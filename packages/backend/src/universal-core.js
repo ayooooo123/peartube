@@ -1,1639 +1,1038 @@
-/**
- * Universal Peartube Core
- *
- * Master "One Backend" skeleton for the Peartube 2.0 rewrite.
- *
- * All clients (mobile, desktop, relay) execute the exact same native backend core
- * and differ only in shell/UI concerns. Platform is an execution target, not a
- * behavioral fork.
- *
- * Goals:
- * - one universal HRPC surface with init/start/suspend/resume/shutdown hooks
- * - shared gossip, mirror/seed, and storage primitives
- * - partitioned main/shorts playback with resource gating and a unified event sink
- * - bare-build packaging into a single native artifact for mobile, desktop, and relay
- * - elimination of platform-specific P2P drift
- */
+const ROLE_MOBILE = 'mobile'
+const ROLE_RELAY = 'relay'
+const ROLE_HYBRID = 'hybrid'
 
-export const UNIVERSAL_CORE_VERSION = '0.2.0'
+const PLAYER_SHORTS = 'shorts'
+const PLAYER_MAIN = 'main'
 
-export const UNIVERSAL_CORE_PLATFORMS = Object.freeze({
-  MOBILE: 'mobile',
-  DESKTOP: 'desktop',
-  RELAY: 'relay'
-})
+const TRANSITION_RANK = {
+  discovered: 0,
+  verified: 1,
+  active: 2,
+  quarantined: 3,
+  tombstoned: 4,
+}
 
-export const UNIVERSAL_CORE_STATES = Object.freeze({
-  CREATED: 'created',
-  INITIALIZING: 'initializing',
-  INITIALIZED: 'initialized',
-  STARTING: 'starting',
-  STARTED: 'started',
-  SUSPENDING: 'suspending',
-  SUSPENDED: 'suspended',
-  RESUMING: 'resuming',
-  RESUMED: 'resumed',
-  SHUTTING_DOWN: 'shutting_down',
-  SHUTDOWN: 'shutdown'
-})
+const textEncoder = new TextEncoder()
 
-const EVENT_PREFIX = 'universal-core:event:'
-const SNAPSHOT_KEY = 'universal-core:snapshot'
-const PLAYBACK_PREFIX = 'universal-core:playback:'
+const DEFAULT_POLICY = {
+  minDescriptorFreshnessMs: 10 * 60 * 1000,
+  longTailWindowMs: 12 * 60 * 60 * 1000,
+  proofFreshnessMs: 20 * 60 * 1000,
+  minReachableCopies: 2,
+  mobile: {
+    maxFanout: 2,
+    maxRequestsPerWindow: 4,
+    syncIntervalMs: 20 * 60 * 1000,
+    maxBytesPerDay: 50 * 1024 * 1024,
+    proofIntervalMs: 45 * 60 * 1000,
+    refreshIntervalMs: 90 * 60 * 1000,
+  },
+  relay: {
+    maxFanout: 16,
+    maxRequestsPerWindow: 64,
+    syncIntervalMs: 2 * 60 * 1000,
+    maxBytesPerDay: 5 * 1024 * 1024 * 1024,
+    proofIntervalMs: 10 * 60 * 1000,
+    refreshIntervalMs: 20 * 60 * 1000,
+  },
+}
 
-function assertOptions(options) {
-  if (!options || typeof options !== 'object') {
-    throw new TypeError('createUniversalCore(options) requires an options object')
+const DEFAULT_PLAYER_POLICY = {
+  main: {
+    priority: 100,
+    activeBudget: 100,
+    backgroundBudget: 15,
+    maxConcurrentDecodes: 2,
+    maxConcurrentPrefetches: 4,
+    suspendAfterMs: 0,
+    pipAllowed: true,
+  },
+  shorts: {
+    priority: 20,
+    activeBudget: 35,
+    backgroundBudget: 8,
+    maxConcurrentDecodes: 1,
+    maxConcurrentPrefetches: 1,
+    suspendAfterMs: 30 * 1000,
+    pipAllowed: false,
+  },
+}
+
+function safeNumber(value, fallback = 0) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function safeBigInt(value, fallback = 0n) {
+  if (typeof value === 'bigint') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.floor(value)))
+  if (typeof value === 'string' && value.trim()) {
+    try { return BigInt(value) } catch {}
+  }
+  return fallback
+}
+
+function toHex(bytes) {
+  if (!bytes) return ''
+  if (typeof bytes === 'string') return bytes.toLowerCase().replace(/^0x/, '')
+  if (bytes instanceof Uint8Array) return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  if (bytes instanceof ArrayBuffer) return toHex(new Uint8Array(bytes))
+  return String(bytes)
+}
+
+function stableStringify(value) {
+  if (value === null || value === undefined) return String(value)
+  if (value instanceof Uint8Array) return `u8:${toHex(value)}`
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']'
+  if (typeof value === 'bigint') return value.toString()
+  if (typeof value === 'object') {
+    const keys = Object.keys(value).sort()
+    return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}'
+  }
+  return JSON.stringify(value)
+}
+
+function hashText(input) {
+  const str = stableStringify(input)
+  let hash = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function nowMs(value = Date.now()) {
+  return safeBigInt(value, BigInt(Date.now()))
+}
+
+function normalizeRole(role) {
+  if (role === ROLE_RELAY || role === ROLE_MOBILE || role === ROLE_HYBRID) return role
+  return ROLE_HYBRID
+}
+
+function cloneDescriptor(descriptor) {
+  if (!descriptor || typeof descriptor !== 'object') return null
+  return {
+    ...descriptor,
+    descriptorId: toHex(descriptor.descriptorId),
+    contentRoot: toHex(descriptor.contentRoot),
+    dasRoot: toHex(descriptor.dasRoot),
+    swarmTopic: toHex(descriptor.swarmTopic),
+    sourceRefHash: toHex(descriptor.sourceRefHash),
+    publisherIdentity: toHex(descriptor.publisherIdentity),
+    parentDescriptorId: toHex(descriptor.parentDescriptorId),
+    signer: toHex(descriptor.signer),
+    signature: toHex(descriptor.signature),
+    publishAt: safeBigInt(descriptor.publishAt, 0n),
+    expiresAt: safeBigInt(descriptor.expiresAt, 0n),
+    availabilityEpoch: safeNumber(descriptor.availabilityEpoch, 0),
+    flags: safeNumber(descriptor.flags, 0),
   }
 }
 
-function noop() {}
-
-function now() {
-  return Date.now()
+function descriptorIdOf(value) {
+  return toHex(value?.descriptorId || value?.id || value?.driveKey || value)
 }
 
-function safeJsonClone(value) {
-  if (value == null) return value
-  try {
-    return JSON.parse(JSON.stringify(value))
-  } catch {
-    return value
-  }
+function compareEventOrder(a, b) {
+  const timeA = safeBigInt(a?.observedAt || a?.localSeenAt || a?.ts || 0n, 0n)
+  const timeB = safeBigInt(b?.observedAt || b?.localSeenAt || b?.ts || 0n, 0n)
+  if (timeA > timeB) return 1
+  if (timeA < timeB) return -1
+  const eventA = toHex(a?.eventId || a?.entryId || a?.proofId || '')
+  const eventB = toHex(b?.eventId || b?.entryId || b?.proofId || '')
+  return eventA.localeCompare(eventB)
 }
 
-function toErrorMessage(error) {
-  if (!error) return null
-  if (typeof error === 'string') return error
-  if (error instanceof Error) return error.message
-  try {
-    return String(error)
-  } catch {
-    return 'unknown error'
-  }
+function transitionRank(state) {
+  return TRANSITION_RANK[String(state || 'discovered').toLowerCase()] ?? 0
 }
 
-function createId(prefix) {
-  const random = Math.random().toString(16).slice(2)
-  return `${prefix}${now().toString(36)}-${random}`
+function isNewerThan(current, next) {
+  if (!current) return true
+  const cmp = compareEventOrder(next, current)
+  if (cmp > 0) return true
+  if (cmp < 0) return false
+  const currentRank = transitionRank(current.state)
+  const nextRank = transitionRank(next.state)
+  return nextRank >= currentRank
 }
 
-function createSerialExecutor() {
-  let tail = Promise.resolve()
-  return async function runSerial(task) {
-    const run = tail.then(task, task)
-    tail = run.catch(() => {})
-    return await run
-  }
-}
-
-async function flushBarrier(target, context) {
-  return await invokeIfPresent(target, ['flush', 'drain', 'sync', 'barrier'], context)
-}
-
-async function rollbackTarget(target, context) {
-  return await invokeIfPresent(target, ['rollback', 'reset', 'abort'], context)
-}
-
-function normalizePlatform(platform) {
-  if (platform === UNIVERSAL_CORE_PLATFORMS.MOBILE) return UNIVERSAL_CORE_PLATFORMS.MOBILE
-  if (platform === UNIVERSAL_CORE_PLATFORMS.DESKTOP) return UNIVERSAL_CORE_PLATFORMS.DESKTOP
-  return UNIVERSAL_CORE_PLATFORMS.RELAY
-}
-
-function resolveStep(target, names) {
-  if (!target) return null
-  for (const name of names) {
-    const fn = target[name]
-    if (typeof fn === 'function') return fn.bind(target)
-  }
-  return null
-}
-
-async function invokeIfPresent(target, names, ...args) {
-  const fn = resolveStep(target, names)
-  if (!fn) return null
-  return await fn(...args)
-}
-
-async function loadModuleEntry(entry) {
-  if (!entry) return null
-  if (typeof entry === 'function') {
-    try {
-      return await entry()
-    } catch {
-      return entry
+function mergeDescriptor(current, incoming) {
+  if (!current) return cloneDescriptor(incoming)
+  const merged = cloneDescriptor(current)
+  const next = cloneDescriptor(incoming)
+  if (!next) return merged
+  for (const key of Object.keys(next)) {
+    if (next[key] === null || next[key] === undefined || next[key] === '') continue
+    if (merged[key] === null || merged[key] === undefined || merged[key] === '') {
+      merged[key] = next[key]
+      continue
     }
+    if (typeof next[key] === 'bigint' && next[key] > merged[key]) merged[key] = next[key]
+    else if (typeof next[key] === 'number' && next[key] > merged[key]) merged[key] = next[key]
   }
-  if (entry && typeof entry.then === 'function') {
-    return await entry
-  }
-  if (typeof entry === 'object' && entry.default && typeof entry.default === 'function') {
-    return await entry.default()
-  }
-  return entry
+  return merged
 }
 
-async function resolveNativeModule(modules, name, fallbackNames = []) {
-  const candidates = [modules?.[name], ...fallbackNames.map((key) => modules?.[key])]
-  for (const candidate of candidates) {
-    if (!candidate) continue
-    const resolved = await loadModuleEntry(candidate)
-    if (resolved) return resolved
-  }
-  return null
+function identityAgeScore(identity = {}, now = Date.now()) {
+  const createdAt = safeBigInt(identity.createdAt || 0n, 0n)
+  const ageMs = createdAt > 0n ? Math.max(0n, nowMs(now) - createdAt) : 0n
+  return Math.min(40, Number(ageMs / BigInt(24 * 60 * 60 * 1000)))
 }
 
-async function instantiateNativeRuntime(options, emit) {
-  const loader = typeof options.loadNativeModules === 'function'
-    ? options.loadNativeModules
-    : async () => options.nativeModules || {}
-
-  const loaded = await loader()
-  const nativeModules = {
-    libhc: await resolveNativeModule(loaded, 'libhc', ['hc', 'nativeCore']),
-    libkv: await resolveNativeModule(loaded, 'libkv', ['kv', 'storageCore']),
-    libudx: await resolveNativeModule(loaded, 'libudx', ['udx', 'networkCore'])
+export function createSybilPolicy(options = {}) {
+  const base = {
+    minProofs: safeNumber(options.minProofs, 1),
+    maxFailurePenalty: safeNumber(options.maxFailurePenalty, 45),
+    maxQuarantinePenalty: safeNumber(options.maxQuarantinePenalty, 35),
+    maxTombstonePenalty: safeNumber(options.maxTombstonePenalty, 50),
+    maxSpamPenalty: safeNumber(options.maxSpamPenalty, 20),
   }
 
-  async function nativeTransition(phase, names, methodNames, context) {
-    const completed = []
-    try {
-      for (const name of names) {
-        const handle = runtime.handles[name]
-        if (!handle) continue
-        await invokeIfPresent(handle, methodNames, { ...context, nativeName: name, phase })
-        await flushBarrier(handle, { ...context, nativeName: name, phase })
-        completed.push(name)
-      }
-      return runtime.handles
-    } catch (error) {
-      for (const name of completed.reverse()) {
-        await rollbackTarget(runtime.handles[name], { ...context, nativeName: name, phase, error: toErrorMessage(error) }).catch(() => {})
-      }
-      throw error
-    }
-  }
-
-  const runtime = {
-    nativeModules,
-    handles: {},
-    async init(context) {
-      const created = []
-      try {
-        for (const name of ['libhc', 'libkv', 'libudx']) {
-          const module = nativeModules[name]
-          if (!module) continue
-          const handle = await createNativeHandle(name, module, context, emit)
-          if (handle) {
-            runtime.handles[name] = handle
-            created.push(name)
-          }
-        }
-        for (const name of created) await flushBarrier(runtime.handles[name], { ...context, nativeName: name, phase: 'init' })
-        return runtime.handles
-      } catch (error) {
-        for (const name of created.reverse()) {
-          await rollbackTarget(runtime.handles[name], { ...context, nativeName: name, phase: 'init', error: toErrorMessage(error) }).catch(() => {})
-          await invokeIfPresent(runtime.handles[name], ['shutdown', 'close', 'stop', 'destroy'], context).catch(() => {})
-          delete runtime.handles[name]
-        }
-        throw error
-      }
+  return {
+    scoreIdentity(identity = {}, now = Date.now()) {
+      const age = identityAgeScore(identity, now)
+      const validProofs = Math.min(30, safeNumber(identity.validProofCount, 0) * 6)
+      const successfulSeals = Math.min(15, safeNumber(identity.successfulSealCount, 0) * 3)
+      const serviceScore = Math.min(15, Math.floor(safeNumber(identity.usefulWorkScore, 0) / 25))
+      const failures = Math.min(base.maxFailurePenalty, safeNumber(identity.failureCount, 0) * 9)
+      const quarantines = Math.min(base.maxQuarantinePenalty, safeNumber(identity.quarantineCount, 0) * 7)
+      const tombstones = Math.min(base.maxTombstonePenalty, safeNumber(identity.tombstoneCount, 0) * 10)
+      const spam = Math.min(base.maxSpamPenalty, safeNumber(identity.spamScore, 0) * 4)
+      const freshness = Math.max(0, 10 - Math.floor(Math.max(0, safeNumber(identity.lastProofAgeMs, Infinity)) / (60 * 60 * 1000)))
+      const score = 20 + age + validProofs + successfulSeals + serviceScore + freshness - failures - quarantines - tombstones - spam
+      return Math.max(0, Math.min(100, score))
     },
-    async start(context) {
-      return await nativeTransition('start', ['libhc', 'libkv', 'libudx'], ['start', 'resume', 'open', 'boot'], context)
+    allowsFanout(identity, peerCount = 0, now = Date.now()) {
+      const score = this.scoreIdentity(identity, now)
+      const scaledFanout = Math.max(1, Math.floor(score / 10))
+      return Math.min(Math.max(1, peerCount || 1), scaledFanout)
     },
-    async suspend(context) {
-      return await nativeTransition('suspend', ['libudx', 'libkv', 'libhc'], ['suspend', 'pause', 'stop'], context)
+    allowsRequest(identity, inFlight = 0, now = Date.now()) {
+      const score = this.scoreIdentity(identity, now)
+      const allowance = Math.max(1, Math.floor(score / 15))
+      return inFlight < allowance
     },
-    async resume(context) {
-      return await nativeTransition('resume', ['libhc', 'libkv', 'libudx'], ['resume', 'start', 'open', 'boot'], context)
-    },
-    async shutdown(context) {
-      return await nativeTransition('shutdown', ['libudx', 'libkv', 'libhc'], ['shutdown', 'close', 'stop', 'destroy'], context)
-    }
   }
-
-  emit('native:modules:resolved', {
-    hasLibhc: Boolean(nativeModules.libhc),
-    hasLibkv: Boolean(nativeModules.libkv),
-    hasLibudx: Boolean(nativeModules.libudx)
-  })
-
-  return runtime
 }
 
-async function createNativeHandle(name, module, context, emit) {
-  if (!module) return null
-
-  let handle = module
-  const factory =
-    (typeof module === 'function' && module) ||
-    (typeof module.create === 'function' && module.create) ||
-    (typeof module.createService === 'function' && module.createService) ||
-    (typeof module.createNativeCore === 'function' && module.createNativeCore) ||
-    (typeof module.default === 'function' && module.default) ||
-    null
-
-  if (factory) {
-    handle = await factory(context)
+export function createUsefulWorkLedger(options = {}) {
+  const byPeer = new Map()
+  const byDescriptor = new Map()
+  const totals = {
+    verifiedDescriptors: 0,
+    refreshedDescriptors: 0,
+    sampledDescriptors: 0,
+    bytesServed: 0n,
+    longTailServed: 0,
+    proofsAccepted: 0,
+    proofsRejected: 0,
   }
 
-  if (!handle || typeof handle !== 'object' && typeof handle !== 'function') {
-    return null
+  function bucket(map, key) {
+    if (!map.has(key)) map.set(key, { count: 0, score: 0, bytes: 0n, lastAt: 0n })
+    return map.get(key)
   }
 
-  emit('native:handle:created', { name, methods: Object.keys(handle).slice(0, 24) })
-  await invokeIfPresent(handle, ['init', 'initialize', 'open'], context)
-  return handle
-}
+  function reward(kind, amount = 1, context = {}) {
+    const descriptorId = descriptorIdOf(context.descriptorId || context.descriptor || '')
+    const peerId = toHex(context.peerId || context.identityId || '')
+    const at = safeBigInt(context.at || Date.now(), nowMs())
+    let scoreDelta = 0
 
-function createAutobaseEventSink({ metaDb, platform, storagePath, onEvent = noop }) {
-  let seq = 0
-  let hydrated = false
-  let currentSnapshot = null
-  const recent = []
-  const serialize = createSerialExecutor()
-
-  async function hydrateUnlocked() {
-    if (hydrated) return currentSnapshot
-    hydrated = true
-
-    if (!metaDb || typeof metaDb.get !== 'function') {
-      currentSnapshot = null
-      return null
+    switch (kind) {
+      case 'descriptor-verified':
+        scoreDelta = 10 * amount
+        totals.verifiedDescriptors += amount
+        break
+      case 'descriptor-refreshed':
+        scoreDelta = 6 * amount
+        totals.refreshedDescriptors += amount
+        break
+      case 'availability-sampled':
+        scoreDelta = 5 * amount
+        totals.sampledDescriptors += amount
+        break
+      case 'bytes-served':
+        scoreDelta = Math.max(1, Math.floor(Number(amount) / (64 * 1024)))
+        totals.bytesServed += safeBigInt(amount, 0n)
+        break
+      case 'long-tail-served':
+        scoreDelta = 12 * amount
+        totals.longTailServed += amount
+        break
+      case 'proof-accepted':
+        scoreDelta = 8 * amount
+        totals.proofsAccepted += amount
+        break
+      case 'proof-rejected':
+        scoreDelta = -6 * amount
+        totals.proofsRejected += amount
+        break
+      default:
+        scoreDelta = 0
     }
 
-    try {
-      const snapshot = await metaDb.get(SNAPSHOT_KEY).catch(() => null)
-      if (snapshot?.value) {
-        currentSnapshot = snapshot.value
-        seq = Number(currentSnapshot?.lastSeq || 0) || 0
-      }
-    } catch {
-      currentSnapshot = null
+    if (descriptorId) {
+      const d = bucket(byDescriptor, descriptorId)
+      d.count += amount
+      d.score += scoreDelta
+      d.lastAt = at > d.lastAt ? at : d.lastAt
+      if (kind === 'bytes-served') d.bytes += safeBigInt(amount, 0n)
     }
 
-    return currentSnapshot
-  }
-
-  async function hydrate() {
-    return await serialize(hydrateUnlocked)
-  }
-
-  async function append(type, payload = {}, extra = {}) {
-    return await serialize(async () => {
-      await hydrateUnlocked()
-      seq += 1
-      const record = {
-      seq,
-      type,
-      platform,
-      storagePath,
-      at: now(),
-      payload: safeJsonClone(payload),
-      ...extra
+    if (peerId) {
+      const p = bucket(byPeer, peerId)
+      p.count += amount
+      p.score += scoreDelta
+      p.lastAt = at > p.lastAt ? at : p.lastAt
+      if (kind === 'bytes-served') p.bytes += safeBigInt(amount, 0n)
     }
 
-      recent.push(record)
-      while (recent.length > 100) recent.shift()
-
-      currentSnapshot = {
-        ...(currentSnapshot || {}),
-        platform,
-        storagePath,
-        lastSeq: seq,
-        updatedAt: record.at,
-        lastEventType: type,
-        lastEvent: record,
-        recent: recent.slice(-32)
-      }
-
-      if (metaDb && typeof metaDb.put === 'function') {
-        const key = `${EVENT_PREFIX}${String(seq).padStart(12, '0')}`
-        try {
-          await metaDb.put(key, record)
-        } catch {
-          // best-effort persistence; the in-memory snapshot still advances.
-        }
-        try {
-          await metaDb.put(SNAPSHOT_KEY, currentSnapshot)
-        } catch {
-          // best-effort persistence; the in-memory snapshot still advances.
-        }
-      }
-
-      onEvent(record)
-      return record
-    })
+    return scoreDelta
   }
 
-  async function restore() {
-    return await hydrate()
+  function scoreUsefulWork() {
+    const byteScore = Number(totals.bytesServed / BigInt(1024 * 1024))
+    return Math.max(0, totals.verifiedDescriptors * 10 + totals.refreshedDescriptors * 6 + totals.sampledDescriptors * 5 + totals.longTailServed * 12 + totals.proofsAccepted * 8 + byteScore + totals.proofsRejected * -2)
   }
 
   function snapshot() {
     return {
-      lastSeq: seq,
-      current: currentSnapshot ? safeJsonClone(currentSnapshot) : null,
-      recent: recent.slice()
+      totals: {
+        ...totals,
+        bytesServed: totals.bytesServed,
+      },
+      byPeer: Array.from(byPeer.entries()),
+      byDescriptor: Array.from(byDescriptor.entries()),
+      usefulWorkScore: scoreUsefulWork(),
     }
   }
 
-  return {
-    hydrate,
-    append,
-    restore,
-    snapshot
-  }
+  return { reward, scoreUsefulWork, snapshot, byPeer, byDescriptor, totals }
 }
 
-function createPartitionedPlaybackContexts({
-  resourceBudget = {},
-  onEvent = noop,
-  platform,
-  storagePath,
-  metaDb
-}) {
-  const state = {
-    suspended: false,
-    nextId: 1,
-    active: new Map(),
-    hostSurfaces: new Map(),
-    partitions: {
-      main: {
-        kind: 'main',
-        priority: 2,
-        maxConcurrent: resourceBudget.mainMaxConcurrent ?? 1,
-        maxMemoryMb: resourceBudget.mainMaxMemoryMb ?? 512,
-        maxBitrateMbps: resourceBudget.mainMaxBitrateMbps ?? 24,
-        activeCount: 0,
-        activeMemoryMb: 0,
-        activeBitrateMbps: 0
-      },
-      shorts: {
-        kind: 'shorts',
-        priority: 1,
-        maxConcurrent: resourceBudget.shortsMaxConcurrent ?? 1,
-        maxMemoryMb: resourceBudget.shortsMaxMemoryMb ?? 192,
-        maxBitrateMbps: resourceBudget.shortsMaxBitrateMbps ?? 8,
-        activeCount: 0,
-        activeMemoryMb: 0,
-        activeBitrateMbps: 0
-      }
-    },
-    total: {
-      maxConcurrent: resourceBudget.totalMaxConcurrent ?? 2,
-      maxMemoryMb: resourceBudget.totalMaxMemoryMb ?? 640,
-      maxBitrateMbps: resourceBudget.totalMaxBitrateMbps ?? 32,
-      activeCount: 0,
-      activeMemoryMb: 0,
-      activeBitrateMbps: 0
-    }
+export function createAvailabilityPlanner(options = {}) {
+  const minCopies = Math.max(1, safeNumber(options.minReachableCopies, DEFAULT_POLICY.minReachableCopies))
+  const longTailWindowMs = Math.max(60 * 60 * 1000, safeNumber(options.longTailWindowMs, DEFAULT_POLICY.longTailWindowMs))
+  const proofFreshnessMs = Math.max(5 * 60 * 1000, safeNumber(options.proofFreshnessMs, DEFAULT_POLICY.proofFreshnessMs))
+  const descriptorFreshnessMs = Math.max(60 * 1000, safeNumber(options.minDescriptorFreshnessMs, DEFAULT_POLICY.minDescriptorFreshnessMs))
+
+  function isLongTail(descriptor = {}, now = Date.now()) {
+    const lastSeenAt = safeBigInt(descriptor.lastSeenAt || descriptor.publishAt || 0n, 0n)
+    const seenWindow = nowMs(now) - lastSeenAt
+    const peerCount = safeNumber(descriptor.peerCount, 0)
+    const videoCount = safeNumber(descriptor.videoCount, 0)
+    return seenWindow >= BigInt(longTailWindowMs) || peerCount <= minCopies || videoCount <= 3
   }
 
-  function emit(type, detail = {}) {
-    const record = {
-      type,
-      detail: safeJsonClone(detail),
-      platform,
-      storagePath,
-      at: now()
-    }
-    onEvent(record)
-    return record
+  function hasReachability(descriptor = {}, now = Date.now()) {
+    const proofAt = safeBigInt(descriptor.lastProofAt || 0n, 0n)
+    const expiresAt = safeBigInt(descriptor.expiresAt || 0n, 0n)
+    if (expiresAt > 0n && nowMs(now) > expiresAt) return false
+    if (proofAt > 0n && nowMs(now) - proofAt > BigInt(proofFreshnessMs)) return false
+    return Boolean(descriptor.reachable !== false)
   }
 
-  function getPartition(kind) {
-    return state.partitions[kind] || null
+  function shouldAdmit(descriptor = {}, now = Date.now()) {
+    if (!descriptorIdOf(descriptor)) return false
+    if (descriptor.tombstoned) return false
+    if (descriptor.quarantined && !descriptor.quarantineExpired) return false
+    return hasReachability(descriptor, now)
   }
 
-  function computeGate(kind, request = {}) {
-    const partition = getPartition(kind)
-    if (!partition) {
-      return { allowed: false, reason: `unknown partition: ${kind}` }
-    }
-    if (state.suspended) {
-      return { allowed: false, reason: 'core suspended' }
-    }
-
-    const estimatedMemoryMb = Number(request.estimatedMemoryMb || 0) || 0
-    const estimatedBitrateMbps = Number(request.estimatedBitrateMbps || 0) || 0
-    const concurrent = state.total.activeCount
-    const nextMemory = state.total.activeMemoryMb + estimatedMemoryMb
-    const nextBitrate = state.total.activeBitrateMbps + estimatedBitrateMbps
-
-    if (concurrent >= state.total.maxConcurrent) {
-      return { allowed: false, reason: 'total concurrency budget exhausted' }
-    }
-    if (nextMemory > state.total.maxMemoryMb) {
-      return { allowed: false, reason: 'total memory budget exhausted' }
-    }
-    if (nextBitrate > state.total.maxBitrateMbps) {
-      return { allowed: false, reason: 'total bitrate budget exhausted' }
-    }
-
-    if (partition.activeCount >= partition.maxConcurrent) {
-      return { allowed: false, reason: `${kind} concurrency budget exhausted` }
-    }
-    if (partition.activeMemoryMb + estimatedMemoryMb > partition.maxMemoryMb) {
-      return { allowed: false, reason: `${kind} memory budget exhausted` }
-    }
-    if (partition.activeBitrateMbps + estimatedBitrateMbps > partition.maxBitrateMbps) {
-      return { allowed: false, reason: `${kind} bitrate budget exhausted` }
-    }
-
-    if (kind === 'shorts' && state.partitions.main.activeCount > 0) {
-      const shortsWeight = estimatedBitrateMbps + estimatedMemoryMb / 128
-      const mainPressure = state.partitions.main.activeBitrateMbps + state.partitions.main.activeMemoryMb / 128
-      if (mainPressure > 6 && shortsWeight > 2) {
-        return { allowed: false, reason: 'shorts gated by main playback pressure' }
-      }
-    }
-
-    const hostSurfaceId = request.hostSurfaceId || request.surfaceId || kind
-    const existingSurfaceOwner = state.hostSurfaces.get(hostSurfaceId)
-    if (existingSurfaceOwner && existingSurfaceOwner.kind !== kind) {
-      return { allowed: false, reason: `host surface ${hostSurfaceId} owned by ${existingSurfaceOwner.kind}` }
-    }
-    if (kind === 'shorts' && (request.pip || request.pictureInPicture || request.autoEnterPipOnLeave)) {
-      return { allowed: false, reason: 'shorts partition cannot acquire PiP-capable host surface' }
-    }
-
-    return {
-      allowed: true,
-      reason: null,
-      allocation: {
-        memoryMb: estimatedMemoryMb,
-        bitrateMbps: estimatedBitrateMbps
-      }
-    }
-  }
-
-  async function persistSnapshot() {
-    if (!metaDb || typeof metaDb.put !== 'function') return
-    const snapshot = getSnapshot()
-    try {
-      await metaDb.put(`${PLAYBACK_PREFIX}snapshot`, snapshot)
-    } catch {
-      // best-effort only
-    }
-  }
-
-  function applyAllocation(kind, allocation) {
-    const partition = getPartition(kind)
-    partition.activeCount += 1
-    partition.activeMemoryMb += allocation.memoryMb
-    partition.activeBitrateMbps += allocation.bitrateMbps
-    state.total.activeCount += 1
-    state.total.activeMemoryMb += allocation.memoryMb
-    state.total.activeBitrateMbps += allocation.bitrateMbps
-  }
-
-  function releaseAllocation(kind, allocation) {
-    const partition = getPartition(kind)
-    partition.activeCount = Math.max(0, partition.activeCount - 1)
-    partition.activeMemoryMb = Math.max(0, partition.activeMemoryMb - allocation.memoryMb)
-    partition.activeBitrateMbps = Math.max(0, partition.activeBitrateMbps - allocation.bitrateMbps)
-    state.total.activeCount = Math.max(0, state.total.activeCount - 1)
-    state.total.activeMemoryMb = Math.max(0, state.total.activeMemoryMb - allocation.memoryMb)
-    state.total.activeBitrateMbps = Math.max(0, state.total.activeBitrateMbps - allocation.bitrateMbps)
-  }
-
-  async function acquire(kind, request = {}) {
-    const gate = computeGate(kind, request)
-    if (!gate.allowed) {
-      emit('playback:gate-denied', { kind, request, reason: gate.reason })
-      return { granted: false, reason: gate.reason, context: null }
-    }
-
-    const contextId = createId(`${kind}-`)
-    const context = {
-      id: contextId,
-      kind,
-      createdAt: now(),
-      request: safeJsonClone(request),
-      allocation: gate.allocation,
-      hostSurfaceId: request.hostSurfaceId || request.surfaceId || kind,
-      hostSurfaceMode: kind === 'shorts' ? 'route-local' : 'global-watch',
-      allowPiP: kind === 'main' && Boolean(request.allowPiP ?? request.pip ?? request.pictureInPicture),
-      state: 'active'
-    }
-
-    state.hostSurfaces.set(context.hostSurfaceId, { kind, contextId, allowPiP: context.allowPiP })
-    state.active.set(contextId, context)
-    applyAllocation(kind, gate.allocation)
-    emit('playback:acquired', { kind, contextId, request })
-    await persistSnapshot()
-    return { granted: true, reason: null, context }
-  }
-
-  async function release(contextOrId) {
-    const contextId = typeof contextOrId === 'string' ? contextOrId : contextOrId?.id
-    if (!contextId) return false
-    const context = state.active.get(contextId)
-    if (!context) return false
-
-    state.active.delete(contextId)
-    const owner = state.hostSurfaces.get(context.hostSurfaceId)
-    if (owner?.contextId === contextId) state.hostSurfaces.delete(context.hostSurfaceId)
-    releaseAllocation(context.kind, context.allocation)
-    emit('playback:released', { kind: context.kind, contextId })
-    await persistSnapshot()
+  function shouldForward(descriptor = {}, now = Date.now()) {
+    if (!shouldAdmit(descriptor, now)) return false
+    const freshness = safeBigInt(descriptor.publishAt || 0n, 0n)
+    if (freshness > 0n && nowMs(now) - freshness > BigInt(descriptorFreshnessMs)) return false
     return true
   }
 
-  async function suspend() {
-    state.suspended = true
-    emit('playback:suspended')
-    await persistSnapshot()
+  function needsRefresh(descriptor = {}, now = Date.now()) {
+    const lastRefreshAt = safeBigInt(descriptor.lastRefreshAt || 0n, 0n)
+    const proofAt = safeBigInt(descriptor.lastProofAt || 0n, 0n)
+    if (lastRefreshAt === 0n) return true
+    if (nowMs(now) - lastRefreshAt >= BigInt(descriptorFreshnessMs)) return true
+    if (proofAt > 0n && nowMs(now) - proofAt >= BigInt(proofFreshnessMs)) return true
+    return isLongTail(descriptor, now)
   }
 
-  async function resume() {
-    state.suspended = false
-    emit('playback:resumed')
-    await persistSnapshot()
-  }
+  return { minCopies, longTailWindowMs, proofFreshnessMs, descriptorFreshnessMs, isLongTail, hasReachability, shouldAdmit, shouldForward, needsRefresh }
+}
 
-  function getSnapshot() {
-    const partitions = {}
-    for (const [kind, partition] of Object.entries(state.partitions)) {
-      partitions[kind] = {
-        kind,
-        priority: partition.priority,
-        maxConcurrent: partition.maxConcurrent,
-        maxMemoryMb: partition.maxMemoryMb,
-        maxBitrateMbps: partition.maxBitrateMbps,
-        activeCount: partition.activeCount,
-        activeMemoryMb: partition.activeMemoryMb,
-        activeBitrateMbps: partition.activeBitrateMbps
-      }
-    }
+export function createResourcePolicy(options = {}) {
+  const role = normalizeRole(options.role)
+  const profile = role === ROLE_RELAY ? DEFAULT_POLICY.relay : DEFAULT_POLICY.mobile
+  const batteryFloor = safeNumber(options.batteryFloor, role === ROLE_RELAY ? 5 : 25)
+  const bandwidthFloor = safeNumber(options.bandwidthFloor, role === ROLE_RELAY ? 0 : 5)
+  const maxConcurrentSync = safeNumber(options.maxConcurrentSync, role === ROLE_RELAY ? 8 : 1)
+  const maxConcurrentProofs = safeNumber(options.maxConcurrentProofs, role === ROLE_RELAY ? 4 : 1)
+  const maxConcurrentFetches = safeNumber(options.maxConcurrentFetches, role === ROLE_RELAY ? 8 : 1)
+
+  function budgetFor(resource = {}) {
+    const battery = safeNumber(resource.batteryPercent, 100)
+    const bandwidth = safeNumber(resource.bandwidthScore, 100)
+    const thermal = safeNumber(resource.thermalScore, 0)
+    const charging = Boolean(resource.isCharging)
+
+    const mobilePenalty = role === ROLE_MOBILE ? Math.max(0, 30 - battery) + Math.max(0, 20 - bandwidth) + Math.max(0, thermal) : 0
+    const base = role === ROLE_RELAY ? 100 : 50
+    const credit = Math.max(0, base - mobilePenalty + (charging ? 10 : 0))
 
     return {
-      suspended: state.suspended,
-      total: { ...state.total },
-      partitions,
-      hostSurfaces: Array.from(state.hostSurfaces.entries()).map(([id, owner]) => ({ id, ...owner })),
-      active: Array.from(state.active.values()).map((item) => ({
-        id: item.id,
-        kind: item.kind,
-        createdAt: item.createdAt,
-        state: item.state,
-        request: safeJsonClone(item.request),
-        allocation: { ...item.allocation },
-        hostSurfaceId: item.hostSurfaceId,
-        hostSurfaceMode: item.hostSurfaceMode,
-        allowPiP: item.allowPiP
-      }))
+      role,
+      syncIntervalMs: profile.syncIntervalMs,
+      proofIntervalMs: profile.proofIntervalMs,
+      refreshIntervalMs: profile.refreshIntervalMs,
+      maxFanout: profile.maxFanout,
+      maxRequestsPerWindow: profile.maxRequestsPerWindow,
+      maxBytesPerDay: profile.maxBytesPerDay,
+      batteryFloor,
+      bandwidthFloor,
+      maxConcurrentSync,
+      maxConcurrentProofs,
+      maxConcurrentFetches,
+      credit,
+      canSync: battery >= batteryFloor && bandwidth >= bandwidthFloor,
+      canEmitProof: battery >= Math.max(10, batteryFloor - 5) && bandwidth >= bandwidthFloor,
+      canFetch: battery >= Math.max(10, batteryFloor - 10) && bandwidth >= bandwidthFloor,
     }
   }
 
+  return { role, profile, budgetFor }
+}
+
+export function createConcurrentState(options = {}) {
   return {
-    computeGate,
-    acquire,
-    release,
-    suspend,
-    resume,
-    getSnapshot
+    descriptors: new Map(),
+    peers: new Map(),
+    events: new Map(),
+    tombstones: new Map(),
+    quarantines: new Map(),
+    causalWatermark: 0n,
+    lastAppliedAt: nowMs(options.now || Date.now()),
   }
 }
 
-function buildLifecycleBridge(target, emit) {
+function normalizeTransition(input = {}) {
+  const state = String(input.state || input.nextState || 'discovered').toLowerCase()
   return {
-    async init(context) {
-      await invokeIfPresent(target, ['init', 'initialize', 'open'], context)
-      emit('backend:lifecycle:init', {})
-    },
-    async start(context) {
-      await invokeIfPresent(target, ['start', 'resume', 'open'], context)
-      emit('backend:lifecycle:start', {})
-    },
-    async suspend(context) {
-      await invokeIfPresent(target, ['suspend', 'pause'], context)
-      emit('backend:lifecycle:suspend', {})
-    },
-    async resume(context) {
-      await invokeIfPresent(target, ['resume', 'start'], context)
-      emit('backend:lifecycle:resume', {})
-    },
-    async shutdown(context) {
-      await invokeIfPresent(target, ['shutdown', 'close', 'stop', 'destroy'], context)
-      emit('backend:lifecycle:shutdown', {})
+    state,
+    eventId: input.eventId || input.entryId || input.proofId || input.id || '',
+    observedAt: safeBigInt(input.observedAt || input.localSeenAt || Date.now(), nowMs()),
+    descriptorId: descriptorIdOf(input.descriptorId || input.descriptor || input),
+    descriptor: input.descriptor || null,
+    reason: input.reason || input.reasonCode || null,
+    proofId: input.proofId || input.lastProofId || null,
+    quarantineUntil: safeBigInt(input.quarantineUntil || 0n, 0n),
+    tombstonedAt: safeBigInt(input.tombstonedAt || 0n, 0n),
+    signatureValid: input.signatureValid !== false,
+    reachable: input.reachable !== false,
+  }
+}
+
+function resolveConflict(current, incoming) {
+  if (!current) return incoming
+  const newer = isNewerThan(current, incoming)
+  if (!newer) return current
+  const mergedDescriptor = mergeDescriptor(current.descriptor, incoming.descriptor)
+  const next = {
+    ...current,
+    ...incoming,
+    descriptor: mergedDescriptor,
+    firstSeenAt: current.firstSeenAt || incoming.firstSeenAt || incoming.observedAt,
+    lastSeenAt: maxBigInt(current.lastSeenAt, incoming.observedAt),
+    lastUpdatedAt: incoming.observedAt,
+    conflictCount: (current.conflictCount || 0) + (current.descriptor && incoming.descriptor && hashText(current.descriptor) !== hashText(incoming.descriptor) ? 1 : 0),
+    duplicateCount: current.duplicateCount || 0,
+  }
+
+  const currentRank = transitionRank(current.state)
+  const incomingRank = transitionRank(incoming.state)
+  if (incomingRank >= currentRank) {
+    next.state = incoming.state
+  }
+  if (incoming.state === 'quarantined') {
+    next.quarantineUntil = maxBigInt(current.quarantineUntil, incoming.quarantineUntil)
+  }
+  if (incoming.state === 'tombstoned') {
+    next.tombstonedAt = maxBigInt(current.tombstonedAt, incoming.tombstonedAt || incoming.observedAt)
+  }
+  return next
+}
+
+function maxBigInt(...values) {
+  return values.reduce((acc, value) => {
+    const next = safeBigInt(value, 0n)
+    return next > acc ? next : acc
+  }, 0n)
+}
+
+export function applyConcurrentUpdate(state, input = {}, options = {}) {
+  const next = normalizeTransition(input)
+  const id = next.descriptorId
+  if (!id) return { applied: false, reason: 'missing-descriptor-id', state }
+
+  const eventKey = toHex(next.eventId)
+  if (eventKey && state.events.has(eventKey)) {
+    const record = state.events.get(eventKey)
+    record.duplicateCount = (record.duplicateCount || 0) + 1
+    return { applied: false, reason: 'duplicate-event', state, record }
+  }
+
+  const current = state.descriptors.get(id) || null
+  const record = resolveConflict(current, next)
+  record.eventId = next.eventId
+  record.lastUpdatedAt = next.observedAt
+  record.state = record.state || next.state
+
+  if (next.state === 'quarantined') {
+    record.quarantined = true
+    state.quarantines.set(id, record)
+    state.tombstones.delete(id)
+  } else if (next.state === 'tombstoned') {
+    record.tombstoned = true
+    state.tombstones.set(id, record)
+    state.quarantines.delete(id)
+  } else {
+    record.quarantined = false
+    record.tombstoned = false
+    if (next.signatureValid) {
+      state.quarantines.delete(id)
+      if (record.state !== 'tombstoned') state.tombstones.delete(id)
     }
   }
+
+  state.descriptors.set(id, record)
+  state.events.set(eventKey || hashText(next), record)
+  state.causalWatermark = record.lastUpdatedAt > state.causalWatermark ? record.lastUpdatedAt : state.causalWatermark
+  state.lastAppliedAt = record.lastUpdatedAt
+
+  return { applied: true, record, state }
 }
 
-async function withPlaybackLease(playback, kind, request, task) {
-  if (!playback || typeof playback.acquire !== 'function') {
-    return await task({ granted: true, context: null })
-  }
-
-  const lease = await playback.acquire(kind, request)
-  if (!lease?.granted) {
-    return await task({ granted: false, reason: lease?.reason || 'lease denied', context: null })
-  }
-
-  try {
-    return await task({ granted: true, context: lease.context || null })
-  } finally {
-    try {
-      if (lease.context) await playback.release(lease.context)
-    } catch {
-      // best effort
-    }
-  }
+function normalizePlayerSurface(surface) {
+  return surface === PLAYER_MAIN ? PLAYER_MAIN : PLAYER_SHORTS
 }
 
-function summarizeFeedEntries(entries = []) {
-  const list = Array.isArray(entries) ? entries : []
-  const previewVideos = list.reduce((count, entry) => count + (Array.isArray(entry?.previewVideos) ? entry.previewVideos.length : 0), 0)
+function createPlayerSurfaceState(surface, options = {}) {
+  const normalizedSurface = normalizePlayerSurface(surface)
+  const policy = { ...DEFAULT_PLAYER_POLICY[normalizedSurface], ...(options.policy || {}) }
   return {
-    entries: list.length,
-    localEntries: list.filter((entry) => entry?.source === 'local').length,
-    relayServingEntries: list.filter((entry) => Boolean(entry?.relayServing)).length,
-    previewVideos
+    surface: normalizedSurface,
+    sessionId: options.sessionId || hashText({ surface: normalizedSurface, seed: options.seed || 'player' }),
+    playerId: options.playerId || hashText({ surface: normalizedSurface, playerId: options.playerId || options.seed || 'player' }),
+    policy,
+    active: Boolean(options.active ?? (normalizedSurface === PLAYER_MAIN)),
+    suspended: Boolean(options.suspended ?? false),
+    pipVisible: Boolean(options.pipVisible ?? false),
+    localClock: 0n,
+    lastActiveAt: nowMs(options.lastActiveAt || Date.now()),
+    lastSuspendedAt: safeBigInt(options.lastSuspendedAt || 0n, 0n),
+    lastEventAt: safeBigInt(options.lastEventAt || 0n, 0n),
+    currentMediaId: toHex(options.currentMediaId || ''),
+    currentQueueId: toHex(options.currentQueueId || ''),
+    playbackState: {
+      mediaId: toHex(options.currentMediaId || ''),
+      positionMs: safeBigInt(options.positionMs || 0n, 0n),
+      bufferedUntilMs: safeBigInt(options.bufferedUntilMs || 0n, 0n),
+      paused: Boolean(options.paused ?? !options.active),
+      muted: Boolean(options.muted ?? false),
+      visible: Boolean(options.visible ?? (normalizedSurface === PLAYER_MAIN)),
+      pipEnabled: normalizedSurface === PLAYER_MAIN ? Boolean(options.pipEnabled ?? true) : false,
+    },
+    resourcePool: {
+      cpuBudget: safeNumber(options.cpuBudget, policy.activeBudget),
+      bandwidthBudget: safeNumber(options.bandwidthBudget, policy.backgroundBudget),
+      decodeBudget: safeNumber(options.decodeBudget, policy.maxConcurrentDecodes),
+      prefetchBudget: safeNumber(options.prefetchBudget, policy.maxConcurrentPrefetches),
+      suspended: Boolean(options.suspended ?? false),
+    },
+    localState: new Map(),
+    localEvents: new Map(),
+    queue: [],
   }
 }
 
-function createRelayStorageService({ backend, eventSink, playback, nativeRuntime, platform, storagePath }) {
-  const ctx = backend?.ctx || null
-  let started = false
-  let suspended = false
+function createPlayerResourceGate(options = {}) {
+  const mainPolicy = { ...DEFAULT_PLAYER_POLICY.main, ...(options.main || {}) }
+  const shortsPolicy = { ...DEFAULT_PLAYER_POLICY.shorts, ...(options.shorts || {}) }
 
-  function snapshot(extra = {}) {
+  function budgetFor(surface, resourceContext = {}) {
+    const normalizedSurface = normalizePlayerSurface(surface)
+    const policy = normalizedSurface === PLAYER_MAIN ? mainPolicy : shortsPolicy
+    const priority = normalizedSurface === PLAYER_MAIN ? policy.priority : policy.priority
+    const pressure = safeNumber(resourceContext.pressure, 0)
+    const backgroundPenalty = normalizedSurface === PLAYER_SHORTS ? Math.min(policy.backgroundBudget, Math.max(0, pressure)) : 0
+    const activeBudget = Math.max(0, policy.activeBudget - backgroundPenalty)
+    const suspended = Boolean(resourceContext.inactive || (normalizedSurface === PLAYER_SHORTS && resourceContext.mainActive && pressure > 0))
     return {
-      platform,
-      storagePath,
-      started,
+      surface: normalizedSurface,
+      priority,
+      activeBudget,
+      backgroundBudget: policy.backgroundBudget,
+      maxConcurrentDecodes: policy.maxConcurrentDecodes,
+      maxConcurrentPrefetches: policy.maxConcurrentPrefetches,
+      pipAllowed: policy.pipAllowed,
       suspended,
-      hasStore: Boolean(ctx?.store),
-      hasMetaDb: Boolean(ctx?.metaDb),
-      hasSwarm: Boolean(ctx?.swarm),
-      hasBlobServer: Boolean(ctx?.blobServer),
-      blobServerPort: ctx?.blobServer?.port || ctx?.blobServerPort || null,
-      swarmConnections: ctx?.swarm?.connections?.size || 0,
-      discoveryHandles: ctx?._swarmDiscoveryHandles?.size || 0,
-      native: {
-        libhc: Boolean(nativeRuntime?.nativeModules?.libhc),
-        libkv: Boolean(nativeRuntime?.nativeModules?.libkv),
-        libudx: Boolean(nativeRuntime?.nativeModules?.libudx)
-      },
-      ...extra
+      suspendAfterMs: policy.suspendAfterMs,
+      shouldPreempt: normalizedSurface === PLAYER_MAIN,
     }
   }
 
-  async function emit(type, detail = {}) {
-    if (!eventSink) return
-    await eventSink.append(type, snapshot(detail))
-  }
-  async function start() {
-    started = true
-    suspended = false
-    await emit('storage.start', { phase: 'begin' })
-    await nativeRuntime?.start?.({ backend, services: backend?.services || null, platform, storagePath, ctx })
-    await ctx?.swarm?.resume?.()
-    await ctx?.blobServer?.resume?.()
-    await emit('storage.start', { phase: 'complete' })
-    return snapshot()
+  function shouldSuspend(surface, resourceContext = {}) {
+    const budget = budgetFor(surface, resourceContext)
+    if (budget.surface === PLAYER_MAIN) return Boolean(resourceContext.forceSuspendMain)
+    if (resourceContext.mainActive && !resourceContext.allowShortsWhileMainActive) return true
+    if (budget.suspended) return true
+    if (resourceContext.inactiveForMs && budget.suspendAfterMs > 0 && resourceContext.inactiveForMs >= budget.suspendAfterMs) return true
+    return false
   }
 
-  async function refresh(reason = 'manual') {
-    return await withPlaybackLease(playback, 'main', {
-      estimatedMemoryMb: 12,
-      estimatedBitrateMbps: 0.5,
-      reason: `storage:${reason}`
-    }, async ({ granted, reason: deniedReason }) => {
-      const extra = { reason, granted, deniedReason: deniedReason || null }
-      await emit('storage.refresh', extra)
-      return snapshot(extra)
-    })
+  function chooseActiveSurface(resourceContext = {}) {
+    if (resourceContext.mainRequested || resourceContext.mainActive) return PLAYER_MAIN
+    if (resourceContext.shortsRequested) return PLAYER_SHORTS
+    return PLAYER_SHORTS
   }
 
-  async function suspend() {
-    suspended = true
-    await emit('storage.suspend', { phase: 'begin' })
-    await nativeRuntime?.suspend?.({ backend, services: backend?.services || null, platform, storagePath, ctx })
-    await ctx?.blobServer?.suspend?.()
-    await ctx?.swarm?.suspend?.()
-    await emit('storage.suspend', { phase: 'complete' })
-    return snapshot()
+  return { mainPolicy, shortsPolicy, budgetFor, shouldSuspend, chooseActiveSurface }
+}
+
+function createUnifiedAutobaseSink(options = {}) {
+  const events = []
+  const bySurface = new Map()
+  const seen = new Set()
+  const appendFn = typeof options.append === 'function'
+    ? options.append
+    : typeof options.autobase?.append === 'function'
+      ? options.autobase.append.bind(options.autobase)
+      : typeof options.autobase?.write === 'function'
+        ? options.autobase.write.bind(options.autobase)
+        : typeof options.autobase?.log?.append === 'function'
+          ? options.autobase.log.append.bind(options.autobase.log)
+          : null
+
+  function surfaceBucket(surface) {
+    const key = normalizePlayerSurface(surface)
+    if (!bySurface.has(key)) bySurface.set(key, { sequence: 0n, events: [], lastEventAt: 0n })
+    return bySurface.get(key)
   }
 
-  async function resume() {
-    suspended = false
-    await emit('storage.resume', { phase: 'begin' })
-    await nativeRuntime?.resume?.({ backend, services: backend?.services || null, platform, storagePath, ctx })
-    await ctx?.swarm?.resume?.()
-    await ctx?.blobServer?.resume?.()
-    await emit('storage.resume', { phase: 'complete' })
-    return snapshot()
-  }
-
-  async function shutdown() {
-    await emit('storage.shutdown', { phase: 'begin' })
-    await nativeRuntime?.shutdown?.({ backend, services: backend?.services || null, platform, storagePath, ctx })
-    await emit('storage.shutdown', { phase: 'complete' })
-    return snapshot()
-  }
-
-  return {
-    start,
-    refresh,
-    suspend,
-    resume,
-    shutdown,
-    getStatus() {
-      return snapshot()
+  async function append(record = {}) {
+    const surface = normalizePlayerSurface(record.surface)
+    const bucket = surfaceBucket(surface)
+    const observedAt = safeBigInt(record.observedAt || Date.now(), nowMs())
+    const sequence = bucket.sequence + 1n
+    bucket.sequence = sequence
+    const eventId = toHex(record.eventId || hashText({ surface, sequence: String(sequence), ...record }))
+    const dedupeKey = `${surface}:${eventId}`
+    if (seen.has(dedupeKey)) {
+      return { appended: false, duplicate: true, eventId, sequence, surface }
     }
-  }
-}
-
-function normalizeServiceModules(modules = {}) {
-  return {
-    bloom: modules?.bloom ?? modules?.gossipBloom ?? null,
-    quota: modules?.quota ?? modules?.gossipQuota ?? null,
-    sync: modules?.sync ?? modules?.gossipSync ?? null,
-    autobase: modules?.autobase ?? modules?.mirrorAutobase ?? null,
-    fetcher: modules?.fetcher ?? modules?.mirrorFetcher ?? null,
-    refresh: modules?.refresh ?? modules?.mirrorRefresh ?? null
-  }
-}
-
-function summarizeServiceModule(module) {
-  if (!module) return null
-  const summary = {
-    available: true,
-    type: typeof module,
-    name: module?.name ?? module?.constructor?.name ?? null,
-    hasStatus: typeof module?.getStatus === "function" || typeof module?.status === "function" || typeof module?.snapshot === "function"
-  }
-  try {
-    if (typeof module?.state !== "undefined") summary.state = module.state
-    if (typeof module?.status !== "undefined" && typeof module?.status !== "function") summary.status = safeJsonClone(module.status)
-    if (typeof module?.snapshot === "function") summary.snapshot = safeJsonClone(module.snapshot())
-  } catch {
-    // best effort summary only
-  }
-  return summary
-}
-
-async function resolveServiceTarget(entry, context) {
-  if (!entry) return null
-  if (entry && typeof entry.then === "function") return await entry
-  if (typeof entry === "function") {
-    try {
-      return await entry(context)
-    } catch {
-      try {
-        return await entry()
-      } catch {
-        return entry
-      }
+    const envelope = {
+      version: 1,
+      domain: 'playback',
+      surface,
+      playerId: toHex(record.playerId || record.sessionId || ''),
+      sessionId: toHex(record.sessionId || ''),
+      eventId,
+      sequence,
+      observedAt,
+      kind: record.kind || 'state',
+      payload: record.payload || {},
     }
-  }
-  return entry?.default ?? entry
-}
+    seen.add(dedupeKey)
+    bucket.events.push(envelope)
+    bucket.lastEventAt = observedAt > bucket.lastEventAt ? observedAt : bucket.lastEventAt
+    events.push(envelope)
 
-async function invokeServiceLifecycle(entry, phase, context, aliases = []) {
-  const target = await resolveServiceTarget(entry, context)
-  if (!target) return { called: false, result: null }
-
-  const candidateNames = [phase].concat(aliases || [])
-  for (const name of candidateNames) {
-    const fn = resolveStep(target, [name])
-    if (fn) {
-      const result = await fn(context)
-      return { called: true, result }
+    if (appendFn) {
+      await appendFn(textEncoder.encode(JSON.stringify(envelope)))
     }
+
+    return { appended: true, duplicate: false, envelope }
   }
 
-  return { called: false, result: null }
-}
-function createRelayGossipService({ backend, eventSink, playback, platform, storagePath, modules = null }) {
-  const publicFeed = backend?.publicFeed || null
-  const api = backend?.api || null
-  const serviceModules = normalizeServiceModules(modules)
-  let started = false
-  let syncCount = 0
-
-  function snapshot(extra = {}) {
-    const feedEntries = publicFeed?.getFeed?.() || []
-    const feedStats = publicFeed?.getStats?.() || {}
+  function snapshot() {
     return {
-      platform,
-      storagePath,
-      started,
-      syncCount,
-      feed: summarizeFeedEntries(feedEntries),
-      bloom: {
-        discoveredPeers: feedStats.rememberedPeerCandidates || 0,
-        feedConnections: feedStats.feedConnections || 0,
-        openConnections: feedStats.feedConnections || 0
-      },
-      quota: {
-        maxConcurrent: playback?.getSnapshot?.()?.partitions?.main?.maxConcurrent ?? null,
-        activeCount: playback?.getSnapshot?.()?.partitions?.main?.activeCount ?? null
-      },
-      modules: {
-        bloom: summarizeServiceModule(serviceModules.bloom),
-        quota: summarizeServiceModule(serviceModules.quota),
-        sync: summarizeServiceModule(serviceModules.sync)
-      },
-      ...extra
+      events: events.slice(),
+      bySurface: Array.from(bySurface.entries()).map(([surface, bucket]) => ({
+        surface,
+        sequence: bucket.sequence,
+        lastEventAt: bucket.lastEventAt,
+        events: bucket.events.slice(),
+      })),
     }
   }
 
-  function createContext(phase, detail = {}) {
-    return {
-      kind: 'gossip',
-      phase,
-      platform,
-      storagePath,
-      backend,
-      api,
-      publicFeed,
-      playback,
-      eventSink,
-      resourcePool: 'main',
-      modules: serviceModules,
-      ...detail
-    }
-  }
+  return { append, snapshot, bySurface, events }
+}
 
-  async function emit(type, detail = {}) {
-    if (!eventSink) return
-    await eventSink.append(type, snapshot(detail))
-  }
-
-  async function runLifecycle(phase, detail = {}) {
-    const context = createContext(phase, detail)
-    await Promise.all([
-      invokeServiceLifecycle(serviceModules.bloom, phase, context),
-      invokeServiceLifecycle(serviceModules.quota, phase, context),
-      invokeServiceLifecycle(serviceModules.sync, phase, context)
-    ])
-  }
-
-  async function start() {
-    started = true
-    await emit('gossip.start', { phase: 'begin' })
-    await runLifecycle('start')
-    await publicFeed?.start?.()
-    await sync('start')
-    await emit('gossip.start', { phase: 'complete' })
-    return snapshot()
-  }
-
-  async function sync(reason = 'manual') {
-    if (!publicFeed) {
-      await emit('gossip.sync', { reason, skipped: true, why: 'missing publicFeed' })
-      return snapshot({ reason, skipped: true })
-    }
-
-    const context = createContext('sync', { reason })
-    const moduleInvocation = await invokeServiceLifecycle(serviceModules.sync, 'sync', context, ['refresh'])
-    if (moduleInvocation.called && moduleInvocation.result != null) {
-      const detail = { reason, moduleUsed: true, moduleResult: safeJsonClone(moduleInvocation.result) }
-      await emit('gossip.sync', detail)
-      return snapshot(detail)
-    }
-
-    return await withPlaybackLease(playback, 'main', {
-      estimatedMemoryMb: 10,
-      estimatedBitrateMbps: 1,
-      reason: `gossip:${reason}`
-    }, async ({ granted, reason: deniedReason }) => {
-      if (!granted) {
-        await emit('gossip.sync', { reason, skipped: true, deniedReason })
-        return snapshot({ reason, skipped: true, deniedReason })
-      }
-
-      syncCount += 1
-      const requested = typeof publicFeed.requestFeedsFromPeers === 'function'
-        ? publicFeed.requestFeedsFromPeers()
-        : 0
-      const feedEntries = publicFeed.getFeed?.() || []
-      const snapshotEntries = typeof api?.getFeedSnapshotEntries === 'function'
-        ? await api.getFeedSnapshotEntries(feedEntries, { limitPerChannel: 3 })
-        : feedEntries
-
-      const detail = {
-        reason,
-        requested,
-        moduleUsed: moduleInvocation.called,
-        feed: summarizeFeedEntries(feedEntries),
-        snapshotEntries: Array.isArray(snapshotEntries) ? snapshotEntries.length : 0,
-        stats: publicFeed.getStats?.() || null
-      }
-
-      await emit('gossip.sync', detail)
-      return snapshot(detail)
-    })
-  }
-
-  async function refresh(reason = 'manual') {
-    await emit('gossip.refresh', { reason })
-    return await sync(reason)
-  }
-
-  async function suspend() {
-    started = false
-    await emit('gossip.suspend', { phase: 'begin' })
-    await runLifecycle('suspend')
-    await publicFeed?.stop?.()
-    await emit('gossip.suspend', { phase: 'complete' })
-    return snapshot()
-  }
-
-  async function resume() {
-    started = true
-    await emit('gossip.resume', { phase: 'begin' })
-    await runLifecycle('resume')
-    await publicFeed?.start?.()
-    await sync('resume')
-    await emit('gossip.resume', { phase: 'complete' })
-    return snapshot()
-  }
-
-  async function shutdown() {
-    started = false
-    await emit('gossip.shutdown', { phase: 'begin' })
-    await runLifecycle('shutdown')
-    await publicFeed?.stop?.()
-    await emit('gossip.shutdown', { phase: 'complete' })
-    return snapshot()
-  }
-
+export function createPlayerSplitState(options = {}) {
   return {
-    init: async () => {
-      await runLifecycle('init')
-      return snapshot()
+    main: createPlayerSurfaceState(PLAYER_MAIN, options.main || {}),
+    shorts: createPlayerSurfaceState(PLAYER_SHORTS, options.shorts || {}),
+    activeSurface: normalizePlayerSurface(options.activeSurface || PLAYER_MAIN),
+    lastSwitchoverAt: safeBigInt(options.lastSwitchoverAt || 0n, 0n),
+  }
+}
+
+function routePlayerEvent(surfaceState, event = {}, sink, resourceGate, globalContext = {}) {
+  const surface = surfaceState.surface
+  const nextEventAt = safeBigInt(event.observedAt || globalContext.observedAt || Date.now(), nowMs())
+  const budget = resourceGate.budgetFor(surface, {
+    mainActive: globalContext.mainActive,
+    inactive: globalContext.inactive,
+    pressure: globalContext.pressure,
+    allowShortsWhileMainActive: globalContext.allowShortsWhileMainActive,
+    inactiveForMs: globalContext.inactiveForMs,
+  })
+  const suspended = resourceGate.shouldSuspend(surface, {
+    ...globalContext,
+    forceSuspendMain: globalContext.forceSuspendMain,
+  })
+
+  surfaceState.lastEventAt = nextEventAt
+  surfaceState.localClock += 1n
+  surfaceState.active = !suspended && (surface === PLAYER_MAIN || globalContext.allowShortsWhileMainActive !== false)
+  surfaceState.suspended = suspended
+  surfaceState.resourcePool = {
+    ...surfaceState.resourcePool,
+    cpuBudget: budget.activeBudget,
+    bandwidthBudget: surface === PLAYER_MAIN ? Math.max(budget.activeBudget, surfaceState.resourcePool.bandwidthBudget) : budget.backgroundBudget,
+    decodeBudget: budget.maxConcurrentDecodes,
+    prefetchBudget: budget.maxConcurrentPrefetches,
+    suspended,
+  }
+  surfaceState.playbackState = {
+    ...surfaceState.playbackState,
+    mediaId: toHex(event.mediaId || surfaceState.playbackState.mediaId),
+    positionMs: safeBigInt(event.positionMs || surfaceState.playbackState.positionMs, 0n),
+    bufferedUntilMs: safeBigInt(event.bufferedUntilMs || surfaceState.playbackState.bufferedUntilMs, 0n),
+    paused: Boolean(event.paused ?? surfaceState.playbackState.paused),
+    muted: Boolean(event.muted ?? surfaceState.playbackState.muted),
+    visible: Boolean(event.visible ?? (surface === PLAYER_MAIN && !suspended)),
+    pipEnabled: surface === PLAYER_MAIN ? Boolean(event.pipEnabled ?? surfaceState.playbackState.pipEnabled) : false,
+  }
+  surfaceState.localState.set(event.kind || 'state', {
+    ...event,
+    surface,
+    budget,
+    suspended,
+    observedAt: nextEventAt,
+  })
+  surfaceState.localEvents.set(toHex(event.eventId || hashText(event)), event)
+  surfaceState.queue.push({
+    kind: event.kind || 'state',
+    surface,
+    payload: event,
+    observedAt: nextEventAt,
+  })
+
+  const sinkRecord = {
+    surface,
+    sessionId: surfaceState.sessionId,
+    playerId: surfaceState.playerId,
+    kind: event.kind || 'state',
+    eventId: event.eventId || '',
+    observedAt: nextEventAt,
+    payload: {
+      ...event,
+      localStateKey: event.kind || 'state',
+      playbackState: surfaceState.playbackState,
     },
-    start,
-    sync,
-    refresh,
-    suspend,
-    resume,
-    shutdown,
-    getStatus() {
-      return snapshot()
-    }
   }
+
+  const commit = sink ? sink.append(sinkRecord) : Promise.resolve({ appended: false })
+  return { surfaceState, budget, suspended, commit }
 }
 
-function createRelayMirrorSeedService({ backend, eventSink, playback, platform, storagePath, modules = null }) {
-  const publicFeed = backend?.publicFeed || null
-  const seedingManager = backend?.seedingManager || null
-  const serviceModules = normalizeServiceModules(modules)
-  let started = false
-  let refreshTimer = null
-  let lastRefreshAt = null
-  let refreshCount = 0
-  let refreshInFlight = null
-  const refreshIntervalMs = 30000
+export function createDualPlayerPlaybackCore(options = {}) {
+  const state = options.state || createPlayerSplitState(options)
+  const resourceGate = createPlayerResourceGate(options.resourceGate || options)
+  const sink = createUnifiedAutobaseSink(options.autobaseSink || { autobase: options.autobase, append: options.append })
 
-  function snapshot(extra = {}) {
-    return {
-      platform,
-      storagePath,
-      started,
-      refreshCount,
-      lastRefreshAt,
-      refreshIntervalMs,
-      seeds: typeof seedingManager?.getActiveSeeds === 'function' ? seedingManager.getActiveSeeds().length : 0,
-      pinnedChannels: typeof seedingManager?.getPinnedChannels === 'function' ? seedingManager.getPinnedChannels().length : 0,
-      modules: {
-        autobase: summarizeServiceModule(serviceModules.autobase),
-        fetcher: summarizeServiceModule(serviceModules.fetcher),
-        refresh: summarizeServiceModule(serviceModules.refresh)
-      },
-      ...extra
-    }
+  function syncActiveSurface(nextSurface, context = {}) {
+    const normalized = normalizePlayerSurface(nextSurface)
+    state.activeSurface = normalized
+    state.lastSwitchoverAt = nowMs(context.observedAt || Date.now())
+    state.main.active = normalized === PLAYER_MAIN
+    state.shorts.active = normalized === PLAYER_SHORTS && context.allowShortsWhileMainActive !== false
+    state.main.suspended = resourceGate.shouldSuspend(PLAYER_MAIN, { ...context, mainActive: normalized === PLAYER_MAIN })
+    state.shorts.suspended = resourceGate.shouldSuspend(PLAYER_SHORTS, { ...context, mainActive: normalized === PLAYER_MAIN })
+    state.main.resourcePool = resourceGate.budgetFor(PLAYER_MAIN, { ...context, mainActive: normalized === PLAYER_MAIN })
+    state.shorts.resourcePool = resourceGate.budgetFor(PLAYER_SHORTS, { ...context, mainActive: normalized === PLAYER_MAIN })
+    return state.activeSurface
   }
 
-  function createContext(phase, detail = {}) {
-    return {
-      kind: 'mirror',
-      phase,
-      platform,
-      storagePath,
-      backend,
-      publicFeed,
-      seedingManager,
-      playback,
-      eventSink,
-      resourcePool: 'shorts',
-      modules: serviceModules,
-      ...detail
-    }
-  }
-
-  async function emit(type, detail = {}) {
-    if (!eventSink) return
-    await eventSink.append(type, snapshot(detail))
-  }
-
-  async function runLifecycle(phase, detail = {}) {
-    const context = createContext(phase, detail)
-    await Promise.all([
-      invokeServiceLifecycle(serviceModules.autobase, phase, context),
-      invokeServiceLifecycle(serviceModules.fetcher, phase, context),
-      invokeServiceLifecycle(serviceModules.refresh, phase, context)
-    ])
-  }
-
-  function clearRefreshTimer() {
-    if (refreshTimer) clearInterval(refreshTimer)
-    refreshTimer = null
-  }
-
-  function collectSeedJobs(feedEntries = []) {
-    const jobs = []
-    for (const entry of Array.isArray(feedEntries) ? feedEntries : []) {
-      const previewVideos = Array.isArray(entry?.previewVideos) ? entry.previewVideos.slice(0, 3) : []
-      for (const video of previewVideos) {
-        const driveKey = entry?.driveKey || video?.driveKey || video?.channelKey || null
-        const videoPath = video?.videoPath || video?.path || video?.id || video?.name || null
-        if (!driveKey || !videoPath) continue
-        jobs.push({
-          driveKey,
-          videoPath,
-          reason: entry?.source === 'local' ? 'pinned' : (entry?.relayServing ? 'subscribed' : 'watched'),
-          blobInfo: {
-            blockLength: video?.blockLength || video?.blocks || 0,
-            byteLength: video?.byteLength || video?.bytes || 0,
-            publicBeeKey: entry?.publicBeeKey || video?.publicBeeKey || null,
-            blobId: video?.blobId || null,
-            blobsCoreKey: video?.blobsCoreKey || null,
-            thumbnailBlobId: video?.thumbnailBlobId || null,
-            thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
-            mimeType: video?.mimeType || null,
-            thumbnailMimeType: video?.thumbnailMimeType || null
-          }
-        })
-      }
-    }
-    return jobs
-  }
-
-  async function refresh(reason = 'manual') {
-    if (refreshInFlight) {
-      await emit('mirror.refresh', { reason, skipped: true, why: 'refresh already in flight' })
-      return snapshot({ reason, skipped: true, why: 'refresh already in flight' })
-    }
-    refreshInFlight = refreshUnlocked(reason)
-    try {
-      return await refreshInFlight
-    } finally {
-      refreshInFlight = null
-    }
-  }
-
-  async function refreshUnlocked(reason = 'manual') {
-    const context = createContext('refresh', { reason })
-    const moduleInvocation = await invokeServiceLifecycle(serviceModules.refresh, 'refresh', context, ['sync'])
-    if (moduleInvocation.called && moduleInvocation.result != null) {
-      const detail = { reason, moduleUsed: true, moduleResult: safeJsonClone(moduleInvocation.result) }
-      await emit('mirror.refresh', detail)
-      return snapshot(detail)
-    }
-
-    if (!seedingManager) {
-      await emit('mirror.refresh', { reason, skipped: true, why: 'missing seedingManager' })
-      return snapshot({ reason, skipped: true })
-    }
-
-    return await withPlaybackLease(playback, 'shorts', {
-      estimatedMemoryMb: 24,
-      estimatedBitrateMbps: 4,
-      reason: `mirror:${reason}`
-    }, async ({ granted, reason: deniedReason }) => {
-      if (!granted) {
-        await emit('mirror.refresh', { reason, skipped: true, deniedReason })
-        return snapshot({ reason, skipped: true, deniedReason })
-      }
-
-      refreshCount += 1
-      lastRefreshAt = now()
-      const feedEntries = publicFeed?.getFeed?.() || []
-      const seedJobs = collectSeedJobs(feedEntries)
-      const desiredSeedKeys = new Set(seedJobs.map((job) => `${job.driveKey}:${job.videoPath}`))
-      const existingSeeds = typeof seedingManager.getActiveSeeds === 'function' ? seedingManager.getActiveSeeds() : []
-      const pinnedChannels = new Set(typeof seedingManager.getPinnedChannels === 'function' ? seedingManager.getPinnedChannels() : [])
-
-      let added = 0
-      let removed = 0
-      let pinned = 0
-
-      for (const seed of existingSeeds) {
-        const key = `${seed.driveKey}:${seed.videoPath}`
-        if (desiredSeedKeys.has(key)) continue
-        if (seed.reason === 'pinned' || pinnedChannels.has(seed.driveKey)) continue
-        try {
-          if (typeof seedingManager.removeSeed === 'function') {
-            await seedingManager.removeSeed(seed.driveKey, seed.videoPath)
-            removed += 1
-          }
-        } catch {
-          // best effort
-        }
-      }
-
-      for (const job of seedJobs) {
-        try {
-          if (job.reason === 'pinned' && typeof seedingManager.pinChannel === 'function') {
-            await seedingManager.pinChannel(job.driveKey)
-            pinned += 1
-          }
-          const changed = await seedingManager.addSeed(job.driveKey, job.videoPath, job.reason, job.blobInfo)
-          if (changed) added += 1
-        } catch {
-          // best effort
-        }
-      }
-
-      if (typeof seedingManager.enforceQuota === 'function') {
-        try { await seedingManager.enforceQuota() } catch { /* best effort */ }
-      }
-
-      await runLifecycle('refresh', {
-        feedEntries: feedEntries.length,
-        seedJobs: seedJobs.length,
-        added,
-        removed,
-        pinned
+  function emit(surface, event = {}, context = {}) {
+    const normalized = normalizePlayerSurface(surface)
+    const surfaceState = normalized === PLAYER_MAIN ? state.main : state.shorts
+    if (normalized === PLAYER_MAIN) {
+      state.shorts.suspended = resourceGate.shouldSuspend(PLAYER_SHORTS, {
+        ...context,
+        mainActive: true,
+        allowShortsWhileMainActive: context.allowShortsWhileMainActive,
+        inactiveForMs: context.inactiveForMs,
       })
-
-      const detail = {
-        reason,
-        moduleUsed: moduleInvocation.called,
-        feedEntries: feedEntries.length,
-        seedJobs: seedJobs.length,
-        added,
-        removed,
-        pinned,
-        status: typeof seedingManager.getStatus === 'function' ? await seedingManager.getStatus() : null
-      }
-
-      await emit('mirror.refresh', detail)
-      return snapshot(detail)
+      if (state.shorts.suspended) state.shorts.active = false
+    }
+    return routePlayerEvent(surfaceState, event, sink, resourceGate, {
+      ...context,
+      mainActive: normalized === PLAYER_MAIN || state.main.active,
     })
   }
 
-  async function start() {
-    started = true
-    await emit('mirror.start', { phase: 'begin' })
-    await runLifecycle('start')
-    clearRefreshTimer()
-    await refresh('start')
-    refreshTimer = setInterval(() => {
-      refresh('interval').catch(() => {})
-    }, refreshIntervalMs)
-    if (typeof refreshTimer?.unref === 'function') refreshTimer.unref()
-    await emit('mirror.start', { phase: 'complete' })
-    return snapshot()
+  function dispatch(event = {}, context = {}) {
+    const surface = normalizePlayerSurface(event.surface || context.surface || state.activeSurface)
+    return emit(surface, event, context)
   }
 
-  async function suspend() {
-    started = false
-    await emit('mirror.suspend', { phase: 'begin' })
-    await runLifecycle('suspend')
-    clearRefreshTimer()
-    await emit('mirror.suspend', { phase: 'complete' })
-    return snapshot()
+  function prioritizeMain(context = {}) {
+    return syncActiveSurface(PLAYER_MAIN, context)
   }
 
-  async function resume() {
-    started = true
-    await emit('mirror.resume', { phase: 'begin' })
-    await runLifecycle('resume')
-    clearRefreshTimer()
-    await refresh('resume')
-    refreshTimer = setInterval(() => {
-      refresh('interval').catch(() => {})
-    }, refreshIntervalMs)
-    if (typeof refreshTimer?.unref === 'function') refreshTimer.unref()
-    await emit('mirror.resume', { phase: 'complete' })
-    return snapshot()
+  function prioritizeShorts(context = {}) {
+    if (context.allowShortsWhileMainActive === false && state.main.active) {
+      return state.activeSurface
+    }
+    return syncActiveSurface(PLAYER_SHORTS, context)
   }
 
-  async function shutdown() {
-    started = false
-    await emit('mirror.shutdown', { phase: 'begin' })
-    await runLifecycle('shutdown')
-    clearRefreshTimer()
-    await emit('mirror.shutdown', { phase: 'complete' })
-    return snapshot()
+  function suspendInactivePlayers(context = {}) {
+    const mainSuspended = resourceGate.shouldSuspend(PLAYER_MAIN, { ...context, mainActive: state.activeSurface === PLAYER_MAIN })
+    const shortsSuspended = resourceGate.shouldSuspend(PLAYER_SHORTS, {
+      ...context,
+      mainActive: state.activeSurface === PLAYER_MAIN,
+      allowShortsWhileMainActive: context.allowShortsWhileMainActive,
+      inactiveForMs: context.inactiveForMs,
+    })
+    state.main.suspended = mainSuspended
+    state.shorts.suspended = shortsSuspended
+    if (shortsSuspended) state.shorts.active = false
+    if (mainSuspended) state.main.active = false
+    return { mainSuspended, shortsSuspended }
+  }
+
+  function snapshot() {
+    return {
+      activeSurface: state.activeSurface,
+      lastSwitchoverAt: state.lastSwitchoverAt,
+      main: state.main,
+      shorts: state.shorts,
+      sink: sink.snapshot(),
+    }
   }
 
   return {
-    start,
-    refresh,
-    suspend,
-    resume,
-    shutdown,
-    getStatus() {
-      return snapshot()
-    }
+    state,
+    resourceGate,
+    sink,
+    dispatch,
+    emit,
+    prioritizeMain,
+    prioritizeShorts,
+    suspendInactivePlayers,
+    syncActiveSurface,
+    snapshot,
   }
 }
 
-
-/**
- * Create the universal core lifecycle controller.
- *
- * This controller owns the shared backend lifecycle for every platform and is
- * the only place where universal state, HRPC, storage, gossip, and playback
- * orchestration are composed.
- */
 export function createUniversalCore(options = {}) {
-  assertOptions(options)
+  const role = normalizeRole(options.role)
+  const sybil = createSybilPolicy(options.sybil)
+  const usefulWork = createUsefulWorkLedger(options.usefulWork)
+  const availability = createAvailabilityPlanner(options.availability)
+  const resources = createResourcePolicy({ role, ...options.resources })
+  const state = options.state || createConcurrentState(options)
+  const playerCore = createDualPlayerPlaybackCore(options.players || {})
 
-  const {
-    platform = UNIVERSAL_CORE_PLATFORMS.RELAY,
-    hrpc = null,
-    runtime = null,
-    storagePath = '',
-    resourceBudget = {},
-    onEvent = noop,
-    onStateChange = noop,
-    createBackendContext = null,
-    createGossipService = null,
-    createMirrorSeedWorker = null,
-    createStorageService = null,
-    createSwarmService = null,
-    gossipModules = null,
-    mirrorModules = null,
-    loadNativeModules = null,
-    nativeModules = null
-  } = options
-
-  const normalizedPlatform = normalizePlatform(platform)
-
-  let state = UNIVERSAL_CORE_STATES.CREATED
-  let backend = null
-  let eventSink = null
-  let playback = null
-  let nativeRuntime = null
-  let lifecycle = null
-  let services = {
-    gossip: null,
-    mirrorSeed: null,
-    storage: null,
-    swarm: null,
-    native: null,
-    playback: null,
-    eventSink: null
+  function scorePeer(peer = {}, now = Date.now()) {
+    const identityScore = sybil.scoreIdentity(peer.identity || peer, now)
+    const useful = Math.max(0, safeNumber(peer.usefulWorkScore, 0))
+    const reachability = availability.shouldAdmit(peer.descriptor || peer, now) ? 10 : 0
+    const resourceFit = resources.budgetFor(peer.resources || peer).credit
+    return Math.max(0, Math.min(100, identityScore + Math.floor(useful / 10) + reachability + Math.floor(resourceFit / 10)))
   }
-  let initPromise = null
-  let shutdownRequested = false
-  const runLifecycleSerial = createSerialExecutor()
 
-  function emit(event, detail = {}) {
+  function registerPeer(peer = {}) {
+    const id = toHex(peer.peerId || peer.identity?.publicKey || peer.identityId || hashText(peer))
+    const score = scorePeer(peer)
     const record = {
-      event,
-      detail: safeJsonClone(detail),
-      state,
-      platform: normalizedPlatform,
-      storagePath,
-      at: now()
+      ...peer,
+      peerId: id,
+      score,
+      lastSeenAt: nowMs(peer.lastSeenAt || Date.now()),
+      fanoutBudget: sybil.allowsFanout(peer.identity || peer, resources.profile.maxFanout),
+      requestBudget: sybil.allowsRequest(peer.identity || peer, peer.inFlightRequests || 0),
     }
-    onEvent(record)
+    state.peers.set(id, record)
     return record
   }
 
-  function setState(nextState, detail = {}) {
-    state = nextState
-    onStateChange({ state, platform: normalizedPlatform, storagePath, detail: safeJsonClone(detail) })
+  function recordUsefulWork(kind, amount = 1, context = {}) {
+    return usefulWork.reward(kind, amount, context)
   }
 
-  async function initializeNative() {
-    nativeRuntime = await instantiateNativeRuntime(
-      { loadNativeModules, nativeModules },
-      emit
-    )
-    services.native = nativeRuntime
-    return nativeRuntime
-  }
-
-  async function initializeBackend() {
-    const resolvedCreateBackendContext = typeof createBackendContext === 'function'
-      ? createBackendContext
-      : (await import('./orchestrator.js')).createBackendContext
-
-    if (typeof resolvedCreateBackendContext !== 'function') {
-      throw new Error('createUniversalCore requires createBackendContext')
+  function ingestDescriptor(descriptor, context = {}) {
+    const normalized = cloneDescriptor(descriptor)
+    if (!normalized) return { accepted: false, reason: 'invalid-descriptor' }
+    if (!availability.shouldAdmit(normalized, context.now || Date.now())) {
+      return { accepted: false, reason: 'unreachable-or-stale' }
     }
+    const result = applyConcurrentUpdate(state, {
+      descriptorId: normalized.descriptorId,
+      descriptor: normalized,
+      state: availability.shouldForward(normalized, context.now || Date.now()) ? 'active' : 'verified',
+      eventId: context.eventId || normalized.signature || normalized.descriptorId,
+      observedAt: context.observedAt || normalized.publishAt || nowMs(),
+      signatureValid: context.signatureValid !== false,
+      reachable: true,
+    }, context)
 
-    backend = await resolvedCreateBackendContext({
-      storagePath,
-      platform: normalizedPlatform,
-      hrpc,
-      runtime,
-      onStatsUpdate: options.onStatsUpdate,
-      onFeedUpdate: options.onFeedUpdate,
-      blobServerHost: options.blobServerHost,
-      blobServerBindHost: options.blobServerBindHost,
-      corestoreWaitForLock: options.corestoreWaitForLock,
-      disableStandalonePrimaryKeyFile: options.disableStandalonePrimaryKeyFile,
-      network: options.network || {},
-      swarmOptions: options.swarmOptions || {},
-      ipcLog: typeof options.ipcLog === 'function' ? options.ipcLog : noop
-    })
-
-    return backend
+    if (result.applied) recordUsefulWork('descriptor-verified', 1, { descriptorId: normalized.descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
+    return { accepted: result.applied, record: result.record, state }
   }
 
-  async function initializeServices() {
-    const ctx = backend?.ctx || null
-    eventSink = createAutobaseEventSink({
-      metaDb: ctx?.metaDb || null,
-      platform: normalizedPlatform,
-      storagePath,
-      onEvent: (record) => emit('autobase:event', record)
-    })
+  function ingestProof(proof, context = {}) {
+    const descriptorId = descriptorIdOf(proof?.descriptorId || proof?.descriptor || '')
+    if (!descriptorId) return { accepted: false, reason: 'missing-descriptor-id' }
+    const reachable = Boolean(proof?.reachable !== false && proof?.signatureValid !== false)
+    const result = applyConcurrentUpdate(state, {
+      descriptorId,
+      descriptor: context.descriptor || proof.descriptor || { descriptorId },
+      state: reachable ? 'active' : 'quarantined',
+      eventId: context.eventId || proof.proofId || proof.signature || descriptorId,
+      observedAt: proof.observedAt || context.observedAt || Date.now(),
+      proofId: proof.proofId,
+      quarantineUntil: proof.quarantineUntil || 0n,
+      tombstonedAt: proof.tombstonedAt || 0n,
+      signatureValid: proof.signatureValid !== false,
+      reachable,
+    }, context)
 
-    playback = createPartitionedPlaybackContexts({
-      resourceBudget,
-      onEvent: (record) => emit('playback:event', record),
-      platform: normalizedPlatform,
-      storagePath,
-      metaDb: ctx?.metaDb || null
-    })
-
-    services.eventSink = eventSink
-    services.playback = playback
-
-    const storageFactory = typeof createStorageService === 'function'
-      ? createStorageService
-      : (args) => createRelayStorageService({ ...args, eventSink, playback, nativeRuntime, platform: normalizedPlatform, storagePath })
-
-    const gossipFactory = typeof createGossipService === 'function'
-      ? createGossipService
-      : (args) => createRelayGossipService({ ...args, eventSink, playback, platform: normalizedPlatform, storagePath, modules: gossipModules })
-
-    const mirrorSeedFactory = typeof createMirrorSeedWorker === 'function'
-      ? createMirrorSeedWorker
-      : (args) => createRelayMirrorSeedService({ ...args, eventSink, playback, platform: normalizedPlatform, storagePath, modules: mirrorModules })
-
-    services.storage = await storageFactory({ backend, platform: normalizedPlatform, hrpc, runtime, storagePath, ctx, nativeRuntime, eventSink, playback })
-    services.swarm = typeof createSwarmService === 'function'
-      ? await createSwarmService({ backend, platform: normalizedPlatform, hrpc, runtime, storagePath, ctx })
-      : ctx?.swarm || null
-    services.gossip = await gossipFactory({ backend, platform: normalizedPlatform, hrpc, runtime, storagePath, ctx })
-    services.mirrorSeed = await mirrorSeedFactory({ backend, platform: normalizedPlatform, hrpc, runtime, storagePath, ctx })
-
-    lifecycle = {
-      backend: buildLifecycleBridge(backend, emit),
-      native: nativeRuntime,
-      playback,
-      eventSink,
-      storage: services.storage,
-      gossip: services.gossip,
-      mirrorSeed: services.mirrorSeed
+    if (reachable && result.applied) {
+      recordUsefulWork('proof-accepted', 1, { descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
+    } else {
+      recordUsefulWork('proof-rejected', 1, { descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
     }
-
-    return services
+    return { accepted: result.applied, record: result.record, state }
   }
 
-  async function writeStateEvent(type, payload = {}) {
-    if (eventSink) {
-      await eventSink.append(type, payload)
-    }
+  function shouldSyncPeer(peer = {}, now = Date.now()) {
+    const peerRecord = state.peers.get(toHex(peer.peerId || peer.identity?.publicKey || '')) || registerPeer(peer)
+    return resources.budgetFor(peer.resources || peer).canSync && peerRecord.score >= 20 && sybil.allowsRequest(peer.identity || peer, peer.inFlightRequests || 0, now)
   }
 
-  async function initUnlocked() {
-    if (backend) return backend
-    if (initPromise) return initPromise
-
-    initPromise = (async () => {
-      setState(UNIVERSAL_CORE_STATES.INITIALIZING)
-      emit('init:start', { platform: normalizedPlatform })
-
-      await initializeNative()
-      await nativeRuntime?.init?.({ platform: normalizedPlatform, storagePath })
-      await initializeBackend()
-      await initializeServices()
-      await Promise.all([
-        invokeIfPresent(services.gossip, ['init'], { backend, services, platform: normalizedPlatform, storagePath }),
-        invokeIfPresent(services.mirrorSeed, ['init'], { backend, services, platform: normalizedPlatform, storagePath })
-      ])
-      await eventSink.restore()
-      setState(UNIVERSAL_CORE_STATES.INITIALIZED)
-      await writeStateEvent('core.initialized', {
-        state,
-        platform: normalizedPlatform,
-        storagePath,
-        hasMetaDb: Boolean(backend?.ctx?.metaDb),
-        hasSwarm: Boolean(backend?.ctx?.swarm)
-      })
-      emit('init:complete', {
-        native: {
-          libhc: Boolean(nativeRuntime?.nativeModules?.libhc),
-          libkv: Boolean(nativeRuntime?.nativeModules?.libkv),
-          libudx: Boolean(nativeRuntime?.nativeModules?.libudx)
-        }
-      })
-
-      return backend
-    })()
-
-    return initPromise
+  function chooseFanoutPeers(peers = [], now = Date.now()) {
+    const ranked = Array.isArray(peers)
+      ? peers.map((peer) => ({ peer, score: scorePeer(peer, now) }))
+          .sort((a, b) => b.score - a.score)
+      : []
+    const limit = sybil.allowsFanout(options.identity || {}, resources.profile.maxFanout, now)
+    return ranked.slice(0, limit).map((entry) => entry.peer)
   }
 
-  async function startUnlocked() {
-    await initUnlocked()
-    setState(UNIVERSAL_CORE_STATES.STARTING)
-    emit('start', { platform: normalizedPlatform })
-
-    await nativeRuntime?.start?.({ backend, services, platform: normalizedPlatform, storagePath })
-    await invokeIfPresent(services.gossip, ['start', 'resume', 'open'], { backend, services })
-    await invokeIfPresent(services.mirrorSeed, ['start', 'resume', 'open'], { backend, services })
-    await invokeIfPresent(services.storage, ['start', 'resume', 'open'], { backend, services })
-    await invokeIfPresent(services.swarm, ['start', 'resume', 'open'], { backend, services })
-    await playback?.resume?.()
-
-    setState(UNIVERSAL_CORE_STATES.STARTED)
-    await writeStateEvent('core.started', {
-      state,
-      playback: playback?.getSnapshot?.() || null
-    })
-    emit('start:complete', { state })
-    return { backend, services, state, lifecycle }
-  }
-
-  async function suspendUnlocked() {
-    if (state !== UNIVERSAL_CORE_STATES.STARTED && state !== UNIVERSAL_CORE_STATES.RESUMED) {
-      return { backend, services, state, lifecycle }
-    }
-
-    setState(UNIVERSAL_CORE_STATES.SUSPENDING)
-    emit('suspend', {})
-
-    await playback?.suspend?.()
-    await nativeRuntime?.suspend?.({ backend, services, platform: normalizedPlatform, storagePath })
-    await invokeIfPresent(services.swarm, ['suspend', 'pause', 'stop'], { backend, services })
-    await invokeIfPresent(services.gossip, ['suspend', 'pause', 'stop'], { backend, services })
-    await invokeIfPresent(services.mirrorSeed, ['suspend', 'pause', 'stop'], { backend, services })
-    setState(UNIVERSAL_CORE_STATES.SUSPENDED)
-    await writeStateEvent('core.suspended', { state, playback: playback?.getSnapshot?.() || null })
-    emit('suspend:complete', {})
-    return { backend, services, state, lifecycle }
-  }
-
-  async function resumeUnlocked() {
-    if (state !== UNIVERSAL_CORE_STATES.SUSPENDED) {
-      return { backend, services, state, lifecycle }
-    }
-
-    setState(UNIVERSAL_CORE_STATES.RESUMING)
-    emit('resume', {})
-
-    await nativeRuntime?.resume?.({ backend, services, platform: normalizedPlatform, storagePath })
-    await invokeIfPresent(services.storage, ['resume', 'start', 'open'], { backend, services })
-    await invokeIfPresent(services.swarm, ['resume', 'start', 'open'], { backend, services })
-    await invokeIfPresent(services.gossip, ['resume', 'start', 'open'], { backend, services })
-    await invokeIfPresent(services.mirrorSeed, ['resume', 'start', 'open'], { backend, services })
-    await playback?.resume?.()
-
-    setState(UNIVERSAL_CORE_STATES.RESUMED)
-    await writeStateEvent('core.resumed', { state, playback: playback?.getSnapshot?.() || null })
-    emit('resume:complete', {})
-    return { backend, services, state, lifecycle }
-  }
-
-  async function shutdownUnlocked() {
-    if (shutdownRequested) return { backend, services, state, lifecycle }
-    shutdownRequested = true
-
-    setState(UNIVERSAL_CORE_STATES.SHUTTING_DOWN)
-    emit('shutdown:start', {})
-    await writeStateEvent('core.shutting_down', { reason: 'requested' })
-
-    await playback?.suspend?.()
-    await nativeRuntime?.shutdown?.({ backend, services, platform: normalizedPlatform, storagePath })
-    await invokeIfPresent(services.mirrorSeed, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
-    await invokeIfPresent(services.gossip, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
-    await invokeIfPresent(services.swarm, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
-    await invokeIfPresent(services.storage, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
-    await invokeIfPresent(backend, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
-
-    setState(UNIVERSAL_CORE_STATES.SHUTDOWN)
-    await writeStateEvent('core.shutdown', { state })
-    emit('shutdown:complete', {})
-    return { backend, services, state, lifecycle }
-  }
-
-
-  async function init() {
-    return await runLifecycleSerial(initUnlocked)
-  }
-
-  async function start() {
-    return await runLifecycleSerial(startUnlocked)
-  }
-
-  async function suspend() {
-    return await runLifecycleSerial(suspendUnlocked)
-  }
-
-  async function resume() {
-    return await runLifecycleSerial(resumeUnlocked)
-  }
-
-  async function shutdown() {
-    return await runLifecycleSerial(shutdownUnlocked)
-  }
-
-  function getStatus() {
+  function planRefresh(descriptor, now = Date.now()) {
+    const record = descriptor || {}
+    const longTail = availability.isLongTail(record, now)
+    const needsRefresh = availability.needsRefresh(record, now)
+    const proofDue = safeBigInt(record.lastProofAt || 0n, 0n) === 0n || nowMs(now) - safeBigInt(record.lastProofAt || 0n, 0n) >= BigInt(resources.profile.proofIntervalMs)
+    const fetchDue = needsRefresh || longTail
+    const rotateEpoch = fetchDue || proofDue
     return {
-      version: UNIVERSAL_CORE_VERSION,
-      platform: normalizedPlatform,
-      state,
-      storagePath,
-      native: {
-        libhc: Boolean(nativeRuntime?.nativeModules?.libhc),
-        libkv: Boolean(nativeRuntime?.nativeModules?.libkv),
-        libudx: Boolean(nativeRuntime?.nativeModules?.libudx)
-      },
-      playback: playback?.getSnapshot?.() || null,
-      eventSink: eventSink?.snapshot?.() || null
+      longTail,
+      needsRefresh,
+      proofDue,
+      fetchDue,
+      rotateEpoch,
+      nextSyncAt: Number(nowMs(now) + BigInt(resources.profile.syncIntervalMs)),
+      nextProofAt: Number(nowMs(now) + BigInt(resources.profile.proofIntervalMs)),
+      nextRefreshAt: Number(nowMs(now) + BigInt(resources.profile.refreshIntervalMs)),
+    }
+  }
+
+  function playerSnapshot() {
+    return playerCore.snapshot()
+  }
+
+  function routePlayerEvent(event = {}, context = {}) {
+    return playerCore.dispatch(event, context)
+  }
+
+  function prioritizeMainPlayer(context = {}) {
+    return playerCore.prioritizeMain(context)
+  }
+
+  function prioritizeShortsPlayer(context = {}) {
+    return playerCore.prioritizeShorts(context)
+  }
+
+  function suspendInactivePlayers(context = {}) {
+    return playerCore.suspendInactivePlayers(context)
+  }
+
+  function usefulWorkSnapshot() {
+    return usefulWork.snapshot()
+  }
+
+  function stateSnapshot() {
+    return {
+      role,
+      peers: Array.from(state.peers.values()),
+      descriptors: Array.from(state.descriptors.values()),
+      quarantines: Array.from(state.quarantines.values()),
+      tombstones: Array.from(state.tombstones.values()),
+      causalWatermark: state.causalWatermark,
+      lastAppliedAt: state.lastAppliedAt,
+      players: playerSnapshot(),
     }
   }
 
   return {
-    version: UNIVERSAL_CORE_VERSION,
-    platform: normalizedPlatform,
-    hrpc,
-    runtime,
-    storagePath,
-    get state() {
-      return state
-    },
-    get backend() {
-      return backend
-    },
-    get services() {
-      return services
-    },
-    get playback() {
-      return playback
-    },
-    get eventSink() {
-      return eventSink
-    },
-    get lifecycle() {
-      return lifecycle
-    },
-    getStatus,
-    init,
-    start,
-    suspend,
-    resume,
-    shutdown
-  }
-}
-
-/**
- * HRPC surface for the universal core.
- * Platform adapters should use this instead of reimplementing backend lifecycle
- * behavior on each shell. The same contract applies to mobile, desktop, and
- * relay targets.
- */
-export function createUniversalHrpcSurface(core) {
-  return {
-    async GetUniversalCoreStatus() {
-      return core.getStatus()
-    },
-    async UniversalCoreInit() {
-      await core.init()
-      return core.getStatus()
-    },
-    async UniversalCoreStart() {
-      await core.start()
-      return core.getStatus()
-    },
-    async UniversalCoreSuspend() {
-      await core.suspend()
-      return core.getStatus()
-    },
-    async UniversalCoreResume() {
-      await core.resume()
-      return core.getStatus()
-    },
-    async UniversalCoreShutdown() {
-      await core.shutdown()
-      return core.getStatus()
-    }
+    role,
+    state,
+    sybil,
+    usefulWork,
+    availability,
+    resources,
+    playerCore,
+    scorePeer,
+    registerPeer,
+    recordUsefulWork,
+    ingestDescriptor,
+    ingestProof,
+    shouldSyncPeer,
+    chooseFanoutPeers,
+    planRefresh,
+    routePlayerEvent,
+    prioritizeMainPlayer,
+    prioritizeShortsPlayer,
+    suspendInactivePlayers,
+    playerSnapshot,
+    usefulWorkSnapshot,
+    stateSnapshot,
   }
 }
 
 export default {
-  UNIVERSAL_CORE_VERSION,
-  UNIVERSAL_CORE_PLATFORMS,
-  UNIVERSAL_CORE_STATES,
+  ROLE_MOBILE,
+  ROLE_RELAY,
+  ROLE_HYBRID,
+  PLAYER_MAIN,
+  PLAYER_SHORTS,
+  createSybilPolicy,
+  createUsefulWorkLedger,
+  createAvailabilityPlanner,
+  createResourcePolicy,
+  createConcurrentState,
+  applyConcurrentUpdate,
+  createPlayerSplitState,
+  createPlayerResourceGate,
+  createUnifiedAutobaseSink,
+  createDualPlayerPlaybackCore,
   createUniversalCore,
-  createUniversalHrpcSurface
 }

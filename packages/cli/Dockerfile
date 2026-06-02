@@ -18,7 +18,8 @@ FROM debian:13-slim AS runtime-libs
 ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
-ARG FFMPEG_VERSION=release
+ARG FFMPEG_VERSION=n7.1-latest
+ARG FFMPEG_SERIES=7.1
 ARG BGUTIL_POT_PROVIDER_VERSION=v0.8.1
 
 RUN apt-get update \
@@ -65,16 +66,16 @@ RUN case "${TARGETARCH}" in \
   && /usr/local/bin/deno --version
 
 RUN case "${TARGETARCH}" in \
-    amd64) FFMPEG_ASSET=ffmpeg-${FFMPEG_VERSION}-amd64-static.tar.xz ;; \
-    arm64) FFMPEG_ASSET=ffmpeg-${FFMPEG_VERSION}-arm64-static.tar.xz ;; \
+    amd64) FFMPEG_ASSET=ffmpeg-${FFMPEG_VERSION}-linux64-gpl-${FFMPEG_SERIES}.tar.xz ;; \
+    arm64) FFMPEG_ASSET=ffmpeg-${FFMPEG_VERSION}-linuxarm64-gpl-${FFMPEG_SERIES}.tar.xz ;; \
     *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
-  && curl -fsSL "https://johnvansickle.com/ffmpeg/releases/${FFMPEG_ASSET}" \
+  && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FFMPEG_ASSET}" \
     -o /tmp/ffmpeg.tar.xz \
   && mkdir -p /tmp/ffmpeg \
   && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 \
-  && cp /tmp/ffmpeg/ffmpeg /usr/local/bin/ffmpeg \
-  && cp /tmp/ffmpeg/ffprobe /usr/local/bin/ffprobe \
+  && cp /tmp/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg \
+  && cp /tmp/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe \
   && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz \
   && chmod 755 /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
   && /usr/local/bin/ffmpeg -version

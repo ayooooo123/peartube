@@ -207,7 +207,8 @@ test('Dockerfile packages ffmpeg for yt-dlp archive merging', async (t) => {
   const dockerfile = readFileSync(join(__dirname, '..', 'Dockerfile'), 'utf8')
 
   t.ok(dockerfile.includes('ARG FFMPEG_VERSION='), 'Dockerfile pins an ffmpeg static build version')
-  t.ok(dockerfile.includes('johnvansickle.com/ffmpeg/releases'), 'Dockerfile downloads static ffmpeg release assets')
+  t.ok(dockerfile.includes('github.com/BtbN/FFmpeg-Builds/releases/download/latest'), 'Dockerfile downloads static ffmpeg release assets from GitHub releases')
+  t.ok(dockerfile.includes('/tmp/ffmpeg/bin/ffmpeg'), 'Dockerfile copies ffmpeg from the static build bin directory')
   t.ok(dockerfile.includes('/usr/local/bin/ffmpeg -version'), 'Dockerfile validates ffmpeg during image build')
   t.ok(dockerfile.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH=/usr/local/bin/ffmpeg'), 'final image exposes configured ffmpeg path to archive jobs')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg'), 'final image includes ffmpeg executable')

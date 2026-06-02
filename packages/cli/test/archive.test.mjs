@@ -438,6 +438,95 @@ test('createArchiver getSourcesStatus exposes per-source state for the WebUI', a
   t.alike(status[0].counts, { archived: 1, failed: 1, abandoned: 0 })
 })
 
+test('createArchiver poll preserves archive source channel keys after publishing', async (t) => {
+  const metaDb = makeFakeMetaDb()
+  const config = resolveRelayConfig({
+    storage: { path: '/tmp/peartube-test', maxBytes: 100000 },
+    archive: {
+      enabled: true,
+      tmpPath: '/tmp/peartube-test/archive-tmp',
+      sources: [{ url: 'https://www.youtube.com/@chan', label: 'Chan' }]
+    }
+  }, { env: {} })
+
+  const archiver = createArchiver({
+    config,
+    runtime: makeFakeRuntime({ metaDb }),
+    logger: makeFakeLogger(),
+    fs: makeFakeFs({ '/tmp/v1.mp4': 'video bytes' }),
+    ytDlp: {
+      async listVideos() { return [{ id: 'v1', title: 'Video 1', webpageUrl: 'https://yt/v1' }] },
+      async downloadVideo() { return { videoFile: '/tmp/v1.mp4' } }
+    },
+    publisherFactory: () => ({
+      async publishVideo() {
+        return {
+          videoId: 'pt-v1',
+          bytes: 200,
+          channelKey: 'channel-key-hex',
+          publicBeeKey: 'public-bee-hex'
+        }
+      }
+    }),
+    setIntervalFn: () => null,
+    clearIntervalFn: () => {},
+    setTimeoutFn: () => {}
+  })
+
+  await archiver.runOnce()
+
+  const sourceRecord = await createArchiveState({ metaDb }).getSource('youtube:@chan')
+  t.is(sourceRecord.channelKey, 'channel-key-hex')
+  t.is(sourceRecord.publicBeeKey, 'public-bee-hex')
+})
+
+test('createArchiver reannounces archived source channels even when every video is already archived', async (t) => {
+  const metaDb = makeFakeMetaDb()
+  const config = resolveRelayConfig({
+    storage: { path: '/tmp/peartube-test', maxBytes: 100000 },
+    archive: {
+      enabled: true,
+      tmpPath: '/tmp/peartube-test/archive-tmp',
+      sources: [{ url: 'https://www.youtube.com/@chan', label: 'Chan' }]
+    }
+  }, { env: {} })
+  const state = createArchiveState({ metaDb })
+  await state.markArchived('youtube:@chan', 'v1', { peartubeVideoId: 'pt-v1', bytes: 100, title: 'Video 1' })
+
+  const ensured = []
+  const archiver = createArchiver({
+    config,
+    runtime: makeFakeRuntime({ metaDb }),
+    logger: makeFakeLogger(),
+    fs: makeFakeFs(),
+    ytDlp: {
+      async listVideos() { return [{ id: 'v1', title: 'Video 1', webpageUrl: 'https://yt/v1' }] },
+      async downloadVideo() { throw new Error('already archived video should not be downloaded') }
+    },
+    publisherFactory: () => ({
+      async ensureSourceChannel(source) {
+        ensured.push(source.sourceId)
+        await state.putSource(source.sourceId, {
+          url: source.url,
+          type: source.type,
+          channelKey: 'channel-key-hex',
+          publicBeeKey: 'public-bee-hex'
+        })
+      }
+    }),
+    setIntervalFn: () => null,
+    clearIntervalFn: () => {},
+    setTimeoutFn: () => {}
+  })
+
+  await archiver.runOnce()
+
+  t.alike(ensured, ['youtube:@chan'])
+  const sourceRecord = await state.getSource('youtube:@chan')
+  t.is(sourceRecord.channelKey, 'channel-key-hex')
+  t.is(sourceRecord.publicBeeKey, 'public-bee-hex')
+})
+
 test('createArchiver returns no-op when disabled', async (t) => {
   const metaDb = makeFakeMetaDb()
   const config = resolveRelayConfig({}, { env: {} })

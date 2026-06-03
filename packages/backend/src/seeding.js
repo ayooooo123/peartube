@@ -384,6 +384,46 @@ export class SeedingManager {
   }
 
   /**
+   * Clear persisted partial download intents that reserve cache storage but may
+   * not have been promoted into activeSeeds yet.
+   * @param {{ excludeKeys?: Set<string> | string[] }} [options]
+   * @returns {Promise<{ clearedBytes: number, clearedCount: number, clearedBlob: boolean }>}
+   */
+  async clearDownloadIntents(options = {}) {
+    const excludeKeys = normalizeProtectedSeedKeys(options.excludeKeys)
+    if (typeof this.metaDb?.createReadStream !== 'function') {
+      return { clearedBytes: 0, clearedCount: 0, clearedBlob: false }
+    }
+
+    const entries = []
+    for await (const entry of this.metaDb.createReadStream({ gte: 'download-intent:', lt: 'download-intent:~' })) {
+      const intent = entry?.value
+      if (!intent?.driveKey || !intent?.videoPath) continue
+      const seedKey = `${intent.driveKey}:${intent.videoPath}`
+      if (excludeKeys.has(seedKey)) continue
+      entries.push({ key: entry.key, seedKey, intent })
+    }
+
+    let clearedBytes = 0
+    let clearedBlob = false
+    for (const entry of entries) {
+      const intent = entry.intent
+      clearedBytes += Math.max(0, Number(intent.totalBytes || intent.byteLength || 0) || 0)
+      clearedBlob = (await this.clearSeedBlob({
+        driveKey: intent.driveKey,
+        videoPath: intent.videoPath,
+        blobId: intent.blobId || null,
+        blobsCoreKey: intent.blobsCoreKey || null
+      })) || clearedBlob
+      await this.metaDb.del?.(entry.key)
+      this.activeSeeds.delete(entry.seedKey)
+    }
+
+    if (entries.length > 0) await this.persistSeeds()
+    return { clearedBytes: Math.round(clearedBytes), clearedCount: entries.length, clearedBlob }
+  }
+
+  /**
    * Persist seeds to database
    */
   async persistSeeds() {
@@ -443,6 +483,13 @@ export class SeedingManager {
     this.config.maxStorageGB = gb;
     await this.metaDb.put('seeding-config', this.config);
     console.log('[SeedingManager] Set max storage to', gb, 'GB');
+    const partials = await this.clearDownloadIntents()
+    if (partials.clearedBlob) {
+      await collectCorestoreGarbage(this.store, {
+        label: 'partial download intent clear',
+        log: console.log
+      });
+    }
     // Enforce quota with new limit
     await this.enforceQuota();
   }
@@ -513,6 +560,10 @@ export class SeedingManager {
       this.activeSeeds.delete(key);
       clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
     }
+
+    const partials = await this.clearDownloadIntents({ excludeKeys: new Set(this.activeSeeds.keys()) })
+    clearedBytes += partials.clearedBytes
+    clearedBlob = partials.clearedBlob || clearedBlob
 
     await this.persistSeeds();
 

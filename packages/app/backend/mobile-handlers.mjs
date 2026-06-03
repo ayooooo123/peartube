@@ -13,6 +13,28 @@
  * @param {Object} B - Backend object to attach handlers to
  * @param {Object} deps - Dependencies from the backend context
  */
+function normalizeSeedingStatus(s) {
+  const maxStorageGB = Number.isFinite(Number(s?.maxStorageGB))
+    ? Number(s.maxStorageGB)
+    : Number.isFinite(Number(s?.config?.maxStorageGB))
+      ? Number(s.config.maxStorageGB)
+      : 10
+  const activeSeeds = Number.isFinite(Number(s?.activeSeeds))
+    ? Number(s.activeSeeds)
+    : Array.isArray(s?.seeds)
+      ? s.seeds.length
+      : 0
+  return {
+    status: {
+      enabled: Boolean(s?.config?.autoSeedWatched),
+      usedStorage: Math.max(0, Number(s?.storageUsedBytes || 0) || 0),
+      maxStorage: Math.max(0, maxStorageGB * 1024 * 1024 * 1024),
+      seedingCount: Math.max(0, activeSeeds)
+    }
+  }
+}
+
+
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder } = deps
   const refreshPublishedChannelFeed = async (driveKey) => {
@@ -197,7 +219,7 @@ export function attachMobileHandlers(B, deps) {
   }
 
   // --- Seeding/Storage handlers ---
-  B.getSeedingStatus = async () => { const s = await api.getSeedingStatus(); return { status: { enabled: s.config?.autoSeedWatched || false, usedStorage: s.storageUsedBytes || 0, maxStorage: (s.maxStorageGB || 10) * 1024 * 1024 * 1024, seedingCount: s.activeSeeds || 0 } } }
+  B.getSeedingStatus = async () => normalizeSeedingStatus(await api.getSeedingStatus())
   B.setSeedingConfig = async (r) => { await api.setSeedingConfig(r.config || {}); return { success: true } }
   B.pinChannel = async (r) => { await api.pinChannel(r.channelKey); return { success: true } }
   B.unpinChannel = async (r) => { await api.unpinChannel(r.channelKey); return { success: true } }

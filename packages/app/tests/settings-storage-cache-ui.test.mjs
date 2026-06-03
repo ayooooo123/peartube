@@ -24,8 +24,25 @@ test('settings renders storage controls before account onboarding', () => {
   assert.match(storageSection, /GB total/)
   assert.match(storageSection, /GB cached/)
   assert.match(storageSection, /app\/P2P data outside tracked peer cache/)
+  assert.match(settingsSource, /totalStorageGB \?\? storageStats\?\.usedGB/)
+  assert.match(settingsSource, /totalStorageBytes \?\? storageStats\?\.usedBytes/)
   assert.match(storageSection, /handleStorageLimitChange/)
   assert.match(storageSection, /handleClearCache/)
+})
+
+test('native diagnostics cache meter prefers measured storage totals', () => {
+  const androidSource = fs.readFileSync(path.join(__dirname, '..', 'components', 'native-diagnostics', 'DiagnosticsPanel.android.tsx'), 'utf8')
+  const iosSource = fs.readFileSync(path.join(__dirname, '..', 'components', 'native-diagnostics', 'DiagnosticsPanel.ios.tsx'), 'utf8')
+  const webSource = fs.readFileSync(path.join(__dirname, '..', 'components', 'native-diagnostics', 'DiagnosticsPanel.web.tsx'), 'utf8')
+  const typesSource = fs.readFileSync(path.join(__dirname, '..', 'components', 'native-diagnostics', 'types.ts'), 'utf8')
+
+  for (const source of [androidSource, iosSource, webSource]) {
+    assert.match(source, /totalStorageGB \?\? storageStats\?\.usedGB/)
+  }
+  assert.match(androidSource, /totalStorageBytes \?\? storageStats\?\.usedBytes/)
+  assert.match(iosSource, /totalStorageBytes \?\? storageStats\?\.usedBytes/)
+  assert.match(typesSource, /totalStorageBytes\?: number/)
+  assert.match(typesSource, /untrackedStorageGB\?: string/)
 })
 
 test('settings exposes a custom cache limit input rather than only preset buttons', () => {

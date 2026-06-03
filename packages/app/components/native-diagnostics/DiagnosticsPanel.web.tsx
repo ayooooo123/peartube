@@ -15,12 +15,13 @@ export default function DiagnosticsPanel({
   storageStats,
   seedingStatus,
 }: DiagnosticsPanelProps) {
+  const cacheUsedGB = storageStats?.totalStorageGB ?? storageStats?.usedGB
   return (
     <View style={styles.card}>
       <Text style={styles.title}>Native diagnostics</Text>
       <Text style={styles.text}>P2P: {swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0} connections</Text>
       <Text style={styles.text}>
-        Cache: {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'loading...'}
+        Cache: {storageStats ? `${cacheUsedGB} GB used of ${storageStats.maxGB} GB` : 'loading...'}
       </Text>
       <Text style={styles.text}>
         Seeding: {seedingStatus?.status?.enabled ? 'enabled' : 'disabled'}

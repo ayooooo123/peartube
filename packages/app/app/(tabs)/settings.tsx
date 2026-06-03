@@ -18,6 +18,10 @@ interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
+  totalStorageBytes?: number
+  totalStorageGB?: string
+  untrackedStorageBytes?: number
+  untrackedStorageGB?: string
 }
 
 interface TranscodeSettings {
@@ -63,6 +67,10 @@ export default function SettingsScreen() {
   const [swarmStatus, setSwarmStatus] = useState<any | null>(null)
   const [seedingStatus, setSeedingStatus] = useState<any | null>(null)
   const nativeButtonStyle = { width: '100%' }
+  const peerCacheUsedBytes = storageStats?.totalStorageBytes ?? storageStats?.usedBytes ?? 0
+  const peerCacheUsedGB = storageStats?.totalStorageGB ?? storageStats?.usedGB
+  const trackedCacheGB = storageStats?.usedGB ?? '0.00'
+  const untrackedStorageGB = storageStats?.untrackedStorageGB ?? '0.00'
 
   // Check if channel is published
   const checkPublishStatus = useCallback(async () => {
@@ -493,7 +501,7 @@ export default function SettingsScreen() {
           <View className="flex-1 ml-4">
             <Text className="text-label text-pear-text">Peer Content Cache</Text>
             <Text className="text-caption text-pear-text-muted mt-0.5">
-              {storageStats ? `${storageStats.usedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
+              {storageStats ? `${peerCacheUsedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
             </Text>
           </View>
         </View>
@@ -503,12 +511,20 @@ export default function SettingsScreen() {
             <View className="h-2 bg-pear-bg-card rounded-full overflow-hidden">
               <View
                 className="h-full bg-pear-primary rounded-full"
-                style={{ width: `${Math.min(100, storageStats.maxBytes > 0 ? (storageStats.usedBytes / storageStats.maxBytes) * 100 : 0)}%` }}
+                style={{ width: `${Math.min(100, storageStats.maxBytes > 0 ? (peerCacheUsedBytes / storageStats.maxBytes) * 100 : 0)}%` }}
               />
             </View>
             <Text className="text-caption text-pear-text-muted mt-2">
               {storageStats.seedCount} cached videos • {storageStats.pinnedCount} pinned channels
             </Text>
+            <Text className="text-caption text-pear-text-muted mt-1">
+              PearTube Storage: {peerCacheUsedGB} GB total • {trackedCacheGB} GB cached
+            </Text>
+            {storageStats.untrackedStorageGB !== undefined ? (
+              <Text className="text-caption text-pear-text-muted mt-1">
+                {untrackedStorageGB} GB app/P2P data outside tracked peer cache
+              </Text>
+            ) : null}
           </View>
         )}
 

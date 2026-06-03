@@ -21,14 +21,16 @@ export default function DiagnosticsPanel({
   loading,
   onRefresh,
 }: DiagnosticsPanelProps) {
+  const cacheUsedBytes = storageStats?.totalStorageBytes ?? storageStats?.usedBytes ?? 0
+  const cacheUsedGB = storageStats?.totalStorageGB ?? storageStats?.usedGB
   const cacheRatio = useMemo(() => {
     if (!storageStats?.maxBytes) return 0
-    return Math.max(0, Math.min(1, storageStats.usedBytes / storageStats.maxBytes))
-  }, [storageStats])
+    return Math.max(0, Math.min(1, cacheUsedBytes / storageStats.maxBytes))
+  }, [cacheUsedBytes, storageStats])
 
   const p2pLabel = swarmStatus?.swarmOffline
     ? 'Network paused'
-    : (swarmStatus?.connected || 0) > 0
+    : (Boolean(swarmStatus?.connected) || Number(swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0) > 0)
       ? 'Connected to peers'
       : 'Searching for peers'
 
@@ -86,7 +88,7 @@ export default function DiagnosticsPanel({
             value={cacheRatio}
             min={0}
             max={1}
-            currentValueLabel={storageStats ? `${storageStats.usedGB} GB used` : 'Loading…'}
+            currentValueLabel={storageStats ? `${cacheUsedGB} GB used` : 'Loading…'}
             maximumValueLabel={storageStats ? `${storageStats.maxGB} GB budget` : '—'}
           >
             Cached content budget

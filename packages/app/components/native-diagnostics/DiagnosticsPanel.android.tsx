@@ -29,14 +29,17 @@ export default function DiagnosticsPanel({
   loading,
   onRefresh,
 }: DiagnosticsPanelProps) {
+  const cacheUsedBytes = storageStats?.totalStorageBytes ?? storageStats?.usedBytes ?? 0
+  const cacheUsedGB = storageStats?.totalStorageGB ?? storageStats?.usedGB
+  const trackedCacheGB = storageStats?.usedGB ?? '0.00'
   const cacheRatio = useMemo(() => {
     if (!storageStats?.maxBytes) return 0
-    return Math.max(0, Math.min(1, storageStats.usedBytes / storageStats.maxBytes))
-  }, [storageStats])
+    return Math.max(0, Math.min(1, cacheUsedBytes / storageStats.maxBytes))
+  }, [cacheUsedBytes, storageStats])
 
   const p2pLabel = swarmStatus?.swarmOffline
     ? 'Network paused'
-    : (swarmStatus?.connected || 0) > 0
+    : (Boolean(swarmStatus?.connected) || Number(swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0) > 0)
       ? 'Connected to peers'
       : 'Searching for peers'
 
@@ -99,8 +102,13 @@ export default function DiagnosticsPanel({
             strokeCap="round"
           />
           <Text style={styles.detailText}>
-            {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
+            {storageStats ? `${cacheUsedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
           </Text>
+          {storageStats?.totalStorageGB ? (
+            <Text style={styles.detailText}>
+              {trackedCacheGB} GB tracked cache • {storageStats.untrackedStorageGB ?? '0.00'} GB other app/P2P data
+            </Text>
+          ) : null}
           <Text style={styles.detailText}>
             {storageStats ? `${storageStats.seedCount} cached videos • ${storageStats.pinnedCount} pinned channels` : 'Loading cache stats…'}
           </Text>

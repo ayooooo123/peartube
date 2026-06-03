@@ -5,6 +5,10 @@ export interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
+  totalStorageBytes?: number
+  totalStorageGB?: string
+  untrackedStorageBytes?: number
+  untrackedStorageGB?: string
 }
 
 export interface SeedingStatus {

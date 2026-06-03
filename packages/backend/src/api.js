@@ -1886,14 +1886,16 @@ export function createApi({
           const totalBlocks = blobId.blockLength
           const totalBytes = blobId.byteLength || blobMeta.byteLength || 0
 
+          const normalizedBlobId = typeof blobMeta.blobId === 'string'
+            ? blobMeta.blobId
+            : `${blobId.blockOffset}:${blobId.blockLength}:${blobId.byteOffset}:${blobId.byteLength}`
+
           if (!existingIntent && blobMeta?.blobsCoreKey) {
             await saveDownloadIntent(ctx, {
               driveKey,
               videoPath,
               blobsCoreKey: blobMeta.blobsCoreKey,
-              blobId: typeof blobMeta.blobId === 'string'
-                ? blobMeta.blobId
-                : `${blobId.blockOffset}:${blobId.blockLength}:${blobId.byteOffset}:${blobId.byteLength}`,
+              blobId: normalizedBlobId,
               startBlock,
               endBlock,
               totalBlocks,
@@ -1901,6 +1903,20 @@ export function createApi({
               mimeType: v?.mimeType || existingIntent?.mimeType || '',
               startedAt: Date.now()
             }).catch(err => console.log('[API] Failed to save download intent:', err?.message))
+          }
+
+          if (seedingManager) {
+            await seedingManager.addSeed(driveKey, videoPath, 'watched', {
+              blockLength: totalBlocks,
+              byteLength: totalBytes,
+              publicBeeKey: publicBeeKey || v?.publicBeeKey || existingIntent?.publicBeeKey || null,
+              blobId: normalizedBlobId,
+              blobsCoreKey: blobMeta.blobsCoreKey,
+              thumbnailBlobId: v?.thumbnailBlobId || existingIntent?.thumbnailBlobId || null,
+              thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || existingIntent?.thumbnailBlobsCoreKey || null,
+              mimeType: v?.mimeType || existingIntent?.mimeType || null,
+              thumbnailMimeType: v?.thumbnailMimeType || existingIntent?.thumbnailMimeType || null
+            }, { protectSelf: true }).catch(err => console.log('[API] Failed to register seed intent:', err?.message))
           }
 
           // Count initial blocks already available
@@ -2056,8 +2072,10 @@ export function createApi({
             uploadSpeed: () => (Date.now() - lastUploadTime > 2000 ? 0 : uploadSpeed)
           }
 
-          core.on('download', onDownload)
-          core.on('upload', onUpload)
+          if (!wasCached || videoStats) {
+            core.on('download', onDownload)
+            core.on('upload', onUpload)
+          }
           if (videoStats) {
             videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
               core.off('download', onDownload)
@@ -2652,8 +2670,8 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        const clearedBytes = await seedingManager.clearCache();
-        return { success: true, clearedBytes };
+        const clearResult = await seedingManager.clearCache();
+        return { success: true, ...clearResult };
       }
       return { success: false, clearedBytes: 0 };
     },

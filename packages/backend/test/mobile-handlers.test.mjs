@@ -79,6 +79,34 @@ test('feed handlers use getPublicFeed for public and canonical RPC names', async
   assert.deepEqual(calls, ['getPublicFeed', 'getPublicFeed'])
 })
 
+test('mobile getSeedingStatus reports normalized backend cache counters', async () => {
+  const backend = {}
+  const deps = createDeps({
+    api: {
+      async getSeedingStatus() {
+        return {
+          activeSeeds: 0,
+          storageUsedBytes: 0,
+          maxStorageGB: 5,
+          config: { autoSeedWatched: false },
+          seeds: [],
+        }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  assert.deepEqual(await backend.getSeedingStatus(), {
+    status: {
+      enabled: false,
+      usedStorage: 0,
+      maxStorage: 5 * 1024 * 1024 * 1024,
+      seedingCount: 0,
+    },
+  })
+})
+
 test('uploadVideo re-gossips an already-published mobile channel after thumbnail metadata is stored', async () => {
   const backend = {}
   const calls = []

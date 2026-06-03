@@ -572,7 +572,29 @@ B.removeComment = async (r: any) => { try { const res = await api.removeComment(
 B.addReaction = async (r: any) => { try { const res = await api.addReaction(r.channelKey, r.videoId, r.reactionType, r.publicBeeKey); return { success: res.success, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
 B.removeReaction = async (r: any) => { try { const res = await api.removeReaction(r.channelKey, r.videoId, r.publicBeeKey); return { success: res.success, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
 B.getReactions = async (r: any) => { try { const res = await api.getReactions(r.channelKey, r.videoId, r.publicBeeKey); const counts = Object.entries(res?.counts && typeof res.counts === 'object' ? res.counts : {}).map(([t, c]) => ({ reactionType: t, count: typeof c === 'number' ? c : 0 })); return { success: Boolean(res?.success), counts, userReaction: res?.userReaction || null, error: res?.error || null } } catch (e: any) { return { success: false, counts: [], userReaction: null, error: e?.message } } }
-B.getSeedingStatus = async () => { const s = await api.getSeedingStatus(); return { status: { enabled: s.config?.autoSeedWatched || false, usedStorage: s.storageUsedBytes || 0, maxStorage: (s.maxStorageGB || 10) * 1024 * 1024 * 1024, seedingCount: s.activeSeeds || 0 } } }
+
+function normalizeSeedingStatus(s: any) {
+  const maxStorageGB = Number.isFinite(Number(s?.maxStorageGB))
+    ? Number(s.maxStorageGB)
+    : Number.isFinite(Number(s?.config?.maxStorageGB))
+      ? Number(s.config.maxStorageGB)
+      : 10
+  const activeSeeds = Number.isFinite(Number(s?.activeSeeds))
+    ? Number(s.activeSeeds)
+    : Array.isArray(s?.seeds)
+      ? s.seeds.length
+      : 0
+  return {
+    status: {
+      enabled: Boolean(s?.config?.autoSeedWatched),
+      usedStorage: Math.max(0, Number(s?.storageUsedBytes || 0) || 0),
+      maxStorage: Math.max(0, maxStorageGB * 1024 * 1024 * 1024),
+      seedingCount: Math.max(0, activeSeeds)
+    }
+  }
+}
+
+B.getSeedingStatus = async () => normalizeSeedingStatus(await api.getSeedingStatus())
 B.setSeedingConfig = async (r: any) => { await api.setSeedingConfig(r.config); return { success: true } }
 B.getTranscodeSettings = async () => api.getTranscodeSettings()
 B.setTranscodeSettings = async (r: any) => api.setTranscodeSettings(r)

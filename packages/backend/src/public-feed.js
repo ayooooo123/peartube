@@ -25,7 +25,8 @@ import { encodeIndexKey } from './index-encoder.js'
 import { swarmHasConnection } from './swarm-peer-dial.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
-  CHANNEL_ROOT_DESCRIPTOR_SCHEMA
+  CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
+  verifySignedChannelRootDescriptor
 } from './channel-descriptor.js'
 
 const log = logger('PublicFeed')
@@ -240,6 +241,7 @@ export class PublicFeed {
 
   _markRestoredDiscoveryOnly(entry, restoredFrom) {
     if (!entry || typeof entry !== 'object') return entry
+    const preserveRelayPlayable = entry.source === 'relay-cache' || entry.relayServing === true || entry.relayRole === 'cache'
     const marked = {
       ...entry,
       discoveryOnly: true,
@@ -248,14 +250,18 @@ export class PublicFeed {
       requiresAvailabilityProbe: true,
     }
     if (Array.isArray(marked.previewVideos)) {
-      marked.previewVideos = marked.previewVideos.map((video) => ({
-        ...video,
-        availability: video?.availability === 'playable' ? 'unknown' : (video?.availability || 'unknown'),
-        byteAvailability: video?.byteAvailability === 'playable' ? 'unknown' : (video?.byteAvailability || 'unknown'),
-        discoveryOnly: true,
-        restoredFromCache: true,
-        requiresAvailabilityProbe: true,
-      }))
+      marked.previewVideos = marked.previewVideos.map((video) => {
+        const hasDirectBlobRef = Boolean(video?.blobId && video?.blobsCoreKey)
+        const keepPlayable = preserveRelayPlayable && hasDirectBlobRef
+        return {
+          ...video,
+          availability: keepPlayable ? (video?.availability || 'playable') : (video?.availability === 'playable' ? 'unknown' : (video?.availability || 'unknown')),
+          byteAvailability: keepPlayable ? (video?.byteAvailability || video?.availability || 'playable') : (video?.byteAvailability === 'playable' ? 'unknown' : (video?.byteAvailability || 'unknown')),
+          discoveryOnly: true,
+          restoredFromCache: true,
+          requiresAvailabilityProbe: true,
+        }
+      })
     }
     return marked
   }
@@ -293,6 +299,51 @@ export class PublicFeed {
     const currentSeq = Number(current?.descriptor?.seq || 0)
     const nextSeq = Number(next?.descriptor?.seq || 0)
     return nextSeq >= currentSeq
+  }
+
+  async _verifyPeerFeedSnapshot(driveKey, source, snapshot = {}, publicBeeKey = null) {
+    const isRelayCatalogSnapshot = snapshot?.source === 'relay-cache' || snapshot?.relayRole === 'cache' || snapshot?.relayServing === true
+    if (source === 'relay-cache' || isRelayCatalogSnapshot) return { ok: true, signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor) }
+    if (source !== 'peer') return { ok: true, signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor) }
+
+    const signedDescriptor = this._normalizeSignedDescriptor(snapshot?.signedDescriptor)
+    if (!signedDescriptor) return { ok: false, reason: 'missing-signed-descriptor' }
+
+    const verified = await verifySignedChannelRootDescriptor(signedDescriptor)
+    if (!verified?.valid) return { ok: false, reason: verified?.error || 'invalid-signed-descriptor' }
+
+    const expectedDriveKey = typeof driveKey === 'string' ? driveKey.toLowerCase() : ''
+    const expectedPublicBeeKey = this._resolvePublicBeeKey({ publicBeeKey, ...(snapshot || {}) })
+    const descriptor = verified.descriptor || signedDescriptor.descriptor
+    if (descriptor.channelId !== expectedDriveKey) return { ok: false, reason: 'descriptor-channel-mismatch' }
+    if (expectedPublicBeeKey && descriptor.metadataKey !== expectedPublicBeeKey) return { ok: false, reason: 'descriptor-metadata-mismatch' }
+
+    return {
+      ok: true,
+      signedDescriptor: {
+        ...signedDescriptor,
+        descriptor
+      }
+    }
+  }
+
+  async _ingestVerifiedPeerEntry(driveKey, source, publicBeeKey, snapshot) {
+    const verification = await this._verifyPeerFeedSnapshot(driveKey, source, snapshot, publicBeeKey)
+    if (!verification.ok) {
+      log.debug('Rejected feed entry', { driveKey: String(driveKey || '').slice(0, 16), source, reason: verification.reason })
+      return { added: false, updated: false, accepted: false }
+    }
+    const verifiedSnapshot = verification.signedDescriptor
+      ? { ...(snapshot || {}), signedDescriptor: verification.signedDescriptor }
+      : snapshot
+    const resolvedPublicBeeKey = this._resolvePublicBeeKey({ publicBeeKey, ...(verifiedSnapshot || {}) })
+    if (this.addEntry(driveKey, source, resolvedPublicBeeKey, verifiedSnapshot)) {
+      return { added: true, updated: false, accepted: true }
+    }
+    if (this._applyEntrySnapshot(driveKey, verifiedSnapshot)) {
+      return { added: false, updated: true, accepted: true }
+    }
+    return { added: false, updated: false, accepted: true }
   }
 
   _resolvePublicBeeKey(entry) {
@@ -363,9 +414,14 @@ export class PublicFeed {
     const entry = this.entries.get(driveKey)
     if (!entry) return false
 
+    const nextSignedDescriptor = this._normalizeSignedDescriptor(snapshot.signedDescriptor)
+    if (snapshot?.signedDescriptor && !this._shouldApplySignedDescriptor(entry.signedDescriptor, nextSignedDescriptor)) {
+      return false
+    }
+
     let changed = false
 
-    const nextPublicBeeKey = this._resolvePublicBeeKey(snapshot)
+    const nextPublicBeeKey = this._resolvePublicBeeKey(nextSignedDescriptor || snapshot)
     if (typeof nextPublicBeeKey === 'string' && nextPublicBeeKey && nextPublicBeeKey !== entry.publicBeeKey) {
       entry.publicBeeKey = nextPublicBeeKey
       changed = true
@@ -434,7 +490,6 @@ export class PublicFeed {
       }
     }
 
-    const nextSignedDescriptor = this._normalizeSignedDescriptor(snapshot.signedDescriptor)
     if (this._shouldApplySignedDescriptor(entry.signedDescriptor, nextSignedDescriptor)) {
       const currentSeq = Number(entry.signedDescriptor?.descriptor?.seq || -1)
       const nextSeq = Number(nextSignedDescriptor?.descriptor?.seq || -1)
@@ -1535,76 +1590,77 @@ export class PublicFeed {
 
     // Handle HAVE_FEED - peer is sharing their known channels
     if (msg.type === 'HAVE_FEED') {
-      let added = 0;
-      let updated = 0;
-      const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
-      let announcedKeys = []
-      let receivedCount = 0
+      void (async () => {
+        let added = 0;
+        let updated = 0;
+        let announcedKeys = []
+        let receivedCount = 0
 
-      // Prefer new entries format (with publicBeeKey)
-      if (msg.entries && Array.isArray(msg.entries)) {
-      log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
-        receivedCount = msg.entries.length
-        for (const entry of msg.entries) {
-          if (!entry?.driveKey) continue
-          const resolvedPublicBeeKey = this._resolvePublicBeeKey(entry)
-          if (!resolvedPublicBeeKey && !entry?.signedDescriptor && !isValidKey(entry?.metadataKey)) continue
-          announcedKeys.push(entry.driveKey)
-          if (this.addEntry(entry.driveKey, 'peer', resolvedPublicBeeKey, entry)) {
-            added++;
-          } else if (this._applyEntrySnapshot(entry.driveKey, entry)) {
-            updated++;
+        // Prefer new entries format (with publicBeeKey)
+        if (msg.entries && Array.isArray(msg.entries)) {
+          log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
+          receivedCount = msg.entries.length
+          for (const entry of msg.entries) {
+            if (!entry?.driveKey) continue
+            const entrySource = 'peer'
+            const resolvedPublicBeeKey = this._resolvePublicBeeKey(entry)
+            const result = await this._ingestVerifiedPeerEntry(entry.driveKey, entrySource, resolvedPublicBeeKey, entry)
+            if (!result.accepted) continue
+            announcedKeys.push(entry.driveKey)
+            if (result.added) added++
+            else if (result.updated) updated++
           }
         }
-      }
-      // Fallback to legacy keys array
-      else if (msg.keys && Array.isArray(msg.keys)) {
-      log.debug('HAVE_FEED received (legacy keys)', { count: msg.keys.length })
-        receivedCount = msg.keys.length
-        for (const key of msg.keys) {
-          if (!key) continue
-          announcedKeys.push(key)
-          if (this.addEntry(key, 'peer')) {
-            added++;
-          }
+        // Fallback to legacy keys array. Legacy drive-key-only gossip is not authoritative enough
+        // to create new public feed entries, but still records what this peer claims to know.
+        else if (msg.keys && Array.isArray(msg.keys)) {
+          log.debug('HAVE_FEED received (legacy keys)', { count: msg.keys.length })
+          receivedCount = msg.keys.length
+          announcedKeys = msg.keys.filter((key) => typeof key === 'string' && key.length > 0)
         }
-      }
 
-      let peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
-      this._enforceFeedEntryLimit()
-      peerSetChanged = this._prunePeerFeedKeysToEntries(conn) || peerSetChanged
-      if (!this._startupEvents.some((event) => event.name === 'first-have-feed-received')) {
-        this._recordStartupEvent('first-have-feed-received', { keys: announcedKeys.length, entries: receivedCount })
-      }
-      try {
-        this.onFeedSync?.({ type: 'HAVE_FEED', added, received: receivedCount });
-      } catch {}
+        let peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
+        this._enforceFeedEntryLimit()
+        peerSetChanged = this._prunePeerFeedKeysToEntries(conn) || peerSetChanged
+        if (!this._startupEvents.some((event) => event.name === 'first-have-feed-received')) {
+          this._recordStartupEvent('first-have-feed-received', { keys: announcedKeys.length, entries: receivedCount })
+        }
+        try {
+          this.onFeedSync?.({ type: 'HAVE_FEED', added, received: receivedCount });
+        } catch {}
 
-    log.debug('Merged feed entries', { added, total: this.entries.size })
-      if (added > 0 || updated > 0 || peerSetChanged) {
-        this.onFeedUpdate?.();
-        this._schedulePersistDiscovered()
-      }
+        log.debug('Merged feed entries', { added, total: this.entries.size })
+        if (added > 0 || updated > 0 || peerSetChanged) {
+          this.onFeedUpdate?.();
+          this._schedulePersistDiscovered()
+        }
+      })().catch((error) => {
+        log.warn('HAVE_FEED ingest failed', { error: error?.message || String(error) })
+      })
     }
     // Handle SUBMIT_CHANNEL - peer is broadcasting a new channel
     else if (msg.type === 'SUBMIT_CHANNEL' && msg.key) {
-      console.log('[PublicFeed] SUBMIT_CHANNEL received:', msg.key?.slice(0, 16), 'publicBee:', msg.publicBeeKey?.slice(0, 16) || 'none');
-      const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
-      const resolvedPublicBeeKey = this._resolvePublicBeeKey(msg)
-      if (!resolvedPublicBeeKey && !msg?.signedDescriptor && !isValidKey(msg?.metadataKey)) return
-      const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
-      const peerSetChanged = this._applyPeerFeedKeys(conn, [msg.key])
-      if (this.addEntry(msg.key, entrySource, resolvedPublicBeeKey, msg)) {
-        this.onFeedUpdate?.();
-        this._schedulePersistDiscovered()
-        // Re-gossip to other peers (exclude sender, include publicBeeKey)
-        this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
-      } else if (this._applyEntrySnapshot(msg.key, msg)) {
-        this.onFeedUpdate?.()
-        this._schedulePersistDiscovered()
-      } else if (peerSetChanged) {
-        this.onFeedUpdate?.()
-      }
+      void (async () => {
+        console.log('[PublicFeed] SUBMIT_CHANNEL received:', msg.key?.slice(0, 16), 'publicBee:', msg.publicBeeKey?.slice(0, 16) || 'none');
+        const resolvedPublicBeeKey = this._resolvePublicBeeKey(msg)
+        const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
+        const result = await this._ingestVerifiedPeerEntry(msg.key, entrySource, resolvedPublicBeeKey, msg)
+        if (!result.accepted) return
+        const peerSetChanged = this._applyPeerFeedKeys(conn, [msg.key])
+        if (result.added) {
+          this.onFeedUpdate?.();
+          this._schedulePersistDiscovered()
+          // Re-gossip to other peers (exclude sender, include publicBeeKey)
+          this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
+        } else if (result.updated) {
+          this.onFeedUpdate?.()
+          this._schedulePersistDiscovered()
+        } else if (peerSetChanged) {
+          this.onFeedUpdate?.()
+        }
+      })().catch((error) => {
+        log.warn('SUBMIT_CHANNEL ingest failed', { key: String(msg.key || '').slice(0, 16), error: error?.message || String(error) })
+      })
     }
     // Handle legacy NEED_FEED/FEED_RESPONSE for backwards compat
     else if (msg.type === 'NEED_FEED') {
@@ -1614,17 +1670,16 @@ export class PublicFeed {
     else if (msg.type === 'FEED_RESPONSE' && msg.keys) {
       console.log('[PublicFeed] FEED_RESPONSE received with', msg.keys?.length || 0, 'keys');
       let added = 0;
-      for (const key of msg.keys) {
-        if (this.addEntry(key, 'peer')) {
-          added++;
-        }
-      }
+      const announcedKeys = Array.isArray(msg.keys)
+        ? msg.keys.filter((key) => typeof key === 'string' && key.length > 0)
+        : []
+      const peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
       try {
         this.onFeedSync?.({ type: 'FEED_RESPONSE', added, received: msg.keys.length });
       } catch {}
-      if (added > 0) {
+      if (added > 0 || peerSetChanged) {
         this.onFeedUpdate?.();
-        this._schedulePersistDiscovered()
+        if (added > 0) this._schedulePersistDiscovered()
       }
     }
     else if (msg.type === 'AVAILABILITY_HINT_REQUEST' && msg.requestId && Array.isArray(msg.requests)) {

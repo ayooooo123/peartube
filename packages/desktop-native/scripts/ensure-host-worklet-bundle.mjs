@@ -25,7 +25,6 @@ const workletEntryRelativePath = path.join(
 
 const transformedSourceRoots = [
   path.join(packageRoot, 'Bridge'),
-  path.join(repoRoot, 'packages', 'app', 'backend'),
   path.join(repoRoot, 'packages', 'host', 'src'),
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend', 'src'),

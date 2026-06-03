@@ -15,7 +15,7 @@ import {
   mergeVideoMetadata,
 } from './bridge-core.mjs'
 import { resolvePlaybackViaClient } from './playback-resolution.mjs'
-import * as mobileHandlersModule from '../../app/backend/mobile-handlers.mjs'
+import { attachMobileHandlers } from '../../backend/src/mobile-handlers.js'
 import * as thumbnailModule from '../../backend/src/thumbnail.js'
 
 const defaultMpvWidth = 1280
@@ -139,7 +139,7 @@ async function loadBareFFmpeg() {
 async function ensureTranscoderModule() {
   if (transcoderModule) return transcoderModule
   if (!transcoderModulePromise) {
-    transcoderModulePromise = import('../../app/backend/transcoder.mjs')
+    transcoderModulePromise = import('../../backend/src/transcode/transcoder.mjs')
       .then((module) => {
         transcoderModule = module?.default ?? module
         return transcoderModule
@@ -474,7 +474,6 @@ async function createNativeSidecarBackend(options = {}) {
 
   const backend = backendSession?.backend
   const rpc = backendSession?.rpc
-  const attachMobileHandlers = mobileHandlersModule?.attachMobileHandlers
 
   if (backend && rpc && typeof attachMobileHandlers === 'function') {
     const path = pathModule?.default ?? pathModule
@@ -806,9 +805,13 @@ function registerHandlers(hrpcInstance, state, reportFatal, cleanupKeepAlive = n
     )
     const snapshot = await loadBrowseSnapshot(state)
 
+    if (!Number.isSafeInteger(ready?.protocolVersion)) {
+      throw new Error('Host ready payload missing protocolVersion')
+    }
+
     return {
       blobServerPort: ready?.blobServerPort ?? 0,
-      protocolVersion: ready?.protocolVersion ?? 2,
+      protocolVersion: ready.protocolVersion,
       storagePath: state.currentStoragePath || '',
       snapshot: toSchemaSnapshot(snapshot),
     }

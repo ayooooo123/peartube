@@ -18,7 +18,6 @@ const appNodeModulesPath = path.join(repoRoot, 'packages', 'app', 'node_modules'
 
 const sourceRoots = [
   path.join(packageRoot, 'Bridge'),
-  path.join(repoRoot, 'packages', 'app', 'backend'),
   path.join(repoRoot, 'packages', 'host'),
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend'),
@@ -131,11 +130,18 @@ function stageDirectory(tempRoot, sourcePath) {
 }
 
 function ensureGeneratedSpec() {
-  const generatedHrpcEntry = path.join(repoRoot, 'packages', 'spec', 'spec', 'hrpc', 'index.js')
-  if (fs.existsSync(generatedHrpcEntry)) return
+  const specRoot = path.join(repoRoot, 'packages', 'spec')
+  const generatedHrpcEntry = path.join(specRoot, 'spec', 'hrpc', 'index.js')
+  const schemaScript = path.join(specRoot, 'schema.cjs')
+  const generatorNewest = Math.max(
+    getNewestMtimeMs(schemaScript),
+    walkNewestMtimeMs(path.join(specRoot, 'lib')),
+  )
+  const generatedMtime = getNewestMtimeMs(generatedHrpcEntry)
+  if (generatedMtime > 0 && generatedMtime >= generatorNewest) return
 
-  const schemaScript = path.join(repoRoot, 'packages', 'spec', 'schema.cjs')
-  console.log('[bundle:native-sidecar:ensure] Generated HRPC spec missing; running schema.cjs')
+  const reason = generatedMtime > 0 ? 'Generated HRPC spec is stale' : 'Generated HRPC spec missing'
+  console.log(`[bundle:native-sidecar:ensure] ${reason}; running schema.cjs`)
   const result = spawnSync(process.execPath, [schemaScript], {
     cwd: path.dirname(schemaScript),
     stdio: 'inherit',

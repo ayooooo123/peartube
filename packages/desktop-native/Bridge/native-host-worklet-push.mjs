@@ -807,9 +807,13 @@ async function handleRequest(state, request, onError) {
     const snapshot = await loadBrowseSnapshot(state)
     writeDebugLog(`[bootstrap] browse snapshot loaded home=${snapshot?.stats?.homeCount ?? 'unknown'}`)
 
+    if (!Number.isSafeInteger(ready?.protocolVersion)) {
+      throw new Error('Host ready payload missing protocolVersion')
+    }
+
     return {
       blobServerPort: ready?.blobServerPort ?? null,
-      protocolVersion: ready?.protocolVersion ?? 2,
+      protocolVersion: ready.protocolVersion,
       storagePath: state.currentStoragePath,
       snapshot,
     }

@@ -1,6 +1,6 @@
 {
   "name": "@peartube/host",
-  "version": "0.1.115",
+  "version": "0.1.185",
   "private": true,
   "description": "Shared host bootstrap layer for PearTube",
   "type": "module",

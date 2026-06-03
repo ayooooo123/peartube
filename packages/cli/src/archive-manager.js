@@ -295,6 +295,9 @@ export function createYtDlpDownloader({
       const thumbnailUrl = typeof info?.thumbnail === 'string' && info.thumbnail.trim()
         ? info.thumbnail.trim()
         : null
+      const thumbnailFile = ['jpg', 'jpeg', 'webp', 'png']
+        .map((ext) => `${stem}.${ext}`)
+        .find((candidate) => typeof fs.existsSync === 'function' && fs.existsSync(candidate)) || null
       const creatorName = typeof info?.uploader === 'string' && info.uploader.trim()
         ? info.uploader.trim()
         : null
@@ -305,6 +308,7 @@ export function createYtDlpDownloader({
         description: input.description || sourceDescription || `Archived anonymously from ${new URL(input.url).hostname}`,
         duration: sourceDuration,
         thumbnailUrl,
+        thumbnailFile,
         creatorName,
         mimeType: filePath.endsWith('.webm') ? 'video/webm' : 'video/mp4',
         cleanup() {
@@ -355,7 +359,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       if (sourceKey) sourceChannels.set(sourceKey, entry)
       return entry
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl }) {
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl }) {
       const result = await uploadManager.uploadFromPath(channel, filePath, {
         title,
         description,
@@ -373,6 +377,29 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         thumbnailUrl
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
+
+      if (thumbnailFile && typeof fs?.readFileSync === 'function') {
+        try {
+          const image = fs.readFileSync(thumbnailFile)
+          const lower = String(thumbnailFile).toLowerCase()
+          const thumbnailMimeType = lower.endsWith('.webp')
+            ? 'image/webp'
+            : lower.endsWith('.png')
+              ? 'image/png'
+              : 'image/jpeg'
+          const thumbnailResult = await uploadManager.setThumbnailFromBuffer(channel, result.videoId, image, thumbnailMimeType)
+          if (thumbnailResult?.success) {
+            result.metadata = {
+              ...(result.metadata || {}),
+              thumbnailBlobId: thumbnailResult.thumbnailBlobId || result.metadata?.thumbnailBlobId || null,
+              thumbnailBlobsCoreKey: channel.blobsKeyHex || result.metadata?.thumbnailBlobsCoreKey || null,
+              thumbnailMimeType
+            }
+          }
+        } catch {
+          // Thumbnail attachment is best-effort; keep the imported video publishable.
+        }
+      }
       return result
     },
     async publishChannel({ channelKey }) {

@@ -1,6 +1,6 @@
 {
   "name": "peartube-monorepo",
-  "version": "0.1.115",
+  "version": "0.1.185",
   "private": true,
   "description": "PearTube monorepo - P2P video streaming for desktop and mobile",
   "scripts": {

@@ -122,8 +122,23 @@ function creatorSourceIdentityForInfo(info) {
   return null
 }
 
+function localThumbnailPathForVideo(filePath, fs) {
+  const value = String(filePath || '')
+  const ext = extname(value)
+  const stem = ext ? value.slice(0, -ext.length) : value
+  for (const candidate of [`${stem}.jpg`, `${stem}.jpeg`, `${stem}.webp`, `${stem}.png`]) {
+    try {
+      if (typeof fs.existsSync === 'function' && fs.existsSync(candidate)) return candidate
+    } catch {
+      // Ignore unreadable adjacent thumbnail candidates and keep scanning.
+    }
+  }
+  return null
+}
+
 function metadataForLocalVideo(video, fs) {
   const info = readYtDlpInfo(video.filePath, fs)
+  const thumbnailFile = localThumbnailPathForVideo(video.filePath, fs)
   if (!info) {
     return {
       title: video.title,
@@ -138,7 +153,8 @@ function metadataForLocalVideo(video, fs) {
       creatorHandle: null,
       sourceIdentity: null,
       duration: 0,
-      thumbnailUrl: null
+      thumbnailUrl: null,
+      thumbnailFile
     }
   }
   const categories = Array.isArray(info.categories) ? info.categories : []
@@ -158,7 +174,8 @@ function metadataForLocalVideo(video, fs) {
     creatorHandle: sourceIdentity?.creatorHandle || null,
     sourceIdentity,
     duration: Number(info.duration || 0) || 0,
-    thumbnailUrl: normalizeText(info.thumbnail || '', 1000) || null
+    thumbnailUrl: normalizeText(info.thumbnail || '', 1000) || null,
+    thumbnailFile
   }
 }
 
@@ -288,7 +305,8 @@ export async function mirrorLocalDriveToRelayChannel({
         creatorName: localMetadata.creatorName,
         creatorHandle: localMetadata.creatorHandle,
         duration: localMetadata.duration,
-        thumbnailUrl: localMetadata.thumbnailUrl
+        thumbnailUrl: localMetadata.thumbnailUrl,
+        thumbnailFile: localMetadata.thumbnailFile
       })
       const metadata = result?.metadata || result || {}
       const playbackSupport = getPlaybackSupportForMimeType(metadata.mimeType || video.mimeType)
@@ -315,7 +333,8 @@ export async function mirrorLocalDriveToRelayChannel({
         blobsCoreKey: metadata.blobsCoreKey || null,
         thumbnailBlobId: metadata.thumbnailBlobId || null,
         thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
-        thumbnailMimeType: metadata.thumbnailMimeType || null
+        thumbnailMimeType: metadata.thumbnailMimeType || null,
+        thumbnailUrl: metadata.thumbnailUrl || localMetadata.thumbnailUrl || null
       } : null
       if (previewVideo) channelInfo.previewVideos.push(previewVideo)
       imported.push({ ...video, title: localMetadata.title, videoId: result?.videoId || null, previewVideo, channelKey: channelInfo.channelKey })

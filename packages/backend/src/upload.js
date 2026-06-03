@@ -173,7 +173,7 @@ export function createUploadManager({ ctx }) {
      * @returns {Promise<UploadResult>}
      */
     async uploadFromPath(channel, filePath, options, fs, onProgress) {
-      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '', width = 0, height = 0 } = options;
+      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, thumbnailUrl, category = '', width = 0, height = 0 } = options;
 
       try {
         if (!channel.blobs) {
@@ -276,6 +276,7 @@ export function createUploadManager({ ctx }) {
           blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
           duration,
           thumbnail,
+          thumbnailUrl,
           category: String(category || ''),
           width,
           height,

@@ -220,6 +220,7 @@ export class PublicFeed {
           uploadedAt: Number(video?.uploadedAt || 0) || 0,
           duration: Number(video?.duration || 0) || 0,
           thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
+          thumbnailUrl: video?.thumbnailUrl ? String(video.thumbnailUrl) : null,
           blobId: video?.blobId ? String(video.blobId) : null,
           blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
           mimeType: video?.mimeType ? String(video.mimeType) : null,
@@ -311,6 +312,25 @@ export class PublicFeed {
     return null
   }
 
+  _entryHasPlayablePreview(entry) {
+    const videos = this._sanitizePreviewVideos(entry?.previewVideos)
+    return videos.some((video) => {
+      const availability = video?.byteAvailability || video?.availability
+      return availability === 'playable'
+    })
+  }
+
+  _isLocallyBackedEntry(entry) {
+    if (!entry || typeof entry !== 'object') return false
+    const driveKey = entry.driveKey || entry.channelKey
+    return (
+      entry.source === 'local' ||
+      entry.source === 'relay-cache' ||
+      (driveKey && this.publishedChannels.has(driveKey)) ||
+      this._entryHasPlayablePreview(entry)
+    )
+  }
+
   _serializeEntry(entry) {
     const publicBeeKey = this._resolvePublicBeeKey(entry)
     const serialized = {
@@ -319,7 +339,7 @@ export class PublicFeed {
       driveKey: entry.driveKey,
       publicBeeKey,
       relayRole: entry.relayRole || (entry.source === 'relay-cache' ? 'cache' : 'publisher'),
-      relayServing: Boolean(entry.relayServing || entry.source === 'relay-cache' || entry.source === 'local'),
+      relayServing: Boolean(entry.relayServing || entry.source === 'relay-cache' || entry.source === 'local' || this._entryHasPlayablePreview(entry)),
       discoveryOnly: Boolean(entry.discoveryOnly),
       restoredFromCache: Boolean(entry.restoredFromCache),
       restoredFrom: entry.restoredFrom || null,
@@ -1400,6 +1420,11 @@ export class PublicFeed {
     // signed descriptor metadata.
     const baseEntries = Array.from(this.entries.values())
       .filter((entry) => isValidKey(this._resolvePublicBeeKey(entry)))
+      // Do not re-gossip every stale peer-discovered channel. Android peers were
+      // OOMing after relays reset because old cached feeds ballooned to 100+
+      // mostly-unavailable entries. A relay should advertise what it can serve
+      // or has explicitly published, not every historical key it heard about.
+      .filter((entry) => this._isLocallyBackedEntry(entry))
       .map((entry) => this._serializeEntry(entry))
 
     const sendEntries = (entries) => {

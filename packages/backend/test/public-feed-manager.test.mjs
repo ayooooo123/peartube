@@ -15,7 +15,6 @@ import Protomux from 'protomux'
 
 import { PublicFeedManager } from '../src/public-feed.js'
 import { NETWORK_TOPIC_STRING } from '../src/types.js'
-import { SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA, CHANNEL_ROOT_DESCRIPTOR_SCHEMA } from '../src/channel-descriptor.js'
 const DRIVE_KEY = '11'.repeat(32)
 const PUBLIC_BEE_KEY = '22'.repeat(32)
 const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
@@ -109,6 +108,11 @@ function createPersistedMetaDb(seed = {}) {
 
 function createConnection() {
   return new EventEmitter()
+}
+
+async function flushFeedMessageHandlers() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 class MemoryDuplex extends Duplex {
@@ -306,7 +310,7 @@ test('PublicFeedManager bounds remembered discovered peers for long-running desk
   }
 })
 
-test('PublicFeedManager bounds retained peer feed entries from HAVE_FEED gossip', () => {
+test('PublicFeedManager bounds retained peer feed entries from HAVE_FEED gossip', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb(), { maxFeedEntries: 3, requireSignedPeerEntries: false })
   const conn = createConnection()
@@ -319,6 +323,7 @@ test('PublicFeedManager bounds retained peer feed entries from HAVE_FEED gossip'
         publicBeeKey: (index + 101).toString(16).padStart(64, '0'),
       })),
     }, conn)
+    await flushFeedMessageHandlers()
 
     assert.equal(manager.entries.size, 3)
     assert.equal(manager.entryPeerCounts.size, 3)
@@ -993,8 +998,8 @@ test('restored relay catalog entries are visible but discovery-only until re-pro
     assert.equal(feed[0].discoveryOnly, true)
     assert.equal(feed[0].restoredFromCache, true)
     assert.equal(feed[0].requiresAvailabilityProbe, true)
-    assert.equal(feed[0].previewVideos[0].availability, 'unknown')
-    assert.equal(feed[0].previewVideos[0].byteAvailability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].availability, 'playable')
+    assert.equal(feed[0].previewVideos[0].byteAvailability, 'playable')
   } finally {
     manager.stop()
   }
@@ -1017,7 +1022,7 @@ test('addEntry accepts legacy peer entries without publicBeeKey', () => {
 })
 
 
-test('handle HAVE_FEED accepts migrated signed descriptors without explicit publicBeeKey', () => {
+test('handle HAVE_FEED accepts migrated metadata descriptors without explicit publicBeeKey', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb(), { requireSignedPeerEntries: false })
   const conn = createConnection()
@@ -1027,22 +1032,11 @@ test('handle HAVE_FEED accepts migrated signed descriptors without explicit publ
       type: 'HAVE_FEED',
       entries: [{
         driveKey: DRIVE_KEY,
-        signedDescriptor: {
-          schema: SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
-          descriptor: {
-            schema: CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
-            channelId: DRIVE_KEY,
-            identityPublicKey: DRIVE_KEY,
-            metadataKey: PUBLIC_BEE_KEY,
-            mediaKey: '33'.repeat(32),
-            seq: 1,
-          },
-          proof: 'aa',
-          attestation: 'bb',
-        },
+        metadataKey: PUBLIC_BEE_KEY,
         channelName: 'Migrated channel',
       }],
     }, conn)
+    await flushFeedMessageHandlers()
 
     const feed = manager.getFeed()
     assert.equal(feed.length, 1)
@@ -1187,7 +1181,7 @@ test('periodic feed gossip does not perform repeated app-level redials after soc
 
 
 
-test('HAVE_FEED accounting accumulates verified entries across repeated messages on one connection', () => {
+test('HAVE_FEED accounting accumulates verified entries across repeated messages on one connection', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb(), { requireSignedPeerEntries: false })
   const conn = createConnection()
   const key2 = '22'.repeat(32)
@@ -1196,6 +1190,7 @@ test('HAVE_FEED accounting accumulates verified entries across repeated messages
   try {
     manager.handleMessage({ type: 'HAVE_FEED', entries: [{ driveKey: DRIVE_KEY, publicBeeKey: PUBLIC_BEE_KEY }] }, conn)
     manager.handleMessage({ type: 'HAVE_FEED', entries: [{ driveKey: key2, publicBeeKey: bee2 }] }, conn)
+    await flushFeedMessageHandlers()
 
     assert.equal(manager.peerFeedKeys.get(conn)?.has(DRIVE_KEY), true)
     assert.equal(manager.peerFeedKeys.get(conn)?.has(key2), true)
@@ -1210,13 +1205,14 @@ test('HAVE_FEED accounting accumulates verified entries across repeated messages
   }
 })
 
-test('SUBMIT_CHANNEL accounting records accepted gossip even when snapshot refreshes an existing entry', () => {
+test('SUBMIT_CHANNEL accounting records accepted gossip even when snapshot refreshes an existing entry', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb(), { requireSignedPeerEntries: false })
   const conn = createConnection()
 
   try {
     manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY, { channelName: 'old' })
     manager.handleMessage({ type: 'SUBMIT_CHANNEL', key: DRIVE_KEY, publicBeeKey: PUBLIC_BEE_KEY, channelName: 'new' }, conn)
+    await flushFeedMessageHandlers()
 
     assert.equal(manager.peerFeedKeys.get(conn)?.has(DRIVE_KEY), true)
     assert.equal(manager.entryPeerCounts.get(DRIVE_KEY), 1)
@@ -1270,7 +1266,7 @@ test('peer disconnect notifies listeners when a cached keyed entry loses live an
   }
 })
 
-test('handle HAVE_FEED stores serving manifest data on the entry', () => {
+test('handle HAVE_FEED stores serving manifest data on the entry', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb(), { requireSignedPeerEntries: false })
   const conn = createConnection()
@@ -1295,6 +1291,7 @@ test('handle HAVE_FEED stores serving manifest data on the entry', () => {
         }],
       }],
     }, conn)
+    await flushFeedMessageHandlers()
 
     const feed = manager.getFeed()
     assert.equal(feed.length, 1)

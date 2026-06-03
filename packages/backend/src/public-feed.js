@@ -131,6 +131,8 @@ export class PublicFeed {
     this._persistDebounceMs = 1500
     /** @type {number} */
     this._persistMaxEntries = Math.max(1, Number(options.maxFeedEntries || 500) || 500)
+    /** @type {boolean} */
+    this.requireSignedPeerEntries = options.requireSignedPeerEntries !== false
 
     /** @type {number} */
     this.maxPeers = Math.max(1, Number(options.maxDiscoveredPeers || options.maxPeers || this.swarm?.maxPeers || 48) || 48)
@@ -307,7 +309,10 @@ export class PublicFeed {
     if (source !== 'peer') return { ok: true, signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor) }
 
     const signedDescriptor = this._normalizeSignedDescriptor(snapshot?.signedDescriptor)
-    if (!signedDescriptor) return { ok: false, reason: 'missing-signed-descriptor' }
+    if (!signedDescriptor) {
+      if (this.requireSignedPeerEntries) return { ok: false, reason: 'missing-signed-descriptor' }
+      return { ok: true, signedDescriptor: null }
+    }
 
     const verified = await verifySignedChannelRootDescriptor(signedDescriptor)
     if (!verified?.valid) return { ok: false, reason: verified?.error || 'invalid-signed-descriptor' }

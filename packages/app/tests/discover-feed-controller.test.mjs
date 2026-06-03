@@ -171,3 +171,38 @@ test('vertical feed controller prewarms next playback URLs best-effort', async (
   ])
   assert.equal(cached.get('one:b'), 'http://prepared/b')
 })
+
+test('vertical feed controller retries warmup when cached URL is not ready for playback', async () => {
+  const prepared = []
+  const cached = new Map([['one:a', { url: 'http://cached/a', ready: false }]])
+
+  await warmNextPlaybackUrls({
+    videos: [
+      { id: 'current', channelKey: 'one' },
+      { id: 'a', channelKey: 'one' },
+    ],
+    activeIndex: 0,
+    makePlaybackRequest(video) {
+      return {
+        cacheKey: `${video.channelKey}:${video.id}`,
+        playbackRequest: { channelKey: video.channelKey, videoId: video.id },
+      }
+    },
+    getCachedVideoUrl(cacheKey, options = {}) {
+      const entry = cached.get(cacheKey)
+      if (!entry) return null
+      if (options.requireReady && !entry.ready) return null
+      return entry.url
+    },
+    setCachedVideoUrl(cacheKey, url, readyForPlayback) {
+      cached.set(cacheKey, { url, ready: readyForPlayback })
+    },
+    async preparePlayback(request) {
+      prepared.push(request)
+      return { url: `http://prepared/${request.videoId}`, selectedBlobWarmup: { readyForPlayback: true } }
+    },
+  })
+
+  assert.deepEqual(prepared, [{ channelKey: 'one', videoId: 'a' }])
+  assert.deepEqual(cached.get('one:a'), { url: 'http://prepared/a', ready: true })
+})

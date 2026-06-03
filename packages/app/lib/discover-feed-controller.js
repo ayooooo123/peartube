@@ -143,7 +143,7 @@ export async function warmNextPlaybackUrls({
 
   await Promise.allSettled(nextVideos.map(async (video) => {
     const { cacheKey, playbackRequest } = makePlaybackRequest(video)
-    if (cacheKey && getCachedVideoUrl(cacheKey)) return null
+    if (cacheKey && getCachedVideoUrl(cacheKey, { requireReady: true })) return null
     if (cacheKey && inflightPlaybackWarmups?.current?.has?.(cacheKey)) return null
     if (cacheKey) inflightPlaybackWarmups?.current?.add?.(cacheKey)
     try {

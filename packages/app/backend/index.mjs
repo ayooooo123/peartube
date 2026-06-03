@@ -284,20 +284,25 @@ function resolveMobileStoragePath(providedStoragePath) {
   return Bare?.argv?.[0] || bareStorageDir || ''
 }
 
-function parseMobileLaunchArgs(args = []) {
-  const first = args[0]
-  if (typeof first !== 'string' || !first.trim().startsWith('{')) {
-    return { launchOptions: null, workerArgs: args }
+export function parseMobileLaunchArgsForTest(args = []) {
+  const candidates = [0, 1]
+  for (const index of candidates) {
+    const arg = args[index]
+    if (typeof arg !== 'string' || !arg.trim().startsWith('{')) continue
+    try {
+      const parsed = JSON.parse(arg)
+      if (parsed?.__peartubeLaunchOptions === true) {
+        return { launchOptions: parsed, workerArgs: [...args.slice(0, index), ...args.slice(index + 1)].filter((value) => value !== 'mobile-entry') }
+      }
+    } catch {}
   }
 
-  try {
-    const parsed = JSON.parse(first)
-    if (parsed?.__peartubeLaunchOptions === true) {
-      return { launchOptions: parsed, workerArgs: args.slice(1) }
-    }
-  } catch {}
+  const workerArgs = args[0] === 'mobile-entry' ? args.slice(1) : args
+  return { launchOptions: null, workerArgs }
+}
 
-  return { launchOptions: null, workerArgs: args }
+function parseMobileLaunchArgs(args = []) {
+  return parseMobileLaunchArgsForTest(args)
 }
 
 export async function startMobileBackend(options = {}) {

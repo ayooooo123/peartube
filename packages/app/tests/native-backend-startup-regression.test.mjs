@@ -64,12 +64,14 @@ test('mobile backend startup lock cleanup removes db LOCK files before orchestra
   assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
 })
 
-test('mobile backend consumes launch options before downloader worker args', () => {
+test('mobile backend consumes launch options before downloader worker args', async () => {
   const source = readAppFile('backend/index.mjs')
+  const { parseMobileLaunchArgsForTest } = await import('../backend/index.mjs')
+  const launchOptions = { __peartubeLaunchOptions: true, network: { relayPeers: ['relay-a'] }, swarmOptions: { knownPeers: ['relay-a'] } }
 
-  assert.match(
-    source,
-    /function parseMobileLaunchArgs\(args = \[\]\) \{[\s\S]*__peartubeLaunchOptions[\s\S]*return \{ launchOptions: parsed, workerArgs: args\.slice\(1\) \}[\s\S]*return \{ launchOptions: null, workerArgs: args \}/,
+  assert.deepEqual(
+    parseMobileLaunchArgsForTest([JSON.stringify(launchOptions), '/tmp/downloader.bundle']),
+    { launchOptions, workerArgs: ['/tmp/downloader.bundle'] },
     'mobile backend entry should peel launchOptions off argv before reading downloader worker args',
   )
   assert.match(
@@ -92,6 +94,25 @@ test('mobile backend consumes launch options before downloader worker args', () 
     /const workerBundlePath = workerArgs\[0\] \|\| ''/,
     'downloader worker path should be read after launchOptions are removed',
   )
+})
+
+test('mobile backend parses launch options after entrypoint and preserves downloader worker path', async () => {
+  const { parseMobileLaunchArgsForTest } = await import('../backend/index.mjs')
+  const launchOptions = {
+    __peartubeLaunchOptions: true,
+    network: { relayPeers: ['relay-a'] },
+    swarmOptions: { knownPeers: ['relay-a'] },
+  }
+
+  const parsed = parseMobileLaunchArgsForTest([
+    'mobile-entry',
+    JSON.stringify(launchOptions),
+    '/tmp/downloader.bundle',
+  ])
+
+  assert.deepEqual(parsed.launchOptions.network, launchOptions.network)
+  assert.deepEqual(parsed.launchOptions.swarmOptions, launchOptions.swarmOptions)
+  assert.deepEqual(parsed.workerArgs, ['/tmp/downloader.bundle'])
 })
 
 test('native root layout clears startup timeout and releases loading on explicit startup errors', () => {

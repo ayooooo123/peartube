@@ -105,7 +105,7 @@ test('native host sidecar bundler stages a temp bundle tree with app node_module
   )
 })
 
-test('native host sidecar bundler regenerates missing HRPC spec before staging temp tree', () => {
+test('native host sidecar bundler regenerates missing or stale HRPC spec before staging temp tree', () => {
   const absolutePath = path.join(packageRoot, 'scripts/ensure-host-sidecar-bundle.mjs')
   const source = fs.readFileSync(absolutePath, 'utf8')
 
@@ -116,13 +116,23 @@ test('native host sidecar bundler regenerates missing HRPC spec before staging t
   )
   assert.match(
     source,
-    /packages', 'spec', 'spec', 'hrpc', 'index\.js'/,
+    /path\.join\(specRoot, 'spec', 'hrpc', 'index\.js'\)/,
     'ensure-host-sidecar-bundle should require generated HRPC entry before bare-pack traversal',
   )
   assert.match(
     source,
-    /packages', 'spec', 'schema\.cjs'/,
-    'ensure-host-sidecar-bundle should run the canonical schema generator when generated files are absent',
+    /path\.join\(specRoot, 'schema\.cjs'\)/,
+    'ensure-host-sidecar-bundle should use the canonical schema generator as an invalidation input',
+  )
+  assert.match(
+    source,
+    /walkNewestMtimeMs\(path\.join\(specRoot, 'lib'\)\)/,
+    'ensure-host-sidecar-bundle should invalidate generated HRPC when schema generator helpers change',
+  )
+  assert.match(
+    source,
+    /generatedMtime > 0 && generatedMtime >= generatorNewest/,
+    'ensure-host-sidecar-bundle should not treat existing generated files as current when schema inputs are newer',
   )
   assert.match(
     source,
@@ -134,6 +144,28 @@ test('native host sidecar bundler regenerates missing HRPC spec before staging t
     /ensureGeneratedSpec\(\)\s*\n\s*for \(const sourcePath of sourceRoots\)/,
     'ensure-host-sidecar-bundle should generate spec before staging sourceRoots into the temp bundle root',
   )
+})
+
+test('native host sidecar keeps backend handlers behind backend package boundary', () => {
+  const sidecarSource = fs.readFileSync(path.join(packageRoot, 'Bridge', 'native-host-sidecar.mjs'), 'utf8')
+  const sidecarBundleSource = fs.readFileSync(path.join(packageRoot, 'scripts', 'ensure-host-sidecar-bundle.mjs'), 'utf8')
+  const workletBundleSource = fs.readFileSync(path.join(packageRoot, 'scripts', 'ensure-host-worklet-bundle.mjs'), 'utf8')
+
+  assert.doesNotMatch(sidecarSource, /\.\.\/\.\.\/app\/backend\//)
+  assert.match(sidecarSource, /\.\.\/\.\.\/backend\/src\/mobile-handlers\.js/)
+  assert.match(sidecarSource, /\.\.\/\.\.\/backend\/src\/transcode\/transcoder\.mjs/)
+  assert.doesNotMatch(sidecarBundleSource, /packages', 'app', 'backend'/)
+  assert.doesNotMatch(workletBundleSource, /packages', 'app', 'backend'/)
+})
+
+test('native host sidecar rejects missing backend protocol versions instead of defaulting to supported version', () => {
+  const sidecarSource = fs.readFileSync(path.join(packageRoot, 'Bridge', 'native-host-sidecar.mjs'), 'utf8')
+  const workletPushSource = fs.readFileSync(path.join(packageRoot, 'Bridge', 'native-host-worklet-push.mjs'), 'utf8')
+
+  assert.doesNotMatch(sidecarSource, /protocolVersion:\s*ready\?\.protocolVersion\s*\?\?\s*2/)
+  assert.doesNotMatch(workletPushSource, /protocolVersion:\s*ready\?\.protocolVersion\s*\?\?\s*2/)
+  assert.match(sidecarSource, /Host ready payload missing protocolVersion/)
+  assert.match(workletPushSource, /Host ready payload missing protocolVersion/)
 })
 
 test('desktop release workflow generates HRPC schema before desktop release builds', () => {

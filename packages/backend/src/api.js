@@ -827,6 +827,13 @@ export function createApi({
           // video is immediately watchable without waiting on remote proof.
           if (isPlayableAvailabilityHint(localHint)) return 'playable'
           if (explicitAvailability === 'playable') return 'playable'
+          if (
+            video?.restoredFromCache === true &&
+            video?.requiresAvailabilityProbe === true &&
+            video?.blobId &&
+            video?.blobsCoreKey &&
+            (!peerHint || peerHint?.availability === 'unknown')
+          ) return 'playable'
 
           // Remote playability must be explicitly proven by a peer serving hint.
           if (peerHint?.availability === 'playable') return 'playable'

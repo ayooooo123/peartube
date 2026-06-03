@@ -21,6 +21,7 @@
     "./upload": "./src/upload.js",
     "./src/backend-entry.js": "./src/backend-entry.js",
     "./hrpc-handlers": "./src/hrpc-handlers.js",
+    "./mobile-handlers": "./src/mobile-handlers.js",
     "./types": "./src/types.js",
     "./remux-to-file": "./src/remux-to-file.mjs",
     "./transcode": "./src/transcode/index.js",

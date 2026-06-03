@@ -3,6 +3,10 @@ import c from 'compact-encoding'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
 
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import {
   getPrioritizedBlobDownloadRange,
   parseHttpByteRange,
@@ -102,4 +106,21 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
   t.ok(calls.some((call) => call[0] === 'close'))
+})
+
+test('storage blob server prioritizes HTTP Range requests before streaming', (t) => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const storageSource = fs.readFileSync(path.join(here, '../src/storage.js'), 'utf8')
+
+  t.ok(
+    storageSource.includes("import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'"),
+    'storage should import blob range prioritization helper',
+  )
+
+  const priorityIndex = storageSource.indexOf('await prioritizeBlobServerRangeRequest(blobServer, req)')
+  const fallbackIndex = storageSource.indexOf('return origOnRequest(req, res)')
+
+  t.ok(priorityIndex > -1, 'blob server request handler should prioritize requested range')
+  t.ok(fallbackIndex > -1, 'blob server request handler should still call original handler')
+  t.ok(priorityIndex < fallbackIndex, 'range prioritization must happen before normal streaming starts')
 })

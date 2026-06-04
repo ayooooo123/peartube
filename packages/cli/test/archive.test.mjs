@@ -180,6 +180,99 @@ test('archive publisher derives YouTube channel name from yt-dlp uploader metada
   t.is(channels.length, 1)
   t.is(channels[0].name, 'Actual Creator')
 })
+test('archive publisher uses yt-dlp info metadata and thumbnail refs for previews', async (t) => {
+  const submitted = []
+  const uploaded = []
+  const source = {
+    sourceId: 'youtube:rumble:video:v7ah96i-america-first-ep.-1690',
+    url: 'https://rumble.com/v7ah96i-america-first-ep.-1690.html',
+    type: 'youtube',
+    kind: 'rumble-video',
+    identifier: 'rumble:video:v7ah96i-america-first-ep.-1690',
+    label: 'America First Full Episodes'
+  }
+  const channel = {
+    writable: true,
+    blobsKeyHex: 'dd'.repeat(32),
+    async getMetadata() { return {} },
+    async updateMetadata(meta) { uploaded.push(['channel-meta', meta]) },
+    async ensureLocalBlobDrive() {},
+    async getPublicBeeKey() { return 'bb'.repeat(32) },
+    async listVideos() { return [] }
+  }
+  const infoJson = JSON.stringify({
+    id: 'v7ah96i-america-first-ep.-1690',
+    title: 'America First Ep. 1690 - Real Rumble Title',
+    uploader: 'Nicholas J. Fuentes',
+    webpage_url: 'https://rumble.com/v7ah96i-america-first-ep.-1690.html',
+    duration: 1234,
+    thumbnail: 'https://rumble.com/thumb.jpg'
+  })
+  const fs = makeFakeFs({
+    '/tmp/video.mp4': 'video bytes',
+    '/tmp/video.info.json': infoJson,
+    '/tmp/video.jpg': 'jpeg bytes'
+  })
+  fs.existsSync = (path) => path in {
+    '/tmp/video.mp4': true,
+    '/tmp/video.info.json': true,
+    '/tmp/video.jpg': true
+  }
+  const publisher = createArchivePublisher({
+    ctx: {},
+    uploadManager: {
+      async uploadFromPath(_channel, _filePath, options) {
+        uploaded.push(['video', options])
+        return {
+          success: true,
+          videoId: 'video-1',
+          metadata: {
+            blobId: '0:1:0:10',
+            blobsCoreKey: 'cc'.repeat(32),
+            mimeType: 'video/mp4',
+            size: 10,
+            duration: options.duration
+          }
+        }
+      },
+      async setThumbnailFromBuffer(_channel, videoId, image, mimeType) {
+        uploaded.push(['thumbnail', videoId, image.toString(), mimeType])
+        return { success: true, thumbnailBlobId: '1:1:0:4' }
+      }
+    },
+    runtime: {
+      publicFeed: {
+        async submitChannel(_driveKey, _publicBeeKey, options) { submitted.push(options) }
+      },
+      cacheManager: { async pinChannel() {}, async addChannel() {} },
+      seeder: { async seedChannel() {} },
+      async publishRelayCatalogEntry() {}
+    },
+    fs,
+    logger: makeFakeLogger(),
+    state: null,
+    createChannelFn: async () => ({ channel, channelKeyHex: 'aa'.repeat(32) })
+  })
+
+  const result = await publisher.publishVideo({
+    source,
+    ytEntry: { id: 'v7ah96i-america-first-ep.-1690', title: 'America First Full Episodes', uploader: null, duration: null, webpageUrl: source.url },
+    files: { videoFile: '/tmp/video.mp4', infoFile: '/tmp/video.info.json', thumbnailFile: '/tmp/video.jpg' }
+  })
+
+  t.is(result.title, 'America First Ep. 1690 - Real Rumble Title')
+  t.is(uploaded[0][1].name, 'Nicholas J. Fuentes')
+  t.is(uploaded[1][1].title, 'America First Ep. 1690 - Real Rumble Title')
+  t.is(uploaded[2][3], 'image/jpeg')
+  const preview = submitted.at(-1).previewVideos[0]
+  t.is(preview.title, 'America First Ep. 1690 - Real Rumble Title')
+  t.is(preview.channelName, 'Nicholas J. Fuentes')
+  t.is(preview.thumbnailBlobId, '1:1:0:4')
+  t.is(preview.thumbnailBlobsCoreKey, 'dd'.repeat(32))
+  t.is(preview.thumbnailMimeType, 'image/jpeg')
+  t.is(preview.thumbnailUrl, 'https://rumble.com/thumb.jpg')
+})
+
 test('classifySourceUrl recognises YouTube channels, handles, and playlists', (t) => {
   t.alike(classifySourceUrl('https://www.youtube.com/@somechannel'), {
     type: 'youtube',

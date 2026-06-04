@@ -150,10 +150,11 @@ export function createArchiver({
       const pub = await ensurePublisher()
       const result = await pub.publishVideo({ source, ytEntry, files })
 
+      const archivedTitle = result.title || ytEntry.title || ''
       await state.markArchived(source.sourceId, ytEntry.id, {
         peartubeVideoId: result.videoId,
         bytes: result.bytes,
-        title: ytEntry.title
+        title: archivedTitle
       })
 
       logger.archive.info('Video archived', {
@@ -161,7 +162,7 @@ export function createArchiver({
         ytId: ytEntry.id,
         peartubeVideoId: result.videoId,
         bytes: result.bytes,
-        title: ytEntry.title || ''
+        title: archivedTitle
       })
 
       return {

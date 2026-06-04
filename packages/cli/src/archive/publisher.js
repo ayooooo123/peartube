@@ -13,8 +13,8 @@ function buildSourceMarker(source) {
 }
 
 function defaultChannelName(source) {
-  if (source.label) return source.label
   if (source.creatorName) return source.creatorName
+  if (source.label) return source.label
   if (source.channelName) return source.channelName
   if (source.uploader) return source.uploader
   if (source.kind === 'handle') return source.identifier
@@ -72,6 +72,52 @@ async function listChannelPreviewVideos(channelEntry, limit = 3) {
       thumbnailMimeType: video?.thumbnailMimeType || null,
       channelName
     }))
+}
+
+function normalizeText(value, maxLength = 5000) {
+  return String(value || '').split('').map((char) => {
+    const code = char.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : char
+  }).join('').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+}
+
+function readYtDlpInfoFile(fs, infoFile) {
+  if (!infoFile || typeof fs?.readFileSync !== 'function') return null
+  try {
+    if (typeof fs.existsSync === 'function' && !fs.existsSync(infoFile)) return null
+    const parsed = JSON.parse(String(fs.readFileSync(infoFile, 'utf8') || '{}'))
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function creatorNameFromInfo(info) {
+  return normalizeText(info?.channel || info?.uploader || info?.uploader_id || '', 160) || null
+}
+
+function titleFromInfo(info) {
+  return normalizeText(info?.title || info?.fulltitle || '', 240) || null
+}
+
+function durationFromInfo(info) {
+  const duration = Number(info?.duration)
+  return Number.isFinite(duration) && duration > 0 ? duration : null
+}
+
+function sourceUrlFromInfo(info, fallback) {
+  return normalizeText(info?.webpage_url || info?.original_url || info?.url || fallback || '', 1000) || null
+}
+
+function thumbnailUrlFromInfo(info) {
+  return normalizeText(info?.thumbnail || '', 1000) || null
+}
+
+function thumbnailMimeTypeForPath(filePath) {
+  const lower = String(filePath || '').toLowerCase()
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.png')) return 'image/png'
+  return 'image/jpeg'
 }
 
 async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, options = {}) {
@@ -255,9 +301,15 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
   }
 
   async function publishVideo({ source, ytEntry, files }) {
+    const info = readYtDlpInfoFile(fs, files?.infoFile)
+    const importedTitle = titleFromInfo(info) || ytEntry?.title || files?.videoFile?.split('/')?.pop() || 'Untitled'
+    const importedCreatorName = creatorNameFromInfo(info) || ytEntry?.uploader || source?.creatorName || null
+    const importedDuration = durationFromInfo(info) ?? (Number.isFinite(ytEntry?.duration) ? Number(ytEntry.duration) : 0)
+    const importedSourceUrl = sourceUrlFromInfo(info, ytEntry?.webpageUrl || source?.url)
+    const importedThumbnailUrl = thumbnailUrlFromInfo(info)
     const sourceForChannel = {
       ...source,
-      creatorName: ytEntry?.uploader || source?.creatorName || null
+      creatorName: importedCreatorName
     }
     const channelEntry = await ensureSourceChannel(sourceForChannel)
     const { channel } = channelEntry
@@ -273,12 +325,17 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
       channel,
       files.videoFile,
       {
-        title: ytEntry.title || files.videoFile.split('/').pop() || 'Untitled',
-        description: ytEntry.webpageUrl
-          ? `Source: ${ytEntry.webpageUrl}`
+        title: importedTitle,
+        description: importedSourceUrl
+          ? `Source: ${importedSourceUrl}`
           : '',
-        duration: Number.isFinite(ytEntry.duration) ? Number(ytEntry.duration) : 0,
-        category: 'archive'
+        duration: importedDuration || 0,
+        category: 'archive',
+        sourceType: info ? 'yt-dlp' : 'archive',
+        sourceUrl: importedSourceUrl,
+        sourceVideoId: normalizeText(info?.id || ytEntry?.id || '', 160) || null,
+        creatorName: importedCreatorName,
+        thumbnailUrl: importedThumbnailUrl
       },
       fs
     )
@@ -290,7 +347,16 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
     if (files.thumbnailFile) {
       try {
         const thumbBuffer = fs.readFileSync(files.thumbnailFile)
-        await uploadManager.setThumbnailFromBuffer(channel, result.videoId, thumbBuffer, 'image/jpeg')
+        const thumbnailMimeType = thumbnailMimeTypeForPath(files.thumbnailFile)
+        const thumbnailResult = await uploadManager.setThumbnailFromBuffer(channel, result.videoId, thumbBuffer, thumbnailMimeType)
+        if (thumbnailResult?.success) {
+          result.metadata = {
+            ...(result.metadata || {}),
+            thumbnailBlobId: thumbnailResult.thumbnailBlobId || result.metadata?.thumbnailBlobId || null,
+            thumbnailBlobsCoreKey: channel.blobsKeyHex || result.metadata?.thumbnailBlobsCoreKey || null,
+            thumbnailMimeType
+          }
+        }
       } catch (err) {
         logger?.archive?.debug?.('Thumbnail attach failed', {
           videoId: result.videoId,
@@ -299,13 +365,35 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
       }
     }
 
-    await announceArchiveChannel(runtime, channelEntry, logger, source.sourceId)
+    const metadata = result.metadata || {}
+    const previewVideo = {
+      id: String(result.videoId),
+      title: importedTitle,
+      description: importedSourceUrl ? `Source: ${importedSourceUrl}` : '',
+      path: metadata.path || `/videos/${result.videoId}.mp4`,
+      uploadedAt: Number(metadata.uploadedAt || 0) || Date.now(),
+      duration: Number(metadata.duration || importedDuration || 0) || 0,
+      size: Number(metadata.size || fileSize || 0) || 0,
+      mimeType: metadata.mimeType || 'video/mp4',
+      availability: 'playable',
+      blobId: metadata.blobId || null,
+      blobsCoreKey: metadata.blobsCoreKey || null,
+      thumbnailBlobId: metadata.thumbnailBlobId || null,
+      thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
+      thumbnailMimeType: metadata.thumbnailMimeType || null,
+      thumbnailUrl: metadata.thumbnailUrl || importedThumbnailUrl || null,
+      channelName: channelEntry.channelName || importedCreatorName || null
+    }
+
+    await announceArchiveChannel(runtime, channelEntry, logger, source.sourceId, { previewVideos: [previewVideo] })
 
     return {
       videoId: result.videoId,
       bytes: fileSize,
       channelKey: channelEntry.channelKey,
-      publicBeeKey: channelEntry.publicBeeKey
+      publicBeeKey: channelEntry.publicBeeKey,
+      title: importedTitle,
+      channelName: channelEntry.channelName || importedCreatorName || null
     }
   }
 

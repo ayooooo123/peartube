@@ -1805,8 +1805,8 @@ export class PublicFeed {
       : null
 
     snapshot = {
-      ...(explicitSnapshot || {}),
       ...(snapshot || {}),
+      ...(explicitSnapshot || {}),
     }
 
     if (this.addEntry(driveKey, 'local', resolvedPublicBeeKey, snapshot)) {

@@ -1334,6 +1334,14 @@ test('submitChannel stores explicit channel names before provider hydration', as
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())
 
   try {
+    manager.setFeedSnapshotProvider(async () => [{
+      driveKey: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+      channelName: null,
+      videoCount: 0,
+      previewVideos: []
+    }])
+
     await manager.submitChannel(DRIVE_KEY, PUBLIC_BEE_KEY, {
       channelName: 'Actual YouTube Creator',
       previewVideos: [{

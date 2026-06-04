@@ -51,10 +51,14 @@ function playableCatalogPreviews(channel, previewVideos = []) {
 function normalizeCatalogChannel(channel, previewVideos = []) {
   const channelKey = channel.channelKey || channel.driveKey
   const publicBeeKey = channel.publicBeeKey || null
+  const channelName = channel.name || channel.channelName || channel.title || null
   const normalizedPreviewVideos = playableCatalogPreviews(channel, previewVideos)
   if (normalizedPreviewVideos.length === 0) return null
   return {
     ...channel,
+    name: channelName,
+    title: channelName,
+    channelName,
     channelKey,
     driveKey: channel.driveKey || channelKey,
     publicBeeKey,

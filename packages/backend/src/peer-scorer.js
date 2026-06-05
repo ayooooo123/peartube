@@ -254,7 +254,11 @@ export function createPeerScorer(options = {}) {
 
   function notify(peerId, record) {
     for (const subscriber of subscribers) {
-      try { subscriber(peerId, record) } catch {}
+      try {
+        subscriber(peerId, record)
+      } catch {
+        // Ignore observer failures so scoring updates keep flowing.
+      }
     }
   }
 

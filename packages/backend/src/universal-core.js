@@ -641,7 +641,11 @@ export function createUniversalCore(options = {}) {
         await metaDb.put('universal-core:snapshot', compactJson(eventSinkSnapshot()))
       }
       for (const subscriber of appendSubscribers) {
-        try { subscriber(record) } catch {}
+        try {
+          subscriber(record)
+        } catch {
+          // Ignore observer failures so append processing is not blocked.
+        }
       }
       return record
     },

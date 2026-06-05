@@ -39,6 +39,8 @@
     "./budget-manager": "./src/budget-manager.js",
     "./hash-utils": "./src/hash-utils.js",
     "./blob-ref": "./src/blob-ref.js",
+    "./archive-schema": "./lib/archive-schema.js",
+    "./archive-writer": "./lib/archive-writer.js",
     "./mirror": "./src/mirror/index.js"
   },
   "scripts": {

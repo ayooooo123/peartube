@@ -1,119 +1,43 @@
-const ROLE_MOBILE = 'mobile'
-const ROLE_RELAY = 'relay'
-const ROLE_HYBRID = 'hybrid'
+import c from 'compact-encoding'
 
-const PLAYER_SHORTS = 'shorts'
-const PLAYER_MAIN = 'main'
+import { createBudgetManager, createResourcePolicy } from './budget-manager.js'
+import { createPeerScorer, createSybilPolicy, createUsefulWorkLedger } from './peer-scorer.js'
+import {
+  DEFAULT_PLAYER_POLICY,
+  DEFAULT_POLICY,
+  PLAYER_MAIN,
+  PLAYER_SHORTS,
+  ROLE_HYBRID,
+  ROLE_MOBILE,
+  ROLE_RELAY,
+  TRANSITION_RANK,
+  descriptorIdOf,
+  hashText,
+  maxBigInt,
+  normalizeRole,
+  nowMs,
+  safeBigInt,
+  safeNumber,
+  toHex,
+} from './universal-core-utils.js'
 
-const TRANSITION_RANK = {
-  discovered: 0,
-  verified: 1,
-  active: 2,
-  quarantined: 3,
-  tombstoned: 4,
-}
+export {
+  createBudgetManager,
+  createResourcePolicy,
+  encodeBudgetState,
+  decodeBudgetState,
+} from './budget-manager.js'
+export {
+  createPeerScorer,
+  createSybilPolicy,
+  createUsefulWorkLedger,
+  createPeerMetricDiffStream,
+  encodePeerMetric,
+  decodePeerMetric,
+} from './peer-scorer.js'
 
-const textEncoder = new TextEncoder()
-
-const DEFAULT_POLICY = {
-  minDescriptorFreshnessMs: 10 * 60 * 1000,
-  longTailWindowMs: 12 * 60 * 60 * 1000,
-  proofFreshnessMs: 20 * 60 * 1000,
-  minReachableCopies: 2,
-  mobile: {
-    maxFanout: 2,
-    maxRequestsPerWindow: 4,
-    syncIntervalMs: 20 * 60 * 1000,
-    maxBytesPerDay: 50 * 1024 * 1024,
-    proofIntervalMs: 45 * 60 * 1000,
-    refreshIntervalMs: 90 * 60 * 1000,
-  },
-  relay: {
-    maxFanout: 16,
-    maxRequestsPerWindow: 64,
-    syncIntervalMs: 2 * 60 * 1000,
-    maxBytesPerDay: 5 * 1024 * 1024 * 1024,
-    proofIntervalMs: 10 * 60 * 1000,
-    refreshIntervalMs: 20 * 60 * 1000,
-  },
-}
-
-const DEFAULT_PLAYER_POLICY = {
-  main: {
-    priority: 100,
-    activeBudget: 100,
-    backgroundBudget: 15,
-    maxConcurrentDecodes: 2,
-    maxConcurrentPrefetches: 4,
-    suspendAfterMs: 0,
-    pipAllowed: true,
-  },
-  shorts: {
-    priority: 20,
-    activeBudget: 35,
-    backgroundBudget: 8,
-    maxConcurrentDecodes: 1,
-    maxConcurrentPrefetches: 1,
-    suspendAfterMs: 30 * 1000,
-    pipAllowed: false,
-  },
-}
-
-function safeNumber(value, fallback = 0) {
-  const n = Number(value)
-  return Number.isFinite(n) ? n : fallback
-}
-
-function safeBigInt(value, fallback = 0n) {
-  if (typeof value === 'bigint') return value
-  if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.floor(value)))
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      return BigInt(value)
-    } catch {
-      return fallback
-    }
-  }
-  return fallback
-}
-
-function toHex(bytes) {
-  if (!bytes) return ''
-  if (typeof bytes === 'string') return bytes.toLowerCase().replace(/^0x/, '')
-  if (bytes instanceof Uint8Array) return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-  if (bytes instanceof ArrayBuffer) return toHex(new Uint8Array(bytes))
-  return String(bytes)
-}
-
-function stableStringify(value) {
-  if (value === null || value === undefined) return String(value)
-  if (value instanceof Uint8Array) return `u8:${toHex(value)}`
-  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']'
-  if (typeof value === 'bigint') return value.toString()
-  if (typeof value === 'object') {
-    const keys = Object.keys(value).sort()
-    return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}'
-  }
-  return JSON.stringify(value)
-}
-
-function hashText(input) {
-  const str = stableStringify(input)
-  let hash = 0x811c9dc5
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0')
-}
-
-function nowMs(value = Date.now()) {
-  return safeBigInt(value, BigInt(Date.now()))
-}
-
-function normalizeRole(role) {
-  if (role === ROLE_RELAY || role === ROLE_MOBILE || role === ROLE_HYBRID) return role
-  return ROLE_HYBRID
+function compactJson(value) {
+  return c.encode(c.string, JSON.stringify(value, (_key, val) => typeof val === 'bigint' ? val.toString() : val))
 }
 
 function cloneDescriptor(descriptor) {
@@ -134,10 +58,6 @@ function cloneDescriptor(descriptor) {
     availabilityEpoch: safeNumber(descriptor.availabilityEpoch, 0),
     flags: safeNumber(descriptor.flags, 0),
   }
-}
-
-function descriptorIdOf(value) {
-  return toHex(value?.descriptorId || value?.id || value?.driveKey || value)
 }
 
 function compareEventOrder(a, b) {
@@ -181,143 +101,7 @@ function mergeDescriptor(current, incoming) {
   return merged
 }
 
-function identityAgeScore(identity = {}, now = Date.now()) {
-  const createdAt = safeBigInt(identity.createdAt || 0n, 0n)
-  const ageMs = createdAt > 0n ? Math.max(0n, nowMs(now) - createdAt) : 0n
-  return Math.min(40, Number(ageMs / BigInt(24 * 60 * 60 * 1000)))
-}
 
-export function createSybilPolicy(options = {}) {
-  const base = {
-    minProofs: safeNumber(options.minProofs, 1),
-    maxFailurePenalty: safeNumber(options.maxFailurePenalty, 45),
-    maxQuarantinePenalty: safeNumber(options.maxQuarantinePenalty, 35),
-    maxTombstonePenalty: safeNumber(options.maxTombstonePenalty, 50),
-    maxSpamPenalty: safeNumber(options.maxSpamPenalty, 20),
-  }
-
-  return {
-    scoreIdentity(identity = {}, now = Date.now()) {
-      const age = identityAgeScore(identity, now)
-      const validProofs = Math.min(30, safeNumber(identity.validProofCount, 0) * 6)
-      const successfulSeals = Math.min(15, safeNumber(identity.successfulSealCount, 0) * 3)
-      const serviceScore = Math.min(15, Math.floor(safeNumber(identity.usefulWorkScore, 0) / 25))
-      const failures = Math.min(base.maxFailurePenalty, safeNumber(identity.failureCount, 0) * 9)
-      const quarantines = Math.min(base.maxQuarantinePenalty, safeNumber(identity.quarantineCount, 0) * 7)
-      const tombstones = Math.min(base.maxTombstonePenalty, safeNumber(identity.tombstoneCount, 0) * 10)
-      const spam = Math.min(base.maxSpamPenalty, safeNumber(identity.spamScore, 0) * 4)
-      const freshness = Math.max(0, 10 - Math.floor(Math.max(0, safeNumber(identity.lastProofAgeMs, Infinity)) / (60 * 60 * 1000)))
-      const score = 20 + age + validProofs + successfulSeals + serviceScore + freshness - failures - quarantines - tombstones - spam
-      return Math.max(0, Math.min(100, score))
-    },
-    allowsFanout(identity, peerCount = 0, now = Date.now()) {
-      const score = this.scoreIdentity(identity, now)
-      const scaledFanout = Math.max(1, Math.floor(score / 10))
-      return Math.min(Math.max(1, peerCount || 1), scaledFanout)
-    },
-    allowsRequest(identity, inFlight = 0, now = Date.now()) {
-      const score = this.scoreIdentity(identity, now)
-      const allowance = Math.max(1, Math.floor(score / 15))
-      return inFlight < allowance
-    },
-  }
-}
-
-export function createUsefulWorkLedger(options = {}) {
-  const byPeer = new Map()
-  const byDescriptor = new Map()
-  const totals = {
-    verifiedDescriptors: 0,
-    refreshedDescriptors: 0,
-    sampledDescriptors: 0,
-    bytesServed: 0n,
-    longTailServed: 0,
-    proofsAccepted: 0,
-    proofsRejected: 0,
-  }
-
-  function bucket(map, key) {
-    if (!map.has(key)) map.set(key, { count: 0, score: 0, bytes: 0n, lastAt: 0n })
-    return map.get(key)
-  }
-
-  function reward(kind, amount = 1, context = {}) {
-    const descriptorId = descriptorIdOf(context.descriptorId || context.descriptor || '')
-    const peerId = toHex(context.peerId || context.identityId || '')
-    const at = safeBigInt(context.at || Date.now(), nowMs())
-    let scoreDelta = 0
-
-    switch (kind) {
-      case 'descriptor-verified':
-        scoreDelta = 10 * amount
-        totals.verifiedDescriptors += amount
-        break
-      case 'descriptor-refreshed':
-        scoreDelta = 6 * amount
-        totals.refreshedDescriptors += amount
-        break
-      case 'availability-sampled':
-        scoreDelta = 5 * amount
-        totals.sampledDescriptors += amount
-        break
-      case 'bytes-served':
-        scoreDelta = Math.max(1, Math.floor(Number(amount) / (64 * 1024)))
-        totals.bytesServed += safeBigInt(amount, 0n)
-        break
-      case 'long-tail-served':
-        scoreDelta = 12 * amount
-        totals.longTailServed += amount
-        break
-      case 'proof-accepted':
-        scoreDelta = 8 * amount
-        totals.proofsAccepted += amount
-        break
-      case 'proof-rejected':
-        scoreDelta = -6 * amount
-        totals.proofsRejected += amount
-        break
-      default:
-        scoreDelta = 0
-    }
-
-    if (descriptorId) {
-      const d = bucket(byDescriptor, descriptorId)
-      d.count += amount
-      d.score += scoreDelta
-      d.lastAt = at > d.lastAt ? at : d.lastAt
-      if (kind === 'bytes-served') d.bytes += safeBigInt(amount, 0n)
-    }
-
-    if (peerId) {
-      const p = bucket(byPeer, peerId)
-      p.count += amount
-      p.score += scoreDelta
-      p.lastAt = at > p.lastAt ? at : p.lastAt
-      if (kind === 'bytes-served') p.bytes += safeBigInt(amount, 0n)
-    }
-
-    return scoreDelta
-  }
-
-  function scoreUsefulWork() {
-    const byteScore = Number(totals.bytesServed / BigInt(1024 * 1024))
-    return Math.max(0, totals.verifiedDescriptors * 10 + totals.refreshedDescriptors * 6 + totals.sampledDescriptors * 5 + totals.longTailServed * 12 + totals.proofsAccepted * 8 + byteScore + totals.proofsRejected * -2)
-  }
-
-  function snapshot() {
-    return {
-      totals: {
-        ...totals,
-        bytesServed: totals.bytesServed,
-      },
-      byPeer: Array.from(byPeer.entries()),
-      byDescriptor: Array.from(byDescriptor.entries()),
-      usefulWorkScore: scoreUsefulWork(),
-    }
-  }
-
-  return { reward, scoreUsefulWork, snapshot, byPeer, byDescriptor, totals }
-}
 
 export function createAvailabilityPlanner(options = {}) {
   const minCopies = Math.max(1, safeNumber(options.minReachableCopies, DEFAULT_POLICY.minReachableCopies))
@@ -367,47 +151,6 @@ export function createAvailabilityPlanner(options = {}) {
   return { minCopies, longTailWindowMs, proofFreshnessMs, descriptorFreshnessMs, isLongTail, hasReachability, shouldAdmit, shouldForward, needsRefresh }
 }
 
-export function createResourcePolicy(options = {}) {
-  const role = normalizeRole(options.role)
-  const profile = role === ROLE_RELAY ? DEFAULT_POLICY.relay : DEFAULT_POLICY.mobile
-  const batteryFloor = safeNumber(options.batteryFloor, role === ROLE_RELAY ? 5 : 25)
-  const bandwidthFloor = safeNumber(options.bandwidthFloor, role === ROLE_RELAY ? 0 : 5)
-  const maxConcurrentSync = safeNumber(options.maxConcurrentSync, role === ROLE_RELAY ? 8 : 1)
-  const maxConcurrentProofs = safeNumber(options.maxConcurrentProofs, role === ROLE_RELAY ? 4 : 1)
-  const maxConcurrentFetches = safeNumber(options.maxConcurrentFetches, role === ROLE_RELAY ? 8 : 1)
-
-  function budgetFor(resource = {}) {
-    const battery = safeNumber(resource.batteryPercent, 100)
-    const bandwidth = safeNumber(resource.bandwidthScore, 100)
-    const thermal = safeNumber(resource.thermalScore, 0)
-    const charging = Boolean(resource.isCharging)
-
-    const mobilePenalty = role === ROLE_MOBILE ? Math.max(0, 30 - battery) + Math.max(0, 20 - bandwidth) + Math.max(0, thermal) : 0
-    const base = role === ROLE_RELAY ? 100 : 50
-    const credit = Math.max(0, base - mobilePenalty + (charging ? 10 : 0))
-
-    return {
-      role,
-      syncIntervalMs: profile.syncIntervalMs,
-      proofIntervalMs: profile.proofIntervalMs,
-      refreshIntervalMs: profile.refreshIntervalMs,
-      maxFanout: profile.maxFanout,
-      maxRequestsPerWindow: profile.maxRequestsPerWindow,
-      maxBytesPerDay: profile.maxBytesPerDay,
-      batteryFloor,
-      bandwidthFloor,
-      maxConcurrentSync,
-      maxConcurrentProofs,
-      maxConcurrentFetches,
-      credit,
-      canSync: battery >= batteryFloor && bandwidth >= bandwidthFloor,
-      canEmitProof: battery >= Math.max(10, batteryFloor - 5) && bandwidth >= bandwidthFloor,
-      canFetch: battery >= Math.max(10, batteryFloor - 10) && bandwidth >= bandwidthFloor,
-    }
-  }
-
-  return { role, profile, budgetFor }
-}
 
 export function createConcurrentState(options = {}) {
   return {
@@ -468,12 +211,6 @@ function resolveConflict(current, incoming) {
   return next
 }
 
-function maxBigInt(...values) {
-  return values.reduce((acc, value) => {
-    const next = safeBigInt(value, 0n)
-    return next > acc ? next : acc
-  }, 0n)
-}
 
 export function applyConcurrentUpdate(state, input = {}, options = {}) {
   const next = normalizeTransition(input)
@@ -654,7 +391,7 @@ function createUnifiedAutobaseSink(options = {}) {
     events.push(envelope)
 
     if (appendFn) {
-      await appendFn(textEncoder.encode(JSON.stringify(envelope)))
+      await appendFn(compactJson(envelope))
     }
 
     return { appended: true, duplicate: false, envelope }
@@ -852,6 +589,17 @@ export function createUniversalCore(options = {}) {
   const availability = createAvailabilityPlanner(options.availability)
   const resources = createResourcePolicy({ role, ...options.resources })
   const concurrentState = options.state || createConcurrentState(options)
+  const peerScorer = createPeerScorer({
+    sybil,
+    usefulWork,
+    availability,
+    resources,
+    state: concurrentState,
+    persist: async (key, value) => {
+      const metaDb = backend?.ctx?.metaDb
+      if (typeof metaDb?.put === 'function') await metaDb.put(key, value)
+    },
+  })
   const playerCore = createDualPlayerPlaybackCore(options.players || {})
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : () => {}
   const playbackLeases = new Map()
@@ -860,6 +608,7 @@ export function createUniversalCore(options = {}) {
   let services = null
   let nativeHandles = {}
   let eventSeq = 0
+  const appendSubscribers = new Set()
   let lifecycleTail = Promise.resolve()
 
   function runLifecycle(task) {
@@ -889,9 +638,17 @@ export function createUniversalCore(options = {}) {
       const record = { seq: eventSeq, kind, payload }
       const metaDb = backend?.ctx?.metaDb
       if (typeof metaDb?.put === 'function') {
-        await metaDb.put('universal-core:snapshot', eventSinkSnapshot())
+        await metaDb.put('universal-core:snapshot', compactJson(eventSinkSnapshot()))
+      }
+      for (const subscriber of appendSubscribers) {
+        try { subscriber(record) } catch {}
       }
       return record
+    },
+    onappend(listener) {
+      if (typeof listener !== 'function') return () => {}
+      appendSubscribers.add(listener)
+      return () => appendSubscribers.delete(listener)
     },
     snapshot: eventSinkSnapshot,
   }
@@ -1055,26 +812,11 @@ export function createUniversalCore(options = {}) {
   }
 
   function scorePeer(peer = {}, now = Date.now()) {
-    const identityScore = sybil.scoreIdentity(peer.identity || peer, now)
-    const useful = Math.max(0, safeNumber(peer.usefulWorkScore, 0))
-    const reachability = availability.shouldAdmit(peer.descriptor || peer, now) ? 10 : 0
-    const resourceFit = resources.budgetFor(peer.resources || peer).credit
-    return Math.max(0, Math.min(100, identityScore + Math.floor(useful / 10) + reachability + Math.floor(resourceFit / 10)))
+    return peerScorer.scorePeer(peer, now)
   }
 
   function registerPeer(peer = {}) {
-    const id = toHex(peer.peerId || peer.identity?.publicKey || peer.identityId || hashText(peer))
-    const score = scorePeer(peer)
-    const record = {
-      ...peer,
-      peerId: id,
-      score,
-      lastSeenAt: nowMs(peer.lastSeenAt || Date.now()),
-      fanoutBudget: sybil.allowsFanout(peer.identity || peer, resources.profile.maxFanout),
-      requestBudget: sybil.allowsRequest(peer.identity || peer, peer.inFlightRequests || 0),
-    }
-    concurrentState.peers.set(id, record)
-    return record
+    return peerScorer.registerPeer(peer)
   }
 
   function recordUsefulWork(kind, amount = 1, context = {}) {
@@ -1203,6 +945,7 @@ export function createUniversalCore(options = {}) {
     get services() { return services },
     sybil,
     usefulWork,
+    peerScorer,
     availability,
     resources,
     playerCore,
@@ -1275,8 +1018,10 @@ export default {
   PLAYER_SHORTS,
   createSybilPolicy,
   createUsefulWorkLedger,
+  createPeerScorer,
   createAvailabilityPlanner,
   createResourcePolicy,
+  createBudgetManager,
   createConcurrentState,
   applyConcurrentUpdate,
   createPlayerSplitState,

@@ -35,6 +35,8 @@
     "./feed": "./src/feed.js",
     "./media": "./src/media.js",
     "./universal-core": "./src/universal-core.js",
+    "./peer-scorer": "./src/peer-scorer.js",
+    "./budget-manager": "./src/budget-manager.js",
     "./hash-utils": "./src/hash-utils.js",
     "./blob-ref": "./src/blob-ref.js",
     "./mirror": "./src/mirror/index.js"

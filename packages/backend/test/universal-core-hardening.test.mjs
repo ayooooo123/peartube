@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
+import { readFile } from 'node:fs/promises'
+
 import { createUniversalCore } from '../src/universal-core.js'
+import { createBudgetManager, decodeBudgetState, encodeBudgetState } from '../src/budget-manager.js'
+import { createPeerScorer, decodePeerMetric, encodePeerMetric } from '../src/peer-scorer.js'
 
 function deferred() {
   let resolve
@@ -164,4 +168,70 @@ test('mirror refresh guard skips overlapping runs instead of mutating seeding st
   release.resolve()
   await first
   assert.equal(addSeedCalls, 1)
+})
+
+test('peer scorer persists compact performance metrics and updates reactive scores', async () => {
+  const puts = []
+  const state = { peers: new Map() }
+  const scorer = createPeerScorer({
+    state,
+    availability: { shouldAdmit: () => true },
+    resources: { profile: { maxFanout: 8 }, budgetFor: () => ({ credit: 80 }) },
+    persist: async (key, value) => puts.push([key, value]),
+  })
+  const updates = []
+  scorer.subscribe((_peerId, record) => updates.push(record.score))
+
+  const peer = scorer.registerPeer({ peerId: 'peer-a', identity: { validProofCount: 2 }, descriptor: { descriptorId: 'feed-a' } })
+  await scorer.recordPerformance(peer.peerId, {
+    latencyMs: 40,
+    handshakeSuccesses: 4,
+    handshakes: 4,
+    udxThroughputBps: 1024 * 1024,
+  })
+
+  assert.equal(puts.length, 1)
+  assert.equal(puts[0][0], 'universal-core:peer-metric:peer-a')
+  assert.equal(puts[0][1] instanceof Uint8Array, true)
+  assert.equal(decodePeerMetric(puts[0][1]).udxThroughputBps, 1024 * 1024)
+  assert.equal(updates.length > 0, true)
+  assert.equal(state.peers.get('peer-a').performance.udxThroughputBps, 1024 * 1024)
+})
+
+test('budget manager derives dynamic peer/feed caps from bare-hc memory pressure', async () => {
+  const manager = createBudgetManager({
+    role: 'relay',
+    bareHc: { memoryStats: async () => ({ total: 1000, rss: 900 }) },
+  })
+
+  const refreshed = await manager.refreshMemoryStats()
+  assert.equal(refreshed.thresholds.memoryPressure, 90)
+  assert.equal(refreshed.thresholds.maxFanout < manager.profile.maxFanout, true)
+  assert.equal(refreshed.thresholds.maxFeedEntries < manager.profile.maxFeedEntries, true)
+
+  const encoded = encodeBudgetState(refreshed.thresholds)
+  assert.equal(encoded instanceof Uint8Array, true)
+  assert.equal(decodeBudgetState(encoded).maxFeedEntries, refreshed.thresholds.maxFeedEntries)
+})
+
+test('universal core state persistence uses compact buffers and has no legacy gossip polling interval', async () => {
+  const puts = []
+  const observed = []
+  const core = createUniversalCore({
+    platform: 'relay',
+    storagePath: '/tmp/peartube-universal-core-test',
+    createBackendContext: async () => ({ ctx: { metaDb: { async put(key, value) { puts.push([key, value]) } } } }),
+  })
+
+  await core.init()
+  const unsubscribe = core.eventSink.onappend((record) => observed.push(record))
+  await core.eventSink.append('test.compact', { ok: true })
+  unsubscribe()
+  const snapshotPut = puts.find(([key]) => key === 'universal-core:snapshot')
+  assert.equal(snapshotPut?.[1] instanceof Uint8Array, true)
+  assert.equal(observed.at(-1).kind, 'test.compact')
+
+  const source = await readFile(new URL('../src/universal-core.js', import.meta.url), 'utf8')
+  assert.equal(/setInterval\s*\(/.test(source), false)
+  assert.equal(/gossip/i.test(source) && /setInterval\s*\(/.test(source), false)
 })

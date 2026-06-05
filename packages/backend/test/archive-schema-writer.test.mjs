@@ -92,6 +92,66 @@ test('archive writer writes cenc records under the content-addressed archive key
   })
 })
 
+test('archive writer rejects pending HyperDB collection writes instead of committing caller state', async () => {
+  await withHyperDb(async (db) => {
+    await db.insert('@peartubePublic/metadata', { key: 'meta', name: 'Pending metadata' })
+
+    await assert.rejects(
+      writeArchiveMapping(db, fileHash, {
+        sourceId: 'youtube:dQw4w9WgXcQ',
+        variants: [{ resolution: '1080p', coreKey, startBlock: 7, endBlock: 42 }],
+      }),
+      /pending updates/
+    )
+
+    await db.flush()
+
+    db.updates.mutating++
+    try {
+      await assert.rejects(
+        writeArchiveMapping(db, fileHash, {
+          sourceId: 'youtube:dQw4w9WgXcQ',
+          variants: [{ resolution: '720p', coreKey, startBlock: 8, endBlock: 43 }],
+        }),
+        /pending updates/
+      )
+    } finally {
+      db.updates.mutating--
+    }
+
+    const originalExclusiveTransaction = db.exclusiveTransaction.bind(db)
+    db.exclusiveTransaction = async (...args) => {
+      const tx = await originalExclusiveTransaction(...args)
+      await db.insert('@peartubePublic/metadata', { key: 'late-meta', name: 'Late pending metadata' })
+      return tx
+    }
+    try {
+      await assert.rejects(
+        writeArchiveMapping(db, fileHash, {
+          sourceId: 'youtube:dQw4w9WgXcQ',
+          variants: [{ resolution: '720p', coreKey, startBlock: 8, endBlock: 43 }],
+        }),
+        /pending updates/
+      )
+    } finally {
+      db.exclusiveTransaction = originalExclusiveTransaction
+    }
+
+    await db.flush()
+
+    await writeArchiveMapping(db, fileHash, {
+      sourceId: 'youtube:dQw4w9WgXcQ',
+      variants: [{ resolution: '1080p', coreKey, startBlock: 7, endBlock: 42 }],
+    })
+
+    const meta = await db.get('@peartubePublic/metadata', { key: 'meta' })
+    const stored = await readArchiveMapping(db, fileHash)
+
+    assert.equal(meta.name, 'Pending metadata')
+    assert.deepEqual(stored, sampleMapping())
+  })
+})
+
 test('archive writer serializes upserts and merges variants without dropping existing refs', async () => {
   await withHyperDb(async (db) => {
     await writeArchiveMapping(db, fileHash, {

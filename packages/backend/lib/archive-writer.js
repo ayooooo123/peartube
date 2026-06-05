@@ -62,14 +62,15 @@ async function withWriteLock(db, key, fn) {
   const previous = locks.get(key) || Promise.resolve()
   let release
   const current = new Promise((resolve) => { release = resolve })
-  locks.set(key, previous.then(() => current, () => current))
+  const next = previous.then(() => current, () => current)
+  locks.set(key, next)
 
   await previous
   try {
     return await fn()
   } finally {
     release()
-    if (locks.get(key) === current) locks.delete(key)
+    if (locks.get(key) === next) locks.delete(key)
   }
 }
 
@@ -86,15 +87,30 @@ async function putRaw(db, key, value) {
   await raw.put(key, value)
 }
 
+function hasPendingHyperDbUpdates(db) {
+  return Boolean(
+    (typeof db.updated === 'function' && db.updated()) ||
+    (Number.isSafeInteger(db.updates?.mutating) && db.updates.mutating > 0)
+  )
+}
+
 async function writeWithTransaction(db, key, next, merge) {
   if (typeof db.exclusiveTransaction === 'function') {
+    if (hasPendingHyperDbUpdates(db)) {
+      throw new Error('Cannot write archive mapping while HyperDB has pending updates; flush or discard them first')
+    }
+
     const tx = await db.exclusiveTransaction()
     try {
+      if (hasPendingHyperDbUpdates(db)) {
+        throw new Error('Cannot write archive mapping while HyperDB has pending updates; flush or discard them first')
+      }
+
       const mapping = merge ? mergeMappings(await readExisting(tx, key), next) : next
       const value = encode(mapping)
 
       await putRaw(tx, key, value)
-      if (typeof tx.flush === 'function') await tx.flush()
+      if (typeof tx.close === 'function') await tx.close()
 
       return { mapping, value }
     } catch (error) {

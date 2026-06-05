@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import { readFile } from 'node:fs/promises'
 
-import { createUniversalCore } from '../src/universal-core.js'
+import { createUniversalCore, createUnifiedAutobaseSink } from '../src/universal-core.js'
 import { createBudgetManager, decodeBudgetState, encodeBudgetState } from '../src/budget-manager.js'
 import { createPeerScorer, decodePeerMetric, encodePeerMetric } from '../src/peer-scorer.js'
 
@@ -234,4 +234,67 @@ test('universal core state persistence uses compact buffers and has no legacy go
   const source = await readFile(new URL('../src/universal-core.js', import.meta.url), 'utf8')
   assert.equal(/setInterval\s*\(/.test(source), false)
   assert.equal(/gossip/i.test(source) && /setInterval\s*\(/.test(source), false)
+})
+
+test('peer scorer ranks and evicts peers from latency handshake stability and udx throughput', async () => {
+  const evicted = []
+  const state = { peers: new Map() }
+  const scorer = createPeerScorer({
+    state,
+    availability: { shouldAdmit: () => true },
+    resources: { profile: { maxFanout: 4 }, budgetFor: () => ({ credit: 80 }), getThresholds: () => ({ maxFanout: 4 }) },
+    evictPeer: (peerId, record) => evicted.push([peerId, record.score]),
+  })
+
+  scorer.registerPeer({ peerId: 'fast', identity: { validProofCount: 3 } })
+  scorer.registerPeer({ peerId: 'slow', identity: { validProofCount: 3 } })
+  await scorer.recordPerformance('fast', { latencyMs: 25, handshakeDurationMs: 15, socketStability: 96, handshakes: 2, handshakeSuccesses: 2, udxThroughputBps: 3 * 1024 * 1024 })
+  await scorer.recordPerformance('slow', { latencyMs: 1200, handshakeDurationMs: 900, socketStability: 3, handshakes: 4, handshakeFailures: 4, udxThroughputBps: 1024 })
+
+  assert.equal(scorer.rankPeers().at(0).peerId, 'fast')
+  assert.equal(scorer.shouldEvict('slow'), true)
+  assert.equal(scorer.evictLowPerformers({ minScore: 40 }).evicted.length, 1)
+  assert.deepEqual(evicted.map(([peerId]) => peerId), ['slow'])
+  assert.equal(state.peers.has('slow'), false)
+})
+
+test('budget manager polls memory and cpu and scales feed/autobase/swarm allocations under pressure', async () => {
+  const manager = createBudgetManager({
+    role: 'relay',
+    bareHc: {
+      memoryStats: async () => ({ total: 1000, rss: 870 }),
+      cpuStats: async () => ({ usagePercent: 92, loadAverage: 5 }),
+    },
+  })
+
+  const refreshed = await manager.refreshSystemStats()
+  const allocation = manager.allocate({ feedIndexers: 500, autobaseLinearizationBuffers: 128, activeSwarmConnections: 48 })
+
+  assert.equal(refreshed.thresholds.memoryPressure, 87)
+  assert.equal(refreshed.thresholds.cpuPressure, 92)
+  assert.equal(allocation.feedIndexers < 500, true)
+  assert.equal(allocation.autobaseLinearizationBuffers < 128, true)
+  assert.equal(allocation.activeSwarmConnections < 48, true)
+  assert.equal(decodeBudgetState(encodeBudgetState(refreshed.thresholds)).cpuPressure, 92)
+})
+
+test('autobase sink binds native onappend and emits zero-copy compact envelopes', async () => {
+  const appended = []
+  const listeners = []
+  const sink = createUnifiedAutobaseSink({
+    autobase: {
+      append: async (buffer) => appended.push(buffer),
+      onappend: (listener) => { listeners.push(listener); return () => {} },
+    },
+    lightWriter: true,
+  })
+  const observed = []
+  sink.onappend((record) => observed.push(record))
+
+  await sink.append({ surface: 'main', kind: 'feed-update', payload: { feed: 'a' } })
+  listeners[0]({ seq: 9, kind: 'remote-feed-update', payload: { feed: 'b' } })
+
+  assert.equal(appended[0] instanceof Uint8Array, true)
+  assert.equal(sink.snapshot().events[0].payload.feed, 'a')
+  assert.equal(observed.at(-1).kind, 'remote-feed-update')
 })

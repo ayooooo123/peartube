@@ -33,6 +33,47 @@ ns.register({
   ]
 })
 
+ns.register({
+  name: 'peer-performance-metric',
+  fields: [
+    { name: 'peerId', type: 'string', required: true },
+    { name: 'latencyMs', type: 'uint', required: false },
+    { name: 'handshakeDurationMs', type: 'uint', required: false },
+    { name: 'socketStability', type: 'uint', required: false },
+    { name: 'handshakeSuccesses', type: 'uint', required: false },
+    { name: 'handshakeFailures', type: 'uint', required: false },
+    { name: 'handshakes', type: 'uint', required: false },
+    { name: 'udxThroughputBps', type: 'uint', required: false },
+    { name: 'observedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'resource-budget-state',
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'memoryPressure', type: 'uint', required: false },
+    { name: 'cpuPressure', type: 'uint', required: false },
+    { name: 'maxFanout', type: 'uint', required: false },
+    { name: 'maxRequestsPerWindow', type: 'uint', required: false },
+    { name: 'maxFeedEntries', type: 'uint', required: false },
+    { name: 'maxConcurrentSync', type: 'uint', required: false },
+    { name: 'maxConcurrentProofs', type: 'uint', required: false },
+    { name: 'maxConcurrentFetches', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'resource-allocation-state',
+  fields: [
+    { name: 'feedIndexers', type: 'uint', required: false },
+    { name: 'autobaseLinearizationBuffers', type: 'uint', required: false },
+    { name: 'activeSwarmConnections', type: 'uint', required: false },
+    { name: 'memoryPressure', type: 'uint', required: false },
+    { name: 'cpuPressure', type: 'uint', required: false }
+  ]
+})
+
 // ============================================
 // Identity Types
 // ============================================

@@ -342,10 +342,11 @@ function createPlayerResourceGate(options = {}) {
   return { mainPolicy, shortsPolicy, budgetFor, shouldSuspend, chooseActiveSurface }
 }
 
-function createUnifiedAutobaseSink(options = {}) {
+export function createUnifiedAutobaseSink(options = {}) {
   const events = []
   const bySurface = new Map()
   const seen = new Set()
+  const appendSubscribers = new Set()
   const appendFn = typeof options.append === 'function'
     ? options.append
     : typeof options.autobase?.append === 'function'
@@ -355,6 +356,25 @@ function createUnifiedAutobaseSink(options = {}) {
         : typeof options.autobase?.log?.append === 'function'
           ? options.autobase.log.append.bind(options.autobase.log)
           : null
+  const nativeOnAppend = typeof options.autobase?.onappend === 'function'
+    ? options.autobase.onappend.bind(options.autobase)
+    : typeof options.autobase?.log?.onappend === 'function'
+      ? options.autobase.log.onappend.bind(options.autobase.log)
+      : null
+
+  function notifyAppend(record) {
+    for (const subscriber of appendSubscribers) {
+      try {
+        subscriber(record)
+      } catch {
+        // Keep native onappend fanout non-blocking.
+      }
+    }
+  }
+
+  const closeNativeOnAppend = nativeOnAppend
+    ? nativeOnAppend((record) => notifyAppend(record))
+    : null
 
   function surfaceBucket(surface) {
     const key = normalizePlayerSurface(surface)
@@ -393,8 +413,19 @@ function createUnifiedAutobaseSink(options = {}) {
     if (appendFn) {
       await appendFn(compactJson(envelope))
     }
+    notifyAppend(envelope)
 
     return { appended: true, duplicate: false, envelope }
+  }
+
+  function onappend(listener) {
+    if (typeof listener !== 'function') return () => {}
+    appendSubscribers.add(listener)
+    return () => appendSubscribers.delete(listener)
+  }
+
+  function close() {
+    if (typeof closeNativeOnAppend === 'function') closeNativeOnAppend()
   }
 
   function snapshot() {
@@ -409,7 +440,7 @@ function createUnifiedAutobaseSink(options = {}) {
     }
   }
 
-  return { append, snapshot, bySurface, events }
+  return { append, onappend, close, snapshot, bySurface, events }
 }
 
 export function createPlayerSplitState(options = {}) {

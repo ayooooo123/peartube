@@ -161,6 +161,7 @@ export async function createBackendContext(config) {
     disableStandalonePrimaryKeyFile = false,
     network = {},
     swarmOptions = {},
+    peerScorer = null,
     ipcLog: _ipcLog
   } = config;
 
@@ -332,7 +333,7 @@ export async function createBackendContext(config) {
   await appendDebugLine('[orchestrator] managers creating')
 
   // Phase 2: Create managers (synchronous, fast)
-  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);
+  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb, { peerScorer });
   ctx.publicFeed = publicFeed
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();

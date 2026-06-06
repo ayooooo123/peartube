@@ -786,7 +786,7 @@ export function createUniversalCore(options = {}) {
       const createBackendContext = typeof options.createBackendContext === 'function'
         ? options.createBackendContext
         : null
-      backend = createBackendContext ? await createBackendContext(options) : { ctx: {} }
+      backend = createBackendContext ? await createBackendContext({ ...options, peerScorer }) : { ctx: {} }
       const mirrorWorker = typeof options.createMirrorSeedWorker === 'function'
         ? options.createMirrorSeedWorker({ backend, core: api })
         : {}

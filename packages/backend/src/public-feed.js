@@ -556,7 +556,9 @@ export class PublicFeed {
       const peerKey = this._connectionPeerKeys.get(conn) || this._connectionIds.get(conn) || conn
       const peerTimeoutMs = Number.isFinite(timeoutMs)
         ? timeoutMs
-        : Math.max(300, Math.min(5000, Number(this.peerScorer?.requestTimeout?.(peerKey) || 3000)))
+        : this.peerScorer?.requestTimeout
+          ? Math.max(300, Math.min(5000, Number(this.peerScorer.requestTimeout(peerKey) || 3000)))
+          : 250
       const requestId = `${Date.now()}:${this._nextAvailabilityRequestId++}`
       const timeout = setTimeout(() => {
         this.pendingAvailabilityRequests.delete(requestId)

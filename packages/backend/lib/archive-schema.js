@@ -117,6 +117,30 @@ export const fileMappingCodec = {
   },
 }
 
+const legacyFileMappingCodec = {
+  preencode(state, mapping) {
+    c.fixed32.preencode(state, mapping.fileHash)
+    c.string.preencode(state, mapping.sourceId)
+    c.array(variantCodec).preencode(state, mapping.variants)
+  },
+  encode(state, mapping) {
+    c.fixed32.encode(state, mapping.fileHash)
+    c.string.encode(state, mapping.sourceId)
+    c.array(variantCodec).encode(state, mapping.variants)
+  },
+  decode(state) {
+    const fileHash = c.fixed32.decode(state)
+    const sourceId = c.string.decode(state)
+    const variants = c.array(variantCodec).decode(state)
+    return {
+      fileHash,
+      hypercoreKey: variants[0]?.coreKey,
+      sourceId,
+      variants,
+    }
+  },
+}
+
 export function encode(mapping) {
   const canonical = normalize(mapping)
   const state = c.state()
@@ -128,14 +152,37 @@ export function encode(mapping) {
   return state.buffer
 }
 
+export function encodeLegacyForTest(mapping) {
+  const canonical = normalize(mapping)
+  const state = c.state()
+
+  legacyFileMappingCodec.preencode(state, canonical)
+  state.buffer = b4a.allocUnsafe(state.end)
+  legacyFileMappingCodec.encode(state, canonical)
+
+  return state.buffer
+}
+
 export function decode(buf) {
   const buffer = b4a.isBuffer(buf) ? buf : b4a.from(buf)
-  const state = c.state(0, buffer.byteLength, buffer)
-  const mapping = fileMappingCodec.decode(state)
+  let state = c.state(0, buffer.byteLength, buffer)
+  let mapping
+
+  try {
+    mapping = fileMappingCodec.decode(state)
+    if (state.start !== state.end) throw new Error('archive mapping buffer has trailing bytes')
+  } catch (error) {
+    state = c.state(0, buffer.byteLength, buffer)
+    try {
+      mapping = legacyFileMappingCodec.decode(state)
+    } catch {
+      throw error
+    }
+  }
 
   if (state.start !== state.end) {
     throw new Error('archive mapping buffer has trailing bytes')
   }
 
-  return mapping
+  return normalize(mapping)
 }

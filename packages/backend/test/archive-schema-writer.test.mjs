@@ -8,7 +8,7 @@ import b4a from 'b4a'
 import Corestore from 'corestore'
 import HyperDB from 'hyperdb'
 
-import { decode, encode } from '../lib/archive-schema.js'
+import { decode, encode, encodeLegacyForTest } from '../lib/archive-schema.js'
 import { archiveKey, ensureCanonicalArchiveCore, readArchiveMapping, writeArchiveMapping } from '../lib/archive-writer.js'
 import publicDbDefinition from '../src/channel/public-hyperdb-spec/hyperdb/index.js'
 
@@ -74,6 +74,12 @@ test('archive schema rejects malformed fixed hashes and ranges', () => {
   assert.throws(() => encode(sampleMapping({ fileHash: b4a.alloc(31) })), /fileHash must be exactly 32 bytes/)
   assert.throws(() => encode(sampleMapping({ variants: [{ resolution: '720p', coreKey, startBlock: 10, endBlock: 9 }] })), /endBlock must be >= startBlock/)
   assert.throws(() => decode(b4a.concat([encode(sampleMapping()), b4a.from([0])])), /trailing bytes/)
+})
+
+test('archive schema reads legacy mappings and derives canonical hypercore key', () => {
+  const encoded = encodeLegacyForTest(sampleMapping())
+  assert.equal(encoded.byteLength, 93)
+  assert.deepEqual(decode(encoded), sampleMapping())
 })
 
 test('archive writer writes cenc records under the content-addressed archive key', async () => {

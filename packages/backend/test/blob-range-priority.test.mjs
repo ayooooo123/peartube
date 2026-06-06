@@ -2,6 +2,9 @@ import test from 'brittle'
 import c from 'compact-encoding'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
 import {
   getPrioritizedBlobDownloadRange,
@@ -32,6 +35,9 @@ const blobIdEncoding = {
   },
 }
 
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const storageSource = readFileSync(resolve(__dirname, '../src/storage.js'), 'utf8')
+
 test('parseHttpByteRange normalizes closed and open HTTP byte ranges', (t) => {
   t.alike(parseHttpByteRange('bytes=65536-131071', 1048576), { start: 65536, end: 131071 })
   t.alike(parseHttpByteRange('bytes=983040-', 1048576), { start: 983040, end: 1048575 })
@@ -59,8 +65,7 @@ test('getPrioritizedBlobDownloadRange maps a seek byte range to the matching blo
   )
 })
 
-test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP range', async (t) => {
-  const calls = []
+function createRangeRequest({ method = 'GET', token = 'test-token' } = {}) {
   const key = Buffer.from('b'.repeat(64), 'hex')
   const blob = {
     blockOffset: 10,
@@ -70,11 +75,18 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   }
   const encodedBlob = z32.encode(c.encode(blobIdEncoding, blob))
   const req = {
-    url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=test-token`,
+    method,
+    url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=${token}`,
     headers: {
       range: `bytes=${4 * 65536}-${(5 * 65536) - 1}`,
     },
   }
+  return { key, blob, req }
+}
+
+test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP GET range', async (t) => {
+  const calls = []
+  const { key, blob, req } = createRangeRequest()
   const blobServer = {
     token: 'test-token',
     async _getCore(requestKey, info, active) {
@@ -102,4 +114,33 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
   t.ok(calls.some((call) => call[0] === 'close'))
+})
+
+test('prioritizeBlobServerRangeRequest ignores HEAD range probes', async (t) => {
+  const calls = []
+  const { req } = createRangeRequest({ method: 'HEAD' })
+  const blobServer = {
+    token: 'test-token',
+    async _getCore() {
+      calls.push(['_getCore'])
+      throw new Error('HEAD should not prioritize blob downloads')
+    },
+  }
+
+  const result = await prioritizeBlobServerRangeRequest(blobServer, req)
+
+  t.is(result, null)
+  t.alike(calls, [])
+})
+
+test('storage wires blob range prioritization before delegating blob-server requests', (t) => {
+  const importIndex = storageSource.indexOf("import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'")
+  const wrapperIndex = storageSource.indexOf('blobServer._onrequest = async function (req, res)')
+  const priorityIndex = storageSource.indexOf('await prioritizeBlobServerRangeRequest(blobServer, req)')
+  const delegateIndex = storageSource.indexOf('return origOnRequest(req, res)')
+
+  t.ok(importIndex >= 0, 'storage imports range priority helper')
+  t.ok(wrapperIndex >= 0, 'storage wraps blob-server requests')
+  t.ok(priorityIndex > wrapperIndex, 'range priority runs inside the request wrapper')
+  t.ok(priorityIndex < delegateIndex, 'range priority runs before blob-server serves the range')
 })

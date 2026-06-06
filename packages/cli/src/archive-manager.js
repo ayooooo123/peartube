@@ -433,14 +433,19 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
           catalogVersion: 1,
           driveKey: channelKey,
           publicBeeKey,
-          source: 'relay-cache',
+          source: 'archive-job',
+          retentionClass: 'private',
           relayRole: 'cache',
           relayServing: true,
           previewVideos: playablePreviews,
           videoCount: playablePreviews.length,
           manifestUpdatedAt: Date.now()
         }
-        await runtime?.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
+        await runtime?.publishRelayCatalogEntry?.({
+          ...catalogEntry,
+          source: 'archive-job',
+          retentionClass: 'private'
+        }).catch(() => {})
       }
     }
   }

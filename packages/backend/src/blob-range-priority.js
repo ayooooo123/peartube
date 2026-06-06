@@ -103,6 +103,8 @@ function decodeBlobParam(value) {
 }
 
 function decodeBlobRangeRequest(blobServer, req) {
+  if (req?.method && req.method !== 'GET') return null
+
   const rangeHeader = req?.headers?.range
   if (!rangeHeader) return null
 

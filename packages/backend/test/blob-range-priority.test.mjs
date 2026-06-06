@@ -65,8 +65,7 @@ test('getPrioritizedBlobDownloadRange maps a seek byte range to the matching blo
   )
 })
 
-test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP range', async (t) => {
-  const calls = []
+function createRangeRequest({ method = 'GET', token = 'test-token' } = {}) {
   const key = Buffer.from('b'.repeat(64), 'hex')
   const blob = {
     blockOffset: 10,
@@ -76,11 +75,18 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   }
   const encodedBlob = z32.encode(c.encode(blobIdEncoding, blob))
   const req = {
-    url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=test-token`,
+    method,
+    url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=${token}`,
     headers: {
       range: `bytes=${4 * 65536}-${(5 * 65536) - 1}`,
     },
   }
+  return { key, blob, req }
+}
+
+test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP GET range', async (t) => {
+  const calls = []
+  const { key, blob, req } = createRangeRequest()
   const blobServer = {
     token: 'test-token',
     async _getCore(requestKey, info, active) {
@@ -108,6 +114,23 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
   t.ok(calls.some((call) => call[0] === 'close'))
+})
+
+test('prioritizeBlobServerRangeRequest ignores HEAD range probes', async (t) => {
+  const calls = []
+  const { req } = createRangeRequest({ method: 'HEAD' })
+  const blobServer = {
+    token: 'test-token',
+    async _getCore() {
+      calls.push(['_getCore'])
+      throw new Error('HEAD should not prioritize blob downloads')
+    },
+  }
+
+  const result = await prioritizeBlobServerRangeRequest(blobServer, req)
+
+  t.is(result, null)
+  t.alike(calls, [])
 })
 
 test('storage wires blob range prioritization before delegating blob-server requests', (t) => {

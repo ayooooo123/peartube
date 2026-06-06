@@ -2,6 +2,9 @@ import test from 'brittle'
 import c from 'compact-encoding'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
 import {
   getPrioritizedBlobDownloadRange,
@@ -31,6 +34,9 @@ const blobIdEncoding = {
     }
   },
 }
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const storageSource = readFileSync(resolve(__dirname, '../src/storage.js'), 'utf8')
 
 test('parseHttpByteRange normalizes closed and open HTTP byte ranges', (t) => {
   t.alike(parseHttpByteRange('bytes=65536-131071', 1048576), { start: 65536, end: 131071 })
@@ -102,4 +108,16 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
   t.ok(calls.some((call) => call[0] === 'close'))
+})
+
+test('storage wires blob range prioritization before delegating blob-server requests', (t) => {
+  const importIndex = storageSource.indexOf("import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'")
+  const wrapperIndex = storageSource.indexOf('blobServer._onrequest = async function (req, res)')
+  const priorityIndex = storageSource.indexOf('await prioritizeBlobServerRangeRequest(blobServer, req)')
+  const delegateIndex = storageSource.indexOf('return origOnRequest(req, res)')
+
+  t.ok(importIndex >= 0, 'storage imports range priority helper')
+  t.ok(wrapperIndex >= 0, 'storage wraps blob-server requests')
+  t.ok(priorityIndex > wrapperIndex, 'range priority runs inside the request wrapper')
+  t.ok(priorityIndex < delegateIndex, 'range priority runs before blob-server serves the range')
 })

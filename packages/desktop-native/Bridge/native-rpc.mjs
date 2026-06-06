@@ -1,6 +1,7 @@
 import c from 'compact-encoding'
+import { PROTOCOL_VERSION } from '../../host/src/contracts.js'
 
-export const NATIVE_BRIDGE_PROTOCOL_VERSION = 2
+export const NATIVE_BRIDGE_PROTOCOL_VERSION = PROTOCOL_VERSION
 
 export const BRIDGE_COMMANDS = Object.freeze({
   bootstrap: 1,
@@ -127,6 +128,22 @@ const optionalStringCodec = optional(c.string)
 const optionalUIntCodec = optional(c.uint)
 const optionalBufferCodec = optional(c.buffer)
 
+const requiredProtocolVersionCodec = {
+  preencode(state, value) {
+    if (!Number.isSafeInteger(value)) throw new Error('bootstrapResponse protocolVersion is required')
+    c.uint.preencode(state, value)
+  },
+  encode(state, value) {
+    if (!Number.isSafeInteger(value)) throw new Error('bootstrapResponse protocolVersion is required')
+    c.uint.encode(state, value)
+  },
+  decode(state) {
+    const value = c.uint.decode(state)
+    if (!Number.isSafeInteger(value)) throw new Error('bootstrapResponse protocolVersion is required')
+    return value
+  },
+}
+
 export const pushRequestCodec = objectCodec([
   field('command', c.uint),
   field('data', optionalBufferCodec, null),
@@ -195,7 +212,7 @@ export const browseSnapshotCodec = objectCodec([
 
 export const bootstrapResponseCodec = objectCodec([
   field('blobServerPort', optionalUIntCodec, null),
-  field('protocolVersion', c.uint, NATIVE_BRIDGE_PROTOCOL_VERSION),
+  field('protocolVersion', requiredProtocolVersionCodec),
   field('storagePath', c.string),
   field('snapshot', browseSnapshotCodec),
 ])

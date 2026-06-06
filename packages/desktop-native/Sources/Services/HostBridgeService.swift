@@ -9,7 +9,7 @@ import Observation
 @MainActor
 @Observable
 final class HostBridgeService {
-  private static let supportedProtocolVersion = 2
+  private static let supportedProtocolVersion = NativeHostProtocolVersion
   private static let supportedVideoUploadFileExtensions: Set<String> = [
     "mp4", "mov", "m4v", "mkv", "webm"
   ]

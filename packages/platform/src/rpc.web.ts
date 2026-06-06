@@ -9,7 +9,7 @@
  */
 
 import { createProtocolClient } from '@peartube/protocol';
-import { createPlatformRpcBridge } from './rpc.shared';
+import { createPlatformRpcBridge, createProtocolRpcFacade } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
@@ -249,7 +249,7 @@ export function getBlobServerPort(): number | null {
 }
 
 /**
- * Get raw HRPC instance (for advanced use cases)
+ * Get app-facing protocol RPC facade (legacy name)
  */
 export function getHRPCInstance(): any {
   return mainBridge.getRpc();
@@ -257,7 +257,7 @@ export function getHRPCInstance(): any {
 
 // Helper to get RPC and ensure it's ready
 function ensureRPC() {
-  const rpc = mainBridge.getRpc();
+  const rpc = createProtocolRpcFacade(mainBridge.getClient());
   if (!rpc) throw new Error('Platform RPC not initialized');
   return rpc;
 }

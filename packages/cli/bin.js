@@ -2,7 +2,7 @@
 import { existsSync, writeFileSync } from '#fs'
 import process from '#process'
 import { normalizeCliArgv, parseArgv } from './src/argv.js'
-import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
+import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
 import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
@@ -220,7 +220,7 @@ async function main() {
       await initCommand(flags)
       break
     default:
-      if (command === RELAY_COMMAND || command === RELAY_COMPAT_COMMAND) {
+      if (command === RELAY_COMMAND) {
         printHelp()
         return
       }

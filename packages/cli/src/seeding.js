@@ -66,7 +66,17 @@ function parseBlockBlobId(blobId) {
   if (typeof blobId !== 'string') return null
   const parts = blobId.split(':').map((part) => Number(part))
   if (parts.length < 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return null
-  return { blockOffset: parts[0], blockLength: parts[1] }
+  return {
+    blockOffset: parts[0],
+    blockLength: parts[1],
+    byteLength: Number.isFinite(parts[3]) ? Math.max(0, parts[3]) : 0
+  }
+}
+
+function estimateVideoBytes(video) {
+  const explicit = Number(video?.size || video?.byteLength || 0)
+  if (Number.isFinite(explicit) && explicit > 0) return explicit
+  return parseBlockBlobId(video?.blobId)?.byteLength || 0
 }
 
 function pushPreview(previews, video) {
@@ -101,16 +111,24 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
   if (typeof loadPublicBee !== 'function') throw new Error('loadPublicBee is required')
 
   const handles = new Map()
+  const handleOwners = new Map()
+  const channelResources = new Map()
   const seededChannels = new Map()
   const logInfo = typeof logger.info === 'function' ? logger.info.bind(logger) : () => {}
   const logWarn = typeof logger.warn === 'function' ? logger.warn.bind(logger) : () => {}
   const logDebug = typeof logger.debug === 'function' ? logger.debug.bind(logger) : () => {}
 
-  function retainDiscovery(discoveryKey, label) {
+  function retainDiscovery(discoveryKey, label, ownerDriveKey = null) {
     if (!ctx.swarm || ctx.swarm.destroyed || !discoveryKey) return null
     const discoveryKeyHex = Buffer.isBuffer(discoveryKey) || b4a.isBuffer(discoveryKey)
       ? b4a.toString(discoveryKey, 'hex')
       : String(discoveryKey)
+    if (ownerDriveKey) {
+      if (!channelResources.has(ownerDriveKey)) channelResources.set(ownerDriveKey, { handleKeys: new Set(), cores: new Set() })
+      channelResources.get(ownerDriveKey).handleKeys.add(discoveryKeyHex)
+      if (!handleOwners.has(discoveryKeyHex)) handleOwners.set(discoveryKeyHex, new Set())
+      handleOwners.get(discoveryKeyHex).add(ownerDriveKey)
+    }
     if (handles.has(discoveryKeyHex)) return handles.get(discoveryKeyHex)
 
     try {
@@ -215,7 +233,9 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
     try {
       const bee = await loadPublicBee(ctx, publicBeeKey)
       if (bee?.core?.discoveryKey) {
-        retainDiscovery(bee.core.discoveryKey, `publicBee:${String(publicBeeKey).slice(0, 16)}`)
+        retainDiscovery(bee.core.discoveryKey, `publicBee:${String(publicBeeKey).slice(0, 16)}`, driveKey)
+        if (!channelResources.has(driveKey)) channelResources.set(driveKey, { handleKeys: new Set(), cores: new Set() })
+        channelResources.get(driveKey).cores.add(bee.core)
         try { blindPeer?.addCore?.(bee.core, { announce: true, referrer: b4a.from(publicBeeKey, 'hex') }) } catch {}
         stats.publicBeeCores = 1
       }
@@ -261,13 +281,16 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
         const core = await resolveBlobCore(keyHex)
         if (core?.discoveryKey) {
           blobCores.set(keyHex, core)
-          retainDiscovery(core.discoveryKey, `${kind}:${keyHex.slice(0, 16)}`)
+          retainDiscovery(core.discoveryKey, `${kind}:${keyHex.slice(0, 16)}`, driveKey)
+          if (!channelResources.has(driveKey)) channelResources.set(driveKey, { handleKeys: new Set(), cores: new Set() })
+          channelResources.get(driveKey).cores.add(core)
           try { blindPeer?.addCore?.(core, { announce: true, referrer: b4a.from(publicBeeKey, 'hex') }) } catch {}
           stats.blobCores += 1
         }
       }
 
       stats.blobAvailability = await collectBlobAvailability(availabilityVideos, blobCores)
+      stats.bytes = availabilityVideos.reduce((total, video) => total + estimateVideoBytes(video), 0)
       stats.videos = Math.max(stats.videos, stats.blobAvailability.videos.length)
       const playableRefs = new Set(
         stats.blobAvailability.videos
@@ -287,6 +310,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
         publicBeeCores: stats.publicBeeCores,
         blobCores: stats.blobCores,
         blobAvailability: stats.blobAvailability,
+        bytes: stats.bytes || 0,
         lastSeededAt: stats.lastSeededAt,
         lastError: null
       })
@@ -333,9 +357,43 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
       const driveKey = channel?.driveKey || channel?.channelKey
       if (!driveKey || seen.has(driveKey)) continue
       seen.add(driveKey)
-      await seedChannel(channel)
+      const stats = await seedChannel(channel)
+      if (typeof cacheManager?.updateChannelSize === 'function') {
+        await cacheManager.updateChannelSize(driveKey, stats.bytes || channel.bytes || 0)
+      }
+      if (typeof cacheManager?.enforceQuota === 'function') {
+        await cacheManager.enforceQuota({
+          onEvict: async (evicted) => {
+            await stopChannel(evicted?.driveKey || evicted?.channelKey)
+          }
+        })
+      }
     }
     return getStats()
+  }
+
+  async function stopChannel(driveKey) {
+    if (!driveKey) return false
+    const resources = channelResources.get(driveKey)
+    if (resources) {
+      for (const key of resources.handleKeys) {
+        const owners = handleOwners.get(key)
+        owners?.delete(driveKey)
+        if (owners && owners.size > 0) continue
+        handleOwners.delete(key)
+        const handle = handles.get(key)
+        handles.delete(key)
+        try { await handle?.destroy?.() } catch (err) { logDebug('[relay-seeder] evicted discovery destroy failed', { error: err?.message || String(err) }) }
+        try { await handle?.close?.() } catch (err) { logDebug('[relay-seeder] evicted discovery close failed', { error: err?.message || String(err) }) }
+      }
+      for (const core of resources.cores) {
+        try { blindPeer?.removeCore?.(core) } catch {}
+        try { core?.undownload?.({ start: 0, end: -1 }) } catch {}
+      }
+      channelResources.delete(driveKey)
+    }
+    seededChannels.delete(driveKey)
+    return true
   }
 
   function getStats() {
@@ -378,6 +436,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
     retainDiscovery,
     seedChannel,
     seedCachedChannels,
+    stopChannel,
     getStats,
     close
   }

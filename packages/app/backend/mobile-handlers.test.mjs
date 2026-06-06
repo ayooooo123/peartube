@@ -225,7 +225,7 @@ test('feed handlers use getPublicFeed for both public and canonical RPC names', 
         availability: 'playable',
       }],
     }],
-    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2, feedConnections: 2, feedEntries: 1, channelsLoaded: 1 },
   }
   const deps = createDeps({
     api: {
@@ -259,7 +259,7 @@ test('feed handlers use getPublicFeed for both public and canonical RPC names', 
         availability: 'playable',
       }],
     }],
-    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2, feedConnections: 2, feedEntries: 1, channelsLoaded: 1 },
   }
 
   assert.deepEqual(await backend.getPublicFeed({}), expected)

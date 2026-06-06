@@ -361,6 +361,62 @@ export function attachMobileHandlers(B, deps) {
   B.transcodeStop = async (r) => { try { const res = await transcoder.stopTranscode(r.sessionId); return { success: res.success, error: res.error || '' } } catch (err) { return { success: false, error: err?.message } } }
   B.transcodeStatus = async (r) => { try { const s = await transcoder.getStatus(r.sessionId); return { status: s.status || '', progress: s.progress || 0, bytesWritten: s.bytesWritten || 0, error: s.error || '' } } catch (err) { return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message } } }
 
+
+  B.searchVideos = async (r = {}) => {
+    try {
+      const raw = await api.searchVideos?.(r.channelKey, r.query, {
+        topK: r.topK || 10,
+        federated: Boolean(r.federated)
+      })
+      return {
+        results: (raw || []).map((result) => ({
+          id: String(result.id || ''),
+          score: result.score != null ? String(result.score) : null,
+          metadata: result.metadata ? JSON.stringify(result.metadata) : null
+        }))
+      }
+    } catch {
+      return { results: [] }
+    }
+  }
+  B.getRecommendations = async (r = {}) => {
+    try {
+      return await api.getRecommendations?.(r.channelKey, { limit: r.limit, excludeVideoIds: r.excludeVideoIds }) ?? { success: true, recommendations: [] }
+    } catch (error) {
+      return { success: false, recommendations: [], error: error?.message || String(error) }
+    }
+  }
+  B.getVideoRecommendations = async (r = {}) => {
+    try {
+      return await api.getVideoRecommendations?.(r.channelKey, r.videoId, { limit: r.limit }) ?? { success: true, recommendations: [] }
+    } catch (error) {
+      return { success: false, recommendations: [], error: error?.message || String(error) }
+    }
+  }
+  B.indexVideoVectors = async (r = {}) => {
+    try {
+      const result = await api.indexVideoVectors?.(r.channelKey, r.videoId)
+      return { success: Boolean(result?.success), error: result?.error || null }
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) }
+    }
+  }
+  B.logWatchEvent = async (r = {}) => {
+    try {
+      return await api.logWatchEvent?.(r.channelKey, r.videoId, r) ?? { success: true }
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) }
+    }
+  }
+  B.retrySyncChannel = async (r = {}) => {
+    try {
+      await api.retrySyncChannel?.(r.channelKey)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error?.message || String(error) }
+    }
+  }
+
   B.globalSearchVideos = async (r) => {
     try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: (raw || []).map((i) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } }
     catch { return { results: [] } }

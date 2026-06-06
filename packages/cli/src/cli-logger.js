@@ -1,5 +1,5 @@
 /**
- * Structured ndjson logger for peartube-peer CLI.
+ * Structured ndjson logger for peartube-relay CLI.
  * Outputs one JSON object per line to stdout/stderr.
  */
 import process from '#process'

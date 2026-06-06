@@ -486,3 +486,57 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
   t.ok(formatted.includes('seeding: channels=2 videos=5 publicBeeCores=2 blobCores=8 discoveryHandles=10'))
   t.ok(formatted.includes('blobAvailability: playable=4 unavailable=1 unknown=0'))
 })
+
+
+test('relay seeder evicts oldest non-pinned channel over cache quota and drops retained resources', async (t) => {
+  const destroyed = []
+  const blindRemoved = []
+  const swarm = {
+    joins: [],
+    join(discoveryKey, opts) {
+      this.joins.push({ discoveryKey, opts })
+      return {
+        discoveryKey,
+        flushed() { return Promise.resolve() },
+        destroy() { destroyed.push(`handle:${discoveryKey}`) },
+        close() { destroyed.push(`close:${discoveryKey}`) }
+      }
+    }
+  }
+  const oldBlobCore = { ...createCore('11'), async has() { return true }, undownload() { destroyed.push('core:11') } }
+  const pinnedBlobCore = { ...createCore('22'), async has() { return true }, undownload() { destroyed.push('core:22') } }
+  const ctx = {
+    swarm,
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('11')) return oldBlobCore
+        if (keyHex.startsWith('22')) return pinnedBlobCore
+        return createCore(keyHex.slice(0, 2))
+      }
+    }
+  }
+  const metaDb = createMetaDb()
+  const cacheManager = new CacheManager({}, metaDb, 100)
+  await cacheManager.addChannel('aa'.padEnd(64, '0'), 'ba'.padEnd(64, '0'), 'discovered', {
+    previewVideos: [{ id: 'old', blobId: '0:1:0:80', blobsCoreKey: '11'.padEnd(64, '0') }]
+  })
+  await cacheManager.updateChannelSize('aa'.padEnd(64, '0'), 80)
+  await cacheManager.addChannel('bb'.padEnd(64, '0'), 'bb'.padEnd(64, '0'), 'pinned', {
+    previewVideos: [{ id: 'pinned', blobId: '0:1:0:80', blobsCoreKey: '22'.padEnd(64, '0') }]
+  })
+  await cacheManager.updateChannelSize('bb'.padEnd(64, '0'), 80)
+  const seeder = createRelaySeeder({
+    ctx,
+    loadPublicBee: async (_ctx, publicBeeKey) => ({ core: createCore(publicBeeKey.slice(0, 2)), async listVideos() { return [] } }),
+    blindPeer: { addCore() {}, removeCore(core) { blindRemoved.push(core) } },
+    logger: { info() {}, warn() {}, debug() {} }
+  })
+
+  await seeder.seedCachedChannels(cacheManager)
+
+  t.alike(cacheManager.getChannels().map((channel) => channel.driveKey.slice(0, 2)), ['bb'])
+  t.ok(destroyed.some((key) => String(key).includes('11') || String(key).includes('ba')), 'evicted channel discovery resources are destroyed')
+  t.ok(blindRemoved.length > 0, 'evicted channel cores are removed from blind peer')
+  t.is(seeder.getStats().channels, 1)
+})

@@ -165,10 +165,12 @@ export class CacheManager {
     return true;
   }
 
-  async enforceQuota() {
+  async enforceQuota(options = {}) {
     let total = this.getTotalBytes();
-    if (total <= this.maxBytes) return;
+    if (total <= this.maxBytes) return [];
 
+    const onEvict = typeof options.onEvict === 'function' ? options.onEvict : null;
+    const evicted = [];
     const evictable = Array.from(this.channels.values())
       .filter((channel) => !channel.pinned)
       .sort((a, b) => a.addedAt - b.addedAt);
@@ -178,12 +180,18 @@ export class CacheManager {
       if (total <= this.maxBytes) break;
       if (!this.channels.delete(channel.driveKey)) continue;
       total -= channel.bytes;
+      evicted.push({ ...channel });
       changed = true;
     }
 
     if (changed) {
       await this._persist();
+      if (onEvict) {
+        for (const channel of evicted) await onEvict(channel);
+      }
     }
+
+    return evicted;
   }
 
   getTotalBytes() {

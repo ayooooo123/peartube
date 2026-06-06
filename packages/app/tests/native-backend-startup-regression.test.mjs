@@ -16,6 +16,18 @@ function readWorkspaceFile(relativePath) {
   return fs.readFileSync(path.resolve(appRoot, '..', relativePath), 'utf8')
 }
 
+
+async function importMobileBackendForTest() {
+  let source = readAppFile('backend/index.mjs')
+  source = source
+    .replace("import { startHost } from '@peartube/host/start-host'", "const startHost = async () => ({})")
+    .replace("import { PROTOCOL_VERSION } from '@peartube/host'", "const PROTOCOL_VERSION = 2")
+    .replace("import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'", "const createJsonFrameParser = () => ({ push: () => [] }); const encodeJsonFrame = (value) => JSON.stringify(value)")
+    .replace("import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'", "const attachLazyCastHandlers = () => {}")
+  const encoded = Buffer.from(source).toString('base64')
+  return import(`data:text/javascript;base64,${encoded}`)
+}
+
 test('native root layout passes versioned bundle loaders into initPlatformRPC instead of eagerly reading source at the call site', () => {
   const source = readAppFile('app/_layout.tsx')
 
@@ -55,18 +67,17 @@ test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of
   assert.match(source, /ensureFsNativeExtensionsModule/)
 })
 
-test('mobile backend startup lock cleanup removes db LOCK files before orchestrator init', () => {
+test('mobile backend startup does not delete Corestore lock files', () => {
   const source = readAppFile('backend/index.mjs')
-  const removeLocksBody =
-    source.match(/function removeStaleLocks\(storageDir\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
 
-  assert.ok(removeLocksBody, 'removeStaleLocks should exist')
-  assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
+  assert.doesNotMatch(source, /function removeStaleLocks/)
+  assert.doesNotMatch(source, /unlinkSync\(path\.join\(storageDir, 'db', 'LOCK'\)\)/)
+  assert.doesNotMatch(source, /corestoreWaitForLock:\s*false/)
 })
 
 test('mobile backend consumes launch options before downloader worker args', async () => {
   const source = readAppFile('backend/index.mjs')
-  const { parseMobileLaunchArgsForTest } = await import('../backend/index.mjs')
+  const { parseMobileLaunchArgsForTest } = await importMobileBackendForTest()
   const launchOptions = { __peartubeLaunchOptions: true, network: { relayPeers: ['relay-a'] }, swarmOptions: { knownPeers: ['relay-a'] } }
 
   assert.deepEqual(
@@ -97,7 +108,7 @@ test('mobile backend consumes launch options before downloader worker args', asy
 })
 
 test('mobile backend parses launch options after entrypoint and preserves downloader worker path', async () => {
-  const { parseMobileLaunchArgsForTest } = await import('../backend/index.mjs')
+  const { parseMobileLaunchArgsForTest } = await importMobileBackendForTest()
   const launchOptions = {
     __peartubeLaunchOptions: true,
     network: { relayPeers: ['relay-a'] },
@@ -154,10 +165,12 @@ test('backend orchestrator records peers discovered on the single shared topic',
 })
 
 test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
-  const source = readAppFile('backend/mobile-handlers.mjs')
+  const appSource = readAppFile('backend/mobile-handlers.mjs')
+  assert.match(appSource, /backend\/src\/mobile-handlers\.js/, 'app should re-export canonical backend mobile handlers')
+  const source = readWorkspaceFile('backend/src/mobile-handlers.js')
   const handlerBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
-  assert.ok(handlerBlock, 'mobile getSwarmStatus handler should exist')
+  assert.ok(handlerBlock, 'canonical mobile getSwarmStatus handler should exist')
   for (const field of [
     'network',
     'swarmOffline',
@@ -218,4 +231,47 @@ test('backend orchestrator defers warm-up behind startup gates and does not forc
   assert.match(source, /startupGate\.waitUntilOpen\(\{ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS \}\)/)
   assert.match(source, /publicFeed startup gate timed out; continuing backend warmup offline/)
   assert.doesNotMatch(source, /publicFeed\.requestFeedsFromPeers\(\)/)
+})
+
+
+test('mobile backend rejects when native owner lock cannot be acquired before touching corestore locks', async () => {
+  const { createMobileRuntimeBackend } = await importMobileBackendForTest()
+  const calls = []
+  const fakeFs = {
+    mkdirSync() { calls.push('mkdir') },
+    existsSync() { return false },
+    open(_path, _flags, cb) { calls.push('open-owner-lock'); cb(null, 42) },
+    close(_fd, cb) { calls.push('close-owner-lock'); if (cb) cb() },
+    unlinkSync(file) { calls.push(`unlink:${file}`) },
+    readFileSync() { return '' },
+  }
+  const fakePath = { join: (...parts) => parts.join('/') }
+  class FakeHRPC {
+    constructor() { this._rpc = { _onrequest: async () => null } }
+  }
+
+  await assert.rejects(
+    createMobileRuntimeBackend({
+      storagePath: '/tmp/peartube-lock-test',
+      stream: { on() {} },
+      testModules: {
+        HRPC: FakeHRPC,
+        createBackendContext: async () => { calls.push('createBackendContext'); return {} },
+        setIsShuttingDown() {},
+        shutdownBackend() {},
+        setCastActive() {},
+        isCastActive() { return false },
+        prefetchVideoForCast() {},
+        path: fakePath,
+        fs: fakeFs,
+        b4a: { from(value) { return value } },
+        fsNativeExtensions: { tryLock() { calls.push('tryLock'); return false }, unlock() {} },
+      },
+      lockRetryDelayMs: 0,
+    }),
+    /Could not acquire mobile backend owner lock/,
+  )
+
+  assert.deepEqual(calls.filter((call) => call.startsWith('unlink:')), [])
+  assert.equal(calls.includes('createBackendContext'), false)
 })

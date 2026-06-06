@@ -1,4 +1,5 @@
 import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
+import { RUNTIME_ONLY_METHODS } from '@peartube/spec/app-rpc-adapter'
 
 type BlobServerStatus = {
   blobServerPort: number | null
@@ -7,7 +8,7 @@ type BlobServerStatus = {
 }
 
 export type HostReadyData = BlobServerStatus & {
-  protocolVersion: 2
+  protocolVersion: number
 }
 
 export type HostErrorData = {
@@ -47,10 +48,10 @@ type PlatformRunner = {
     args?: string[]
   }): Promise<{
     stream: any
-    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 2 }>
+    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: number }>
     terminate(): Promise<void>
     onLifecycle(cb: (event:
-      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 2 } }
+      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: number } }
       | { type: 'host.error', code: string, message: string, retryable: boolean }
       | { type: 'transport.closed', reason?: string }
     ) => void): () => void
@@ -75,14 +76,48 @@ export type PlatformRunnerSession = {
 }
 
 export type ProtocolClientLike = {
-  rpc: any
+  rpc?: any
   events: {
     on(event: string, listener: (payload: any) => void): () => void
   }
   ready(): Promise<HostReadyData>
-  system?: {
-    getSwarmStatus?(request?: any): Promise<NetworkStatusData>
-  }
+  system?: Record<string, any>
+  identity?: Record<string, any>
+  feed?: Record<string, any>
+  channel?: Record<string, any>
+  video?: Record<string, any>
+  watch?: Record<string, any>
+  transfer?: Record<string, any>
+  search?: Record<string, any>
+  shell?: Record<string, any>
+}
+
+
+const PROTOCOL_RPC_NAMESPACES = ['system', 'identity', 'feed', 'channel', 'video', 'watch', 'transfer', 'search', 'shell'] as const
+const RUNTIME_ONLY_METHOD_SET = new Set<string>(RUNTIME_ONLY_METHODS)
+
+export function createProtocolRpcFacade(client: ProtocolClientLike | null): any {
+  if (!client) return null
+  return new Proxy({}, {
+    get(_target, method) {
+      if (typeof method !== 'string') return undefined
+      const methodName = method
+      for (const namespace of PROTOCOL_RPC_NAMESPACES) {
+        const namespaceObject = (client as any)?.[namespace]
+        const fn = namespaceObject?.[methodName]
+        if (typeof fn === 'function') {
+          return (request: any = {}) => fn.call(namespaceObject, request)
+        }
+      }
+      if (RUNTIME_ONLY_METHOD_SET.has(methodName)) {
+        const rawFn = client.rpc?.[methodName]
+        if (typeof rawFn === 'function') {
+          return (request: any = {}) => rawFn.call(client.rpc, request)
+        }
+      }
+      return undefined
+    }
+  })
 }
 
 type ReadyCallback = (data: HostReadyData) => void
@@ -377,7 +412,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     },
 
     getRpc() {
-      return client?.rpc ?? null
+      return createProtocolRpcFacade(client)
     }
   }
 }

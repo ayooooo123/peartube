@@ -56,3 +56,13 @@ test('relay runtime persists and reuses primary-key across restart on same stora
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+
+test('relay runtime wires production discovered seeding through quota-aware cache manager', async (t) => {
+  const source = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/runtime.js', import.meta.url), 'utf8'))
+  t.ok(/new CacheManager\(ctx\.store, ctx\.metaDb, config\?\.storage\?\.maxBytes \|\| 0\)/.test(source), 'runtime cache manager should receive storage.maxBytes')
+  t.ok(/seeder\.seedCachedChannels\(cacheManager\)/.test(source), 'runtime should seed cached/discovered channels through the production seeder')
+  const seedingSource = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/seeding.js', import.meta.url), 'utf8'))
+  t.ok(/cacheManager\.enforceQuota\(\{/.test(seedingSource), 'production seedCachedChannels should enforce quota after measured seeding')
+  t.ok(/await stopChannel\(evicted\?\.driveKey \|\| evicted\?\.channelKey\)/.test(seedingSource), 'quota eviction should stop retained seeding resources')
+})

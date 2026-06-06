@@ -29,6 +29,7 @@ import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMsePlayerForWatch } from '@/lib/watch-page-player-mode.mjs'
+import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics.js'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -43,6 +44,7 @@ const feedCache = {
   feedVideos: [] as VideoData[],
   channelMeta: {} as Record<string, ChannelMeta>,
   peerCount: 0,
+  swarmStatus: null as any,
   lastLoadedAt: 0,
 }
 
@@ -177,7 +179,7 @@ function toCountMap(countsData: any): Record<string, number> {
   return counts
 }
 
-// Now using HRPC methods directly - no command IDs needed
+// Platform RPC facade routes through protocol namespaces - no command IDs needed
 
 // Route parsing for hash-based routing
 interface WatchRoute {
@@ -215,6 +217,21 @@ function parseHash(hash: string): Route {
     }
   }
   return { type: 'home' }
+}
+
+
+function getWebFeedDiscoveryEmptyCopy(discoveryState: any): string {
+  if (discoveryState?.state === 'backend-starting') return 'Starting P2P network...'
+  if (discoveryState?.state === 'network-degraded') {
+    if (discoveryState.reason === 'dht-bootstrap') return 'Bootstrapping DHT discovery...'
+    if (discoveryState.reason === 'transport-socket') return 'Network transport connected to peers but has no sockets yet.'
+    if (discoveryState.reason === 'feed-gossip') return 'Connected, waiting for feed gossip from peers.'
+    if (discoveryState.reason === 'protomux-feed-open') return 'Connected, waiting for public feed channels to open.'
+    return 'P2P transport is degraded; check network diagnostics.'
+  }
+  if (discoveryState?.state === 'hydrating') return 'Discovered feed channels; loading videos...'
+  if (discoveryState?.state === 'cached-fallback') return 'Showing no live feed yet; cached discovery is waiting for peers.'
+  return 'Click refresh to discover videos'
 }
 
 function safeDecodeURIComponent(value: string): string {
@@ -2043,6 +2060,7 @@ export default function HomeScreen() {
   const [channelMeta, setChannelMeta] = useState<Record<string, ChannelMeta>>(feedCache.channelMeta)
   const [feedLoading, setFeedLoading] = useState(false)
   const [peerCount, setPeerCount] = useState(feedCache.peerCount)
+  const [swarmStatus, setSwarmStatus] = useState<any>(feedCache.swarmStatus)
 
   // Aggregated feed videos from discovered channels
   const [feedVideos, setFeedVideos] = useState<VideoData[]>(feedCache.feedVideos)
@@ -2181,6 +2199,13 @@ export default function HomeScreen() {
       if (result?.stats) {
         setPeerCount(result.stats.peerCount || 0)
         feedCache.peerCount = result.stats.peerCount || 0
+      }
+      try {
+        const status = await rpc.getSwarmStatus({})
+        setSwarmStatus(status)
+        feedCache.swarmStatus = status
+      } catch (err) {
+        console.debug('[Home] Failed to load swarm status:', err)
       }
       feedCache.lastLoadedAt = Date.now()
     } catch (err) {
@@ -2514,6 +2539,16 @@ export default function HomeScreen() {
     }
   }, [myVideosWithMeta, channelVideos, playVideo])
 
+  const feedDiscoveryState = classifyFeedDiscoveryState({
+    ready,
+    entries: feedEntries,
+    videos: feedVideos,
+    peerCount,
+    swarmStatus,
+    hasCachedSnapshot: feedCache.feedEntries.length > 0 || feedCache.feedVideos.length > 0,
+  })
+  const feedEmptySubtitle = getWebFeedDiscoveryEmptyCopy(feedDiscoveryState)
+
   if (!ready || loading) {
     return (
       <div style={styles.loadingContainer}>
@@ -2665,7 +2700,7 @@ export default function HomeScreen() {
                 <GlobeIcon color={colors.textMuted} size={32} />
                 <p style={styles.emptyTitle}>No videos discovered yet</p>
                 <p style={styles.emptySubtitle}>
-                  {peerCount === 0 ? 'Waiting for peers to connect...' : 'Click refresh to discover videos'}
+                  {feedEmptySubtitle}
                 </p>
               </div>
             ) : (

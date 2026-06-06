@@ -1,5 +1,4 @@
 export const RELAY_COMMAND = 'peartube-relay'
-export const RELAY_COMPAT_COMMAND = 'peartube-peer'
 
 export const RELAY_MODE_PRIVATE = 'private'
 export const RELAY_MODE_PUBLIC = 'public'

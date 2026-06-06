@@ -181,3 +181,12 @@ test('desktop release workflow generates HRPC schema before desktop release buil
   assert.ok(nativeSchemaIndex >= 0, 'native desktop release job should generate full HRPC/Swift schema')
   assert.ok(nativeSchemaIndex < nativeProjectIndex, 'native release schema generation should run before native project generation')
 })
+
+
+test('Swift supported protocol version is generated from host protocol version', async () => {
+  const { PROTOCOL_VERSION } = await import('../../host/src/contracts.js')
+  const generatedSource = fs.readFileSync(path.join(packageRoot, 'Sources', 'Support', 'ProtocolVersion.swift'), 'utf8')
+  const serviceSource = fs.readFileSync(path.join(packageRoot, 'Sources', 'Services', 'HostBridgeService.swift'), 'utf8')
+  assert.match(generatedSource, new RegExp(`NativeHostProtocolVersion = ${PROTOCOL_VERSION}\\b`))
+  assert.match(serviceSource, /supportedProtocolVersion = NativeHostProtocolVersion/)
+})

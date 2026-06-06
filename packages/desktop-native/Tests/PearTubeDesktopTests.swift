@@ -1169,7 +1169,7 @@ final class PearTubeDesktopTests: XCTestCase {
 
     let response = NativeBridgeBootstrapResponse(
       blobServerPort: 64369,
-      protocolVersion: 2,
+      protocolVersion: UInt(NativeHostProtocolVersion),
       storagePath: "/tmp/peartube-native",
       snapshot: snapshot
     )

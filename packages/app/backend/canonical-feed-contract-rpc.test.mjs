@@ -48,3 +48,36 @@ test('RPC integration scaffold preserves canonical feed video fields through the
   assert.equal(result.videos[0].thumbnailBlobId, 'thumb-blob')
   assert.equal(result.videos[0].availability, 'playable')
 })
+
+
+test('app mobile handler adapter uses backend canonical mobile handler implementation', async () => {
+  const appHandlers = await import('./mobile-handlers.mjs')
+  const backendHandlers = await import('../../backend/src/mobile-handlers.js')
+  assert.equal(appHandlers.attachMobileHandlers, backendHandlers.attachMobileHandlers)
+})
+
+test('canonical mobile handlers preserve backend recommendation and watch handlers', async () => {
+  const backend = {}
+  const calls = []
+  attachMobileHandlers(backend, {
+    api: {
+      async getRecommendations(channelKey, options) { calls.push(['getRecommendations', channelKey, options]); return { success: true, recommendations: [{ id: `${channelKey}:${options.limit}` }] } },
+      async getVideoRecommendations(channelKey, videoId, options) { calls.push(['getVideoRecommendations', channelKey, videoId, options]); return { success: true, recommendations: [{ id: `${channelKey}:${videoId}:${options.limit}` }] } },
+      async logWatchEvent(channelKey, videoId, options) { calls.push(['logWatchEvent', channelKey, videoId, options.completed]); return { success: true, watched: `${channelKey}:${videoId}:${options.completed}` } },
+    },
+    identityManager: {},
+    uploadManager: {},
+    ctx: {},
+    initializeIdentityFromMnemonic: async () => ({ needsRestart: false }),
+    rpc: {},
+    fs: {},
+    path: {},
+    generateAndStoreThumbnail: async () => null,
+    transcoder: {},
+  })
+
+  assert.deepEqual(await backend.getRecommendations({ channelKey: 'channel', limit: 2 }), { success: true, recommendations: [{ id: 'channel:2' }] })
+  assert.deepEqual(await backend.getVideoRecommendations({ channelKey: 'channel', videoId: 'video', limit: 3 }), { success: true, recommendations: [{ id: 'channel:video:3' }] })
+  assert.deepEqual(await backend.logWatchEvent({ channelKey: 'channel', videoId: 'video', completed: true }), { success: true, watched: 'channel:video:true' })
+  assert.deepEqual(calls.map((call) => call[0]), ['getRecommendations', 'getVideoRecommendations', 'logWatchEvent'])
+})

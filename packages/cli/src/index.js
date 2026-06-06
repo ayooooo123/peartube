@@ -75,23 +75,3 @@ export async function startRelay({ config, logger = null } = {}) {
 
   return service
 }
-
-export async function startPeer({ storagePath, maxStorageMB, pinnedChannels = [], debug = false }) {
-  const config = resolveRelayConfig({
-    mode: 'private',
-    policy: 'allowlist',
-    storage: {
-      path: storagePath,
-      maxBytes: Number(maxStorageMB) * 1024 * 1024
-    },
-    admission: {
-      channels: pinnedChannels,
-      owners: []
-    },
-    logging: {
-      level: debug ? 'debug' : 'info'
-    }
-  }, { env: {} })
-
-  return startRelay({ config })
-}

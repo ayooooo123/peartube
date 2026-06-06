@@ -6,7 +6,7 @@
  * Handles BareKit Worklet initialization, HRPC setup, and event subscriptions.
  */
 
-import { createPlatformRpcBridge } from './rpc.shared';
+import { createPlatformRpcBridge, createProtocolRpcFacade } from './rpc.shared';
 import { createNativeRunner } from './runner.native';
 import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js';
 import {
@@ -683,7 +683,7 @@ export function getBlobServerPort(): number | null {
 }
 
 /**
- * Get raw HRPC instance (for advanced use cases)
+ * Get app-facing protocol RPC facade (legacy name)
  */
 export function getHRPCInstance(): any {
   return mainBridge.getRpc();
@@ -897,7 +897,7 @@ export function isTranscodeWorkletRunning(): boolean {
 
 // Helper to ensure RPC is ready
 function ensureRPC() {
-  const rpc = mainBridge.getRpc();
+  const rpc = createProtocolRpcFacade(mainBridge.getClient());
   if (!rpc) throw new Error('Platform RPC not initialized');
   return rpc;
 }

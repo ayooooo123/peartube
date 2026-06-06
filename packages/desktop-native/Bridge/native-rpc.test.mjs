@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { PROTOCOL_VERSION } from '../../host/src/contracts.js'
 import assert from 'node:assert/strict'
 
 import {
@@ -81,22 +82,22 @@ test('bootstrap payload roundtrips through compact encoding', () => {
 
   const encoded = encodePayload(bootstrapResponseCodec, {
     blobServerPort: 64369,
-    protocolVersion: 2,
+    protocolVersion: PROTOCOL_VERSION,
     storagePath: '/tmp/native',
     snapshot,
   })
 
   const decoded = decodePayload(bootstrapResponseCodec, encoded)
   assert.equal(decoded.blobServerPort, 64369)
-  assert.equal(decoded.protocolVersion, 2)
+  assert.equal(decoded.protocolVersion, PROTOCOL_VERSION)
   assert.equal(decoded.storagePath, '/tmp/native')
   assert.deepEqual(decoded.snapshot.sections.home, snapshot.sections.home)
   assert.deepEqual(decoded.snapshot.stats, snapshot.stats)
   assert.deepEqual(decoded.snapshot.state, snapshot.state)
 })
 
-test('bootstrap response defaults to the current native bridge protocol version', () => {
-  const encoded = encodePayload(bootstrapResponseCodec, {
+test('bootstrap response requires explicit protocolVersion', () => {
+  assert.throws(() => encodePayload(bootstrapResponseCodec, {
     storagePath: '/tmp/native',
     snapshot: {
       generatedAt: 1234,
@@ -106,16 +107,13 @@ test('bootstrap response defaults to the current native bridge protocol version'
         subscriptionChannelKeys: [],
         identityChannelKeys: [],
         activeIdentityName: null,
-        activeIdentityChannelKey: null,
+        activeChannelKey: null,
         activeChannelPublished: false,
       },
     },
-  })
+  }), /protocolVersion is required/)
 
-  const decoded = decodePayload(bootstrapResponseCodec, encoded)
-
-  assert.equal(NATIVE_BRIDGE_PROTOCOL_VERSION, 2)
-  assert.equal(decoded.protocolVersion, NATIVE_BRIDGE_PROTOCOL_VERSION)
+  assert.equal(NATIVE_BRIDGE_PROTOCOL_VERSION, PROTOCOL_VERSION)
 })
 
 test('rpc frame parser assembles chunked request frames', () => {
@@ -452,4 +450,9 @@ test('upload progress events roundtrip through compact encoding', () => {
     decodePayload(uploadProgressEventCodec, eventMessage.data),
     payload
   )
+})
+
+
+test('NATIVE_BRIDGE_PROTOCOL_VERSION follows @peartube/host', () => {
+  assert.equal(NATIVE_BRIDGE_PROTOCOL_VERSION, PROTOCOL_VERSION)
 })

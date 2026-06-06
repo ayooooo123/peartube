@@ -13,9 +13,9 @@ test('package.json exports peartube-relay and compatibility aliases', async (t) 
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
 
   t.is(pkg.bin['peartube-relay'], 'bin.js')
-  t.is(pkg.bin['peartube-peer'], 'bin.js')
+  t.absent(pkg.bin['peartube-peer'])
   t.is(pkg.bin['peartube-relay-bare'], 'bare-bin.js')
-  t.is(pkg.bin['peartube-peer-bare'], 'bare-bin.js')
+  t.absent(pkg.bin['peartube-peer-bare'])
   t.alike(pkg.imports['#process'], {
     bare: './src/shims/process.bare.js',
     default: './src/shims/process.node.js'
@@ -53,7 +53,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   const packageJsonPath = join(__dirname, '..', 'package.json')
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
 
-  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
+  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/runtime.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
   t.is(pkg.imports['#subprocess'].bare, './src/shims/subprocess.bare.js')
   t.is(pkg.imports['#subprocess'].default, './src/shims/subprocess.node.js')
   t.is(pkg.imports['#http'].bare, './src/shims/http.bare.js')
@@ -227,12 +227,11 @@ test('relay runtime source wires client-equivalent feed availability providers',
   t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'relay runtime should pass discovered shared-topic peers through the same promotion path as app backends')
 })
 
-test('legacy relay init leaves shared-topic discovery under storage ownership', async (t) => {
+test('legacy relay init path is not shipped', async (t) => {
+  const fs = await import('node:fs')
   const initPath = join(__dirname, '..', 'src', 'init.js')
-  const content = readFileSync(initPath, 'utf8')
 
-  t.absent(content.includes("ctx.swarm.on('peer', (peer, topic)"), 'legacy relay init should not install app-level shared-topic peer discovery hooks')
-  t.absent(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'legacy relay init should leave discovery diagnostics to the storage-owned swarm')
+  t.absent(fs.existsSync(initPath), 'deleted divergent initPeer harness should not ship')
 })
 
 test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouTube bot checks', async (t) => {
@@ -249,4 +248,17 @@ test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouT
   t.ok(dockerfile.includes('ENV PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS='), 'final image includes configurable yt-dlp retry client fallbacks')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/bgutil-pot /usr/local/bin/bgutil-pot'), 'final image includes the bgutil POT CLI binary')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/share/yt-dlp-plugins /usr/local/share/yt-dlp-plugins'), 'final image includes yt-dlp plugins')
+})
+
+
+test('no shipped CLI entry exposes divergent peer runtime', async (t) => {
+  const fs = await import('node:fs')
+  const packageJsonPath = join(__dirname, '..', 'package.json')
+  const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+  const indexSource = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
+  const constantsSource = fs.readFileSync(new URL('../src/constants.js', import.meta.url), 'utf8')
+  t.absent(indexSource.match(/startPeer|initPeer/))
+  t.absent(constantsSource.match(/peartube-peer|RELAY_COMPAT_COMMAND/))
+  t.absent(pkg.bin['peartube-peer'])
+  t.absent(pkg.bin['peartube-peer-bare'])
 })

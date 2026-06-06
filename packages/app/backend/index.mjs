@@ -216,63 +216,6 @@ function attachUnhandledHandlers(reportBackendError) {
   }
 }
 
-function attachMobileOnlyRpcHandlers(rpc, api) {
-  if (typeof rpc.onSearchVideos === 'function') {
-    rpc.onSearchVideos(async (request) => {
-      try {
-        const raw = await api.searchVideos(request.channelKey, request.query, {
-          topK: request.topK || 10,
-          federated: Boolean(request.federated)
-        })
-
-        return {
-          results: (raw || []).map((result) => ({
-            id: String(result.id || ''),
-            score: result.score != null ? String(result.score) : null,
-            metadata: result.metadata ? JSON.stringify(result.metadata) : null
-          }))
-        }
-      } catch {
-        return { results: [] }
-      }
-    })
-  }
-
-  if (typeof rpc.onGetRecommendations === 'function') {
-    rpc.onGetRecommendations(async () => ({ success: true, recommendations: [] }))
-  }
-
-  if (typeof rpc.onGetVideoRecommendations === 'function') {
-    rpc.onGetVideoRecommendations(async () => ({ success: true, recommendations: [] }))
-  }
-
-  if (typeof rpc.onIndexVideoVectors === 'function') {
-    rpc.onIndexVideoVectors(async (request) => {
-      try {
-        const result = await api.indexVideoVectors?.(request.channelKey, request.videoId)
-        return { success: Boolean(result?.success), error: result?.error || null }
-      } catch (error) {
-        return { success: false, error: error?.message }
-      }
-    })
-  }
-
-  if (typeof rpc.onLogWatchEvent === 'function') {
-    rpc.onLogWatchEvent(async () => ({ success: true }))
-  }
-
-  if (typeof rpc.onRetrySyncChannel === 'function') {
-    rpc.onRetrySyncChannel(async (request) => {
-      try {
-        await api.retrySyncChannel?.(request.channelKey)
-        return { success: true }
-      } catch (error) {
-        return { success: false, error: error?.message }
-      }
-    })
-  }
-}
-
 function resolveMobileStoragePath(providedStoragePath) {
   if (providedStoragePath) return providedStoragePath
 
@@ -352,7 +295,9 @@ export async function createMobileRuntimeBackend(options = {}) {
     stream,
     args = [],
     onReady = () => {},
-    onError = () => {}
+    onError = () => {},
+    testModules = null,
+    lockRetryDelayMs = 200
   } = options
 
   if (!stream) throw new Error('createMobileRuntimeBackend requires a stream transport')
@@ -435,9 +380,9 @@ export async function createMobileRuntimeBackend(options = {}) {
   }
 
   async function acquireOwnerLock(storageDir) {
-    const extensions = await ensureFsNativeExtensionsModule()
+    const extensions = fsNativeExtensions || await ensureFsNativeExtensionsModule()
     const tryLock = extensions?.tryLock
-    if (typeof tryLock !== 'function') return
+    if (typeof tryLock !== 'function') return null
 
     const lockPath = path.join(storageDir, 'backend-owner.lock')
     const fd = await new Promise((resolve, reject) => {
@@ -450,41 +395,16 @@ export async function createMobileRuntimeBackend(options = {}) {
         acquired = tryLock(fd)
       } catch {}
       if (acquired) break
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      if (lockRetryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, lockRetryDelayMs))
     }
 
     if (!acquired) {
       try { fs.close(fd, () => {}) } catch {}
-      return
+      throw new Error('Could not acquire mobile backend owner lock')
     }
 
     ownerLockFd = fd
-  }
-
-function removeStaleLocks(storageDir) {
-  try { fs.unlinkSync(path.join(storageDir, 'CORESTORE')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', error.message) }
-  try { fs.unlinkSync(path.join(storageDir, 'LOCK')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] LOCK cleanup skipped:', error.message) }
-  try { fs.unlinkSync(path.join(storageDir, 'primary', 'LOCK')) } catch (error) { if (error?.code !== 'ENOENT') {} }
-  try { fs.unlinkSync(path.join(storageDir, 'db', 'LOCK')) } catch (error) { if (error?.code !== 'ENOENT') {} }
-
-  function removeDirRecursive(dir) {
-      try {
-        for (const entry of fs.readdirSync(dir)) {
-          const file = path.join(dir, entry)
-          try {
-            fs.statSync(file).isDirectory() ? removeDirRecursive(file) : fs.unlinkSync(file)
-          } catch {}
-        }
-        fs.rmdirSync(dir)
-      } catch {}
-    }
-
-    for (const name of ['logs', 'LOG', 'LOG.old', 'IDENTITY', 'CURRENT', 'MANIFEST-000001']) {
-      const filePath = path.join(storageDir, name)
-      try {
-        fs.statSync(filePath).isDirectory() ? removeDirRecursive(filePath) : fs.unlinkSync(filePath)
-      } catch {}
-    }
+    return fd
   }
 
   const ipcFrameParser = createJsonFrameParser()
@@ -499,7 +419,21 @@ function removeStaleLocks(storageDir) {
   }
 
   attachUnhandledHandlers(reportBackendError)
-  await loadBackendModules()
+  if (testModules && typeof testModules === 'object') {
+    HRPC = testModules.HRPC ?? HRPC
+    createBackendContext = testModules.createBackendContext ?? createBackendContext
+    setIsShuttingDown = testModules.setIsShuttingDown ?? setIsShuttingDown
+    shutdownBackend = testModules.shutdownBackend ?? shutdownBackend
+    setCastActive = testModules.setCastActive ?? setCastActive
+    isCastActive = testModules.isCastActive ?? isCastActive
+    prefetchVideoForCast = testModules.prefetchVideoForCast ?? prefetchVideoForCast
+    path = testModules.path ?? path
+    fs = testModules.fs ?? fs
+    b4a = testModules.b4a ?? b4a
+    fsNativeExtensions = testModules.fsNativeExtensions ?? fsNativeExtensions
+  } else {
+    await loadBackendModules()
+  }
   ensureRpc()
 
   const storageDir = path.join(storagePath, 'peartube-data')
@@ -523,15 +457,12 @@ function removeStaleLocks(storageDir) {
   await acquireOwnerLock(storageDir)
   ipcLog('[init] owner lock done')
 
-  removeStaleLocks(storageDir)
-  ipcLog('[init] CORESTORE + LOCK cleanup done')
-
   let backend = null
   try {
     ipcLog('[init] createBackendContext starting')
     backend = await createBackendContext({
       storagePath: storageDir,
-      corestoreWaitForLock: false,
+      corestoreWaitForLock: true,
       network: launchOptions?.network,
       swarmOptions: launchOptions?.swarmOptions,
       ipcLog,
@@ -593,7 +524,7 @@ function removeStaleLocks(storageDir) {
     }
   }
 
-  const { attachMobileHandlers } = await import('./mobile-handlers.mjs')
+  const { attachMobileHandlers } = await import('../../backend/src/mobile-handlers.js')
   attachMobileHandlers(backend, {
     api,
     identityManager,
@@ -658,7 +589,6 @@ function removeStaleLocks(storageDir) {
   const { registerSharedHandlers } = await import('@peartube/backend/hrpc-handlers')
   registerSharedHandlers(rpc, backend)
   handlersRegistered = true
-  attachMobileOnlyRpcHandlers(rpc, api)
 
   async function destroy() {
     if (shutdownInFlight) return shutdownInFlight

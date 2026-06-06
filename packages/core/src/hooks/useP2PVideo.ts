@@ -17,14 +17,37 @@ export interface P2PVideoState {
   error: Error | null;
 }
 
+export interface PlaybackRequest {
+  channelKey: string;
+  videoId: string;
+  publicBeeKey?: string;
+  blobId?: string;
+  blobsCoreKey?: string;
+  mimeType?: string;
+}
+
 export interface P2PVideoService {
+  getVideoUrl(request: PlaybackRequest): Promise<{ url: string }>;
   getVideoUrl(driveKey: string, videoPath: string): Promise<{ url: string }>;
+  prefetchVideo(request: PlaybackRequest): Promise<{ success: boolean }>;
   prefetchVideo(driveKey: string, videoPath: string): Promise<{ success: boolean }>;
-  preparePlayback?(driveKey: string, videoPath: string): Promise<{ url: string; stats?: VideoStats | null }>;
+  preparePlayback?: {
+    (request: PlaybackRequest): Promise<{ url: string; stats?: VideoStats | null }>;
+    (driveKey: string, videoPath: string): Promise<{ url: string; stats?: VideoStats | null }>;
+  };
+  getVideoStats(request: PlaybackRequest): Promise<VideoStats>;
   getVideoStats(driveKey: string, videoPath: string): Promise<VideoStats>;
 }
 
 export interface UseP2PVideoOptions {
+  /** Public bee key for canonical remote playback requests. */
+  publicBeeKey?: string;
+  /** Direct blob id for canonical instant playback requests. */
+  blobId?: string;
+  /** Direct blobs core key for canonical instant playback requests. */
+  blobsCoreKey?: string;
+  /** MIME type for canonical instant playback requests. */
+  mimeType?: string;
   /** Auto-start loading when channelKey/videoPath change (default: true) */
   autoStart?: boolean;
   /** Stats polling interval in ms (default: 500) */
@@ -33,11 +56,21 @@ export interface UseP2PVideoOptions {
   pollTimeout?: number;
 }
 
-const defaultOptions: Required<UseP2PVideoOptions> = {
+const defaultOptions: Required<Pick<UseP2PVideoOptions, 'autoStart' | 'pollInterval' | 'pollTimeout'>> = {
   autoStart: true,
   pollInterval: 500,
   pollTimeout: 300000,
 };
+
+
+function callPlaybackService<T>(fn: any, request: PlaybackRequest): Promise<T> {
+  if (typeof fn !== 'function') return Promise.reject(new Error('Missing playback service method'));
+  const hasCanonicalPlaybackFields = Boolean(
+    request.publicBeeKey || request.blobId || request.blobsCoreKey || request.mimeType
+  );
+  if (!hasCanonicalPlaybackFields && fn.length >= 2) return fn(request.channelKey, request.videoId);
+  return fn(request);
+}
 
 /**
  * Hook for managing P2P video loading state
@@ -125,9 +158,18 @@ export function useP2PVideo(
       error: null,
     });
 
+    const playbackRequest: PlaybackRequest = {
+      channelKey,
+      videoId: videoPath,
+      publicBeeKey: options.publicBeeKey || undefined,
+      blobId: options.blobId || undefined,
+      blobsCoreKey: options.blobsCoreKey || undefined,
+      mimeType: options.mimeType || undefined,
+    };
+
     try {
       if (typeof service.preparePlayback === 'function') {
-        const playback = await service.preparePlayback(channelKey, videoPath);
+        const playback = await callPlaybackService<{ url: string; stats?: VideoStats | null }>(service.preparePlayback, playbackRequest);
 
         if (!isCurrentRequest()) return;
 
@@ -142,7 +184,7 @@ export function useP2PVideo(
           return;
         }
       } else {
-        const urlResult = await service.getVideoUrl(channelKey, videoPath);
+        const urlResult = await callPlaybackService<{ url: string }>(service.getVideoUrl, playbackRequest);
 
         if (!isCurrentRequest()) return;
 
@@ -152,12 +194,12 @@ export function useP2PVideo(
           status: 'prefetching',
         }));
 
-        await service.prefetchVideo(channelKey, videoPath);
+        await callPlaybackService<{ success: boolean }>(service.prefetchVideo, playbackRequest);
 
         if (!isCurrentRequest()) return;
       }
 
-      const initialStats = await service.getVideoStats(channelKey, videoPath);
+      const initialStats = await callPlaybackService<VideoStats>(service.getVideoStats, playbackRequest);
 
       if (!isCurrentRequest()) return;
 
@@ -184,7 +226,7 @@ export function useP2PVideo(
           }
 
           try {
-            const stats = await service.getVideoStats(channelKey, videoPath);
+            const stats = await callPlaybackService<VideoStats>(service.getVideoStats, playbackRequest);
 
             if (requestGenerationRef.current !== requestId) {
               stopThisInterval();
@@ -218,7 +260,7 @@ export function useP2PVideo(
         error: err instanceof Error ? err : new Error(String(err)),
       });
     }
-  }, [service, channelKey, videoPath, opts.pollInterval, opts.pollTimeout, cleanup]);
+  }, [service, channelKey, videoPath, options.publicBeeKey, options.blobId, options.blobsCoreKey, options.mimeType, opts.pollInterval, opts.pollTimeout, cleanup]);
 
   // Auto-start on mount or when video changes
   useEffect(() => {

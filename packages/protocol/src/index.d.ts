@@ -1,6 +1,6 @@
 export type ProtocolReadyData = {
   blobServerPort: number | null
-  protocolVersion: 2
+  protocolVersion: number
 }
 
 export type ProtocolNetworkStatus = {

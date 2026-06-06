@@ -63,11 +63,19 @@ export function normalize(mapping) {
     throw new TypeError('variants must be an array')
   }
 
+  const variants = mapping.variants.map(normalizeVariant)
+  const hypercoreKey = fixed32(mapping.hypercoreKey ?? mapping.coreKey ?? variants[0]?.coreKey, 'hypercoreKey')
+  for (const variant of variants) {
+    if (!b4a.equals(variant.coreKey, hypercoreKey)) {
+      throw new Error('variants must reference the canonical hypercoreKey')
+    }
+  }
+
   return {
     fileHash: fixed32(mapping.fileHash, 'fileHash'),
-    hypercoreKey: fixed32(mapping.hypercoreKey ?? mapping.coreKey ?? mapping.variants?.[0]?.coreKey, 'hypercoreKey'),
+    hypercoreKey,
     sourceId: mapping.sourceId,
-    variants: mapping.variants.map(normalizeVariant),
+    variants,
   }
 }
 
@@ -97,22 +105,23 @@ const variantCodec = {
 export const fileMappingCodec = {
   preencode(state, mapping) {
     c.fixed32.preencode(state, mapping.fileHash)
-    c.fixed32.preencode(state, mapping.hypercoreKey)
     c.string.preencode(state, mapping.sourceId)
     c.array(variantCodec).preencode(state, mapping.variants)
   },
   encode(state, mapping) {
     c.fixed32.encode(state, mapping.fileHash)
-    c.fixed32.encode(state, mapping.hypercoreKey)
     c.string.encode(state, mapping.sourceId)
     c.array(variantCodec).encode(state, mapping.variants)
   },
   decode(state) {
+    const fileHash = c.fixed32.decode(state)
+    const sourceId = c.string.decode(state)
+    const variants = c.array(variantCodec).decode(state)
     return {
-      fileHash: c.fixed32.decode(state),
-      hypercoreKey: c.fixed32.decode(state),
-      sourceId: c.string.decode(state),
-      variants: c.array(variantCodec).decode(state),
+      fileHash,
+      hypercoreKey: variants[0]?.coreKey,
+      sourceId,
+      variants,
     }
   },
 }

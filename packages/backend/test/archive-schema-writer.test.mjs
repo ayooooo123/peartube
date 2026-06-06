@@ -66,7 +66,7 @@ test('archive schema encodes compact file mappings and decodes canonical objects
   const decoded = decode(encoded)
 
   assert.ok(b4a.isBuffer(encoded))
-  assert.equal(encoded.byteLength, 125)
+  assert.equal(encoded.byteLength, 93)
   assert.deepEqual(decoded, mapping)
 })
 
@@ -80,6 +80,9 @@ test('archive schema reads legacy mappings and derives canonical hypercore key',
   const encoded = encodeLegacyForTest(sampleMapping())
   assert.equal(encoded.byteLength, 93)
   assert.deepEqual(decode(encoded), sampleMapping())
+
+  const longSource = sampleMapping({ sourceId: 'a'.repeat(129) })
+  assert.deepEqual(decode(encodeLegacyForTest(longSource)), longSource)
 })
 
 test('archive writer writes cenc records under the content-addressed archive key', async () => {

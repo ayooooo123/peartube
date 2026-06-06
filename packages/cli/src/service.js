@@ -152,6 +152,56 @@ export async function createRelayService({
     return currentStatus
   }
 
+  const basePublishRelayCatalogEntry = typeof runtime.publishRelayCatalogEntry === 'function'
+    ? runtime.publishRelayCatalogEntry.bind(runtime)
+    : null
+
+  async function persistRuntimeRelayCatalogEntry(entry = {}) {
+    const channelKey = entry.channelKey || entry.driveKey
+    const publicBeeKey = entry.publicBeeKey || null
+    if (!channelKey || !publicBeeKey) return null
+    const existing = relayCatalog.getChannel(channelKey)
+
+    const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+    const unavailableVideos = Array.isArray(entry.unavailableVideos) ? entry.unavailableVideos : []
+    const manifestUpdatedAt = Number(entry.manifestUpdatedAt || entry.mirroredAt || entry.lastSeenAt || nowFn()) || Date.now()
+    const source = entry.source === 'relay-cache' && existing?.source === 'archive-job'
+      ? existing.source
+      : (entry.source || existing?.source || 'relay-cache')
+    const retentionClass = entry.retentionClass || existing?.retentionClass || (source === 'archive-job' ? 'private' : 'discovery')
+    const record = {
+      ...entry,
+      channelKey,
+      driveKey: entry.driveKey || channelKey,
+      publicBeeKey,
+      source,
+      retentionClass,
+      relayRole: entry.relayRole || 'cache',
+      relayServing: entry.relayServing !== false,
+      lastSeenAt: Number(entry.lastSeenAt || manifestUpdatedAt) || manifestUpdatedAt,
+      mirroredAt: Number(entry.mirroredAt || manifestUpdatedAt) || manifestUpdatedAt,
+      previewVideos,
+      unavailableVideos,
+      videoCount: Number(entry.videoCount || previewVideos.length || unavailableVideos.length || 0) || 0,
+      manifestUpdatedAt
+    }
+
+    const persisted = await relayCatalog.upsertChannel(record)
+    await persistStatus()
+    return persisted
+  }
+
+  runtime.publishRelayCatalogEntry = async (entry = {}) => {
+    const published = basePublishRelayCatalogEntry
+      ? await basePublishRelayCatalogEntry(entry)
+      : entry
+    const catalogEntry = published && typeof published === 'object'
+      ? { ...entry, ...published }
+      : entry
+    const persisted = await persistRuntimeRelayCatalogEntry(catalogEntry)
+    return published || persisted
+  }
+
   async function processCandidate(candidate) {
     if (closed) {
       return { accepted: false, reason: 'closed' }
@@ -168,11 +218,14 @@ export async function createRelayService({
 
     if (refreshDecision.skip) {
       const retentionClass = existingChannel.retentionClass || resolved.retentionClass || 'discovery'
+      const source = existingChannel.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
+        ? existingChannel.source
+        : (resolved.source || existingChannel.source || 'discovered')
       await relayCatalog.upsertChannel({
         channelKey: resolved.channelKey,
         ownerKey: resolved.ownerKey || existingChannel.ownerKey || null,
         publicBeeKey: resolved.publicBeeKey || existingChannel.publicBeeKey || null,
-        source: resolved.source || existingChannel.source || 'discovered',
+        source,
         retentionClass,
         lastDecisionReason: refreshDecision.reason,
         lastSeenAt: now
@@ -210,11 +263,14 @@ export async function createRelayService({
       return decision
     }
 
+    const acceptedSource = existingChannel?.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
+      ? existingChannel.source
+      : (resolved.source || 'discovered')
     const baseRecord = {
       channelKey: resolved.channelKey,
       ownerKey: resolved.ownerKey || null,
       publicBeeKey: resolved.publicBeeKey || null,
-      source: resolved.source || 'discovered',
+      source: acceptedSource,
       retentionClass: decision.retentionClass,
       lastDecisionReason: decision.reason,
       lastSeenAt: now
@@ -296,18 +352,23 @@ export async function createRelayService({
           publicBeeKey: resolved.publicBeeKey,
           previewVideos: seedPreviewVideos
         }).catch(() => null)
-        const catalogEntry = seedStats?.catalogEntry || {
-          schema: 'peartube.relayCatalog',
-          catalogVersion: 1,
-          driveKey: resolved.channelKey,
-          publicBeeKey: resolved.publicBeeKey,
-          source: 'relay-cache',
-          relayRole: 'cache',
-          relayServing: true,
-          previewVideos: persistedPreviewVideos,
-          unavailableVideos: mirrorUnavailableVideos,
-          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
-          manifestUpdatedAt: now
+        const catalogEntry = {
+          ...(seedStats?.catalogEntry || {
+            schema: 'peartube.relayCatalog',
+            catalogVersion: 1,
+            driveKey: resolved.channelKey,
+            publicBeeKey: resolved.publicBeeKey,
+            source: 'relay-cache',
+            relayRole: 'cache',
+            relayServing: true,
+            previewVideos: persistedPreviewVideos,
+            unavailableVideos: mirrorUnavailableVideos,
+            videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
+            manifestUpdatedAt: now
+          }),
+          ...(baseRecord.source === 'archive-job'
+              ? { source: 'archive-job', retentionClass: 'private' }
+              : {})
         }
         await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
       }
@@ -399,7 +460,8 @@ export async function createRelayService({
       catalogVersion: 1,
       driveKey: job.channelKey,
       publicBeeKey: job.publicBeeKey,
-      source: 'relay-cache',
+      source: 'archive-job',
+      retentionClass: 'private',
       relayRole: 'cache',
       relayServing: true,
       previewVideos,
@@ -407,7 +469,11 @@ export async function createRelayService({
       videoCount: previewVideos.length,
       manifestUpdatedAt
     }
-    await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
+    await runtime.publishRelayCatalogEntry?.({
+      ...catalogEntry,
+      source: 'archive-job',
+      retentionClass: 'private'
+    }).catch(() => {})
     await persistStatus()
     return { published: true, previewVideos: previewVideos.length }
   }

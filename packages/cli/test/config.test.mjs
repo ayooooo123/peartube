@@ -17,6 +17,8 @@ test('resolveRelayConfig defaults to public discovery mode', async (t) => {
   t.is(config.discovery.enabled, true)
   t.is(config.storage.path, './peartube-relay')
   t.is(config.paths.corestore, 'peartube-relay/corestore')
+  t.is(config.paths.catalog, 'peartube-relay/db/relay-catalog.json')
+  t.is(config.paths.status, 'peartube-relay/db/relay-status.json')
 })
 
 
@@ -82,6 +84,8 @@ test('loadRelayConfig parses yaml-like config files', async (t) => {
     t.is(config.policy, 'allowlist')
     t.is(config.storage.path, './relay-data')
     t.is(config.paths.corestore, 'relay-data/corestore')
+    t.is(config.paths.catalog, 'relay-data/db/relay-catalog.json')
+    t.is(config.paths.status, 'relay-data/db/relay-status.json')
     t.is(config.storage.maxBytes, 4096)
     t.alike(config.admission.channels, ['chan-1', 'chan-2'])
     t.alike(config.admission.owners, ['owner-1'])
@@ -98,6 +102,8 @@ test('loadRelayConfig uses built-in defaults without a config file', async (t) =
   t.is(config.policy, 'discovery')
   t.is(config.storage.path, './peartube-relay')
   t.is(config.paths.corestore, 'peartube-relay/corestore')
+  t.is(config.paths.catalog, 'peartube-relay/db/relay-catalog.json')
+  t.is(config.paths.status, 'peartube-relay/db/relay-status.json')
   t.is(config.paths.config, undefined)
 })
 
@@ -127,6 +133,8 @@ test('loadRelayConfig supports env-only relay configuration', async (t) => {
   t.is(config.policy, 'allowlist')
   t.is(config.storage.path, '/var/lib/peartube-relay')
   t.is(config.paths.corestore, '/var/lib/peartube-relay/corestore')
+  t.is(config.paths.catalog, '/var/lib/peartube-relay/db/relay-catalog.json')
+  t.is(config.paths.status, '/var/lib/peartube-relay/db/relay-status.json')
   t.is(config.storage.maxBytes, 2048)
   t.alike(config.admission.channels, ['chan-a', 'chan-b'])
   t.alike(config.admission.owners, ['owner-a'])

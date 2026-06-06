@@ -608,9 +608,10 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
 
+  const runtimeDbPath = join(config.storage.path, 'db')
   config.paths = {
-    catalog: join(config.storage.path, RELAY_CATALOG_FILENAME),
-    status: join(config.storage.path, RELAY_STATUS_FILENAME),
+    catalog: join(runtimeDbPath, RELAY_CATALOG_FILENAME),
+    status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
     corestore: join(config.storage.path, 'corestore'),
     archiveTmpPath: config.archive.tmpPath
   }

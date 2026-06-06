@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from '#fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from '#fs'
 import { retentionClassPriority } from './admission.js'
 
 function sortEvictionCandidates(channels) {
@@ -71,6 +71,10 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
 }
 
 export function writeRelayStatus(statusPath, status) {
+  if (statusPath) {
+    const separatorIndex = Math.max(statusPath.lastIndexOf('/'), statusPath.lastIndexOf('\\'))
+    if (separatorIndex > 0) mkdirSync(statusPath.slice(0, separatorIndex), { recursive: true })
+  }
   writeFileSync(statusPath, JSON.stringify(status, null, 2))
 }
 

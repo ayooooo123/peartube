@@ -10,6 +10,11 @@ function ensureDir(path) {
   mkdirSync(path, { recursive: true })
 }
 
+function ensureParentDir(path) {
+  const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (separatorIndex > 0) ensureDir(path.slice(0, separatorIndex))
+}
+
 function readCatalog(path) {
   if (!existsSync(path)) {
     return {
@@ -31,12 +36,14 @@ export class RelayCatalog {
 
   static async open({ storagePath, catalogPath = join(storagePath, RELAY_CATALOG_FILENAME) }) {
     ensureDir(storagePath)
+    ensureParentDir(catalogPath)
     const data = readCatalog(catalogPath)
     return new RelayCatalog({ storagePath, catalogPath, data })
   }
 
   async persist() {
     this.data.updatedAt = Date.now()
+    ensureParentDir(this.catalogPath)
     writeFileSync(this.catalogPath, JSON.stringify(this.data, null, 2))
   }
 

@@ -1,8 +1,9 @@
 import test from 'brittle'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { resolveRelayConfig } from '../src/config.js'
 import { createRelayService } from '../src/service.js'
 
 function makeTempDir(prefix) {
@@ -1118,6 +1119,123 @@ test('createRelayService marks timed-out preview refs unavailable instead of pre
     t.is(channel.videosDownloaded, 0)
     t.is(published[published.length - 1].previewVideos.length, 0)
     t.is(published[published.length - 1].unavailableVideos.length, 1)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService persists catalog and status under resolved runtime db path', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-status-db-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const config = resolveRelayConfig({
+      storage: { path: dir, maxBytes: 10_000 },
+      admission: { channels: ['configured-channel'] }
+    })
+    const service = await createRelayService({
+      config,
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 1024, videosFound: 1, videosDownloaded: 1 })
+    })
+
+    await service.start()
+
+    t.ok(existsSync(join(dir, 'db', 'relay-catalog.json')))
+    t.ok(existsSync(join(dir, 'db', 'relay-status.json')))
+    const catalog = JSON.parse(readFileSync(join(dir, 'db', 'relay-catalog.json'), 'utf8'))
+    const status = JSON.parse(readFileSync(join(dir, 'db', 'relay-status.json'), 'utf8'))
+    t.ok(catalog.channels['configured-channel'])
+    t.is(status.storage.path, dir)
+    t.is(status.summary.totalChannels, 1)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService preserves archive-job catalog source after completed archive publish', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-catalog-')
+  const runtime = createFakeRuntime()
+  const published = []
+  const statuses = []
+  runtime.publishRelayCatalogEntry = async (entry) => {
+    published.push(entry)
+    return {
+      schema: 'peartube.relayCatalog',
+      catalogVersion: 1,
+      source: 'relay-cache',
+      relayRole: 'cache',
+      relayServing: true,
+      ...entry
+    }
+  }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async (_path, status) => { statuses.push(status) },
+      nowFn: () => 12345
+    })
+
+    await service.start()
+    const result = await service.publishArchiveJobToFeed({
+      status: 'completed',
+      channelKey: 'archive-channel',
+      publicBeeKey: 'archive-public-bee',
+      completedAt: 67890,
+      previewVideo: {
+        id: 'archive-video',
+        title: 'Archived Video',
+        blobId: '0:1:0:10',
+        blobsCoreKey: 'aa'.repeat(32),
+        mimeType: 'video/webm',
+        availability: 'playable'
+      }
+    })
+
+    t.is(result.published, true)
+    t.is(published.length, 1)
+    t.is(published[0].source, 'archive-job')
+    t.is(published[0].retentionClass, 'private')
+    const channel = service.catalog.getChannel('archive-channel')
+    t.is(channel.publicBeeKey, 'archive-public-bee')
+    t.is(channel.source, 'archive-job')
+    t.is(channel.retentionClass, 'private')
+    t.is(channel.previewVideos[0].mimeType, 'video/webm')
+    t.is(channel.videoCount, 1)
+
+    await runtime.emit({
+      channelKey: 'archive-channel',
+      publicBeeKey: 'archive-public-bee',
+      source: 'discovered',
+      previewVideos: [{
+        id: 'archive-video',
+        blobId: '0:1:0:10',
+        blobsCoreKey: 'aa'.repeat(32)
+      }]
+    })
+    const refreshedChannel = service.catalog.getChannel('archive-channel')
+    t.is(refreshedChannel.source, 'archive-job')
+    t.is(refreshedChannel.retentionClass, 'private')
+    t.is(published.at(-1).source, 'archive-job')
+    t.is(published.at(-1).retentionClass, 'private')
+    t.is(statuses.at(-1).summary.totalChannels, 1)
     await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

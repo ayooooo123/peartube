@@ -22,6 +22,10 @@ function clampScore(score) {
   return Math.max(0, Math.min(100, Math.floor(safeNumber(score, 0))))
 }
 
+function metricIncludes(metric = {}, names = []) {
+  return names.some((name) => metric[name] !== undefined && metric[name] !== null)
+}
+
 function normalizeMetric(peerId, metric = {}) {
   const handshakes = safeNumber(metric.handshakes ?? metric.handshakeCount, 0)
   const failures = safeNumber(metric.handshakeFailures ?? metric.failedHandshakes, 0)
@@ -29,13 +33,17 @@ function normalizeMetric(peerId, metric = {}) {
   const total = Math.max(handshakes, successes + failures)
   const latencyMs = Math.max(0, safeNumber(metric.latencyMs ?? metric.rttMs, 0))
   const handshakeDurationMs = Math.max(0, safeNumber(metric.handshakeDurationMs ?? metric.handshakeMs ?? metric.handshakeLatencyMs, 0))
-  const socketStability = Math.max(0, Math.min(100, safeNumber(metric.socketStability ?? metric.socketStabilityScore ?? metric.stability, 0)))
+  const socketStabilityObserved = metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability'])
+  const socketStability = socketStabilityObserved
+    ? Math.max(0, Math.min(100, safeNumber(metric.socketStability ?? metric.socketStabilityScore ?? metric.stability, 0)))
+    : 0
   const throughput = Math.max(0, safeNumber(metric.udxThroughputBps ?? metric.throughputBps ?? metric.bytesPerSecond, 0))
   return {
     peerId: toHex(peerId || metric.peerId || metric.identityId || hashText(metric)),
     latencyMs,
     handshakeDurationMs,
     socketStability,
+    socketStabilityObserved,
     handshakeSuccesses: successes,
     handshakeFailures: failures,
     handshakes: total,
@@ -64,11 +72,12 @@ function performanceScore(metric = {}) {
 
 export const peerMetricEncoding = {
   preencode(state, metric = {}) {
-    c.uint.preencode(state, 2)
+    c.uint.preencode(state, 3)
     c.string.preencode(state, toHex(metric.peerId || ''))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.latencyMs, 0))))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeDurationMs, 0))))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.socketStability, 0))))
+    c.bool.preencode(state, Boolean(metric.socketStabilityObserved))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeSuccesses, 0))))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeFailures, 0))))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.handshakes, 0))))
@@ -76,11 +85,12 @@ export const peerMetricEncoding = {
     c.biguint.preencode(state, safeBigInt(metric.observedAt, 0n))
   },
   encode(state, metric = {}) {
-    c.uint.encode(state, 2)
+    c.uint.encode(state, 3)
     c.string.encode(state, toHex(metric.peerId || ''))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.latencyMs, 0))))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeDurationMs, 0))))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.socketStability, 0))))
+    c.bool.encode(state, Boolean(metric.socketStabilityObserved))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeSuccesses, 0))))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeFailures, 0))))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.handshakes, 0))))
@@ -89,16 +99,18 @@ export const peerMetricEncoding = {
   },
   decode(state) {
     const version = c.uint.decode(state)
-    if (version !== 1 && version !== 2) throw new Error(`Unsupported peer metric version ${version}`)
+    if (version !== 1 && version !== 2 && version !== 3) throw new Error(`Unsupported peer metric version ${version}`)
     const peerId = c.string.decode(state)
     const latencyMs = c.uint.decode(state)
     const handshakeDurationMs = version >= 2 ? c.uint.decode(state) : 0
     const socketStability = version >= 2 ? c.uint.decode(state) : 0
+    const socketStabilityObserved = version >= 3 ? c.bool.decode(state) : version >= 2
     return {
       peerId,
       latencyMs,
       handshakeDurationMs,
       socketStability,
+      socketStabilityObserved,
       handshakeSuccesses: c.uint.decode(state),
       handshakeFailures: c.uint.decode(state),
       handshakes: c.uint.decode(state),
@@ -321,10 +333,6 @@ export function createPeerScorer(options = {}) {
     return record
   }
 
-  function metricIncludes(metric = {}, names = []) {
-    return names.some((name) => metric[name] !== undefined && metric[name] !== null)
-  }
-
   async function recordPerformance(peerId, metric = {}) {
     const normalized = normalizeMetric(peerId, metric)
     const current = metrics.get(normalized.peerId)
@@ -334,6 +342,7 @@ export function createPeerScorer(options = {}) {
           latencyMs: metricIncludes(metric, ['latencyMs', 'rttMs']) ? normalized.latencyMs : current.latencyMs,
           handshakeDurationMs: metricIncludes(metric, ['handshakeDurationMs', 'handshakeMs', 'handshakeLatencyMs']) ? normalized.handshakeDurationMs : current.handshakeDurationMs,
           socketStability: metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability']) ? normalized.socketStability : current.socketStability,
+          socketStabilityObserved: Boolean(current.socketStabilityObserved || normalized.socketStabilityObserved),
           handshakeSuccesses: current.handshakeSuccesses + normalized.handshakeSuccesses,
           handshakeFailures: current.handshakeFailures + normalized.handshakeFailures,
           handshakes: current.handshakes + normalized.handshakes,
@@ -387,7 +396,7 @@ export function createPeerScorer(options = {}) {
     const metric = metricFor(peer) || peer.performance || {}
     if (safeNumber(metric.handshakeFailures, 0) >= safeNumber(options.maxHandshakeFailures, 4)) return true
     const stability = safeNumber(metric.socketStability, 100)
-    if (Object.hasOwn(metric, 'socketStability') && stability < safeNumber(options.minSocketStability, 20)) return true
+    if (metric.socketStabilityObserved && stability < safeNumber(options.minSocketStability, 20)) return true
     return safeNumber(peer.score ?? scorePeer(peer), 0) < minScore
   }
 

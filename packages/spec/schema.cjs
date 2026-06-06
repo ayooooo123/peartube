@@ -40,6 +40,7 @@ ns.register({
     { name: 'latencyMs', type: 'uint', required: false },
     { name: 'handshakeDurationMs', type: 'uint', required: false },
     { name: 'socketStability', type: 'uint', required: false },
+    { name: 'socketStabilityObserved', type: 'bool', required: false },
     { name: 'handshakeSuccesses', type: 'uint', required: false },
     { name: 'handshakeFailures', type: 'uint', required: false },
     { name: 'handshakes', type: 'uint', required: false },

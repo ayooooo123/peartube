@@ -194,6 +194,7 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   assert.equal(puts[0][0], 'universal-core:peer-metric:peer-a')
   assert.equal(puts[0][1] instanceof Uint8Array, true)
   assert.equal(decodePeerMetric(puts[0][1]).udxThroughputBps, 1024 * 1024)
+  assert.equal(decodePeerMetric(puts[0][1]).socketStabilityObserved, true)
   assert.equal(updates.length > 0, true)
   assert.equal(state.peers.get('peer-a').performance.udxThroughputBps, 1024 * 1024)
 })
@@ -265,7 +266,11 @@ test('peer scorer accepts zero-valued performance updates when merging metrics',
   })
 
   scorer.registerPeer({ peerId: 'peer', identity: { validProofCount: 3 } })
-  await scorer.recordPerformance('peer', { socketStability: 96, latencyMs: 25, handshakeDurationMs: 20, handshakes: 1, handshakeSuccesses: 1 })
+  await scorer.recordPerformance('peer', { latencyMs: 25, handshakeDurationMs: 20, handshakes: 1, handshakeSuccesses: 1 })
+  assert.equal(scorer.metrics.get('peer').socketStabilityObserved, false)
+  assert.equal(scorer.shouldEvict('peer', { minSocketStability: 20, maxHandshakeFailures: 99, minScore: 0 }), false)
+
+  await scorer.recordPerformance('peer', { socketStability: 96, handshakes: 1, handshakeSuccesses: 1 })
   await scorer.recordPerformance('peer', { socketStability: 0, latencyMs: 0, handshakeDurationMs: 0, handshakes: 1, handshakeFailures: 1 })
 
   assert.equal(scorer.metrics.get('peer').socketStability, 0)

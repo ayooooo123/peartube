@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import { readFile } from 'node:fs/promises'
 
-import { createUniversalCore } from '../src/universal-core.js'
+import { createUniversalCore, createUnifiedAutobaseSink } from '../src/universal-core.js'
 import { createBudgetManager, decodeBudgetState, encodeBudgetState } from '../src/budget-manager.js'
 import { createPeerScorer, decodePeerMetric, encodePeerMetric } from '../src/peer-scorer.js'
 
@@ -194,6 +194,18 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   assert.equal(puts[0][0], 'universal-core:peer-metric:peer-a')
   assert.equal(puts[0][1] instanceof Uint8Array, true)
   assert.equal(decodePeerMetric(puts[0][1]).udxThroughputBps, 1024 * 1024)
+  assert.equal(decodePeerMetric(puts[0][1]).socketStabilityObserved, false)
+  assert.equal(decodePeerMetric(encodePeerMetric({ peerId: 'peer-unknown', latencyMs: 10, socketStability: 0, socketStabilityObserved: false })).socketStabilityObserved, false)
+
+  const diffValue = encodePeerMetric({ peerId: 'peer-b', latencyMs: 5, socketStability: 88, socketStabilityObserved: true })
+  scorer.registerPeer({ peerId: 'peer-b', identity: { validProofCount: 2 }, descriptor: { descriptorId: 'feed-b' } })
+  await scorer.applyPerformanceDiff({ left: { value: diffValue }, right: null })
+  assert.equal(scorer.metrics.has('peer-b'), true)
+  assert.equal(state.peers.get('peer-b').performance.socketStability, 88)
+  await scorer.applyPerformanceDiff({ left: null, right: { value: diffValue } })
+  assert.equal(scorer.metrics.has('peer-b'), false)
+  assert.equal(state.peers.get('peer-b').performance, null)
+
   assert.equal(updates.length > 0, true)
   assert.equal(state.peers.get('peer-a').performance.udxThroughputBps, 1024 * 1024)
 })
@@ -234,4 +246,137 @@ test('universal core state persistence uses compact buffers and has no legacy go
   const source = await readFile(new URL('../src/universal-core.js', import.meta.url), 'utf8')
   assert.equal(/setInterval\s*\(/.test(source), false)
   assert.equal(/gossip/i.test(source) && /setInterval\s*\(/.test(source), false)
+})
+
+test('peer scorer ranks and evicts peers from latency handshake stability and udx throughput', async () => {
+  const evicted = []
+  const state = { peers: new Map() }
+  const scorer = createPeerScorer({
+    state,
+    availability: { shouldAdmit: () => true },
+    resources: { profile: { maxFanout: 4 }, budgetFor: () => ({ credit: 80 }), getThresholds: () => ({ maxFanout: 4 }) },
+    evictPeer: (peerId, record) => evicted.push([peerId, record.score]),
+  })
+
+  scorer.registerPeer({ peerId: 'fast', identity: { validProofCount: 3 } })
+  scorer.registerPeer({ peerId: 'slow', identity: { validProofCount: 3 } })
+  await scorer.recordPerformance('fast', { latencyMs: 25, handshakeDurationMs: 15, socketStability: 96, handshakes: 2, handshakeSuccesses: 2, udxThroughputBps: 3 * 1024 * 1024 })
+  await scorer.recordPerformance('slow', { latencyMs: 1200, handshakeDurationMs: 900, socketStability: 3, handshakes: 4, handshakeFailures: 4, udxThroughputBps: 1024 })
+
+  assert.equal(scorer.rankPeers().at(0).peerId, 'fast')
+  assert.equal(scorer.shouldEvict('slow'), true)
+  assert.equal(scorer.evictLowPerformers({ minScore: 40 }).evicted.length, 1)
+  assert.deepEqual(evicted.map(([peerId]) => peerId), ['slow'])
+  assert.equal(state.peers.has('slow'), false)
+})
+
+test('peer scorer accepts zero-valued performance updates when merging metrics', async () => {
+  const scorer = createPeerScorer({
+    availability: { shouldAdmit: () => true },
+    resources: { profile: { maxFanout: 4 }, budgetFor: () => ({ credit: 80 }), getThresholds: () => ({ maxFanout: 4 }) },
+  })
+
+  scorer.registerPeer({ peerId: 'peer', identity: { validProofCount: 3 } })
+  await scorer.recordPerformance('peer', { latencyMs: 25, handshakeDurationMs: 20, handshakes: 1, handshakeSuccesses: 1 })
+  assert.equal(scorer.metrics.get('peer').socketStabilityObserved, false)
+  assert.equal(scorer.shouldEvict('peer', { minSocketStability: 20, maxHandshakeFailures: 99, minScore: 0 }), false)
+
+  await scorer.recordPerformance('peer', { socketStability: 96, handshakes: 1, handshakeSuccesses: 1 })
+  const stableScore = scorer.scorePeer({ peerId: 'peer', identity: { validProofCount: 3 } })
+  await scorer.recordPerformance('peer', { socketStability: 0, latencyMs: 0, handshakeDurationMs: 0, handshakes: 1, handshakeFailures: 1 })
+
+  assert.equal(scorer.metrics.get('peer').socketStability, 0)
+  assert.equal(scorer.scorePeer({ peerId: 'peer', identity: { validProofCount: 3 } }) < stableScore, true)
+  assert.equal(scorer.metrics.get('peer').latencyMs, 0)
+  assert.equal(scorer.metrics.get('peer').handshakeDurationMs, 0)
+  assert.equal(scorer.shouldEvict('peer', { minSocketStability: 20, maxHandshakeFailures: 99, minScore: 0 }), true)
+})
+
+test('budget manager polls memory and cpu and scales feed/autobase/swarm allocations under pressure', async () => {
+  const manager = createBudgetManager({
+    role: 'relay',
+    bareHc: {
+      memoryStats: async () => ({ total: 1000, rss: 870 }),
+      cpuStats: async () => ({ usagePercent: 92, loadAverage: 5 }),
+    },
+  })
+
+  const refreshed = await manager.refreshSystemStats()
+  const allocation = manager.allocate({ feedIndexers: 500, autobaseLinearizationBuffers: 128, activeSwarmConnections: 48 })
+
+  assert.equal(refreshed.thresholds.memoryPressure, 87)
+  assert.equal(refreshed.thresholds.cpuPressure, 92)
+  assert.equal(allocation.feedIndexers < 500, true)
+  assert.equal(allocation.autobaseLinearizationBuffers < 128, true)
+  assert.equal(allocation.activeSwarmConnections < 48, true)
+  assert.equal(decodeBudgetState(encodeBudgetState(refreshed.thresholds)).cpuPressure, 92)
+
+  const combined = createBudgetManager({
+    role: 'relay',
+    bareHc: {
+      getSystemStats: async () => ({
+        memory: { total: 2000, rss: 1600 },
+        cpu: { usagePercent: 25 },
+      }),
+    },
+  })
+  const combinedRefreshed = await combined.refreshSystemStats()
+  assert.equal(combinedRefreshed.thresholds.memoryPressure, 80)
+  assert.equal(combinedRefreshed.thresholds.cpuPressure, 25)
+
+  const genericStats = createBudgetManager({
+    role: 'relay',
+    bareHc: {
+      getStats: async () => ({
+        memory: { total: 1000, rss: 500 },
+        cpu: { usagePercent: 91 },
+      }),
+    },
+  })
+  const genericRefreshed = await genericStats.refreshSystemStats()
+  assert.equal(genericRefreshed.thresholds.memoryPressure, 50)
+  assert.equal(genericRefreshed.thresholds.cpuPressure, 91)
+})
+
+test('autobase sink binds native onappend and emits zero-copy compact envelopes', async () => {
+  const appended = []
+  const listeners = []
+  const sink = createUnifiedAutobaseSink({
+    autobase: {
+      append: async (buffer) => appended.push(buffer),
+      onappend: (listener) => { listeners.push(listener); return () => {} },
+    },
+    lightWriter: true,
+  })
+  const observed = []
+  sink.onappend((record) => observed.push(record))
+
+  await sink.append({ surface: 'main', kind: 'feed-update', payload: { feed: 'a' } })
+  listeners[0]({ surface: 'main', sequence: 9n, eventId: 'remote-1', kind: 'remote-feed-update', payload: { feed: 'b' } })
+  listeners[0]({ surface: 'main', sequence: 9n, eventId: 'remote-1', kind: 'remote-feed-update', payload: { feed: 'b' } })
+
+  assert.equal(appended[0] instanceof Uint8Array, true)
+  assert.equal(sink.snapshot().events[0].payload.feed, 'a')
+  assert.equal(sink.snapshot().events[1].payload.feed, 'b')
+  assert.equal(sink.snapshot().bySurface[0].sequence, 9n)
+  assert.equal(observed.at(-1).kind, 'remote-feed-update')
+  assert.equal(observed.length, 2)
+})
+
+test('universal core shutdown closes native autobase append subscriptions', async () => {
+  const calls = []
+  const core = createUniversalCore({
+    platform: 'relay',
+    storagePath: '/tmp/peartube-universal-core-test',
+    players: {
+      autobase: {
+        onappend: () => () => calls.push('closed'),
+      },
+    },
+    createBackendContext: async () => ({ ctx: {} }),
+  })
+
+  await core.init()
+  await core.shutdown()
+  assert.deepEqual(calls, ['closed'])
 })

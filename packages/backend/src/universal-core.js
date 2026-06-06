@@ -342,10 +342,11 @@ function createPlayerResourceGate(options = {}) {
   return { mainPolicy, shortsPolicy, budgetFor, shouldSuspend, chooseActiveSurface }
 }
 
-function createUnifiedAutobaseSink(options = {}) {
+export function createUnifiedAutobaseSink(options = {}) {
   const events = []
   const bySurface = new Map()
   const seen = new Set()
+  const appendSubscribers = new Set()
   const appendFn = typeof options.append === 'function'
     ? options.append
     : typeof options.autobase?.append === 'function'
@@ -355,6 +356,68 @@ function createUnifiedAutobaseSink(options = {}) {
         : typeof options.autobase?.log?.append === 'function'
           ? options.autobase.log.append.bind(options.autobase.log)
           : null
+  const nativeOnAppend = typeof options.autobase?.onappend === 'function'
+    ? options.autobase.onappend.bind(options.autobase)
+    : typeof options.autobase?.log?.onappend === 'function'
+      ? options.autobase.log.onappend.bind(options.autobase.log)
+      : null
+
+  function notifyAppend(record) {
+    for (const subscriber of appendSubscribers) {
+      try {
+        subscriber(record)
+      } catch {
+        // Keep native onappend fanout non-blocking.
+      }
+    }
+  }
+
+  function decodeNativeRecord(record) {
+    if (!(record instanceof Uint8Array)) return record || {}
+    try {
+      return JSON.parse(c.decode(c.string, record))
+    } catch {
+      return { payload: record }
+    }
+  }
+
+  function storeEnvelope(envelope) {
+    const surface = normalizePlayerSurface(envelope.surface)
+    const bucket = surfaceBucket(surface)
+    const sequence = safeBigInt(envelope.sequence || envelope.seq || bucket.sequence + 1n, bucket.sequence + 1n)
+    const observedAt = safeBigInt(envelope.observedAt || Date.now(), nowMs())
+    const eventId = toHex(envelope.eventId || hashText({ surface, sequence: String(sequence), kind: envelope.kind, payload: envelope.payload || {} }))
+    const dedupeKey = `${surface}:${eventId}`
+    if (seen.has(dedupeKey)) return { duplicate: true, envelope: { ...envelope, surface, sequence, observedAt, eventId } }
+    const stored = {
+      version: safeNumber(envelope.version, 1),
+      domain: envelope.domain || 'playback',
+      surface,
+      playerId: toHex(envelope.playerId || envelope.sessionId || ''),
+      sessionId: toHex(envelope.sessionId || ''),
+      eventId,
+      sequence,
+      observedAt,
+      kind: envelope.kind || 'state',
+      payload: envelope.payload || {},
+    }
+    seen.add(dedupeKey)
+    bucket.sequence = sequence > bucket.sequence ? sequence : bucket.sequence
+    bucket.events.push(stored)
+    bucket.lastEventAt = observedAt > bucket.lastEventAt ? observedAt : bucket.lastEventAt
+    events.push(stored)
+    return { duplicate: false, envelope: stored }
+  }
+
+  function ingestNativeAppend(record) {
+    const { duplicate, envelope } = storeEnvelope(decodeNativeRecord(record))
+    if (!duplicate) notifyAppend(envelope)
+    return envelope
+  }
+
+  const closeNativeOnAppend = nativeOnAppend
+    ? nativeOnAppend((record) => ingestNativeAppend(record))
+    : null
 
   function surfaceBucket(surface) {
     const key = normalizePlayerSurface(surface)
@@ -365,36 +428,40 @@ function createUnifiedAutobaseSink(options = {}) {
   async function append(record = {}) {
     const surface = normalizePlayerSurface(record.surface)
     const bucket = surfaceBucket(surface)
-    const observedAt = safeBigInt(record.observedAt || Date.now(), nowMs())
     const sequence = bucket.sequence + 1n
-    bucket.sequence = sequence
-    const eventId = toHex(record.eventId || hashText({ surface, sequence: String(sequence), ...record }))
-    const dedupeKey = `${surface}:${eventId}`
-    if (seen.has(dedupeKey)) {
-      return { appended: false, duplicate: true, eventId, sequence, surface }
-    }
     const envelope = {
       version: 1,
       domain: 'playback',
       surface,
       playerId: toHex(record.playerId || record.sessionId || ''),
       sessionId: toHex(record.sessionId || ''),
-      eventId,
       sequence,
-      observedAt,
+      observedAt: safeBigInt(record.observedAt || Date.now(), nowMs()),
       kind: record.kind || 'state',
       payload: record.payload || {},
     }
-    seen.add(dedupeKey)
-    bucket.events.push(envelope)
-    bucket.lastEventAt = observedAt > bucket.lastEventAt ? observedAt : bucket.lastEventAt
-    events.push(envelope)
-
-    if (appendFn) {
-      await appendFn(compactJson(envelope))
+    envelope.eventId = toHex(record.eventId || hashText({ surface, sequence: String(sequence), ...record }))
+    const stored = storeEnvelope(envelope)
+    if (stored.duplicate) {
+      return { appended: false, duplicate: true, eventId: stored.envelope.eventId, sequence, surface }
     }
 
-    return { appended: true, duplicate: false, envelope }
+    if (appendFn) {
+      await appendFn(compactJson(stored.envelope))
+    }
+    notifyAppend(stored.envelope)
+
+    return { appended: true, duplicate: false, envelope: stored.envelope }
+  }
+
+  function onappend(listener) {
+    if (typeof listener !== 'function') return () => {}
+    appendSubscribers.add(listener)
+    return () => appendSubscribers.delete(listener)
+  }
+
+  function close() {
+    if (typeof closeNativeOnAppend === 'function') closeNativeOnAppend()
   }
 
   function snapshot() {
@@ -409,7 +476,7 @@ function createUnifiedAutobaseSink(options = {}) {
     }
   }
 
-  return { append, snapshot, bySurface, events }
+  return { append, onappend, close, snapshot, bySurface, events }
 }
 
 export function createPlayerSplitState(options = {}) {
@@ -568,6 +635,10 @@ export function createDualPlayerPlaybackCore(options = {}) {
     }
   }
 
+  function close() {
+    sink.close()
+  }
+
   return {
     state,
     resourceGate,
@@ -578,6 +649,7 @@ export function createDualPlayerPlaybackCore(options = {}) {
     prioritizeShorts,
     suspendInactivePlayers,
     syncActiveSurface,
+    close,
     snapshot,
   }
 }
@@ -782,6 +854,7 @@ export function createUniversalCore(options = {}) {
     return await runLifecycle(async () => {
       lifecycleState = 'shutting_down'
       await transitionNative('shutdown', ['libudx', 'libkv', 'libhc'], ['shutdown', 'close', 'stop', 'destroy'], { platform: options.platform })
+      playerCore.close()
       lifecycleState = 'shutdown'
       emitCoreEvent('core.shutdown', { state: lifecycleState })
       return backend

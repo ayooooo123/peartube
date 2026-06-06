@@ -128,11 +128,24 @@ export async function createRelayRuntime({ config, logger } = {}) {
     return true
   }
 
+  function getFeedEntries() {
+    return Array.from(publicFeed.getFeed?.() || publicFeed.entries.values())
+  }
+
+  function seedFeedEntries(reason) {
+    return seeder.seedFeedEntries(getFeedEntries()).catch((err) => {
+      logger.runtime?.warn('Relay feed-entry seeding refresh failed', {
+        reason,
+        error: err?.message || String(err)
+      })
+    })
+  }
+
   function emitFeedEntries() {
     if (typeof candidateHandler !== 'function') return
     if (!discoveryAcceptsCandidates()) return
 
-    for (const entry of publicFeed.getFeed?.() || publicFeed.entries.values()) {
+    for (const entry of getFeedEntries()) {
       if (!entry?.driveKey || !entry?.publicBeeKey) continue
       candidateHandler({
         channelKey: entry.driveKey,
@@ -164,6 +177,7 @@ export async function createRelayRuntime({ config, logger } = {}) {
           }).catch(() => {})
         }
       }
+      seedFeedEntries('feed-update')
       emitFeedEntries()
     } catch (err) {
       logger.runtime?.error('Feed update failed', { error: err?.message || String(err) })
@@ -231,6 +245,7 @@ export async function createRelayRuntime({ config, logger } = {}) {
       await seeder.seedCachedChannels(cacheManager).catch((err) => {
         logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
       })
+      await seedFeedEntries('startup')
       emitFeedEntries()
     },
     requestFeedSync() {

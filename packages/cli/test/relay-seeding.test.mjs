@@ -376,6 +376,57 @@ test('relay seeder also seeds preview/catalog blob refs when PublicBee is sparse
   ])
 })
 
+test('native relay seeding retains public-feed entries as they arrive', async (t) => {
+  const publicBeeCore = createCore('41')
+  const videoCore = createCore('42')
+  const thumbnailCore = createCore('43')
+  const swarm = createSwarm()
+  const ctx = {
+    swarm,
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('42')) return videoCore
+        if (keyHex.startsWith('43')) return thumbnailCore
+        throw new Error(`unexpected core key ${keyHex}`)
+      }
+    }
+  }
+  const seeding = createRelaySeeder({
+    ctx,
+    loadPublicBee: async () => ({
+      core: publicBeeCore,
+      async listVideos() {
+        return []
+      }
+    }),
+    logger: { info() {}, warn() {}, debug() {} }
+  })
+
+  const stats = await seeding.seedFeedEntries([{
+    driveKey: 'aa'.padEnd(64, '0'),
+    publicBeeKey: 'bb'.padEnd(64, '0'),
+    source: 'relay-cache',
+    previewVideos: [{
+      id: 'feed-video',
+      blobId: '0:1:0:10',
+      blobsCoreKey: '42'.padEnd(64, '0'),
+      thumbnailBlobId: '1:1:0:5',
+      thumbnailBlobsCoreKey: '43'.padEnd(64, '0')
+    }]
+  }])
+
+  t.is(stats.channels, 1)
+  t.is(stats.publicBeeCores, 1)
+  t.is(stats.blobCores, 2)
+  t.is(stats.discoveryHandles, 3)
+  t.alike(swarm.joins.map((join) => join.discoveryKey), [
+    publicBeeCore.discoveryKey,
+    videoCore.discoveryKey,
+    thumbnailCore.discoveryKey
+  ])
+})
+
 test('relay seeder registers mirrored cores with relay blind peer', async (t) => {
   const publicBeeCore = createCore('66')
   const videoCore = createCore('77')

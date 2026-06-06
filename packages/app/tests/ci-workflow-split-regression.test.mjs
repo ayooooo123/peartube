@@ -62,19 +62,19 @@ test('build workflows stay separate from publish workflows', () => {
   )
 })
 
-test('tagged Android releases only build the arm64-v8a APK', () => {
+test('tagged Android releases build arm64 and x86 APKs', () => {
   const releaseAndroid = readFile('.github/workflows/release-android.yml')
   const abiSplitsPlugin = readFile('packages/app/plugins/withAndroidAbiSplits.js')
 
   assert.match(
     releaseAndroid,
-    /abi:\s*\[arm64-v8a\]/,
-    'release-android should only build the arm64-v8a APK for tagged releases',
+    /abi:\s*\[arm64-v8a, x86, x86_64\]/,
+    'release-android should build arm64-v8a, x86, and x86_64 APKs for tagged releases',
   )
   assert.doesNotMatch(
     releaseAndroid,
-    /abi:\s*\[[^\]]*(armeabi-v7a|x86|x86_64)/,
-    'release-android should skip armv7 and emulator APK builds for tagged releases',
+    /abi:\s*\[[^\]]*armeabi-v7a/,
+    'release-android should skip armv7 APK builds for tagged releases',
   )
   assert.match(
     releaseAndroid,

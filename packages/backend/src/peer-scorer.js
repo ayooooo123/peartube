@@ -66,7 +66,9 @@ function performanceScore(metric = {}) {
   const handshakeRate = Math.max(0, Math.min(1, successes / Math.max(handshakes, successes + failures, 1)))
   const latencyScore = latency <= 0 ? 5 : Math.max(-20, 20 - Math.floor(latency / 50))
   const handshakeDurationScore = handshakeDuration <= 0 ? 0 : Math.max(-15, 12 - Math.floor(handshakeDuration / 75))
-  const stabilityScore = Math.floor(stability / 5) - (stability > 0 && stability < 20 ? 15 : 0)
+  const stabilityScore = metric.socketStabilityObserved
+    ? Math.floor(stability / 5) - (stability < 20 ? 15 : 0)
+    : 0
   const throughputScore = Math.min(20, Math.floor(throughput / (128 * 1024)))
   const handshakeScore = Math.floor(handshakeRate * 20) - Math.min(20, failures * 4)
   return latencyScore + handshakeDurationScore + stabilityScore + throughputScore + handshakeScore
@@ -366,7 +368,7 @@ export function createPeerScorer(options = {}) {
     if (diff.left) metrics.set(metric.peerId, metric)
     else metrics.delete(metric.peerId)
     const peer = state.peers.get(metric.peerId)
-    if (peer) registerPeer({ ...peer, performance: metric })
+    if (peer) registerPeer({ ...peer, performance: diff.left ? metric : null })
     return metric
   }
 

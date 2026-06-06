@@ -198,10 +198,13 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   assert.equal(decodePeerMetric(encodePeerMetric({ peerId: 'peer-unknown', latencyMs: 10, socketStability: 0, socketStabilityObserved: false })).socketStabilityObserved, false)
 
   const diffValue = encodePeerMetric({ peerId: 'peer-b', latencyMs: 5, socketStability: 88, socketStabilityObserved: true })
+  scorer.registerPeer({ peerId: 'peer-b', identity: { validProofCount: 2 }, descriptor: { descriptorId: 'feed-b' } })
   await scorer.applyPerformanceDiff({ left: { value: diffValue }, right: null })
   assert.equal(scorer.metrics.has('peer-b'), true)
+  assert.equal(state.peers.get('peer-b').performance.socketStability, 88)
   await scorer.applyPerformanceDiff({ left: null, right: { value: diffValue } })
   assert.equal(scorer.metrics.has('peer-b'), false)
+  assert.equal(state.peers.get('peer-b').performance, null)
 
   assert.equal(updates.length > 0, true)
   assert.equal(state.peers.get('peer-a').performance.udxThroughputBps, 1024 * 1024)
@@ -279,9 +282,11 @@ test('peer scorer accepts zero-valued performance updates when merging metrics',
   assert.equal(scorer.shouldEvict('peer', { minSocketStability: 20, maxHandshakeFailures: 99, minScore: 0 }), false)
 
   await scorer.recordPerformance('peer', { socketStability: 96, handshakes: 1, handshakeSuccesses: 1 })
+  const stableScore = scorer.scorePeer({ peerId: 'peer', identity: { validProofCount: 3 } })
   await scorer.recordPerformance('peer', { socketStability: 0, latencyMs: 0, handshakeDurationMs: 0, handshakes: 1, handshakeFailures: 1 })
 
   assert.equal(scorer.metrics.get('peer').socketStability, 0)
+  assert.equal(scorer.scorePeer({ peerId: 'peer', identity: { validProofCount: 3 } }) < stableScore, true)
   assert.equal(scorer.metrics.get('peer').latencyMs, 0)
   assert.equal(scorer.metrics.get('peer').handshakeDurationMs, 0)
   assert.equal(scorer.shouldEvict('peer', { minSocketStability: 20, maxHandshakeFailures: 99, minScore: 0 }), true)

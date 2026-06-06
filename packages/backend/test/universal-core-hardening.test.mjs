@@ -198,9 +198,9 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   assert.equal(decodePeerMetric(encodePeerMetric({ peerId: 'peer-unknown', latencyMs: 10, socketStability: 0, socketStabilityObserved: false })).socketStabilityObserved, false)
 
   const diffValue = encodePeerMetric({ peerId: 'peer-b', latencyMs: 5, socketStability: 88, socketStabilityObserved: true })
-  await scorer.applyPerformanceDiff({ left: null, right: { value: diffValue } })
-  assert.equal(scorer.metrics.has('peer-b'), true)
   await scorer.applyPerformanceDiff({ left: { value: diffValue }, right: null })
+  assert.equal(scorer.metrics.has('peer-b'), true)
+  await scorer.applyPerformanceDiff({ left: null, right: { value: diffValue } })
   assert.equal(scorer.metrics.has('peer-b'), false)
 
   assert.equal(updates.length > 0, true)

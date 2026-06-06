@@ -360,10 +360,10 @@ export function createPeerScorer(options = {}) {
   }
 
   async function applyPerformanceDiff(diff) {
-    const entry = diff?.right || diff?.left
+    const entry = diff?.left || diff?.right
     if (!entry?.value) return null
     const metric = decodePeerMetric(entry.value)
-    if (diff.right) metrics.set(metric.peerId, metric)
+    if (diff.left) metrics.set(metric.peerId, metric)
     else metrics.delete(metric.peerId)
     const peer = state.peers.get(metric.peerId)
     if (peer) registerPeer({ ...peer, performance: metric })

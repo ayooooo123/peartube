@@ -338,6 +338,25 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
     return getStats()
   }
 
+  async function seedFeedEntries(entries = []) {
+    const seen = new Set()
+    for (const entry of entries || []) {
+      const driveKey = entry?.driveKey || entry?.channelKey
+      const publicBeeKey = entry?.publicBeeKey || null
+      if (!driveKey || !publicBeeKey || seen.has(driveKey)) continue
+      seen.add(driveKey)
+      await seedChannel({
+        driveKey,
+        publicBeeKey,
+        previewVideos: Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
+        feedEntry: entry,
+        catalogEntry: entry?.schema === 'peartube.relayCatalog' ? entry : entry?.catalogEntry
+      })
+    }
+    return getStats()
+  }
+
+
   function getStats() {
     const stats = emptyStats()
     stats.channels = seededChannels.size
@@ -378,6 +397,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
     retainDiscovery,
     seedChannel,
     seedCachedChannels,
+    seedFeedEntries,
     getStats,
     close
   }

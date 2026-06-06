@@ -25,7 +25,7 @@ The structural fix is not to revive legacy topics. It is to make relay availabil
 
 ## Task 1: Backend content discovery retention helper
 
-**Objective:** Restore the old simple seeding behavior as a shared backend primitive.
+**Objective:** Restore content-core discovery retention as a shared PearTube backend primitive; do not revive standalone/simple seeder operation.
 
 **Files:**
 - Modify: `packages/backend/src/storage.js`

@@ -435,15 +435,10 @@ Compact encoding schemes for building small and fast parsers/serializers.
 
 Bridging the gap between buffers and typed arrays.
 
-### simple-seeder
+### simple-seeder (historical reference only)
 **Stars:** 23 | **Status:** Active | [GitHub](https://github.com/holepunchto/simple-seeder)
 
-Dead simple Hypercore seeder. CLI and programmatic.
-
-```bash
-simple-seeder -c <key> -c <another-key>
-simple-seeder --file ./seeds.txt
-```
+Historical Hypercore seeder utility. Do not run it as a PearTube relay or operator sidecar; PearTube relay discovery and content-core seeding live in the native relay/backend runtime path.
 
 ---
 

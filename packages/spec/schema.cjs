@@ -70,6 +70,9 @@ ns.register({
     { name: 'feedIndexers', type: 'uint', required: false },
     { name: 'autobaseLinearizationBuffers', type: 'uint', required: false },
     { name: 'activeSwarmConnections', type: 'uint', required: false },
+    { name: 'maxConcurrentSync', type: 'uint', required: false },
+    { name: 'maxConcurrentProofs', type: 'uint', required: false },
+    { name: 'maxConcurrentFetches', type: 'uint', required: false },
     { name: 'memoryPressure', type: 'uint', required: false },
     { name: 'cpuPressure', type: 'uint', required: false }
   ]

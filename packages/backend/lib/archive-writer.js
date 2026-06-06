@@ -60,7 +60,9 @@ function mergeMappings(existing, next) {
   }
 
   const variants = new Map()
-  for (const variant of existing.variants) variants.set(variantId(variant), variant)
+  for (const variant of existing.variants) {
+    if (b4a.equals(variant.coreKey, existing.hypercoreKey)) variants.set(variantId(variant), variant)
+  }
   for (const variant of next.variants) variants.set(variantId(variant), variant)
 
   return normalize({

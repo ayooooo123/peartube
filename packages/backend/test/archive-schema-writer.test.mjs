@@ -198,6 +198,30 @@ test('archive writer serializes upserts and merges variants without dropping exi
   })
 })
 
+test('archive writer canonicalizes mixed legacy variants on upsert', async () => {
+  await withHyperDb(async (db) => {
+    const legacy = encodeLegacyForTest({
+      fileHash,
+      sourceId: 'legacy:mixed',
+      variants: [
+        { resolution: '1080p', coreKey, startBlock: 7, endBlock: 42 },
+        { resolution: '720p', coreKey: secondCoreKey, startBlock: 43, endBlock: 70 },
+      ],
+    })
+    await db.engine.db.put(archiveKey(fileHash), legacy)
+
+    await writeArchiveMapping(db, fileHash, {
+      sourceId: 'youtube:dQw4w9WgXcQ',
+      variants: [{ resolution: '480p', coreKey, startBlock: 71, endBlock: 99 }],
+    })
+
+    const stored = await readArchiveMapping(db, fileHash)
+    assert.deepEqual(stored.variants.map((variant) => variant.resolution), ['1080p', '480p'])
+    assert.equal(stored.variants.every((variant) => b4a.equals(variant.coreKey, coreKey)), true)
+  })
+})
+
+
 test('archive writer rejects attempts to remap a content hash to another hypercore key', async () => {
   await withHyperDb(async (db) => {
     await writeArchiveMapping(db, fileHash, {

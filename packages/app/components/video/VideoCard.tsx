@@ -204,6 +204,7 @@ function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): bo
     prev.channelKey === next.channelKey &&
     prev.driveKey === next.driveKey &&
     prev.channel?.name === next.channel?.name &&
+    prevProps.onPress === nextProps.onPress &&
     prevProps.showChannelInfo === nextProps.showChannelInfo &&
     prevProps.onChannelPress === nextProps.onChannelPress
   )

@@ -71,6 +71,15 @@ function mergeMappings(existing, next) {
   })
 }
 
+function enforceCanonicalWrite(mapping) {
+  for (const variant of mapping.variants) {
+    if (!b4a.equals(variant.coreKey, mapping.hypercoreKey)) {
+      throw new Error('archive writes must reference the canonical hypercoreKey')
+    }
+  }
+  return mapping
+}
+
 function canonicalVariantFor(core, metadata = {}) {
   const key = toCoreKeyBuffer(core?.key || metadata.hypercoreKey || metadata.coreKey || metadata.variants?.[0]?.coreKey)
   const length = Number.isSafeInteger(core?.length) ? core.length : Number(metadata.endBlock || metadata.length || 0)
@@ -191,7 +200,7 @@ export async function writeArchiveMapping(db, fileHash, metadata, opts = {}) {
   }
 
   return withWriteLock(db, key, async () => {
-    const next = normalize({ ...metadata, fileHash: fileHashBuffer })
+    const next = enforceCanonicalWrite(normalize({ ...metadata, fileHash: fileHashBuffer }))
     const { mapping, value } = await writeWithTransaction(db, key, next, merge)
 
     return { key, mapping, value }
@@ -224,7 +233,7 @@ export async function ensureCanonicalArchiveCore(db, fileHash, options = {}) {
       hypercoreKey,
       sourceId: metadata.sourceId || options.sourceId || 'archive:unknown',
       variants: Array.isArray(metadata.variants) && metadata.variants.length > 0
-        ? metadata.variants.map((variant) => ({ ...variant, coreKey: variant.coreKey || hypercoreKey }))
+        ? metadata.variants.map((variant) => ({ ...variant, coreKey: hypercoreKey }))
         : [canonicalVariantFor(core, { ...metadata, hypercoreKey })],
     })
     const { mapping, value } = await writeWithTransaction(db, key, next, false)

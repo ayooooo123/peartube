@@ -65,11 +65,6 @@ export function normalize(mapping) {
 
   const variants = mapping.variants.map(normalizeVariant)
   const hypercoreKey = fixed32(mapping.hypercoreKey ?? mapping.coreKey ?? variants[0]?.coreKey, 'hypercoreKey')
-  for (const variant of variants) {
-    if (!b4a.equals(variant.coreKey, hypercoreKey)) {
-      throw new Error('variants must reference the canonical hypercoreKey')
-    }
-  }
 
   return {
     fileHash: fixed32(mapping.fileHash, 'fileHash'),
@@ -162,12 +157,11 @@ export function encode(mapping) {
 }
 
 export function encodeLegacyForTest(mapping) {
-  const canonical = normalize(mapping)
   const state = c.state()
 
-  legacyFileMappingCodec.preencode(state, canonical)
+  legacyFileMappingCodec.preencode(state, mapping)
   state.buffer = b4a.allocUnsafe(state.end)
-  legacyFileMappingCodec.encode(state, canonical)
+  legacyFileMappingCodec.encode(state, mapping)
 
   return state.buffer
 }

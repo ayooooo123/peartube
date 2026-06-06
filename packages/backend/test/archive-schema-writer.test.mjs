@@ -83,6 +83,17 @@ test('archive schema reads legacy mappings and derives canonical hypercore key',
 
   const longSource = sampleMapping({ sourceId: 'a'.repeat(129) })
   assert.deepEqual(decode(encodeLegacyForTest(longSource)), longSource)
+
+  const mixedLegacy = sampleMapping({
+    hypercoreKey: undefined,
+    variants: [
+      { resolution: '1080p', coreKey, startBlock: 7, endBlock: 42 },
+      { resolution: '720p', coreKey: secondCoreKey, startBlock: 1, endBlock: 9 },
+    ],
+  })
+  const decoded = decode(encodeLegacyForTest(mixedLegacy))
+  assert.equal(b4a.toString(decoded.hypercoreKey, 'hex'), b4a.toString(coreKey, 'hex'))
+  assert.equal(b4a.toString(decoded.variants[1].coreKey, 'hex'), b4a.toString(secondCoreKey, 'hex'))
 })
 
 test('archive writer writes cenc records under the content-addressed archive key', async () => {
@@ -193,6 +204,15 @@ test('archive writer rejects attempts to remap a content hash to another hyperco
       sourceId: 'youtube:dQw4w9WgXcQ',
       variants: [{ resolution: '1080p', coreKey, startBlock: 7, endBlock: 42 }],
     })
+
+    await assert.rejects(
+      writeArchiveMapping(db, fileHash, {
+        sourceId: 'youtube:dQw4w9WgXcQ',
+        hypercoreKey: coreKey,
+        variants: [{ resolution: '720p', coreKey: secondCoreKey, startBlock: 43, endBlock: 70 }],
+      }),
+      /canonical hypercoreKey/
+    )
 
     await assert.rejects(
       writeArchiveMapping(db, fileHash, {

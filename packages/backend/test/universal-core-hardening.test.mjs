@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 
 import { readFile } from 'node:fs/promises'
 
+import b4a from 'b4a'
+
 import { createUniversalCore, createUnifiedAutobaseSink } from '../src/universal-core.js'
 import { createBudgetManager, decodeBudgetState, encodeBudgetState } from '../src/budget-manager.js'
 import { createPeerScorer, decodePeerMetric, encodePeerMetric } from '../src/peer-scorer.js'
@@ -197,6 +199,13 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   assert.equal(decodePeerMetric(puts[0][1]).udxThroughputBps, 1024 * 1024)
   assert.equal(decodePeerMetric(puts[0][1]).srttMs, 80)
   assert.equal(scorer.requestTimeout(peer.peerId), 300)
+
+  const peerKey = b4a.alloc(32, 9)
+  const peerKeyHex = b4a.toString(peerKey, 'hex')
+  scorer.registerPeer({ peerId: peerKeyHex, identity: { publicKey: peerKey, validProofCount: 2 } })
+  await scorer.recordPerformance(peerKeyHex, { srttMs: 200, handshakes: 1, handshakeSuccesses: 1 })
+  assert.equal(scorer.requestTimeout(peerKey), 600)
+
   assert.equal(decodePeerMetric(puts[0][1]).socketStabilityObserved, false)
   assert.equal(decodePeerMetric(encodePeerMetric({ peerId: 'peer-unknown', latencyMs: 10, socketStability: 0, socketStabilityObserved: false })).socketStabilityObserved, false)
 
@@ -232,13 +241,18 @@ test('budget manager derives dynamic peer/feed caps from bare-hc memory pressure
 test('universal core state persistence uses compact buffers and has no legacy gossip polling interval', async () => {
   const puts = []
   const observed = []
+  let backendOptions = null
   const core = createUniversalCore({
     platform: 'relay',
     storagePath: '/tmp/peartube-universal-core-test',
-    createBackendContext: async () => ({ ctx: { metaDb: { async put(key, value) { puts.push([key, value]) } } } }),
+    createBackendContext: async (opts) => {
+      backendOptions = opts
+      return { ctx: { metaDb: { async put(key, value) { puts.push([key, value]) } } } }
+    },
   })
 
   await core.init()
+  assert.equal(typeof backendOptions?.peerScorer?.requestTimeout, 'function')
   const unsubscribe = core.eventSink.onappend((record) => observed.push(record))
   await core.eventSink.append('test.compact', { ok: true })
   unsubscribe()

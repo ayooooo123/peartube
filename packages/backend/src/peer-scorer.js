@@ -420,8 +420,11 @@ export function createPeerScorer(options = {}) {
   }
 
   function requestTimeout(peerOrId) {
-    const peer = typeof peerOrId === 'string' ? state.peers.get(peerOrId) : peerOrId
-    const metric = (peer ? metricFor(peer) : null) || (typeof peerOrId === 'string' ? metrics.get(peerOrId) : null) || peer?.performance || peerOrId?.metrics || {}
+    const peerId = typeof peerOrId === 'string'
+      ? peerOrId
+      : toHex(peerOrId?.peerId || peerOrId?.identity?.publicKey || peerOrId?.publicKey || peerOrId?.remotePublicKey || peerOrId)
+    const peer = state.peers.get(peerId) || (peerOrId && typeof peerOrId === 'object' && !ArrayBuffer.isView(peerOrId) ? peerOrId : null)
+    const metric = (peer ? metricFor(peer) : null) || metrics.get(peerId) || peer?.performance || peerOrId?.metrics || {}
     return timeoutFromSrtt(metric.srttMs ?? metric.latencyMs ?? 1000)
   }
 

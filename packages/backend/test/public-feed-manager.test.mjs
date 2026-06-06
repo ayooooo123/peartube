@@ -1399,6 +1399,57 @@ test('requestAvailabilityHints merges playable responses from feed peers (includ
 })
 
 
+test('requestAvailabilityHints uses peer scorer dynamic timeout for connected peer keys', async () => {
+  const swarm = createSwarm()
+  const peerKey = b4a.alloc(32, 9)
+  const seenPeers = []
+  const manager = new PublicFeedManager(swarm, createMetaDb(), {
+    peerScorer: {
+      requestTimeout(peer) {
+        seenPeers.push(peer)
+        return 450
+      },
+    },
+  })
+  const conn = createConnection()
+  const sent = []
+  const delays = []
+
+  const originalFrom = Protomux.from
+  const originalSetTimeout = globalThis.setTimeout
+  Protomux.from = () => ({
+    pair() {},
+    createChannel() {
+      return {
+        messages: [{ send(msg) { sent.push(msg) } }],
+        open() {},
+      }
+    }
+  })
+  globalThis.setTimeout = (fn, delay, ...args) => {
+    delays.push(delay)
+    return originalSetTimeout(fn, 0, ...args)
+  }
+
+  try {
+    manager.handleConnection(conn, { publicKey: peerKey })
+    manager.feedConnections.add(conn)
+    const hints = await manager.requestAvailabilityHints([
+      { driveKey: DRIVE_KEY, id: 'v1', blobsCoreKey: '33'.repeat(32), blobId: '1:2:3:4' }
+    ], { maxPeers: 1 })
+
+    assert.deepEqual(hints, [])
+    assert.equal(delays[0], 450)
+    assert.equal(seenPeers[0], peerKey)
+    assert.ok(sent.find((msg) => msg.type === 'AVAILABILITY_HINT_REQUEST'))
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+
 test('relay catalog entries stay visible and do not become published channels', async (t) => {
   const feed = new PublicFeedManager({
     connections: new Set(),

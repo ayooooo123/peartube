@@ -486,6 +486,10 @@ function MobileVideoPlayerScreen() {
         if (Platform.OS !== 'web' || isPear) {
           void rpc.preparePlayback(playbackRequest).then((result: any) => {
             if (!mountedRef.current || loadGenerationRef.current !== generation) return
+            if (result?.url) {
+              if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+              loadAndPlayVideo(videoData, result.url)
+            }
             if (result?.stats) {
               setLocalStats(result.stats as VideoStats)
             }

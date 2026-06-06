@@ -1499,8 +1499,9 @@ ns.register({
 ns.register({
   name: 'event-error',
   fields: [
-    { name: 'code', type: 'uint', required: false },
-    { name: 'message', type: 'string', required: true }
+    { name: 'code', type: 'string', required: false },
+    { name: 'message', type: 'string', required: true },
+    { name: 'retryable', type: 'bool', required: false }
   ]
 })
 

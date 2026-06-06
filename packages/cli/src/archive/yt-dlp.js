@@ -135,7 +135,7 @@ export function createYtDlp({ binary = 'yt-dlp' } = {}) {
     async downloadVideo(url, opts) {
       if (!opts || typeof opts.workDir !== 'string') throw new Error('workDir required')
       if (typeof opts.videoId !== 'string' || !opts.videoId) throw new Error('videoId required')
-      const format = typeof opts.format === 'string' && opts.format ? opts.format : 'b'
+      const format = typeof opts.format === 'string' && opts.format ? opts.format : 'bv*+ba/b'
 
       const outputTemplate = `${opts.videoId}.%(ext)s`
 

@@ -23,6 +23,26 @@ async function ensureReady(value) {
   return value
 }
 
+const replicatedCoreStreams = new WeakMap()
+
+function connectionHasTopic(info, topicKey) {
+  if (!info || !Array.isArray(info.topics)) return false
+  const expected = Buffer.from(topicKey || ZERO_32)
+  return info.topics.some((topic) => Buffer.compare(Buffer.from(topic || ZERO_32), expected) === 0)
+}
+
+async function replicateCoreOnce(core, stream) {
+  if (!core || !stream || (typeof stream !== 'object' && typeof stream !== 'function')) return false
+  let replicatedCores = replicatedCoreStreams.get(stream)
+  if (!replicatedCores) {
+    replicatedCores = new WeakSet()
+    replicatedCoreStreams.set(stream, replicatedCores)
+  }
+  if (replicatedCores.has(core)) return false
+  replicatedCores.add(core)
+  return replicateCore(core, stream)
+}
+
 async function replicateCore(core, stream) {
   if (!core || !stream) return false
   if (typeof core.replicate === 'function') {
@@ -42,9 +62,10 @@ function joinSwarmTopic(swarm, topic, onConnection) {
   }
   const topicKey = toFixed32(topic)
   const discovery = swarm.join(topicKey, { server: true, client: true })
-  const onConn = async (stream) => {
+  const onConn = async (stream, info = {}) => {
+    if (!connectionHasTopic(info, topicKey)) return
     try {
-      await onConnection?.(stream)
+      await onConnection?.(stream, info)
     } catch { /* ignore connection handler failures */ }
   }
   if (typeof swarm.on === 'function') swarm.on('connection', onConn)
@@ -197,7 +218,7 @@ export async function seedMirroredVideo(autobase, swarm, descriptor, options = {
   const core = await openCoreForDescriptor(options.getCore, descriptor, options)
   const topic = toFixed32(descriptor.swarmTopic || ZERO_32)
   const seedHandle = joinSwarmTopic(swarm, topic, async (stream) => {
-    if (core) await replicateCore(core, stream)
+    if (core) await replicateCoreOnce(core, stream)
   })
 
   if (autobase && typeof options.signBytes === 'function') {

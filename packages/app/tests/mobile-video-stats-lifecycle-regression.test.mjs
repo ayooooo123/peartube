@@ -59,3 +59,20 @@ test('mobile watch page clears stale local stats only when starting a different 
     'new playback loads should drop stale local snapshots before showing a loading state',
   )
 })
+
+test('useP2PVideo gates async completions by request generation', () => {
+  const source = read('../core/src/hooks/useP2PVideo.ts')
+
+  assert.match(source, /const requestGenerationRef = useRef\(0\)/, 'hook should use a monotonic request generation')
+  assert.match(source, /const requestId = requestGenerationRef\.current \+ 1[\s\S]*const isCurrentRequest = \(\) => requestGenerationRef\.current === requestId/, 'each start should capture its own generation')
+  assert.match(source, /if \(!isCurrentRequest\(\)\) return/, 'async prepare/get-url/get-stats completions should be gated')
+  assert.match(source, /requestGenerationRef\.current !== requestId \|\| Date\.now\(\) - startTimeRef\.current > opts\.pollTimeout/, 'polling ticks should ignore stale generations')
+})
+
+test('cached playback refreshes active URL only for the current session', () => {
+  const source = read('app/video/[id].tsx')
+  const cachedBlock = source.slice(source.indexOf('if (cachedUrl) {'), source.indexOf('      const result = await rpc.preparePlayback', source.indexOf('if (cachedUrl) {')))
+
+  assert.match(cachedBlock, /loadGenerationRef\.current !== generation/, 'background preparePlayback should be generation-gated')
+  assert.match(cachedBlock, /if \(result\?\.url\) \{[\s\S]*setCachedVideoUrl[\s\S]*loadAndPlayVideo\(videoData, result\.url\)/, 'fresh prepared URL should replace the cached URL only in the active generation')
+})

@@ -88,3 +88,13 @@ test('generated app RPC facade invokes namespaced HRPC methods after ready', asy
 
   await t.exception(() => client.video.getVideoUrl({}), /missing:getVideoUrl/)
 })
+
+test('package exports resolve generated HRPC and schema entry points', async (t) => {
+  const hrpc = await import('@peartube/spec')
+  const messages = await import('@peartube/spec/messages')
+  const schema = await import('@peartube/spec/schema')
+
+  t.ok(hrpc.default || hrpc.HRPC, 'root export resolves generated HRPC client')
+  t.ok(Object.keys(messages).length > 0, 'messages export resolves generated message codecs')
+  t.ok(Object.keys(schema).length > 0, 'schema export resolves generated schema codecs')
+})

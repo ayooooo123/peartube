@@ -23,7 +23,7 @@ archive:
   maxItems: 50            # videos to consider per poll, newest first
   maxRetries: 3           # give up on a video after this many consecutive failures
   budgetReservePercent: 5 # stop archiving when within N% of storage.maxBytes
-  format: "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b"
+  format: "bv*+ba/b"       # preserve original best video+audio when yt-dlp provides separate streams
   tmpPath: /var/lib/peartube-relay/archive-tmp  # yt-dlp scratch dir
   sources:
     - url: https://www.youtube.com/@somechannel

@@ -66,6 +66,32 @@ test('seedMirroredVideo does not append unsigned autobase events after joining s
   assert.equal(swarm.handlers.size, 0)
 })
 
+test('seedMirroredVideo replicates only matching swarm topic once per connection/core pair', async () => {
+  const swarm = fakeSwarm()
+  const streams = [{ id: 'match' }, { id: 'other-topic' }]
+  const replicateCalls = []
+  const record = await seedMirroredVideo(null, swarm, descriptor(), {
+    getCore: async () => ({
+      ready: async () => {},
+      close: async () => {},
+      replicate(stream) {
+        replicateCalls.push(stream.id)
+      },
+    }),
+  })
+
+  try {
+    const handler = Array.from(swarm.handlers)[0]
+    await handler(streams[1], { topics: [fixed(99)] })
+    await handler(streams[0], { topics: [fixed(4)] })
+    await handler(streams[0], { topics: [fixed(4)] })
+
+    assert.deepEqual(replicateCalls, ['match'])
+  } finally {
+    await record.close()
+  }
+})
+
 test('new seed records do not start immediately key-rotation due', async () => {
   const now = 1_000_000n
   const swarm = fakeSwarm()

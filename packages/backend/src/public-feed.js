@@ -306,8 +306,6 @@ export class PublicFeed {
   }
 
   async _verifyPeerFeedSnapshot(driveKey, source, snapshot = {}, publicBeeKey = null) {
-    const isRelayCatalogSnapshot = snapshot?.source === 'relay-cache' || snapshot?.relayRole === 'cache' || snapshot?.relayServing === true
-    if (source === 'relay-cache' || isRelayCatalogSnapshot) return { ok: true, signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor) }
     if (source !== 'peer') return { ok: true, signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor) }
 
     const signedDescriptor = this._normalizeSignedDescriptor(snapshot?.signedDescriptor)
@@ -1656,8 +1654,7 @@ export class PublicFeed {
       void (async () => {
         console.log('[PublicFeed] SUBMIT_CHANNEL received:', msg.key?.slice(0, 16), 'publicBee:', msg.publicBeeKey?.slice(0, 16) || 'none');
         const resolvedPublicBeeKey = this._resolvePublicBeeKey(msg)
-        const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
-        const result = await this._ingestVerifiedPeerEntry(msg.key, entrySource, resolvedPublicBeeKey, msg)
+        const result = await this._ingestVerifiedPeerEntry(msg.key, 'peer', resolvedPublicBeeKey, msg)
         if (!result.accepted) return
         const peerSetChanged = this._applyPeerFeedKeys(conn, [msg.key])
         if (result.added) {

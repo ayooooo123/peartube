@@ -90,6 +90,7 @@ type ErrorCallback = (data: { message: string; code?: string; retryable?: boolea
 type VideoStatsCallback = (data: any) => void
 type UploadProgressCallback = (data: any) => void
 type DownloadProgressCallback = (data: any) => void
+type TranscodeProgressCallback = (data: any) => void
 type FeedUpdateCallback = (data: any) => void
 type NetworkStatusCallback = (data: NetworkStatusData) => void
 type CastDeviceFoundCallback = (data: any) => void
@@ -105,6 +106,7 @@ type PlatformCallbacks = {
   videoStats: VideoStatsCallback[]
   uploadProgress: UploadProgressCallback[]
   downloadProgress: DownloadProgressCallback[]
+  transcodeProgress: TranscodeProgressCallback[]
   feedUpdate: FeedUpdateCallback[]
   networkStatus: NetworkStatusCallback[]
   castDeviceFound: CastDeviceFoundCallback[]
@@ -136,6 +138,7 @@ function createCallbackStore(): PlatformCallbacks {
     uploadProgress: [],
     downloadProgress: [],
     feedUpdate: [],
+    transcodeProgress: [],
     networkStatus: [],
     castDeviceFound: [],
     castDeviceLost: [],
@@ -202,6 +205,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       nextClient.events.on(PROTOCOL_EVENTS.LOG, (data: any) => safeDispatch(callbacks.log, data)),
       nextClient.events.on(PROTOCOL_EVENTS.DOWNLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.downloadProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.FEED_UPDATED, (data: any) => safeDispatch(callbacks.feedUpdate, data)),
+      nextClient.events.on(PROTOCOL_EVENTS.TRANSCODE_PROGRESS, (data: any) => safeDispatch(callbacks.transcodeProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.NETWORK_STATUS, (data: any) => safeDispatch(callbacks.networkStatus, data)),
       nextClient.events.on(PROTOCOL_EVENTS.VIDEO_STATS, (data: any) => safeDispatch(callbacks.videoStats, data)),
       nextClient.events.on(PROTOCOL_EVENTS.CAST_DEVICE_FOUND, (data: any) => safeDispatch(callbacks.castDeviceFound, data)),
@@ -264,6 +268,10 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       onDownloadProgress(callback: DownloadProgressCallback) {
         callbacks.downloadProgress.push(callback)
         return () => removeCallback(callbacks.downloadProgress, callback)
+      },
+      onTranscodeProgress(callback: TranscodeProgressCallback) {
+        callbacks.transcodeProgress.push(callback)
+        return () => removeCallback(callbacks.transcodeProgress, callback)
       },
       onFeedUpdate(callback: FeedUpdateCallback) {
         callbacks.feedUpdate.push(callback)
@@ -333,7 +341,9 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
         lastReady = null
         await activeSession?.terminate?.().catch(() => {})
         dispatchError({
-          message: error instanceof Error ? error.message : String(error)
+          code: (error as any)?.code,
+          message: error instanceof Error ? error.message : String(error),
+          retryable: Boolean((error as any)?.retryable)
         })
         throw error
       } finally {

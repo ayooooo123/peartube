@@ -159,6 +159,8 @@ export default function HomeScreen() {
   const [snapshotChannelKeys, setSnapshotChannelKeys] = useState<Set<string>>(new Set())
   const [snapshotRestoredOnly, setSnapshotRestoredOnly] = useState(false)
   const feedLoadRunIdRef = useRef(0)
+  const feedLoadSeqRef = useRef(0)
+  const playbackRequestSeqRef = useRef(0)
   const feedSnapshotRestoredRef = useRef(false)
   const feedSnapshotWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -268,6 +270,9 @@ export default function HomeScreen() {
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
     if (!rpc) return
+    const loadSeq = feedLoadSeqRef.current + 1
+    feedLoadSeqRef.current = loadSeq
+    const isLatestFeedLoad = () => feedLoadSeqRef.current === loadSeq
     const startedAt = nowMs()
     try {
       setFeedLoading(true)
@@ -278,7 +283,7 @@ export default function HomeScreen() {
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
       const result = await Promise.race([feedPromise, timeoutPromise])
 
-      if (result?.entries) {
+      if (result?.entries && isLatestFeedLoad()) {
         const mergedEntries = (Array.isArray(result.entries) ? result.entries : []).filter((entry: any, index: number, all: any[]) => {
           const key = entry?.channelKey || entry?.driveKey
           return key && all.findIndex((candidate) => (candidate?.channelKey || candidate?.driveKey) === key) === index
@@ -299,7 +304,7 @@ export default function HomeScreen() {
           loadChannelMeta(request.channelKey, request.publicBeeKey)
         }
       }
-      if (result?.stats) {
+      if (result?.stats && isLatestFeedLoad()) {
         const feedStats = result.stats as any
         setPeerCount(feedStats.peerCount || feedStats.feedConnections || 0)
         setSwarmStatus((prev) => ({
@@ -315,11 +320,11 @@ export default function HomeScreen() {
         entries: result?.entries?.length || 0,
         timedOut: !result,
       })
-      setLastFeedRefresh(Date.now())
+      if (isLatestFeedLoad()) setLastFeedRefresh(Date.now())
       try {
         const statusPromise = rpc.getSwarmStatus()
         const status = await Promise.race([statusPromise, new Promise((r) => setTimeout(() => r(null), 3000))])
-        if (status) {
+        if (status && isLatestFeedLoad()) {
           const statusAny = status as any
           setSwarmStatus({
             peers: statusAny.swarmConnections ?? statusAny.peerCount ?? 0,
@@ -336,7 +341,7 @@ export default function HomeScreen() {
     } catch (err) {
       console.error('[Home] Failed to load public feed:', err)
     } finally {
-      setFeedLoading(false)
+      if (isLatestFeedLoad()) setFeedLoading(false)
     }
   }, [rpc, loadChannelMeta])
 
@@ -757,6 +762,8 @@ export default function HomeScreen() {
       const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
         ? video.path
         : video.id
+      const requestSeq = ++playbackRequestSeqRef.current
+      const isCurrentPlaybackRequest = () => playbackRequestSeqRef.current === requestSeq
 
       // INSTANT PATH: Pass blobId and blobsCoreKey directly if available
       // This skips metadata fetch entirely for instant playback
@@ -777,11 +784,18 @@ export default function HomeScreen() {
         mimeType: videoAny.mimeType || undefined,
       }
       if (cachedUrl) {
-        void rpc.preparePlayback(playbackRequest).catch(() => {})
+        void rpc.preparePlayback(playbackRequest).then((result: any) => {
+          if (!isCurrentPlaybackRequest()) return
+          if (result?.url) {
+            if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+            loadAndPlayVideo(video, result.url)
+          }
+        }).catch(() => {})
         loadAndPlayVideo(video, cachedUrl)
         return
       }
       const result = await rpc.preparePlayback(playbackRequest)
+      if (!isCurrentPlaybackRequest()) return
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
@@ -806,6 +820,8 @@ export default function HomeScreen() {
       const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
         ? video.path
         : video.id
+      const requestSeq = ++playbackRequestSeqRef.current
+      const isCurrentPlaybackRequest = () => playbackRequestSeqRef.current === requestSeq
 
       // Get video URL from backend - use instant path if we have blob info
       const videoAny = video as any
@@ -825,11 +841,18 @@ export default function HomeScreen() {
         mimeType: videoAny.mimeType || undefined,
       }
       if (cachedUrl) {
-        void rpc.preparePlayback(playbackRequest).catch(() => {})
+        void rpc.preparePlayback(playbackRequest).then((result: any) => {
+          if (!isCurrentPlaybackRequest()) return
+          if (result?.url) {
+            if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+            loadAndPlayVideo(video, result.url)
+          }
+        }).catch(() => {})
         loadAndPlayVideo(video, cachedUrl)
         return
       }
       const result = await rpc.preparePlayback(playbackRequest)
+      if (!isCurrentPlaybackRequest()) return
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))

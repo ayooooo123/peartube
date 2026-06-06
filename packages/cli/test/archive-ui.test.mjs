@@ -327,7 +327,7 @@ test('yt-dlp downloader removes deprecated no-call-home and passes cookies/js ru
   t.is(args[args.indexOf('--js-runtimes') + 1], 'deno:/usr/local/bin/deno')
 })
 
-test('yt-dlp WebUI downloader uses ffmpeg and prefers merged mp4-compatible archives', async (t) => {
+test('yt-dlp WebUI downloader preserves original best format and passes ffmpeg location', async (t) => {
   const calls = []
   const existing = new Set(['/archive/tmp/arch_ffmpeg/example.mp4'])
   const downloader = createYtDlpDownloader({
@@ -354,8 +354,8 @@ test('yt-dlp WebUI downloader uses ffmpeg and prefers merged mp4-compatible arch
   await downloader.download({ id: 'arch_ffmpeg', url: 'https://www.youtube.com/watch?v=ABbqy1VGeck' })
 
   const args = calls[0].args
-  t.is(args[args.indexOf('-f') + 1], 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b', 'WebUI archive prefers bounded mp4-compatible video+audio with progressive fallback')
-  t.ok(args.includes('--merge-output-format'), 'merge output stays mp4 when separate streams are selected')
+  t.is(args[args.indexOf('-f') + 1], 'bv*+ba/b', 'WebUI archive defaults to original-preserving best video+audio with best fallback')
+  t.absent(args.includes('--merge-output-format'), 'archive downloader does not force remuxing to mp4 by default')
   t.ok(args.includes('--ffmpeg-location'), 'ffmpeg location is passed when configured')
   t.is(args[args.indexOf('--ffmpeg-location') + 1], '/usr/local/bin/ffmpeg')
 })

@@ -337,6 +337,10 @@ export function createPeerScorer(options = {}) {
     return record
   }
 
+  function metricIncludes(metric = {}, names = []) {
+    return names.some((name) => metric[name] !== undefined && metric[name] !== null)
+  }
+
   async function recordPerformance(peerId, metric = {}) {
     const normalized = normalizeMetric(peerId, metric)
     const current = metrics.get(normalized.peerId)

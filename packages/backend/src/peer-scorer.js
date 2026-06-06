@@ -321,15 +321,19 @@ export function createPeerScorer(options = {}) {
     return record
   }
 
+  function metricIncludes(metric = {}, names = []) {
+    return names.some((name) => metric[name] !== undefined && metric[name] !== null)
+  }
+
   async function recordPerformance(peerId, metric = {}) {
     const normalized = normalizeMetric(peerId, metric)
     const current = metrics.get(normalized.peerId)
     const merged = current
       ? {
           ...current,
-          latencyMs: normalized.latencyMs || current.latencyMs,
-          handshakeDurationMs: normalized.handshakeDurationMs || current.handshakeDurationMs,
-          socketStability: normalized.socketStability || current.socketStability,
+          latencyMs: metricIncludes(metric, ['latencyMs', 'rttMs']) ? normalized.latencyMs : current.latencyMs,
+          handshakeDurationMs: metricIncludes(metric, ['handshakeDurationMs', 'handshakeMs', 'handshakeLatencyMs']) ? normalized.handshakeDurationMs : current.handshakeDurationMs,
+          socketStability: metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability']) ? normalized.socketStability : current.socketStability,
           handshakeSuccesses: current.handshakeSuccesses + normalized.handshakeSuccesses,
           handshakeFailures: current.handshakeFailures + normalized.handshakeFailures,
           handshakes: current.handshakes + normalized.handshakes,
@@ -382,7 +386,8 @@ export function createPeerScorer(options = {}) {
     if (!peer) return false
     const metric = metricFor(peer) || peer.performance || {}
     if (safeNumber(metric.handshakeFailures, 0) >= safeNumber(options.maxHandshakeFailures, 4)) return true
-    if (safeNumber(metric.socketStability, 100) > 0 && safeNumber(metric.socketStability, 100) < safeNumber(options.minSocketStability, 20)) return true
+    const stability = safeNumber(metric.socketStability, 100)
+    if (Object.hasOwn(metric, 'socketStability') && stability < safeNumber(options.minSocketStability, 20)) return true
     return safeNumber(peer.score ?? scorePeer(peer), 0) < minScore
   }
 

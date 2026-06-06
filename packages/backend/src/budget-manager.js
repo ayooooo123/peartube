@@ -48,7 +48,7 @@ async function readBareHcMemoryStats(source) {
 async function readBareHcCpuStats(source) {
   if (!source) return null
   if (typeof source === 'function') return normalizeCpuStats(await source())
-  for (const name of ['cpuStats', 'getCpuStats', 'getCPUStats', 'systemStats', 'getSystemStats']) {
+  for (const name of ['cpuStats', 'getCpuStats', 'getCPUStats', 'stats', 'getStats', 'systemStats', 'getSystemStats']) {
     if (typeof source[name] === 'function') {
       const stats = await source[name]()
       return normalizeCpuStats(stats?.cpu || stats)

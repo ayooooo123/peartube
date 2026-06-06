@@ -258,6 +258,22 @@ test('peer scorer ranks and evicts peers from latency handshake stability and ud
   assert.equal(state.peers.has('slow'), false)
 })
 
+test('peer scorer accepts zero-valued performance updates when merging metrics', async () => {
+  const scorer = createPeerScorer({
+    availability: { shouldAdmit: () => true },
+    resources: { profile: { maxFanout: 4 }, budgetFor: () => ({ credit: 80 }), getThresholds: () => ({ maxFanout: 4 }) },
+  })
+
+  scorer.registerPeer({ peerId: 'peer', identity: { validProofCount: 3 } })
+  await scorer.recordPerformance('peer', { socketStability: 96, latencyMs: 25, handshakeDurationMs: 20, handshakes: 1, handshakeSuccesses: 1 })
+  await scorer.recordPerformance('peer', { socketStability: 0, latencyMs: 0, handshakeDurationMs: 0, handshakes: 1, handshakeFailures: 1 })
+
+  assert.equal(scorer.metrics.get('peer').socketStability, 0)
+  assert.equal(scorer.metrics.get('peer').latencyMs, 0)
+  assert.equal(scorer.metrics.get('peer').handshakeDurationMs, 0)
+  assert.equal(scorer.shouldEvict('peer', { minSocketStability: 20, maxHandshakeFailures: 99, minScore: 0 }), true)
+})
+
 test('budget manager polls memory and cpu and scales feed/autobase/swarm allocations under pressure', async () => {
   const manager = createBudgetManager({
     role: 'relay',
@@ -289,6 +305,19 @@ test('budget manager polls memory and cpu and scales feed/autobase/swarm allocat
   const combinedRefreshed = await combined.refreshSystemStats()
   assert.equal(combinedRefreshed.thresholds.memoryPressure, 80)
   assert.equal(combinedRefreshed.thresholds.cpuPressure, 25)
+
+  const genericStats = createBudgetManager({
+    role: 'relay',
+    bareHc: {
+      getStats: async () => ({
+        memory: { total: 1000, rss: 500 },
+        cpu: { usagePercent: 91 },
+      }),
+    },
+  })
+  const genericRefreshed = await genericStats.refreshSystemStats()
+  assert.equal(genericRefreshed.thresholds.memoryPressure, 50)
+  assert.equal(genericRefreshed.thresholds.cpuPressure, 91)
 })
 
 test('autobase sink binds native onappend and emits zero-copy compact envelopes', async () => {

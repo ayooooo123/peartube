@@ -80,6 +80,14 @@ function isSupportedArchiveVideoPath(filePath) {
   return /\.(mp4|m4v|mov|webm|mkv)$/i.test(String(filePath || '').split('?')[0])
 }
 
+function getArchiveMimeType(filePath) {
+  const ext = String(filePath || '').split('?')[0].toLowerCase().split('.').pop()
+  if (ext === 'webm') return 'video/webm'
+  if (ext === 'mkv') return 'video/x-matroska'
+  if (ext === 'mov') return 'video/quicktime'
+  return 'video/mp4'
+}
+
 function sanitizeName(value) {
   const name = String(value || '').trim()
   return name || 'Anonymous Archive'
@@ -193,7 +201,7 @@ export async function enqueueArchiveJob(store, input = {}) {
 export function createYtDlpDownloader({
   bin = 'yt-dlp',
   outputDir,
-  format = 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b',
+  format = 'bv*+ba/b',
   ffmpegPath = null,
   cookiesPath = null,
   jsRuntime = null,
@@ -218,7 +226,6 @@ export function createYtDlpDownloader({
           '--write-info-json',
           '--print', 'after_move:filepath',
           '-f', format,
-          '--merge-output-format', 'mp4',
           '-o', outputTemplate
         ]
         if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath)
@@ -310,7 +317,7 @@ export function createYtDlpDownloader({
         thumbnailUrl,
         thumbnailFile,
         creatorName,
-        mimeType: filePath.endsWith('.webm') ? 'video/webm' : 'video/mp4',
+        mimeType: getArchiveMimeType(filePath),
         cleanup() {
           try {
             fs.rmSync(targetDir, { recursive: true, force: true })

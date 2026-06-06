@@ -34,6 +34,10 @@ class FakeHRPC {
     this.handlers.error = handler
   }
 
+  onEventTranscodeProgress(handler) {
+    this.handlers.transcodeProgress = handler
+  }
+
   getSwarmStatus() {
     return Promise.resolve({
       connected: true,
@@ -54,6 +58,22 @@ class FakeHRPC {
       doctorJson: JSON.stringify({ recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } }),
       directPeerDialJson: JSON.stringify({ discoveredPeers: 6, pending: 3 })
     })
+  }
+
+  getCanonicalFeed() {
+    return Promise.resolve({ entries: [] })
+  }
+
+  preparePlayback() {
+    return Promise.resolve({ url: 'http://video.local/play' })
+  }
+
+  ffmpegDecodeAvailable() {
+    return Promise.resolve({ available: true })
+  }
+
+  transcodeStart() {
+    return Promise.resolve({ success: true, sessionId: 'tx', transcodeUrl: 'http://video.local/tx.m3u8' })
   }
 }
 
@@ -156,6 +176,42 @@ test('createProtocolClient forwards log events through the shared event map', as
   FakeHRPC.instances[0].handlers.log({ level: 'info', message: 'backend ready' })
 
   t.alike(logEvents, [{ level: 'info', message: 'backend ready' }])
+})
+
+test('createProtocolClient exposes generated app RPC namespace methods', async (t) => {
+  FakeHRPC.instances.length = 0
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: FakeHRPC
+  })
+
+  t.alike(await client.feed.getCanonicalFeed(), { entries: [] })
+  t.alike(await client.video.preparePlayback({ channelKey: 'ch', videoId: 'v' }), { url: 'http://video.local/play' })
+  t.alike(await client.shell.ffmpegDecodeAvailable(), { available: true })
+  t.alike(await client.shell.transcodeStart({ sourceUrl: 'http://video.local/source.mp4' }), {
+    success: true,
+    sessionId: 'tx',
+    transcodeUrl: 'http://video.local/tx.m3u8'
+  })
+})
+
+test('createProtocolClient forwards transcode progress events through the shared event map', async (t) => {
+  FakeHRPC.instances.length = 0
+  const progressEvents = []
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: FakeHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.TRANSCODE_PROGRESS, (payload) => {
+    progressEvents.push(payload)
+  })
+
+  await client.ready()
+  FakeHRPC.instances[0].handlers.transcodeProgress({ sessionId: 'tx', percent: 40, bytesWritten: 1024 })
+
+  t.alike(progressEvents, [{ sessionId: 'tx', percent: 40, bytesWritten: 1024 }])
 })
 
 test('createProtocolClient emits normalized network status from the system namespace', async (t) => {

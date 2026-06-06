@@ -68,7 +68,7 @@ export function useP2PVideo(
 
   // Refs for cleanup
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const cancelledRef = useRef(false);
+  const requestGenerationRef = useRef(0);
   const startTimeRef = useRef<number>(0);
 
   // Cleanup function
@@ -81,7 +81,7 @@ export function useP2PVideo(
 
   // Cancel current loading
   const cancel = useCallback(() => {
-    cancelledRef.current = true;
+    requestGenerationRef.current += 1;
     cleanup();
     setState(prev => ({
       ...prev,
@@ -91,7 +91,7 @@ export function useP2PVideo(
 
   // Reset to initial state
   const reset = useCallback(() => {
-    cancelledRef.current = true;
+    requestGenerationRef.current += 1;
     cleanup();
     setState({
       url: null,
@@ -112,7 +112,10 @@ export function useP2PVideo(
       return;
     }
 
-    cancelledRef.current = false;
+    cleanup();
+    const requestId = requestGenerationRef.current + 1;
+    requestGenerationRef.current = requestId;
+    const isCurrentRequest = () => requestGenerationRef.current === requestId;
     startTimeRef.current = Date.now();
 
     setState({
@@ -126,7 +129,7 @@ export function useP2PVideo(
       if (typeof service.preparePlayback === 'function') {
         const playback = await service.preparePlayback(channelKey, videoPath);
 
-        if (cancelledRef.current) return;
+        if (!isCurrentRequest()) return;
 
         setState(prev => ({
           ...prev,
@@ -141,7 +144,7 @@ export function useP2PVideo(
       } else {
         const urlResult = await service.getVideoUrl(channelKey, videoPath);
 
-        if (cancelledRef.current) return;
+        if (!isCurrentRequest()) return;
 
         setState(prev => ({
           ...prev,
@@ -151,12 +154,12 @@ export function useP2PVideo(
 
         await service.prefetchVideo(channelKey, videoPath);
 
-        if (cancelledRef.current) return;
+        if (!isCurrentRequest()) return;
       }
 
       const initialStats = await service.getVideoStats(channelKey, videoPath);
 
-      if (cancelledRef.current) return;
+      if (!isCurrentRequest()) return;
 
       setState(prev => ({
         ...prev,
@@ -166,22 +169,27 @@ export function useP2PVideo(
 
       // Start polling for stats if not already complete
       if (!initialStats.isComplete) {
-        pollIntervalRef.current = setInterval(async () => {
-          // Check timeout
-          if (Date.now() - startTimeRef.current > opts.pollTimeout) {
-            cleanup();
-            return;
-          }
+        const interval = setInterval(async () => {
+          const stopThisInterval = () => {
+            clearInterval(interval);
+            if (pollIntervalRef.current === interval) {
+              pollIntervalRef.current = null;
+            }
+          };
 
-          if (cancelledRef.current) {
-            cleanup();
+          // Check timeout
+          if (requestGenerationRef.current !== requestId || Date.now() - startTimeRef.current > opts.pollTimeout) {
+            stopThisInterval();
             return;
           }
 
           try {
             const stats = await service.getVideoStats(channelKey, videoPath);
 
-            if (cancelledRef.current) return;
+            if (requestGenerationRef.current !== requestId) {
+              stopThisInterval();
+              return;
+            }
 
             setState(prev => ({
               ...prev,
@@ -191,16 +199,17 @@ export function useP2PVideo(
 
             // Stop polling when complete
             if (stats.isComplete) {
-              cleanup();
+              stopThisInterval();
             }
           } catch (err) {
             console.error('[useP2PVideo] Stats polling error:', err);
             // Continue polling on transient errors
           }
         }, opts.pollInterval);
+        pollIntervalRef.current = interval;
       }
     } catch (err) {
-      if (cancelledRef.current) return;
+      if (!isCurrentRequest()) return;
 
       setState({
         url: null,
@@ -218,7 +227,7 @@ export function useP2PVideo(
     }
 
     return () => {
-      cancelledRef.current = true;
+      requestGenerationRef.current += 1;
       cleanup();
     };
   }, [channelKey, videoPath, opts.autoStart]); // eslint-disable-line react-hooks/exhaustive-deps

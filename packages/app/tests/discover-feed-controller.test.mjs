@@ -2,12 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  clearHydratedFeedChannels,
+  getVerticalFeedHydrationKey,
   getVerticalFeedPreviewVideos,
   hasRichVerticalFeedSnapshot,
   mapHydratedVerticalFeedVideos,
   mergeUniqueFeedVideos,
   mergeVerticalFeedEntries,
+  pruneHydratedFeedChannels,
   warmNextPlaybackUrls,
   withFeedTimeout,
 } from '../lib/discover-feed-controller.js'
@@ -126,12 +127,25 @@ test('vertical feed controller maps hydrated videos with channel metadata and re
   }])
 })
 
-test('vertical feed refresh clears hydrated channel state through controller helper', () => {
-  const hydratedChannelsRef = { current: new Set(['one', 'two']) }
+test('vertical feed hydration keys include changing content signatures and prune absent channels', () => {
+  const first = {
+    channelKey: 'one',
+    manifestUpdatedAt: 10,
+    previewVideos: [{ id: 'a', blobId: '0:1:0:10', blobsCoreKey: 'core-a' }],
+  }
+  const second = {
+    ...first,
+    manifestUpdatedAt: 20,
+    previewVideos: [{ id: 'b', blobId: '0:2:0:20', blobsCoreKey: 'core-b' }],
+  }
+  const staleKey = getVerticalFeedHydrationKey(first)
+  const freshKey = getVerticalFeedHydrationKey(second)
+  const hydratedChannelsRef = { current: new Set([staleKey, freshKey, getVerticalFeedHydrationKey({ channelKey: 'two', manifestUpdatedAt: 1 })]) }
 
-  clearHydratedFeedChannels(hydratedChannelsRef)
+  assert.notEqual(staleKey, freshKey)
+  pruneHydratedFeedChannels(hydratedChannelsRef, [second])
 
-  assert.equal(hydratedChannelsRef.current.size, 0)
+  assert.deepEqual(Array.from(hydratedChannelsRef.current), [freshKey])
 })
 
 test('vertical feed controller prewarms next playback URLs best-effort', async () => {

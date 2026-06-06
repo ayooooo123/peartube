@@ -26,11 +26,13 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import {
+  getVerticalFeedHydrationKey,
   getVerticalFeedPreviewVideos,
   hasRichVerticalFeedSnapshot,
   mapHydratedVerticalFeedVideos,
   mergeUniqueFeedVideos,
   mergeVerticalFeedEntries,
+  pruneHydratedFeedChannels,
   warmNextPlaybackUrls,
   withFeedTimeout,
 } from '@/lib/discover-feed-controller'
@@ -260,7 +262,8 @@ export default function VerticalDiscoveryScreen() {
   const hydrateChannelVideos = useCallback(async (entry: FeedEntry) => {
     if (!rpc) return
     const channelKey = entry.channelKey || entry.driveKey
-    if (!channelKey || hydratedChannelsRef.current.has(channelKey)) return
+    const hydrationKey = getVerticalFeedHydrationKey(entry)
+    if (!channelKey || !hydrationKey || hydratedChannelsRef.current.has(hydrationKey)) return
 
     try {
       const timeoutToken = Symbol('vertical-channel-timeout')
@@ -277,7 +280,7 @@ export default function VerticalDiscoveryScreen() {
         setHydrationErrors((prev) => ({ ...prev, [channelKey]: { error: (result as any)?.error || 'Channel refresh failed; showing cached previews.', lastAttempt: Date.now() } }))
         return
       }
-      hydratedChannelsRef.current.add(channelKey)
+      hydratedChannelsRef.current.add(hydrationKey)
       const channelVideos = Array.isArray((result as any)?.videos) ? (result as any).videos : []
       const mapped = mapHydratedVerticalFeedVideos(entry, channelVideos, {
         identityDriveKey: identity?.driveKey || undefined,
@@ -338,6 +341,7 @@ export default function VerticalDiscoveryScreen() {
         return prevSignature === nextSignature ? prev : mergedEntries
       })
       seedFromFeedEntries(mergedEntries, channelMetaByKey)
+      pruneHydratedFeedChannels(hydratedChannelsRef, mergedEntries)
       await loadSwarmStatus()
       for (const entry of mergedEntries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
@@ -409,7 +413,14 @@ export default function VerticalDiscoveryScreen() {
     try {
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
       if (cachedUrl) {
-        void rpc.preparePlayback(playbackRequest).catch(() => undefined)
+        void rpc.preparePlayback(playbackRequest).then((result: any) => {
+          if (isStalePlaybackRequest()) return
+          if (result?.url) {
+            if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+            setShortsVideoUrl(result.url)
+            setShortsPlaybackSession((prev) => prev + 1)
+          }
+        }).catch(() => undefined)
         if (isStalePlaybackRequest()) return
         setShortsVideoUrl(cachedUrl)
         setShortsPlaybackSession((prev) => prev + 1)

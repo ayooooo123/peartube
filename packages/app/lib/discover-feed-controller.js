@@ -34,6 +34,37 @@ function getEntryKey(entry) {
   return entry?.channelKey || entry?.driveKey || ''
 }
 
+export function getVerticalFeedHydrationKey(entry) {
+  const channelKey = getEntryKey(entry)
+  if (!channelKey) return ''
+  const previewSignature = Array.isArray(entry?.previewVideos)
+    ? entry.previewVideos.map((video) => [
+      video?.id || '',
+      video?.blobId || '',
+      video?.blobsCoreKey || '',
+      video?.thumbnailBlobId || '',
+      video?.thumbnailBlobsCoreKey || '',
+    ].join(':')).join('|')
+    : ''
+  const descriptorSeq = entry?.signedDescriptor?.descriptor?.seq || ''
+  return [
+    channelKey,
+    entry?.manifestUpdatedAt || '',
+    entry?.previewVideosHash || '',
+    descriptorSeq,
+    previewSignature,
+  ].join('\u001f')
+}
+
+export function pruneHydratedFeedChannels(hydratedChannelsRef, entries = []) {
+  const current = hydratedChannelsRef?.current
+  if (!current || typeof current.delete !== 'function') return
+  const activeHydrationKeys = new Set((entries || []).map(getVerticalFeedHydrationKey).filter(Boolean))
+  for (const key of Array.from(current)) {
+    if (!activeHydrationKeys.has(key)) current.delete(key)
+  }
+}
+
 function getEntryFreshness(entry) {
   return Number(entry?.manifestUpdatedAt || entry?.lastSeen || 0) || 0
 }

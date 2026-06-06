@@ -118,7 +118,7 @@ test('public feed rejects signed peer entries whose descriptor does not bind adv
 })
 
 
-test('public feed accepts relay-cache catalog entries without signed descriptors', async () => {
+test('public feed rejects inbound relay-cache-like SUBMIT_CHANNEL without signed descriptor', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())
   const conn = {}
   try {
@@ -140,22 +140,16 @@ test('public feed accepts relay-cache catalog entries without signed descriptors
     }, conn)
     await new Promise((resolve) => setImmediate(resolve))
 
-    const entry = manager.entries.get(key(1))
-    assert.ok(entry)
-    assert.equal(entry.source, 'relay-cache')
-    assert.equal(entry.relayServing, true)
-    assert.equal(entry.publicBeeKey, key(2))
-    assert.equal(entry.previewVideos[0].availability, 'playable')
-    assert.equal(manager.peerFeedKeys.get(conn)?.has(key(1)), true)
-    assert.equal(manager.entryPeerCounts.get(key(1)), 1)
-    assert.equal(manager.getFeed().length, 1)
+    assert.equal(manager.entries.has(key(1)), false)
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(key(1)), undefined)
+    assert.equal(manager.getFeed().length, 0)
   } finally {
     manager.stop()
   }
 })
 
 
-test('public feed accepts relay-cache HAVE_FEED catalog entries without signed descriptors', async () => {
+test('public feed rejects inbound relay-cache-like HAVE_FEED entries without signed descriptors', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())
   try {
     manager.handleMessage({
@@ -179,13 +173,8 @@ test('public feed accepts relay-cache HAVE_FEED catalog entries without signed d
     }, {})
     await new Promise((resolve) => setImmediate(resolve))
 
-    const entry = manager.entries.get(key(4))
-    assert.ok(entry)
-    assert.equal(entry.source, 'peer')
-    assert.equal(entry.relayServing, true)
-    assert.equal(entry.publicBeeKey, key(5))
-    assert.equal(entry.previewVideos[0].id, 'relay-feed-video')
-    assert.equal(manager.getFeed().length, 1)
+    assert.equal(manager.entries.has(key(4)), false)
+    assert.equal(manager.getFeed().length, 0)
   } finally {
     manager.stop()
   }

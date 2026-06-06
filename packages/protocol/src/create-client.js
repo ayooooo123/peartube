@@ -1,6 +1,7 @@
 /* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
 import DefaultHRPC from '@peartube/spec'
+import { APP_RPC_METHODS } from '@peartube/spec/app-rpc-adapter'
 
 import { PROTOCOL_EVENT_BINDINGS, PROTOCOL_EVENTS } from './event-map.js'
 
@@ -20,111 +21,7 @@ async function appendDebugLine(line) {
   } catch {}
 }
 
-const NAMESPACE_METHODS = Object.freeze({
-  identity: {
-    createIdentity: 'createIdentity',
-    getIdentity: 'getIdentity',
-    getIdentities: 'getIdentities',
-    setActiveIdentity: 'setActiveIdentity',
-    recoverIdentity: 'recoverIdentity',
-    createDeviceInvite: 'createDeviceInvite',
-    pairDevice: 'pairDevice',
-    listDevices: 'listDevices',
-    bootstrapDevice: 'bootstrapDevice',
-    attestDevice: 'attestDevice',
-    verifyAttestation: 'verifyAttestation'
-  },
-  feed: {
-    getPublicFeed: 'getPublicFeed',
-    refreshFeed: 'refreshFeed',
-    submitToFeed: 'submitToFeed',
-    unpublishFromFeed: 'unpublishFromFeed',
-    isChannelPublished: 'isChannelPublished',
-    subscribeChannel: 'subscribeChannel',
-    unsubscribeChannel: 'unsubscribeChannel',
-    getSubscriptions: 'getSubscriptions',
-    joinChannel: 'joinChannel',
-    hideChannel: 'hideChannel',
-    pinChannel: 'pinChannel',
-    unpinChannel: 'unpinChannel',
-    getPinnedChannels: 'getPinnedChannels'
-  },
-  channel: {
-    getChannel: 'getChannel',
-    getChannelMeta: 'getChannelMeta',
-    updateChannel: 'updateChannel',
-    updateChannelAvatar: 'updateChannelAvatar'
-  },
-  video: {
-    listVideos: 'listVideos',
-    getVideoUrl: 'getVideoUrl',
-    getVideoData: 'getVideoData',
-    getVideoMetadata: 'getVideoMetadata',
-    getVideoThumbnail: 'getVideoThumbnail',
-    getVideoStats: 'getVideoStats',
-    prefetchVideo: 'prefetchVideo',
-    deleteVideo: 'deleteVideo',
-    updateVideoMetadata: 'updateVideoMetadata',
-    setVideoThumbnail: 'setVideoThumbnail',
-    setVideoThumbnailFromFile: 'setVideoThumbnailFromFile',
-    addComment: 'addComment',
-    listComments: 'listComments',
-    hideComment: 'hideComment',
-    removeComment: 'removeComment',
-    addReaction: 'addReaction',
-    removeReaction: 'removeReaction',
-    getReactions: 'getReactions'
-  },
-  watch: {
-    logWatchEvent: 'logWatchEvent',
-    getRecommendations: 'getRecommendations',
-    getVideoRecommendations: 'getVideoRecommendations'
-  },
-  transfer: {
-    uploadVideo: 'uploadVideo',
-    downloadVideo: 'downloadVideo',
-    getSeedingStatus: 'getSeedingStatus',
-    setSeedingConfig: 'setSeedingConfig',
-    getStorageStats: 'getStorageStats',
-    setStorageLimit: 'setStorageLimit',
-    clearCache: 'clearCache'
-  },
-  search: {
-    searchVideos: 'searchVideos',
-    globalSearchVideos: 'globalSearchVideos',
-    indexVideoVectors: 'indexVideoVectors'
-  },
-  shell: {
-    pickVideoFile: 'pickVideoFile',
-    pickImageFile: 'pickImageFile',
-    getTranscodeSettings: 'getTranscodeSettings',
-    setTranscodeSettings: 'setTranscodeSettings',
-    mpvAvailable: 'mpvAvailable',
-    mpvCreate: 'mpvCreate',
-    mpvLoadFile: 'mpvLoadFile',
-    mpvPlay: 'mpvPlay',
-    mpvPause: 'mpvPause',
-    mpvSeek: 'mpvSeek',
-    mpvGetState: 'mpvGetState',
-    mpvRenderFrame: 'mpvRenderFrame',
-    mpvDestroy: 'mpvDestroy',
-    castAvailable: 'castAvailable',
-    castStartDiscovery: 'castStartDiscovery',
-    castStopDiscovery: 'castStopDiscovery',
-    castGetDevices: 'castGetDevices',
-    castAddManualDevice: 'castAddManualDevice',
-    castConnect: 'castConnect',
-    castDisconnect: 'castDisconnect',
-    castPlay: 'castPlay',
-    castPause: 'castPause',
-    castResume: 'castResume',
-    castStop: 'castStop',
-    castSeek: 'castSeek',
-    castSetVolume: 'castSetVolume',
-    castGetState: 'castGetState',
-    castIsConnected: 'castIsConnected'
-  }
-})
+const NAMESPACE_METHODS = APP_RPC_METHODS
 
 function createEmitter() {
   const listeners = new Map()

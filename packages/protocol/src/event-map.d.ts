@@ -4,6 +4,7 @@ export const PROTOCOL_EVENTS: {
   readonly LOG: 'log'
   readonly UPLOAD_PROGRESS: 'upload.progress'
   readonly DOWNLOAD_PROGRESS: 'download.progress'
+  readonly TRANSCODE_PROGRESS: 'transcode.progress'
   readonly FEED_UPDATED: 'feed.updated'
   readonly NETWORK_STATUS: 'network.status'
   readonly VIDEO_STATS: 'video.stats'

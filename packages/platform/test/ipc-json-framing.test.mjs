@@ -1,7 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
 import { createJsonFrameParser, encodeJsonFrame } from '../src/ipc-json-framing.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const rpcSharedSource = () => readFileSync(join(__dirname, '../src/rpc.shared.ts'), 'utf8')
 
 test('JSON IPC parser assembles split messages', () => {
   const parser = createJsonFrameParser()
@@ -30,4 +36,13 @@ test('JSON IPC parser ignores non-JSON prefixes and preserves nested braces in s
 
 test('encodeJsonFrame emits parseable object JSON', () => {
   assert.deepEqual(JSON.parse(encodeJsonFrame({ type: 'shutdown' })), { type: 'shutdown' })
+})
+
+test('shared platform RPC preserves init error fidelity and transcode progress events', () => {
+  const source = rpcSharedSource()
+
+  assert.match(source, /code: \(error as any\)\?\.code/, 'init failures should preserve error code')
+  assert.match(source, /retryable: Boolean\(\(error as any\)\?\.retryable\)/, 'init failures should preserve retryability')
+  assert.match(source, /PROTOCOL_EVENTS\.TRANSCODE_PROGRESS/, 'transcode progress should be bound through protocol events')
+  assert.match(source, /onTranscodeProgress/, 'platform consumers should be able to subscribe to transcode progress')
 })

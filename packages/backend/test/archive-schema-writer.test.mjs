@@ -246,6 +246,15 @@ test('archive writer rejects attempts to remap a content hash to another hyperco
       }),
       /canonical hypercore key/
     )
+
+    await assert.rejects(
+      writeArchiveMapping(db, fileHash, {
+        sourceId: 'youtube:dQw4w9WgXcQ',
+        hypercoreKey: secondCoreKey,
+        variants: [{ resolution: '360p', coreKey: secondCoreKey, startBlock: 71, endBlock: 99 }],
+      }, { merge: false }),
+      /canonical hypercore key/
+    )
   })
 })
 

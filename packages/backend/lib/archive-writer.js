@@ -170,7 +170,11 @@ async function writeWithTransaction(db, key, next, merge) {
         throw new Error('Cannot write archive mapping while HyperDB has pending updates; flush or discard them first')
       }
 
-      const mapping = merge ? mergeMappings(await readExisting(tx, key), next) : next
+      const existing = await readExisting(tx, key)
+      if (existing && !b4a.equals(existing.hypercoreKey, next.hypercoreKey)) {
+        throw new Error('archive mapping already has a canonical hypercore key for this content hash')
+      }
+      const mapping = existing && merge ? mergeMappings(existing, next) : next
       const value = encode(mapping)
 
       await putRaw(tx, key, value)
@@ -183,7 +187,11 @@ async function writeWithTransaction(db, key, next, merge) {
     }
   }
 
-  const mapping = merge ? mergeMappings(await readExisting(db, key), next) : next
+  const existing = await readExisting(db, key)
+  if (existing && !b4a.equals(existing.hypercoreKey, next.hypercoreKey)) {
+    throw new Error('archive mapping already has a canonical hypercore key for this content hash')
+  }
+  const mapping = existing && merge ? mergeMappings(existing, next) : next
   const value = encode(mapping)
 
   await putRaw(db, key, value)

@@ -33,7 +33,9 @@ function normalizeMetric(peerId, metric = {}) {
   const total = Math.max(handshakes, successes + failures)
   const latencyMs = Math.max(0, safeNumber(metric.latencyMs ?? metric.rttMs, 0))
   const handshakeDurationMs = Math.max(0, safeNumber(metric.handshakeDurationMs ?? metric.handshakeMs ?? metric.handshakeLatencyMs, 0))
-  const socketStabilityObserved = metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability'])
+  const socketStabilityObserved = metric.socketStabilityObserved !== undefined && metric.socketStabilityObserved !== null
+    ? Boolean(metric.socketStabilityObserved)
+    : metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability'])
   const socketStability = socketStabilityObserved
     ? Math.max(0, Math.min(100, safeNumber(metric.socketStability ?? metric.socketStabilityScore ?? metric.stability, 0)))
     : 0
@@ -358,11 +360,11 @@ export function createPeerScorer(options = {}) {
   }
 
   async function applyPerformanceDiff(diff) {
-    const entry = diff?.left || diff?.right
+    const entry = diff?.right || diff?.left
     if (!entry?.value) return null
     const metric = decodePeerMetric(entry.value)
-    if (!diff.left) metrics.delete(metric.peerId)
-    else metrics.set(metric.peerId, metric)
+    if (diff.right) metrics.set(metric.peerId, metric)
+    else metrics.delete(metric.peerId)
     const peer = state.peers.get(metric.peerId)
     if (peer) registerPeer({ ...peer, performance: metric })
     return metric

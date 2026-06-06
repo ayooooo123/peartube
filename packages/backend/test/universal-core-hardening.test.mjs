@@ -276,6 +276,19 @@ test('budget manager polls memory and cpu and scales feed/autobase/swarm allocat
   assert.equal(allocation.autobaseLinearizationBuffers < 128, true)
   assert.equal(allocation.activeSwarmConnections < 48, true)
   assert.equal(decodeBudgetState(encodeBudgetState(refreshed.thresholds)).cpuPressure, 92)
+
+  const combined = createBudgetManager({
+    role: 'relay',
+    bareHc: {
+      getSystemStats: async () => ({
+        memory: { total: 2000, rss: 1600 },
+        cpu: { usagePercent: 25 },
+      }),
+    },
+  })
+  const combinedRefreshed = await combined.refreshSystemStats()
+  assert.equal(combinedRefreshed.thresholds.memoryPressure, 80)
+  assert.equal(combinedRefreshed.thresholds.cpuPressure, 25)
 })
 
 test('autobase sink binds native onappend and emits zero-copy compact envelopes', async () => {
@@ -292,9 +305,31 @@ test('autobase sink binds native onappend and emits zero-copy compact envelopes'
   sink.onappend((record) => observed.push(record))
 
   await sink.append({ surface: 'main', kind: 'feed-update', payload: { feed: 'a' } })
-  listeners[0]({ seq: 9, kind: 'remote-feed-update', payload: { feed: 'b' } })
+  listeners[0]({ surface: 'main', sequence: 9n, eventId: 'remote-1', kind: 'remote-feed-update', payload: { feed: 'b' } })
+  listeners[0]({ surface: 'main', sequence: 9n, eventId: 'remote-1', kind: 'remote-feed-update', payload: { feed: 'b' } })
 
   assert.equal(appended[0] instanceof Uint8Array, true)
   assert.equal(sink.snapshot().events[0].payload.feed, 'a')
+  assert.equal(sink.snapshot().events[1].payload.feed, 'b')
+  assert.equal(sink.snapshot().bySurface[0].sequence, 9n)
   assert.equal(observed.at(-1).kind, 'remote-feed-update')
+  assert.equal(observed.length, 2)
+})
+
+test('universal core shutdown closes native autobase append subscriptions', async () => {
+  const calls = []
+  const core = createUniversalCore({
+    platform: 'relay',
+    storagePath: '/tmp/peartube-universal-core-test',
+    players: {
+      autobase: {
+        onappend: () => () => calls.push('closed'),
+      },
+    },
+    createBackendContext: async () => ({ ctx: {} }),
+  })
+
+  await core.init()
+  await core.shutdown()
+  assert.deepEqual(calls, ['closed'])
 })

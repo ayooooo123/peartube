@@ -3010,6 +3010,26 @@ rpcNs.register({
 // Save HRPC interface to disk
 HRPCBuilder.toDisk(builder)
 
+// Generated JS is CommonJS because hyperschema/hrpc emit CommonJS runtime
+// clients. Keep checked-in generated outputs lint-clean when lint:changed runs
+// against newly tracked files.
+{
+  const fsLint = require('fs')
+  const pathLint = require('path')
+  const lintHeader = '/* eslint-disable @typescript-eslint/no-require-imports */\n'
+  for (const generatedPath of [
+    pathLint.join(SCHEMA_DIR, 'index.js'),
+    pathLint.join(HRPC_DIR, 'index.js'),
+    pathLint.join(HRPC_DIR, 'messages.js')
+  ]) {
+    let generatedSource = fsLint.readFileSync(generatedPath, 'utf-8')
+    if (!generatedSource.startsWith(lintHeader)) {
+      generatedSource = lintHeader + generatedSource
+      fsLint.writeFileSync(generatedPath, generatedSource)
+    }
+  }
+}
+
 const { writeAppRpcAdapter } = require('./lib/app-rpc-adapter-codegen.cjs')
 const appRpcMetadata = writeAppRpcAdapter({
   hrpcJsonPath: require('path').join(HRPC_DIR, 'hrpc.json'),

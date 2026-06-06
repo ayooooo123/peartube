@@ -73,6 +73,8 @@ export class PublicFeed {
     this.wiredConnections = new Set();
     /** @type {((requests: any[], conn?: any) => Promise<any[]>) | null} */
     this.availabilityHintProvider = null;
+    /** @type {{ requestTimeout?: (peer: any) => number } | null} */
+    this.peerScorer = options.peerScorer || null;
     /** @type {((entries: any[], conn?: any) => Promise<any[]>) | null} */
     this.feedSnapshotProvider = null;
     /** @type {number} */
@@ -544,18 +546,22 @@ export class PublicFeed {
     }
   }
 
-  async requestAvailabilityHints(requests, { timeoutMs = 250, maxPeers = 4 } = {}) {
+  async requestAvailabilityHints(requests, { timeoutMs = null, maxPeers = 4 } = {}) {
     const peers = Array.from(this.feedConnections).slice(0, maxPeers)
     if (!Array.isArray(requests) || requests.length === 0 || peers.length === 0) return []
 
     const perPeer = peers.map((conn) => new Promise((resolve) => {
       const channel = this.peerChannels.get(conn)
       if (!channel) return resolve([])
+      const peerKey = this._connectionPeerKeys.get(conn) || this._connectionIds.get(conn) || conn
+      const peerTimeoutMs = Number.isFinite(timeoutMs)
+        ? timeoutMs
+        : Math.max(300, Math.min(5000, Number(this.peerScorer?.requestTimeout?.(peerKey) || 3000)))
       const requestId = `${Date.now()}:${this._nextAvailabilityRequestId++}`
       const timeout = setTimeout(() => {
         this.pendingAvailabilityRequests.delete(requestId)
         resolve([])
-      }, timeoutMs)
+      }, peerTimeoutMs)
       this.pendingAvailabilityRequests.set(requestId, {
         resolve: (hints) => {
           clearTimeout(timeout)

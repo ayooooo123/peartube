@@ -32,6 +32,7 @@ function normalizeMetric(peerId, metric = {}) {
   const successes = safeNumber(metric.handshakeSuccesses ?? metric.successfulHandshakes, 0)
   const total = Math.max(handshakes, successes + failures)
   const latencyMs = Math.max(0, safeNumber(metric.latencyMs ?? metric.rttMs, 0))
+  const srttMs = Math.max(0, safeNumber(metric.srttMs ?? metric.smoothedRttMs ?? metric.srtt ?? latencyMs, latencyMs))
   const handshakeDurationMs = Math.max(0, safeNumber(metric.handshakeDurationMs ?? metric.handshakeMs ?? metric.handshakeLatencyMs, 0))
   const socketStabilityObserved = metric.socketStabilityObserved !== undefined && metric.socketStabilityObserved !== null
     ? Boolean(metric.socketStabilityObserved)
@@ -43,6 +44,7 @@ function normalizeMetric(peerId, metric = {}) {
   return {
     peerId: toHex(peerId || metric.peerId || metric.identityId || hashText(metric)),
     latencyMs,
+    srttMs,
     handshakeDurationMs,
     socketStability,
     socketStabilityObserved,
@@ -74,11 +76,16 @@ function performanceScore(metric = {}) {
   return latencyScore + handshakeDurationScore + stabilityScore + throughputScore + handshakeScore
 }
 
+function timeoutFromSrtt(srttMs) {
+  return Math.max(300, Math.min(5000, Math.floor(safeNumber(srttMs, 0) * 3)))
+}
+
 export const peerMetricEncoding = {
   preencode(state, metric = {}) {
-    c.uint.preencode(state, 3)
+    c.uint.preencode(state, 4)
     c.string.preencode(state, toHex(metric.peerId || ''))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.latencyMs, 0))))
+    c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.srttMs ?? metric.latencyMs, 0))))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeDurationMs, 0))))
     c.uint.preencode(state, Math.max(0, Math.floor(safeNumber(metric.socketStability, 0))))
     c.bool.preencode(state, Boolean(metric.socketStabilityObserved))
@@ -89,9 +96,10 @@ export const peerMetricEncoding = {
     c.biguint.preencode(state, safeBigInt(metric.observedAt, 0n))
   },
   encode(state, metric = {}) {
-    c.uint.encode(state, 3)
+    c.uint.encode(state, 4)
     c.string.encode(state, toHex(metric.peerId || ''))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.latencyMs, 0))))
+    c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.srttMs ?? metric.latencyMs, 0))))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.handshakeDurationMs, 0))))
     c.uint.encode(state, Math.max(0, Math.floor(safeNumber(metric.socketStability, 0))))
     c.bool.encode(state, Boolean(metric.socketStabilityObserved))
@@ -103,15 +111,17 @@ export const peerMetricEncoding = {
   },
   decode(state) {
     const version = c.uint.decode(state)
-    if (version !== 1 && version !== 2 && version !== 3) throw new Error(`Unsupported peer metric version ${version}`)
+    if (version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error(`Unsupported peer metric version ${version}`)
     const peerId = c.string.decode(state)
     const latencyMs = c.uint.decode(state)
+    const srttMs = version >= 4 ? c.uint.decode(state) : latencyMs
     const handshakeDurationMs = version >= 2 ? c.uint.decode(state) : 0
     const socketStability = version >= 2 ? c.uint.decode(state) : 0
     const socketStabilityObserved = version >= 3 ? c.bool.decode(state) : version >= 2
     return {
       peerId,
       latencyMs,
+      srttMs,
       handshakeDurationMs,
       socketStability,
       socketStabilityObserved,
@@ -344,6 +354,11 @@ export function createPeerScorer(options = {}) {
       ? {
           ...current,
           latencyMs: metricIncludes(metric, ['latencyMs', 'rttMs']) ? normalized.latencyMs : current.latencyMs,
+          srttMs: metricIncludes(metric, ['srttMs', 'smoothedRttMs', 'srtt'])
+            ? normalized.srttMs
+            : metricIncludes(metric, ['latencyMs', 'rttMs'])
+              ? Math.max(0, Math.floor((safeNumber(current.srttMs ?? current.latencyMs, 0) * 7 + normalized.latencyMs) / 8))
+              : safeNumber(current.srttMs ?? current.latencyMs, 0),
           handshakeDurationMs: metricIncludes(metric, ['handshakeDurationMs', 'handshakeMs', 'handshakeLatencyMs']) ? normalized.handshakeDurationMs : current.handshakeDurationMs,
           socketStability: metricIncludes(metric, ['socketStability', 'socketStabilityScore', 'stability']) ? normalized.socketStability : current.socketStability,
           socketStabilityObserved: Boolean(current.socketStabilityObserved || normalized.socketStabilityObserved),
@@ -404,6 +419,12 @@ export function createPeerScorer(options = {}) {
     return safeNumber(peer.score ?? scorePeer(peer), 0) < minScore
   }
 
+  function requestTimeout(peerOrId) {
+    const peer = typeof peerOrId === 'string' ? state.peers.get(peerOrId) : peerOrId
+    const metric = (peer ? metricFor(peer) : null) || (typeof peerOrId === 'string' ? metrics.get(peerOrId) : null) || peer?.performance || peerOrId?.metrics || {}
+    return timeoutFromSrtt(metric.srttMs ?? metric.latencyMs ?? 1000)
+  }
+
   function evictLowPerformers(options = {}) {
     const evicted = []
     for (const peer of Array.from(state.peers.values())) {
@@ -435,6 +456,7 @@ export function createPeerScorer(options = {}) {
     createPerformanceDiffStream: createPeerMetricDiffStream,
     rankPeers,
     shouldEvict,
+    requestTimeout,
     evictLowPerformers,
     subscribe,
     snapshot,

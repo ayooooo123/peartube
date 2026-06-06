@@ -9,7 +9,7 @@ import Corestore from 'corestore'
 import HyperDB from 'hyperdb'
 
 import { decode, encode } from '../lib/archive-schema.js'
-import { archiveKey, readArchiveMapping, writeArchiveMapping } from '../lib/archive-writer.js'
+import { archiveKey, ensureCanonicalArchiveCore, readArchiveMapping, writeArchiveMapping } from '../lib/archive-writer.js'
 import publicDbDefinition from '../src/channel/public-hyperdb-spec/hyperdb/index.js'
 
 const fileHash = b4a.alloc(32, 1)
@@ -19,6 +19,7 @@ const secondCoreKey = b4a.alloc(32, 3)
 function sampleMapping(overrides = {}) {
   return {
     fileHash,
+    hypercoreKey: coreKey,
     sourceId: 'youtube:dQw4w9WgXcQ',
     variants: [
       {
@@ -65,7 +66,7 @@ test('archive schema encodes compact file mappings and decodes canonical objects
   const decoded = decode(encoded)
 
   assert.ok(b4a.isBuffer(encoded))
-  assert.equal(encoded.byteLength, 93)
+  assert.equal(encoded.byteLength, 125)
   assert.deepEqual(decoded, mapping)
 })
 
@@ -162,7 +163,8 @@ test('archive writer serializes upserts and merges variants without dropping exi
     await Promise.all([
       writeArchiveMapping(db, fileHash, {
         sourceId: 'youtube:dQw4w9WgXcQ',
-        variants: [{ resolution: '720p', coreKey: secondCoreKey, startBlock: 43, endBlock: 70 }],
+        hypercoreKey: coreKey,
+        variants: [{ resolution: '720p', coreKey, startBlock: 43, endBlock: 70 }],
       }),
       writeArchiveMapping(db, fileHash, {
         sourceId: 'youtube:dQw4w9WgXcQ',
@@ -173,5 +175,91 @@ test('archive writer serializes upserts and merges variants without dropping exi
     const stored = await readArchiveMapping(db, fileHash)
     assert.equal(stored.variants.length, 3)
     assert.deepEqual(stored.variants.map((variant) => variant.resolution), ['1080p', '720p', '480p'])
+  })
+})
+
+test('archive writer rejects attempts to remap a content hash to another hypercore key', async () => {
+  await withHyperDb(async (db) => {
+    await writeArchiveMapping(db, fileHash, {
+      sourceId: 'youtube:dQw4w9WgXcQ',
+      variants: [{ resolution: '1080p', coreKey, startBlock: 7, endBlock: 42 }],
+    })
+
+    await assert.rejects(
+      writeArchiveMapping(db, fileHash, {
+        sourceId: 'youtube:dQw4w9WgXcQ',
+        hypercoreKey: secondCoreKey,
+        variants: [{ resolution: '720p', coreKey: secondCoreKey, startBlock: 43, endBlock: 70 }],
+      }),
+      /canonical hypercore key/
+    )
+  })
+})
+
+test('ensureCanonicalArchiveCore joins an existing archive core instead of creating a duplicate', async () => {
+  await withHyperDb(async (db) => {
+    await writeArchiveMapping(db, fileHash, {
+      sourceId: 'youtube:dQw4w9WgXcQ',
+      variants: [{ resolution: 'original', coreKey, startBlock: 0, endBlock: 1 }],
+    })
+
+    let created = 0
+    const joined = []
+    const store = {
+      get(opts) {
+        assert.deepEqual(opts, { key: coreKey })
+        return { key: coreKey, discoveryKey: b4a.alloc(32, 9), ready: async () => {} }
+      },
+    }
+    const swarm = {
+      join(topic, opts) {
+        joined.push({ topic, opts })
+        return { flushed: async () => {} }
+      },
+    }
+
+    const resolved = await ensureCanonicalArchiveCore(db, fileHash, {
+      store,
+      swarm,
+      createCore: async () => { created += 1; return { key: secondCoreKey, ready: async () => {} } },
+    })
+
+    assert.equal(resolved.created, false)
+    assert.equal(created, 0)
+    assert.deepEqual(resolved.mapping.hypercoreKey, coreKey)
+    assert.equal(joined.length, 1)
+    assert.deepEqual(joined[0].opts, { server: true, client: true })
+  })
+})
+
+test('ensureCanonicalArchiveCore creates and announces exactly one canonical core for new content', async () => {
+  await withHyperDb(async (db) => {
+    let created = 0
+    const joined = []
+    const canonicalCore = { key: secondCoreKey, discoveryKey: b4a.alloc(32, 8), length: 5, ready: async () => {} }
+    const store = { get() { throw new Error('store.get should not be used when createCore is supplied') } }
+    const swarm = {
+      join(topic, opts) {
+        joined.push({ topic, opts })
+        return { flushed: async () => {} }
+      },
+    }
+
+    const resolved = await ensureCanonicalArchiveCore(db, fileHash, {
+      store,
+      swarm,
+      metadata: { sourceId: 'youtube:dQw4w9WgXcQ' },
+      createCore: async ({ name }) => {
+        created += 1
+        assert.equal(name, `archives/${b4a.toString(fileHash, 'hex')}`)
+        return canonicalCore
+      },
+    })
+
+    assert.equal(resolved.created, true)
+    assert.equal(created, 1)
+    assert.deepEqual(resolved.mapping.hypercoreKey, secondCoreKey)
+    assert.deepEqual((await readArchiveMapping(db, fileHash)).hypercoreKey, secondCoreKey)
+    assert.equal(joined.length, 1)
   })
 })

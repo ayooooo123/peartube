@@ -65,6 +65,7 @@ export function normalize(mapping) {
 
   return {
     fileHash: fixed32(mapping.fileHash, 'fileHash'),
+    hypercoreKey: fixed32(mapping.hypercoreKey ?? mapping.coreKey ?? mapping.variants?.[0]?.coreKey, 'hypercoreKey'),
     sourceId: mapping.sourceId,
     variants: mapping.variants.map(normalizeVariant),
   }
@@ -96,17 +97,20 @@ const variantCodec = {
 export const fileMappingCodec = {
   preencode(state, mapping) {
     c.fixed32.preencode(state, mapping.fileHash)
+    c.fixed32.preencode(state, mapping.hypercoreKey)
     c.string.preencode(state, mapping.sourceId)
     c.array(variantCodec).preencode(state, mapping.variants)
   },
   encode(state, mapping) {
     c.fixed32.encode(state, mapping.fileHash)
+    c.fixed32.encode(state, mapping.hypercoreKey)
     c.string.encode(state, mapping.sourceId)
     c.array(variantCodec).encode(state, mapping.variants)
   },
   decode(state) {
     return {
       fileHash: c.fixed32.decode(state),
+      hypercoreKey: c.fixed32.decode(state),
       sourceId: c.string.decode(state),
       variants: c.array(variantCodec).decode(state),
     }

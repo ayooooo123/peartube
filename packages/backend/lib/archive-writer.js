@@ -41,8 +41,23 @@ function variantId(variant) {
   return `${variant.resolution}\0${b4a.toString(variant.coreKey, 'hex')}\0${variant.startBlock}`
 }
 
+function toCoreKeyBuffer(coreKey) {
+  if (!coreKey) throw new TypeError('hypercoreKey is required')
+  const buffer = b4a.isBuffer(coreKey)
+    ? coreKey
+    : typeof coreKey === 'string'
+      ? b4a.from(coreKey, 'hex')
+      : b4a.from(coreKey)
+  if (buffer.byteLength !== 32) throw new RangeError('hypercoreKey must be exactly 32 bytes')
+  return buffer
+}
+
 function mergeMappings(existing, next) {
   if (!existing) return next
+
+  if (!b4a.equals(existing.hypercoreKey, next.hypercoreKey)) {
+    throw new Error('archive mapping already has a canonical hypercore key for this content hash')
+  }
 
   const variants = new Map()
   for (const variant of existing.variants) variants.set(variantId(variant), variant)
@@ -50,9 +65,47 @@ function mergeMappings(existing, next) {
 
   return normalize({
     fileHash: next.fileHash,
+    hypercoreKey: existing.hypercoreKey,
     sourceId: next.sourceId || existing.sourceId,
     variants: [...variants.values()],
   })
+}
+
+function canonicalVariantFor(core, metadata = {}) {
+  const key = toCoreKeyBuffer(core?.key || metadata.hypercoreKey || metadata.coreKey || metadata.variants?.[0]?.coreKey)
+  const length = Number.isSafeInteger(core?.length) ? core.length : Number(metadata.endBlock || metadata.length || 0)
+  return {
+    resolution: metadata.resolution || metadata.variant || 'original',
+    coreKey: key,
+    startBlock: Number.isSafeInteger(metadata.startBlock) ? metadata.startBlock : 0,
+    endBlock: Number.isSafeInteger(metadata.endBlock) ? metadata.endBlock : Math.max(0, length),
+  }
+}
+
+async function readyCore(core) {
+  if (core && typeof core.ready === 'function') await core.ready()
+  return core
+}
+
+function archiveCoreName(fileHash) {
+  return `archives/${b4a.toString(toHashBuffer(fileHash), 'hex')}`
+}
+
+function openCoreByKey(store, key) {
+  if (!store || typeof store.get !== 'function') throw new TypeError('store with get() is required')
+  return store.get({ key: toCoreKeyBuffer(key) })
+}
+
+function createCoreForHash(store, fileHash) {
+  if (!store || typeof store.get !== 'function') throw new TypeError('store with get() is required')
+  return store.get({ name: archiveCoreName(fileHash) })
+}
+
+async function joinCoreSwarm(swarm, core, opts = {}) {
+  if (!swarm || typeof swarm.join !== 'function' || !core?.discoveryKey) return null
+  const handle = swarm.join(core.discoveryKey, { server: true, client: true, ...opts })
+  if (handle && typeof handle.flushed === 'function') await handle.flushed().catch(() => {})
+  return handle
 }
 
 async function withWriteLock(db, key, fn) {
@@ -142,6 +195,41 @@ export async function writeArchiveMapping(db, fileHash, metadata, opts = {}) {
     const { mapping, value } = await writeWithTransaction(db, key, next, merge)
 
     return { key, mapping, value }
+  })
+}
+
+export async function ensureCanonicalArchiveCore(db, fileHash, options = {}) {
+  const fileHashBuffer = toHashBuffer(fileHash)
+  const key = archiveKey(fileHashBuffer)
+  const store = options.store
+  const swarm = options.swarm
+  const metadata = options.metadata || {}
+
+  return withWriteLock(db, key, async () => {
+    const existing = await readExisting(db, key)
+    if (existing?.hypercoreKey) {
+      const core = await readyCore(openCoreByKey(store, existing.hypercoreKey))
+      const discoveryHandle = await joinCoreSwarm(swarm, core, options.swarmOptions)
+      return { key, mapping: existing, core, discoveryHandle, created: false }
+    }
+
+    const core = await readyCore(
+      typeof options.createCore === 'function'
+        ? await options.createCore({ fileHash: fileHashBuffer, name: archiveCoreName(fileHashBuffer) })
+        : createCoreForHash(store, fileHashBuffer)
+    )
+    const hypercoreKey = toCoreKeyBuffer(core.key)
+    const next = normalize({
+      fileHash: fileHashBuffer,
+      hypercoreKey,
+      sourceId: metadata.sourceId || options.sourceId || 'archive:unknown',
+      variants: Array.isArray(metadata.variants) && metadata.variants.length > 0
+        ? metadata.variants.map((variant) => ({ ...variant, coreKey: variant.coreKey || hypercoreKey }))
+        : [canonicalVariantFor(core, { ...metadata, hypercoreKey })],
+    })
+    const { mapping, value } = await writeWithTransaction(db, key, next, false)
+    const discoveryHandle = await joinCoreSwarm(swarm, core, options.swarmOptions)
+    return { key, mapping, value, core, discoveryHandle, created: true }
   })
 }
 

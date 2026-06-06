@@ -185,6 +185,7 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   const peer = scorer.registerPeer({ peerId: 'peer-a', identity: { validProofCount: 2 }, descriptor: { descriptorId: 'feed-a' } })
   await scorer.recordPerformance(peer.peerId, {
     latencyMs: 40,
+    srttMs: 80,
     handshakeSuccesses: 4,
     handshakes: 4,
     udxThroughputBps: 1024 * 1024,
@@ -194,6 +195,8 @@ test('peer scorer persists compact performance metrics and updates reactive scor
   assert.equal(puts[0][0], 'universal-core:peer-metric:peer-a')
   assert.equal(puts[0][1] instanceof Uint8Array, true)
   assert.equal(decodePeerMetric(puts[0][1]).udxThroughputBps, 1024 * 1024)
+  assert.equal(decodePeerMetric(puts[0][1]).srttMs, 80)
+  assert.equal(scorer.requestTimeout(peer.peerId), 300)
   assert.equal(decodePeerMetric(puts[0][1]).socketStabilityObserved, false)
   assert.equal(decodePeerMetric(encodePeerMetric({ peerId: 'peer-unknown', latencyMs: 10, socketStability: 0, socketStabilityObserved: false })).socketStabilityObserved, false)
 

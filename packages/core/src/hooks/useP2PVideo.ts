@@ -112,6 +112,7 @@ export function useP2PVideo(
       return;
     }
 
+    cleanup();
     const requestId = requestGenerationRef.current + 1;
     requestGenerationRef.current = requestId;
     const isCurrentRequest = () => requestGenerationRef.current === requestId;
@@ -168,17 +169,27 @@ export function useP2PVideo(
 
       // Start polling for stats if not already complete
       if (!initialStats.isComplete) {
-        pollIntervalRef.current = setInterval(async () => {
+        const interval = setInterval(async () => {
+          const stopThisInterval = () => {
+            clearInterval(interval);
+            if (pollIntervalRef.current === interval) {
+              pollIntervalRef.current = null;
+            }
+          };
+
           // Check timeout
           if (requestGenerationRef.current !== requestId || Date.now() - startTimeRef.current > opts.pollTimeout) {
-            cleanup();
+            stopThisInterval();
             return;
           }
 
           try {
             const stats = await service.getVideoStats(channelKey, videoPath);
 
-            if (requestGenerationRef.current !== requestId) return;
+            if (requestGenerationRef.current !== requestId) {
+              stopThisInterval();
+              return;
+            }
 
             setState(prev => ({
               ...prev,
@@ -188,13 +199,14 @@ export function useP2PVideo(
 
             // Stop polling when complete
             if (stats.isComplete) {
-              cleanup();
+              stopThisInterval();
             }
           } catch (err) {
             console.error('[useP2PVideo] Stats polling error:', err);
             // Continue polling on transient errors
           }
         }, opts.pollInterval);
+        pollIntervalRef.current = interval;
       }
     } catch (err) {
       if (!isCurrentRequest()) return;

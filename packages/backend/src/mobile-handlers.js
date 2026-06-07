@@ -238,8 +238,8 @@ export function attachMobileHandlers(B, deps) {
 
   B.getSeedingStatus = async () => normalizeSeedingStatus(await api.getSeedingStatus())
   B.setSeedingConfig = async (r) => { await api.setSeedingConfig(r.config || {}); return { success: true } }
-  B.pinChannel = async (r) => { await api.pinChannel(r.channelKey); return { success: true } }
-  B.unpinChannel = async (r) => { await api.unpinChannel(r.channelKey); return { success: true } }
+  B.pinChannel = async (r) => api.pinChannel(r.channelKey)
+  B.unpinChannel = async (r) => api.unpinChannel(r.channelKey)
   B.getPinnedChannels = async () => ({ channels: (await api.getPinnedChannels()).channels || [] })
   B.getStorageStats = async () => api.getStorageStats()
   B.setStorageLimit = async (r) => api.setStorageLimit(r.maxGB)

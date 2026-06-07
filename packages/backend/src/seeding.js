@@ -39,6 +39,16 @@ function mergeSeedReason(existingReason, nextReason) {
     : existingReason
 }
 
+function hasFiniteByteLength(blobInfo) {
+  return Number.isFinite(Number(blobInfo?.byteLength)) && Number(blobInfo.byteLength) >= 0
+}
+
+function normalizeByteLength(blobInfo, fallback = 0) {
+  return hasFiniteByteLength(blobInfo)
+    ? Math.round(Number(blobInfo.byteLength))
+    : fallback
+}
+
 export class SeedingAuthorizationError extends Error {
   constructor(message = 'Unauthorized seeding mutation') {
     super(message)
@@ -152,7 +162,7 @@ export class SeedingManager {
         ...existing,
         reason: mergeSeedReason(existing.reason, reason),
         blocks: blobInfo?.blockLength || existing.blocks || 0,
-        bytes: blobInfo?.byteLength || existing.bytes || 0,
+        bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
         publicBeeKey: blobInfo?.publicBeeKey || existing.publicBeeKey || null,
         blobId: blobInfo?.blobId || existing.blobId || null,
         blobsCoreKey: blobInfo?.blobsCoreKey || existing.blobsCoreKey || null,
@@ -176,7 +186,7 @@ export class SeedingManager {
       reason,
       addedAt: Date.now(),
       blocks: blobInfo?.blockLength || 0,
-      bytes: blobInfo?.byteLength || 0,
+      bytes: normalizeByteLength(blobInfo, 0),
       publicBeeKey: blobInfo?.publicBeeKey || null,
       blobId: blobInfo?.blobId || null,
       blobsCoreKey: blobInfo?.blobsCoreKey || null,
@@ -299,6 +309,28 @@ export class SeedingManager {
       total += seed.bytes || 0;
     }
     return total;
+  }
+
+  /**
+   * Update the locally cached byte accounting for an already tracked seed.
+   * This is cache bookkeeping, not an explicit channel/seeding mutation, so it
+   * can be driven by automatic playback downloads without an active identity.
+   * @param {string} driveKey
+   * @param {string} videoPath
+   * @param {number} byteLength
+   * @param {{ persist?: boolean }} [options]
+   */
+  async updateSeedCachedBytes(driveKey, videoPath, byteLength, options = {}) {
+    const key = `${driveKey}:${videoPath}`;
+    const seed = this.activeSeeds.get(key);
+    if (!seed) return false;
+
+    const nextBytes = Math.max(0, Math.round(Number(byteLength) || 0));
+    if (nextBytes === (seed.bytes || 0)) return false;
+
+    this.activeSeeds.set(key, { ...seed, bytes: nextBytes });
+    if (options.persist === true) await this.persistSeeds();
+    return true;
   }
 
   /**
@@ -478,19 +510,22 @@ export class SeedingManager {
    */
   async setMaxStorageGB(gb, options = {}) {
     this.assertAuthorizedMutation(options)
+    const previousMaxStorageGB = this.config.maxStorageGB;
     if (gb < 1) gb = 1;
     if (gb > 100) gb = 100;
     this.config.maxStorageGB = gb;
     await this.metaDb.put('seeding-config', this.config);
     console.log('[SeedingManager] Set max storage to', gb, 'GB');
-    const partials = await this.clearDownloadIntents()
-    if (partials.clearedBlob) {
-      await collectCorestoreGarbage(this.store, {
-        label: 'partial download intent clear',
-        log: console.log
-      });
+    if (gb < previousMaxStorageGB) {
+      const partials = await this.clearDownloadIntents()
+      if (partials.clearedBlob) {
+        await collectCorestoreGarbage(this.store, {
+          label: 'partial download intent clear',
+          log: console.log
+        });
+      }
     }
-    // Enforce quota with new limit
+    // Enforce quota with the new limit after any lower-limit partial cleanup.
     await this.enforceQuota();
   }
 

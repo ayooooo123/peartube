@@ -380,6 +380,23 @@ export function createApi({
     return previews.find((video) => normalizeVideoId(video?.id || video?.path) === targetId) || null
   }
 
+  function resolvePlaybackBlobRef(driveKey, videoId, publicBeeKey, blobId, blobsCoreKey, mimeType) {
+    if (blobId && blobsCoreKey) {
+      return { blobId, blobsCoreKey, mimeType: mimeType || 'video/mp4' }
+    }
+
+    const previewVideo = getPreviewVideoFromFeed(driveKey, videoId, publicBeeKey)
+    if (!previewVideo?.blobId || !previewVideo?.blobsCoreKey) {
+      return { blobId, blobsCoreKey, mimeType }
+    }
+
+    return {
+      blobId: previewVideo.blobId,
+      blobsCoreKey: previewVideo.blobsCoreKey,
+      mimeType: mimeType || previewVideo.mimeType || 'video/mp4',
+    }
+  }
+
   // ============================================
   // Download Intent Persistence Helpers
   // ============================================
@@ -1017,13 +1034,13 @@ export function createApi({
     async getVideoUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
 
-      // INSTANT PATH: If we already have blobId and blobsCoreKey, skip metadata fetch entirely.
-      if (blobId && blobsCoreKey) {
+      const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
+      if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey) {
         console.log('[API] getVideoUrl: INSTANT - using direct blobId/blobsCoreKey');
         return blobPlayback.resolveDirectBlobUrl({
-          blobsCoreKey,
-          blobId,
-          mimeType: mimeType || 'video/mp4',
+          blobsCoreKey: playbackBlobRef.blobsCoreKey,
+          blobId: playbackBlobRef.blobId,
+          mimeType: playbackBlobRef.mimeType || 'video/mp4',
         })
       }
 
@@ -1053,14 +1070,16 @@ export function createApi({
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
 
+      const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
+
       return blobPlayback.preparePlayback({
         driveKey,
         videoPath,
         publicBeeKey,
-        blobId,
-        blobsCoreKey,
-        mimeType,
-        warmSelectedBlob: Boolean(blobId && blobsCoreKey),
+        blobId: playbackBlobRef?.blobId,
+        blobsCoreKey: playbackBlobRef?.blobsCoreKey,
+        mimeType: playbackBlobRef?.mimeType,
+        warmSelectedBlob: Boolean(playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey),
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),

@@ -73,6 +73,98 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
   ])
 })
 
+test('preparePlayback resolves feed preview blob refs when playback request omits direct identity', async (t) => {
+  const driveKey = '12'.repeat(32)
+  const publicBeeKey = '34'.repeat(32)
+  const blobsCoreKey = '56'.repeat(32)
+  const blobId = '0:4:0:2048'
+  const calls = []
+  const core = {
+    discoveryKey: Buffer.from('discovery-key'),
+    peers: [{ remotePublicKey: Buffer.from('peer-key') }],
+    async ready() {
+      calls.push(['core.ready'])
+    },
+    update() {
+      calls.push(['core.update'])
+      return Promise.resolve()
+    },
+    async has(start, end) {
+      calls.push(['core.has', start, end])
+      return start === 0 && end === 1
+    },
+  }
+
+  const api = createApi({
+    ctx: {
+      blobServer: {
+        port: 60023,
+        getLink(_keyBuffer, options) {
+          calls.push(['getLink', options.blob, options.type])
+          return 'http://127.0.0.1:60023/feed-video.webm'
+        },
+      },
+      store: {
+        get() {
+          calls.push(['store.get'])
+          return core
+        },
+      },
+      swarm: {
+        join(discoveryKey) {
+          calls.push(['swarm.join', discoveryKey])
+          return { flushed: () => Promise.resolve() }
+        },
+      },
+    },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey,
+          publicBeeKey,
+          source: 'peer',
+          peerCount: 2,
+          previewVideos: [{
+            id: 'feed-video',
+            title: 'Feed video',
+            blobId,
+            blobsCoreKey,
+            mimeType: 'video/webm',
+            availability: 'playable',
+          }],
+        }]
+      },
+      getStats() {
+        return { totalEntries: 1, hiddenCount: 0, peerCount: 2 }
+      },
+    },
+    loadPublicBee: async () => {
+      throw new Error('public bee should not be required for preview playback')
+    },
+    loadChannel: async () => {
+      throw new Error('channel should not be required for preview playback')
+    },
+  })
+
+  api.prefetchVideo = async (...args) => {
+    calls.push(['prefetchVideo', args])
+  }
+  api.getVideoStats = (...args) => {
+    calls.push(['getVideoStats', args])
+    return { peerCount: 1 }
+  }
+
+  const result = await api.preparePlayback(driveKey, 'feed-video', publicBeeKey)
+
+  t.is(result.url, 'http://127.0.0.1:60023/feed-video.webm')
+  t.is(result.peerWarmupStarted, true)
+  t.is(result.selectedBlobWarmup.blobId, blobId)
+  t.is(result.selectedBlobWarmup.blobsCoreKey, blobsCoreKey)
+  t.is(result.selectedBlobWarmup.readyForPlayback, true)
+  t.ok(calls.some((call) => call[0] === 'getLink' && call[2] === 'video/webm'), 'uses feed preview mime type for the blob-server URL')
+  t.ok(calls.some((call) => call[0] === 'swarm.join'), 'joins selected blob discovery before returning playback diagnostics')
+})
+
 test('prefetchNextVideos lists channel videos with the correct signature', async (t) => {
   const api = createApi({ ctx: {} })
   const calls = []

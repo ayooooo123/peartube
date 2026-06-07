@@ -68,6 +68,19 @@ function hasDirectBlobRef(video) {
     typeof video?.blobsCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(video.blobsCoreKey)
 }
 
+function mergeVideoPlaybackIdentity(previous, incoming) {
+  if (!previous) return incoming
+  if (!incoming) return previous
+  return {
+    ...incoming,
+    path: incoming.path || previous.path,
+    publicBeeKey: incoming.publicBeeKey || previous.publicBeeKey,
+    blobId: incoming.blobId || previous.blobId,
+    blobsCoreKey: incoming.blobsCoreKey || previous.blobsCoreKey,
+    mimeType: incoming.mimeType || previous.mimeType,
+  }
+}
+
 function canUseFeedPreviewVideos(entry, identityDriveKey) {
   const channelKey = entry?.channelKey || entry?.driveKey || null
   if (!channelKey) return false
@@ -222,7 +235,7 @@ export function mergeHydratedFeedVideos({
     if (!identifier) continue
     const key = `${channelKey || ''}:${identifier}`
     byKey.set(key, {
-      ...video,
+      ...mergeVideoPlaybackIdentity(byKey.get(key), video),
       __feedSource: video?.__feedSource === 'preview' ? 'preview' : 'hydrated',
     })
   }

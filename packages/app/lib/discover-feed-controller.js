@@ -19,7 +19,8 @@ export function mergeUniqueFeedVideos(previousVideos = [], incomingVideos = [], 
     const channelKey = video.channelKey || video.driveKey || ''
     const identifier = video.id || video.path || ''
     if (!identifier) continue
-    byKey.set(`${channelKey}:${identifier}`, video)
+    const key = `${channelKey}:${identifier}`
+    byKey.set(key, mergeVideoPlaybackIdentity(byKey.get(key), video))
   }
 
   return Array.from(byKey.values()).slice(0, limit)
@@ -32,6 +33,19 @@ function hasNonEmpty(value) {
 
 function getEntryKey(entry) {
   return entry?.channelKey || entry?.driveKey || ''
+}
+
+function mergeVideoPlaybackIdentity(previous, incoming) {
+  if (!previous) return incoming
+  if (!incoming) return previous
+  return {
+    ...incoming,
+    path: incoming.path || previous.path,
+    publicBeeKey: incoming.publicBeeKey || previous.publicBeeKey,
+    blobId: incoming.blobId || previous.blobId,
+    blobsCoreKey: incoming.blobsCoreKey || previous.blobsCoreKey,
+    mimeType: incoming.mimeType || previous.mimeType,
+  }
 }
 
 export function getVerticalFeedHydrationKey(entry) {

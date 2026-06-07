@@ -371,6 +371,51 @@ test('mergeHydratedFeedVideos preserves preview-backed cards when channel hydrat
   ])
 })
 
+test('mergeHydratedFeedVideos preserves feed preview blob refs when hydration omits them', () => {
+  const merged = mergeHydratedFeedVideos({
+    previousVideos: [
+      {
+        id: 'shared-video',
+        channelKey: 'remote-a',
+        uploadedAt: 30,
+        availability: 'playable',
+        blobId: '0:4:0:1024',
+        blobsCoreKey: 'aa'.repeat(32),
+        mimeType: 'video/mp4',
+        publicBeeKey: 'bee-preview',
+        __feedSource: 'preview',
+      },
+    ],
+    incomingVideos: [
+      {
+        id: 'shared-video',
+        channelKey: 'remote-a',
+        uploadedAt: 40,
+        availability: 'playable',
+        title: 'Hydrated title',
+      },
+    ],
+    refreshedChannelKeys: ['remote-a'],
+    feedEntries: [
+      {
+        driveKey: 'remote-a',
+        manifestUpdatedAt: 123,
+        previewVideos: [{ id: 'shared-video', availability: 'playable' }],
+      },
+    ],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].title, 'Hydrated title')
+  assert.equal(merged[0].blobId, '0:4:0:1024')
+  assert.equal(merged[0].blobsCoreKey, 'aa'.repeat(32))
+  assert.equal(merged[0].mimeType, 'video/mp4')
+  assert.equal(merged[0].publicBeeKey, 'bee-preview')
+  assert.equal(merged[0].__feedSource, 'hydrated')
+})
+
 test('isConfirmedFeedHydrationResult only treats empty results as authoritative when the feed manifest explicitly resolved empty', () => {
   assert.equal(isConfirmedFeedHydrationResult({
     entry: { manifestUpdatedAt: 0, previewVideos: [] },

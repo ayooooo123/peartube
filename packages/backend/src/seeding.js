@@ -32,6 +32,10 @@ function normalizeProtectedSeedKeys(keys) {
   return new Set()
 }
 
+function createNoopRelease() {
+  return () => {}
+}
+
 function mergeSeedReason(existingReason, nextReason) {
   const priority = { watched: 1, subscribed: 2, pinned: 3 }
   return (priority[nextReason] || 0) > (priority[existingReason] || 0)
@@ -64,7 +68,7 @@ export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
    * @param {import('hyperbee')} metaDb - Metadata database
-   * @param {{ getDiskUsageBytes?: () => number | Promise<number> }} [options]
+   * @param {{ getDiskUsageBytes?: () => number | Promise<number>, isCacheClearBlocked?: () => boolean }} [options]
    */
   constructor(store, metaDb, options = {}) {
     this.store = store;
@@ -74,8 +78,13 @@ export class SeedingManager {
     this.getDiskUsageBytes = typeof options.getDiskUsageBytes === 'function'
       ? options.getDiskUsageBytes
       : (typeof store?.getDiskUsageBytes === 'function' ? () => store.getDiskUsageBytes() : null);
+    this.isCacheClearBlocked = typeof options.isCacheClearBlocked === 'function'
+      ? options.isCacheClearBlocked
+      : null;
     /** @type {Map<string, SeedInfo>} key: `${driveKey}:${videoPath}` -> seed info */
     this.activeSeeds = new Map();
+    /** @type {Map<string, number>} blobsCoreKey -> active playback/prefetch retain count */
+    this.protectedBlobCores = new Map();
     /** @type {Set<string>} driveKeys that are pinned (always seed) */
     this.pinnedChannels = new Set();
     /** @type {SeedingConfig} */
@@ -103,6 +112,43 @@ export class SeedingManager {
   assertAuthorizedForSeed(driveKey, reason, options = {}) {
     if (reason === 'watched' && options.userInitiated !== true) return
     this.assertAuthorizedMutation(options)
+  }
+
+  retainBlobRef(blobInfo) {
+    const ref = normalizeSeedBlobRef(blobInfo)
+    if (!ref) return createNoopRelease()
+
+    const key = ref.blobsCoreKey
+    this.protectedBlobCores.set(key, (this.protectedBlobCores.get(key) || 0) + 1)
+
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const nextCount = (this.protectedBlobCores.get(key) || 0) - 1
+      if (nextCount > 0) {
+        this.protectedBlobCores.set(key, nextCount)
+      } else {
+        this.protectedBlobCores.delete(key)
+      }
+    }
+  }
+
+  isSeedBlobProtected(seed) {
+    const ref = normalizeSeedBlobRef(seed)
+    return Boolean(ref && this.protectedBlobCores.has(ref.blobsCoreKey))
+  }
+
+  isCacheClearBlockedNow() {
+    try {
+      return Boolean(this.isCacheClearBlocked?.())
+    } catch {
+      return false
+    }
+  }
+
+  shouldSkipSeedClear(seed) {
+    return this.isCacheClearBlockedNow() || this.isSeedBlobProtected(seed)
   }
 
   /**
@@ -369,7 +415,7 @@ export class SeedingManager {
     for (const seed of seeds) {
       if (quotaBytes <= maxBytes) break;
       if (seed.reason === 'pinned') continue; // Never remove pinned
-      if (protectedKeys.has(seed.key)) continue;
+      if (protectedKeys.has(seed.key) || this.shouldSkipSeedClear(seed)) continue;
 
       this.activeSeeds.delete(seed.key);
       clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
@@ -432,7 +478,7 @@ export class SeedingManager {
       const intent = entry?.value
       if (!intent?.driveKey || !intent?.videoPath) continue
       const seedKey = `${intent.driveKey}:${intent.videoPath}`
-      if (excludeKeys.has(seedKey)) continue
+      if (excludeKeys.has(seedKey) || this.shouldSkipSeedClear(intent)) continue
       entries.push({ key: entry.key, seedKey, intent })
     }
 
@@ -584,7 +630,7 @@ export class SeedingManager {
     let clearedBlob = false;
 
     for (const [key, seed] of this.activeSeeds.entries()) {
-      if (seed.reason !== 'pinned') {
+      if (seed.reason !== 'pinned' && !this.shouldSkipSeedClear(seed)) {
         clearedBytes += seed.bytes || 0;
         toRemove.push(key);
       }

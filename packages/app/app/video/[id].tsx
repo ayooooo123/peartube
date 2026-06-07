@@ -486,9 +486,17 @@ function MobileVideoPlayerScreen() {
         if (Platform.OS !== 'web' || isPear) {
           void rpc.preparePlayback(playbackRequest).then((result: any) => {
             if (!mountedRef.current || loadGenerationRef.current !== generation) return
-            if (result?.url) {
-              if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+            const selectedBlobWarmup = result?.selectedBlobWarmup
+            const waitingForSelectedBlob = Boolean(selectedBlobWarmup && selectedBlobWarmup.readyForPlayback === false)
+            if (result?.url && !waitingForSelectedBlob) {
+              if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(selectedBlobWarmup?.readyForPlayback))
               loadAndPlayVideo(videoData, result.url)
+            } else if (waitingForSelectedBlob) {
+              setTimeout(() => {
+                if (mountedRef.current && loadGenerationRef.current === generation) {
+                  setVideoLoaded(false)
+                }
+              }, 1500)
             }
             if (result?.stats) {
               setLocalStats(result.stats as VideoStats)
@@ -507,8 +515,10 @@ function MobileVideoPlayerScreen() {
       const result = await rpc.preparePlayback(playbackRequest)
       if (!mountedRef.current || loadGenerationRef.current !== generation) return
 
-      if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+      const selectedBlobWarmup = result?.selectedBlobWarmup
+      const waitingForSelectedBlob = Boolean(selectedBlobWarmup && selectedBlobWarmup.readyForPlayback === false)
+      if (result?.url && !waitingForSelectedBlob) {
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(selectedBlobWarmup?.readyForPlayback))
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 
@@ -521,6 +531,16 @@ function MobileVideoPlayerScreen() {
             scheduleStatsPolling(500)
           }
         }
+      } else if (waitingForSelectedBlob) {
+        if (result?.stats) {
+          setLocalStats(result.stats as VideoStats)
+        }
+        scheduleStatsPolling(500)
+        setTimeout(() => {
+          if (mountedRef.current && loadGenerationRef.current === generation) {
+            setVideoLoaded(false)
+          }
+        }, 1500)
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)

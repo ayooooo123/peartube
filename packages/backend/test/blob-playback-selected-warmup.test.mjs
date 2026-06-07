@@ -103,3 +103,24 @@ test('preparePlayback returns URL with explicit selected blob diagnostics when n
   t.is(result.selectedBlobWarmup.hasHeadBlock, false)
   t.is(result.selectedBlobWarmup.readyForPlayback, false)
 })
+
+test('preparePlayback does not report selected blob ready from peers alone', async (t) => {
+  const { ctx } = createCtx({ peerCount: 1, hasHeadBlock: false })
+  const service = new BlobPlaybackService({ ctx })
+
+  const result = await service.preparePlayback({
+    driveKey: 'channel-key',
+    videoPath: 'videos/king.mp4',
+    publicBeeKey: 'public-bee-key',
+    blobId: VALID_BLOB,
+    blobsCoreKey: VALID_KEY,
+    mimeType: 'video/mp4',
+    warmSelectedBlob: true,
+    selectedBlobWarmupTimeoutMs: 25,
+  })
+
+  t.is(result.url, VALID_URL)
+  t.is(result.selectedBlobWarmup.peerCount, 1)
+  t.is(result.selectedBlobWarmup.hasHeadBlock, false)
+  t.is(result.selectedBlobWarmup.readyForPlayback, false)
+})

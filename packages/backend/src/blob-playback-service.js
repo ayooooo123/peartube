@@ -159,7 +159,7 @@ export class BlobPlaybackService {
       const peers = getCorePeerList(blobsCore)
       diagnostics.peerCount = getCorePeerCount(blobsCore)
       diagnostics.blobPeerIds = peers.map(getPeerKey).filter(Boolean)
-      diagnostics.readyForPlayback = diagnostics.hasHeadBlock || diagnostics.peerCount > 0
+      diagnostics.readyForPlayback = diagnostics.hasHeadBlock
       return diagnostics
     } catch (err) {
       diagnostics.error = err?.message || String(err)

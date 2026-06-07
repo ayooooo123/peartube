@@ -210,6 +210,8 @@ test('vertical discovery ignores stale preparePlayback completions after fast sw
   const playBlock = source.slice(source.indexOf('const playVideo = useCallback'), source.indexOf('useEffect(() => {\n    if (!activeVideo'))
 
   assert.match(source, /const playbackRequestSeqRef = useRef\(0\)/, 'Shorts playback should track request generations')
+  assert.match(source, /const activeVideoKeyRef = useRef<string \| null>\(null\)/, 'Shorts playback should compare delayed retries against the current active video key')
+  assert.match(source, /activeVideoKeyRef\.current = activeVideoKey/, 'Shorts active video key ref should stay current across renders')
   assert.match(playBlock, /const requestSeq = \+\+playbackRequestSeqRef\.current/, 'each playback attempt should get a newer generation id')
   assert.match(playBlock, /pendingPlayKeyRef\.current !== playKey \|\| playbackRequestSeqRef\.current !== requestSeq/, 'stale async preparePlayback completions should be ignored')
   assert.match(playBlock, /if \(isStalePlaybackRequest\(\)\) return/, 'resolved stale playback URLs must not attach to the active card')

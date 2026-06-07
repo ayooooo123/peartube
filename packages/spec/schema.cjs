@@ -337,11 +337,44 @@ ns.register({
 })
 
 ns.register({
+  name: 'playback-selected-blob-warmup',
+  fields: [
+    { name: 'requested', type: 'bool', required: false },
+    { name: 'resolved', type: 'bool', required: false },
+    { name: 'driveKey', type: 'string', required: false },
+    { name: 'videoPath', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'peerCount', type: 'uint', required: false },
+    { name: 'blobPeerIds', type: 'string', array: true },
+    { name: 'hasHeadBlock', type: 'bool', required: false },
+    { name: 'requiredStartupBlocks', type: 'uint', required: false },
+    { name: 'startupBlocks', type: 'uint', required: false },
+    { name: 'startupByteLength', type: 'uint', required: false },
+    { name: 'readyForPlayback', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'playback-peer-warmup',
+  fields: [
+    { name: 'peerCount', type: 'uint', required: false },
+    { name: 'retained', type: 'bool', required: false },
+    { name: 'timedOut', type: 'bool', required: false },
+    { name: 'elapsedMs', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
   name: 'prepare-playback-response',
   fields: [
     { name: 'url', type: 'string', required: true },
     { name: 'stats', type: '@peartube/video-stats', required: false },
-    { name: 'warmupStarted', type: 'bool', required: true }
+    { name: 'warmupStarted', type: 'bool', required: true },
+    { name: 'peerWarmupStarted', type: 'bool', required: false },
+    { name: 'selectedBlobWarmup', type: '@peartube/playback-selected-blob-warmup', required: false },
+    { name: 'peerWarmup', type: '@peartube/playback-peer-warmup', required: false }
   ]
 })
 

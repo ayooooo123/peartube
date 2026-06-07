@@ -84,7 +84,7 @@ function createRangeRequest({ method = 'GET', token = 'test-token' } = {}) {
   return { key, blob, req }
 }
 
-test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP GET range', async (t) => {
+test('prioritizeBlobServerRangeRequest starts a non-linear core download without closing the playback core', async (t) => {
   const calls = []
   const { key, blob, req } = createRangeRequest()
   const blobServer = {
@@ -113,6 +113,34 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   t.alike(result, { start: 14, end: 15, blocks: 1 })
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
+  t.is(calls.some((call) => call[0] === 'close'), false, 'cleanup should not close the blob-server playback core by default')
+})
+
+test('prioritizeBlobServerRangeRequest only closes the core when explicitly requested', async (t) => {
+  const calls = []
+  const { req } = createRangeRequest()
+  const blobServer = {
+    token: 'test-token',
+    async _getCore() {
+      return {
+        download() {
+          return {
+            done: () => Promise.resolve(),
+            destroy: () => calls.push(['destroy']),
+          }
+        },
+        close() {
+          calls.push(['close'])
+        },
+      }
+    },
+  }
+
+  await prioritizeBlobServerRangeRequest(blobServer, req, { readAheadBytes: 0, closeCoreOnCleanup: true })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  t.ok(calls.some((call) => call[0] === 'destroy'))
   t.ok(calls.some((call) => call[0] === 'close'))
 })
 

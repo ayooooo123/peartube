@@ -34,6 +34,32 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+const SELECTED_BLOB_STARTUP_WINDOW_BYTES = 2 * 1024 * 1024
+
+function getSelectedBlobStartupWindow(blob) {
+  const blockOffset = Number(blob?.blockOffset)
+  const blockLength = Number(blob?.blockLength)
+  const byteLength = Number(blob?.byteLength)
+  if (!Number.isInteger(blockOffset) || blockOffset < 0) return null
+  if (!Number.isInteger(blockLength) || blockLength <= 0) return null
+  if (!Number.isFinite(byteLength) || byteLength <= 0) return null
+
+  const bytesPerBlock = Math.max(1, byteLength / blockLength)
+  const startupByteLength = Math.min(byteLength, SELECTED_BLOB_STARTUP_WINDOW_BYTES)
+  const requiredStartupBlocks = Math.min(
+    blockLength,
+    Math.max(1, Math.ceil(startupByteLength / bytesPerBlock)),
+  )
+
+  return {
+    start: blockOffset,
+    end: blockOffset + requiredStartupBlocks,
+    bytesPerBlock,
+    startupByteLength,
+    requiredStartupBlocks,
+  }
+}
+
 export class BlobPlaybackService {
   constructor({ ctx }) {
     this.ctx = ctx
@@ -128,7 +154,9 @@ export class BlobPlaybackService {
       peerCount: 0,
       blobPeerIds: [],
       hasHeadBlock: false,
-      contiguousBlocks: 0,
+      requiredStartupBlocks: 0,
+      startupBlocks: 0,
+      startupByteLength: 0,
       readyForPlayback: false,
       error: null,
     }
@@ -149,17 +177,21 @@ export class BlobPlaybackService {
         ])
       } catch { /* best effort */ }
 
-      const start = ref.blob.blockOffset
-      const headEnd = Math.min(start + Math.max(1, ref.blob.blockLength || 1), start + 1)
-      try {
-        diagnostics.hasHeadBlock = Boolean(await blobsCore.has?.(start, headEnd))
-        diagnostics.contiguousBlocks = diagnostics.hasHeadBlock ? 1 : 0
-      } catch { /* best effort */ }
+      const startupWindow = getSelectedBlobStartupWindow(ref.blob)
+      if (startupWindow) {
+        diagnostics.requiredStartupBlocks = startupWindow.requiredStartupBlocks
+        diagnostics.startupByteLength = startupWindow.startupByteLength
+        try {
+          diagnostics.hasHeadBlock = Boolean(await blobsCore.has?.(startupWindow.start, startupWindow.start + 1))
+          const hasStartupWindow = Boolean(await blobsCore.has?.(startupWindow.start, startupWindow.end))
+          diagnostics.startupBlocks = hasStartupWindow ? startupWindow.requiredStartupBlocks : (diagnostics.hasHeadBlock ? 1 : 0)
+        } catch { /* best effort */ }
+      }
 
       const peers = getCorePeerList(blobsCore)
       diagnostics.peerCount = getCorePeerCount(blobsCore)
       diagnostics.blobPeerIds = peers.map(getPeerKey).filter(Boolean)
-      diagnostics.readyForPlayback = diagnostics.hasHeadBlock
+      diagnostics.readyForPlayback = diagnostics.requiredStartupBlocks > 0 && diagnostics.startupBlocks >= diagnostics.requiredStartupBlocks
       return diagnostics
     } catch (err) {
       diagnostics.error = err?.message || String(err)
@@ -248,7 +280,7 @@ export class BlobPlaybackService {
         selectedBlobWarmup,
         peerWarmup: await Promise.race([
           peerWarmup,
-          wait(0).then(() => ({ peerCount: 0, retained: false, timedOut: false })),
+          wait(250).then(() => ({ peerCount: 0, retained: false, timedOut: true, elapsedMs: 250 })),
         ]),
       }
     }

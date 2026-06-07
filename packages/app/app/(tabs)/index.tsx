@@ -112,6 +112,12 @@ function logTiming(label: string, startMs: number, details: Record<string, any> 
 
 // Detect Pear desktop vs mobile
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).PearWorkerClient || !!(window as any).bridge)
+const PLAYBACK_READINESS_RETRY_MS = 350
+const PLAYBACK_READINESS_MAX_RETRIES = 3
+
+function isSelectedBlobWarmupPending(result: any) {
+  return Boolean(result?.selectedBlobWarmup && result.selectedBlobWarmup.readyForPlayback === false)
+}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
@@ -168,6 +174,8 @@ export default function HomeScreen() {
   const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
   const [activeCategory, setActiveCategory] = useState('All')
 
+  const playVideoRetryRef = useRef<(video: VideoData, readinessRetry?: number) => void>(() => {})
+  const playVideoInOverlayRetryRef = useRef<(video: VideoData, readinessRetry?: number) => void>(() => {})
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const thumbnailCacheRef = useRef(thumbnailCache)
@@ -228,7 +236,7 @@ export default function HomeScreen() {
       videoAny.blobId || undefined,
       videoAny.blobsCoreKey || undefined,
     )
-    if (!cacheKey || getCachedVideoUrl(cacheKey) || inflightPlaybackWarmups.current.has(cacheKey)) return
+    if (!cacheKey || getCachedVideoUrl(cacheKey, { requireReady: true }) || inflightPlaybackWarmups.current.has(cacheKey)) return
     inflightPlaybackWarmups.current.add(cacheKey)
     try {
       const result = await rpc.preparePlayback({
@@ -749,7 +757,7 @@ export default function HomeScreen() {
   }, [])
 
   // Play video - load into the global VideoPlayerOverlay (single player path on mobile + desktop)
-  const playVideo = useCallback(async (video: VideoData) => {
+  const playVideo = useCallback(async (video: VideoData, readinessRetry = 0) => {
     if (!rpc) return
     try {
       // Always close channel view when playing video
@@ -786,7 +794,7 @@ export default function HomeScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (!isCurrentPlaybackRequest()) return
-          if (result?.url) {
+          if (result?.url && !isSelectedBlobWarmupPending(result)) {
             if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
             loadAndPlayVideo(video, result.url)
           }
@@ -799,6 +807,14 @@ export default function HomeScreen() {
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (isSelectedBlobWarmupPending(result)) {
+          if (readinessRetry < PLAYBACK_READINESS_MAX_RETRIES) {
+            setTimeout(() => {
+              if (isCurrentPlaybackRequest()) playVideoRetryRef.current(video, readinessRetry + 1)
+            }, PLAYBACK_READINESS_RETRY_MS)
+          }
+          return
+        }
         loadAndPlayVideo(video, result.url)
       }
     } catch (err) {
@@ -807,7 +823,7 @@ export default function HomeScreen() {
   }, [rpc, loadAndPlayVideo])
 
   // Legacy: Play video in overlay only (used by mini player expansion)
-  const playVideoInOverlay = useCallback(async (video: VideoData) => {
+  const playVideoInOverlay = useCallback(async (video: VideoData, readinessRetry = 0) => {
     if (!rpc) return
     try {
       // For overlay-only playback (no comments)
@@ -843,7 +859,7 @@ export default function HomeScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (!isCurrentPlaybackRequest()) return
-          if (result?.url) {
+          if (result?.url && !isSelectedBlobWarmupPending(result)) {
             if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
             loadAndPlayVideo(video, result.url)
           }
@@ -856,6 +872,14 @@ export default function HomeScreen() {
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (isSelectedBlobWarmupPending(result)) {
+          if (readinessRetry < PLAYBACK_READINESS_MAX_RETRIES) {
+            setTimeout(() => {
+              if (isCurrentPlaybackRequest()) playVideoInOverlayRetryRef.current(video, readinessRetry + 1)
+            }, PLAYBACK_READINESS_RETRY_MS)
+          }
+          return
+        }
         // Load video into the overlay player (animates from mini to fullscreen)
         loadAndPlayVideo(video, result.url)
       }
@@ -863,6 +887,9 @@ export default function HomeScreen() {
       console.error('[Home] Failed to play video:', err)
     }
   }, [rpc, loadAndPlayVideo])
+  playVideoRetryRef.current = playVideo
+  playVideoInOverlayRetryRef.current = playVideoInOverlay
+
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)

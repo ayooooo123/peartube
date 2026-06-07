@@ -166,10 +166,12 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
     if (cleanedUp) return
     cleanedUp = true
     try { range?.destroy?.() } catch { /* best effort */ }
-    try {
-      const closeResult = core.close?.()
-      if (closeResult && typeof closeResult.catch === 'function') closeResult.catch(() => {})
-    } catch { /* best effort */ }
+    if (options.closeCoreOnCleanup === true) {
+      try {
+        const closeResult = core.close?.()
+        if (closeResult && typeof closeResult.catch === 'function') closeResult.catch(() => {})
+      } catch { /* best effort */ }
+    }
   }
   const timer = setTimeout(cleanup, timeoutMs)
   const done = typeof range?.done === 'function'

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -915,6 +915,24 @@
           "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "peerWarmupStarted",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "selectedBlobWarmup",
+          "required": false,
+          "type": "@peartube/playback-selected-blob-warmup",
+          "version": 2
+        },
+        {
+          "name": "peerWarmup",
+          "required": false,
+          "type": "@peartube/playback-peer-warmup",
+          "version": 2
         }
       ]
     },
@@ -6294,6 +6312,130 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "playback-selected-blob-warmup",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "requested",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "resolved",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "driveKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "videoPath",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "peerCount",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "blobPeerIds",
+          "array": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "hasHeadBlock",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "requiredStartupBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "startupBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "startupByteLength",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "readyForPlayback",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "playback-peer-warmup",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "peerCount",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "retained",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "timedOut",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "elapsedMs",
+          "required": false,
+          "type": "uint",
+          "version": 2
         }
       ]
     }

@@ -6,7 +6,7 @@ const VALID_KEY = 'b'.repeat(64)
 const VALID_BLOB = '5:4:0:1024'
 const VALID_URL = 'http://127.0.0.1:4321/blob.mp4?token=***'
 
-function createCtx({ peerCount = 0, hasHeadBlock = false } = {}) {
+function createCtx({ peerCount = 0, hasRanges = new Map([[`${5}:${9}`, false], [`${5}:${6}`, false]]) } = {}) {
   const calls = []
   const peerList = Array.from({ length: peerCount }, (_, index) => ({
     remotePublicKey: Buffer.from(String(index + 1).repeat(64), 'hex'),
@@ -23,7 +23,7 @@ function createCtx({ peerCount = 0, hasHeadBlock = false } = {}) {
     },
     async has(start, end) {
       calls.push(['has', start, end])
-      return hasHeadBlock
+      return Boolean(hasRanges.get(`${start}:${end}`))
     },
   }
 
@@ -56,7 +56,7 @@ function createCtx({ peerCount = 0, hasHeadBlock = false } = {}) {
 }
 
 test('preparePlayback warms selected direct blob core and reports blob peer diagnostics', async (t) => {
-  const { ctx, calls } = createCtx({ peerCount: 2, hasHeadBlock: true })
+  const { ctx, calls } = createCtx({ peerCount: 2, hasRanges: new Map([[`${5}:${6}`, true], [`${5}:${9}`, true]]) })
   const service = new BlobPlaybackService({ ctx })
 
   const result = await service.preparePlayback({
@@ -77,13 +77,18 @@ test('preparePlayback warms selected direct blob core and reports blob peer diag
   t.is(result.selectedBlobWarmup.blobId, VALID_BLOB)
   t.is(result.selectedBlobWarmup.peerCount, 2)
   t.is(result.selectedBlobWarmup.hasHeadBlock, true)
+  t.is(result.selectedBlobWarmup.requiredStartupBlocks, 4)
+  t.is(result.selectedBlobWarmup.startupBlocks, 4)
+  t.is(result.selectedBlobWarmup.startupByteLength, 1024)
+  t.is(result.selectedBlobWarmup.readyForPlayback, true)
   t.ok(calls.some((call) => call[0] === 'swarm.join'), 'joins selected blob discovery')
   t.ok(calls.some((call) => call[0] === 'update' && call[1]?.wait === true), 'waits for selected blob core update')
   t.ok(calls.some((call) => call[0] === 'has' && call[1] === 5 && call[2] === 6), 'checks selected blob head block')
+  t.ok(calls.some((call) => call[0] === 'has' && call[1] === 5 && call[2] === 9), 'checks selected blob startup window')
 })
 
 test('preparePlayback returns URL with explicit selected blob diagnostics when no blob peer arrives', async (t) => {
-  const { ctx } = createCtx({ peerCount: 0, hasHeadBlock: false })
+  const { ctx } = createCtx({ peerCount: 0 })
   const service = new BlobPlaybackService({ ctx })
 
   const result = await service.preparePlayback({
@@ -105,7 +110,7 @@ test('preparePlayback returns URL with explicit selected blob diagnostics when n
 })
 
 test('preparePlayback does not report selected blob ready from peers alone', async (t) => {
-  const { ctx } = createCtx({ peerCount: 1, hasHeadBlock: false })
+  const { ctx } = createCtx({ peerCount: 1 })
   const service = new BlobPlaybackService({ ctx })
 
   const result = await service.preparePlayback({
@@ -122,5 +127,26 @@ test('preparePlayback does not report selected blob ready from peers alone', asy
   t.is(result.url, VALID_URL)
   t.is(result.selectedBlobWarmup.peerCount, 1)
   t.is(result.selectedBlobWarmup.hasHeadBlock, false)
+  t.is(result.selectedBlobWarmup.readyForPlayback, false)
+})
+
+test('preparePlayback does not report selected blob ready from only the first block', async (t) => {
+  const { ctx } = createCtx({ peerCount: 1, hasRanges: new Map([[`${5}:${6}`, true], [`${5}:${9}`, false]]) })
+  const service = new BlobPlaybackService({ ctx })
+
+  const result = await service.preparePlayback({
+    driveKey: 'channel-key',
+    videoPath: 'videos/king.mp4',
+    publicBeeKey: 'public-bee-key',
+    blobId: VALID_BLOB,
+    blobsCoreKey: VALID_KEY,
+    mimeType: 'video/mp4',
+    warmSelectedBlob: true,
+    selectedBlobWarmupTimeoutMs: 25,
+  })
+
+  t.is(result.selectedBlobWarmup.hasHeadBlock, true)
+  t.is(result.selectedBlobWarmup.requiredStartupBlocks, 4)
+  t.is(result.selectedBlobWarmup.startupBlocks, 1)
   t.is(result.selectedBlobWarmup.readyForPlayback, false)
 })

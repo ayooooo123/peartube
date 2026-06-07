@@ -82,3 +82,23 @@ test('preparePlayback joins the blob topic and leaves peer selection to Hyperswa
   assert.ok(calls.some((call) => call[0] === 'join'))
   assert.deepEqual(calls.filter((call) => call[0] === 'joinPeer'), [])
 })
+
+test('preparePlayback peer diagnostics can observe a peer after the first tick', async () => {
+  const peers = []
+  const { ctx } = createCtx({ peers })
+  const service = new BlobPlaybackService({ ctx })
+  setImmediate(() => {
+    peers.push({ remotePublicKey: Buffer.from('d'.repeat(64), 'hex') })
+  })
+
+  const result = await service.preparePlayback({
+    driveKey: 'channel-key',
+    videoPath: 'videos/demo.mp4',
+    blobId: VALID_BLOB,
+    blobsCoreKey: VALID_KEY,
+    mimeType: 'video/mp4',
+  })
+
+  assert.equal(result.peerWarmup.peerCount, 1)
+  assert.equal(result.peerWarmup.timedOut, false)
+})

@@ -74,6 +74,13 @@ type SwarmStatus = {
   channels?: number
   doctor?: { recommendedBoundary?: string | null }
 }
+const PLAYBACK_READINESS_RETRY_MS = 350
+const PLAYBACK_READINESS_MAX_RETRIES = 3
+
+function isSelectedBlobWarmupPending(result: any) {
+  return Boolean(result?.selectedBlobWarmup && result.selectedBlobWarmup.readyForPlayback === false)
+}
+
 function getFeedEntrySignature(entry: FeedEntry) {
   const previewSignature = (entry.previewVideos || []).map((video) => [
     video.id,
@@ -154,10 +161,12 @@ export default function VerticalDiscoveryScreen() {
   const [shortsPlaybackSession, setShortsPlaybackSession] = useState(0)
   const [shortsLoading, setShortsLoading] = useState(false)
   const [shortsChromeVisible, setShortsChromeVisible] = useState(true)
+  const playVideoRetryRef = useRef<(video: VideoData, readinessRetry?: number) => void>(() => {})
   const [commentsSheetVisible, setCommentsSheetVisible] = useState(false)
   const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
   const playbackRequestSeqRef = useRef(0)
+  const activeVideoKeyRef = useRef<string | null>(null)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
   const feedLoadInFlightRef = useRef(false)
   const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
@@ -189,6 +198,7 @@ export default function VerticalDiscoveryScreen() {
 
   const activeVideo = videos[activeIndex]
   const activeVideoKey = activeVideo ? `${activeVideo.channelKey}:${activeVideo.id}` : null
+  activeVideoKeyRef.current = activeVideoKey
 
   const makePlaybackRequest = useCallback((video: VideoData) => {
     const videoRef = getVideoRef(video)
@@ -401,7 +411,7 @@ export default function VerticalDiscoveryScreen() {
 
 
 
-  const playVideo = useCallback(async (video: VideoData) => {
+  const playVideo = useCallback(async (video: VideoData, readinessRetry = 0) => {
     if (!rpc) return
     const { cacheKey, playbackRequest } = makePlaybackRequest(video)
     const playKey = `${video.channelKey}:${video.id}`
@@ -415,7 +425,7 @@ export default function VerticalDiscoveryScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (isStalePlaybackRequest()) return
-          if (result?.url) {
+          if (result?.url && !isSelectedBlobWarmupPending(result)) {
             if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
             setShortsVideoUrl(result.url)
             setShortsPlaybackSession((prev) => prev + 1)
@@ -432,6 +442,14 @@ export default function VerticalDiscoveryScreen() {
       if (isStalePlaybackRequest()) return
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (isSelectedBlobWarmupPending(result)) {
+          if (readinessRetry < PLAYBACK_READINESS_MAX_RETRIES) {
+            setTimeout(() => {
+              if (playbackRequestSeqRef.current === requestSeq && activeVideoKeyRef.current === playKey) playVideoRetryRef.current(video, readinessRetry + 1)
+            }, PLAYBACK_READINESS_RETRY_MS)
+          }
+          return
+        }
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
       }
@@ -446,6 +464,8 @@ export default function VerticalDiscoveryScreen() {
       }
     }
   }, [makePlaybackRequest, rpc])
+  playVideoRetryRef.current = playVideo
+
 
   useEffect(() => {
     if (!activeVideo || !ready) return

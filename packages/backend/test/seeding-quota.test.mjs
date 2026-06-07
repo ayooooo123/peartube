@@ -122,6 +122,90 @@ test('protectSelf keeps the current watched seed through quota enforcement', asy
   t.alike(store.cores.get(coreA)?.clearCalls || [], [])
 })
 
+test('quota enforcement skips retained in-flight blob cores', async (t) => {
+  const store = createStore()
+  const metaDb = createMetaDb()
+  const manager = new SeedingManager(store, metaDb)
+
+  await manager.setMaxStorageGB(10)
+  manager.activeSeeds.set('drive-a:videos/in-flight.mp4', {
+    driveKey: 'drive-a',
+    videoPath: 'videos/in-flight.mp4',
+    reason: 'watched',
+    addedAt: 1,
+    blocks: 4,
+    bytes: 4 * GB,
+    blobId: '10:4:0:4096',
+    blobsCoreKey: coreA
+  })
+  manager.activeSeeds.set('drive-b:videos/evictable.mp4', {
+    driveKey: 'drive-b',
+    videoPath: 'videos/evictable.mp4',
+    reason: 'watched',
+    addedAt: 2,
+    blocks: 4,
+    bytes: 4 * GB,
+    blobId: '20:4:0:4096',
+    blobsCoreKey: coreB
+  })
+  await manager.persistSeeds()
+
+  const release = manager.retainBlobRef({ blobId: '10:4:0:4096', blobsCoreKey: coreA })
+  await manager.setMaxStorageGB(5)
+
+  t.is(manager.getActiveSeeds().length, 1)
+  t.is(manager.getActiveSeeds()[0].videoPath, 'videos/in-flight.mp4')
+  t.alike(store.cores.get(coreA)?.clearCalls || [], [])
+  t.alike(store.cores.get(coreB).clearCalls, [{ start: 20, end: 24 }])
+
+  release()
+  t.absent(manager.isSeedBlobProtected({ blobId: '10:4:0:4096', blobsCoreKey: coreA }))
+})
+
+test('quota enforcement defers clears while playback is active', async (t) => {
+  const store = createStore()
+  const metaDb = createMetaDb()
+  let playbackActive = true
+  const manager = new SeedingManager(store, metaDb, {
+    isCacheClearBlocked: () => playbackActive
+  })
+
+  await manager.setMaxStorageGB(10)
+  manager.activeSeeds.set('drive-a:videos/old.mp4', {
+    driveKey: 'drive-a',
+    videoPath: 'videos/old.mp4',
+    reason: 'watched',
+    addedAt: 1,
+    blocks: 4,
+    bytes: 4 * GB,
+    blobId: '10:4:0:4096',
+    blobsCoreKey: coreA
+  })
+  manager.activeSeeds.set('drive-b:videos/new.mp4', {
+    driveKey: 'drive-b',
+    videoPath: 'videos/new.mp4',
+    reason: 'watched',
+    addedAt: 2,
+    blocks: 4,
+    bytes: 4 * GB,
+    blobId: '20:4:0:4096',
+    blobsCoreKey: coreB
+  })
+  await manager.persistSeeds()
+
+  await manager.setMaxStorageGB(5)
+
+  t.is(manager.getActiveSeeds().length, 2)
+  t.is(store.calls.length, 0)
+
+  playbackActive = false
+  await manager.enforceQuota()
+
+  t.is(manager.getActiveSeeds().length, 1)
+  t.is(manager.getActiveSeeds()[0].videoPath, 'videos/new.mp4')
+  t.alike(store.cores.get(coreA).clearCalls, [{ start: 10, end: 14 }])
+})
+
 test('clearCache clears non-pinned blob ranges and keeps pinned cached bytes', async (t) => {
   const store = createStore()
   const metaDb = createMetaDb()

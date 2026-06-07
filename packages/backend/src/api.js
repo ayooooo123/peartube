@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, setPlaybackActive as storageSetPlaybackActive, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
@@ -218,6 +218,14 @@ export function createApi({
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
   const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
+
+  function getActiveRangeSeedKeys() {
+    const keys = new Set()
+    for (const request of activeRangeRequests.values()) {
+      if (request?.seedKey) keys.add(request.seedKey)
+    }
+    return keys
+  }
 
   /** @type {Map<string, { ts: number, value: any[] }>} */
   const listVideosCache = new Map()
@@ -1854,6 +1862,13 @@ export function createApi({
       const existingIntent = await loadDownloadIntent(ctx, driveKey, videoPath)
       let blobMeta = null
       let v = null
+      let releasePrefetchBlobRef = null
+      const releaseProtectedPrefetchBlobRef = () => {
+        if (!releasePrefetchBlobRef) return
+        const release = releasePrefetchBlobRef
+        releasePrefetchBlobRef = null
+        release()
+      }
 
       if (existingIntent) {
         console.log('[API] Resuming download from intent:', videoPath)
@@ -1913,6 +1928,13 @@ export function createApi({
           const normalizedBlobId = typeof blobMeta.blobId === 'string'
             ? blobMeta.blobId
             : `${blobId.blockOffset}:${blobId.blockLength}:${blobId.byteOffset}:${blobId.byteLength}`
+
+          if (seedingManager?.retainBlobRef) {
+            releasePrefetchBlobRef = seedingManager.retainBlobRef({
+              blobsCoreKey: blobMeta.blobsCoreKey,
+              blobId: normalizedBlobId
+            })
+          }
 
           if (!existingIntent && blobMeta?.blobsCoreKey) {
             await saveDownloadIntent(ctx, {
@@ -1988,7 +2010,7 @@ export function createApi({
               thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || existingIntent?.thumbnailBlobsCoreKey || null,
               mimeType: v?.mimeType || existingIntent?.mimeType || null,
               thumbnailMimeType: v?.thumbnailMimeType || existingIntent?.thumbnailMimeType || null
-            }, { protectSelf: true }).catch(err => console.log('[API] Failed to register seed intent:', err?.message))
+            }, { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() }).catch(err => console.log('[API] Failed to register seed intent:', err?.message))
           }
           const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
           const tailBlocks = getTailBlockCount(totalBlocks, totalBytes)
@@ -2114,8 +2136,8 @@ export function createApi({
             })
           }
 
-          // Initialize range tracking entry (ranges added as they're created)
-          activeRangeRequests.set(prefetchKey, { ranges: [], core, onDownload, onUpload })
+          // Initialize range tracking entry only for live downloads.
+          if (!wasCached) activeRangeRequests.set(prefetchKey, { ranges: [], core, onDownload, onUpload, seedKey: `${driveKey}:${videoPath}` })
 
           if (!wasCached) {
             let fullDownloadStarted = false
@@ -2148,7 +2170,11 @@ export function createApi({
                     thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
                     mimeType: v?.mimeType || existingIntent?.mimeType || null,
                     thumbnailMimeType: v?.thumbnailMimeType || null
-                  }, { protectSelf: true }).catch(err => console.log('[API] Failed to register seed:', err?.message))
+                  }, { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() })
+                    .catch(err => console.log('[API] Failed to register seed:', err?.message))
+                    .finally(releaseProtectedPrefetchBlobRef)
+                } else {
+                  releaseProtectedPrefetchBlobRef()
                 }
               }).catch(err => {
                 if (err.message?.includes('closed') || ctx.store.closed) {
@@ -2162,6 +2188,7 @@ export function createApi({
                   videoStats.cleanupMonitor(driveKey, videoPath)
                 }
                 activeRangeRequests.delete(prefetchKey)
+                releaseProtectedPrefetchBlobRef()
               })
             }
 
@@ -2246,10 +2273,17 @@ export function createApi({
                 thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
                 mimeType: v?.mimeType || existingIntent?.mimeType || null,
                 thumbnailMimeType: v?.thumbnailMimeType || null
-              }, { protectSelf: true }).catch(() => {})
+              }, { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() })
+                .catch(() => {})
+                .finally(releaseProtectedPrefetchBlobRef)
+            } else {
+              releaseProtectedPrefetchBlobRef()
             }
           }
 
+          if (wasCached && !videoStats) {
+            releaseProtectedPrefetchBlobRef()
+          }
           await playbackReady
 
           return {
@@ -2270,6 +2304,7 @@ export function createApi({
           videoStats.updateStats(driveKey, videoPath, { status: 'error', error: err.message });
           videoStats.cleanupMonitor(driveKey, videoPath);
         }
+        releaseProtectedPrefetchBlobRef()
         activeRangeRequests.delete(prefetchKey)
         return { success: false, error: err.message };
       }
@@ -3405,6 +3440,19 @@ export function createApi({
       } catch (err) {
         console.error('[API] resumeNetwork error:', err.message)
         return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Mirror app playback state into the backend so cache cleanup does not
+     * clear blob ranges while a player or blob-server reader is active.
+     * @param {{active?: boolean, ttlMs?: number}} [options]
+     * @returns {{success: boolean, active: boolean, updatedAt: number, expiresAt: number}}
+     */
+    setPlaybackActive(options = {}) {
+      return {
+        success: true,
+        ...storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
       }
     },
 

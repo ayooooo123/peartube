@@ -9,7 +9,7 @@
  *   const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
  */
 
-import { initializeStorage, loadChannel, retainPublicBeeContentDiscovery, retainSwarmDiscovery } from './storage.js';
+import { initializeStorage, isPlaybackActive, loadChannel, retainPublicBeeContentDiscovery, retainSwarmDiscovery } from './storage.js';
 import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
@@ -340,7 +340,8 @@ export async function createBackendContext(config) {
   const identityManager = createIdentityManager({ ctx });
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
-    getDiskUsageBytes: createStorageUsageMeasurer(storagePath)
+    getDiskUsageBytes: createStorageUsageMeasurer(storagePath),
+    isCacheClearBlocked: isPlaybackActive
   });
   const uploadManager = createUploadManager({ ctx });
 

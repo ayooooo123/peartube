@@ -94,6 +94,7 @@ class FakeCore extends EventEmitter {
 
 const GB = 1024 * 1024 * 1024
 const coreA = 'aa'.repeat(32)
+const coreB = 'bb'.repeat(32)
 
 test('clearCache clears persisted partial download intents as cache bytes', async (t) => {
   const metaDb = createMetaDb({
@@ -310,6 +311,53 @@ test('prefetchVideo corrects stale full-size watched seed accounting downward', 
   t.is(seeds.length, 1)
   t.is(seeds[0]?.bytes, 0)
   t.is(seedingManager.getStorageStatsSync().usedBytes, 0)
+})
+
+test('prefetchVideo quota enforcement preserves active range downloads', async (t) => {
+  const metaDb = createMetaDb()
+  const store = createStore()
+  const seedingManager = new SeedingManager(store, metaDb)
+  await seedingManager.init()
+  await seedingManager.setMaxStorageGB(5)
+  const api = createApi({ ctx: { store, metaDb, swarm: null }, seedingManager })
+
+  api.getVideoData = async (_driveKey, videoPath) => {
+    if (videoPath === 'videos/active.mp4') {
+      return {
+        id: 'active',
+        path: 'videos/active.mp4',
+        blobId: '0:8:0:4294967296',
+        blobsCoreKey: coreA,
+        byteLength: 4 * GB,
+        mimeType: 'video/mp4'
+      }
+    }
+
+    return {
+      id: 'cached',
+      path: 'videos/cached.mp4',
+      blobId: '10:8:0:4294967296',
+      blobsCoreKey: coreB,
+      byteLength: 4 * GB,
+      mimeType: 'video/mp4'
+    }
+  }
+
+  const activePrefetch = api.prefetchVideo('drive-a', 'videos/active.mp4')
+  await new Promise((resolve) => setImmediate(resolve))
+  const activeCore = store.cores.get(coreA)
+  activeCore.emit('download', 0, 2 * GB)
+  await activePrefetch
+
+  const cachedCore = store.get(b4a.from(coreB, 'hex'))
+  cachedCore.has = async () => true
+  const cachedResult = await api.prefetchVideo('drive-b', 'videos/cached.mp4')
+
+  t.is(cachedResult.success, true)
+  t.is(cachedResult.cached, true)
+  t.alike(activeCore.clearCalls, [])
+  t.is(seedingManager.getActiveSeeds().length, 2)
+  t.is(seedingManager.getStorageStatsSync().usedBytes, 6 * GB)
 })
 
 test('prefetchVideo cleans up core listeners when blob is already fully cached', async (t) => {

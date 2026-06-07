@@ -63,7 +63,7 @@ function createIdentityManager(activeIdentity = null) {
   }
 }
 
-test('SeedingManager rejects explicit seeding mutations without an active identity', async (t) => {
+test('SeedingManager protects explicit seeds but accepts authorized local cache controls without an active identity', async (t) => {
   const manager = new SeedingManager(createStore(), createMetaDb(), {
     identityManager: createIdentityManager(null)
   })
@@ -73,13 +73,15 @@ test('SeedingManager rejects explicit seeding mutations without an active identi
     SeedingAuthorizationError
   )
   await t.exception(
-    () => manager.setMaxStorageGB(10),
+    () => manager.addSeed('drive-a', 'videos/pinned.mp4', 'pinned', { byteLength: 1024 }),
     SeedingAuthorizationError
   )
-  await t.exception(
-    () => manager.clearCache(),
-    SeedingAuthorizationError
-  )
+
+  await manager.setMaxStorageGB(10, { authorized: true })
+  t.is(manager.config.maxStorageGB, 10)
+
+  const clearResult = await manager.clearCache({ authorized: true })
+  t.is(clearResult.clearedBytes, 0)
 })
 
 test('SeedingManager allows automatic watched seeds but requires active identity for explicit pins', async (t) => {
@@ -114,13 +116,21 @@ test('SeedingManager allows explicit seeding mutations for the active channel id
   t.is(manager.config.maxStorageGB, 8)
 })
 
-test('seeding API mutation endpoints return unauthorized without active identity', async (t) => {
+test('seeding API keeps pin auth but allows local cache controls without active identity', async (t) => {
   const manager = new SeedingManager(createStore(), createMetaDb(), {
     identityManager: createIdentityManager(null)
   })
   const api = createApi({ ctx: { store: createStore(), metaDb: createMetaDb() }, seedingManager: manager })
 
   t.alike(await api.pinChannel('aa'.repeat(32)), { success: false, error: 'Unauthorized seeding mutation' })
-  t.alike(await api.setStorageLimit(5), { success: false, error: 'Unauthorized seeding mutation' })
-  t.alike(await api.clearCache(), { success: false, clearedBytes: 0, error: 'Unauthorized seeding mutation' })
+  t.alike(await api.setStorageLimit(5), { success: true })
+  t.is(manager.config.maxStorageGB, 5)
+  t.alike(await api.clearCache(), {
+    success: true,
+    clearedBytes: 0,
+    totalStorageBytes: 0,
+    totalStorageGB: '0.00',
+    untrackedStorageBytes: 0,
+    untrackedStorageGB: '0.00'
+  })
 })

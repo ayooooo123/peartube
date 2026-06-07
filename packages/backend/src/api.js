@@ -20,6 +20,7 @@ import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoTo
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
+import { SeedingAuthorizationError } from './seeding.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -27,6 +28,10 @@ import { NETWORK_TOPIC_STRING } from './types.js'
  * @typedef {import('./types.js').VideoMetadata} VideoMetadata
  * @typedef {import('./types.js').ChannelMetadata} ChannelMetadata
  */
+
+function isSeedingAuthorizationError(err) {
+  return err instanceof SeedingAuthorizationError || err?.name === 'SeedingAuthorizationError'
+}
 
 /**
  * Create the API object with all shared methods
@@ -1905,31 +1910,20 @@ export function createApi({
             }).catch(err => console.log('[API] Failed to save download intent:', err?.message))
           }
 
-          if (seedingManager) {
-            await seedingManager.addSeed(driveKey, videoPath, 'watched', {
-              blockLength: totalBlocks,
-              byteLength: totalBytes,
-              publicBeeKey: publicBeeKey || v?.publicBeeKey || existingIntent?.publicBeeKey || null,
-              blobId: normalizedBlobId,
-              blobsCoreKey: blobMeta.blobsCoreKey,
-              thumbnailBlobId: v?.thumbnailBlobId || existingIntent?.thumbnailBlobId || null,
-              thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || existingIntent?.thumbnailBlobsCoreKey || null,
-              mimeType: v?.mimeType || existingIntent?.mimeType || null,
-              thumbnailMimeType: v?.thumbnailMimeType || existingIntent?.thumbnailMimeType || null
-            }, { protectSelf: true }).catch(err => console.log('[API] Failed to register seed intent:', err?.message))
-          }
-
           // Count initial blocks already available
           // For large videos, use sampling instead of all-or-nothing has(start, end)
           let initialAvailable = 0
+          let initialAvailabilityIsExact = false
           const fullyCached = await core.has(startBlock, endBlock)
           if (fullyCached) {
             initialAvailable = totalBlocks
+            initialAvailabilityIsExact = true
           } else if (totalBlocks <= 512) {
             // Small video: exact block-by-block count
             for (let i = startBlock; i < endBlock; i++) {
               if (await core.has(i)) initialAvailable++
             }
+            initialAvailabilityIsExact = true
           } else {
             // Large video: sample to estimate (same pattern as checkVideoSync)
             const sampleSize = Math.min(totalBlocks, 20)
@@ -1962,6 +1956,21 @@ export function createApi({
           }
 
           const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
+          const initialCachedBlocksForQuota = initialAvailabilityIsExact ? initialAvailable : 0
+          const initialCachedBytes = Math.round(initialCachedBlocksForQuota * bytesPerBlock)
+          if (seedingManager) {
+            await seedingManager.addSeed(driveKey, videoPath, 'watched', {
+              blockLength: totalBlocks,
+              byteLength: initialCachedBytes,
+              publicBeeKey: publicBeeKey || v?.publicBeeKey || existingIntent?.publicBeeKey || null,
+              blobId: normalizedBlobId,
+              blobsCoreKey: blobMeta.blobsCoreKey,
+              thumbnailBlobId: v?.thumbnailBlobId || existingIntent?.thumbnailBlobId || null,
+              thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || existingIntent?.thumbnailBlobsCoreKey || null,
+              mimeType: v?.mimeType || existingIntent?.mimeType || null,
+              thumbnailMimeType: v?.thumbnailMimeType || existingIntent?.thumbnailMimeType || null
+            }, { protectSelf: true }).catch(err => console.log('[API] Failed to register seed intent:', err?.message))
+          }
           const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
           const tailBlocks = getTailBlockCount(totalBlocks, totalBytes)
           const midBlocks = getMidBlockCount(totalBlocks, totalBytes)
@@ -1986,7 +1995,7 @@ export function createApi({
           }
 
           let downloadedBlocks = 0
-          let downloadedBytesTotal = initialAvailable * bytesPerBlock
+          let downloadedBytesTotal = initialCachedBytes
           let downloadSpeed = 0
           let lastSpeedTime = Date.now()
           let lastSpeedBytes = downloadedBytesTotal
@@ -2030,6 +2039,9 @@ export function createApi({
             }
 
             const isComplete = totalDownloaded >= totalBlocks
+            if (seedingManager) {
+              seedingManager.updateSeedCachedBytes?.(driveKey, videoPath, Math.min(totalBytes, downloadedBytesTotal)).catch(() => {})
+            }
             if (videoStats) {
               videoStats.updateStats(driveKey, videoPath, {
                 downloadedBlocks,
@@ -2117,7 +2129,7 @@ export function createApi({
                     thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
                     mimeType: v?.mimeType || existingIntent?.mimeType || null,
                     thumbnailMimeType: v?.thumbnailMimeType || null
-                  }).catch(err => console.log('[API] Failed to register seed:', err?.message))
+                  }, { protectSelf: true }).catch(err => console.log('[API] Failed to register seed:', err?.message))
                 }
               }).catch(err => {
                 if (err.message?.includes('closed') || ctx.store.closed) {
@@ -2215,7 +2227,7 @@ export function createApi({
                 thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
                 mimeType: v?.mimeType || existingIntent?.mimeType || null,
                 thumbnailMimeType: v?.thumbnailMimeType || null
-              }).catch(() => {})
+              }, { protectSelf: true }).catch(() => {})
             }
           }
 
@@ -2595,7 +2607,12 @@ export function createApi({
     async pinChannel(driveKey) {
       console.log('[API] PIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
-        await seedingManager.pinChannel(driveKey);
+        try {
+          await seedingManager.pinChannel(driveKey);
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return { success: false, error: err.message };
+          throw err;
+        }
         await loadChannel(ctx, driveKey);
         return { success: true };
       }
@@ -2610,7 +2627,12 @@ export function createApi({
     async unpinChannel(driveKey) {
       console.log('[API] UNPIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
-        await seedingManager.unpinChannel(driveKey);
+        try {
+          await seedingManager.unpinChannel(driveKey);
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return { success: false, error: err.message };
+          throw err;
+        }
         return { success: true };
       }
       return { success: false, error: 'Invalid request' };
@@ -2657,7 +2679,7 @@ export function createApi({
     async setStorageLimit(maxGB) {
       console.log('[API] SET_STORAGE_LIMIT:', maxGB, 'GB');
       if (seedingManager) {
-        await seedingManager.setMaxStorageGB(maxGB);
+        await seedingManager.setMaxStorageGB(maxGB, { authorized: true });
         return { success: true };
       }
       return { success: false };
@@ -2670,7 +2692,7 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        const clearResult = await seedingManager.clearCache();
+        const clearResult = await seedingManager.clearCache({ authorized: true });
         return { success: true, ...clearResult };
       }
       return { success: false, clearedBytes: 0 };

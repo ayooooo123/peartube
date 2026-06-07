@@ -100,6 +100,28 @@ test('setMaxStorageGB enforces quota and clears removed cached blob ranges', asy
   t.ok(persistedSeeds['drive-b:videos/new.mp4'])
 })
 
+test('protectSelf keeps the current watched seed through quota enforcement', async (t) => {
+  const store = createStore()
+  const manager = new SeedingManager(store, createMetaDb())
+
+  await manager.setMaxStorageGB(5)
+  await manager.addSeed('drive-a', 'videos/large.mp4', 'watched', {
+    byteLength: 1 * GB,
+    blobId: '30:1:0:1024',
+    blobsCoreKey: coreA
+  }, { protectSelf: true })
+  await manager.addSeed('drive-a', 'videos/large.mp4', 'watched', {
+    byteLength: 6 * GB,
+    blobId: '30:6:0:6144',
+    blobsCoreKey: coreA
+  }, { protectSelf: true })
+
+  t.is(manager.getStorageStatsSync().usedBytes, 6 * GB)
+  t.is(manager.getActiveSeeds().length, 1)
+  t.is(manager.getActiveSeeds()[0].videoPath, 'videos/large.mp4')
+  t.alike(store.cores.get(coreA)?.clearCalls || [], [])
+})
+
 test('clearCache clears non-pinned blob ranges and keeps pinned cached bytes', async (t) => {
   const store = createStore()
   const metaDb = createMetaDb()

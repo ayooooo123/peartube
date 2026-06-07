@@ -741,6 +741,30 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "byteAvailability",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "hasHeadBlock",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "contiguousBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "readyForPlayback",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -893,6 +917,130 @@
       ]
     },
     {
+      "name": "selected-blob-warmup",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "peerCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "hasHeadBlock",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "contiguousBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "readyForPlayback",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "blobPeerIdsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceFeedPeerIdsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceRelayPeerIdsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retainedDiscoveryLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "retainedDiscoveryStatus",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "feedRelayAlsoBlobPeer",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "promotedPeerHintsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "peer-warmup",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "peerCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "retained",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "timedOut",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "elapsedMs",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "prepare-playback-response",
       "namespace": "peartube",
       "compact": false,
@@ -914,6 +1062,24 @@
           "name": "warmupStarted",
           "required": false,
           "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "peerWarmupStarted",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "selectedBlobWarmup",
+          "required": false,
+          "type": "@peartube/selected-blob-warmup",
+          "version": 1
+        },
+        {
+          "name": "peerWarmup",
+          "required": false,
+          "type": "@peartube/peer-warmup",
           "version": 1
         }
       ]
@@ -964,6 +1130,24 @@
           "name": "warmupStarted",
           "required": false,
           "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "peerWarmupStarted",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "selectedBlobWarmup",
+          "required": false,
+          "type": "@peartube/selected-blob-warmup",
+          "version": 1
+        },
+        {
+          "name": "peerWarmup",
+          "required": false,
+          "type": "@peartube/peer-warmup",
           "version": 1
         }
       ]
@@ -1489,6 +1673,24 @@
           "name": "publicBeeKey",
           "required": false,
           "type": "string",
+          "version": 1
+        },
+        {
+          "name": "hasHeadBlock",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "contiguousBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "readyForPlayback",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]

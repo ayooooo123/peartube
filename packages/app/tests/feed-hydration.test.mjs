@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   getFeedPreviewVideos,
+  hasDirectBlobReadinessProof,
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
@@ -12,6 +13,7 @@ import {
   mergePreviewFeedVideos,
   selectFeedEntryVideosWithPreviewFallback,
   shouldKeepFeedVideoForVisibleEntries,
+  isFeedVideoPlaybackReady,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
 
@@ -70,6 +72,9 @@ test('getFeedVideoLoadEntries prioritizes playable relay archive previews before
       byteAvailability: 'playable',
       blobId: '0:1:0:32',
       blobsCoreKey: 'aa'.repeat(32),
+      hasHeadBlock: true,
+      contiguousBlocks: 1,
+      readyForPlayback: true,
     }],
   }
   const staleLive = { driveKey: 'stale-live', peerCount: 4, publicBeeKey: 'bee-live', previewVideos: [] }
@@ -137,6 +142,9 @@ test('selectFeedEntryVideosWithPreviewFallback uses direct feed previews when hy
     availability: 'playable',
     blobId: '0:8:0:1024',
     blobsCoreKey: 'aa'.repeat(32),
+    hasHeadBlock: true,
+    contiguousBlocks: 1,
+    readyForPlayback: true,
   }]
 
   assert.equal(selectFeedEntryVideosWithPreviewFallback([], previews), previews)
@@ -220,6 +228,9 @@ test('getFeedPreviewVideos keeps relay manifest previews with direct blob refs e
         availability: 'playable',
         blobId: '0:8:0:1024',
         blobsCoreKey: 'aa'.repeat(32),
+        hasHeadBlock: true,
+        contiguousBlocks: 1,
+        readyForPlayback: true,
       }],
     },
   ], {}, 'local', 5)
@@ -260,16 +271,29 @@ test('shouldKeepFeedVideoForVisibleEntries keeps restored snapshot cards until t
   }), false)
 })
 
-test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps the local channel visible', () => {
-  assert.equal(shouldRenderFeedVideo({
-    video: { channelKey: 'remote', availability: 'playable' },
-    identityDriveKey: 'local',
-  }), true)
+test('feed readiness separates visible direct-blob cards from playable direct-blob cards', () => {
+  const directWithoutBytes = {
+    channelKey: 'remote',
+    availability: 'playable',
+    byteAvailability: 'playable',
+    blobId: '0:1:0:32',
+    blobsCoreKey: 'aa'.repeat(32),
+  }
 
   assert.equal(shouldRenderFeedVideo({
-    video: { channelKey: 'remote', availability: 'unknown' },
+    video: directWithoutBytes,
     identityDriveKey: 'local',
-  }), false)
+  }), true)
+  assert.equal(hasDirectBlobReadinessProof(directWithoutBytes), false)
+  assert.equal(isFeedVideoPlaybackReady(directWithoutBytes, 'local'), false)
+
+  const directWithBytes = {
+    ...directWithoutBytes,
+    hasHeadBlock: true,
+    contiguousBlocks: 1,
+  }
+  assert.equal(hasDirectBlobReadinessProof(directWithBytes), true)
+  assert.equal(isFeedVideoPlaybackReady(directWithBytes, 'local'), true)
 
   assert.equal(shouldRenderFeedVideo({
     video: { channelKey: 'remote', availability: 'unknown', playbackSupport: 'unverified-container' },
@@ -300,6 +324,9 @@ test('feed preview videos keep unverified mirrored media visible when byte avail
       playbackSupport: 'unverified-container',
       blobId: '0:1:0:32',
       blobsCoreKey: 'cc'.repeat(32),
+      hasHeadBlock: true,
+      contiguousBlocks: 1,
+      readyForPlayback: true,
     }],
   }], {}, undefined, 5)
 
@@ -309,7 +336,7 @@ test('feed preview videos keep unverified mirrored media visible when byte avail
   assert.equal(videos[0].playbackSupport, 'unverified-container')
 })
 
-test('backend preview fallback preserves live-peer preview availability for Home rendering', async () => {
+test('backend preview fallback refuses to convert feed peer metadata into byte readiness', async () => {
   const source = await import('node:fs').then((fs) => fs.readFileSync(new URL('../../backend/src/api.js', import.meta.url), 'utf8'))
   const previewHelper = source.slice(
     source.indexOf('function previewVideosFromFeedEntry'),
@@ -320,10 +347,10 @@ test('backend preview fallback preserves live-peer preview availability for Home
     source.indexOf('const cached = listVideosCache.get'),
   )
 
-  assert.match(previewHelper, /const feedEntryHasLivePeer = Number\(entry\?\.peerCount \|\| 0\) > 0/, 'backend preview fallback should treat live-peer feed previews as renderable')
-  assert.match(previewHelper, /const videoAvailability = video\.availability \|\| video\.byteAvailability \|\| \(feedEntryHasLivePeer \? 'playable' : null\)/, 'preview videos should carry playable availability when the feed entry has live peers')
-  assert.match(availabilityBlock, /const explicitAvailability = video\?\.byteAvailability \|\| video\?\.availability \|\| null/, 'availability revalidation should preserve explicit playable preview availability')
-  assert.match(availabilityBlock, /explicitAvailability === 'playable'[\s\S]*return 'playable'/, 'explicit playable preview refs must not be downgraded to unavailable during fallback')
+  assert.doesNotMatch(previewHelper, /feedEntryHasLivePeer/, 'feed peer counts must not mark selected direct blobs playable')
+  assert.match(previewHelper, /hasByteProof/, 'preview fallback should carry byte proof only from preview video fields')
+  assert.match(availabilityBlock, /Feed peers, relay metadata, and stale playable labels are[\s\S]*not media readiness/, 'availability revalidation should reject stale playable metadata without byte proof')
+  assert.match(availabilityBlock, /explicitAvailability === 'playable' && hasVideoByteProof\(video\)/, 'explicit playable labels must require direct byte proof')
 })
 
 test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed channel no longer has watchable videos', () => {
@@ -383,6 +410,10 @@ test('mergeHydratedFeedVideos preserves feed preview blob refs when hydration om
         blobsCoreKey: 'aa'.repeat(32),
         mimeType: 'video/mp4',
         publicBeeKey: 'bee-preview',
+        byteAvailability: 'playable',
+        hasHeadBlock: true,
+        contiguousBlocks: 4,
+        readyForPlayback: true,
         __feedSource: 'preview',
       },
     ],
@@ -413,6 +444,10 @@ test('mergeHydratedFeedVideos preserves feed preview blob refs when hydration om
   assert.equal(merged[0].blobsCoreKey, 'aa'.repeat(32))
   assert.equal(merged[0].mimeType, 'video/mp4')
   assert.equal(merged[0].publicBeeKey, 'bee-preview')
+  assert.equal(merged[0].byteAvailability, 'playable')
+  assert.equal(merged[0].hasHeadBlock, true)
+  assert.equal(merged[0].contiguousBlocks, 4)
+  assert.equal(merged[0].readyForPlayback, true)
   assert.equal(merged[0].__feedSource, 'hydrated')
 })
 

@@ -18,6 +18,10 @@ const VIDEO_FIELDS = [
   'blobsCoreKey',
   'mimeType',
   'availability',
+  'byteAvailability',
+  'hasHeadBlock',
+  'contiguousBlocks',
+  'readyForPlayback',
   'channelKey',
   'driveKey',
   'publicBeeKey',
@@ -38,6 +42,16 @@ function snapshotKeyForVideo(video) {
   return `${channelKey}:${identifier}`
 }
 
+function hasDirectBlobRef(video) {
+  return typeof video?.blobId === 'string' && video.blobId.length > 0 &&
+    typeof video?.blobsCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(video.blobsCoreKey)
+}
+
+function hasDirectBlobReadinessProof(video) {
+  return video?.readyForPlayback === true ||
+    (video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0)
+}
+
 export function createFeedSnapshot({
   videos = [],
   channelMeta = {},
@@ -55,13 +69,16 @@ export function createFeedSnapshot({
     seen.add(key)
 
     const channelKey = video.channelKey || video.driveKey || null
-    const playable = video.availability === 'playable' || (identityDriveKey && channelKey === identityDriveKey)
+    const localVideo = identityDriveKey && channelKey === identityDriveKey
+    const playable = localVideo || (hasDirectBlobRef(video)
+      ? hasDirectBlobReadinessProof(video)
+      : video.availability === 'playable')
     if (!playable) continue
 
     const safeVideo = copyDefinedFields(video, VIDEO_FIELDS)
     safeVideo.channelKey = channelKey || safeVideo.channelKey
     safeVideo.driveKey = video.driveKey || channelKey || safeVideo.driveKey
-    safeVideo.availability = playable ? 'playable' : video.availability
+    safeVideo.availability = localVideo ? 'playable' : playable ? (video.availability || 'playable') : video.availability
 
     const channelName = video.channel?.name || channelMeta?.[channelKey]?.name || null
     if (channelName) safeVideo.channel = { name: channelName }

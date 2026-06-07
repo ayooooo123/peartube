@@ -36,6 +36,20 @@ test('home and vertical tap playback require ready cached URLs before attaching 
   assert.match(discoverPlayBlock, /setCachedVideoUrl\(cacheKey, result\.url, Boolean\(result\.selectedBlobWarmup\?\.readyForPlayback\)\)/, 'Shorts taps should record selected blob readiness')
 })
 
+test('tap playback surfaces selected blob fetching instead of silently no-oping', () => {
+  const homeSource = readAppFile('app/(tabs)/index.tsx')
+  const discoverSource = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(homeSource, /preparePlaybackWhenReady/, 'Home taps should poll bounded readiness for selected direct blobs')
+  assert.match(homeSource, /Fetching video from peers…/, 'Home taps should expose visible fetching state while selected bytes are unavailable')
+  assert.match(homeSource, /Video is still fetching from peers\. Try again shortly\./, 'Home taps should surface a visible not-ready fallback after bounded polling')
+  assert.match(homeSource, /result\?\.url && !isWaitingForSelectedBlob\(result\)[\s\S]*loadAndPlayVideo\(video, result\.url\)/, 'Home taps should not attach an unready selected blob URL')
+
+  assert.match(discoverSource, /preparePlaybackWhenReady/, 'Vertical taps should poll bounded readiness for selected direct blobs')
+  assert.match(discoverSource, /setShortsPlaybackMessage\(\{ key: playKey, text: 'Fetching video from peers…' \}\)/, 'Vertical taps should expose visible fetching state')
+  assert.match(discoverSource, /result\?\.url && !isWaitingForSelectedBlob\(result\)[\s\S]*setShortsVideoUrl\(result\.url\)/, 'Vertical taps should not attach an unready selected blob URL')
+})
+
 test('background warmups may cache speculative URLs but mark them unready until diagnostics prove playback', () => {
   const homeSource = readAppFile('app/(tabs)/index.tsx')
   const controllerSource = readAppFile('lib/discover-feed-controller.js')

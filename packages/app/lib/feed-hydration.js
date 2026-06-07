@@ -6,14 +6,32 @@ function getFeedEntryPriority(entry) {
   return 4
 }
 
+export function hasDirectBlobRef(video) {
+  return typeof video?.blobId === 'string' && video.blobId.length > 0 &&
+    typeof video?.blobsCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(video.blobsCoreKey)
+}
+
+export function hasDirectBlobReadinessProof(video) {
+  if (!hasDirectBlobRef(video)) return false
+  if (video?.readyForPlayback === true) return true
+  return video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0
+}
+
+export function isFeedVideoPlaybackReady(video, identityDriveKey) {
+  const channelKey = video?.channelKey || video?.driveKey || null
+  if (identityDriveKey && channelKey === identityDriveKey) return true
+  if (hasDirectBlobRef(video)) return hasDirectBlobReadinessProof(video)
+  return (video?.byteAvailability || video?.availability) === 'playable'
+}
+
 function hasRenderableDirectFeedPreview(entry) {
   return Boolean(
     entry?.publicBeeKey &&
     Array.isArray(entry?.previewVideos) &&
-    entry.previewVideos.some((video) => (
-      hasDirectBlobRef(video) &&
-      (video?.byteAvailability || video?.availability) === 'playable'
-    ))
+    entry.previewVideos.some((video) => hasDirectBlobRef(video) && isFeedVideoPlaybackReady({
+      ...video,
+      channelKey: entry?.channelKey || entry?.driveKey,
+    }))
   )
 }
 
@@ -63,10 +81,7 @@ export function getFeedVideoLoadEntries(feedEntries, limit = 15) {
   return getVisibleSeededFeedEntries(feedEntries, limit)
 }
 
-function hasDirectBlobRef(video) {
-  return typeof video?.blobId === 'string' && video.blobId.length > 0 &&
-    typeof video?.blobsCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(video.blobsCoreKey)
-}
+
 
 function mergeVideoPlaybackIdentity(previous, incoming) {
   if (!previous) return incoming
@@ -78,6 +93,10 @@ function mergeVideoPlaybackIdentity(previous, incoming) {
     blobId: incoming.blobId || previous.blobId,
     blobsCoreKey: incoming.blobsCoreKey || previous.blobsCoreKey,
     mimeType: incoming.mimeType || previous.mimeType,
+    byteAvailability: incoming.byteAvailability || previous.byteAvailability,
+    hasHeadBlock: incoming.hasHeadBlock ?? previous.hasHeadBlock,
+    contiguousBlocks: incoming.contiguousBlocks ?? previous.contiguousBlocks,
+    readyForPlayback: incoming.readyForPlayback ?? previous.readyForPlayback,
   }
 }
 
@@ -169,6 +188,7 @@ export function selectFeedEntryVideosWithPreviewFallback(loadedVideos, previewFa
 export function shouldRenderFeedVideo({ video, identityDriveKey }) {
   const channelKey = video?.channelKey || video?.driveKey || null
   if (identityDriveKey && channelKey === identityDriveKey) return true
+  if (hasDirectBlobRef(video)) return true
   return (video?.byteAvailability || video?.availability) === 'playable'
 }
 

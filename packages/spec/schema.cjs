@@ -284,7 +284,11 @@ ns.register({
     { name: 'thumbnailBlobId', type: 'string', required: false },
     { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
     { name: 'thumbnailMimeType', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
+    { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'byteAvailability', type: 'string', required: false },
+    { name: 'hasHeadBlock', type: 'bool', required: false },
+    { name: 'contiguousBlocks', type: 'uint', required: false },
+    { name: 'readyForPlayback', type: 'bool', required: false },
   ]
 })
 
@@ -337,11 +341,44 @@ ns.register({
 })
 
 ns.register({
+  name: 'selected-blob-warmup',
+  fields: [
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'peerCount', type: 'uint', required: false },
+    { name: 'hasHeadBlock', type: 'bool', required: false },
+    { name: 'contiguousBlocks', type: 'uint', required: false },
+    { name: 'readyForPlayback', type: 'bool', required: false },
+    { name: 'blobPeerIdsJson', type: 'string', required: false },
+    { name: 'sourceFeedPeerIdsJson', type: 'string', required: false },
+    { name: 'sourceRelayPeerIdsJson', type: 'string', required: false },
+    { name: 'retainedDiscoveryLabel', type: 'string', required: false },
+    { name: 'retainedDiscoveryStatus', type: 'string', required: false },
+    { name: 'feedRelayAlsoBlobPeer', type: 'bool', required: false },
+    { name: 'promotedPeerHintsJson', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'peer-warmup',
+  fields: [
+    { name: 'peerCount', type: 'uint', required: false },
+    { name: 'retained', type: 'bool', required: false },
+    { name: 'timedOut', type: 'bool', required: false },
+    { name: 'elapsedMs', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
   name: 'prepare-playback-response',
   fields: [
     { name: 'url', type: 'string', required: true },
     { name: 'stats', type: '@peartube/video-stats', required: false },
-    { name: 'warmupStarted', type: 'bool', required: true }
+    { name: 'warmupStarted', type: 'bool', required: true },
+    { name: 'peerWarmupStarted', type: 'bool', required: false },
+    { name: 'selectedBlobWarmup', type: '@peartube/selected-blob-warmup', required: false },
+    { name: 'peerWarmup', type: '@peartube/peer-warmup', required: false }
   ]
 })
 
@@ -354,7 +391,10 @@ ns.register({
     { name: 'videoCodec', type: 'string', required: false },
     { name: 'transcodeError', type: 'string', required: false },
     { name: 'stats', type: '@peartube/video-stats', required: false },
-    { name: 'warmupStarted', type: 'bool', required: false }
+    { name: 'warmupStarted', type: 'bool', required: false },
+    { name: 'peerWarmupStarted', type: 'bool', required: false },
+    { name: 'selectedBlobWarmup', type: '@peartube/selected-blob-warmup', required: false },
+    { name: 'peerWarmup', type: '@peartube/peer-warmup', required: false }
   ]
 })
 
@@ -543,6 +583,9 @@ ns.register({
     { name: 'channelKey', type: 'string', required: false },
     { name: 'driveKey', type: 'string', required: false },
     { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'hasHeadBlock', type: 'bool', required: false },
+    { name: 'contiguousBlocks', type: 'uint', required: false },
+    { name: 'readyForPlayback', type: 'bool', required: false },
   ]
 })
 

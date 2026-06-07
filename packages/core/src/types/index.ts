@@ -59,6 +59,10 @@ export interface VideoData extends Video {
   publicBeeKey?: string | null;
   blobId?: string | null;
   blobsCoreKey?: string | null;
+  byteAvailability?: string | null;
+  hasHeadBlock?: boolean;
+  contiguousBlocks?: number;
+  readyForPlayback?: boolean;
 }
 
 export interface UploadVideoResult {

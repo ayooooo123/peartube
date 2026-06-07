@@ -295,7 +295,7 @@ test('listVideos uses legacy previewVideos from relay feed entries', async (t) =
   t.is(videos[0]?.publicBeeKey, '34'.repeat(32))
 })
 
-test('listVideos keeps restored relay preview refs playable while availability proof is pending', async (t) => {
+test('listVideos keeps restored relay preview refs visible but not byte-playable while proof is pending', async (t) => {
   const driveKey = '13'.repeat(32)
   const publicBeeKey = '35'.repeat(32)
   const blobsCoreKey = '57'.repeat(32)
@@ -355,8 +355,9 @@ test('listVideos keeps restored relay preview refs playable while availability p
 
   t.is(videos.length, 1)
   t.is(videos[0]?.id, 'restored-relay-preview-1')
-  t.is(videos[0]?.availability, 'playable')
-  t.is(videos[0]?.byteAvailability, 'playable')
+  t.is(videos[0]?.availability, 'unknown')
+  t.is(videos[0]?.byteAvailability, 'unknown')
+  t.is(videos[0]?.readyForPlayback, false)
 })
 
 test('listVideos falls back to the owner public bee when the channel view is empty', async (t) => {
@@ -416,7 +417,7 @@ test('listVideos falls back to the owner public bee when the channel view is emp
   t.is(videos[0]?.publicBeeKey, 'cc'.repeat(32))
 })
 
-test('listVideos keeps metadata-only public bee videos playable while peer proof is pending', async (t) => {
+test('listVideos marks metadata-only public bee videos unavailable while byte proof is pending', async (t) => {
   const driveKey = 'ee'.repeat(32)
   const publicBeeKey = 'ff'.repeat(32)
   const blobsCoreKey = 'aa'.repeat(32)
@@ -480,8 +481,9 @@ test('listVideos keeps metadata-only public bee videos playable while peer proof
 
   t.is(requestCalls.length, 1)
   t.is(videos.length, 1)
-  t.is(videos[0]?.availability, 'playable')
-  t.is(videos[0]?.byteAvailability, 'playable')
+  t.is(videos[0]?.availability, 'unavailable')
+  t.is(videos[0]?.byteAvailability, 'unavailable')
+  t.is(videos[0]?.readyForPlayback, false)
 })
 
 test('listVideos does not mark remote videos playable from unrelated swarm peers alone', async (t) => {
@@ -723,6 +725,8 @@ test('listVideos revalidates cached remote availability after the playable metad
               availability: 'playable',
               hasHeadBlock: true,
               contiguousBlocks: 8,
+              blobId: '0:8:0:1024',
+              blobsCoreKey,
             }]
           }
           return []
@@ -764,12 +768,81 @@ test('listVideos revalidates cached remote availability after the playable metad
     t.is(first[0]?.byteAvailability, 'playable')
     t.is(first[0]?.contiguousBlocks, 8)
     t.is(first[0]?.hasHeadBlock, true)
-    t.is(second[0]?.availability, 'unavailable')
-    t.is(second[0]?.byteAvailability, 'unavailable')
+    t.is(second[0]?.availability, 'unknown')
+    t.is(second[0]?.byteAvailability, 'unknown')
     t.is(requestCount, 2)
   } finally {
     Date.now = originalDateNow
   }
+})
+
+test('listVideos ignores playable peer hints for a different blob core', async (t) => {
+  const driveKey = '21'.repeat(32)
+  const publicBeeKey = '43'.repeat(32)
+  const blobsCoreKey = '65'.repeat(32)
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() {
+              return false
+            },
+          }
+        },
+      },
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async requestAvailabilityHints() {
+        return [{
+          driveKey,
+          id: 'video-wrong-core',
+          availability: 'playable',
+          hasHeadBlock: true,
+          contiguousBlocks: 8,
+          blobId: '0:8:0:1024',
+          blobsCoreKey: '66'.repeat(32),
+          sourceFeedPeerId: '77'.repeat(32),
+        }]
+      },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return [{
+          id: 'video-wrong-core',
+          title: 'Wrong core hint',
+          uploadedAt: 4,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }]
+      },
+      async getVideo(id) {
+        return {
+          id,
+          title: 'Wrong core hint',
+          uploadedAt: 4,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }
+      },
+    }),
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.is(videos[0]?.availability, 'unavailable')
+  t.is(videos[0]?.readyForPlayback, false)
 })
 
 test('getFeedSnapshotEntries keeps manifestUpdatedAt stable for unchanged public bee content', async (t) => {

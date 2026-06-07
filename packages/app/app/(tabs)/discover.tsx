@@ -62,6 +62,10 @@ interface FeedEntry {
     thumbnailBlobId?: string | null
     thumbnailBlobsCoreKey?: string | null
     thumbnailMimeType?: string | null
+    byteAvailability?: 'playable' | 'unavailable' | 'unknown' | null
+    hasHeadBlock?: boolean
+    contiguousBlocks?: number
+    readyForPlayback?: boolean
   }>
 }
 
@@ -78,6 +82,10 @@ function getFeedEntrySignature(entry: FeedEntry) {
   const previewSignature = (entry.previewVideos || []).map((video) => [
     video.id,
     video.uploadedAt || 0,
+    video.byteAvailability || '',
+    video.hasHeadBlock ? '1' : '0',
+    video.contiguousBlocks || 0,
+    video.readyForPlayback ? '1' : '0',
     video.duration || 0,
     video.blobId || '',
     video.blobsCoreKey || '',
@@ -99,6 +107,38 @@ function getVideoRef(video: VideoData) {
   return video.path && typeof video.path === 'string' && video.path.startsWith('/')
     ? video.path
     : video.id
+}
+const PLAYBACK_READY_RETRY_DELAYS_MS = [900, 1400, 2200] as const
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isWaitingForSelectedBlob(result: any) {
+  const warmup = result?.selectedBlobWarmup
+  return Boolean(warmup && warmup.readyForPlayback === false)
+}
+
+async function preparePlaybackWhenReady({
+  preparePlayback,
+  playbackRequest,
+  isCurrent,
+}: {
+  preparePlayback: (request: any) => Promise<any>
+  playbackRequest: any
+  isCurrent: () => boolean
+}) {
+  let result: any = null
+  for (let attempt = 0; attempt <= PLAYBACK_READY_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await wait(PLAYBACK_READY_RETRY_DELAYS_MS[attempt - 1])
+      if (!isCurrent()) return null
+    }
+    result = await preparePlayback(playbackRequest)
+    if (!isCurrent()) return null
+    if (!result?.url || !isWaitingForSelectedBlob(result)) return result
+  }
+  return result
 }
 
 
@@ -153,6 +193,7 @@ export default function VerticalDiscoveryScreen() {
   const [shortsVideoUrl, setShortsVideoUrl] = useState<string | null>(null)
   const [shortsPlaybackSession, setShortsPlaybackSession] = useState(0)
   const [shortsLoading, setShortsLoading] = useState(false)
+  const [shortsPlaybackMessage, setShortsPlaybackMessage] = useState<{ key: string; text: string; isError?: boolean } | null>(null)
   const [shortsChromeVisible, setShortsChromeVisible] = useState(true)
   const [commentsSheetVisible, setCommentsSheetVisible] = useState(false)
   const shortsPlayerRef = useRef<any>(null)
@@ -391,6 +432,7 @@ export default function VerticalDiscoveryScreen() {
     setShortsVideoUrl(null)
     setCommentsSheetVisible(false)
     setShortsLoading(false)
+    setShortsPlaybackMessage(null)
   }, [])
 
   useFocusEffect(
@@ -407,6 +449,7 @@ export default function VerticalDiscoveryScreen() {
     const playKey = `${video.channelKey}:${video.id}`
     if (pendingPlayKeyRef.current === playKey) return
     pendingPlayKeyRef.current = playKey
+    setShortsPlaybackMessage(null)
     const requestSeq = ++playbackRequestSeqRef.current
     const isStalePlaybackRequest = () => pendingPlayKeyRef.current !== playKey || playbackRequestSeqRef.current !== requestSeq
 
@@ -415,7 +458,7 @@ export default function VerticalDiscoveryScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (isStalePlaybackRequest()) return
-          if (result?.url) {
+          if (result?.url && !isWaitingForSelectedBlob(result)) {
             if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
             setShortsVideoUrl(result.url)
             setShortsPlaybackSession((prev) => prev + 1)
@@ -428,16 +471,27 @@ export default function VerticalDiscoveryScreen() {
         return
       }
       setShortsLoading(true)
-      const result = await rpc.preparePlayback(playbackRequest)
-      if (isStalePlaybackRequest()) return
-      if (result?.url) {
+      setShortsPlaybackMessage({ key: playKey, text: 'Fetching video from peers…' })
+      const result = await preparePlaybackWhenReady({
+        preparePlayback: rpc.preparePlayback.bind(rpc),
+        playbackRequest,
+        isCurrent: () => !isStalePlaybackRequest(),
+      })
+      if (isStalePlaybackRequest() || !result) return
+      if (result?.url && !isWaitingForSelectedBlob(result)) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        setShortsPlaybackMessage(null)
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
+      } else if (result?.url && isWaitingForSelectedBlob(result)) {
+        setShortsPlaybackMessage({ key: playKey, text: 'Video is still fetching from peers. Try again shortly.', isError: true })
+      } else {
+        setShortsPlaybackMessage({ key: playKey, text: 'Could not prepare playback. Try again shortly.', isError: true })
       }
     } catch (err) {
       if (!isStalePlaybackRequest()) {
         console.log('[VerticalDiscovery] Playback failed:', (err as any)?.message || err)
+        setShortsPlaybackMessage({ key: playKey, text: 'Could not prepare playback. Try again shortly.', isError: true })
       }
     } finally {
       if (!isStalePlaybackRequest()) {
@@ -667,6 +721,11 @@ export default function VerticalDiscoveryScreen() {
                     onControlsVisibleChange={setShortsChromeVisible}
                     onReplay={() => playVideo(video)}
                   />
+                  {shortsPlaybackMessage && shortsPlaybackMessage.key === `${video.channelKey}:${video.id}` ? (
+                    <View pointerEvents="none" style={[styles.playbackMessageBadge, shortsPlaybackMessage.isError ? styles.playbackMessageError : null]}>
+                      <Text style={styles.playbackMessageText} numberOfLines={2}>{shortsPlaybackMessage.text}</Text>
+                    </View>
+                  ) : null}
                 </View>
                 {shortsChromeVisible ? (
                   <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
@@ -811,6 +870,29 @@ const styles = StyleSheet.create({
   videoStage: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
+  },
+  playbackMessageBadge: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    top: 80,
+    zIndex: 4,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(15,23,42,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  playbackMessageError: {
+    backgroundColor: 'rgba(127,29,29,0.92)',
+    borderColor: 'rgba(248,113,113,0.42)',
+  },
+  playbackMessageText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   bottomMeta: {
     position: 'absolute',

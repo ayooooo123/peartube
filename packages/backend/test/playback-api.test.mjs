@@ -60,6 +60,7 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
   t.is(result.peerWarmupStarted, true)
   t.alike(result.peerWarmup, {
     peerCount: 0,
+    blobPeerIds: [],
     retained: false,
     timedOut: false,
   })

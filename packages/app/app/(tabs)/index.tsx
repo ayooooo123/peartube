@@ -2,7 +2,7 @@
  * Home Tab - YouTube-style Video Feed with P2P Public Feed Discovery
  */
 import { useCallback, useState, useEffect, useRef, useMemo } from 'react'
-import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, FlatList, useWindowDimensions, AppState, AppStateStatus, type ListRenderItemInfo } from 'react-native'
+import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, FlatList, useWindowDimensions, AppState, AppStateStatus, StyleSheet, type ListRenderItemInfo } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -29,6 +29,8 @@ import {
   selectFeedEntryVideosWithPreviewFallback,
   shouldKeepFeedVideoForVisibleEntries,
   shouldRenderFeedVideo,
+  hasDirectBlobRef,
+  isFeedVideoPlaybackReady,
 } from '@/lib/feed-hydration'
 import {
   createFeedSnapshot,
@@ -68,6 +70,10 @@ interface FeedEntry {
     thumbnailBlobId?: string | null
     thumbnailBlobsCoreKey?: string | null
     thumbnailMimeType?: string | null
+    byteAvailability?: 'playable' | 'unavailable' | 'unknown' | null
+    hasHeadBlock?: boolean
+    contiguousBlocks?: number
+    readyForPlayback?: boolean
   }>
 }
 
@@ -113,6 +119,43 @@ function logTiming(label: string, startMs: number, details: Record<string, any> 
 // Detect Pear desktop vs mobile
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).PearWorkerClient || !!(window as any).bridge)
 
+const PLAYBACK_READY_RETRY_DELAYS_MS = [900, 1400, 2200] as const
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getHomePlaybackKey(video: VideoData) {
+  return `${video.channelKey || video.driveKey || 'local'}:${video.id}`
+}
+
+function isWaitingForSelectedBlob(result: any) {
+  const warmup = result?.selectedBlobWarmup
+  return Boolean(warmup && warmup.readyForPlayback === false)
+}
+
+async function preparePlaybackWhenReady({
+  preparePlayback,
+  playbackRequest,
+  isCurrent,
+}: {
+  preparePlayback: (request: any) => Promise<any>
+  playbackRequest: any
+  isCurrent: () => boolean
+}) {
+  let result: any = null
+  for (let attempt = 0; attempt <= PLAYBACK_READY_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await wait(PLAYBACK_READY_RETRY_DELAYS_MS[attempt - 1])
+      if (!isCurrent()) return null
+    }
+    result = await preparePlayback(playbackRequest)
+    if (!isCurrent()) return null
+    if (!result?.url || !isWaitingForSelectedBlob(result)) return result
+  }
+  return result
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -156,6 +199,7 @@ export default function HomeScreen() {
   // Aggregated feed videos from all discovered channels
   const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
   const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
+  const [playbackFetchState, setPlaybackFetchState] = useState<{ key: string; message: string; isError?: boolean } | null>(null)
   const [snapshotChannelKeys, setSnapshotChannelKeys] = useState<Set<string>>(new Set())
   const [snapshotRestoredOnly, setSnapshotRestoredOnly] = useState(false)
   const feedLoadRunIdRef = useRef(0)
@@ -786,7 +830,7 @@ export default function HomeScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (!isCurrentPlaybackRequest()) return
-          if (result?.url) {
+          if (result?.url && !isWaitingForSelectedBlob(result)) {
             if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
             loadAndPlayVideo(video, result.url)
           }
@@ -794,15 +838,27 @@ export default function HomeScreen() {
         loadAndPlayVideo(video, cachedUrl)
         return
       }
-      const result = await rpc.preparePlayback(playbackRequest)
-      if (!isCurrentPlaybackRequest()) return
+      const playKey = getHomePlaybackKey(video)
+      setPlaybackFetchState({ key: playKey, message: 'Fetching video from peers…' })
+      const result = await preparePlaybackWhenReady({
+        preparePlayback: rpc.preparePlayback.bind(rpc),
+        playbackRequest,
+        isCurrent: isCurrentPlaybackRequest,
+      })
+      if (!isCurrentPlaybackRequest() || !result) return
 
-      if (result?.url) {
+      if (result?.url && !isWaitingForSelectedBlob(result)) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        setPlaybackFetchState((state) => state?.key === playKey ? null : state)
         loadAndPlayVideo(video, result.url)
+      } else if (result?.url && isWaitingForSelectedBlob(result)) {
+        setPlaybackFetchState({ key: playKey, message: 'Video is still fetching from peers. Try again shortly.', isError: true })
+      } else {
+        setPlaybackFetchState({ key: playKey, message: 'Could not prepare playback. Try again shortly.', isError: true })
       }
     } catch (err) {
       console.error('[Home] Failed to play video:', err)
+      setPlaybackFetchState({ key: getHomePlaybackKey(video), message: 'Could not prepare playback. Try again shortly.', isError: true })
     }
   }, [rpc, loadAndPlayVideo])
 
@@ -843,7 +899,7 @@ export default function HomeScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (!isCurrentPlaybackRequest()) return
-          if (result?.url) {
+          if (result?.url && !isWaitingForSelectedBlob(result)) {
             if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
             loadAndPlayVideo(video, result.url)
           }
@@ -851,16 +907,28 @@ export default function HomeScreen() {
         loadAndPlayVideo(video, cachedUrl)
         return
       }
-      const result = await rpc.preparePlayback(playbackRequest)
-      if (!isCurrentPlaybackRequest()) return
+      const playKey = getHomePlaybackKey(video)
+      setPlaybackFetchState({ key: playKey, message: 'Fetching video from peers…' })
+      const result = await preparePlaybackWhenReady({
+        preparePlayback: rpc.preparePlayback.bind(rpc),
+        playbackRequest,
+        isCurrent: isCurrentPlaybackRequest,
+      })
+      if (!isCurrentPlaybackRequest() || !result) return
 
-      if (result?.url) {
+      if (result?.url && !isWaitingForSelectedBlob(result)) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        setPlaybackFetchState((state) => state?.key === playKey ? null : state)
         // Load video into the overlay player (animates from mini to fullscreen)
         loadAndPlayVideo(video, result.url)
+      } else if (result?.url && isWaitingForSelectedBlob(result)) {
+        setPlaybackFetchState({ key: playKey, message: 'Video is still fetching from peers. Try again shortly.', isError: true })
+      } else {
+        setPlaybackFetchState({ key: playKey, message: 'Could not prepare playback. Try again shortly.', isError: true })
       }
     } catch (err) {
       console.error('[Home] Failed to play video:', err)
+      setPlaybackFetchState({ key: getHomePlaybackKey(video), message: 'Could not prepare playback. Try again shortly.', isError: true })
     }
   }, [rpc, loadAndPlayVideo])
 
@@ -1021,22 +1089,36 @@ export default function HomeScreen() {
       gap: 24,
       marginBottom: 24,
     } : { marginBottom: 12 }}>
-      {rowVideos.map((video, index) => (
-        <View
-          key={`${video.channelKey || 'local'}-${video.id}`}
-          style={videoGridItemStyle}
-        >
-          <VideoCard
-            video={video}
-            onPress={() => playVideo(video)}
-            showChannelInfo={showChannelInfo}
-            onChannelPress={showChannelInfo && video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey, publicBeeKey: video.publicBeeKey || undefined } }) : undefined}
-            testID={firstRowTestId && index === 0 ? 'discover-feed-first-video' : undefined}
-          />
-        </View>
-      ))}
+      {rowVideos.map((video, index) => {
+        const playKey = getHomePlaybackKey(video)
+        const directBlobNotReady = hasDirectBlobRef(video as any) && !isFeedVideoPlaybackReady(video as any, identity?.driveKey)
+        const playbackStatus = playbackFetchState?.key === playKey
+          ? playbackFetchState
+          : directBlobNotReady
+            ? { key: playKey, message: 'Fetching video from peers…' }
+            : null
+        return (
+          <View
+            key={`${video.channelKey || 'local'}-${video.id}`}
+            style={videoGridItemStyle}
+          >
+            <VideoCard
+              video={video}
+              onPress={() => playVideo(video)}
+              showChannelInfo={showChannelInfo}
+              onChannelPress={showChannelInfo && video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey, publicBeeKey: video.publicBeeKey || undefined } }) : undefined}
+              testID={firstRowTestId && index === 0 ? 'discover-feed-first-video' : undefined}
+            />
+            {playbackStatus ? (
+              <View pointerEvents="none" style={[styles.playbackStatusBadge, playbackStatus.isError ? styles.playbackStatusError : null]}>
+                <Text style={styles.playbackStatusText} numberOfLines={2}>{playbackStatus.message}</Text>
+              </View>
+            ) : null}
+          </View>
+        )
+      })}
     </View>
-  ), [isDesktop, playVideo, router, videoGridItemStyle])
+  ), [identity?.driveKey, isDesktop, playVideo, playbackFetchState, router, videoGridItemStyle])
 
   const renderChannelItem = useCallback(({ item }: ListRenderItemInfo<ChannelListItem>) => {
     if (item.type === 'loading') {
@@ -1396,3 +1478,28 @@ export default function HomeScreen() {
     </View>
   )
 }
+
+const styles = StyleSheet.create({
+  playbackStatusBadge: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    top: 12,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(15,23,42,0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  playbackStatusError: {
+    backgroundColor: 'rgba(127,29,29,0.92)',
+    borderColor: 'rgba(248,113,113,0.42)',
+  },
+  playbackStatusText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+})

@@ -36,6 +36,29 @@ test('vertical feed controller dedupes preview and hydrated videos by channel/vi
   ])
 })
 
+test('vertical feed controller preserves preview blob refs when hydration updates metadata only', () => {
+  const merged = mergeUniqueFeedVideos([
+    {
+      id: 'a',
+      channelKey: 'one',
+      title: 'preview',
+      blobId: '0:2:0:512',
+      blobsCoreKey: 'aa'.repeat(32),
+      mimeType: 'video/mp4',
+      publicBeeKey: 'bee-preview',
+    },
+  ], [
+    { id: 'a', channelKey: 'one', title: 'hydrated' },
+  ])
+
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].title, 'hydrated')
+  assert.equal(merged[0].blobId, '0:2:0:512')
+  assert.equal(merged[0].blobsCoreKey, 'aa'.repeat(32))
+  assert.equal(merged[0].mimeType, 'video/mp4')
+  assert.equal(merged[0].publicBeeKey, 'bee-preview')
+})
+
 test('vertical feed controller preserves rich cached entries during partial feed hydration', () => {
   const cached = [{
     channelKey: 'one',

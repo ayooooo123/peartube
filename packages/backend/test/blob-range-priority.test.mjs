@@ -84,7 +84,7 @@ function createRangeRequest({ method = 'GET', token = 'test-token' } = {}) {
   return { key, blob, req }
 }
 
-test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP GET range', async (t) => {
+test('prioritizeBlobServerRangeRequest starts a linear core download for the requested HTTP GET range', async (t) => {
   const calls = []
   const { key, blob, req } = createRangeRequest()
   const blobServer = {
@@ -112,7 +112,7 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
 
   t.alike(result, { start: 14, end: 15, blocks: 1 })
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
-  t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
+  t.alike(calls[1], ['download', { start: 14, end: 15, linear: true }])
   // The shared serving core must NOT be closed on cleanup by default: it is the
   // same core hypercore-blob-server streams playback ranges from. Closing it
   // mid-stream causes constant playback stalls.

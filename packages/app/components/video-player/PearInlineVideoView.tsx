@@ -43,6 +43,14 @@ const ANDROID_BUFFER_OPTIONS = {
   preferredForwardBufferDuration: 20,
   waitsToMinimizeStalling: true,
 }
+// iOS (AVPlayer) was using the default forward buffer, so for large P2P-streamed
+// archives it would only read a little ahead and stall whenever the relay peers
+// lagged. Match Android's 20s forward buffer and let AVPlayer wait to minimize
+// stalling so it refills before resuming instead of stuttering block-by-block.
+const IOS_BUFFER_OPTIONS = {
+  preferredForwardBufferDuration: 20,
+  waitsToMinimizeStalling: true,
+}
 const SEEK_PLAYBACK_RECOVERY_MS = 6000
 
 function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
@@ -125,12 +133,12 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     nextPlayer.playbackRate = playbackRate
     nextPlayer.showNowPlayingNotification = showNotificationControls
     nextPlayer.staysActiveInBackground = showNotificationControls
-    if (Platform.OS === 'android') {
-      try {
-        nextPlayer.bufferOptions = ANDROID_BUFFER_OPTIONS as any
-      } catch {
-        // Some Expo Video versions expose bufferOptions as read-only before source load.
-      }
+    try {
+      nextPlayer.bufferOptions = (Platform.OS === 'android'
+        ? ANDROID_BUFFER_OPTIONS
+        : IOS_BUFFER_OPTIONS) as any
+    } catch {
+      // Some Expo Video versions expose bufferOptions as read-only before source load.
     }
   })
 

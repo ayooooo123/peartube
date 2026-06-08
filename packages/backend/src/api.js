@@ -2230,7 +2230,11 @@ export function createApi({
             const startFullDownload = () => {
               if (fullDownloadStarted) return
               fullDownloadStarted = true
-              const downloadRange = core.download({ start: startBlock, end: endBlock })
+              // Stream the body in play order. Without `linear`, hypercore pulls
+              // blocks in rarest/availability order, so the background fill races
+              // ahead into the middle/end of the file while the player stalls
+              // waiting for the contiguous bytes right after its current position.
+              const downloadRange = core.download({ start: startBlock, end: endBlock, linear: true })
               activeRangeRequests.get(prefetchKey)?.ranges.push(downloadRange)
               downloadRange.done().then(async () => {
                 console.log('[API] Download complete (blobs)')
@@ -2283,7 +2287,7 @@ export function createApi({
               if (headBlocks > 0 && headBlocks < totalBlocks) {
                 const headEnd = Math.min(endBlock, startBlock + headBlocks)
                 console.log('[API] Prefetch head range (blobs):', (headEnd - startBlock), 'blocks')
-                const headRange = core.download({ start: startBlock, end: headEnd })
+                const headRange = core.download({ start: startBlock, end: headEnd, linear: true })
                 activeRangeRequests.get(prefetchKey).ranges.push(headRange)
                 let headTimeout = null
                 headTimeout = setTimeout(() => {

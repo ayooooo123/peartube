@@ -21,6 +21,6 @@
     "hyperschema-swift": "^0.2.0"
   },
   "devDependencies": {
-    "brittle": "^3.19.1"
+    "brittle": "^4.0.2"
   }
 }

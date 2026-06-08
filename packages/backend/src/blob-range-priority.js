@@ -166,10 +166,17 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
     if (cleanedUp) return
     cleanedUp = true
     try { range?.destroy?.() } catch { /* best effort */ }
-    try {
-      const closeResult = core.close?.()
-      if (closeResult && typeof closeResult.catch === 'function') closeResult.catch(() => {})
-    } catch { /* best effort */ }
+    // Do NOT close the shared serving core by default: `_getCore` returns the
+    // core that hypercore-blob-server is actively streaming byte ranges from to
+    // the player. Closing it on range-priority cleanup tears down playback
+    // mid-stream, causing constant stalls. Only close when a caller explicitly
+    // owns the core lifecycle for this request.
+    if (options.closeCoreOnCleanup === true) {
+      try {
+        const closeResult = core.close?.()
+        if (closeResult && typeof closeResult.catch === 'function') closeResult.catch(() => {})
+      } catch { /* best effort */ }
+    }
   }
   const timer = setTimeout(cleanup, timeoutMs)
   const done = typeof range?.done === 'function'

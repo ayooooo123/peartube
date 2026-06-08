@@ -2,7 +2,13 @@ import c from 'compact-encoding'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
 
-const DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES = 2 * 1024 * 1024
+// Keep the prioritized read-ahead window comfortably larger than the player's
+// forward buffer (ExoPlayer/AVPlayer buffer ~20s ahead). A 2MB window was only
+// ~2s of video for large archived files, so the player constantly outran the
+// prioritized region on bandwidth-constrained mobile links. 16MB keeps the
+// front of the stream prioritized ahead of the player without flooding the
+// scheduler with the whole file.
+const DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES = 16 * 1024 * 1024
 const DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS = 15000
 
 const blobIdEncoding = {
@@ -152,10 +158,15 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
   }, true)
   if (!core || typeof core.download !== 'function') return null
 
+  // Video playback reads bytes sequentially from the seek point forward, so the
+  // prioritized region must download in play order. `linear: false` let
+  // hypercore fetch blocks in rarest/availability order, which leaves gaps the
+  // player reaches before they land -> rebuffering on large files. `linear: true`
+  // fills the window front-to-back so the player keeps draining contiguous bytes.
   const range = core.download({
     start: downloadRange.start,
     end: downloadRange.end,
-    linear: false
+    linear: true
   })
   const timeoutMs = Math.max(
     1000,

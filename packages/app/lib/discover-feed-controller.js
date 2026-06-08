@@ -45,6 +45,10 @@ function mergeVideoPlaybackIdentity(previous, incoming) {
     blobId: incoming.blobId || previous.blobId,
     blobsCoreKey: incoming.blobsCoreKey || previous.blobsCoreKey,
     mimeType: incoming.mimeType || previous.mimeType,
+    byteAvailability: incoming.byteAvailability || previous.byteAvailability,
+    hasHeadBlock: incoming.hasHeadBlock ?? previous.hasHeadBlock,
+    contiguousBlocks: incoming.contiguousBlocks ?? previous.contiguousBlocks,
+    readyForPlayback: incoming.readyForPlayback ?? previous.readyForPlayback,
   }
 }
 

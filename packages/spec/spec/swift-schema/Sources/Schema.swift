@@ -1389,8 +1389,12 @@ public struct Video {
   public var thumbnailBlobsCoreKey: String?
   public var thumbnailMimeType: String?
   public var publicBeeKey: String?
+  public var byteAvailability: String?
+  public var hasHeadBlock: Bool
+  public var contiguousBlocks: UInt?
+  public var readyForPlayback: Bool
 
-  public init(id: String, title: String, description: String? = nil, path: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, channelKey: String? = nil, channelName: String? = nil, createdAt: UInt? = nil, views: UInt? = nil, category: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, availability: String? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, publicBeeKey: String? = nil) {
+  public init(id: String, title: String, description: String? = nil, path: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, channelKey: String? = nil, channelName: String? = nil, createdAt: UInt? = nil, views: UInt? = nil, category: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, availability: String? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, publicBeeKey: String? = nil, byteAvailability: String? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false) {
     self.id = id
     self.title = title
     self.description = description
@@ -1410,6 +1414,10 @@ public struct Video {
     self.thumbnailBlobsCoreKey = thumbnailBlobsCoreKey
     self.thumbnailMimeType = thumbnailMimeType
     self.publicBeeKey = publicBeeKey
+    self.byteAvailability = byteAvailability
+    self.hasHeadBlock = hasHeadBlock
+    self.contiguousBlocks = contiguousBlocks
+    self.readyForPlayback = readyForPlayback
   }
 }
 
@@ -1419,9 +1427,11 @@ public struct VideoCodec: Codec {
   let _availabilityCodec = Primitive.UTF8()
   let _blobIdCodec = Primitive.UTF8()
   let _blobsCoreKeyCodec = Primitive.UTF8()
+  let _byteAvailabilityCodec = Primitive.UTF8()
   let _categoryCodec = Primitive.UTF8()
   let _channelKeyCodec = Primitive.UTF8()
   let _channelNameCodec = Primitive.UTF8()
+  let _contiguousBlocksCodec = Primitive.UInt()
   let _createdAtCodec = Primitive.UInt()
   let _descriptionCodec = Primitive.UTF8()
   let _durationCodec = Primitive.UInt()
@@ -1458,6 +1468,10 @@ public struct VideoCodec: Codec {
     if value.thumbnailBlobsCoreKey != nil { flags |= 16384 }
     if value.thumbnailMimeType != nil { flags |= 32768 }
     if value.publicBeeKey != nil { flags |= 65536 }
+    if value.byteAvailability != nil { flags |= 131072 }
+    if value.hasHeadBlock { flags |= 262144 }
+    if value.contiguousBlocks != nil { flags |= 524288 }
+    if value.readyForPlayback { flags |= 1048576 }
 
     _idCodec.preencode(&state, value.id)
     _titleCodec.preencode(&state, value.title)
@@ -1479,6 +1493,8 @@ public struct VideoCodec: Codec {
     if let v = value.thumbnailBlobsCoreKey { _thumbnailBlobsCoreKeyCodec.preencode(&state, v) }
     if let v = value.thumbnailMimeType { _thumbnailMimeTypeCodec.preencode(&state, v) }
     if let v = value.publicBeeKey { _publicBeeKeyCodec.preencode(&state, v) }
+    if let v = value.byteAvailability { _byteAvailabilityCodec.preencode(&state, v) }
+    if let v = value.contiguousBlocks { _contiguousBlocksCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: Video) throws {
@@ -1500,6 +1516,10 @@ public struct VideoCodec: Codec {
     if value.thumbnailBlobsCoreKey != nil { flags |= 16384 }
     if value.thumbnailMimeType != nil { flags |= 32768 }
     if value.publicBeeKey != nil { flags |= 65536 }
+    if value.byteAvailability != nil { flags |= 131072 }
+    if value.hasHeadBlock { flags |= 262144 }
+    if value.contiguousBlocks != nil { flags |= 524288 }
+    if value.readyForPlayback { flags |= 1048576 }
 
     try _idCodec.encode(&state, value.id)
     try _titleCodec.encode(&state, value.title)
@@ -1521,6 +1541,8 @@ public struct VideoCodec: Codec {
     if let v = value.thumbnailBlobsCoreKey { try _thumbnailBlobsCoreKeyCodec.encode(&state, v) }
     if let v = value.thumbnailMimeType { try _thumbnailMimeTypeCodec.encode(&state, v) }
     if let v = value.publicBeeKey { try _publicBeeKeyCodec.encode(&state, v) }
+    if let v = value.byteAvailability { try _byteAvailabilityCodec.encode(&state, v) }
+    if let v = value.contiguousBlocks { try _contiguousBlocksCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> Video {
@@ -1544,6 +1566,8 @@ public struct VideoCodec: Codec {
     let _r16: String? = (flags & 16384) != 0 ? try _thumbnailBlobsCoreKeyCodec.decode(&state) : nil
     let _r17: String? = (flags & 32768) != 0 ? try _thumbnailMimeTypeCodec.decode(&state) : nil
     let _r18: String? = (flags & 65536) != 0 ? try _publicBeeKeyCodec.decode(&state) : nil
+    let _r19: String? = (flags & 131072) != 0 ? try _byteAvailabilityCodec.decode(&state) : nil
+    let _r20: UInt? = (flags & 524288) != 0 ? try _contiguousBlocksCodec.decode(&state) : nil
     return Video(
       id: _r0,
       title: _r1,
@@ -1563,7 +1587,11 @@ public struct VideoCodec: Codec {
       thumbnailBlobId: _r15,
       thumbnailBlobsCoreKey: _r16,
       thumbnailMimeType: _r17,
-      publicBeeKey: _r18
+      publicBeeKey: _r18,
+      byteAvailability: _r19,
+      hasHeadBlock: (flags & 262144) != 0,
+      contiguousBlocks: _r20,
+      readyForPlayback: (flags & 1048576) != 0
     )
   }
 }
@@ -1863,22 +1891,235 @@ public struct PreparePlaybackRequestCodec: Codec {
 
 public let preparePlaybackRequest = PreparePlaybackRequestCodec()
 
+// @peartube/selected-blob-warmup
+public struct SelectedBlobWarmup {
+  public var blobsCoreKey: String?
+  public var blobId: String?
+  public var peerCount: UInt?
+  public var hasHeadBlock: Bool
+  public var contiguousBlocks: UInt?
+  public var readyForPlayback: Bool
+  public var blobPeerIdsJson: String?
+  public var sourceFeedPeerIdsJson: String?
+  public var sourceRelayPeerIdsJson: String?
+  public var retainedDiscoveryLabel: String?
+  public var retainedDiscoveryStatus: String?
+  public var feedRelayAlsoBlobPeer: Bool
+  public var promotedPeerHintsJson: String?
+  public var error: String?
+
+  public init(blobsCoreKey: String? = nil, blobId: String? = nil, peerCount: UInt? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false, blobPeerIdsJson: String? = nil, sourceFeedPeerIdsJson: String? = nil, sourceRelayPeerIdsJson: String? = nil, retainedDiscoveryLabel: String? = nil, retainedDiscoveryStatus: String? = nil, feedRelayAlsoBlobPeer: Bool = false, promotedPeerHintsJson: String? = nil, error: String? = nil) {
+    self.blobsCoreKey = blobsCoreKey
+    self.blobId = blobId
+    self.peerCount = peerCount
+    self.hasHeadBlock = hasHeadBlock
+    self.contiguousBlocks = contiguousBlocks
+    self.readyForPlayback = readyForPlayback
+    self.blobPeerIdsJson = blobPeerIdsJson
+    self.sourceFeedPeerIdsJson = sourceFeedPeerIdsJson
+    self.sourceRelayPeerIdsJson = sourceRelayPeerIdsJson
+    self.retainedDiscoveryLabel = retainedDiscoveryLabel
+    self.retainedDiscoveryStatus = retainedDiscoveryStatus
+    self.feedRelayAlsoBlobPeer = feedRelayAlsoBlobPeer
+    self.promotedPeerHintsJson = promotedPeerHintsJson
+    self.error = error
+  }
+}
+
+public struct SelectedBlobWarmupCodec: Codec {
+  public typealias Value = SelectedBlobWarmup
+
+  let _blobIdCodec = Primitive.UTF8()
+  let _blobPeerIdsJsonCodec = Primitive.UTF8()
+  let _blobsCoreKeyCodec = Primitive.UTF8()
+  let _contiguousBlocksCodec = Primitive.UInt()
+  let _errorCodec = Primitive.UTF8()
+  let _peerCountCodec = Primitive.UInt()
+  let _promotedPeerHintsJsonCodec = Primitive.UTF8()
+  let _retainedDiscoveryLabelCodec = Primitive.UTF8()
+  let _retainedDiscoveryStatusCodec = Primitive.UTF8()
+  let _sourceFeedPeerIdsJsonCodec = Primitive.UTF8()
+  let _sourceRelayPeerIdsJsonCodec = Primitive.UTF8()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: SelectedBlobWarmup) {
+    // Compute flags for varint sizing
+    var flags: UInt = 0
+    if value.blobsCoreKey != nil { flags |= 1 }
+    if value.blobId != nil { flags |= 2 }
+    if value.peerCount != nil { flags |= 4 }
+    if value.hasHeadBlock { flags |= 8 }
+    if value.contiguousBlocks != nil { flags |= 16 }
+    if value.readyForPlayback { flags |= 32 }
+    if value.blobPeerIdsJson != nil { flags |= 64 }
+    if value.sourceFeedPeerIdsJson != nil { flags |= 128 }
+    if value.sourceRelayPeerIdsJson != nil { flags |= 256 }
+    if value.retainedDiscoveryLabel != nil { flags |= 512 }
+    if value.retainedDiscoveryStatus != nil { flags |= 1024 }
+    if value.feedRelayAlsoBlobPeer { flags |= 2048 }
+    if value.promotedPeerHintsJson != nil { flags |= 4096 }
+    if value.error != nil { flags |= 8192 }
+
+    Primitive.UInt().preencode(&state, flags)
+    if let v = value.blobsCoreKey { _blobsCoreKeyCodec.preencode(&state, v) }
+    if let v = value.blobId { _blobIdCodec.preencode(&state, v) }
+    if let v = value.peerCount { _peerCountCodec.preencode(&state, v) }
+    if let v = value.contiguousBlocks { _contiguousBlocksCodec.preencode(&state, v) }
+    if let v = value.blobPeerIdsJson { _blobPeerIdsJsonCodec.preencode(&state, v) }
+    if let v = value.sourceFeedPeerIdsJson { _sourceFeedPeerIdsJsonCodec.preencode(&state, v) }
+    if let v = value.sourceRelayPeerIdsJson { _sourceRelayPeerIdsJsonCodec.preencode(&state, v) }
+    if let v = value.retainedDiscoveryLabel { _retainedDiscoveryLabelCodec.preencode(&state, v) }
+    if let v = value.retainedDiscoveryStatus { _retainedDiscoveryStatusCodec.preencode(&state, v) }
+    if let v = value.promotedPeerHintsJson { _promotedPeerHintsJsonCodec.preencode(&state, v) }
+    if let v = value.error { _errorCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: SelectedBlobWarmup) throws {
+    var flags: UInt = 0
+    if value.blobsCoreKey != nil { flags |= 1 }
+    if value.blobId != nil { flags |= 2 }
+    if value.peerCount != nil { flags |= 4 }
+    if value.hasHeadBlock { flags |= 8 }
+    if value.contiguousBlocks != nil { flags |= 16 }
+    if value.readyForPlayback { flags |= 32 }
+    if value.blobPeerIdsJson != nil { flags |= 64 }
+    if value.sourceFeedPeerIdsJson != nil { flags |= 128 }
+    if value.sourceRelayPeerIdsJson != nil { flags |= 256 }
+    if value.retainedDiscoveryLabel != nil { flags |= 512 }
+    if value.retainedDiscoveryStatus != nil { flags |= 1024 }
+    if value.feedRelayAlsoBlobPeer { flags |= 2048 }
+    if value.promotedPeerHintsJson != nil { flags |= 4096 }
+    if value.error != nil { flags |= 8192 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.blobsCoreKey { try _blobsCoreKeyCodec.encode(&state, v) }
+    if let v = value.blobId { try _blobIdCodec.encode(&state, v) }
+    if let v = value.peerCount { try _peerCountCodec.encode(&state, v) }
+    if let v = value.contiguousBlocks { try _contiguousBlocksCodec.encode(&state, v) }
+    if let v = value.blobPeerIdsJson { try _blobPeerIdsJsonCodec.encode(&state, v) }
+    if let v = value.sourceFeedPeerIdsJson { try _sourceFeedPeerIdsJsonCodec.encode(&state, v) }
+    if let v = value.sourceRelayPeerIdsJson { try _sourceRelayPeerIdsJsonCodec.encode(&state, v) }
+    if let v = value.retainedDiscoveryLabel { try _retainedDiscoveryLabelCodec.encode(&state, v) }
+    if let v = value.retainedDiscoveryStatus { try _retainedDiscoveryStatusCodec.encode(&state, v) }
+    if let v = value.promotedPeerHintsJson { try _promotedPeerHintsJsonCodec.encode(&state, v) }
+    if let v = value.error { try _errorCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> SelectedBlobWarmup {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: String? = (flags & 1) != 0 ? try _blobsCoreKeyCodec.decode(&state) : nil
+    let _r1: String? = (flags & 2) != 0 ? try _blobIdCodec.decode(&state) : nil
+    let _r2: UInt? = (flags & 4) != 0 ? try _peerCountCodec.decode(&state) : nil
+    let _r3: UInt? = (flags & 16) != 0 ? try _contiguousBlocksCodec.decode(&state) : nil
+    let _r4: String? = (flags & 64) != 0 ? try _blobPeerIdsJsonCodec.decode(&state) : nil
+    let _r5: String? = (flags & 128) != 0 ? try _sourceFeedPeerIdsJsonCodec.decode(&state) : nil
+    let _r6: String? = (flags & 256) != 0 ? try _sourceRelayPeerIdsJsonCodec.decode(&state) : nil
+    let _r7: String? = (flags & 512) != 0 ? try _retainedDiscoveryLabelCodec.decode(&state) : nil
+    let _r8: String? = (flags & 1024) != 0 ? try _retainedDiscoveryStatusCodec.decode(&state) : nil
+    let _r9: String? = (flags & 4096) != 0 ? try _promotedPeerHintsJsonCodec.decode(&state) : nil
+    let _r10: String? = (flags & 8192) != 0 ? try _errorCodec.decode(&state) : nil
+    return SelectedBlobWarmup(
+      blobsCoreKey: _r0,
+      blobId: _r1,
+      peerCount: _r2,
+      hasHeadBlock: (flags & 8) != 0,
+      contiguousBlocks: _r3,
+      readyForPlayback: (flags & 32) != 0,
+      blobPeerIdsJson: _r4,
+      sourceFeedPeerIdsJson: _r5,
+      sourceRelayPeerIdsJson: _r6,
+      retainedDiscoveryLabel: _r7,
+      retainedDiscoveryStatus: _r8,
+      feedRelayAlsoBlobPeer: (flags & 2048) != 0,
+      promotedPeerHintsJson: _r9,
+      error: _r10
+    )
+  }
+}
+
+public let selectedBlobWarmup = SelectedBlobWarmupCodec()
+
+// @peartube/peer-warmup
+public struct PeerWarmup {
+  public var peerCount: UInt?
+  public var retained: Bool
+  public var timedOut: Bool
+  public var elapsedMs: UInt?
+
+  public init(peerCount: UInt? = nil, retained: Bool = false, timedOut: Bool = false, elapsedMs: UInt? = nil) {
+    self.peerCount = peerCount
+    self.retained = retained
+    self.timedOut = timedOut
+    self.elapsedMs = elapsedMs
+  }
+}
+
+public struct PeerWarmupCodec: Codec {
+  public typealias Value = PeerWarmup
+
+  let _elapsedMsCodec = Primitive.UInt()
+  let _peerCountCodec = Primitive.UInt()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: PeerWarmup) {
+    state.end += 1 // flags
+    if let v = value.peerCount { _peerCountCodec.preencode(&state, v) }
+    if let v = value.elapsedMs { _elapsedMsCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: PeerWarmup) throws {
+    var flags: UInt = 0
+    if value.peerCount != nil { flags |= 1 }
+    if value.retained { flags |= 2 }
+    if value.timedOut { flags |= 4 }
+    if value.elapsedMs != nil { flags |= 8 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.peerCount { try _peerCountCodec.encode(&state, v) }
+    if let v = value.elapsedMs { try _elapsedMsCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> PeerWarmup {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: UInt? = (flags & 1) != 0 ? try _peerCountCodec.decode(&state) : nil
+    let _r1: UInt? = (flags & 8) != 0 ? try _elapsedMsCodec.decode(&state) : nil
+    return PeerWarmup(
+      peerCount: _r0,
+      retained: (flags & 2) != 0,
+      timedOut: (flags & 4) != 0,
+      elapsedMs: _r1
+    )
+  }
+}
+
+public let peerWarmup = PeerWarmupCodec()
+
 // @peartube/prepare-playback-response
 public struct PreparePlaybackResponse {
   public var url: String
   public var stats: VideoStats?
   public var warmupStarted: Bool
+  public var peerWarmupStarted: Bool
+  public var selectedBlobWarmup: SelectedBlobWarmup?
+  public var peerWarmup: PeerWarmup?
 
-  public init(url: String, stats: VideoStats? = nil, warmupStarted: Bool = false) {
+  public init(url: String, stats: VideoStats? = nil, warmupStarted: Bool = false, peerWarmupStarted: Bool = false, selectedBlobWarmup: SelectedBlobWarmup? = nil, peerWarmup: PeerWarmup? = nil) {
     self.url = url
     self.stats = stats
     self.warmupStarted = warmupStarted
+    self.peerWarmupStarted = peerWarmupStarted
+    self.selectedBlobWarmup = selectedBlobWarmup
+    self.peerWarmup = peerWarmup
   }
 }
 
 public struct PreparePlaybackResponseCodec: Codec {
   public typealias Value = PreparePlaybackResponse
 
+  let _peerWarmupCodec = FrameCodec(PeerWarmupCodec())
+  let _selectedBlobWarmupCodec = FrameCodec(SelectedBlobWarmupCodec())
   let _statsCodec = FrameCodec(VideoStatsCodec())
   let _urlCodec = Primitive.UTF8()
 
@@ -1888,26 +2129,38 @@ public struct PreparePlaybackResponseCodec: Codec {
     _urlCodec.preencode(&state, value.url)
     state.end += 1 // flags
     if let v = value.stats { _statsCodec.preencode(&state, v) }
+    if let v = value.selectedBlobWarmup { _selectedBlobWarmupCodec.preencode(&state, v) }
+    if let v = value.peerWarmup { _peerWarmupCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: PreparePlaybackResponse) throws {
     var flags: UInt = 0
     if value.stats != nil { flags |= 1 }
     if value.warmupStarted { flags |= 2 }
+    if value.peerWarmupStarted { flags |= 4 }
+    if value.selectedBlobWarmup != nil { flags |= 8 }
+    if value.peerWarmup != nil { flags |= 16 }
 
     try _urlCodec.encode(&state, value.url)
     try Primitive.UInt().encode(&state, flags)
     if let v = value.stats { try _statsCodec.encode(&state, v) }
+    if let v = value.selectedBlobWarmup { try _selectedBlobWarmupCodec.encode(&state, v) }
+    if let v = value.peerWarmup { try _peerWarmupCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> PreparePlaybackResponse {
     let _r0 = try _urlCodec.decode(&state)
     let flags = try Primitive.UInt().decode(&state)
     let _r1: VideoStats? = (flags & 1) != 0 ? try _statsCodec.decode(&state) : nil
+    let _r2: SelectedBlobWarmup? = (flags & 8) != 0 ? try _selectedBlobWarmupCodec.decode(&state) : nil
+    let _r3: PeerWarmup? = (flags & 16) != 0 ? try _peerWarmupCodec.decode(&state) : nil
     return PreparePlaybackResponse(
       url: _r0,
       stats: _r1,
-      warmupStarted: (flags & 2) != 0
+      warmupStarted: (flags & 2) != 0,
+      peerWarmupStarted: (flags & 4) != 0,
+      selectedBlobWarmup: _r2,
+      peerWarmup: _r3
     )
   }
 }
@@ -1923,8 +2176,11 @@ public struct WebPreparePlaybackResponse {
   public var transcodeError: String?
   public var stats: VideoStats?
   public var warmupStarted: Bool
+  public var peerWarmupStarted: Bool
+  public var selectedBlobWarmup: SelectedBlobWarmup?
+  public var peerWarmup: PeerWarmup?
 
-  public init(url: String, transcoded: Bool = false, audioCodec: String? = nil, videoCodec: String? = nil, transcodeError: String? = nil, stats: VideoStats? = nil, warmupStarted: Bool = false) {
+  public init(url: String, transcoded: Bool = false, audioCodec: String? = nil, videoCodec: String? = nil, transcodeError: String? = nil, stats: VideoStats? = nil, warmupStarted: Bool = false, peerWarmupStarted: Bool = false, selectedBlobWarmup: SelectedBlobWarmup? = nil, peerWarmup: PeerWarmup? = nil) {
     self.url = url
     self.transcoded = transcoded
     self.audioCodec = audioCodec
@@ -1932,6 +2188,9 @@ public struct WebPreparePlaybackResponse {
     self.transcodeError = transcodeError
     self.stats = stats
     self.warmupStarted = warmupStarted
+    self.peerWarmupStarted = peerWarmupStarted
+    self.selectedBlobWarmup = selectedBlobWarmup
+    self.peerWarmup = peerWarmup
   }
 }
 
@@ -1939,6 +2198,8 @@ public struct WebPreparePlaybackResponseCodec: Codec {
   public typealias Value = WebPreparePlaybackResponse
 
   let _audioCodecCodec = Primitive.UTF8()
+  let _peerWarmupCodec = FrameCodec(PeerWarmupCodec())
+  let _selectedBlobWarmupCodec = FrameCodec(SelectedBlobWarmupCodec())
   let _statsCodec = FrameCodec(VideoStatsCodec())
   let _transcodeErrorCodec = Primitive.UTF8()
   let _urlCodec = Primitive.UTF8()
@@ -1947,12 +2208,26 @@ public struct WebPreparePlaybackResponseCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: WebPreparePlaybackResponse) {
+    // Compute flags for varint sizing
+    var flags: UInt = 0
+    if value.transcoded { flags |= 1 }
+    if value.audioCodec != nil { flags |= 2 }
+    if value.videoCodec != nil { flags |= 4 }
+    if value.transcodeError != nil { flags |= 8 }
+    if value.stats != nil { flags |= 16 }
+    if value.warmupStarted { flags |= 32 }
+    if value.peerWarmupStarted { flags |= 64 }
+    if value.selectedBlobWarmup != nil { flags |= 128 }
+    if value.peerWarmup != nil { flags |= 256 }
+
     _urlCodec.preencode(&state, value.url)
-    state.end += 1 // flags
+    Primitive.UInt().preencode(&state, flags)
     if let v = value.audioCodec { _audioCodecCodec.preencode(&state, v) }
     if let v = value.videoCodec { _videoCodecCodec.preencode(&state, v) }
     if let v = value.transcodeError { _transcodeErrorCodec.preencode(&state, v) }
     if let v = value.stats { _statsCodec.preencode(&state, v) }
+    if let v = value.selectedBlobWarmup { _selectedBlobWarmupCodec.preencode(&state, v) }
+    if let v = value.peerWarmup { _peerWarmupCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: WebPreparePlaybackResponse) throws {
@@ -1963,6 +2238,9 @@ public struct WebPreparePlaybackResponseCodec: Codec {
     if value.transcodeError != nil { flags |= 8 }
     if value.stats != nil { flags |= 16 }
     if value.warmupStarted { flags |= 32 }
+    if value.peerWarmupStarted { flags |= 64 }
+    if value.selectedBlobWarmup != nil { flags |= 128 }
+    if value.peerWarmup != nil { flags |= 256 }
 
     try _urlCodec.encode(&state, value.url)
     try Primitive.UInt().encode(&state, flags)
@@ -1970,6 +2248,8 @@ public struct WebPreparePlaybackResponseCodec: Codec {
     if let v = value.videoCodec { try _videoCodecCodec.encode(&state, v) }
     if let v = value.transcodeError { try _transcodeErrorCodec.encode(&state, v) }
     if let v = value.stats { try _statsCodec.encode(&state, v) }
+    if let v = value.selectedBlobWarmup { try _selectedBlobWarmupCodec.encode(&state, v) }
+    if let v = value.peerWarmup { try _peerWarmupCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> WebPreparePlaybackResponse {
@@ -1979,6 +2259,8 @@ public struct WebPreparePlaybackResponseCodec: Codec {
     let _r2: String? = (flags & 4) != 0 ? try _videoCodecCodec.decode(&state) : nil
     let _r3: String? = (flags & 8) != 0 ? try _transcodeErrorCodec.decode(&state) : nil
     let _r4: VideoStats? = (flags & 16) != 0 ? try _statsCodec.decode(&state) : nil
+    let _r5: SelectedBlobWarmup? = (flags & 128) != 0 ? try _selectedBlobWarmupCodec.decode(&state) : nil
+    let _r6: PeerWarmup? = (flags & 256) != 0 ? try _peerWarmupCodec.decode(&state) : nil
     return WebPreparePlaybackResponse(
       url: _r0,
       transcoded: (flags & 1) != 0,
@@ -1986,7 +2268,10 @@ public struct WebPreparePlaybackResponseCodec: Codec {
       videoCodec: _r2,
       transcodeError: _r3,
       stats: _r4,
-      warmupStarted: (flags & 32) != 0
+      warmupStarted: (flags & 32) != 0,
+      peerWarmupStarted: (flags & 64) != 0,
+      selectedBlobWarmup: _r5,
+      peerWarmup: _r6
     )
   }
 }
@@ -2853,8 +3138,11 @@ public struct FeedEntryPreviewVideo {
   public var channelKey: String?
   public var driveKey: String?
   public var publicBeeKey: String?
+  public var hasHeadBlock: Bool
+  public var contiguousBlocks: UInt?
+  public var readyForPlayback: Bool
 
-  public init(id: String, title: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, path: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, uploadedAt: UInt? = nil, width: UInt? = nil, height: UInt? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, availability: String? = nil, description: String? = nil, thumbnailUrl: String? = nil, byteAvailability: String? = nil, channelKey: String? = nil, driveKey: String? = nil, publicBeeKey: String? = nil) {
+  public init(id: String, title: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, path: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, uploadedAt: UInt? = nil, width: UInt? = nil, height: UInt? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, availability: String? = nil, description: String? = nil, thumbnailUrl: String? = nil, byteAvailability: String? = nil, channelKey: String? = nil, driveKey: String? = nil, publicBeeKey: String? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false) {
     self.id = id
     self.title = title
     self.duration = duration
@@ -2876,6 +3164,9 @@ public struct FeedEntryPreviewVideo {
     self.channelKey = channelKey
     self.driveKey = driveKey
     self.publicBeeKey = publicBeeKey
+    self.hasHeadBlock = hasHeadBlock
+    self.contiguousBlocks = contiguousBlocks
+    self.readyForPlayback = readyForPlayback
   }
 }
 
@@ -2887,6 +3178,7 @@ public struct FeedEntryPreviewVideoCodec: Codec {
   let _blobsCoreKeyCodec = Primitive.UTF8()
   let _byteAvailabilityCodec = Primitive.UTF8()
   let _channelKeyCodec = Primitive.UTF8()
+  let _contiguousBlocksCodec = Primitive.UInt()
   let _descriptionCodec = Primitive.UTF8()
   let _driveKeyCodec = Primitive.UTF8()
   let _durationCodec = Primitive.UInt()
@@ -2929,6 +3221,9 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if value.channelKey != nil { flags |= 131072 }
     if value.driveKey != nil { flags |= 262144 }
     if value.publicBeeKey != nil { flags |= 524288 }
+    if value.hasHeadBlock { flags |= 1048576 }
+    if value.contiguousBlocks != nil { flags |= 2097152 }
+    if value.readyForPlayback { flags |= 4194304 }
 
     _idCodec.preencode(&state, value.id)
     Primitive.UInt().preencode(&state, flags)
@@ -2952,6 +3247,7 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if let v = value.channelKey { _channelKeyCodec.preencode(&state, v) }
     if let v = value.driveKey { _driveKeyCodec.preencode(&state, v) }
     if let v = value.publicBeeKey { _publicBeeKeyCodec.preencode(&state, v) }
+    if let v = value.contiguousBlocks { _contiguousBlocksCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: FeedEntryPreviewVideo) throws {
@@ -2976,6 +3272,9 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if value.channelKey != nil { flags |= 131072 }
     if value.driveKey != nil { flags |= 262144 }
     if value.publicBeeKey != nil { flags |= 524288 }
+    if value.hasHeadBlock { flags |= 1048576 }
+    if value.contiguousBlocks != nil { flags |= 2097152 }
+    if value.readyForPlayback { flags |= 4194304 }
 
     try _idCodec.encode(&state, value.id)
     try Primitive.UInt().encode(&state, flags)
@@ -2999,6 +3298,7 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if let v = value.channelKey { try _channelKeyCodec.encode(&state, v) }
     if let v = value.driveKey { try _driveKeyCodec.encode(&state, v) }
     if let v = value.publicBeeKey { try _publicBeeKeyCodec.encode(&state, v) }
+    if let v = value.contiguousBlocks { try _contiguousBlocksCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> FeedEntryPreviewVideo {
@@ -3024,6 +3324,7 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     let _r18: String? = (flags & 131072) != 0 ? try _channelKeyCodec.decode(&state) : nil
     let _r19: String? = (flags & 262144) != 0 ? try _driveKeyCodec.decode(&state) : nil
     let _r20: String? = (flags & 524288) != 0 ? try _publicBeeKeyCodec.decode(&state) : nil
+    let _r21: UInt? = (flags & 2097152) != 0 ? try _contiguousBlocksCodec.decode(&state) : nil
     return FeedEntryPreviewVideo(
       id: _r0,
       title: _r1,
@@ -3045,7 +3346,10 @@ public struct FeedEntryPreviewVideoCodec: Codec {
       byteAvailability: _r17,
       channelKey: _r18,
       driveKey: _r19,
-      publicBeeKey: _r20
+      publicBeeKey: _r20,
+      hasHeadBlock: (flags & 1048576) != 0,
+      contiguousBlocks: _r21,
+      readyForPlayback: (flags & 4194304) != 0
     )
   }
 }

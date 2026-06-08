@@ -68,6 +68,49 @@ test('createFeedSnapshot stores only safe renderable feed card fields', () => {
   ])
 })
 
+test('createFeedSnapshot refuses to restore direct blob cards without byte proof', () => {
+  const snapshot = createFeedSnapshot({
+    now: 1000,
+    videos: [
+      {
+        id: 'metadata-only',
+        title: 'Metadata only',
+        channelKey: 'remote',
+        uploadedAt: 20,
+        availability: 'playable',
+        byteAvailability: 'playable',
+        blobId: '0:1:0:32',
+        blobsCoreKey: 'aa'.repeat(32),
+      },
+      {
+        id: 'ready',
+        title: 'Ready',
+        channelKey: 'remote',
+        uploadedAt: 10,
+        availability: 'playable',
+        byteAvailability: 'playable',
+        blobId: '0:1:0:32',
+        blobsCoreKey: 'bb'.repeat(32),
+        hasHeadBlock: true,
+        contiguousBlocks: 1,
+        readyForPlayback: true,
+      },
+    ],
+  })
+
+  assert.deepEqual(snapshot.videos.map((video) => ({
+    id: video.id,
+    hasHeadBlock: video.hasHeadBlock,
+    contiguousBlocks: video.contiguousBlocks,
+    readyForPlayback: video.readyForPlayback,
+  })), [{
+    id: 'ready',
+    hasHeadBlock: true,
+    contiguousBlocks: 1,
+    readyForPlayback: true,
+  }])
+})
+
 test('restoreFeedSnapshot rejects stale or unsupported snapshots', () => {
   assert.deepEqual(restoreFeedSnapshot(null), [])
   assert.deepEqual(restoreFeedSnapshot({ version: 999, savedAt: 1000, videos: [] }, { now: 1000 }), [])

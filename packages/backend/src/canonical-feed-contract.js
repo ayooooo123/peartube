@@ -37,6 +37,9 @@
  * @property {string | null} [mimeType]
  * @property {'playable' | 'unavailable' | 'unknown' | null} [availability]
  * @property {'playable' | 'unavailable' | 'unknown' | null} [byteAvailability]
+ * @property {boolean} [hasHeadBlock]
+ * @property {number} [contiguousBlocks]
+ * @property {boolean} [readyForPlayback]
  * @property {string} channelKey
  * @property {string | null} [driveKey]
  * @property {string | null} [publicBeeKey]
@@ -92,6 +95,9 @@ export const CANONICAL_FEED_VIDEO_FIELDS = Object.freeze([
   'mimeType',
   'availability',
   'byteAvailability',
+  'hasHeadBlock',
+  'contiguousBlocks',
+  'readyForPlayback',
   'channelKey',
   'driveKey',
   'publicBeeKey',
@@ -160,6 +166,9 @@ export function createCanonicalFeedVideo(video = {}) {
   normalized.mimeType = video.mimeType ?? normalized.mimeType ?? null
   normalized.availability = video.availability ?? normalized.availability ?? null
   normalized.byteAvailability = video.byteAvailability ?? normalized.byteAvailability ?? normalized.availability ?? null
+  normalized.hasHeadBlock = Boolean(video.hasHeadBlock ?? normalized.hasHeadBlock)
+  normalized.contiguousBlocks = normalizeNumber(video.contiguousBlocks, normalized.contiguousBlocks ?? 0) || 0
+  normalized.readyForPlayback = Boolean(video.readyForPlayback ?? normalized.readyForPlayback)
   normalized.channelKey = video.channelKey || video.driveKey || normalized.channelKey || ''
   normalized.driveKey = video.driveKey || video.channelKey || normalized.driveKey || normalized.channelKey || ''
   normalized.publicBeeKey = video.publicBeeKey ?? normalized.publicBeeKey ?? null

@@ -62,7 +62,7 @@ test('feed handlers use getPublicFeed for public and canonical RPC names', async
       peerCount: 2,
       lastSeen: 123,
       manifestUpdatedAt: 456,
-      previewVideos: [{ id: 'preview-1', title: 'Preview' }],
+      previewVideos: [{ id: 'preview-1', title: 'Preview', byteAvailability: null, hasHeadBlock: false, contiguousBlocks: 0, readyForPlayback: false }],
     }],
     stats: {
       totalEntries: 1,
@@ -77,6 +77,56 @@ test('feed handlers use getPublicFeed for public and canonical RPC names', async
   assert.deepEqual(await backend.getPublicFeed({}), expected)
   assert.deepEqual(await backend.getCanonicalFeed({}), expected)
   assert.deepEqual(calls, ['getPublicFeed', 'getPublicFeed'])
+})
+
+test('mobile video handlers preserve byte-readiness fields', async () => {
+  const backend = {}
+  const deps = createDeps({
+    api: {
+      async listVideos() {
+        return [{
+          id: 'video-1',
+          title: 'Ready Video',
+          availability: 'playable',
+          byteAvailability: 'playable',
+          hasHeadBlock: true,
+          contiguousBlocks: 4,
+          readyForPlayback: true,
+          blobId: '0:4:0:512',
+          blobsCoreKey: 'aa'.repeat(32),
+        }]
+      },
+      async getPublicFeed() {
+        return {
+          entries: [{
+            driveKey: 'channel-key',
+            previewVideos: [{
+              id: 'preview-1',
+              availability: 'playable',
+              byteAvailability: 'playable',
+              hasHeadBlock: true,
+              contiguousBlocks: 2,
+              readyForPlayback: true,
+            }],
+          }],
+        }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const listResult = await backend.listVideos({ channelKey: 'channel-key' })
+  assert.equal(listResult.videos[0].byteAvailability, 'playable')
+  assert.equal(listResult.videos[0].hasHeadBlock, true)
+  assert.equal(listResult.videos[0].contiguousBlocks, 4)
+  assert.equal(listResult.videos[0].readyForPlayback, true)
+
+  const feedResult = await backend.getPublicFeed({})
+  assert.equal(feedResult.entries[0].previewVideos[0].byteAvailability, 'playable')
+  assert.equal(feedResult.entries[0].previewVideos[0].hasHeadBlock, true)
+  assert.equal(feedResult.entries[0].previewVideos[0].contiguousBlocks, 2)
+  assert.equal(feedResult.entries[0].previewVideos[0].readyForPlayback, true)
 })
 
 test('mobile getSeedingStatus reports normalized backend cache counters', async () => {

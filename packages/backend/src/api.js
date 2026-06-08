@@ -362,12 +362,15 @@ export function createApi({
         : []
     if (videos.length === 0) return []
     const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
-    const feedEntryHasLivePeer = Number(entry?.peerCount || 0) > 0
     return videos
       .filter((video) => video?.id || video?.path)
       .map((video) => {
         const id = normalizeVideoId(video.id || video.path)
-        const videoAvailability = video.availability || video.byteAvailability || (feedEntryHasLivePeer ? 'playable' : null)
+        const hasByteProof = video?.readyForPlayback === true ||
+          (video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0)
+        const videoAvailability = hasByteProof
+          ? (video.byteAvailability || video.availability || 'playable')
+          : (video.byteAvailability === 'playable' || video.availability === 'playable' ? 'unknown' : (video.byteAvailability || video.availability || null))
         return {
           ...video,
           id,
@@ -377,7 +380,10 @@ export function createApi({
           relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
           mimeType: video.mimeType || 'video/mp4',
           availability: videoAvailability || video.availability,
-          byteAvailability: video.byteAvailability || videoAvailability || video.availability,
+          byteAvailability: videoAvailability || video.byteAvailability || video.availability,
+          hasHeadBlock: Boolean(video?.hasHeadBlock),
+          contiguousBlocks: Number(video?.contiguousBlocks || 0) || 0,
+          readyForPlayback: Boolean(video?.readyForPlayback || hasByteProof),
         }
       })
   }
@@ -403,6 +409,51 @@ export function createApi({
       blobsCoreKey: previewVideo.blobsCoreKey,
       mimeType: mimeType || previewVideo.mimeType || 'video/mp4',
     }
+  }
+
+  function localSwarmPeerId() {
+    try {
+      const key = ctx?.swarm?.keyPair?.publicKey
+      if (!key) return null
+      const hex = typeof key === 'string' ? key : b4a.toString(key, 'hex')
+      return /^[a-f0-9]{64}$/i.test(hex) ? hex.toLowerCase() : null
+    } catch {
+      return null
+    }
+  }
+
+  function addPeerId(set, value) {
+    if (typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)) set.add(value.toLowerCase())
+  }
+
+  function collectHintPeerIds(hints = []) {
+    const sourceFeedPeerIds = new Set()
+    const sourceRelayPeerIds = new Set()
+    for (const hint of hints || []) {
+      addPeerId(sourceFeedPeerIds, hint?.sourceFeedPeerId)
+      addPeerId(sourceRelayPeerIds, hint?.sourcePeerId)
+      addPeerId(sourceRelayPeerIds, hint?.sourceFeedPeerId)
+      addPeerId(sourceRelayPeerIds, hint?.relayPeerId)
+      if (Array.isArray(hint?.sourceFeedPeerIds)) for (const id of hint.sourceFeedPeerIds) addPeerId(sourceFeedPeerIds, id)
+      if (Array.isArray(hint?.sourceRelayPeerIds)) for (const id of hint.sourceRelayPeerIds) addPeerId(sourceRelayPeerIds, id)
+      if (Array.isArray(hint?.relayHintIds)) for (const id of hint.relayHintIds) addPeerId(sourceRelayPeerIds, id)
+    }
+    return {
+      sourceFeedPeerIds: Array.from(sourceFeedPeerIds),
+      sourceRelayPeerIds: Array.from(sourceRelayPeerIds),
+    }
+  }
+
+  function hintMatchesBlobRef(hint, video) {
+    if (!hint || !video) return false
+    if (hint.id && video.id && hint.id !== video.id) return false
+    const videoCore = normalizeBlobsCoreKey(video.blobsCoreKey)
+    const hintCore = normalizeBlobsCoreKey(hint.blobsCoreKey)
+    const videoBlob = normalizeBlobRefInput(video.blobId)
+    const hintBlob = normalizeBlobRefInput(hint.blobId)
+    if (videoCore && hintCore && videoCore !== hintCore) return false
+    if (videoBlob && hintBlob && stringifyBlobId(videoBlob) !== stringifyBlobId(hintBlob)) return false
+    return Boolean(videoCore && hintCore && videoBlob && hintBlob)
   }
 
   // ============================================
@@ -518,14 +569,19 @@ export function createApi({
             return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
           }
         })()
+        const localPeerId = localSwarmPeerId()
         hints.push({
           driveKey: req?.driveKey,
           id,
+          blobsCoreKey: req?.blobsCoreKey || null,
+          blobId: req?.blobId || null,
           availability: local.availability,
           contiguousBlocks: local.contiguousBlocks,
           hasHeadBlock: local.hasHeadBlock,
           lastSeenAt: Date.now(),
           activelyServing: local.availability === 'playable',
+          sourcePeerId: localPeerId,
+          sourceRelayPeerIds: localPeerId && local.availability === 'playable' ? [localPeerId] : [],
         })
       }
       return hints
@@ -849,32 +905,29 @@ export function createApi({
           return { availability, contiguousBlocks, hasHeadBlock }
         }
 
-        const isPlayableAvailabilityHint = (hint) => hint?.availability === 'playable'
+        const hasPlayableByteProof = (hint) => hint?.availability === 'playable' &&
+          (hint?.readyForPlayback === true ||
+            (hint?.hasHeadBlock === true && (Number(hint?.contiguousBlocks || 0) || 0) > 0))
+
+        const hasVideoByteProof = (video) => video?.readyForPlayback === true ||
+          (video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0)
 
         const resolveExplicitVideoAvailability = ({ localHint, peerHint, video }) => {
           const explicitAvailability = video?.byteAvailability || video?.availability || null
-          // Fast path: if our local store already has the opening blocks, the
-          // video is immediately watchable without waiting on remote proof.
-          if (isPlayableAvailabilityHint(localHint)) return 'playable'
-          if (explicitAvailability === 'playable') return 'playable'
-          if (
-            video?.restoredFromCache === true &&
-            video?.requiresAvailabilityProbe === true &&
-            video?.blobId &&
-            video?.blobsCoreKey &&
-            (!peerHint || peerHint?.availability === 'unknown')
-          ) return 'playable'
-
-          // Remote playability must be explicitly proven by a peer serving hint.
-          if (peerHint?.availability === 'playable') return 'playable'
-          if (peerHint?.availability && peerHint.availability !== 'unknown') {
+          // A direct blob is watchable only when the selected blob has current
+          // byte proof. Feed peers, relay metadata, and stale playable labels are
+          // discovery signals, not media readiness.
+          if (hasPlayableByteProof(localHint)) return 'playable'
+          if (hasPlayableByteProof(peerHint)) return 'playable'
+          if (explicitAvailability === 'playable' && hasVideoByteProof(video)) return 'playable'
+          if (peerHint?.availability && peerHint.availability !== 'playable' && peerHint.availability !== 'unknown') {
             return peerHint.availability
           }
-          if (explicitAvailability && explicitAvailability !== 'unknown') {
+          if (explicitAvailability && explicitAvailability !== 'playable' && explicitAvailability !== 'unknown') {
             return explicitAvailability
           }
 
-          return 'unavailable'
+          return explicitAvailability === 'unknown' ? 'unknown' : 'unavailable'
         }
 
         const attachVideoAvailability = async (videos) => {
@@ -890,30 +943,24 @@ export function createApi({
                   blobsCoreKey: video?.blobsCoreKey,
                   blobId: video?.blobId,
                 }])
-                peerHint = Array.isArray(hints) ? hints.find((hint) => hint?.id === video?.id) || null : null
+                peerHint = Array.isArray(hints) ? hints.find((hint) => hintMatchesBlobRef(hint, video)) || null : null
               } catch { /* best effort */ }
             }
             const availability = resolveExplicitVideoAvailability({ localHint, peerHint, video })
-            const hint = isPlayableAvailabilityHint(localHint) ? localHint : peerHint
-            // Metadata carried by PublicBee / relay catalogs is a short-lived
-            // optimistic startup hint. It lets feed cards render as playable while
-            // peer/local byte proof catches up, but is revalidated by cache TTL.
-            const hasOptimisticMetadata = video?.availability === 'playable' || video?.byteAvailability === 'playable'
-            if (hasOptimisticMetadata && (!peerHint || peerHint?.availability === 'playable')) {
-              return {
-                ...video,
-                availability: 'playable',
-                byteAvailability: 'playable',
-                contiguousBlocks: Number(video?.contiguousBlocks || hint?.contiguousBlocks || 0) || 0,
-                hasHeadBlock: Boolean(video?.hasHeadBlock || hint?.hasHeadBlock),
-              }
-            }
+            const proofHint = hasPlayableByteProof(localHint)
+              ? localHint
+              : hasPlayableByteProof(peerHint)
+                ? peerHint
+                : hasVideoByteProof(video)
+                  ? video
+                  : null
             return {
               ...video,
               availability,
               byteAvailability: availability,
-              contiguousBlocks: Number(hint?.contiguousBlocks || 0) || 0,
-              hasHeadBlock: Boolean(hint?.hasHeadBlock),
+              contiguousBlocks: Number(proofHint?.contiguousBlocks || 0) || 0,
+              hasHeadBlock: Boolean(proofHint?.hasHeadBlock),
+              readyForPlayback: availability === 'playable' && Boolean(proofHint),
             }
           }))
         }
@@ -1073,14 +1120,37 @@ export function createApi({
      * @param {string} [blobId]
      * @param {string} [blobsCoreKey]
      * @param {string} [mimeType]
-     * @returns {Promise<{url: string, stats: Object, warmupStarted: boolean}>}
+     * @returns {Promise<{url: string, stats: Object, warmupStarted: boolean, selectedBlobWarmup?: Object}>}
      */
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
 
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
+      let sourcePeerDiagnostics = { sourceFeedPeerIds: [], sourceRelayPeerIds: [] }
+      if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey && publicFeed?.requestAvailabilityHints) {
+        try {
+          const hints = await publicFeed.requestAvailabilityHints([{
+            driveKey,
+            publicBeeKey,
+            id: videoPath,
+            blobsCoreKey: playbackBlobRef.blobsCoreKey,
+            blobId: playbackBlobRef.blobId,
+          }], { timeoutMs: 500, maxPeers: 4 })
+          const matchingHints = Array.isArray(hints)
+            ? hints.filter((hint) => hintMatchesBlobRef(hint, {
+              id: videoPath,
+              blobsCoreKey: playbackBlobRef.blobsCoreKey,
+              blobId: playbackBlobRef.blobId,
+            }))
+            : []
+          sourcePeerDiagnostics = collectHintPeerIds(matchingHints)
+        } catch { /* best effort */ }
+      }
+      const promotePeerHints = publicFeed?.promoteAvailabilityHintPeers
+        ? (peerIds, topic) => publicFeed.promoteAvailabilityHintPeers(peerIds, topic)
+        : null
 
-      return blobPlayback.preparePlayback({
+      const prepared = await blobPlayback.preparePlayback({
         driveKey,
         videoPath,
         publicBeeKey,
@@ -1088,10 +1158,26 @@ export function createApi({
         blobsCoreKey: playbackBlobRef?.blobsCoreKey,
         mimeType: playbackBlobRef?.mimeType,
         warmSelectedBlob: Boolean(playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey),
+        sourceFeedPeerIds: sourcePeerDiagnostics.sourceFeedPeerIds,
+        sourceRelayPeerIds: sourcePeerDiagnostics.sourceRelayPeerIds,
+        promotePeerHints,
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),
       })
+      if (prepared?.selectedBlobWarmup && prepared.selectedBlobWarmup.readyForPlayback !== true) {
+        const warm = prepared.selectedBlobWarmup
+        console.log(
+          '[API] preparePlayback unready:',
+          'blobCore=', playbackBlobRef?.blobsCoreKey?.slice(0, 16) || 'none',
+          'blobId=', playbackBlobRef?.blobId || 'none',
+          'blobPeers=', Number(warm.peerCount || 0),
+          'feedPeers=', sourcePeerDiagnostics.sourceFeedPeerIds.map((id) => id.slice(0, 16)).join(',') || 'none',
+          'relayHints=', sourcePeerDiagnostics.sourceRelayPeerIds.map((id) => id.slice(0, 16)).join(',') || 'none',
+          'hasHeadBlock=', Boolean(warm.hasHeadBlock)
+        )
+      }
+      return prepared
     },
 
     /**

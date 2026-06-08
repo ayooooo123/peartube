@@ -39,7 +39,7 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.doesNotMatch(source, /setAmbientVideoContext\(/, 'Shorts playback and comments should not update global watch-player metadata')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
   assert.match(source, /const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\) : null/, 'cached Shorts playback should attach directly to the Shorts player')
-  assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/, 'prepared Shorts playback should attach directly to the Shorts player')
+  assert.match(source, /const result = await preparePlaybackWhenReady\(\{[\s\S]*playbackRequest/, 'prepared Shorts playback should wait for selected direct blob readiness before attaching')
 })
 
 test('vertical discovery is isolated from the global watch player context', () => {

@@ -82,6 +82,38 @@ test('preparePlayback warms selected direct blob core and reports blob peer diag
   t.ok(calls.some((call) => call[0] === 'has' && call[1] === 5 && call[2] === 6), 'checks selected blob head block')
 })
 
+test('preparePlayback promotes source relay hints and reports blob bridge diagnostics', async (t) => {
+  const sourcePeer = '1'.repeat(64)
+  const { ctx } = createCtx({ peerCount: 1, hasHeadBlock: false })
+  const promoted = []
+  const service = new BlobPlaybackService({ ctx })
+
+  const result = await service.preparePlayback({
+    driveKey: 'channel-key',
+    videoPath: 'videos/king.mp4',
+    publicBeeKey: 'public-bee-key',
+    blobId: VALID_BLOB,
+    blobsCoreKey: VALID_KEY,
+    mimeType: 'video/mp4',
+    warmSelectedBlob: true,
+    selectedBlobWarmupTimeoutMs: 25,
+    sourceFeedPeerIds: [sourcePeer],
+    sourceRelayPeerIds: [sourcePeer],
+    promotePeerHints(peerIds, topic) {
+      promoted.push({ peerIds, topic })
+      return [{ key: sourcePeer, connected: true, explicit: true, relayAddresses: 1 }]
+    },
+  })
+
+  t.alike(promoted[0].peerIds, [sourcePeer])
+  t.ok(promoted[0].topic, 'passes selected blob discovery topic')
+  t.is(result.selectedBlobWarmup.readyForPlayback, false)
+  t.is(result.selectedBlobWarmup.feedRelayAlsoBlobPeer, true)
+  t.is(result.selectedBlobWarmup.sourceFeedPeerIdsJson, JSON.stringify([sourcePeer]))
+  t.is(result.selectedBlobWarmup.sourceRelayPeerIdsJson, JSON.stringify([sourcePeer]))
+  t.is(JSON.parse(result.selectedBlobWarmup.promotedPeerHintsJson)[0].key, sourcePeer.slice(0, 16))
+})
+
 test('preparePlayback returns URL with explicit selected blob diagnostics when no blob peer arrives', async (t) => {
   const { ctx } = createCtx({ peerCount: 0, hasHeadBlock: false })
   const service = new BlobPlaybackService({ ctx })

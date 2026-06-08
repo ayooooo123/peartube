@@ -75,5 +75,6 @@ test('cached playback refreshes active URL only for the current session', () => 
   const cachedBlock = source.slice(source.indexOf('if (cachedUrl) {'), source.indexOf('      const result = await rpc.preparePlayback', source.indexOf('if (cachedUrl) {')))
 
   assert.match(cachedBlock, /loadGenerationRef\.current !== generation/, 'background preparePlayback should be generation-gated')
-  assert.match(cachedBlock, /if \(result\?\.url\) \{[\s\S]*setCachedVideoUrl[\s\S]*loadAndPlayVideo\(videoData, result\.url\)/, 'fresh prepared URL should replace the cached URL only in the active generation')
+  assert.match(cachedBlock, /const waitingForSelectedBlob = Boolean\(selectedBlobWarmup && selectedBlobWarmup\.readyForPlayback === false\)/, 'cached refresh should inspect selected blob readiness before replacing the URL')
+  assert.match(cachedBlock, /if \(result\?\.url && !waitingForSelectedBlob\) \{[\s\S]*setCachedVideoUrl[\s\S]*loadAndPlayVideo\(videoData, result\.url\)/, 'fresh prepared URL should replace the cached URL only in the active generation after selected blob readiness is proven')
 })

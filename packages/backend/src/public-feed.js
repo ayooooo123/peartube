@@ -22,7 +22,7 @@ import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 import { encodeIndexKey } from './index-encoder.js'
-import { swarmHasConnection } from './swarm-peer-dial.js'
+import { swarmHasConnection, swarmRememberPeer } from './swarm-peer-dial.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
   CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
@@ -231,6 +231,9 @@ export class PublicFeed {
           mimeType: video?.mimeType ? String(video.mimeType) : null,
           availability: availability === 'playable' ? 'playable' : (availability === 'unknown' ? 'unknown' : 'unavailable'),
           byteAvailability: availability === 'playable' ? 'playable' : (availability === 'unknown' ? 'unknown' : 'unavailable'),
+          hasHeadBlock: Boolean(video?.hasHeadBlock),
+          contiguousBlocks: Number(video?.contiguousBlocks || 0) || 0,
+          readyForPlayback: Boolean(video?.readyForPlayback),
           playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
           containerSupport: containerSupport ? String(containerSupport) : null,
           thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
@@ -245,7 +248,6 @@ export class PublicFeed {
 
   _markRestoredDiscoveryOnly(entry, restoredFrom) {
     if (!entry || typeof entry !== 'object') return entry
-    const preserveRelayPlayable = entry.source === 'relay-cache' || entry.relayServing === true || entry.relayRole === 'cache'
     const marked = {
       ...entry,
       discoveryOnly: true,
@@ -254,18 +256,17 @@ export class PublicFeed {
       requiresAvailabilityProbe: true,
     }
     if (Array.isArray(marked.previewVideos)) {
-      marked.previewVideos = marked.previewVideos.map((video) => {
-        const hasDirectBlobRef = Boolean(video?.blobId && video?.blobsCoreKey)
-        const keepPlayable = preserveRelayPlayable && hasDirectBlobRef
-        return {
-          ...video,
-          availability: keepPlayable ? (video?.availability || 'playable') : (video?.availability === 'playable' ? 'unknown' : (video?.availability || 'unknown')),
-          byteAvailability: keepPlayable ? (video?.byteAvailability || video?.availability || 'playable') : (video?.byteAvailability === 'playable' ? 'unknown' : (video?.byteAvailability || 'unknown')),
-          discoveryOnly: true,
-          restoredFromCache: true,
-          requiresAvailabilityProbe: true,
-        }
-      })
+      marked.previewVideos = marked.previewVideos.map((video) => ({
+        ...video,
+        availability: video?.availability === 'playable' ? 'unknown' : (video?.availability || 'unknown'),
+        byteAvailability: video?.byteAvailability === 'playable' ? 'unknown' : (video?.byteAvailability || 'unknown'),
+        hasHeadBlock: false,
+        contiguousBlocks: 0,
+        readyForPlayback: false,
+        discoveryOnly: true,
+        restoredFromCache: true,
+        requiresAvailabilityProbe: true,
+      }))
     }
     return marked
   }
@@ -372,7 +373,9 @@ export class PublicFeed {
     const videos = this._sanitizePreviewVideos(entry?.previewVideos)
     return videos.some((video) => {
       const availability = video?.byteAvailability || video?.availability
-      return availability === 'playable'
+      const hasByteProof = video?.readyForPlayback === true ||
+        (video?.hasHeadBlock === true && (Number(video?.contiguousBlocks || 0) || 0) > 0)
+      return availability === 'playable' && hasByteProof
     })
   }
 
@@ -544,6 +547,52 @@ export class PublicFeed {
     }
   }
 
+
+  _connectionPeerKeyHex(conn) {
+    const key = this._connectionPeerKeys.get(conn) || conn?.remotePublicKey || conn?.publicKey || null
+    return this._peerKeyHex(key)
+  }
+
+  _sourcePeerIdsForHint(conn, hint = {}) {
+    const sourceFeedPeerId = this._connectionPeerKeyHex(conn)
+    const ids = new Set()
+    const add = (value) => {
+      if (typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)) ids.add(value.toLowerCase())
+    }
+    add(hint.sourcePeerId)
+    add(hint.sourceFeedPeerId)
+    add(hint.relayPeerId)
+    if (Array.isArray(hint.sourceFeedPeerIds)) for (const id of hint.sourceFeedPeerIds) add(id)
+    if (Array.isArray(hint.sourceRelayPeerIds)) for (const id of hint.sourceRelayPeerIds) add(id)
+    if (Array.isArray(hint.relayHintIds)) for (const id of hint.relayHintIds) add(id)
+    if (sourceFeedPeerId) ids.add(sourceFeedPeerId)
+    return {
+      sourceFeedPeerId,
+      sourceFeedPeerIds: sourceFeedPeerId ? [sourceFeedPeerId] : [],
+      sourceRelayPeerIds: Array.from(ids),
+    }
+  }
+
+  _annotateAvailabilityHint(hint, request, conn) {
+    if (!hint || typeof hint !== 'object') return null
+    const peerIds = this._sourcePeerIdsForHint(conn, hint)
+    return {
+      ...hint,
+      driveKey: hint.driveKey || request?.driveKey || null,
+      id: hint.id || request?.id || null,
+      blobsCoreKey: hint.blobsCoreKey || request?.blobsCoreKey || null,
+      blobId: hint.blobId || request?.blobId || null,
+      ...peerIds,
+    }
+  }
+
+  _availabilityHintMergeKey(hint) {
+    return [
+      encodeIndexKey(hint?.driveKey || '', hint?.id || ''),
+      hint?.blobsCoreKey || '',
+      hint?.blobId || '',
+    ].join(':')
+  }
   async requestAvailabilityHints(requests, { timeoutMs = null, maxPeers = 4 } = {}) {
     const peers = Array.from(this.feedConnections).slice(0, maxPeers)
     if (!Array.isArray(requests) || requests.length === 0 || peers.length === 0) return []
@@ -565,7 +614,15 @@ export class PublicFeed {
       this.pendingAvailabilityRequests.set(requestId, {
         resolve: (hints) => {
           clearTimeout(timeout)
-          resolve(Array.isArray(hints) ? hints : [])
+          const byRequest = new Map(requests.map((req) => [encodeIndexKey(req?.driveKey || '', req?.id || ''), req]))
+          const annotated = Array.isArray(hints)
+            ? hints.map((hint) => this._annotateAvailabilityHint(
+              hint,
+              byRequest.get(encodeIndexKey(hint?.driveKey || '', hint?.id || '')),
+              conn
+            )).filter(Boolean)
+            : []
+          resolve(annotated)
         },
         timeout,
       })
@@ -587,8 +644,8 @@ export class PublicFeed {
     for (const res of settled) {
       if (res.status !== 'fulfilled') continue
       for (const hint of res.value || []) {
-        const key = encodeIndexKey(hint?.driveKey || '', hint?.id || '')
         if (!hint?.driveKey || !hint?.id) continue
+        const key = this._availabilityHintMergeKey(hint)
         const prev = merged.get(key)
         if (!prev || prev.availability !== 'playable') {
           if (hint.availability === 'playable' || !prev) merged.set(key, hint)
@@ -931,6 +988,7 @@ export class PublicFeed {
         if (requeued) this._directPeerDialStats.lastReason = 'queued-discovered-peer'
       } catch (err) {
         this._directPeerLastDialError.set(remembered.keyHex, err?.message || String(err))
+
         if (err?.stack) this._directPeerLastDialErrorStack.set(remembered.keyHex, err.stack)
       }
     }
@@ -939,6 +997,48 @@ export class PublicFeed {
       this._directPeerDialStats.lastReason = 'already-connected-peer'
     }
     return true
+  }
+
+  promoteAvailabilityHintPeers(peerIds = [], topic = null) {
+    const ids = Array.isArray(peerIds) ? peerIds : [peerIds]
+    const promoted = []
+    for (const id of ids) {
+      const keyHex = typeof id === 'string' && /^[a-f0-9]{64}$/i.test(id) ? id.toLowerCase() : null
+      if (!keyHex) continue
+      const publicKey = this._discoveredPeers.get(keyHex) || b4a.from(keyHex, 'hex')
+      const hint = this._discoveredPeerHints.get(keyHex)
+      const peer = hint?.peer || { publicKey, relayAddresses: hint?.relayAddresses || [] }
+      let peerInfo = null
+      try {
+        peerInfo = swarmRememberPeer(this.swarm, peer, topic)
+      } catch (err) {
+        this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+        if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+      }
+      if (peerInfo && typeof peerInfo === 'object') {
+        try {
+          peerInfo.explicit = true
+          if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
+          if (typeof peerInfo._requeue === 'function') peerInfo._requeue()
+        } catch (err) {
+          this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+          if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+        }
+      }
+      this._directPeerDialStats.attempted++
+      this._directPeerDialStats.lastDialedAt = this._now()
+      this._directPeerDialStats.lastReason = this._hasActivePeerConnection(keyHex, publicKey)
+        ? 'already-connected-peer'
+        : 'promoted-availability-hint-peer'
+      promoted.push({
+        key: keyHex,
+        connected: this._hasActivePeerConnection(keyHex, publicKey),
+        relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0,
+        explicit: Boolean(peerInfo?.explicit),
+        synthetic: Boolean(peerInfo?.synthetic),
+      })
+    }
+    return promoted
   }
 
   _rememberDiscoveredPeerInSwarm(peer, topic, keyHex) {

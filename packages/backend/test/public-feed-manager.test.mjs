@@ -969,7 +969,7 @@ test('restored discovered entries are marked discovery-only and previews require
   }
 })
 
-test('restored relay catalog entries are visible but discovery-only until re-probed', async () => {
+test('restored relay catalog entries are visible but not byte-playable until re-probed', async () => {
   const metaDb = createPersistedMetaDb({
     'public-feed-relay-catalog-v1': {
       entries: [{
@@ -998,8 +998,11 @@ test('restored relay catalog entries are visible but discovery-only until re-pro
     assert.equal(feed[0].discoveryOnly, true)
     assert.equal(feed[0].restoredFromCache, true)
     assert.equal(feed[0].requiresAvailabilityProbe, true)
-    assert.equal(feed[0].previewVideos[0].availability, 'playable')
-    assert.equal(feed[0].previewVideos[0].byteAvailability, 'playable')
+    assert.equal(feed[0].previewVideos[0].availability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].byteAvailability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].hasHeadBlock, false)
+    assert.equal(feed[0].previewVideos[0].contiguousBlocks, 0)
+    assert.equal(feed[0].previewVideos[0].readyForPlayback, false)
   } finally {
     manager.stop()
   }
@@ -1088,6 +1091,53 @@ test('availability hint request is answered on the existing feed channel', async
     assert.equal(response.hints[0].availability, 'playable')
   } finally {
     Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+test('availability hint responses carry selected blob refs and source feed peer identity', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const conn = createConnection()
+  const remotePeerId = '99'.repeat(32)
+  conn.remotePublicKey = b4a.from(remotePeerId, 'hex')
+  const blobId = '1:2:3:4'
+  const blobsCoreKey = '33'.repeat(32)
+
+  try {
+    manager.feedConnections.add(conn)
+    manager.peerChannels.set(conn, {
+      messages: [{
+        send(msg) {
+          manager.handleMessage({
+            type: 'AVAILABILITY_HINT_RESPONSE',
+            requestId: msg.requestId,
+            hints: [{
+              driveKey: DRIVE_KEY,
+              id: 'v1',
+              availability: 'playable',
+              contiguousBlocks: 2,
+              hasHeadBlock: true,
+              activelyServing: true,
+            }],
+          }, conn)
+        },
+      }],
+    })
+
+    const hints = await manager.requestAvailabilityHints([{
+      driveKey: DRIVE_KEY,
+      id: 'v1',
+      blobsCoreKey,
+      blobId,
+    }], { timeoutMs: 100 })
+
+    assert.equal(hints.length, 1)
+    assert.equal(hints[0].blobId, blobId)
+    assert.equal(hints[0].blobsCoreKey, blobsCoreKey)
+    assert.equal(hints[0].sourceFeedPeerId, remotePeerId)
+    assert.deepEqual(hints[0].sourceFeedPeerIds, [remotePeerId])
+    assert.deepEqual(hints[0].sourceRelayPeerIds, [remotePeerId])
+  } finally {
     manager.stop()
   }
 })

@@ -11,6 +11,13 @@ export function mergeVerticalFeedEntries<T extends { channelKey?: string; driveK
   incomingEntries?: T[],
 ): T[]
 
+export function getVerticalFeedHydrationKey(entry: any): string
+
+export function pruneHydratedFeedChannels(
+  hydratedChannelsRef: { current?: Set<string> } | null | undefined,
+  entries?: any[],
+): void
+
 export function hasRichVerticalFeedSnapshot(entries?: any[], videos?: any[]): boolean
 
 export function getVerticalFeedPreviewVideos<T = any>(
@@ -34,9 +41,9 @@ export function warmNextPlaybackUrls(options: {
   videos: any[]
   activeIndex: number
   makePlaybackRequest: (video: any) => { cacheKey?: string | null; playbackRequest: any }
-  getCachedVideoUrl: (cacheKey: string) => string | null | undefined
-  setCachedVideoUrl: (cacheKey: string, url: string) => void
-  preparePlayback?: (request: any) => Promise<{ url?: string | null } | null | undefined>
+  getCachedVideoUrl: (cacheKey: string, options?: { requireReady?: boolean }) => string | null | undefined
+  setCachedVideoUrl: (cacheKey: string, url: string, readyForPlayback?: boolean) => void
+  preparePlayback?: (request: any) => Promise<{ url?: string | null; selectedBlobWarmup?: { readyForPlayback?: boolean } | null } | null | undefined>
   windowSize?: number
   inflightPlaybackWarmups?: { current?: Set<string> } | null
 }): Promise<void>

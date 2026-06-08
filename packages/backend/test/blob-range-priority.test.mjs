@@ -113,7 +113,38 @@ test('prioritizeBlobServerRangeRequest starts a non-linear core download for the
   t.alike(result, { start: 14, end: 15, blocks: 1 })
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
-  t.ok(calls.some((call) => call[0] === 'close'))
+  // The shared serving core must NOT be closed on cleanup by default: it is the
+  // same core hypercore-blob-server streams playback ranges from. Closing it
+  // mid-stream causes constant playback stalls.
+  t.absent(calls.some((call) => call[0] === 'close'), 'shared serving core is not closed on default cleanup')
+})
+
+test('prioritizeBlobServerRangeRequest closes the core when closeCoreOnCleanup is set', async (t) => {
+  const calls = []
+  const { req } = createRangeRequest()
+  const blobServer = {
+    token: 'test-token',
+    async _getCore() {
+      return {
+        download(options) {
+          calls.push(['download', options])
+          return {
+            done: () => Promise.resolve(),
+            destroy: () => calls.push(['destroy']),
+          }
+        },
+        close() {
+          calls.push(['close'])
+        },
+      }
+    },
+  }
+
+  await prioritizeBlobServerRangeRequest(blobServer, req, { readAheadBytes: 0, closeCoreOnCleanup: true })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  t.ok(calls.some((call) => call[0] === 'close'), 'core is closed when caller opts in')
 })
 
 test('prioritizeBlobServerRangeRequest ignores HEAD range probes', async (t) => {

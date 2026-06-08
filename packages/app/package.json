@@ -47,7 +47,7 @@
   "author": "PearTube",
   "license": "Apache-2.0",
   "dependencies": {
-    "@expo/ui": "56.0.13",
+    "@expo/ui": "56.0.16",
     "@expo/vector-icons": "^15.0.3",
     "@gluestack-ui/button": "^1.0.14",
     "@gluestack-ui/icon": "^0.1.27",

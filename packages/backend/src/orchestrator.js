@@ -284,7 +284,9 @@ export async function createBackendContext(config) {
       blobServerHost,
       blobServerBindHost,
       primaryKey: null,
-      corestoreWaitForLock
+      corestoreWaitForLock,
+      network,
+      swarmOptions
     })
 
     try {

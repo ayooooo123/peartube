@@ -722,13 +722,20 @@ export async function startTranscodeWorklet(config: {
   const FS = normalizeFsModule(require('expo-file-system'));
   const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
 
-  // Terminate any existing transcode worklet
+  // Terminate any existing transcode worklet, settling its pending promise
+  // so the previous caller is not left hanging forever.
   if (transcodeWorklet) {
     console.log('[Platform RPC] Terminating existing transcode worklet');
     try {
       transcodeWorklet.terminate();
     } catch {}
     transcodeWorklet = null;
+    if (_transcodeReject) {
+      _transcodeReject(new Error('Transcode superseded by a new request'));
+    }
+    _transcodeResolve = null;
+    _transcodeReject = null;
+    _transcodeCallbacks = {};
   }
 
   return new Promise((resolve, reject) => {
@@ -882,6 +889,11 @@ export function terminateTranscodeWorklet(): void {
       console.error('[Platform RPC] Failed to terminate transcode worklet:', err);
       transcodeWorklet = null;
     }
+  }
+  // Settle a still-pending transcode promise (no-op after complete/error,
+  // which clear these before terminating).
+  if (_transcodeReject) {
+    _transcodeReject(new Error('Transcode terminated'));
   }
   _transcodeCallbacks = {};
   _transcodeResolve = null;

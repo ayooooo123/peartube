@@ -51,6 +51,7 @@ function createBridgePipe(specifier: string) {
   const listeners = new Map<string, Array<(...args: any[]) => void>>();
   let destroyed = false;
   let unsubscribe: (() => void) | null = null;
+  let offOutput: (() => void) | null = null;
 
   const pipe: any = {
     write(data: any) {
@@ -79,6 +80,7 @@ function createBridgePipe(specifier: string) {
       pipe.emit('close');
       listeners.clear();
       if (unsubscribe) unsubscribe();
+      if (offOutput) offOutput();
     },
     get destroyed() { return destroyed; },
     get writable() { return !destroyed; },
@@ -99,9 +101,13 @@ function createBridgePipe(specifier: string) {
   });
   const offExit = bridge.onWorkerExit(specifier, (code: number) => {
     console.log('[Worker] Exited with code:', code);
-    offStdout(); offStderr(); offExit();
     if (!destroyed) pipe.destroy();
   });
+  offOutput = () => {
+    offStdout();
+    offStderr();
+    offExit();
+  };
 
   return pipe;
 }

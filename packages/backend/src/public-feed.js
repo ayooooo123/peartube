@@ -32,6 +32,7 @@ import {
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
 const PUBLIC_FEED_RELAY_CATALOG_KEY = 'public-feed-relay-catalog-v1'
+const PUBLIC_FEED_HIDDEN_CHANNELS_KEY = 'hidden-channels-v1'
 const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
 const NETWORK_TOPIC_HEX = b4a.toString(NETWORK_TOPIC, 'hex')
 
@@ -844,15 +845,18 @@ export class PublicFeed {
   }
 
   _enforceFeedEntryLimit() {
-    while (this.entries.size > this._persistMaxEntries) {
-      const oldestKey = this.entries.keys().next().value
-      if (!oldestKey) break
-      const entry = this.entries.get(oldestKey)
-      if (entry?.source === 'local') break
-      this.entries.delete(oldestKey)
-      this.entryPeerCounts.delete(oldestKey)
+    if (this.entries.size <= this._persistMaxEntries) return
+    // Evict oldest non-local entries. Local entries are skipped (never break:
+    // a local entry at the head of the Map must not disable eviction entirely,
+    // or peer-discovered entries grow unbounded).
+    for (const key of this.entries.keys()) {
+      if (this.entries.size <= this._persistMaxEntries) break
+      const entry = this.entries.get(key)
+      if (entry?.source === 'local') continue
+      this.entries.delete(key)
+      this.entryPeerCounts.delete(key)
       for (const peerKeys of this.peerFeedKeys.values()) {
-        peerKeys.delete(oldestKey)
+        peerKeys.delete(key)
       }
     }
   }
@@ -930,16 +934,15 @@ export class PublicFeed {
   }
 
   _recordPeerConnectionOutcome(conn, reason = 'closed') {
+    // A failing connection emits both 'error' and 'close'. _forgetConnection
+    // clears the conn maps after the first event, so bail here to avoid
+    // scoring the same connection outcome twice (the connected-stat decrement
+    // is owned by _forgetConnection).
+    if (!this._connectionPeerKeys.has(conn)) return
     const remoteKey = this._connectionPeerKeys.get(conn) || conn?.remotePublicKey || conn?.publicKey || null
     const keyHex = this._peerKeyHex(remoteKey)
     const record = keyHex ? this._peerDirectory.get(keyHex) : null
-    const hadRemoteKey = Boolean(remoteKey)
-    if (!record) {
-      if (hadRemoteKey && this._directPeerDialStats.connected > 0) {
-        this._directPeerDialStats.connected = Math.max(0, this._directPeerDialStats.connected - 1)
-      }
-      return
-    }
+    if (!record) return
     const ageMs = this._connectionAgeMs(conn)
     const swarmState = this._swarmDialState(keyHex, remoteKey)
     record.lastConnectionAt = this._now()
@@ -1200,6 +1203,24 @@ export class PublicFeed {
       this.handleConnection(conn, {});
     }
 
+    // Restore hidden channels before any cached entries so addEntry() filters
+    // them out — otherwise channels the user hid reappear on every restart.
+    if (this.metaDb) {
+      try {
+        const hidden = await this.metaDb.get(PUBLIC_FEED_HIDDEN_CHANNELS_KEY).catch(() => null)
+        if (Array.isArray(hidden?.value)) {
+          for (const key of hidden.value) {
+            if (typeof key === 'string' && /^[a-f0-9]{64}$/i.test(key)) this.hiddenKeys.add(key)
+          }
+          if (this.hiddenKeys.size > 0) {
+            console.log('[PublicFeed] Restored', this.hiddenKeys.size, 'hidden channels from db')
+          }
+        }
+      } catch (err) {
+        console.log('[PublicFeed] Hidden-channel restore skipped:', err?.message)
+      }
+    }
+
     // Load persisted published channels from database
     // Try new format first (with publicBeeKey), fall back to legacy format
     if (this.metaDb) {
@@ -1445,7 +1466,7 @@ export class PublicFeed {
     try {
       mux = Protomux.from(conn);
     } catch (err) {
-      this.wiredConnections.delete(conn);
+      this._forgetConnection(conn);
       console.error('[PublicFeed] Protomux.from failed during handshake:', label, err?.message || err, err?.stack || '')
       return;
     }
@@ -1459,7 +1480,7 @@ export class PublicFeed {
         }
       });
     } catch (err) {
-      this.wiredConnections.delete(conn);
+      this._forgetConnection(conn);
       console.error('[PublicFeed] mux.pair failed during handshake:', label, err?.message || err, err?.stack || '')
       return
     }
@@ -1467,7 +1488,7 @@ export class PublicFeed {
     try {
       this.setupFeedProtocol(conn, mux);
     } catch (err) {
-      this.wiredConnections.delete(conn);
+      this._forgetConnection(conn);
       console.error('[PublicFeed] setupFeedProtocol failed during handshake:', label, err?.message || err, err?.stack || '')
     }
   }
@@ -1707,11 +1728,14 @@ export class PublicFeed {
         let announcedKeys = []
         let receivedCount = 0
 
-        // Prefer new entries format (with publicBeeKey)
+        // Prefer new entries format (with publicBeeKey).
+        // Cap processed entries per message: each verified entry costs a
+        // signature check, and a hostile peer must not be able to pin the CPU
+        // or balloon memory with one oversized HAVE_FEED.
         if (msg.entries && Array.isArray(msg.entries)) {
           log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
           receivedCount = msg.entries.length
-          for (const entry of msg.entries) {
+          for (const entry of msg.entries.slice(0, this._persistMaxEntries)) {
             if (!entry?.driveKey) continue
             const entrySource = 'peer'
             const resolvedPublicBeeKey = this._resolvePublicBeeKey(entry)
@@ -1727,7 +1751,9 @@ export class PublicFeed {
         else if (msg.keys && Array.isArray(msg.keys)) {
           log.debug('HAVE_FEED received (legacy keys)', { count: msg.keys.length })
           receivedCount = msg.keys.length
-          announcedKeys = msg.keys.filter((key) => typeof key === 'string' && key.length > 0)
+          announcedKeys = msg.keys
+            .filter((key) => typeof key === 'string' && key.length > 0)
+            .slice(0, this._persistMaxEntries)
         }
 
         let peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
@@ -1781,7 +1807,7 @@ export class PublicFeed {
       console.log('[PublicFeed] FEED_RESPONSE received with', msg.keys?.length || 0, 'keys');
       let added = 0;
       const announcedKeys = Array.isArray(msg.keys)
-        ? msg.keys.filter((key) => typeof key === 'string' && key.length > 0)
+        ? msg.keys.filter((key) => typeof key === 'string' && key.length > 0).slice(0, this._persistMaxEntries)
         : []
       const peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
       try {
@@ -2102,7 +2128,17 @@ export class PublicFeed {
     this.hiddenKeys.add(driveKey);
     this.entries.delete(driveKey);
     console.log('[PublicFeed] Hidden channel:', driveKey.slice(0, 16));
+    this._persistHiddenChannels().catch(() => {})
     this._schedulePersistDiscovered()
+  }
+
+  async _persistHiddenChannels() {
+    if (!this.metaDb) return
+    try {
+      await this.metaDb.put(PUBLIC_FEED_HIDDEN_CHANNELS_KEY, Array.from(this.hiddenKeys))
+    } catch (err) {
+      console.log('[PublicFeed] Failed to persist hidden channels:', err?.message)
+    }
   }
 
   /**

@@ -444,8 +444,9 @@ export class SeedingManager {
     const ref = normalizeSeedBlobRef(seed);
     if (!ref) return false;
 
+    let core = null;
     try {
-      const core = this.store.get(Buffer.from(ref.blobsCoreKey, 'hex'));
+      core = this.store.get(Buffer.from(ref.blobsCoreKey, 'hex'));
       await core.ready?.();
       const start = ref.blob.blockOffset;
       const end = ref.blob.blockOffset + ref.blob.blockLength;
@@ -456,6 +457,10 @@ export class SeedingManager {
       }
     } catch (err) {
       console.log('[SeedingManager] Failed to clear cached blob range:', err?.message);
+    } finally {
+      // store.get() opened a fresh session for this clear; release it so
+      // evictions don't accumulate open core sessions.
+      try { await core?.close?.(); } catch { /* best effort */ }
     }
 
     return false;

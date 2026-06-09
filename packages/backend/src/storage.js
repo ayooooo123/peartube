@@ -2111,6 +2111,13 @@ export async function shutdownBackend(ctx) {
   ctx._isShutdown = true
   ctx.isShuttingDown = true
 
+  // The cast watchdog probes the blob server on an interval and force-resumes
+  // it; left running past shutdown it targets a closed server forever.
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer)
+    watchdogTimer = null
+  }
+
   async function runShutdownStep(label, fn, timeoutMs = 5000) {
     let timeoutId = null
     let timedOut = false

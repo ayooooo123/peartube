@@ -59,6 +59,7 @@ export default function DiagnosticsPanel({
   const discoveryPeers = network?.discovery?.discoveredPeers ?? swarmStatus?.peerCount ?? 0
   const feedConnections = network?.feed?.feedConnections ?? swarmStatus?.feedConnections ?? 0
   const dht = network?.dht
+  const lastHaveFeed = network?.feed?.lastHaveFeed
 
   return (
     <View style={styles.root}>
@@ -95,6 +96,14 @@ export default function DiagnosticsPanel({
           <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text>
         ) : null}
         {boundary ? <Text style={styles.boundaryText}>Boundary: {boundary}</Text> : null}
+        {lastHaveFeed ? (
+          <Text style={styles.detailText}>
+            Last gossip: {lastHaveFeed.received ?? 0} received • {lastHaveFeed.accepted ?? 0} accepted • {lastHaveFeed.rejected ?? 0} rejected
+            {lastHaveFeed.lastRejectReason ? ` (${lastHaveFeed.lastRejectReason})` : ''}
+          </Text>
+        ) : (
+          <Text style={styles.detailText}>No gossip received yet this session.</Text>
+        )}
       </View>
 
       <View style={styles.card}>

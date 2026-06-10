@@ -338,7 +338,7 @@ export class PublicFeed {
     const verification = await this._verifyPeerFeedSnapshot(driveKey, source, snapshot, publicBeeKey)
     if (!verification.ok) {
       log.debug('Rejected feed entry', { driveKey: String(driveKey || '').slice(0, 16), source, reason: verification.reason })
-      return { added: false, updated: false, accepted: false }
+      return { added: false, updated: false, accepted: false, reason: verification.reason }
     }
     const verifiedSnapshot = verification.signedDescriptor
       ? { ...(snapshot || {}), signedDescriptor: verification.signedDescriptor }
@@ -1725,6 +1725,8 @@ export class PublicFeed {
       void (async () => {
         let added = 0;
         let updated = 0;
+        let rejected = 0;
+        let lastRejectReason = null;
         let announcedKeys = []
         let receivedCount = 0
 
@@ -1740,7 +1742,11 @@ export class PublicFeed {
             const entrySource = 'peer'
             const resolvedPublicBeeKey = this._resolvePublicBeeKey(entry)
             const result = await this._ingestVerifiedPeerEntry(entry.driveKey, entrySource, resolvedPublicBeeKey, entry)
-            if (!result.accepted) continue
+            if (!result.accepted) {
+              rejected++
+              if (result.reason) lastRejectReason = result.reason
+              continue
+            }
             announcedKeys.push(entry.driveKey)
             if (result.added) added++
             else if (result.updated) updated++
@@ -1756,6 +1762,15 @@ export class PublicFeed {
             .slice(0, this._persistMaxEntries)
         }
 
+        this._lastHaveFeed = {
+          at: Date.now(),
+          received: receivedCount,
+          accepted: announcedKeys.length,
+          added,
+          updated,
+          rejected,
+          lastRejectReason,
+        }
         let peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
         this._enforceFeedEntryLimit()
         peerSetChanged = this._prunePeerFeedKeysToEntries(conn) || peerSetChanged
@@ -2188,6 +2203,7 @@ export class PublicFeed {
       candidateConnections: feed.candidateConnections,
       rememberedPeerCandidates: feed.rememberedPeerCandidates,
       directPeerDial: this.getDirectPeerDialStats(),
+      lastHaveFeed: this._lastHaveFeed || null,
       startupTiming: this.getStartupTiming(),
     };
   }

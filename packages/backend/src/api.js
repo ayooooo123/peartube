@@ -2896,6 +2896,7 @@ export function createApi({
           feedConnections: publicFeed?.feedConnections?.size || 0,
           feedEntries: publicFeed?.entries?.size || 0,
           directPeerDial: feedStats.directPeerDial || null,
+          lastHaveFeed: feedStats.lastHaveFeed || null,
         },
         recommendedBoundary: null,
       }

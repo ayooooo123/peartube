@@ -48,6 +48,15 @@ export interface SwarmStatus {
       feedConnections?: number
       feedEntries?: number
       directPeerDial?: { discoveredPeers?: number } | null
+      lastHaveFeed?: {
+        at?: number
+        received?: number
+        accepted?: number
+        added?: number
+        updated?: number
+        rejected?: number
+        lastRejectReason?: string | null
+      } | null
     }
     recommendedBoundary?: string | null
   } | null

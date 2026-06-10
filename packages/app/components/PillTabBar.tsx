@@ -16,6 +16,7 @@ import { useVideoPlayerSession } from '@/lib/VideoPlayerContext'
 import { setTabBarMetrics } from '@/lib/tabBarHeight'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
+import * as haptics from '@/lib/haptics'
 
 let BlurView: any = null
 try {
@@ -39,10 +40,8 @@ interface TabItem {
 const TABS: TabItem[] = [
   { name: 'index', path: '/', icon: 'home', label: 'Home' },
   { name: 'discover', path: '/discover', icon: 'zap', label: 'Discover' },
-  { name: 'subscriptions', path: '/subscriptions', icon: 'users', label: 'Subs' },
   { name: 'studio', path: '/studio', icon: 'plus-circle', label: 'Studio', emphasized: true },
-  { name: 'downloads', path: '/downloads', icon: 'download', label: 'Downloads' },
-  { name: 'settings', path: '/settings', icon: 'settings', label: 'Settings' },
+  { name: 'library', path: '/library', icon: 'layers', label: 'Library' },
 ]
 
 const PILL_HEIGHT = Platform.OS === 'android' ? 66 : 58
@@ -170,6 +169,7 @@ export function PillTabBar() {
               isActive={isActive}
               onPress={() => {
                 if (isActive) return
+                haptics.tabSwitch()
                 router.replace(tab.path as any)
               }}
             />

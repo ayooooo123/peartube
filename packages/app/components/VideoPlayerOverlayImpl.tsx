@@ -74,6 +74,7 @@ import {
   P2PStatsBar,
   ChannelInfo,
   ActionButton,
+  ReactionButton,
   Scrubber,
   PearInlineVideoView,
 } from './video-player'
@@ -137,7 +138,9 @@ export function VideoPlayerOverlay() {
     loadMoreComments,
     postComment,
     deleteComment,
+    hideComment,
     toggleReaction,
+    canModerate,
     displayComments,
     organizedComments,
   } = useSocial()
@@ -2988,11 +2991,10 @@ export function VideoPlayerOverlay() {
 
             {/* Action Buttons */}
             <View style={styles.actions}>
-              <ActionButton
-                icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-up" color={color} size={size} />}
-                label={`Like${reactionCounts.like ? ` (${reactionCounts.like})` : ''}`}
-                active={userReaction === 'like'}
-                onPress={() => toggleReaction('like')}
+              <ReactionButton
+                reactionCounts={reactionCounts}
+                userReaction={userReaction}
+                onToggleReaction={toggleReaction}
               />
               <ActionButton
                 icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-down" color={color} size={size} />}
@@ -3136,6 +3138,17 @@ export function VideoPlayerOverlay() {
                                 )}
                               </Pressable>
                             )}
+                            {canModerate && !isOwnComment(c) && !c.pendingState && (
+                              <Pressable
+                                onPress={() => hideComment(c.commentId)}
+                                disabled={deletingCommentId === c.commentId}
+                                style={styles.commentActionButton}
+                                accessibilityRole="button"
+                                accessibilityLabel="Hide comment"
+                              >
+                                <Feather name="eye-off" color={colors.textMuted} size={14} />
+                              </Pressable>
+                            )}
                           </View>
                         </View>
                         <Text style={c.pendingState ? styles.commentTextPending : styles.commentText}>{c.text}</Text>
@@ -3171,6 +3184,17 @@ export function VideoPlayerOverlay() {
                                     ) : (
                                       <Feather name="trash-2" color="#f87171" size={14} />
                                     )}
+                                  </Pressable>
+                                )}
+                                {canModerate && !isOwnComment(reply) && !reply.pendingState && (
+                                  <Pressable
+                                    onPress={() => hideComment(reply.commentId)}
+                                    disabled={deletingCommentId === reply.commentId}
+                                    style={styles.commentActionButton}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Hide reply"
+                                  >
+                                    <Feather name="eye-off" color={colors.textMuted} size={14} />
                                   </Pressable>
                                 )}
                               </View>

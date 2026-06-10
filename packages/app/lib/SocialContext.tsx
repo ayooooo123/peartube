@@ -42,7 +42,11 @@ interface SocialContextType {
   loadMoreComments: () => void
   postComment: () => Promise<void>
   deleteComment: (commentId: string) => void
+  hideComment: (commentId: string) => void
   toggleReaction: (reactionType: string) => Promise<void>
+
+  /** True when the active identity owns the channel of the current video (can moderate comments). */
+  canModerate: boolean
 
   displayComments: any[]
   organizedComments: any[]
@@ -308,6 +312,38 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
     )
   }, [currentVideo, pendingComments])
 
+  // Channel-owner moderation: hides the comment for everyone on this channel.
+  const hideComment = useCallback((commentId: string) => {
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    const pubBee = currentVideo.publicBeeKey || undefined
+    Alert.alert(
+      'Hide Comment',
+      'Hide this comment from everyone watching this channel?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Hide',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingCommentId(commentId)
+            try {
+              const res = await rpc.hideComment?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee, commentId })
+              if (res?.success) {
+                setComments(prev => prev.filter(c => c.commentId !== commentId))
+              }
+            } finally {
+              setDeletingCommentId(null)
+            }
+          },
+        },
+      ],
+    )
+  }, [currentVideo])
+
+  const canModerate = Boolean(
+    identity?.driveKey && currentVideo?.channelKey && identity.driveKey === currentVideo.channelKey
+  )
+
   const toggleReaction = useCallback(async (reactionType: string) => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
     const pubBee = currentVideo.publicBeeKey || undefined
@@ -345,7 +381,9 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
     loadMoreComments,
     postComment,
     deleteComment,
+    hideComment,
     toggleReaction,
+    canModerate,
     displayComments,
     organizedComments,
   }), [
@@ -367,7 +405,9 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
     loadMoreComments,
     postComment,
     deleteComment,
+    hideComment,
     toggleReaction,
+    canModerate,
     displayComments,
     organizedComments,
   ])

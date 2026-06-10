@@ -397,7 +397,7 @@ export const Scrubber = memo(function Scrubber({
       borderRadius: geometry.borderRadius,
       width: shimmerWidth,
       left: Math.max(0, bufW - shimmerWidth),
-      backgroundColor: '#5e6ad2',
+      backgroundColor: '#a3e635',
       opacity: bufferShimmerOpacity.value,
     }
   }, [])

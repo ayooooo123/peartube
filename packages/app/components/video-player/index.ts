@@ -15,6 +15,7 @@ export { desktopStyles } from './desktopStyles'
 export { P2PStatsBar } from './P2PStatsBar'
 export { ChannelInfo } from './ChannelInfo'
 export { ActionButton } from './ActionButton'
+export { ReactionButton } from './ReactionButton'
 export { TimeDisplay } from './TimeDisplay'
 export { Scrubber } from './Scrubber'
 

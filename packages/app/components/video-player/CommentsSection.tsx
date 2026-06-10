@@ -4,7 +4,7 @@
  * Uses the useCommentsPolling hook for state management.
  */
 
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { View, Text, Pressable, ActivityIndicator } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
@@ -46,6 +46,10 @@ interface CommentsSectionProps {
   onPostComment: () => void
   onDeleteComment: (commentId: string) => void
   isOwnComment: (comment: Comment) => boolean
+
+  /** Channel-owner moderation (optional) */
+  canModerate?: boolean
+  onHideComment?: (commentId: string) => void
 }
 
 export const CommentsSection = memo(function CommentsSection({
@@ -66,6 +70,8 @@ export const CommentsSection = memo(function CommentsSection({
   onPostComment,
   onDeleteComment,
   isOwnComment,
+  canModerate,
+  onHideComment,
 }: CommentsSectionProps) {
   return (
     <View style={styles.commentsSection}>
@@ -116,54 +122,16 @@ export const CommentsSection = memo(function CommentsSection({
       ) : (
         <View style={{ gap: 12, paddingBottom: 24 }}>
           {organizedComments.map((c) => (
-            <View key={c.commentId}>
-              <CommentItem
-                comment={c}
-                isOwnComment={isOwnComment(c)}
-                deletingCommentId={deletingCommentId}
-                onReply={() => onSetReplyToComment(c)}
-                onDelete={() => onDeleteComment(c.commentId)}
-              />
-
-              {/* Replies */}
-              {c.replies && c.replies.length > 0 && (
-                <View style={styles.repliesContainer}>
-                  {c.replies.map((reply) => (
-                    <View key={reply.commentId} style={styles.replyItem}>
-                      <View style={styles.commentHeader}>
-                        <Text style={styles.commentAuthor}>
-                          {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
-                        </Text>
-                        {reply.isAdmin && (
-                          <Text style={styles.adminBadge}>Admin</Text>
-                        )}
-                        {reply.pendingState && (
-                          <Text style={styles.pendingBadge}>
-                            {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
-                          </Text>
-                        )}
-                        {(isOwnComment(reply) || reply.pendingState) && (
-                          <Pressable
-                            onPress={() => onDeleteComment(reply.commentId)}
-                            disabled={deletingCommentId === reply.commentId}
-                            style={styles.commentActionButton}
-                          >
-                            {deletingCommentId === reply.commentId ? (
-                              <ActivityIndicator size="small" color={colors.textMuted} />
-                            ) : (
-                              <Feather name="trash-2" color="#f87171" size={14} />
-                            )}
-                          </Pressable>
-                        )}
-                      </View>
-                      <Text style={reply.pendingState ? styles.commentTextPending : styles.commentText}>
-                        {reply.text}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
+            <CommentThread
+              key={c.commentId}
+              comment={c}
+              deletingCommentId={deletingCommentId}
+              isOwnComment={isOwnComment}
+              canModerate={canModerate}
+              onSetReplyToComment={onSetReplyToComment}
+              onDeleteComment={onDeleteComment}
+              onHideComment={onHideComment}
+            />
           ))}
 
           {/* Load more */}
@@ -185,3 +153,116 @@ export const CommentsSection = memo(function CommentsSection({
     </View>
   )
 })
+
+interface CommentThreadProps {
+  comment: Comment
+  deletingCommentId: string | null
+  isOwnComment: (comment: Comment) => boolean
+  canModerate?: boolean
+  onSetReplyToComment: (comment: Comment | null) => void
+  onDeleteComment: (commentId: string) => void
+  onHideComment?: (commentId: string) => void
+}
+
+/** Top-level comment with collapsible replies. */
+function CommentThread({
+  comment,
+  deletingCommentId,
+  isOwnComment,
+  canModerate,
+  onSetReplyToComment,
+  onDeleteComment,
+  onHideComment,
+}: CommentThreadProps) {
+  const replies = comment.replies || []
+  const [repliesOpen, setRepliesOpen] = useState(replies.length <= 2)
+
+  return (
+    <View>
+      <CommentItem
+        comment={comment}
+        isOwnComment={isOwnComment(comment)}
+        deletingCommentId={deletingCommentId}
+        onReply={() => onSetReplyToComment(comment)}
+        onDelete={() => onDeleteComment(comment.commentId)}
+        onHide={canModerate && onHideComment ? () => onHideComment(comment.commentId) : undefined}
+      />
+
+      {replies.length > 0 && (
+        <View style={styles.repliesContainer}>
+          {!repliesOpen ? (
+            <Pressable
+              onPress={() => setRepliesOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`View ${replies.length} replies`}
+              style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 }, pressed && { opacity: 0.6 }]}
+            >
+              <Feather name="corner-down-right" color={colors.primary} size={13} />
+              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>
+                View {replies.length} repl{replies.length === 1 ? 'y' : 'ies'}
+              </Text>
+            </Pressable>
+          ) : (
+            <>
+              {replies.length > 2 && (
+                <Pressable
+                  onPress={() => setRepliesOpen(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Hide replies"
+                  style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 }, pressed && { opacity: 0.6 }]}
+                >
+                  <Feather name="chevron-up" color={colors.textMuted} size={13} />
+                  <Text style={{ color: colors.textMuted, fontSize: 12, fontWeight: '600' }}>Hide replies</Text>
+                </Pressable>
+              )}
+              {replies.map((reply) => (
+                <View key={reply.commentId} style={styles.replyItem}>
+                  <View style={styles.commentHeader}>
+                    <Text style={styles.commentAuthor}>
+                      {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
+                    </Text>
+                    {reply.isAdmin && (
+                      <Text style={styles.adminBadge}>Admin</Text>
+                    )}
+                    {reply.pendingState && (
+                      <Text style={styles.pendingBadge}>
+                        {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
+                      </Text>
+                    )}
+                    {(isOwnComment(reply) || reply.pendingState) && (
+                      <Pressable
+                        onPress={() => onDeleteComment(reply.commentId)}
+                        disabled={deletingCommentId === reply.commentId}
+                        style={styles.commentActionButton}
+                      >
+                        {deletingCommentId === reply.commentId ? (
+                          <ActivityIndicator size="small" color={colors.textMuted} />
+                        ) : (
+                          <Feather name="trash-2" color="#f87171" size={14} />
+                        )}
+                      </Pressable>
+                    )}
+                    {canModerate && onHideComment && !isOwnComment(reply) && !reply.pendingState && (
+                      <Pressable
+                        onPress={() => onHideComment(reply.commentId)}
+                        disabled={deletingCommentId === reply.commentId}
+                        style={styles.commentActionButton}
+                        accessibilityRole="button"
+                        accessibilityLabel="Hide reply"
+                      >
+                        <Feather name="eye-off" color={colors.textMuted} size={14} />
+                      </Pressable>
+                    )}
+                  </View>
+                  <Text style={reply.pendingState ? styles.commentTextPending : styles.commentText}>
+                    {reply.text}
+                  </Text>
+                </View>
+              ))}
+            </>
+          )}
+        </View>
+      )}
+    </View>
+  )
+}

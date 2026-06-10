@@ -26,6 +26,8 @@ interface CommentItemProps {
   deletingCommentId: string | null
   onReply: () => void
   onDelete: () => void
+  /** Channel-owner moderation — hides the comment for everyone. */
+  onHide?: () => void
 }
 
 export const CommentItem = memo(function CommentItem({
@@ -34,6 +36,7 @@ export const CommentItem = memo(function CommentItem({
   deletingCommentId,
   onReply,
   onDelete,
+  onHide,
 }: CommentItemProps) {
   const isDeleting = deletingCommentId === comment.commentId
 
@@ -73,6 +76,22 @@ export const CommentItem = memo(function CommentItem({
                 <ActivityIndicator size="small" color={colors.textMuted} />
               ) : (
                 <Feather name="trash-2" color="#f87171" size={14} />
+              )}
+            </Pressable>
+          )}
+          {onHide && !isOwnComment && !comment.pendingState && (
+            <Pressable
+              onPress={onHide}
+              disabled={isDeleting}
+              style={styles.commentActionButton}
+              accessibilityRole="button"
+              accessibilityLabel="Hide comment"
+              accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
+            >
+              {isDeleting ? (
+                <ActivityIndicator size="small" color={colors.textMuted} />
+              ) : (
+                <Feather name="eye-off" color={colors.textMuted} size={14} />
               )}
             </Pressable>
           )}

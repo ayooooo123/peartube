@@ -36,16 +36,28 @@ export default function DiagnosticsPanel({
     return Math.max(0, Math.min(1, storageStats.usedBytes / storageStats.maxBytes))
   }, [storageStats])
 
+  // Over HRPC the doctor/network detail arrives JSON-encoded (the wire
+  // schema has no nested object fields), so fall back to parsing it.
+  const network = useMemo(() => {
+    if (swarmStatus?.network) return swarmStatus.network
+    for (const raw of [swarmStatus?.doctorJson, swarmStatus?.networkJson]) {
+      if (typeof raw === 'string' && raw) {
+        try { return JSON.parse(raw) } catch {}
+      }
+    }
+    return null
+  }, [swarmStatus])
+
   const p2pLabel = swarmStatus?.swarmOffline
     ? 'Network paused'
     : (swarmStatus?.connected || 0) > 0
       ? 'Connected to peers'
       : 'Searching for peers'
 
-  const boundary = swarmStatus?.network?.recommendedBoundary
-  const discoveryPeers = swarmStatus?.network?.discovery?.discoveredPeers ?? swarmStatus?.peerCount ?? 0
-  const feedConnections = swarmStatus?.network?.feed?.feedConnections ?? swarmStatus?.feedConnections ?? 0
-  const dht = swarmStatus?.network?.dht
+  const boundary = network?.recommendedBoundary ?? swarmStatus?.recommendedBoundary
+  const discoveryPeers = network?.discovery?.discoveredPeers ?? swarmStatus?.peerCount ?? 0
+  const feedConnections = network?.feed?.feedConnections ?? swarmStatus?.feedConnections ?? 0
+  const dht = network?.dht
 
   return (
     <View style={styles.root}>

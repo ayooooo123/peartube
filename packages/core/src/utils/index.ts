@@ -126,10 +126,18 @@ export const RPC_METHODS = {
 // ============================================
 
 export const colors = {
-  // Brand
-  primary: '#5e6ad2',
-  primaryHover: '#7170ff',
-  primaryLight: 'rgba(94, 106, 210, 0.18)',
+  // Brand — warm pear green
+  primary: '#a3e635',
+  primaryHover: '#bef264',
+  primaryLight: 'rgba(163, 230, 53, 0.16)',
+  primaryDeep: '#65a30d',
+  // Readable text/icon color on top of primary fills
+  onPrimary: '#101503',
+
+  // Network/peer presence — teal, used only for swarm/peer ambient UI
+  swarm: '#2dd4bf',
+  swarmGlow: 'rgba(45, 212, 191, 0.35)',
+  swarmDim: 'rgba(45, 212, 191, 0.12)',
 
   // Accent
   accent: '#10b981',
@@ -144,12 +152,12 @@ export const colors = {
   errorLight: 'rgba(239, 98, 98, 0.18)',
   red: '#ef6262',
 
-  // Backgrounds
-  bg: '#08090a',
-  bgElevated: '#0f1011',
-  bgSecondary: '#0f1011', // Alias for bgElevated
-  bgHover: '#191a1b',
-  bgActive: '#28282c',
+  // Backgrounds — green-tinted near-blacks
+  bg: '#0a0c0a',
+  bgElevated: '#111411',
+  bgSecondary: '#111411', // Alias for bgElevated
+  bgHover: '#1a1e1a',
+  bgActive: '#242924',
   bgOverlay: 'rgba(0, 0, 0, 0.85)',
   bgCard: 'rgba(255,255,255,0.035)',
 
@@ -157,6 +165,11 @@ export const colors = {
   surface: 'rgba(255,255,255,0.035)',
   surfaceHover: 'rgba(255,255,255,0.055)',
   surfaceBorder: 'rgba(255,255,255,0.08)',
+
+  // Glass surfaces
+  glass: 'rgba(255,255,255,0.05)',
+  glassBorder: 'rgba(255,255,255,0.09)',
+  glassHighlight: 'rgba(190, 242, 100, 0.06)',
 
   // Text
   text: '#f7f8f8', // Alias for textPrimary
@@ -168,7 +181,7 @@ export const colors = {
   // Borders
   border: 'rgba(255,255,255,0.08)',
   borderLight: 'rgba(255,255,255,0.12)',
-  borderFocus: '#7170ff',
+  borderFocus: '#bef264',
 } as const;
 
 export const spacing = {

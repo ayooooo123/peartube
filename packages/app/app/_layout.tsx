@@ -19,6 +19,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import Constants from 'expo-constants'
+import { useFonts } from 'expo-font'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
@@ -196,6 +197,14 @@ let cachedAppState: {
 // AppContext / useApp live in '@/lib/AppContext' to avoid require cycles with VideoPlayerOverlay.
 
 export default function RootLayout() {
+  // Brand fonts (headings only — body text stays on the system font).
+  // Non-blocking: text renders with the fallback font until loaded, then
+  // the root re-render applies the brand font.
+  useFonts({
+    'SpaceGrotesk-Medium': require('../assets/fonts/SpaceGrotesk-Medium.ttf'),
+    'SpaceGrotesk-Bold': require('../assets/fonts/SpaceGrotesk-Bold.ttf'),
+  })
+
   // Initialize state from cache if available (for soft navigation)
   const [ready, setReady] = useState(() => cachedAppState !== null)
   const [identity, setIdentity] = useState<Identity | null>(() => cachedAppState?.identity ?? null)

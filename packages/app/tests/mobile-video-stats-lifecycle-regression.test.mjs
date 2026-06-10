@@ -72,9 +72,10 @@ test('useP2PVideo gates async completions by request generation', () => {
 
 test('cached playback refreshes active URL only for the current session', () => {
   const source = read('app/video/[id].tsx')
-  const cachedBlock = source.slice(source.indexOf('if (cachedUrl) {'), source.indexOf('      const result = await rpc.preparePlayback', source.indexOf('if (cachedUrl) {')))
+  const cachedStart = source.indexOf('if (cachedUrl) {')
+  const cachedBlock = source.slice(cachedStart, source.indexOf('const result = await preparePlaybackWhenReady(', cachedStart))
+  assert.notEqual(cachedBlock.length, 0, 'expected cached playback block before the bounded readiness wait')
 
   assert.match(cachedBlock, /loadGenerationRef\.current !== generation/, 'background preparePlayback should be generation-gated')
-  assert.match(cachedBlock, /const waitingForSelectedBlob = Boolean\(selectedBlobWarmup && selectedBlobWarmup\.readyForPlayback === false\)/, 'cached refresh should inspect selected blob readiness before replacing the URL')
-  assert.match(cachedBlock, /if \(result\?\.url && !waitingForSelectedBlob\) \{[\s\S]*setCachedVideoUrl[\s\S]*loadAndPlayVideo\(videoData, result\.url\)/, 'fresh prepared URL should replace the cached URL only in the active generation after selected blob readiness is proven')
+  assert.match(cachedBlock, /if \(result\?\.url && !isWaitingForSelectedBlob\(result\)\) \{[\s\S]*setCachedVideoUrl[\s\S]*loadAndPlayVideo\(videoData, result\.url\)/, 'fresh prepared URL should replace the cached URL only in the active generation after selected blob readiness is proven')
 })

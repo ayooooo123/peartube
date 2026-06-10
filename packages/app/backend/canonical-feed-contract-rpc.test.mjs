@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { attachMobileHandlers } from './mobile-handlers.mjs'
+import { attachMobileHandlers } from '../../backend/src/mobile-handlers.js'
 import { createCanonicalFeedVideo } from '../../backend/src/canonical-feed-contract.js'
 
 test('RPC integration scaffold preserves canonical feed video fields through the app boundary', async () => {

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { attachMobileHandlers } from './mobile-handlers.mjs'
+import { attachMobileHandlers } from '../../backend/src/mobile-handlers.js'
 
 function createDeps(overrides = {}) {
   return {
@@ -125,6 +125,10 @@ test('listVideos forwards video availability metadata from backend api', async (
       blobsCoreKey: 'blobs-core-key',
       mimeType: null,
       availability: 'playable',
+      byteAvailability: null,
+      hasHeadBlock: false,
+      contiguousBlocks: 0,
+      readyForPlayback: false,
       thumbnailBlobId: null,
       thumbnailBlobsCoreKey: null,
       thumbnailMimeType: null,
@@ -257,9 +261,20 @@ test('feed handlers use getPublicFeed for both public and canonical RPC names', 
         title: 'Preview',
         uploadedAt: 999,
         availability: 'playable',
+        byteAvailability: null,
+        hasHeadBlock: false,
+        contiguousBlocks: 0,
+        readyForPlayback: false,
       }],
     }],
-    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+    stats: {
+      totalEntries: 1,
+      hiddenCount: 0,
+      peerCount: 2,
+      feedConnections: 2,
+      feedEntries: 1,
+      channelsLoaded: 1,
+    },
   }
 
   assert.deepEqual(await backend.getPublicFeed({}), expected)

@@ -593,7 +593,7 @@ function removeStaleLocks(storageDir) {
     }
   }
 
-  const { attachMobileHandlers } = await import('./mobile-handlers.mjs')
+  const { attachMobileHandlers } = await import('@peartube/backend/mobile-handlers')
   attachMobileHandlers(backend, {
     api,
     identityManager,

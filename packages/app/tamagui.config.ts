@@ -3,11 +3,11 @@ import { config as defaultConfig } from '@tamagui/config/v3'
 
 // PearTube dark theme colors
 const colors = {
-  bg: '#08090a',
-  bgSecondary: '#0f1011',
-  bgHover: '#191a1b',
-  primary: '#5e6ad2',
-  primaryHover: '#7170ff',
+  bg: '#0a0c0a',
+  bgSecondary: '#111411',
+  bgHover: '#1a1e1a',
+  primary: '#a3e635',
+  primaryHover: '#bef264',
   text: '#f7f8f8',
   textSecondary: '#d0d6e0',
   textMuted: '#8a8f98',

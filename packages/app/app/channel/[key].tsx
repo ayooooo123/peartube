@@ -22,6 +22,8 @@ import { rpc } from '@peartube/platform/rpc'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { colors } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
+import * as haptics from '@/lib/haptics'
 
 const CHANNEL_PAGE_RPC_TIMEOUT_MS = 4500
 
@@ -132,7 +134,7 @@ function ChannelVideoCard({
       />
       <View className="flex-row mt-3 px-3">
         <View className="w-10 h-10 rounded-full bg-pear-primary items-center justify-center mr-3">
-          <Text className="text-white text-label font-semibold">{channelName.charAt(0).toUpperCase() || 'P'}</Text>
+          <Text className="text-label font-semibold" style={{ color: colors.onPrimary }}>{channelName.charAt(0).toUpperCase() || 'P'}</Text>
         </View>
         <View className="flex-1">
           <Text className="text-label text-pear-text" numberOfLines={2}>{video.title || 'Untitled video'}</Text>
@@ -177,6 +179,10 @@ export default function ChannelScreen() {
   const [isLoading, setIsLoading] = useState(true)
   const [screenError, setScreenError] = useState('')
   const [videosDegradedMessage, setVideosDegradedMessage] = useState('')
+
+  const [isSubscribed, setIsSubscribed] = useState(false)
+  const [subscribeBusy, setSubscribeBusy] = useState(false)
+  const [isPinned, setIsPinned] = useState(false)
 
   const [isEditModalVisible, setIsEditModalVisible] = useState(false)
   const [editName, setEditName] = useState('')
@@ -286,6 +292,62 @@ export default function ChannelScreen() {
     fetchChannelPage()
   }, [fetchChannelPage])
 
+  // Subscription + keep-online state (best-effort; buttons stay usable either way)
+  useEffect(() => {
+    if (!channelKey) return
+    let isMounted = true
+    ;(async () => {
+      try {
+        const subs = await (rpc as any).getSubscriptions?.({})
+        if (isMounted && Array.isArray(subs?.subscriptions)) {
+          setIsSubscribed(subs.subscriptions.some((s: any) => s.channelKey === channelKey))
+        }
+      } catch {}
+      try {
+        const pinned = await (rpc as any).getPinnedChannels?.()
+        if (isMounted && Array.isArray(pinned?.channels)) {
+          setIsPinned(pinned.channels.includes(channelKey))
+        }
+      } catch {}
+    })()
+    return () => { isMounted = false }
+  }, [channelKey])
+
+  const toggleSubscribe = useCallback(async () => {
+    if (!channelKey || subscribeBusy) return
+    setSubscribeBusy(true)
+    const next = !isSubscribed
+    setIsSubscribed(next)
+    try {
+      if (next) {
+        await (rpc as any).subscribeChannel({ channelKey })
+        haptics.success()
+      } else {
+        await (rpc as any).unsubscribeChannel({ channelKey })
+      }
+    } catch {
+      setIsSubscribed(!next)
+    } finally {
+      setSubscribeBusy(false)
+    }
+  }, [channelKey, isSubscribed, subscribeBusy])
+
+  const togglePin = useCallback(async () => {
+    if (!channelKey) return
+    const next = !isPinned
+    setIsPinned(next)
+    try {
+      if (next) {
+        await (rpc as any).pinChannel?.({ channelKey })
+        haptics.success()
+      } else {
+        await (rpc as any).unpinChannel?.({ channelKey })
+      }
+    } catch {
+      setIsPinned(!next)
+    }
+  }, [channelKey, isPinned])
+
   const openEditModal = useCallback(() => {
     setSaveError('')
     setAvatarBase64('')
@@ -388,7 +450,7 @@ export default function ChannelScreen() {
             className="mt-5 bg-pear-primary rounded-lg px-5 py-3"
             accessibilityRole="button"
           >
-            <Text className="text-white text-label">Retry</Text>
+            <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
           </PressableFeedback>
         </View>
       ) : (
@@ -427,7 +489,38 @@ export default function ChannelScreen() {
                     <Feather name="edit-2" size={16} color={colors.text} />
                     <Text style={styles.editButtonText}>Edit Channel</Text>
                   </PressableFeedback>
-                ) : null}
+                ) : (
+                  <View style={styles.heroActions}>
+                    <Pressable
+                      onPress={toggleSubscribe}
+                      disabled={subscribeBusy}
+                      accessibilityRole="button"
+                      accessibilityLabel={isSubscribed ? 'Unsubscribe' : 'Subscribe'}
+                      style={({ pressed }) => [
+                        styles.subscribeButton,
+                        isSubscribed && styles.subscribeButtonActive,
+                        (pressed || subscribeBusy) && { opacity: 0.75 },
+                      ]}
+                    >
+                      <Feather
+                        name={isSubscribed ? 'check' : 'user-plus'}
+                        size={15}
+                        color={isSubscribed ? colors.textSecondary : colors.onPrimary}
+                      />
+                      <Text style={[styles.subscribeLabel, isSubscribed && styles.subscribeLabelActive]}>
+                        {isSubscribed ? 'Subscribed' : 'Subscribe'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={togglePin}
+                      accessibilityRole="button"
+                      accessibilityLabel={isPinned ? 'Stop keeping this channel online' : 'Keep this channel online'}
+                      style={({ pressed }) => [styles.pinButton, isPinned && styles.pinButtonActive, pressed && { opacity: 0.75 }]}
+                    >
+                      <Feather name="anchor" size={15} color={isPinned ? colors.onPrimary : colors.textSecondary} />
+                    </Pressable>
+                  </View>
+                )}
               </View>
 
               <View style={styles.videoListSection}>
@@ -439,7 +532,7 @@ export default function ChannelScreen() {
                   className="mt-3 self-start bg-pear-primary rounded-lg px-4 py-2"
                   accessibilityRole="button"
                 >
-                  <Text className="text-white text-label">Retry</Text>
+                  <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
                 </PressableFeedback>
               </View>
             ) : null}
@@ -608,9 +701,9 @@ const styles = StyleSheet.create({
     borderRadius: 27,
   },
   avatarInitial: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontSize: 30,
-    fontWeight: '700',
+    fontFamily: fonts.heading,
   },
   heroCopy: {
     gap: 8,
@@ -619,7 +712,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 28,
     lineHeight: 33,
-    fontWeight: '700',
+    fontFamily: fonts.heading,
     letterSpacing: -0.65,
   },
   channelDescription: {
@@ -658,6 +751,49 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
     fontWeight: '600',
+  },
+  heroActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 18,
+  },
+  subscribeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.primary,
+  },
+  subscribeButtonActive: {
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+  },
+  subscribeLabel: {
+    color: colors.onPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  subscribeLabelActive: {
+    color: colors.textSecondary,
+  },
+  pinButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+  },
+  pinButtonActive: {
+    backgroundColor: colors.swarm,
+    borderColor: colors.swarm,
   },
   videoListSection: {
     paddingTop: 18,

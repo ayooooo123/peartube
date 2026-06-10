@@ -8,6 +8,7 @@ import { memo } from 'react'
 import { View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { ActionButton } from './ActionButton'
+import { ReactionButton } from './ReactionButton'
 import { styles } from './styles'
 
 interface ActionButtonsProps {
@@ -42,11 +43,10 @@ export const ActionButtons = memo(function ActionButtons({
 }: ActionButtonsProps) {
   return (
     <View style={styles.actions}>
-      <ActionButton
-        icon={({ color, size }) => <Feather name="thumbs-up" color={color} size={size} />}
-        label={`Like${reactionCounts.like ? ` (${reactionCounts.like})` : ''}`}
-        active={userReaction === 'like'}
-        onPress={() => onToggleReaction('like')}
+      <ReactionButton
+        reactionCounts={reactionCounts}
+        userReaction={userReaction}
+        onToggleReaction={onToggleReaction}
       />
       <ActionButton
         icon={({ color, size }) => <Feather name="thumbs-down" color={color} size={size} />}

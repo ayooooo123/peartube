@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
+import { SwarmIndicator } from '@/components/primitives'
 import { formatBytes as formatSize, formatTimeAgo, formatViews } from '@/lib/formatters'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useVideoPlayerActions, useVideoPlayerSession, VideoStats } from '@/lib/VideoPlayerContext'
@@ -94,6 +95,7 @@ function P2PStatsOverlay({ stats, showDetails, onPress }: {
 function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const { rpc: appRpc } = useApp()
   const [globalConnections, setGlobalConnections] = useState(0)
+  const [statsExpanded, setStatsExpanded] = useState(false)
 
   // Fetch global connection count as network diagnostics when video stats are not available yet.
   useEffect(() => {
@@ -157,24 +159,36 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
 
   const statusInfo = getStatusInfo()
 
+  // Human one-liner shown by default; raw numbers live behind a tap.
+  const statusLine = !stats
+    ? (globalConnections > 0 ? 'Reaching out to peers…' : 'Waiting for the swarm…')
+    : stats.isComplete
+      ? 'Saved on this device'
+      : stats.status === 'error'
+        ? 'Playback hit a snag'
+        : videoPeerCount > 0
+          ? `Streaming from ${videoPeerCount} ${videoPeerCount === 1 ? 'peer' : 'peers'}`
+          : 'Reaching out to peers…'
+
   return (
-    <View style={styles.statsBar}>
-      {/* Top row: Status, Peers, Speed */}
+    <Pressable
+      style={styles.statsBar}
+      onPress={() => setStatsExpanded((v) => !v)}
+      accessibilityRole="button"
+      accessibilityLabel={`${statusLine}. Tap for network details`}
+      accessibilityState={{ expanded: statsExpanded }}
+    >
+      {/* Ambient row */}
       <View style={styles.statsBarRow}>
         <View style={styles.statsBarLeft}>
-          <View style={[styles.statusDot, { backgroundColor: statusInfo.color }]} />
-          <Text style={styles.statsBarText}>{statusInfo.label}</Text>
+          {stats?.isComplete ? (
+            <Feather name="check-circle" size={12} color={colors.primary} />
+          ) : (
+            <SwarmIndicator peers={stats ? videoPeerCount : globalConnections} size={6} />
+          )}
+          <Text style={[styles.statsBarText, { color: statusInfo.color }]}>{statusLine}</Text>
         </View>
-        <View style={styles.statsBarCenter}>
-          <Feather name="users" color={colors.textMuted} size={12} />
-          <Text style={styles.statsBarText}>{videoPeerCount} video peer{videoPeerCount !== 1 ? 's' : ''}</Text>
-        </View>
-        {stats && (
-          <View style={styles.statsBarSpeeds}>
-            <Text style={styles.statsBarSpeed}>↓ {downloadSpeedText} MB/s</Text>
-            <Text style={styles.statsBarUploadSpeed}>↑ {uploadSpeedText} MB/s</Text>
-          </View>
-        )}
+        <Feather name={statsExpanded ? 'chevron-up' : 'chevron-down'} size={14} color={colors.textMuted} />
       </View>
 
       {/* Progress bar */}
@@ -184,32 +198,39 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         </View>
       )}
 
-      {!stats && globalConnections > 0 && (
+      {statsExpanded && !stats && globalConnections > 0 && (
         <View style={styles.statsBarRow2}>
           <Text style={styles.statsBarDetail}>Network online: {globalConnections} connection{globalConnections !== 1 ? 's' : ''}</Text>
         </View>
       )}
 
-      {/* Bottom row: Bytes, Blocks, Time */}
-      {stats && (
-        <View style={styles.statsBarRow2}>
-          <Text style={styles.statsBarDetail}>
-            {formatBytes(stats.downloadedBytes)} / {formatBytes(stats.totalBytes)}
-          </Text>
-          <Text style={styles.statsBarDetail}>
-            {stats.downloadedBlocks || 0} / {stats.totalBlocks || 0} blocks
-          </Text>
-          {!stats.isComplete && stats.elapsed > 0 && (
+      {/* Detail rows */}
+      {statsExpanded && stats && (
+        <>
+          <View style={styles.statsBarRow2}>
+            <Text style={styles.statsBarDetail}>{videoPeerCount} video peer{videoPeerCount !== 1 ? 's' : ''}</Text>
+            <Text style={styles.statsBarSpeed}>↓ {downloadSpeedText} MB/s</Text>
+            <Text style={styles.statsBarUploadSpeed}>↑ {uploadSpeedText} MB/s</Text>
+          </View>
+          <View style={styles.statsBarRow2}>
             <Text style={styles.statsBarDetail}>
-              {stats.elapsed}s
+              {formatBytes(stats.downloadedBytes)} / {formatBytes(stats.totalBytes)}
             </Text>
-          )}
-          <Text style={[styles.statsBarProgress, stats.isComplete && styles.statsBarProgressComplete]}>
-            {stats.progress || 0}%
-          </Text>
-        </View>
+            <Text style={styles.statsBarDetail}>
+              {stats.downloadedBlocks || 0} / {stats.totalBlocks || 0} blocks
+            </Text>
+            {!stats.isComplete && stats.elapsed > 0 && (
+              <Text style={styles.statsBarDetail}>
+                {stats.elapsed}s
+              </Text>
+            )}
+            <Text style={[styles.statsBarProgress, stats.isComplete && styles.statsBarProgressComplete]}>
+              {stats.progress || 0}%
+            </Text>
+          </View>
+        </>
       )}
-    </View>
+    </Pressable>
   )
 }
 

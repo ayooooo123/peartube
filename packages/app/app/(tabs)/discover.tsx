@@ -24,6 +24,7 @@ import type { VideoData } from '@peartube/core'
 import { useApp } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import {
   getVerticalFeedHydrationKey,
@@ -631,8 +632,14 @@ export default function VerticalDiscoveryScreen() {
                 <Text style={styles.feedPillText}>Cached</Text>
               </View>
             ) : null}
-            <Pressable onPress={onRefresh} style={styles.roundButton} disabled={refreshing || feedLoading}>
-              <Text style={styles.roundButtonText}>R</Text>
+            <Pressable
+              onPress={onRefresh}
+              style={styles.roundButton}
+              disabled={refreshing || feedLoading}
+              accessibilityRole="button"
+              accessibilityLabel="Refresh feed"
+            >
+              <Feather name="refresh-cw" size={14} color={colors.text} />
             </Pressable>
           </View>
         </View>
@@ -763,7 +770,7 @@ const styles = StyleSheet.create({
   title: {
     color: '#fff',
     fontSize: 26,
-    fontWeight: '800',
+    fontFamily: fonts.heading,
     letterSpacing: -0.8,
   },
   topActions: {

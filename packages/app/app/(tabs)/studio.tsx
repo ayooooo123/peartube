@@ -15,6 +15,9 @@ import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatBytes } from '@/lib/formatters'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
+import { Chip, EmptyState } from '@/components/primitives'
+import { fonts } from '@/lib/typography'
+import * as haptics from '@/lib/haptics'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -326,14 +329,14 @@ export default function StudioScreen() {
       return
     }
     if (!identity) {
-      console.error('[Studio] No identity! Please create one in Settings first')
-      Alert.alert('No identity', 'Please create an identity in Settings first')
+      console.error('[Studio] No identity! Please create one in Profile first')
+      Alert.alert('No channel yet', 'Create your channel from the Profile screen first.')
       return
     }
 
     if (!identity.driveKey) {
       console.error('[Studio] Identity missing driveKey')
-      Alert.alert('Identity error', 'Your identity is missing a channel key. Please recreate it in Settings.')
+      Alert.alert('Channel error', 'Your channel is missing its key. Please recreate it from the Profile screen.')
       return
     }
 
@@ -424,7 +427,8 @@ export default function StudioScreen() {
       setVideoDuration(null)
       setSelectedCategory('Other')
       setThumbnailError(null)
-      Alert.alert('Success', 'Video uploaded successfully!')
+      haptics.success()
+      Alert.alert('Published!', 'Your video is live on your channel.')
     } catch (err: any) {
       console.error('[Studio] Upload failed:', err)
       Alert.alert('Upload failed', err.message || 'Failed to upload video')
@@ -535,24 +539,12 @@ export default function StudioScreen() {
                 <Text className="text-caption text-pear-text-muted">Category</Text>
                 <View className="flex-row flex-wrap gap-2">
                   {categoryOptions.map((cat) => (
-                    <Pressable
+                    <Chip
                       key={cat}
+                      label={cat}
+                      selected={selectedCategory === cat}
                       onPress={() => setSelectedCategory(cat)}
-                      style={{
-                        paddingHorizontal: 16,
-                        paddingVertical: 8,
-                        borderRadius: 8,
-                        backgroundColor: selectedCategory === cat ? colors.primary : colors.bgCard,
-                      }}
-                    >
-                      <Text style={{
-                        fontSize: 14,
-                        fontWeight: '500',
-                        color: selectedCategory === cat ? '#fff' : colors.text,
-                      }}>
-                        {cat}
-                      </Text>
-                    </Pressable>
+                    />
                   ))}
                 </View>
               </View>
@@ -571,10 +563,10 @@ export default function StudioScreen() {
                     <ActivityIndicator color={colors.primary} size="small" />
                     <Text className="text-pear-text-muted text-caption">
                       {isTranscoding ? (
-                        `Transcoding audio... ${uploadProgress}%`
+                        `Optimizing for streaming… ${uploadProgress}%`
                       ) : (
                         <>
-                          Uploading... {uploadProgress}%
+                          Adding to your channel… {uploadProgress}%
                           {uploadSpeed > 0 && ` · ${formatSpeed(uploadSpeed)}`}
                           {uploadEta > 0 && ` · ${formatEta(uploadEta)} left`}
                         </>
@@ -591,13 +583,13 @@ export default function StudioScreen() {
                   }
                   className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(!title.trim() || (!isPear && (thumbnailGenerating || !thumbnailFilePath))) ? 'opacity-50' : ''}`}
                 >
-                  <Feather name="upload" color="white" size={18} />
-                  <Text className="text-white text-label">
+                  <Feather name="upload" color={colors.onPrimary} size={18} />
+                  <Text className="text-label" style={{ color: colors.onPrimary }}>
                     {!isPear && thumbnailGenerating
-                      ? 'Generating Thumbnail...'
+                      ? 'Preparing thumbnail…'
                       : (!isPear && !thumbnailFilePath)
-                        ? 'Thumbnail Required'
-                        : 'Upload Video'}
+                        ? 'Add a thumbnail to publish'
+                        : 'Publish'}
                   </Text>
                 </Pressable>
               )}
@@ -609,14 +601,16 @@ export default function StudioScreen() {
               className="flex-row items-center justify-center gap-3 bg-pear-bg-card border-2 border-dashed border-pear-border rounded-xl py-8 active:opacity-80"
             >
               <Feather name="upload" color={colors.textMuted} size={24} />
-              <Text className="text-body text-pear-text-muted">{pickingVideo ? 'Opening picker...' : 'Select a video to upload'}</Text>
+              <Text className="text-body text-pear-text-muted">{pickingVideo ? 'Opening picker…' : 'Choose a video to share'}</Text>
             </Pressable>
           )}
         </View>
 
         {/* Videos List title */}
         <View className="py-4">
-          <Text className="text-headline text-pear-text">Your Videos ({myVideos.length})</Text>
+          <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>
+            Published ({myVideos.length})
+          </Text>
         </View>
     </View>
   )
@@ -685,7 +679,7 @@ export default function StudioScreen() {
       >
         <View className="px-5 py-4">
           <View className="flex-row items-center justify-between">
-            <Text className="text-title text-pear-text">Studio</Text>
+            <Text style={{ color: colors.text, fontSize: 24, fontFamily: fonts.heading }}>Studio</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <CastHeaderButton size={18} />
               <Pressable onPress={() => router.push('/search')} className="p-2">
@@ -693,9 +687,15 @@ export default function StudioScreen() {
               </Pressable>
             </View>
           </View>
-          <Text className="text-caption text-pear-text-muted mt-1">
-            {identity ? `Channel: ${identity.name}` : 'No identity - create one in Settings'}
-          </Text>
+          {identity ? (
+            <Text className="text-caption text-pear-text-muted mt-1">{identity.name}</Text>
+          ) : (
+            <Pressable onPress={() => router.push('/profile')}>
+              <Text className="text-caption mt-1" style={{ color: colors.primary }}>
+                Set up your channel to start publishing →
+              </Text>
+            </Pressable>
+          )}
         </View>
       </View>
 
@@ -709,14 +709,11 @@ export default function StudioScreen() {
           paddingBottom: bottomPadding,
         }}
         ListEmptyComponent={
-          <View className="flex-1 justify-center items-center py-16">
-            <View className="w-16 h-16 rounded-full bg-pear-bg-card items-center justify-center mb-4">
-              <Feather name="film" color={colors.textMuted} size={28} />
-            </View>
-            <Text className="text-body text-pear-text-muted text-center">
-              No videos uploaded yet
-            </Text>
-          </View>
+          <EmptyState
+            icon="film"
+            title="Nothing published yet"
+            body="Pick a video above — it streams directly from your devices, no servers involved."
+          />
         }
         ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
         renderItem={({ item }) => (

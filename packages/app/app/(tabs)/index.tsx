@@ -4,13 +4,18 @@
 import { useCallback, useState, useEffect, useRef, useMemo } from 'react'
 import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, FlatList, useWindowDimensions, AppState, AppStateStatus, StyleSheet, type ListRenderItemInfo } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { VideoCard } from '../../components/video'
+import { RailCard, RAIL_CARD_WIDTH } from '../../components/video/RailCard'
 import type { VideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
+import { SwarmIndicator, Chip, Rail } from '@/components/primitives'
+import { fonts } from '@/lib/typography'
+import * as watchHistoryStore from '@/lib/watch-history'
+import { resumeWatchEntry } from '@/lib/playback-resume'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
@@ -86,6 +91,8 @@ interface ChannelMeta {
 }
 
 type HomeFeedListItem =
+  | { type: 'continue-watching' }
+  | { type: 'recommended' }
   | { type: 'discover-header' }
   | { type: 'discover-loading' }
   | { type: 'discover-empty' }
@@ -128,7 +135,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { ready, identity, videos, loading, loadVideos, rpc, backendError, startupStatus, retryBackend, platformEvents, blobServerPort, androidDiscoveryPermissionStatus } = useApp()
-  const { loadAndPlayVideo } = useVideoPlayerActions()
+  const { loadAndPlayVideo, seekTo } = useVideoPlayerActions()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
   const tabBarMetrics = useTabBarMetrics()
@@ -158,6 +165,56 @@ export default function HomeScreen() {
   const channelMetaRef = useRef(channelMeta)
   channelMetaRef.current = channelMeta
   const inflightChannelMetaLoads = useRef<Set<string>>(new Set())
+
+  // Personal rails: local continue-watching + backend recommendations
+  const [continueWatching, setContinueWatching] = useState<watchHistoryStore.WatchHistoryEntry[]>([])
+  const [recommendedVideos, setRecommendedVideos] = useState<VideoData[]>([])
+  const [swarmDetailOpen, setSwarmDetailOpen] = useState(false)
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false
+      watchHistoryStore.getContinueWatching(10).then((entries) => {
+        if (!cancelled) setContinueWatching(entries)
+      }).catch(() => {})
+      return () => { cancelled = true }
+    }, [])
+  )
+
+  useEffect(() => {
+    if (!ready || !rpc || !identity?.driveKey) return
+    if (typeof (rpc as any).getRecommendations !== 'function') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await (rpc as any).getRecommendations({ channelKey: identity.driveKey, limit: 10 })
+        if (cancelled) return
+        const results: any[] = Array.isArray(res?.results) ? res.results : []
+        const mapped: VideoData[] = results
+          .map((r) => {
+            const meta = r?.metadata || {}
+            const channelKey = meta.channelKey || meta.driveKey
+            const id = meta.id || meta.videoId || r?.id
+            if (!channelKey || !id || !meta.title) return null
+            return {
+              ...meta,
+              id,
+              channelKey,
+              title: meta.title,
+            } as VideoData
+          })
+          .filter(Boolean) as VideoData[]
+        setRecommendedVideos(mapped)
+      } catch {
+        // Recommendations are best-effort; the rail simply stays hidden.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [ready, rpc, identity?.driveKey])
+
+  const resumeEntry = useCallback((entry: watchHistoryStore.WatchHistoryEntry) => {
+    void resumeWatchEntry(entry, { rpc, loadAndPlayVideo, seekTo })
+  }, [rpc, loadAndPlayVideo, seekTo])
 
   // Channel viewing state
   const [viewingChannel, setViewingChannel] = useState<string | null>(null)
@@ -1020,7 +1077,10 @@ export default function HomeScreen() {
   )
 
   const homeFeedItems = useMemo<HomeFeedListItem[]>(() => {
-    const items: HomeFeedListItem[] = [{ type: 'discover-header' }]
+    const items: HomeFeedListItem[] = []
+    if (continueWatching.length > 0) items.push({ type: 'continue-watching' })
+    if (recommendedVideos.length > 0) items.push({ type: 'recommended' })
+    items.push({ type: 'discover-header' })
     if ((feedLoading || loadingFeedVideos) && feedVideos.length === 0) {
       items.push({ type: 'discover-loading' })
     } else if (discoverRows.length === 0) {
@@ -1036,7 +1096,7 @@ export default function HomeScreen() {
       myVideoRows.forEach((row, rowIndex) => items.push({ type: 'my-videos-row', videos: row, rowIndex }))
     }
     return items
-  }, [discoverRows, feedLoading, loadingFeedVideos, feedVideos.length, myVideoRows])
+  }, [continueWatching.length, recommendedVideos.length, discoverRows, feedLoading, loadingFeedVideos, feedVideos.length, myVideoRows])
 
   const channelItems = useMemo<ChannelListItem[]>(() => {
     if (loadingChannel) return [{ type: 'loading' }]
@@ -1108,34 +1168,85 @@ export default function HomeScreen() {
   }, [isDesktop, renderVideoRow])
 
   const renderHomeFeedItem = useCallback(({ item }: ListRenderItemInfo<HomeFeedListItem>) => {
+    if (item.type === 'continue-watching') {
+      return (
+        <View style={{ paddingTop: isDesktop ? 24 : 16 }}>
+          <View style={{ paddingHorizontal: isDesktop ? 24 : 20, marginBottom: 10 }}>
+            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Continue watching</Text>
+          </View>
+          <Rail
+            data={continueWatching}
+            keyExtractor={(entry) => `${entry.channelKey}:${entry.videoId}`}
+            itemWidth={RAIL_CARD_WIDTH}
+            renderItem={({ item: entry }) => (
+              <RailCard
+                title={entry.title}
+                subtitle={entry.channelName}
+                thumbnailUrl={entry.thumbnailUrl}
+                duration={entry.durationSec}
+                progress={entry.durationSec > 0 ? entry.positionSec / entry.durationSec : 0}
+                onPress={() => resumeEntry(entry)}
+              />
+            )}
+          />
+        </View>
+      )
+    }
+
+    if (item.type === 'recommended') {
+      return (
+        <View style={{ paddingTop: 16 }}>
+          <View style={{ paddingHorizontal: isDesktop ? 24 : 20, marginBottom: 10 }}>
+            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>For you</Text>
+          </View>
+          <Rail
+            data={recommendedVideos}
+            keyExtractor={(video) => `${video.channelKey}:${video.id}`}
+            itemWidth={RAIL_CARD_WIDTH}
+            renderItem={({ item: video }) => (
+              <RailCard
+                title={video.title}
+                subtitle={video.channel?.name}
+                thumbnailUrl={video.thumbnailUrl || video.thumbnail}
+                duration={video.duration}
+                onPress={() => playVideo(video)}
+              />
+            )}
+          />
+        </View>
+      )
+    }
+
     if (item.type === 'discover-header') {
       return (
         <View style={{ paddingHorizontal: isDesktop ? 24 : 20, paddingTop: isDesktop ? 24 : 16 }}>
           <View className="flex-row items-center justify-between mb-3">
-            <View className="flex-row items-center">
-              <Feather name="globe" color={colors.primary} size={18} />
-              <Text className="text-headline text-pear-text ml-2">Discover</Text>
-              {peerCount > 0 && (
-                <View className="flex-row items-center ml-2 bg-pear-bg-card px-2 py-0.5 rounded-full">
-                  <Feather name="users" color={colors.textMuted} size={12} />
-                  <Text className="text-caption text-pear-text-muted ml-1">{peerCount}</Text>
-                </View>
-              )}
+            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Discover</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+              <Pressable
+                onPress={() => setSwarmDetailOpen((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel="Network details"
+                hitSlop={6}
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+              >
+                <SwarmIndicator peers={displayPeers} label="auto" size={7} />
+              </Pressable>
+              <Pressable
+                onPress={refreshFeed}
+                className="p-2 active:opacity-60"
+                disabled={feedLoading || backendConnecting || !rpc}
+                accessibilityRole="button"
+                accessibilityLabel="Refresh discover feed"
+                accessibilityState={{ disabled: feedLoading || backendConnecting || !rpc, busy: feedLoading }}
+              >
+                <Feather
+                  name="refresh-cw"
+                  color={(feedLoading || backendConnecting || !rpc) ? colors.textMuted : colors.primary}
+                  size={18}
+                />
+              </Pressable>
             </View>
-            <Pressable
-              onPress={refreshFeed}
-              className="p-2 active:opacity-60"
-              disabled={feedLoading || backendConnecting || !rpc}
-              accessibilityRole="button"
-              accessibilityLabel="Refresh discover feed"
-              accessibilityState={{ disabled: feedLoading || backendConnecting || !rpc, busy: feedLoading }}
-            >
-              <Feather
-                name="refresh-cw"
-                color={(feedLoading || backendConnecting || !rpc) ? colors.textMuted : colors.primary}
-                size={18}
-              />
-            </Pressable>
           </View>
 
           {(backendConnecting || backendLoading || backendError) && (
@@ -1170,7 +1281,7 @@ export default function HomeScreen() {
                         backgroundColor: colors.primary,
                       }}
                     >
-                      <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Retry backend</Text>
+                      <Text style={{ color: colors.onPrimary, fontWeight: '600', fontSize: 13 }}>Retry backend</Text>
                     </Pressable>
                   ) : null}
                 </>
@@ -1180,13 +1291,13 @@ export default function HomeScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
                       {backendConnecting
-                        ? (startupStatus || 'Connecting to P2P network...')
-                        : 'Loading...'}
+                        ? (startupStatus || 'Waking up the swarm…')
+                        : 'Loading…'}
                     </Text>
                     <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
                       {backendConnecting
-                        ? 'You can browse the UI while the backend starts.'
-                        : 'Fetching identities and videos in the background.'}
+                        ? 'You can browse while PearTube connects to peers.'
+                        : 'Catching up on videos in the background.'}
                     </Text>
                   </View>
                 </View>
@@ -1194,30 +1305,32 @@ export default function HomeScreen() {
             </View>
           )}
 
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-              <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {displayPeers}</Text>
-              {swarmStatus?.feedConnections !== undefined && (
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Live: {swarmStatus.feedConnections}</Text>
-              )}
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-              <Text style={{ color: colors.text, fontSize: 12 }}>Feed: {displayFeedEntries}</Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-              <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {displayChannels}</Text>
-              {swarmStatus?.channels !== undefined && swarmStatus.channels !== displayChannels && (
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Live: {swarmStatus.channels}</Text>
-              )}
-            </View>
-            {lastFeedRefresh && (
+          {swarmDetailOpen && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-                <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                  Updated {formatTimeAgo(lastFeedRefresh)}
-                </Text>
+                <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {displayPeers}</Text>
+                {swarmStatus?.feedConnections !== undefined && (
+                  <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Live: {swarmStatus.feedConnections}</Text>
+                )}
               </View>
-            )}
-          </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                <Text style={{ color: colors.text, fontSize: 12 }}>Feed: {displayFeedEntries}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {displayChannels}</Text>
+                {swarmStatus?.channels !== undefined && swarmStatus.channels !== displayChannels && (
+                  <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Live: {swarmStatus.channels}</Text>
+                )}
+              </View>
+              {lastFeedRefresh && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                    Updated {formatTimeAgo(lastFeedRefresh)}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
 
           <ScrollView
             horizontal
@@ -1226,27 +1339,12 @@ export default function HomeScreen() {
             contentContainerStyle={{ gap: 8 }}
           >
             {categories.map((cat) => (
-              <Pressable
+              <Chip
                 key={cat}
+                label={cat}
+                selected={activeCategory === cat}
                 onPress={() => setActiveCategory(cat)}
-                accessibilityRole="button"
-                accessibilityLabel={`Filter by ${cat}`}
-                accessibilityState={{ selected: activeCategory === cat }}
-                style={{
-                  paddingHorizontal: 16,
-                  paddingVertical: 8,
-                  borderRadius: 8,
-                  backgroundColor: activeCategory === cat ? colors.text : colors.bgCard,
-                }}
-              >
-                <Text style={{
-                  fontSize: 14,
-                  fontWeight: '500',
-                  color: activeCategory === cat ? colors.bg : colors.text,
-                }}>
-                  {cat}
-                </Text>
-              </Pressable>
+              />
             ))}
           </ScrollView>
         </View>
@@ -1266,23 +1364,23 @@ export default function HomeScreen() {
       const state = feedDiscoveryState?.state || 'discovery-waiting'
       const reason = feedDiscoveryState?.reason
       const title = state === 'permission-degraded'
-        ? 'Local peer discovery needs Nearby Wi-Fi'
+        ? 'PearTube needs the Nearby Wi-Fi permission'
         : state === 'network-degraded'
-          ? 'Peer discovery is degraded'
+          ? 'Having trouble reaching peers'
           : state === 'cached-fallback'
-            ? 'Using cached discovery data'
+            ? 'Showing what we saw last time'
             : state === 'hydrating'
-              ? 'Loading playable previews'
-              : 'Looking for PearTube peers'
+              ? 'Almost there…'
+              : 'Listening for the swarm'
       const detail = state === 'permission-degraded'
-        ? 'Grant Nearby devices/Wi-Fi permission, then refresh discovery.'
+        ? 'Allow Nearby devices in system settings, then refresh.'
         : state === 'network-degraded'
-          ? `Network boundary: ${reason || 'unknown'}. Refresh will retry the feed path.`
+          ? `Your network may be blocking peer connections${reason ? ` (${reason})` : ''}. Tap refresh to retry.`
           : state === 'cached-fallback'
-            ? 'No live peers are connected yet; cached videos will stay visible when available.'
+            ? 'No peers are reachable right now — cached videos stay available.'
             : state === 'hydrating'
-              ? `${displayFeedEntries || feedEntries.length} feed entries detected; resolving playable video previews.`
-              : 'No live peers have announced channels yet. Keep the app open or tap refresh.'
+              ? 'Found channels nearby; fetching their videos now.'
+              : 'No channels have appeared yet. Keep the app open or tap refresh — someone will show up.'
 
       return (
         <View style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
@@ -1297,7 +1395,7 @@ export default function HomeScreen() {
               accessibilityRole="button"
               accessibilityLabel="Retry peer discovery"
             >
-              <Text className="text-label text-white">Retry discovery</Text>
+              <Text className="text-label" style={{ color: colors.onPrimary }}>Retry discovery</Text>
             </Pressable>
           </View>
         </View>
@@ -1316,7 +1414,7 @@ export default function HomeScreen() {
       return (
         <View style={{ paddingTop: 12, paddingHorizontal: isDesktop ? 24 : 20 }}>
           <View className="flex-row items-center justify-between mb-3">
-            <Text className="text-headline text-pear-text">Your Videos</Text>
+            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Your videos</Text>
             <Pressable
               onPress={refreshMyVideos}
               className="p-2 active:opacity-60"
@@ -1354,21 +1452,27 @@ export default function HomeScreen() {
     backendError,
     backendLoading,
     categories,
+    continueWatching,
+    displayChannels,
+    displayFeedEntries,
+    displayPeers,
     feedDiscoveryState,
-    feedEntries.length,
     feedLoading,
     identity?.driveKey,
     isDesktop,
     lastFeedRefresh,
     loadingFeedVideos,
-    peerCount,
+    playVideo,
+    recommendedVideos,
     refreshFeed,
     refreshMyVideos,
     refreshingMyVideos,
     renderVideoRow,
+    resumeEntry,
     retryBackend,
     rpc,
     startupStatus,
+    swarmDetailOpen,
     swarmStatus,
   ])
 
@@ -1378,8 +1482,8 @@ export default function HomeScreen() {
       {!isDesktop && (
         <View className="bg-pear-bg border-b border-pear-border" style={{ paddingTop: insets.top }}>
           <View className="flex-row px-5 py-4 items-center justify-between">
-            <Text className="text-title text-pear-text">PearTube</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <Text style={{ color: colors.text, fontSize: 24, fontFamily: fonts.heading }}>PearTube</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <CastHeaderButton size={18} />
               <Pressable
                 onPress={() => router.push('/search')}
@@ -1389,11 +1493,25 @@ export default function HomeScreen() {
               >
                 <Feather name="search" color={colors.text} size={18} />
               </Pressable>
-              {identity && (
-                <View className="bg-pear-bg-card px-3 py-1.5 rounded-full">
-                  <Text className="text-caption text-pear-text-secondary">{identity.name}</Text>
-                </View>
-              )}
+              <Pressable
+                onPress={() => router.push('/profile')}
+                accessibilityRole="button"
+                accessibilityLabel="Profile"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: colors.bgActive,
+                  borderWidth: 1,
+                  borderColor: colors.glassBorder,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text style={{ color: colors.text, fontSize: 13, fontFamily: fonts.heading }}>
+                  {identity?.name?.charAt(0)?.toUpperCase() || '•'}
+                </Text>
+              </Pressable>
             </View>
           </View>
         </View>

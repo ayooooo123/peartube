@@ -87,6 +87,12 @@ declare const HRPC: new (stream: any) => {
   getStorageStats(req: {}): Promise<any>;
   setStorageLimit(req: { maxGB: number }): Promise<any>;
   clearCache(req: {}): Promise<any>;
+  getSeedingStatus(req: {}): Promise<any>;
+  setSeedingConfig(req: { config: { enabled?: boolean; maxStorage?: number; maxBandwidth?: number } }): Promise<any>;
+  pinChannel(req: { channelKey: string }): Promise<any>;
+  unpinChannel(req: { channelKey: string }): Promise<any>;
+  getPinnedChannels(req: {}): Promise<any>;
+  retrySyncChannel(req: { channelKey: string }): Promise<any>;
   castAvailable(req: {}): Promise<any>;
   castStartDiscovery(req: {}): Promise<any>;
   castStopDiscovery(req: {}): Promise<any>;
@@ -1179,6 +1185,31 @@ export const rpc = {
 
   async clearCache(): Promise<{ success: boolean; clearedBytes?: number }> {
     return ensureRPC().clearCache({});
+  },
+
+  // Seeding / pinning
+  async getSeedingStatus(): Promise<{ status: { enabled: boolean; usedStorage?: number; maxStorage?: number; seedingCount?: number } }> {
+    return ensureRPC().getSeedingStatus({});
+  },
+
+  async setSeedingConfig(config: { enabled?: boolean; maxStorage?: number; maxBandwidth?: number }): Promise<{ success: boolean }> {
+    return ensureRPC().setSeedingConfig({ config });
+  },
+
+  async pinChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
+    return ensureRPC().pinChannel(req);
+  },
+
+  async unpinChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
+    return ensureRPC().unpinChannel(req);
+  },
+
+  async getPinnedChannels(): Promise<{ channels: string[] }> {
+    return ensureRPC().getPinnedChannels({});
+  },
+
+  async retrySyncChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
+    return ensureRPC().retrySyncChannel(req);
   },
 
   // Casting (FCast/Chromecast)

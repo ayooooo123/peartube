@@ -540,6 +540,44 @@ export const rpc = {
     return ensureRPC().clearCache({});
   },
 
+  // Seeding / pinning
+  async getSeedingStatus(): Promise<{ status: { enabled: boolean; usedStorage?: number; maxStorage?: number; seedingCount?: number } }> {
+    return ensureRPC().getSeedingStatus({});
+  },
+
+  async setSeedingConfig(config: { enabled?: boolean; maxStorage?: number; maxBandwidth?: number }): Promise<{ success: boolean }> {
+    return ensureRPC().setSeedingConfig({ config });
+  },
+
+  async pinChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
+    return ensureRPC().pinChannel(req);
+  },
+
+  async unpinChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
+    return ensureRPC().unpinChannel(req);
+  },
+
+  async getPinnedChannels(): Promise<{ channels: string[] }> {
+    return ensureRPC().getPinnedChannels({});
+  },
+
+  async retrySyncChannel(req: { channelKey: string }): Promise<{ success: boolean }> {
+    return ensureRPC().retrySyncChannel(req);
+  },
+
+  // Watch events & recommendations
+  async logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }): Promise<{ success: boolean }> {
+    return ensureRPC().logWatchEvent(req);
+  },
+
+  async getRecommendations(req: { channelKey: string; limit?: number }): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
+    return ensureRPC().getRecommendations(req);
+  },
+
+  async getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
+    return ensureRPC().getVideoRecommendations(req);
+  },
+
   // Comments
   async addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string | null; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<{ success: boolean; commentId?: string | null; queued?: boolean; error?: string | null }> {
     return ensureRPC().addComment(req);

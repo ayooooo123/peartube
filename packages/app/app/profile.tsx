@@ -478,6 +478,24 @@ export default function ProfileScreen() {
 
           <SectionHeader title="Network cache" subtitle="Works even without a channel" />
           {renderStorageCard()}
+
+          <SectionHeader title="Diagnostics" subtitle="Swarm, storage, and seeding state" />
+          <GlassCard padded={false} style={styles.sectionCard}>
+            <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
+              <Feather name="terminal" size={15} color={colors.textMuted} />
+              <Text style={styles.advancedLabel}>Network diagnostics</Text>
+              <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
+            </Pressable>
+            {advancedOpen && (
+              <DiagnosticsPanel
+                swarmStatus={swarmStatus}
+                storageStats={storageStats}
+                seedingStatus={seedingStatus}
+                loading={diagnosticsLoading}
+                onRefresh={loadDiagnostics}
+              />
+            )}
+          </GlassCard>
         </ScrollView>
       </View>
     )

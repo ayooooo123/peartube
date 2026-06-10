@@ -179,7 +179,8 @@ export function DesktopHeader() {
           <button
             type="button"
             style={styles.avatarButton}
-            aria-label="User menu"
+            onClick={() => router.push('/profile' as any)}
+            aria-label="Profile"
           >
             <UserIcon />
           </button>

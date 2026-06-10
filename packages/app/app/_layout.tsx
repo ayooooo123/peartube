@@ -1161,7 +1161,12 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
                             headerShown: false,
                             contentStyle: { backgroundColor: colors.bg },
                           }}
-                        />
+                        >
+                          <Stack.Screen
+                            name="profile"
+                            options={{ presentation: 'modal' }}
+                          />
+                        </Stack>
                       </View>
                       <VideoPlayerOverlay />
                     </SocialProvider>

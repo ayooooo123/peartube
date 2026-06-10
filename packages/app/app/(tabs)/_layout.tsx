@@ -37,10 +37,11 @@ export default function TabLayout() {
       >
         <Tabs.Screen name="index" />
         <Tabs.Screen name="discover" />
-        <Tabs.Screen name="subscriptions" />
         <Tabs.Screen name="studio" />
+        <Tabs.Screen name="library" />
+        {/* Legacy routes kept as redirects so deep links survive */}
+        <Tabs.Screen name="subscriptions" />
         <Tabs.Screen name="downloads" />
-        <Tabs.Screen name="search" />
         <Tabs.Screen name="settings" />
       </Tabs>
     </View>

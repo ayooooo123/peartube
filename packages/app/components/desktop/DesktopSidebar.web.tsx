@@ -78,16 +78,6 @@ function SettingsIcon() {
   )
 }
 
-function DownloadIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <title>Downloads</title>
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  )
-}
 
 interface NavItem {
   path: string
@@ -97,16 +87,15 @@ interface NavItem {
 
 const mainNavItems: NavItem[] = [
   { path: '/', icon: HomeIcon, label: 'Home' },
-  { path: '/subscriptions', icon: UsersIcon, label: 'Subscriptions' },
+  { path: '/library', icon: UsersIcon, label: 'Library' },
 ]
 
 const yourContentItems: NavItem[] = [
-  { path: '/studio', icon: FilmIcon, label: 'Your videos' },
-  { path: '/downloads', icon: DownloadIcon, label: 'Downloads' },
+  { path: '/studio', icon: FilmIcon, label: 'Studio' },
 ]
 
 const bottomItems: NavItem[] = [
-  { path: '/settings', icon: SettingsIcon, label: 'Settings' },
+  { path: '/profile', icon: SettingsIcon, label: 'Profile' },
 ]
 
 interface NavButtonProps {

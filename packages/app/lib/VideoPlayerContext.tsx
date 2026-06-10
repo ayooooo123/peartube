@@ -14,6 +14,45 @@ import type { PlayerMode, PlayerPort } from './video-player'
 import { resolvePlayerPort } from './video-player'
 import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
+import * as watchHistory from './watch-history'
+
+const WATCH_HISTORY_WRITE_INTERVAL_MS = 10000
+
+/**
+ * Persist local watch progress and feed the backend recommender.
+ * Strictly best-effort — failures must never affect playback.
+ */
+function recordWatchProgressSafe(video: VideoData | null, positionSec: number, durationSec: number): void {
+  if (!video || !(durationSec > 0) || !(positionSec > 0)) return
+  const channelKey = video.channelKey || (video as any).driveKey || video.channel?.key || ''
+  const videoId = video.id || (video as any).path || ''
+  if (!channelKey || !videoId) return
+  try {
+    void watchHistory.recordProgress({
+      videoId,
+      channelKey,
+      publicBeeKey: video.publicBeeKey || null,
+      title: video.title || 'Untitled',
+      channelName: video.channel?.name,
+      thumbnailUrl: video.thumbnailUrl || (video as any).thumbnail || null,
+      positionSec,
+      durationSec,
+    })
+  } catch {}
+}
+
+function logWatchEventSafe(video: VideoData | null, durationSec: number, completed: boolean): void {
+  if (!video) return
+  const channelKey = video.channelKey || (video as any).driveKey || video.channel?.key || ''
+  const videoId = video.id || (video as any).path || ''
+  if (!channelKey || !videoId) return
+  import('@peartube/platform/rpc')
+    .then((mod: any) => {
+      if (!mod?.isInitialized?.()) return
+      return mod.rpc?.logWatchEvent?.({ channelKey, videoId, duration: Math.round(durationSec), completed })
+    })
+    .catch(() => {})
+}
 
 const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
 const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
@@ -238,6 +277,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Ref for current video - updated synchronously to avoid race conditions with stats events
   const currentVideoRef = useRef<VideoData | null>(null)
+  const lastHistoryWriteRef = useRef(0)
+  const watchEventSentForRef = useRef<string | null>(null)
 
   // Ref for video URL - used for error debugging
   const videoUrlRef = useRef<string | null>(null)
@@ -1161,6 +1202,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       currentTimeRef.current = timeS
     }
 
+    // Persist watch progress (throttled) so Continue Watching can resume,
+    // and send a single engagement signal per video to the recommender.
+    if (durationS > 0 && !waitingForSeekCatchup && now - lastHistoryWriteRef.current >= WATCH_HISTORY_WRITE_INTERVAL_MS) {
+      lastHistoryWriteRef.current = now
+      const video = currentVideoRef.current
+      recordWatchProgressSafe(video, timeS, durationS)
+      const key = video ? `${video.channelKey || (video as any)?.driveKey || ''}:${video.id || ''}` : null
+      if (key && timeS > 30 && watchEventSentForRef.current !== key) {
+        watchEventSentForRef.current = key
+        logWatchEventSafe(video, timeS, false)
+      }
+    }
+
     if (data.currentTime > 0) {
       if (Platform.OS === 'ios') {
         iosIgnorePausedUntilRef.current = 0
@@ -1243,6 +1297,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // ExoPlayer from resuming.
     if (!isBufferingRef.current) {
       setIsPlaying(false)
+      // A deliberate pause is a good resume point — persist it immediately.
+      recordWatchProgressSafe(currentVideoRef.current, currentTimeRef.current, durationRef.current)
     }
   }, [getPlayerPort, reassertNativePlayAfterPipExit])
 
@@ -1289,6 +1345,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (__DEV__) console.log('[VideoPlayerContext] Player ended')
     isBufferingRef.current = false
     setDesiredPlaying(false)
+    const video = currentVideoRef.current
+    const durationS = durationRef.current
+    if (video && durationS > 0) {
+      recordWatchProgressSafe(video, durationS, durationS)
+      logWatchEventSafe(video, durationS, true)
+    }
   }, [setDesiredPlaying])
 
   const onError = useCallback((error: any) => {

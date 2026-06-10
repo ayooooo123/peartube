@@ -12,6 +12,7 @@ interface DiagnosticsPanelProps {
 }
 
 function boolLabel(value?: boolean | null) {
+  if (value === null || value === undefined) return '—'
   return value ? 'On' : 'Off'
 }
 

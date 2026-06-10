@@ -206,7 +206,7 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
   }))
 
   const iconSize = tab.emphasized ? EMPHASIZED_ICON_SIZE : ICON_SIZE
-  const iconColor = tab.emphasized ? (isActive ? '#fff' : colors.textMuted) : (isActive ? colors.primary : colors.textMuted)
+  const iconColor = tab.emphasized ? (isActive ? colors.onPrimary : colors.textMuted) : (isActive ? colors.primary : colors.textMuted)
 
   return (
     <AnimatedPressable

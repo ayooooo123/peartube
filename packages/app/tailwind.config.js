@@ -21,18 +21,18 @@ module.exports = {
       colors: {
         // PearTube brand colors mapped to Gluestack semantic colors
         primary: {
-          0: "#F0F2FF",
-          50: "#E2E6FF",
-          100: "#CAD1FF",
-          200: "#AAB4F6",
-          300: "#8B95EA",
-          400: "#7170ff", // PearTube primary hover
-          500: "#5e6ad2", // PearTube primary
-          600: "#505ab7",
-          700: "#414894",
-          800: "#30356f",
-          900: "#20254f",
-          950: "#151936",
+          0: "#FAFFF0",
+          50: "#F4FFD6",
+          100: "#ECFCCB",
+          200: "#D9F99D",
+          300: "#CDF381",
+          400: "#bef264", // PearTube primary hover
+          500: "#a3e635", // PearTube primary
+          600: "#84cc16",
+          700: "#65a30d", // PearTube primary deep
+          800: "#4d7c0f",
+          900: "#3f6212",
+          950: "#1a2e05",
         },
         secondary: {
           0: "#FEFFFF",
@@ -157,17 +157,17 @@ module.exports = {
           400: "#A2A3A3",
           500: "#8E8E8E",
           600: "#747474",
-          700: "#1f1f23", // PearTube bg-card
-          800: "#18181b", // PearTube bg-elevated
-          900: "#0e0e10", // PearTube bg
-          950: "#181718",
+          700: "#1a1e1a", // PearTube bg-hover
+          800: "#111411", // PearTube bg-elevated
+          900: "#0a0c0a", // PearTube bg
+          950: "#0a0c0a",
           error: "#FEF1F1",
           warning: "#FFF4EB",
           success: "#EDFCF2",
           muted: "#26262c", // PearTube bg-input
           info: "#EBF8FE",
           light: "#FBFBFB",
-          dark: "#0e0e10",
+          dark: "#0a0c0a",
         },
         border: {
           0: "#FDFEFE",
@@ -192,13 +192,13 @@ module.exports = {
         },
         // PearTube legacy colors for backwards compatibility
         pear: {
-          primary: '#5e6ad2',
-          'primary-hover': '#7170ff',
-          'primary-muted': 'rgba(94, 106, 210, 0.18)',
-          bg: '#08090a',
-          'bg-elevated': '#0f1011',
+          primary: '#a3e635',
+          'primary-hover': '#bef264',
+          'primary-muted': 'rgba(163, 230, 53, 0.16)',
+          bg: '#0a0c0a',
+          'bg-elevated': '#111411',
           'bg-card': 'rgba(255,255,255,0.035)',
-          'bg-input': '#191a1b',
+          'bg-input': '#1a1e1a',
           text: '#f7f8f8',
           'text-secondary': '#d0d6e0',
           'text-muted': '#8a8f98',
@@ -207,10 +207,18 @@ module.exports = {
           error: '#ef6262',
           success: '#27a644',
           warning: '#d6a243',
+          swarm: '#2dd4bf',
+          'swarm-glow': 'rgba(45, 212, 191, 0.35)',
+          'swarm-dim': 'rgba(45, 212, 191, 0.12)',
+          glass: 'rgba(255,255,255,0.05)',
+          'glass-border': 'rgba(255,255,255,0.09)',
+          'glass-highlight': 'rgba(190, 242, 100, 0.06)',
         },
       },
       fontFamily: {
         roboto: ["Roboto", "sans-serif"],
+        heading: ["SpaceGrotesk-Bold", "Space Grotesk", "sans-serif"],
+        "heading-medium": ["SpaceGrotesk-Medium", "Space Grotesk", "sans-serif"],
       },
       fontWeight: {
         hairline: "100",

@@ -198,9 +198,10 @@ let cachedAppState: {
 
 export default function RootLayout() {
   // Brand fonts (headings only — body text stays on the system font).
-  // Non-blocking: text renders with the fallback font until loaded, then
-  // the root re-render applies the brand font.
-  useFonts({
+  // The first frame is held until these resolve (see the gate before the
+  // main return): Android measures Text with the fallback font otherwise
+  // and keeps the stale width after the swap, clipping the last glyphs.
+  const [fontsLoaded, fontsError] = useFonts({
     'SpaceGrotesk-Medium': require('../assets/fonts/SpaceGrotesk-Medium.ttf'),
     'SpaceGrotesk-Bold': require('../assets/fonts/SpaceGrotesk-Bold.ttf'),
   })
@@ -1142,6 +1143,12 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     createIdentity: createIdentityHandler,
     loadVideos: loadVideosFromBackend,
     removeVideo: (videoId: string) => setVideos(prev => prev.filter(v => v.id !== videoId)),
+  }
+
+  // Local font assets resolve within a frame or two; if loading fails we
+  // render anyway and headings fall back to the system font.
+  if (!fontsLoaded && !fontsError) {
+    return <View style={{ flex: 1, backgroundColor: colors.bg }} />
   }
 
   return (

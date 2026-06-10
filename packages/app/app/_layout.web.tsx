@@ -8,6 +8,7 @@
 import '../global.css'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
+import { useFonts } from 'expo-font'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
@@ -65,6 +66,13 @@ let cachedAppState: {
 // AppContext / useApp live in '@/lib/AppContext' to avoid require cycles with VideoPlayerOverlay.
 
 export default function RootLayout() {
+  // Brand heading fonts. Non-blocking on web: the DOM re-measures on font
+  // swap, so late application reflows instead of clipping.
+  useFonts({
+    'SpaceGrotesk-Medium': require('../assets/fonts/SpaceGrotesk-Medium.ttf'),
+    'SpaceGrotesk-Bold': require('../assets/fonts/SpaceGrotesk-Bold.ttf'),
+  })
+
   // Initialize state from cache if available (for soft navigation)
   const [ready, setReady] = useState(() => cachedAppState !== null)
   const [identity, setIdentity] = useState<Identity | null>(() => cachedAppState?.identity ?? null)

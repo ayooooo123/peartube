@@ -15,6 +15,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { isWaitingForSelectedBlob, preparePlaybackWhenReady } from '@/lib/playback-readiness'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-virtualization'
 import {
@@ -119,41 +120,8 @@ function logTiming(label: string, startMs: number, details: Record<string, any> 
 // Detect Pear desktop vs mobile
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).PearWorkerClient || !!(window as any).bridge)
 
-const PLAYBACK_READY_RETRY_DELAYS_MS = [900, 1400, 2200] as const
-
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 function getHomePlaybackKey(video: VideoData) {
   return `${video.channelKey || video.driveKey || 'local'}:${video.id}`
-}
-
-function isWaitingForSelectedBlob(result: any) {
-  const warmup = result?.selectedBlobWarmup
-  return Boolean(warmup && warmup.readyForPlayback === false)
-}
-
-async function preparePlaybackWhenReady({
-  preparePlayback,
-  playbackRequest,
-  isCurrent,
-}: {
-  preparePlayback: (request: any) => Promise<any>
-  playbackRequest: any
-  isCurrent: () => boolean
-}) {
-  let result: any = null
-  for (let attempt = 0; attempt <= PLAYBACK_READY_RETRY_DELAYS_MS.length; attempt += 1) {
-    if (attempt > 0) {
-      await wait(PLAYBACK_READY_RETRY_DELAYS_MS[attempt - 1])
-      if (!isCurrent()) return null
-    }
-    result = await preparePlayback(playbackRequest)
-    if (!isCurrent()) return null
-    if (!result?.url || !isWaitingForSelectedBlob(result)) return result
-  }
-  return result
 }
 
 export default function HomeScreen() {

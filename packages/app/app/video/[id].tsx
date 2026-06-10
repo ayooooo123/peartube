@@ -18,6 +18,7 @@ import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { isWaitingForSelectedBlob, preparePlaybackWhenReady } from '@/lib/playback-readiness'
 
 // HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
@@ -486,17 +487,9 @@ function MobileVideoPlayerScreen() {
         if (Platform.OS !== 'web' || isPear) {
           void rpc.preparePlayback(playbackRequest).then((result: any) => {
             if (!mountedRef.current || loadGenerationRef.current !== generation) return
-            const selectedBlobWarmup = result?.selectedBlobWarmup
-            const waitingForSelectedBlob = Boolean(selectedBlobWarmup && selectedBlobWarmup.readyForPlayback === false)
-            if (result?.url && !waitingForSelectedBlob) {
-              if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(selectedBlobWarmup?.readyForPlayback))
+            if (result?.url && !isWaitingForSelectedBlob(result)) {
+              if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
               loadAndPlayVideo(videoData, result.url)
-            } else if (waitingForSelectedBlob) {
-              setTimeout(() => {
-                if (mountedRef.current && loadGenerationRef.current === generation) {
-                  setVideoLoaded(false)
-                }
-              }, 1500)
             }
             if (result?.stats) {
               setLocalStats(result.stats as VideoStats)
@@ -512,13 +505,18 @@ function MobileVideoPlayerScreen() {
         }
         return
       }
-      const result = await rpc.preparePlayback(playbackRequest)
-      if (!mountedRef.current || loadGenerationRef.current !== generation) return
+      // Bounded readiness wait (same pattern as the feed cards): retry while the
+      // selected blob head block is still warming, then play the URL anyway and
+      // let the blob server stream/buffer on demand.
+      const result = await preparePlaybackWhenReady({
+        preparePlayback: (request) => rpc.preparePlayback(request),
+        playbackRequest,
+        isCurrent: () => mountedRef.current && loadGenerationRef.current === generation,
+      })
+      if (!result || !mountedRef.current || loadGenerationRef.current !== generation) return
 
-      const selectedBlobWarmup = result?.selectedBlobWarmup
-      const waitingForSelectedBlob = Boolean(selectedBlobWarmup && selectedBlobWarmup.readyForPlayback === false)
-      if (result?.url && !waitingForSelectedBlob) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(selectedBlobWarmup?.readyForPlayback))
+      if (result?.url) {
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 
@@ -531,16 +529,11 @@ function MobileVideoPlayerScreen() {
             scheduleStatsPolling(500)
           }
         }
-      } else if (waitingForSelectedBlob) {
+      } else {
         if (result?.stats) {
           setLocalStats(result.stats as VideoStats)
         }
         scheduleStatsPolling(500)
-        setTimeout(() => {
-          if (mountedRef.current && loadGenerationRef.current === generation) {
-            setVideoLoaded(false)
-          }
-        }, 1500)
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)

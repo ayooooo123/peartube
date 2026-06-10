@@ -154,7 +154,7 @@ test('backend orchestrator records peers discovered on the single shared topic',
 })
 
 test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
-  const source = readAppFile('backend/mobile-handlers.mjs')
+  const source = readWorkspaceFile('backend/src/mobile-handlers.js')
   const handlerBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
   assert.ok(handlerBlock, 'mobile getSwarmStatus handler should exist')

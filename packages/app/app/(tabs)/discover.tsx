@@ -37,6 +37,7 @@ import {
   withFeedTimeout,
 } from '@/lib/discover-feed-controller'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { isWaitingForSelectedBlob, preparePlaybackWhenReady } from '@/lib/playback-readiness'
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
 import { formatTimeAgo } from '@/lib/formatters'
@@ -108,40 +109,6 @@ function getVideoRef(video: VideoData) {
     ? video.path
     : video.id
 }
-const PLAYBACK_READY_RETRY_DELAYS_MS = [900, 1400, 2200] as const
-
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function isWaitingForSelectedBlob(result: any) {
-  const warmup = result?.selectedBlobWarmup
-  return Boolean(warmup && warmup.readyForPlayback === false)
-}
-
-async function preparePlaybackWhenReady({
-  preparePlayback,
-  playbackRequest,
-  isCurrent,
-}: {
-  preparePlayback: (request: any) => Promise<any>
-  playbackRequest: any
-  isCurrent: () => boolean
-}) {
-  let result: any = null
-  for (let attempt = 0; attempt <= PLAYBACK_READY_RETRY_DELAYS_MS.length; attempt += 1) {
-    if (attempt > 0) {
-      await wait(PLAYBACK_READY_RETRY_DELAYS_MS[attempt - 1])
-      if (!isCurrent()) return null
-    }
-    result = await preparePlayback(playbackRequest)
-    if (!isCurrent()) return null
-    if (!result?.url || !isWaitingForSelectedBlob(result)) return result
-  }
-  return result
-}
-
-
 function makeRouteVideoData(video: VideoData) {
   return JSON.stringify({
     id: video.id,

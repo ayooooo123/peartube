@@ -222,8 +222,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: colors.surface,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.glass,
   },
   thumbnailFrame: {
     overflow: 'hidden',
@@ -253,7 +253,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   avatarText: {
-    color: '#ffffff',
+    color: colors.onPrimary,
     fontSize: 15,
     fontWeight: '600',
   },

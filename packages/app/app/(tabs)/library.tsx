@@ -16,6 +16,7 @@ import { ChannelRow, DownloadRow, HistoryRow, SubscribeSheet, type SubscriptionI
 import { fonts } from '@/lib/typography'
 import * as watchHistory from '@/lib/watch-history'
 import * as haptics from '@/lib/haptics'
+import { resumeWatchEntry } from '@/lib/playback-resume'
 
 type LibraryTab = 'channels' | 'downloads' | 'history'
 
@@ -133,39 +134,8 @@ export default function LibraryScreen() {
     }
   }, [rpc])
 
-  const resumeFromHistory = useCallback(async (entry: watchHistory.WatchHistoryEntry) => {
-    if (!rpc) return
-    try {
-      const result = await rpc.preparePlayback({
-        channelKey: entry.channelKey,
-        videoId: entry.videoId,
-        publicBeeKey: entry.publicBeeKey || undefined,
-      })
-      if (!result?.url) return
-      loadAndPlayVideo(
-        {
-          id: entry.videoId,
-          title: entry.title,
-          channelKey: entry.channelKey,
-          description: '',
-          path: entry.videoId,
-          size: 0,
-          uploadedAt: entry.updatedAt,
-          duration: entry.durationSec,
-          publicBeeKey: entry.publicBeeKey || undefined,
-          channel: entry.channelName ? { name: entry.channelName } : undefined,
-        } as any,
-        result.url
-      )
-      // The player has no start-position API; nudge the seek once it has loaded.
-      if (!entry.completed && entry.positionSec > 5) {
-        const target = entry.positionSec
-        setTimeout(() => { try { seekTo(target) } catch {} }, 1200)
-        setTimeout(() => { try { seekTo(target) } catch {} }, 3000)
-      }
-    } catch (err) {
-      console.error('[Library] Resume failed:', err)
-    }
+  const resumeFromHistory = useCallback((entry: watchHistory.WatchHistoryEntry) => {
+    void resumeWatchEntry(entry, { rpc, loadAndPlayVideo, seekTo })
   }, [rpc, loadAndPlayVideo, seekTo])
 
   const removeHistoryEntry = useCallback(async (entry: watchHistory.WatchHistoryEntry) => {

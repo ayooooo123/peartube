@@ -433,7 +433,7 @@ export default function ProfileScreen() {
             <Pressable
               onPress={handleCreateIdentity}
               disabled={creating || !newName.trim()}
-              style={({ pressed }) => [styles.primaryButton, (creating || !newName.trim()) && { opacity: 0.4 }, pressed && { opacity: 0.8 }]}
+              style={[styles.primaryButton, (creating || !newName.trim()) && { opacity: 0.4 }]}
             >
               {creating ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
                 <>
@@ -465,7 +465,7 @@ export default function ProfileScreen() {
             <Pressable
               onPress={async () => { await pairDevice(); await loadIdentity() }}
               disabled={pairing || !pairInviteCode.trim()}
-              style={({ pressed }) => [styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }, pressed && { opacity: 0.8 }]}
+              style={[styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }]}
             >
               {pairing ? <ActivityIndicator size="small" color={colors.text} /> : (
                 <>
@@ -535,7 +535,7 @@ export default function ProfileScreen() {
                 key={preset.label}
                 onPress={() => handleStorageLimitChange(preset.gb)}
                 disabled={storageLimitSaving}
-                style={({ pressed }) => [styles.preset, selected && styles.presetSelected, (pressed || storageLimitSaving) && { opacity: 0.7 }]}
+                style={[styles.preset, selected && styles.presetSelected, storageLimitSaving && { opacity: 0.7 }]}
               >
                 <Text style={[styles.presetLabel, selected && { color: colors.onPrimary }]}>{preset.label}</Text>
                 <Text style={[styles.presetGb, selected && { color: colors.onPrimary, opacity: 0.8 }]}>{preset.gb} GB</Text>
@@ -557,7 +557,7 @@ export default function ProfileScreen() {
           <Pressable
             onPress={handleCustomStorageLimitApply}
             disabled={storageLimitSaving}
-            style={({ pressed }) => [styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, (pressed || storageLimitSaving) && { opacity: 0.7 }]}
+            style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, storageLimitSaving && { opacity: 0.7 }]}
           >
             <Text style={styles.secondaryLabel}>{storageLimitSaving ? 'Saving…' : 'Set'}</Text>
           </Pressable>
@@ -573,7 +573,7 @@ export default function ProfileScreen() {
         <Pressable
           onPress={handleClearCache}
           disabled={clearingCache}
-          style={({ pressed }) => [styles.ghostButton, (pressed || clearingCache) && { opacity: 0.6 }]}
+          style={[styles.ghostButton, clearingCache && { opacity: 0.6 }]}
         >
           <Feather name="trash-2" size={14} color={colors.textMuted} />
           <Text style={styles.ghostLabel}>{clearingCache ? 'Clearing…' : 'Clear cached videos'}</Text>
@@ -602,13 +602,13 @@ export default function ProfileScreen() {
           </View>
 
           <View style={styles.identityActions}>
-            <Pressable onPress={shareChannelKey} style={({ pressed }) => [styles.primaryButton, { flex: 1 }, pressed && { opacity: 0.8 }]}>
+            <Pressable onPress={shareChannelKey} style={[styles.primaryButton, { flex: 1 }]}>
               <Feather name="share-2" size={15} color={colors.onPrimary} />
               <Text style={styles.primaryLabel}>Share channel</Text>
             </Pressable>
             <Pressable
               onPress={() => identity.driveKey && copyToClipboard(identity.driveKey, 'Channel key')}
-              style={({ pressed }) => [styles.secondaryButton, { flex: 1, marginTop: 0 }, pressed && { opacity: 0.8 }]}
+              style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}
             >
               <Feather name="copy" size={15} color={colors.text} />
               <Text style={styles.secondaryLabel}>Copy key</Text>
@@ -618,7 +618,7 @@ export default function ProfileScreen() {
           <Pressable
             onPress={togglePublish}
             disabled={publishLoading}
-            style={({ pressed }) => [styles.ghostButton, (pressed || publishLoading) && { opacity: 0.6 }]}
+            style={[styles.ghostButton, publishLoading && { opacity: 0.6 }]}
           >
             <Feather name={isPublished ? 'eye-off' : 'globe'} size={14} color={isPublished ? colors.textMuted : colors.primary} />
             <Text style={[styles.ghostLabel, !isPublished && { color: colors.primary }]}>
@@ -653,11 +653,11 @@ export default function ProfileScreen() {
               <Text style={styles.inviteLabel}>Invite code — enter it on your other device</Text>
               <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={({ pressed }) => [styles.secondaryButton, { flex: 1, marginTop: 0 }, pressed && { opacity: 0.8 }]}>
+                <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
                   <Feather name="copy" size={14} color={colors.text} />
                   <Text style={styles.secondaryLabel}>Copy</Text>
                 </Pressable>
-                <Pressable onPress={() => shareInviteCode(inviteCode)} style={({ pressed }) => [styles.secondaryButton, { flex: 1, marginTop: 0 }, pressed && { opacity: 0.8 }]}>
+                <Pressable onPress={() => shareInviteCode(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
                   <Feather name="share-2" size={14} color={colors.text} />
                   <Text style={styles.secondaryLabel}>Share</Text>
                 </Pressable>
@@ -669,7 +669,7 @@ export default function ProfileScreen() {
             <Pressable
               onPress={createInvite}
               disabled={inviteLoading}
-              style={({ pressed }) => [styles.primaryButton, { flex: 1 }, (pressed || inviteLoading) && { opacity: 0.8 }]}
+              style={[styles.primaryButton, { flex: 1 }, inviteLoading && { opacity: 0.8 }]}
             >
               {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
                 <>
@@ -680,7 +680,7 @@ export default function ProfileScreen() {
             </Pressable>
             <Pressable
               onPress={() => setShowPairForm((v) => !v)}
-              style={({ pressed }) => [styles.secondaryButton, { flex: 1, marginTop: 0 }, pressed && { opacity: 0.8 }]}
+              style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}
             >
               <Feather name="key" size={14} color={colors.text} />
               <Text style={styles.secondaryLabel}>Enter code</Text>
@@ -708,7 +708,7 @@ export default function ProfileScreen() {
               <Pressable
                 onPress={pairDevice}
                 disabled={pairing || !pairInviteCode.trim()}
-                style={({ pressed }) => [styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }, pressed && { opacity: 0.8 }]}
+                style={[styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }]}
               >
                 {pairing ? <ActivityIndicator size="small" color={colors.text} /> : (
                   <Text style={styles.secondaryLabel}>Link with this code</Text>

@@ -1,13 +1,6 @@
 import React, { useMemo } from 'react'
-import { StyleSheet } from 'react-native'
-import {
-  Button,
-  Column,
-  Host,
-  LinearProgressIndicator,
-  Row,
-  Text,
-} from '@expo/ui/jetpack-compose'
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { colors } from '@/lib/colors'
 import type { SeedingStatus, StorageStats, SwarmStatus } from './types'
 
 interface DiagnosticsPanelProps {
@@ -20,6 +13,15 @@ interface DiagnosticsPanelProps {
 
 function boolLabel(value?: boolean | null) {
   return value ? 'On' : 'Off'
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <View style={styles.metric}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{String(value)}</Text>
+    </View>
+  )
 }
 
 export default function DiagnosticsPanel({
@@ -46,166 +48,168 @@ export default function DiagnosticsPanel({
   const dht = swarmStatus?.network?.dht
 
   return (
-    <Host style={styles.host}>
-      <Column spacing={14} style={styles.root}>
-        <Row alignment="center" spacing={12} style={styles.headerRow}>
-          <Column spacing={4} style={styles.headerCopy}>
-            <Text style={styles.sectionTitle}>Native diagnostics</Text>
-            <Text style={styles.sectionSubtitle}>
-              P2P status, cache meters, and network info built with Expo UI.
-            </Text>
-          </Column>
-          {onRefresh ? (
-            <Button onClick={onRefresh}>
-              <Text style={styles.refreshText}>{loading ? 'Refreshing…' : 'Refresh'}</Text>
-            </Button>
-          ) : null}
-        </Row>
+    <View style={styles.root}>
+      <View style={styles.headerRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Network diagnostics</Text>
+          <Text style={styles.sectionSubtitle}>P2P status, cache meters, and network info.</Text>
+        </View>
+        {onRefresh ? (
+          <Pressable onPress={onRefresh} disabled={loading} style={styles.refreshButton} accessibilityRole="button" accessibilityLabel="Refresh diagnostics">
+            {loading ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Text style={styles.refreshText}>Refresh</Text>
+            )}
+          </Pressable>
+        ) : null}
+      </View>
 
-        <Column spacing={10} style={styles.card}>
-          <Text style={styles.cardTitle}>P2P status</Text>
-          <Text style={styles.statusText}>{p2pLabel}</Text>
-          <Row spacing={12} style={styles.metricRow}>
-            <Column spacing={4} style={styles.metric}>
-              <Text style={styles.metricLabel}>Connections</Text>
-              <Text style={styles.metricValue}>{swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0}</Text>
-            </Column>
-            <Column spacing={4} style={styles.metric}>
-              <Text style={styles.metricLabel}>Feed links</Text>
-              <Text style={styles.metricValue}>{feedConnections}</Text>
-            </Column>
-            <Column spacing={4} style={styles.metric}>
-              <Text style={styles.metricLabel}>Discovered peers</Text>
-              <Text style={styles.metricValue}>{discoveryPeers}</Text>
-            </Column>
-          </Row>
-          <Text style={styles.detailText}>
-            {swarmStatus?.swarmListenResolved ? 'Listening socket resolved' : 'Listening socket pending'}
-            {swarmStatus?.peerPoolJoined ? ' • peer pool joined' : ''}
-            {swarmStatus?.publicFeedDiscoveryJoined ? ' • public feed joined' : ''}
-          </Text>
-          {swarmStatus?.swarmOfflineReason ? (
-            <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text>
-          ) : null}
-          {boundary ? <Text style={styles.detailText}>Boundary: {boundary}</Text> : null}
-        </Column>
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>P2P status</Text>
+        <Text style={styles.statusText}>{p2pLabel}</Text>
+        <View style={styles.metricRow}>
+          <Metric label="Connections" value={swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0} />
+          <Metric label="Feed links" value={feedConnections} />
+          <Metric label="Discovered peers" value={discoveryPeers} />
+        </View>
+        <Text style={styles.detailText}>
+          {swarmStatus?.swarmListenResolved ? 'Listening socket resolved' : 'Listening socket pending'}
+          {swarmStatus?.peerPoolJoined ? ' • peer pool joined' : ''}
+          {swarmStatus?.publicFeedDiscoveryJoined ? ' • public feed joined' : ''}
+        </Text>
+        {swarmStatus?.swarmOfflineReason ? (
+          <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text>
+        ) : null}
+        {boundary ? <Text style={styles.boundaryText}>Boundary: {boundary}</Text> : null}
+      </View>
 
-        <Column spacing={10} style={styles.card}>
-          <Text style={styles.cardTitle}>Cache meter</Text>
-          <LinearProgressIndicator
-            progress={cacheRatio}
-            color="#60a5fa"
-            trackColor="#243041"
-            strokeCap="round"
-          />
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Cache meter</Text>
+        <View style={styles.track}>
+          <View style={[styles.fill, { width: `${Math.round(cacheRatio * 100)}%` }]} />
+        </View>
+        <Text style={styles.detailText}>
+          {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
+        </Text>
+        <Text style={styles.detailText}>
+          {storageStats ? `${storageStats.seedCount} cached videos • ${storageStats.pinnedCount} pinned channels` : 'Loading cache stats…'}
+        </Text>
+        {seedingStatus?.status ? (
           <Text style={styles.detailText}>
-            {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
+            Seeding: {seedingStatus.status.enabled ? 'enabled' : 'disabled'} • {seedingStatus.status.seedingCount ?? 0} active seeds
           </Text>
-          <Text style={styles.detailText}>
-            {storageStats ? `${storageStats.seedCount} cached videos • ${storageStats.pinnedCount} pinned channels` : 'Loading cache stats…'}
-          </Text>
-          {seedingStatus?.status ? (
-            <Text style={styles.detailText}>
-              Seeding: {seedingStatus.status.enabled ? 'enabled' : 'disabled'} • {seedingStatus.status.seedingCount ?? 0} active seeds
-            </Text>
-          ) : null}
-        </Column>
+        ) : null}
+      </View>
 
-        <Column spacing={10} style={styles.card}>
-          <Text style={styles.cardTitle}>Network info</Text>
-          <Row spacing={12} style={styles.metricRow}>
-            <Column spacing={4} style={styles.metric}>
-              <Text style={styles.metricLabel}>DHT online</Text>
-              <Text style={styles.metricValue}>{boolLabel(dht?.online)}</Text>
-            </Column>
-            <Column spacing={4} style={styles.metric}>
-              <Text style={styles.metricLabel}>Bootstrapped</Text>
-              <Text style={styles.metricValue}>{boolLabel(dht?.bootstrapped)}</Text>
-            </Column>
-            <Column spacing={4} style={styles.metric}>
-              <Text style={styles.metricLabel}>Firewalled</Text>
-              <Text style={styles.metricValue}>{boolLabel(dht?.firewalled)}</Text>
-            </Column>
-          </Row>
-          <Text style={styles.detailText}>
-            Feed topic {swarmStatus?.feedTopicHex || 'unavailable'}
-          </Text>
-          <Text style={styles.detailText}>
-            Feed entries: {swarmStatus?.feedEntries ?? 0} • Channels loaded: {swarmStatus?.channelsLoaded ?? 0}
-          </Text>
-          <Text style={styles.detailText}>
-            Discovery peers: {discoveryPeers} • Peer pool: {boolLabel(swarmStatus?.peerPoolJoined)}
-          </Text>
-        </Column>
-      </Column>
-    </Host>
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Network info</Text>
+        <View style={styles.metricRow}>
+          <Metric label="DHT online" value={boolLabel(dht?.online)} />
+          <Metric label="Bootstrapped" value={boolLabel(dht?.bootstrapped)} />
+          <Metric label="Firewalled" value={boolLabel(dht?.firewalled)} />
+        </View>
+        <Text style={styles.detailText}>Feed topic {swarmStatus?.feedTopicHex || 'unavailable'}</Text>
+        <Text style={styles.detailText}>
+          Feed entries: {swarmStatus?.feedEntries ?? 0} • Channels loaded: {swarmStatus?.channelsLoaded ?? 0}
+        </Text>
+        <Text style={styles.detailText}>
+          Discovery peers: {discoveryPeers} • Peer pool: {boolLabel(swarmStatus?.peerPoolJoined)}
+        </Text>
+      </View>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  host: {
-    width: '100%',
-    marginBottom: 16,
-  },
   root: {
-    width: '100%',
+    padding: 16,
+    gap: 12,
   },
   headerRow: {
-    justifyContent: 'space-between',
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  headerCopy: {
-    flex: 1,
+    gap: 12,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '700',
-    color: '#f8fafc',
+    color: colors.text,
   },
   sectionSubtitle: {
-    fontSize: 13,
-    color: '#cbd5e1',
+    marginTop: 2,
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  refreshButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    minWidth: 72,
+    alignItems: 'center',
   },
   refreshText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#0f172a',
+    color: colors.primary,
   },
   card: {
-    backgroundColor: '#111827',
-    borderRadius: 18,
-    padding: 16,
+    backgroundColor: colors.bg,
+    borderRadius: 14,
+    padding: 14,
     borderWidth: 1,
-    borderColor: '#243041',
+    borderColor: colors.glassBorder,
+    gap: 8,
   },
   cardTitle: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
-    color: '#f8fafc',
+    color: colors.text,
   },
   statusText: {
-    fontSize: 15,
-    color: '#e2e8f0',
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
   },
   metricRow: {
-    justifyContent: 'space-between',
+    flexDirection: 'row',
+    gap: 12,
   },
   metric: {
     flex: 1,
     minWidth: 0,
   },
   metricLabel: {
-    fontSize: 12,
-    color: '#94a3b8',
+    fontSize: 11,
+    color: colors.textMuted,
   },
   metricValue: {
-    fontSize: 18,
-    color: '#f8fafc',
+    marginTop: 2,
+    fontSize: 16,
     fontWeight: '700',
+    color: colors.text,
   },
   detailText: {
-    fontSize: 13,
-    color: '#cbd5e1',
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  boundaryText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  track: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.glass,
+    overflow: 'hidden',
+  },
+  fill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.swarm,
   },
 })

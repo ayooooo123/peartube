@@ -19,6 +19,7 @@ import {
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import type { CastDevice } from '@/lib/cast'
 
 interface DevicePickerModalProps {
@@ -48,7 +49,6 @@ export function DevicePickerModal({
   onAddManualDevice,
   onRefresh,
 }: DevicePickerModalProps) {
-  const useAndroidTextIcons = Platform.OS === 'android'
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [manualName, setManualName] = useState('')
   const [manualHost, setManualHost] = useState('')
@@ -112,8 +112,8 @@ export function DevicePickerModal({
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>Cast</Text>
-            <Pressable style={styles.closeButton} onPress={onClose}>
-              {useAndroidTextIcons ? <Text style={styles.androidIcon}>X</Text> : <Feather name="x" size={24} color={colors.text} />}
+            <Pressable style={styles.closeButton} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close cast picker">
+              <Feather name="x" size={24} color={colors.text} />
             </Pressable>
           </View>
 
@@ -128,13 +128,13 @@ export function DevicePickerModal({
                   </>
                 ) : (
                   <>
-                    {useAndroidTextIcons ? <Text style={styles.androidHeroIcon}>TV</Text> : <Feather name="cast" size={48} color={colors.textMuted} />}
+                    <Feather name="cast" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>No devices found</Text>
                     <Text style={styles.emptySubtext}>
                       Make sure your phone and cast device are on the same Wi-Fi.
                     </Text>
                     <Pressable style={styles.emptyRefresh} onPress={onRefresh}>
-                      {useAndroidTextIcons ? <Text style={styles.androidIconPrimary}>R</Text> : <Feather name="refresh-cw" size={16} color={colors.primary} />}
+                      <Feather name="refresh-cw" size={16} color={colors.primary} />
                       <Text style={styles.emptyRefreshText}>Refresh</Text>
                     </Pressable>
                   </>
@@ -152,15 +152,11 @@ export function DevicePickerModal({
                   disabled={Boolean(connectingDeviceId) && connectingDeviceId !== device.id}
                 >
                   <View style={styles.deviceIcon}>
-                    {useAndroidTextIcons ? (
-                      <Text style={[styles.androidIcon, connectedDevice?.id === device.id && styles.androidIconConnected]}>TV</Text>
-                    ) : (
-                      <Feather
-                        name={device.protocol === 'chromecast' ? 'tv' : 'cast'}
-                        size={24}
-                        color={connectedDevice?.id === device.id ? colors.primary : colors.text}
-                      />
-                    )}
+                    <Feather
+                      name={device.protocol === 'chromecast' ? 'tv' : 'cast'}
+                      size={24}
+                      color={connectedDevice?.id === device.id ? colors.primary : colors.text}
+                    />
                   </View>
                   <View style={styles.deviceInfo}>
                     <Text style={[
@@ -193,7 +189,7 @@ export function DevicePickerModal({
               {isDiscovering ? (
                 <ActivityIndicator size={16} color={colors.primary} />
               ) : (
-                useAndroidTextIcons ? <Text style={styles.androidIconPrimary}>R</Text> : <Feather name="refresh-cw" size={16} color={colors.primary} />
+                <Feather name="refresh-cw" size={16} color={colors.primary} />
               )}
               <Text style={styles.actionText}>Refresh</Text>
             </Pressable>
@@ -202,7 +198,7 @@ export function DevicePickerModal({
               style={styles.actionButton}
               onPress={() => setShowAdvanced(!showAdvanced)}
             >
-              {useAndroidTextIcons ? <Text style={styles.androidIconPrimary}>{showAdvanced ? 'v' : '^'}</Text> : <Feather name={showAdvanced ? 'chevron-down' : 'chevron-up'} size={16} color={colors.primary} />}
+              <Feather name={showAdvanced ? 'chevron-down' : 'chevron-up'} size={16} color={colors.primary} />
               <Text style={styles.actionText}>Advanced</Text>
             </Pressable>
           </View>
@@ -251,7 +247,7 @@ export function DevicePickerModal({
                 disabled={!manualHost.trim() || isAdding}
               >
                 {isAdding ? (
-                  <ActivityIndicator size={16} color="#fff" />
+                  <ActivityIndicator size={16} color={colors.onPrimary} />
                 ) : (
                   <Text style={styles.addButtonText}>Add Device</Text>
                 )}
@@ -271,9 +267,12 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modal: {
-    backgroundColor: colors.bgCard,
+    backgroundColor: colors.bgElevated,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: colors.glassBorder,
     maxHeight: '80%',
     paddingBottom: 32,
   },
@@ -287,7 +286,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 18,
-    fontWeight: '600',
+    fontFamily: fonts.heading,
     color: colors.text,
   },
   closeButton: {
@@ -338,7 +337,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   deviceItemConnected: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    backgroundColor: colors.primaryLight,
   },
   deviceIcon: {
     width: 48,
@@ -373,7 +372,7 @@ const styles = StyleSheet.create({
   connectedText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#fff',
+    color: colors.onPrimary,
   },
   actions: {
     flexDirection: 'row',
@@ -470,29 +469,7 @@ const styles = StyleSheet.create({
   addButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#fff',
-  },
-  androidIcon: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-    minWidth: 16,
-    textAlign: 'center',
-  },
-  androidIconPrimary: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.primary,
-    minWidth: 16,
-    textAlign: 'center',
-  },
-  androidIconConnected: {
-    color: colors.primary,
-  },
-  androidHeroIcon: {
-    fontSize: 34,
-    fontWeight: '700',
-    color: colors.textMuted,
+    color: colors.onPrimary,
   },
 })
 

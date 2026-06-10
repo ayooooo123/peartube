@@ -12,10 +12,10 @@ import {
   Pressable,
   StyleSheet,
   ActivityIndicator,
-  Platform,
 } from 'react-native'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
+import { fonts } from '@/lib/typography'
 import { useCast } from '@/lib/cast'
 import { Scrubber, formatDuration } from '@/components/video-player'
 
@@ -44,7 +44,6 @@ function formatCastState(state: string) {
 }
 
 export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }: Props) {
-  const useAndroidTextIcons = Platform.OS === 'android'
   const cast = useCast()
   const deviceName = cast.connectedDevice?.name || 'Cast device'
   const playback = cast.playbackState
@@ -126,7 +125,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
             </View>
 
             <Pressable style={styles.closeButton} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close cast remote">
-              {useAndroidTextIcons ? <Text style={styles.androidIcon}>X</Text> : <Feather name="x" size={22} color={colors.text} />}
+              <Feather name="x" size={22} color={colors.text} />
             </Pressable>
           </View>
 
@@ -152,15 +151,11 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel={playback.state === 'playing' ? 'Pause' : 'Play'}
             >
-              {useAndroidTextIcons ? (
-                <Text style={styles.androidPrimaryIcon}>{(playback.state === 'playing' || playback.state === 'buffering') ? '||' : '>'}</Text>
-              ) : (
-                <Ionicons
-                  name={(playback.state === 'playing' || playback.state === 'buffering') ? 'pause' : 'play'}
-                  size={22}
-                  color="#fff"
-                />
-              )}
+              <Ionicons
+                name={(playback.state === 'playing' || playback.state === 'buffering') ? 'pause' : 'play'}
+                size={22}
+                color={colors.onPrimary}
+              />
               <Text style={styles.primaryButtonText}>
                 {(playback.state === 'playing' || playback.state === 'buffering') ? 'Pause' : 'Play'}
               </Text>
@@ -172,7 +167,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel="Switch cast device"
             >
-              {useAndroidTextIcons ? <Text style={styles.androidIcon}>TV</Text> : <Feather name="tv" size={18} color={colors.text} />}
+              <Feather name="tv" size={18} color={colors.text} />
               <Text style={styles.secondaryButtonText}>Switch</Text>
             </Pressable>
           </View>
@@ -211,7 +206,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
                 accessibilityRole="button"
                 accessibilityLabel="Volume down"
               >
-                {useAndroidTextIcons ? <Text style={styles.androidIcon}>-</Text> : <Feather name="minus" size={18} color={colors.text} />}
+                <Feather name="minus" size={18} color={colors.text} />
               </Pressable>
               <View style={styles.volumeBarOuter}>
                 <View style={[styles.volumeBarInner, { width: `${Math.max(0, Math.min(100, playback.volume || 0))}%` }]} />
@@ -223,7 +218,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
                 accessibilityRole="button"
                 accessibilityLabel="Volume up"
               >
-                {useAndroidTextIcons ? <Text style={styles.androidIcon}>+</Text> : <Feather name="plus" size={18} color={colors.text} />}
+                <Feather name="plus" size={18} color={colors.text} />
               </Pressable>
             </View>
           </View>
@@ -236,7 +231,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel="Disconnect casting"
             >
-              {useAndroidTextIcons ? <Text style={styles.androidDangerIcon}>X</Text> : <Feather name="x-circle" size={18} color="#fff" />}
+              <Feather name="x-circle" size={18} color="#fff" />
               <Text style={styles.dangerButtonText}>Disconnect</Text>
             </Pressable>
 
@@ -247,7 +242,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel="Stop playback"
             >
-              {useAndroidTextIcons ? <Text style={styles.androidIcon}>[]</Text> : <Feather name="square" size={18} color={colors.text} />}
+              <Feather name="square" size={18} color={colors.text} />
               <Text style={styles.secondaryButtonText}>Stop</Text>
             </Pressable>
           </View>
@@ -264,9 +259,12 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: colors.bgCard,
+    backgroundColor: colors.bgElevated,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: colors.glassBorder,
     paddingBottom: 24,
   },
   header: {
@@ -283,7 +281,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 18,
-    fontWeight: '700',
+    fontFamily: fonts.heading,
     color: colors.text,
   },
   subtitle: {
@@ -342,7 +340,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   primaryButtonText: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontWeight: '700',
     fontSize: 14,
   },
@@ -445,27 +443,6 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
-  },
-  androidIcon: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-    minWidth: 16,
-    textAlign: 'center',
-  },
-  androidPrimaryIcon: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#fff',
-    minWidth: 16,
-    textAlign: 'center',
-  },
-  androidDangerIcon: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#fff',
-    minWidth: 16,
-    textAlign: 'center',
   },
 })
 

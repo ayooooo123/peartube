@@ -147,16 +147,7 @@ jobs:
         env:
           REQUESTED_TAG: ${{ github.event.inputs.tag }}
         run: |
-          RELEASE_TAG="$REQUESTED_TAG"
-          if [ -z "$RELEASE_TAG" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            RELEASE_TAG="$GITHUB_REF_NAME"
-          fi
-
-          if [ -n "$RELEASE_TAG" ]; then
-            VERSION="${RELEASE_TAG#v}"
-          else
-            VERSION="dev-${GITHUB_SHA::7}"
-          fi
+          eval "$("$GITHUB_WORKSPACE/scripts/ci/resolve-release-version.sh")"
 
           APK_DIR="packages/app/android/app/build/outputs/apk/release"
           APK_FILE=$(find "$APK_DIR" \( -name "app-${{ matrix.abi }}-release*.apk" -o -name "app-release*.apk" \) | head -1)

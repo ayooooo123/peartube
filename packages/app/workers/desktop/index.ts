@@ -512,13 +512,46 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
 )
 B.setPlaybackActive = async (r: any = {}) => api.setPlaybackActive(r)
 
-// Desktop: placeholder for webPreparePlayback.
-// MKV playback is handled client-side via mediabunny MSE player.
+// Desktop compat fallback: the renderer calls this only after deciding (via
+// MediaSource.isTypeSupported / mediabunny) that it cannot play the source
+// directly. Start a bare-ffmpeg compat transcode (video stream-copy +
+// audio→AAC where possible) and hand back the local fMP4-HLS URL the MSE
+// player pulls fragments from. Any failure falls back to the direct URL.
 rpc.onWebPreparePlayback(async (r: any) => {
-  return api.preparePlayback(
+  const prep = await api.preparePlayback(
     r.channelKey, r.videoId, r.publicBeeKey,
     r.blobId, r.blobsCoreKey, r.mimeType
   )
+  if (!prep?.url) return prep
+  try {
+    const directUrl = normalizeLocalUrlForWorker(prep.url)
+    const sourceKey = buildTranscodeCacheKey(directUrl) || directUrl
+    const result = await castTranscoder.startCompatTranscode(directUrl, {
+      player: 'webkit', sourceKey, force: true, isVideoComplete: true,
+    })
+    if (!result?.success) {
+      return { ...prep, transcoded: false, transcodeError: result?.reason || result?.error || 'compat transcode unavailable' }
+    }
+    if (!result.reused) {
+      const waitStart = Date.now()
+      while (Date.now() - waitStart < 30000) {
+        const st = castTranscoder.getCastStatus(result.sessionId)
+        if (st?.fragmentCount >= 1 || st?.status === 'error') break
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      const st = castTranscoder.getCastStatus(result.sessionId)
+      if (st?.status === 'error') {
+        return { ...prep, transcoded: false, transcodeError: st?.error || 'compat transcode failed' }
+      }
+    }
+    const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, '127.0.0.1')
+    if (!hlsUrl) return { ...prep, transcoded: false, transcodeError: 'no HLS URL' }
+    console.log('[Worker] webPreparePlayback: compat transcode started, mode:', result.mode)
+    return { ...prep, url: hlsUrl, transcoded: true }
+  } catch (e: any) {
+    console.warn('[Worker] webPreparePlayback compat path failed:', e?.message)
+    return { ...prep, transcoded: false, transcodeError: e?.message }
+  }
 })
 B.getVideoData = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.getVideoMetadata = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId); return { video: v || { id: r.videoId, title: 'Unknown' } } }

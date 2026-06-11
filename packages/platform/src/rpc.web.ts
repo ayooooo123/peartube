@@ -338,7 +338,7 @@ export const rpc = {
     return rpcInstance.setPlaybackActive(req);
   },
 
-  async webPreparePlayback(req: { channelKey: string; videoId: string }): Promise<{ url: string; transcoded?: boolean; audioCodec?: string; transcodeError?: string }> {
+  async webPreparePlayback(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<{ url: string; transcoded?: boolean; audioCodec?: string; transcodeError?: string }> {
     const rpcInstance = ensureRPC();
     if (typeof rpcInstance.webPreparePlayback === 'function') {
       return rpcInstance.webPreparePlayback(req);

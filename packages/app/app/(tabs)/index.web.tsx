@@ -541,6 +541,30 @@ function WatchPageView({
     return Array.from(merged.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
   }, [comments, pendingComments])
 
+  // Compat fallback for the MSE player: when the webview can't decode the
+  // source directly, ask the backend for a bare-ffmpeg transcode (local
+  // fMP4-HLS) via webPreparePlayback. Returning null keeps today's behavior.
+  const requestCompatPlayback = useCallback(async () => {
+    if (!video || !rpc?.webPreparePlayback) return null
+    const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+      ? video.path
+      : video.id
+    const videoAny = video as any
+    try {
+      return await rpc.webPreparePlayback({
+        channelKey,
+        videoId: videoRef,
+        publicBeeKey: videoAny.publicBeeKey || publicBeeKey || undefined,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        mimeType: videoAny.mimeType || undefined,
+      })
+    } catch (err: any) {
+      console.warn('[WatchPage] webPreparePlayback failed:', err?.message)
+      return null
+    }
+  }, [video, rpc, channelKey, publicBeeKey])
+
   // Load video URL
   useEffect(() => {
     if (!video || !rpc || !isActiveWatch) return
@@ -953,6 +977,7 @@ function WatchPageView({
                 videoUrl={videoUrl}
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
                 playerRef={videoRef}
+                requestCompatPlayback={requestCompatPlayback}
                 isPlaying={isPlaying}
                 onPlaying={() => setIsPlaying(true)}
                 onPaused={() => setIsPlaying(false)}

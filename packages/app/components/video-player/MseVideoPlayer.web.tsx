@@ -2,25 +2,46 @@
 /**
  * MseVideoPlayer — seek-aware streaming MSE player.
  *
- * Remuxes (MKV→fMP4) ON DEMAND using mediabunny's random-access packet API
- * instead of a single linear Conversion. Seeking looks up the keyframe before
- * the target through the container index (fetched via HTTP range requests
- * against the local P2P blob server) and starts a fresh remux pipeline from
- * there — so seeking into an uncached region of a streamed file only
- * downloads bytes around the seek target instead of everything before it.
+ * Two fragment sources feed the same MediaSource/SourceBuffer contract
+ * (init segment, then moof/mdat fragments carrying absolute timestamps):
  *
- * Fragments carry absolute timestamps (fMP4 tfdt), so they land at the right
- * place on the MSE timeline without timestampOffset bookkeeping. Only a
- * sliding window is kept buffered (~60s ahead / ~30s behind) to stay within
- * WebKit's SourceBuffer memory quota.
+ * 1. mediabunny remux (the ~90% path): repackages MKV/MP4 into fMP4 ON
+ *    DEMAND using mediabunny's random-access packet API, stream-copying
+ *    packets — no transcode. Seeking looks up the keyframe before the target
+ *    through the container index (fetched via HTTP range requests against the
+ *    local P2P blob server) and starts a fresh remux pipeline from there.
+ *
+ * 2. bare-ffmpeg compat fallback: when the webview can't decode a track
+ *    (AC-3/E-AC-3/DTS audio, or a codec mediabunny can't repackage), the
+ *    renderer asks the backend (via webPreparePlayback) for a compat
+ *    transcode — video stream-copy + audio→AAC — and pulls the resulting
+ *    fMP4 fragments from the local HTTP server (an fMP4 HLS playlist on
+ *    127.0.0.1). Selection is driven by MediaSource.isTypeSupported, not a
+ *    hardcoded codec matrix.
+ *    See docs/superpowers/plans/2026-06-11-desktop-mse-audio-transcode-fallback.md
+ *
+ * Only a sliding window is kept buffered (~60s ahead / ~30s behind) to stay
+ * within WebKit's SourceBuffer memory quota.
  */
 
 import { memo, useCallback, useRef } from 'react'
+
+import {
+  isMasterPlaylist,
+  parseMasterPlaylist,
+  parseMediaPlaylist,
+  resolveAgainstPlaylist,
+  findSegmentIndexForTime,
+  buildCompatMimeCandidates,
+  type ParsedMediaPlaylist,
+} from '@/lib/hls-fragment-source.mjs'
 
 const BUFFER_AHEAD_SEC = 60   // Remux/buffer this far ahead of playback
 const BUFFER_BEHIND_SEC = 30  // Keep this much behind playback
 const POLL_MS = 250           // Pump idle poll interval
 const MAX_PENDING_SEGMENTS = 64 // Hard cap on segments awaiting append
+const PLAYLIST_POLL_MS = 1000   // Compat path: live playlist refresh interval
+const PLAYLIST_READY_TIMEOUT_MS = 30000 // Compat path: max wait for first segment
 
 interface Segment {
   time: number       // Fragment start timestamp in seconds (absolute)
@@ -28,6 +49,12 @@ interface Segment {
 }
 
 import { createWebMsePlayerPort, type PlayerPort } from '@/lib/video-player'
+
+export type CompatPlaybackResult = {
+  url?: string | null
+  transcoded?: boolean
+  transcodeError?: string | null
+} | null | undefined
 
 type MseVideoPlayerProps = {
   videoUrl: string
@@ -41,6 +68,12 @@ type MseVideoPlayerProps = {
   onEnded?: () => void
   onError?: (error: any) => void
   playerRef?: React.RefObject<PlayerPort | null>
+  /**
+   * Ask the backend for a compat (bare-ffmpeg) playback URL when this webview
+   * cannot decode the source directly. Returns the webPreparePlayback result;
+   * `transcoded: true` means `url` is a local fMP4-HLS stream to pull from.
+   */
+  requestCompatPlayback?: () => Promise<CompatPlaybackResult>
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -51,6 +84,235 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+/** Shared SourceBuffer append/remove helpers used by both fragment sources. */
+function createSourceBufferOps(sb: SourceBuffer, el: HTMLVideoElement) {
+  /** Wait for sb.updating to become false */
+  const waitForUpdate = () => new Promise<void>(resolve => {
+    if (!sb.updating) { resolve(); return }
+    sb.addEventListener('updateend', () => resolve(), { once: true })
+  })
+
+  /** Safely append data, handling QuotaExceededError by evicting */
+  const safeAppend = async (data: Uint8Array): Promise<boolean> => {
+    try {
+      await waitForUpdate()
+      sb.appendBuffer(data)
+      await waitForUpdate()
+      return true
+    } catch (err: any) {
+      if (err.name === 'QuotaExceededError') {
+        // Evict everything before current position and retry
+        console.warn('[MsePlayer] QuotaExceeded, evicting')
+        try {
+          await waitForUpdate()
+          sb.remove(0, Math.max(0, el.currentTime - 1))
+          await waitForUpdate()
+          sb.appendBuffer(data)
+          await waitForUpdate()
+          return true
+        } catch {
+          return false
+        }
+      }
+      return false
+    }
+  }
+
+  /** Remove buffered range */
+  const removeRange = async (start: number, end: number) => {
+    try {
+      await waitForUpdate()
+      if (sb.buffered.length > 0) {
+        sb.remove(start, end)
+        await waitForUpdate()
+      }
+    } catch {}
+  }
+
+  const isBuffered = (time: number) => {
+    for (let i = 0; i < sb.buffered.length; i++) {
+      if (time >= sb.buffered.start(i) && time <= sb.buffered.end(i)) return true
+    }
+    return false
+  }
+
+  return { waitForUpdate, safeAppend, removeRange, isBuffered }
+}
+
+/**
+ * Compat fragment source: pull fMP4 fragments produced by the backend
+ * bare-ffmpeg transcoder from its local HTTP server and append them to a
+ * fresh SourceBuffer. The playlist is live (EVENT) while the transcode runs;
+ * production is paced near realtime, so far-forward seeks wait for the
+ * transcoder to catch up.
+ */
+async function runCompatHlsPipeline(opts: {
+  el: HTMLVideoElement
+  hlsUrl: string
+  videoCodecString: string | null
+  durationHint: number
+  onLoad?: (data?: any) => void
+  onError?: (error: any) => void
+  setDispose: (fn: () => void) => void
+}): Promise<void> {
+  const { el, hlsUrl, videoCodecString, durationHint, onLoad, onError, setDispose } = opts
+
+  const ctl = { disposed: false, generation: 0 }
+  const stale = (gen: number) => ctl.disposed || gen !== ctl.generation
+  setDispose(() => { ctl.disposed = true; ctl.generation++ })
+
+  const fetchText = async (url: string): Promise<string | null> => {
+    const res = await fetch(url, { cache: 'no-store' })
+    if (res.status === 503) return null // manifest not ready yet
+    if (!res.ok) throw new Error(`Compat playlist HTTP ${res.status}`)
+    return res.text()
+  }
+  const fetchBytes = async (url: string): Promise<Uint8Array> => {
+    const res = await fetch(url, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`Compat segment HTTP ${res.status}`)
+    return new Uint8Array(await res.arrayBuffer())
+  }
+
+  // Resolve master → media playlist (the server serves both).
+  let mediaPlaylistUrl = hlsUrl
+  const firstText = await fetchText(hlsUrl)
+  if (firstText && isMasterPlaylist(firstText)) {
+    const variant = parseMasterPlaylist(firstText)
+    mediaPlaylistUrl = resolveAgainstPlaylist(hlsUrl, variant) || hlsUrl
+  }
+
+  let playlist: ParsedMediaPlaylist | null = null
+  const refreshPlaylist = async (): Promise<ParsedMediaPlaylist | null> => {
+    const text = await fetchText(mediaPlaylistUrl)
+    if (text == null) return playlist
+    const parsed = parseMediaPlaylist(text)
+    if (parsed.segments.length > 0 || parsed.ended) playlist = parsed
+    return playlist
+  }
+
+  // Wait for the first segment (transcode startup).
+  const readyDeadline = Date.now() + PLAYLIST_READY_TIMEOUT_MS
+  while (!ctl.disposed) {
+    await refreshPlaylist()
+    if (playlist && playlist.segments.length > 0) break
+    if (playlist?.ended || Date.now() > readyDeadline) {
+      onError?.({ message: 'Compat transcode produced no playable segments' })
+      return
+    }
+    await sleep(PLAYLIST_POLL_MS)
+  }
+  if (ctl.disposed || !playlist) return
+
+  const ms = new MediaSource()
+  el.src = URL.createObjectURL(ms)
+  await new Promise<void>(r => { ms.onsourceopen = () => r() })
+  if (ctl.disposed) return
+
+  let sb: SourceBuffer | null = null
+  for (const mime of buildCompatMimeCandidates(videoCodecString)) {
+    if (MediaSource.isTypeSupported(mime)) {
+      try {
+        sb = ms.addSourceBuffer(mime)
+        break
+      } catch {}
+    }
+  }
+  if (!sb) { onError?.({ message: 'No MSE MIME support for compat stream' }); return }
+
+  const ops = createSourceBufferOps(sb, el)
+
+  if (durationHint > 0) {
+    await ops.waitForUpdate()
+    try { ms.duration = durationHint } catch {}
+    onLoad?.({ duration: durationHint, durationMs: Math.round(durationHint * 1000) })
+  }
+
+  let playbackStarted = false
+
+  const pump = async (startIndex: number, gen: number) => {
+    const initUri = resolveAgainstPlaylist(mediaPlaylistUrl, playlist!.initUri || 'init.mp4')
+    if (!initUri) { onError?.({ message: 'Compat stream missing init segment' }); return }
+    const initData = await fetchBytes(initUri)
+    if (stale(gen)) return
+    if (!(await ops.safeAppend(initData))) return
+
+    let index = startIndex
+    while (!stale(gen)) {
+      if (index >= playlist!.segments.length) {
+        if (playlist!.ended) {
+          await ops.waitForUpdate()
+          if (ms.readyState === 'open') {
+            try { ms.endOfStream() } catch {}
+          }
+          return
+        }
+        await sleep(PLAYLIST_POLL_MS)
+        await refreshPlaylist()
+        continue
+      }
+
+      // Throttle: stay BUFFER_AHEAD_SEC ahead of the playhead, evict behind
+      const seg = playlist!.segments[index]
+      if (seg.start > el.currentTime + BUFFER_AHEAD_SEC && ops.isBuffered(el.currentTime)) {
+        const evictEnd = el.currentTime - BUFFER_BEHIND_SEC
+        if (sb!.buffered.length > 0 && sb!.buffered.start(0) < evictEnd) {
+          await ops.removeRange(sb!.buffered.start(0), evictEnd)
+        }
+        await sleep(POLL_MS)
+        continue
+      }
+
+      const data = await fetchBytes(resolveAgainstPlaylist(mediaPlaylistUrl, seg.uri)!)
+      if (stale(gen)) return
+      if (!(await ops.safeAppend(data))) return
+      if (!playbackStarted) {
+        playbackStarted = true
+        el.play().catch(() => {})
+      }
+      index++
+    }
+  }
+
+  // Seek: jump to the covering segment if produced, else wait for the
+  // transcoder to reach it (production is paced near realtime).
+  el.onseeking = () => {
+    const target = el.currentTime
+    if (ops.isBuffered(target)) return
+
+    ctl.generation++
+    const gen = ctl.generation
+    ;(async () => {
+      try {
+        if (sb!.updating) {
+          try { sb!.abort() } catch {}
+        }
+        await ops.removeRange(0, Infinity)
+        if (stale(gen)) return
+        let idx = findSegmentIndexForTime(playlist!.segments, target)
+        while (idx === -1 && !playlist!.ended && !stale(gen)) {
+          await sleep(PLAYLIST_POLL_MS)
+          await refreshPlaylist()
+          idx = findSegmentIndexForTime(playlist!.segments, target)
+        }
+        if (stale(gen)) return
+        if (idx === -1) idx = Math.max(0, playlist!.segments.length - 1)
+        await pump(idx, gen)
+      } catch (err: any) {
+        console.warn('[MsePlayer] Compat seek error:', err?.message)
+      }
+    })()
+  }
+
+  try {
+    await pump(0, ctl.generation)
+  } catch (err: any) {
+    if (!ctl.disposed) {
+      console.warn('[MsePlayer] Compat pipeline error:', err?.message)
+      onError?.({ message: err?.message || 'Compat stream error' })
+    }
+  }
+}
 
 export const MseVideoPlayer = memo(function MseVideoPlayer({
   videoUrl,
@@ -63,6 +325,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
   onEnded,
   onError,
   playerRef,
+  requestCompatPlayback,
 }: MseVideoPlayerProps) {
   const initStarted = useRef(false)
   const videoElRef = useRef<HTMLVideoElement | null>(null)
@@ -122,10 +385,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         const videoCodec = await videoTrack.getCodec()
         const videoDecoderConfig = videoCodec ? await videoTrack.getDecoderConfig() : null
         const mp4Codecs = new Mp4OutputFormat({ fastStart: 'fragmented' }).getSupportedCodecs()
-        if (!videoCodec || !videoDecoderConfig || !mp4Codecs.includes(videoCodec)) {
-          onError?.({ message: `Unsupported video codec: ${videoCodec || 'unknown'}` })
-          return
-        }
+        const videoUsable = Boolean(videoCodec && videoDecoderConfig && mp4Codecs.includes(videoCodec))
 
         const audioTrack = await input.getPrimaryAudioTrack()
         const audioCodec = audioTrack ? await audioTrack.getCodec() : null
@@ -134,8 +394,60 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
 
         // Build the SourceBuffer MIME from the precise codec strings, falling
         // back to the legacy hardcoded candidates.
-        const videoCodecString = await videoTrack.getCodecParameterString()
-        const audioCodecString = audioUsable ? await audioTrack!.getCodecParameterString() : null
+        let videoCodecString: string | null = null
+        try { videoCodecString = videoUsable ? await videoTrack.getCodecParameterString() : null } catch {}
+        let audioCodecString: string | null = null
+        try { audioCodecString = audioUsable ? await audioTrack!.getCodecParameterString() : null } catch {}
+
+        // Real duration is known up front from the container index.
+        const duration = await input.computeDuration()
+
+        // Capability gate (see the MSE-fallback design doc): the source plays
+        // through mediabunny remux only if mediabunny can repackage every track
+        // into fMP4 AND this webview reports it can decode them. Otherwise ask
+        // the backend for a bare-ffmpeg compat stream (audio→AAC, video copy).
+        const audioPlayable = Boolean(
+          audioUsable && videoCodecString && audioCodecString &&
+          MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodecString}, ${audioCodecString}"`)
+        )
+        const videoPlayable = Boolean(
+          videoUsable && (!videoCodecString ||
+            MediaSource.isTypeSupported(`video/mp4; codecs="${videoCodecString}"`))
+        )
+        const needsCompat = !videoPlayable || (audioTrack && !audioPlayable)
+
+        if (needsCompat && requestCompatPlayback) {
+          let compat: CompatPlaybackResult = null
+          try { compat = await requestCompatPlayback() } catch {}
+          if (compat?.transcoded && compat.url) {
+            console.log('[MsePlayer] Using compat fragment source:', compat.url)
+            try { (input as any).dispose?.() } catch {}
+            const compatDisposeRef: { current: (() => void) | null } = { current: null }
+            disposeRef.current = () => {
+              clearInterval(progressTimer)
+              compatDisposeRef.current?.()
+            }
+            await runCompatHlsPipeline({
+              el,
+              hlsUrl: compat.url,
+              videoCodecString,
+              durationHint: duration > 0 ? duration : 0,
+              onLoad,
+              onError,
+              setDispose: (fn) => { compatDisposeRef.current = fn },
+            })
+            return
+          }
+          if (compat?.transcodeError) {
+            console.warn('[MsePlayer] Compat playback unavailable:', compat.transcodeError)
+          }
+        }
+
+        if (!videoUsable) {
+          onError?.({ message: `Unsupported video codec: ${videoCodec || 'unknown'}` })
+          return
+        }
+
         const mimeCandidates: Array<{ mime: string; withAudio: boolean }> = []
         if (videoCodecString) {
           if (audioCodecString) {
@@ -165,63 +477,11 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         }
         if (!sb) { onError?.({ message: 'No MSE MIME support' }); return }
 
-        // --- SourceBuffer append/remove helpers ---
+        const { waitForUpdate, safeAppend, removeRange, isBuffered } = createSourceBufferOps(sb, el)
 
-        /** Wait for sb.updating to become false */
-        const waitForUpdate = () => new Promise<void>(resolve => {
-          if (!sb!.updating) { resolve(); return }
-          sb!.addEventListener('updateend', () => resolve(), { once: true })
-        })
-
-        /** Safely append data, handling QuotaExceededError by evicting */
-        const safeAppend = async (data: Uint8Array): Promise<boolean> => {
-          try {
-            await waitForUpdate()
-            sb!.appendBuffer(data)
-            await waitForUpdate()
-            return true
-          } catch (err: any) {
-            if (err.name === 'QuotaExceededError') {
-              // Evict everything before current position and retry
-              console.warn('[MsePlayer] QuotaExceeded, evicting')
-              try {
-                await waitForUpdate()
-                sb!.remove(0, Math.max(0, el.currentTime - 1))
-                await waitForUpdate()
-                sb!.appendBuffer(data)
-                await waitForUpdate()
-                return true
-              } catch {
-                return false
-              }
-            }
-            return false
-          }
-        }
-
-        /** Remove buffered range */
-        const removeRange = async (start: number, end: number) => {
-          try {
-            await waitForUpdate()
-            if (sb!.buffered.length > 0) {
-              sb!.remove(start, end)
-              await waitForUpdate()
-            }
-          } catch {}
-        }
-
-        const isBuffered = (time: number) => {
-          for (let i = 0; i < sb!.buffered.length; i++) {
-            if (time >= sb!.buffered.start(i) && time <= sb!.buffered.end(i)) return true
-          }
-          return false
-        }
-
-        // Real duration is known up front from the container index — report it
-        // and size the MediaSource so the whole timeline is seekable
-        // immediately (the old linear conversion only grew the seekable range
-        // as it progressed through the file).
-        const duration = await input.computeDuration()
+        // Report the duration and size the MediaSource so the whole timeline
+        // is seekable immediately (the old linear conversion only grew the
+        // seekable range as it progressed through the file).
         if (duration > 0) {
           await waitForUpdate()
           try { ms.duration = duration } catch {}
@@ -424,7 +684,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         onError?.({ message: err?.message || 'MSE error' })
       }
     })()
-  }, [videoUrl, onProgress, onLoad, onError, playerRef])
+  }, [videoUrl, onProgress, onLoad, onError, playerRef, requestCompatPlayback])
 
   return (
     <video

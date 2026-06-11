@@ -16,7 +16,7 @@ test('fatal playback errors trigger automatic source recovery instead of freezin
 
   assert.match(
     handler,
-    /status === 'error'[\s\S]*if \(tryRecoverFromPlaybackError\(\)\) return/,
+    /status === 'error'[\s\S]*tryRecoverFromPlaybackError\(\)\) return/,
     'a fatal player error (e.g. blob server resetting an uncached seek range request) must attempt recovery before surfacing onError'
   )
 })

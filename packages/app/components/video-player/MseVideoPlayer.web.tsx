@@ -1,23 +1,29 @@
-/* eslint-disable no-empty, no-constant-condition, jsx-a11y/media-has-caption */
+/* eslint-disable no-empty, jsx-a11y/media-has-caption */
 /**
- * MseVideoPlayer — streaming MSE player with sliding buffer window.
+ * MseVideoPlayer — seek-aware streaming MSE player.
  *
- * Uses mediabunny to remux MKV→fMP4 and feeds segments to MSE SourceBuffer.
- * Only keeps a window of data buffered around the playback position:
- *   - ~60s ahead of current position
- *   - ~30s behind current position
- * Removes old segments to stay within WebKit's SourceBuffer memory quota (~200MB).
- * Supports seeking by clearing the buffer and re-appending from the target position.
+ * Remuxes (MKV→fMP4) ON DEMAND using mediabunny's random-access packet API
+ * instead of a single linear Conversion. Seeking looks up the keyframe before
+ * the target through the container index (fetched via HTTP range requests
+ * against the local P2P blob server) and starts a fresh remux pipeline from
+ * there — so seeking into an uncached region of a streamed file only
+ * downloads bytes around the seek target instead of everything before it.
+ *
+ * Fragments carry absolute timestamps (fMP4 tfdt), so they land at the right
+ * place on the MSE timeline without timestampOffset bookkeeping. Only a
+ * sliding window is kept buffered (~60s ahead / ~30s behind) to stay within
+ * WebKit's SourceBuffer memory quota.
  */
 
 import { memo, useCallback, useRef } from 'react'
 
-const BUFFER_AHEAD_SEC = 60   // Buffer 60s ahead of current position
-const BUFFER_BEHIND_SEC = 30  // Keep 30s behind current position
-const POLL_MS = 500           // Main loop poll interval
+const BUFFER_AHEAD_SEC = 60   // Remux/buffer this far ahead of playback
+const BUFFER_BEHIND_SEC = 30  // Keep this much behind playback
+const POLL_MS = 250           // Pump idle poll interval
+const MAX_PENDING_SEGMENTS = 64 // Hard cap on segments awaiting append
 
 interface Segment {
-  time: number       // Timestamp in seconds from mediabunny onMoof
+  time: number       // Fragment start timestamp in seconds (absolute)
   data: Uint8Array   // moof+mdat combined
 }
 
@@ -37,22 +43,14 @@ type MseVideoPlayerProps = {
   playerRef?: React.RefObject<PlayerPort | null>
 }
 
-/** Binary search for the segment whose time is <= target */
-function findSegmentIndex(segments: Segment[], target: number): number {
-  let lo = 0
-  let hi = segments.length - 1
-  let result = 0
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1
-    if (segments[mid].time <= target) {
-      result = mid
-      lo = mid + 1
-    } else {
-      hi = mid - 1
-    }
-  }
-  return result
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const combined = new Uint8Array(a.length + b.length)
+  combined.set(a, 0)
+  combined.set(b, a.length)
+  return combined
 }
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 export const MseVideoPlayer = memo(function MseVideoPlayer({
   videoUrl,
@@ -68,9 +66,15 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
 }: MseVideoPlayerProps) {
   const initStarted = useRef(false)
   const videoElRef = useRef<HTMLVideoElement | null>(null)
+  const disposeRef = useRef<(() => void) | null>(null)
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
-    if (!el || initStarted.current) return
+    if (!el) {
+      disposeRef.current?.()
+      disposeRef.current = null
+      return
+    }
+    if (initStarted.current) return
     initStarted.current = true
     videoElRef.current = el
 
@@ -79,7 +83,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     }
 
     // Progress reporting
-    setInterval(() => {
+    const progressTimer = setInterval(() => {
       if (el.duration && !isNaN(el.duration)) {
         onProgress?.({
           currentTime: Math.round(el.currentTime * 1000),
@@ -92,7 +96,16 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     ;(async () => {
       try {
         const mb = await import('mediabunny')
-        const { Input, Output, Conversion, UrlSource, Mp4OutputFormat, NullTarget } = mb
+        const {
+          Input,
+          Output,
+          UrlSource,
+          Mp4OutputFormat,
+          NullTarget,
+          EncodedPacketSink,
+          EncodedVideoPacketSource,
+          EncodedAudioPacketSource,
+        } = mb
         const ALL_FORMATS = mb.ALL_FORMATS || [mb.MatroskaInputFormat, mb.Mp4InputFormat].filter(Boolean)
 
         const source = new UrlSource(videoUrl, {
@@ -101,46 +114,37 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         })
         const input = new Input({ source, formats: ALL_FORMATS, prefetchProfile: 'network' })
 
-        // Collect fMP4 segments (ftyp+moov init + moof+mdat pairs)
-        let initSegment: Uint8Array | null = null
-        let moofTimestamp = 0
-        let lastMoof: Uint8Array | null = null
-        const segments: Segment[] = []
-
-        const output = new Output({
-          target: new NullTarget(),
-          format: new Mp4OutputFormat({
-            fastStart: 'fragmented',
-            onFtyp: (data: Uint8Array) => {
-              initSegment = new Uint8Array(data)
-            },
-            onMoov: (data: Uint8Array) => {
-              if (initSegment) {
-                const combined = new Uint8Array(initSegment.length + data.length)
-                combined.set(initSegment, 0)
-                combined.set(data, initSegment.length)
-                initSegment = combined
-              }
-            },
-            onMoof: (data: Uint8Array, _pos: number, timestamp: number) => {
-              lastMoof = new Uint8Array(data)
-              moofTimestamp = timestamp // seconds from mediabunny
-            },
-            onMdat: (data: Uint8Array) => {
-              if (!lastMoof) return
-              const segment = new Uint8Array(lastMoof.length + data.length)
-              segment.set(lastMoof, 0)
-              segment.set(data, lastMoof.length)
-              segments.push({ time: moofTimestamp, data: segment })
-              lastMoof = null
-            },
-          }),
-        })
-
-        const conversion = await Conversion.init({ input, output })
-        if (!conversion.isValid) {
-          onError?.({ message: 'Incompatible tracks' })
+        const videoTrack = await input.getPrimaryVideoTrack()
+        if (!videoTrack) {
+          onError?.({ message: 'No video track' })
           return
+        }
+        const videoCodec = await videoTrack.getCodec()
+        const videoDecoderConfig = videoCodec ? await videoTrack.getDecoderConfig() : null
+        const mp4Codecs = new Mp4OutputFormat({ fastStart: 'fragmented' }).getSupportedCodecs()
+        if (!videoCodec || !videoDecoderConfig || !mp4Codecs.includes(videoCodec)) {
+          onError?.({ message: `Unsupported video codec: ${videoCodec || 'unknown'}` })
+          return
+        }
+
+        const audioTrack = await input.getPrimaryAudioTrack()
+        const audioCodec = audioTrack ? await audioTrack.getCodec() : null
+        const audioDecoderConfig = audioTrack && audioCodec ? await audioTrack.getDecoderConfig() : null
+        const audioUsable = Boolean(audioCodec && audioDecoderConfig && mp4Codecs.includes(audioCodec))
+
+        // Build the SourceBuffer MIME from the precise codec strings, falling
+        // back to the legacy hardcoded candidates.
+        const videoCodecString = await videoTrack.getCodecParameterString()
+        const audioCodecString = audioUsable ? await audioTrack!.getCodecParameterString() : null
+        const mimeCandidates: Array<{ mime: string; withAudio: boolean }> = []
+        if (videoCodecString) {
+          if (audioCodecString) {
+            mimeCandidates.push({ mime: `video/mp4; codecs="${videoCodecString}, ${audioCodecString}"`, withAudio: true })
+          }
+          mimeCandidates.push({ mime: `video/mp4; codecs="${videoCodecString}"`, withAudio: false })
+        }
+        for (const legacy of ['video/mp4; codecs="hev1.1.6.L150.B0"', 'video/mp4; codecs="avc1.640032"', 'video/mp4']) {
+          mimeCandidates.push({ mime: legacy, withAudio: audioUsable })
         }
 
         // Create MediaSource
@@ -148,17 +152,15 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         el.src = URL.createObjectURL(ms)
         await new Promise<void>(r => { ms.onsourceopen = () => r() })
 
-        // Add SourceBuffer
-        const mimes = [
-          'video/mp4; codecs="hev1.1.6.L150.B0"',
-          'video/mp4; codecs="avc1.640032"',
-          'video/mp4',
-        ]
         let sb: SourceBuffer | null = null
-        for (const m of mimes) {
-          if (MediaSource.isTypeSupported(m)) {
-            try { sb = ms.addSourceBuffer(m); break }
-            catch {}
+        let includeAudio = false
+        for (const candidate of mimeCandidates) {
+          if (MediaSource.isTypeSupported(candidate.mime)) {
+            try {
+              sb = ms.addSourceBuffer(candidate.mime)
+              includeAudio = candidate.withAudio
+              break
+            } catch {}
           }
         }
         if (!sb) { onError?.({ message: 'No MSE MIME support' }); return }
@@ -184,7 +186,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
               console.warn('[MsePlayer] QuotaExceeded, evicting')
               try {
                 await waitForUpdate()
-                sb!.remove(0, el.currentTime)
+                sb!.remove(0, Math.max(0, el.currentTime - 1))
                 await waitForUpdate()
                 sb!.appendBuffer(data)
                 await waitForUpdate()
@@ -208,164 +210,215 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
           } catch {}
         }
 
-        // --- Conversion runs in background ---
-        let conversionDone = false
-        const conversionPromise = (async () => {
-          await conversion.execute()
-          conversionDone = true
-        })()
-
-        // Wait for init segment + first few media segments
-        while (!initSegment || segments.length < 2) {
-          await new Promise(r => setTimeout(r, 100))
-          if (conversionDone && segments.length === 0) {
-            onError?.({ message: 'No segments produced' })
-            return
+        const isBuffered = (time: number) => {
+          for (let i = 0; i < sb!.buffered.length; i++) {
+            if (time >= sb!.buffered.start(i) && time <= sb!.buffered.end(i)) return true
           }
+          return false
         }
 
-        // Append init segment
-        await safeAppend(initSegment)
+        // Real duration is known up front from the container index — report it
+        // and size the MediaSource so the whole timeline is seekable
+        // immediately (the old linear conversion only grew the seekable range
+        // as it progressed through the file).
+        const duration = await input.computeDuration()
+        if (duration > 0) {
+          await waitForUpdate()
+          try { ms.duration = duration } catch {}
+          onLoad?.({ duration, durationMs: Math.round(duration * 1000) })
+        }
 
-        // --- State for sliding window ---
-        // Track which segments are currently in the SourceBuffer
-        let windowStart = 0  // Index of first segment currently appended
-        let windowEnd = 0    // Index past last segment appended (exclusive)
-        let seekGeneration = 0  // Increments on seek to abort stale appends
+        const videoSink = new EncodedPacketSink(videoTrack)
+        const audioSink = includeAudio && audioTrack ? new EncodedPacketSink(audioTrack) : null
 
-        /** Append segments from `from` to cover up to `targetTime` seconds ahead */
-        const fillWindow = async (from: number, targetTime: number, gen: number): Promise<number> => {
-          let idx = from
-          while (idx < segments.length && segments[idx].time < targetTime) {
-            if (gen !== seekGeneration) return idx // Abort if seek happened
-            const ok = await safeAppend(segments[idx].data)
-            if (!ok) break // Quota still exceeded, stop
-            idx++
+        // --- On-demand remux pipeline ---
+        let generation = 0
+        let activeOutput: any = null
+        let playbackStarted = false
+        let disposed = false
+
+        disposeRef.current = () => {
+          disposed = true
+          generation++
+          clearInterval(progressTimer)
+          try { activeOutput?.cancel?.()?.catch?.(() => {}) } catch {}
+          activeOutput = null
+          try { (input as any).dispose?.() } catch {}
+        }
+
+        /**
+         * Remux from the keyframe at/before `fromTime` and feed fragments into
+         * the SourceBuffer until end of file, a newer generation supersedes
+         * this one, or the component is disposed. Stays ~BUFFER_AHEAD_SEC
+         * ahead of playback and evicts ~BUFFER_BEHIND_SEC behind it.
+         */
+        const runPipeline = async (fromTime: number, gen: number) => {
+          const stale = () => disposed || gen !== generation
+
+          let startPacket = await videoSink.getKeyPacket(Math.max(0, fromTime), { verifyKeyPackets: true })
+          if (!startPacket) startPacket = await videoSink.getFirstKeyPacket({ verifyKeyPackets: true })
+          if (!startPacket || stale()) return
+          const startTime = startPacket.timestamp
+
+          const pending: Segment[] = []
+          let ftyp: Uint8Array | null = null
+          let initSegment: Uint8Array | null = null
+          let initAppended = false
+          let lastMoof: { data: Uint8Array; time: number } | null = null
+
+          const output = new Output({
+            target: new NullTarget(),
+            format: new Mp4OutputFormat({
+              fastStart: 'fragmented',
+              onFtyp: (data: Uint8Array) => { ftyp = new Uint8Array(data) },
+              onMoov: (data: Uint8Array) => {
+                initSegment = ftyp ? concatBytes(ftyp, new Uint8Array(data)) : new Uint8Array(data)
+              },
+              onMoof: (data: Uint8Array, _pos: number, timestamp: number) => {
+                lastMoof = { data: new Uint8Array(data), time: timestamp }
+              },
+              onMdat: (data: Uint8Array) => {
+                if (!lastMoof) return
+                pending.push({ time: lastMoof.time, data: concatBytes(lastMoof.data, new Uint8Array(data)) })
+                lastMoof = null
+              },
+            }),
+          })
+          const videoOut = new EncodedVideoPacketSource(videoCodec)
+          output.addVideoTrack(videoOut)
+          let audioOut: any = null
+          if (audioSink && audioCodec) {
+            audioOut = new EncodedAudioPacketSource(audioCodec)
+            output.addAudioTrack(audioOut)
           }
-          return idx
-        }
+          await output.start()
+          if (stale()) { output.cancel().catch(() => {}); return }
+          activeOutput = output
 
-        // Append initial batch — enough to start playback
-        const initialEnd = Math.min(segments.length, 10)
-        for (let i = 0; i < initialEnd; i++) {
-          await safeAppend(segments[i].data)
-        }
-        windowStart = 0
-        windowEnd = initialEnd
-
-        el.play().catch(() => {})
-        onLoad?.({ duration: 0, durationMs: 0 })
-
-        // --- Seek handler ---
-        let seekPending = false
-
-        el.onseeking = async () => {
-          const target = el.currentTime
-
-          // Check if target is within the currently buffered range
-          if (sb!.buffered.length > 0) {
-            for (let i = 0; i < sb!.buffered.length; i++) {
-              if (target >= sb!.buffered.start(i) && target <= sb!.buffered.end(i)) {
-                return // Already buffered, nothing to do
+          /** Append the init segment (once ready) and any finalized fragments */
+          const drain = async (): Promise<boolean> => {
+            while (pending.length > 0) {
+              if (stale()) return false
+              if (!initAppended) {
+                if (!initSegment) return true // moov not written yet, fragments can't precede it for long
+                if (!(await safeAppend(initSegment))) return false
+                if (stale()) return false
+                initAppended = true
               }
+              const segment = pending.shift()!
+              if (!(await safeAppend(segment.data))) return false
+              if (stale()) return false
+              if (!playbackStarted) {
+                playbackStarted = true
+                el.play().catch(() => {})
+              }
+            }
+            return true
+          }
+
+          // Pump packets in timestamp order across tracks
+          const videoIter: AsyncGenerator<any, void, unknown> = videoSink.packets(startPacket, undefined, { verifyKeyPackets: true })
+          let nextVideo: IteratorResult<any> = await videoIter.next()
+          let audioIter: AsyncGenerator<any, void, unknown> | null = null
+          let nextAudio: IteratorResult<any> | null = null
+          if (audioSink) {
+            const audioStart = (await audioSink.getPacket(startTime)) ?? (await audioSink.getFirstPacket())
+            if (audioStart) {
+              audioIter = audioSink.packets(audioStart)
+              nextAudio = await audioIter.next()
             }
           }
 
-          // Target is outside buffered range — need to clear and re-fill
-          seekPending = true
-          const gen = ++seekGeneration
-
+          let firstVideo = true
+          let firstAudio = true
           try {
-            // Abort any pending operation
-            if (sb!.updating) {
-              sb!.abort()
+            while (!stale()) {
+              if (!(await drain())) break
+
+              const videoDone = nextVideo.done === true
+              const audioDone = !nextAudio || nextAudio.done === true
+              if (videoDone && audioDone) {
+                await output.finalize() // flushes the trailing fragment via callbacks
+                if (activeOutput === output) activeOutput = null
+                await drain()
+                if (!stale()) {
+                  await waitForUpdate()
+                  if (ms.readyState === 'open') {
+                    try { ms.endOfStream() } catch {}
+                  }
+                }
+                return
+              }
+
+              // Throttle: stay BUFFER_AHEAD_SEC ahead of the playhead, evict behind
+              const headTimestamp = Math.min(
+                videoDone ? Infinity : nextVideo.value.timestamp,
+                audioDone ? Infinity : nextAudio!.value.timestamp
+              )
+              if (
+                pending.length > MAX_PENDING_SEGMENTS ||
+                (headTimestamp > el.currentTime + BUFFER_AHEAD_SEC && isBuffered(el.currentTime))
+              ) {
+                const evictEnd = el.currentTime - BUFFER_BEHIND_SEC
+                if (sb!.buffered.length > 0 && sb!.buffered.start(0) < evictEnd) {
+                  await removeRange(sb!.buffered.start(0), evictEnd)
+                }
+                await sleep(POLL_MS)
+                continue
+              }
+
+              // Feed whichever track is furthest behind
+              if (audioDone || (!videoDone && nextVideo.value.timestamp <= nextAudio!.value.timestamp)) {
+                await videoOut.add(nextVideo.value, firstVideo ? { decoderConfig: videoDecoderConfig } : undefined)
+                firstVideo = false
+                nextVideo = await videoIter.next()
+              } else {
+                await audioOut.add(nextAudio!.value, firstAudio ? { decoderConfig: audioDecoderConfig } : undefined)
+                firstAudio = false
+                nextAudio = await audioIter!.next()
+              }
             }
-
-            // Clear entire SourceBuffer
-            await removeRange(0, Infinity)
-
-            // Re-append init segment
-            await safeAppend(initSegment!)
-
-            // Find segment closest to seek target
-            const startIdx = findSegmentIndex(segments, Math.max(0, target - 1))
-            const endTime = target + BUFFER_AHEAD_SEC
-
-            windowStart = startIdx
-            windowEnd = await fillWindow(startIdx, endTime, gen)
           } catch (err: any) {
-            console.warn('[MsePlayer] Seek error:', err?.message)
-          }
-
-          seekPending = false
-        }
-
-        // --- Main streaming loop ---
-        const streamLoop = async () => {
-          while (true) {
-            await new Promise(r => setTimeout(r, POLL_MS))
-
-            // Skip if a seek is in progress
-            if (seekPending) continue
-
-            const currentGen = seekGeneration
-            const now = el.currentTime
-
-            // 1. Evict old buffer behind playback
-            if (now > BUFFER_BEHIND_SEC && sb!.buffered.length > 0) {
-              const evictEnd = now - BUFFER_BEHIND_SEC
-              if (sb!.buffered.start(0) < evictEnd) {
-                await removeRange(sb!.buffered.start(0), evictEnd)
-                // Update windowStart to reflect evicted segments
-                while (windowStart < windowEnd && segments[windowStart].time < evictEnd) {
-                  windowStart++
-                }
-              }
+            if (!stale()) {
+              console.warn('[MsePlayer] Pipeline error:', err?.message)
+              onError?.({ message: err?.message || 'Remux pipeline error' })
             }
-
-            // 2. Append ahead of playback (only within window)
-            if (currentGen === seekGeneration) {
-              const targetTime = now + BUFFER_AHEAD_SEC
-              if (windowEnd < segments.length && segments[windowEnd].time < targetTime) {
-                windowEnd = await fillWindow(windowEnd, targetTime, currentGen)
-              }
+          } finally {
+            if (activeOutput === output) activeOutput = null
+            if (output.state === 'pending' || output.state === 'started') {
+              output.cancel().catch(() => {})
             }
-
-            // 3. Report duration if available
-            if (el.duration && isFinite(el.duration) && el.duration > 0) {
-              onLoad?.({ duration: el.duration, durationMs: Math.round(el.duration * 1000) })
-            }
-
-            // 4. Set MediaSource duration once conversion is done
-            if (conversionDone && ms.readyState === 'open' && segments.length > 0) {
-              const lastSeg = segments[segments.length - 1]
-              // Estimate: last segment time + typical segment duration
-              const estDuration = lastSeg.time + (segments.length > 1
-                ? lastSeg.time - segments[segments.length - 2].time
-                : 4)
-              try {
-                await waitForUpdate()
-                ms.duration = estDuration
-              } catch {}
-              onLoad?.({ duration: estDuration, durationMs: Math.round(estDuration * 1000) })
-            }
-
-            // 5. End of stream when all segments have been seen
-            // (but only if playback is near the end — don't end prematurely)
-            if (conversionDone && windowEnd >= segments.length) {
-              const lastSegTime = segments[segments.length - 1]?.time ?? 0
-              if (now >= lastSegTime - 10) {
-                await waitForUpdate()
-                if (ms.readyState === 'open') {
-                  try { ms.endOfStream() } catch {}
-                }
-                break
-              }
-            }
+            try { videoIter.return?.(undefined) } catch {}
+            try { audioIter?.return?.(undefined) } catch {}
           }
         }
 
-        await Promise.all([conversionPromise, streamLoop()])
+        // --- Seek handler: restart the pipeline from the seek target ---
+        el.onseeking = () => {
+          const target = el.currentTime
+          if (isBuffered(target)) return // Data already present, the element recovers on its own
+
+          generation++
+          const gen = generation
+          const oldOutput = activeOutput
+          activeOutput = null
+          try { oldOutput?.cancel?.()?.catch?.(() => {}) } catch {}
+
+          ;(async () => {
+            try {
+              if (sb!.updating) {
+                try { sb!.abort() } catch {}
+              }
+              await removeRange(0, Infinity)
+              if (gen !== generation) return
+              await runPipeline(Math.max(0, target - 0.5), gen)
+            } catch (err: any) {
+              console.warn('[MsePlayer] Seek error:', err?.message)
+            }
+          })()
+        }
+
+        await runPipeline(0, generation)
       } catch (err: any) {
         console.error('[MsePlayer] Error:', err?.message)
         onError?.({ message: err?.message || 'MSE error' })

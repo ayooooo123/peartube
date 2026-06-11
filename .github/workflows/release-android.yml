@@ -71,7 +71,7 @@ jobs:
 
       - uses: ./.github/actions/setup-node-workspace
         with:
-          node-version: 20.x
+          node-version: 22.x
           install: 'true'
 
       - name: Setup JDK 17

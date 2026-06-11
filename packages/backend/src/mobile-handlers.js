@@ -7,6 +7,8 @@
  * symlinked node_modules layout.
  */
 
+import { resolveCompatPlaybackUrl } from './transcode/playback-compat-runtime.mjs'
+
 /**
  * @param {Object} B - Backend object to attach handlers to
  * @param {Object} deps - Dependencies from the backend context
@@ -42,7 +44,7 @@ function normalizeSeedingStatus(s) {
 }
 
 export function attachMobileHandlers(B, deps) {
-  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder } = deps
+  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player } = deps
   const refreshPublishedChannelFeed = async (driveKey) => {
     if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
     try {
@@ -144,14 +146,34 @@ export function attachMobileHandlers(B, deps) {
     )
     return { url: res.url }
   }
-  B.preparePlayback = async (r) => api.preparePlayback(
-    r.channelKey,
-    r.videoId,
-    r.publicBeeKey,
-    r.blobId,
-    r.blobsCoreKey,
-    r.mimeType
-  )
+  B.preparePlayback = async (r) => {
+    const prepared = await api.preparePlayback(
+      r.channelKey,
+      r.videoId,
+      r.publicBeeKey,
+      r.blobId,
+      r.blobsCoreKey,
+      r.mimeType
+    )
+    // Optional OS-native-player compatibility layer: when the backend was given
+    // a `castTranscoder` + `player`, route codecs the player can't decode through
+    // a local-HLS transcode. Best-effort — any failure keeps the direct URL.
+    if (castTranscoder && player && prepared?.url) {
+      try {
+        const sourceKey = r.blobsCoreKey && r.blobId ? `${r.blobsCoreKey}:${r.blobId}` : null
+        const compat = await resolveCompatPlaybackUrl({
+          player,
+          directUrl: prepared.url,
+          sourceKey,
+          castTranscoder,
+        })
+        if (compat?.transcoded && compat.url) {
+          return { ...prepared, url: compat.url, compatTranscoded: true, compatMode: compat.mode }
+        }
+      } catch { /* best-effort: fall through to the direct URL */ }
+    }
+    return prepared
+  }
   B.setPlaybackActive = async (r = {}) => api.setPlaybackActive(r)
   B.startLivestream = async (r = {}) => api.startLivestream(r)
   B.stopLivestream = async (r) => api.stopLivestream(r.videoId)

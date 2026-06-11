@@ -90,11 +90,23 @@ benefit.
   `getCastHlsUrl(sessionId, '127.0.0.1')` already returns a loopback URL — usable
   by local AVPlayer, not just Chromecast. (A dedicated `127.0.0.1`-only bind can
   be tightened later.)
-- ⏭ **Remaining:** thread the requesting `player`/capabilities through the
-  `preparePlayback` HRPC and branch there (probe → `decidePlayback` → either the
-  direct blob URL or `startCompatTranscode` + `getCastHlsUrl`). Backward-compatible
-  (absent player ⇒ today's direct-URL behavior). Needs on-device validation, so
-  staged separately from the pure/unit-tested core above.
+- ✅ `playback-compat-runtime.resolveCompatPlaybackUrl()` — best-effort runtime
+  orchestration (probe/decide happens inside `startCompatTranscode`; this waits for
+  the first fragment then returns the local HLS URL, falling back to the direct URL
+  on ANY error). Unit-tested with a mock transcoder (`test/playback-compat-runtime.test.mjs`).
+- ✅ Wired into the shared `mobile-handlers.js` `B.preparePlayback`, **gated** on the
+  backend passing `castTranscoder` + `player` in deps — a strict no-op otherwise, so
+  mobile/desktop behavior is unchanged.
+- ✅ Activated (behind a flag) in the desktop-native sidecar: with
+  `PEARTUBE_AVPLAYER_COMPAT=1` the sidecar injects a lazy cast-transcoder +
+  `player: 'avplayer'`, so AVPlayer-incompatible codecs route through local-HLS
+  transcode. Off by default.
+- ⏭ **Remaining (needs a device):** flip the flag and validate AVPlayer plays the
+  local-HLS output for MKV/Opus/AC-3/DTS on macOS; then **Phase 3** — drop
+  `prefersNativeMpvPlayback` so the Swift app always uses AVPlayer (no longer mpv)
+  for those, completing the desktop-native retirement. Mobile (iOS `avplayer` vs
+  Android `exoplayer`) needs the per-OS player id threaded to the worklet at launch
+  (`rpc.native` → worklet args → `attachMobileHandlers` deps) before enabling there.
 
 ### Phase 1 — iOS (delete dead mpv)
 4. Remove `MpvPlayerCore.swift`, `MpvPlayerView.swift`, `MpvPlayerViewManager.swift`,

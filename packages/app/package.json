@@ -5,7 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "npm run bundle:backend:ensure && expo start",
-    "android:prebuild": "node ./scripts/patch-react-native-video-pip.js && (cat android/local.properties 2>/dev/null > /tmp/local.properties.bak || true) && expo prebuild --platform android --clean && (if [ -s /tmp/local.properties.bak ]; then cat /tmp/local.properties.bak > android/local.properties; else echo \"sdk.dir=${ANDROID_HOME:-$HOME/Library/Android/sdk}\" > android/local.properties; fi)",
+    "android:prebuild": "(cat android/local.properties 2>/dev/null > /tmp/local.properties.bak || true) && expo prebuild --platform android --clean && (if [ -s /tmp/local.properties.bak ]; then cat /tmp/local.properties.bak > android/local.properties; else echo \"sdk.dir=${ANDROID_HOME:-$HOME/Library/Android/sdk}\" > android/local.properties; fi)",
     "android": "npm run prepare:mobile-backend && npm run android:prebuild && expo run:android",
     "setup:android": "bash ./scripts/setup-android.sh",
     "ios:prepare": "bash ./scripts/create-xcframeworks.sh",
@@ -42,12 +42,11 @@
     "build:eas:android": "npm run prepare:mobile-backend && eas build --platform android --profile preview",
     "build:eas:all": "npm run prepare:mobile-backend && eas build --platform all --profile preview",
     "test:android:pip:repro": "bash ./scripts/maestro-android-pip-repro.sh",
-    "eas-build-post-install": "node ./scripts/patch-react-native-video-pip.js && npm run prepare:mobile-backend"
+    "eas-build-post-install": "npm run prepare:mobile-backend"
   },
   "author": "PearTube",
   "license": "Apache-2.0",
   "dependencies": {
-    "@expo/ui": "56.0.13",
     "@expo/vector-icons": "^15.0.3",
     "@gluestack-ui/button": "^1.0.14",
     "@gluestack-ui/icon": "^0.1.27",
@@ -91,13 +90,10 @@
     "expo-image-picker": "~56.0.12",
     "expo-linear-gradient": "~56.0.4",
     "expo-linking": "~56.0.11",
-    "expo-media-library": "~56.0.6",
     "expo-router": "~56.2.6",
-    "expo-splash-screen": "~56.0.10",
     "expo-screen-orientation": "~56.0.5",
-    "expo-sharing": "~56.0.12",
+    "expo-splash-screen": "~56.0.10",
     "expo-status-bar": "~56.0.4",
-    "expo-system-ui": "~56.0.5",
     "expo-video": "~56.1.2",
     "expo-video-thumbnails": "~56.0.3",
     "hrpc": "^4.3.0",
@@ -118,7 +114,6 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-svg": "15.15.4",
-    "react-native-video": "^6.19.1",
     "react-native-web": "^0.21.2",
     "react-native-worklets": "0.8.3"
   },
@@ -136,6 +131,7 @@
     "blind-pairing": "^2.3.1",
     "compact-encoding": "^2.19.2",
     "corestore": "^7.9.2",
+    "esbuild": "^0.28.0",
     "hyperbee": "^2.27.3",
     "hypercore": "^11.28.1",
     "hypercore-blob-server": "^1.12.0",

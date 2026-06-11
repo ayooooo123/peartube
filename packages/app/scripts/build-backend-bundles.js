@@ -3,6 +3,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -53,6 +56,46 @@ function runBarePack(bundle) {
   if (result.status !== 0) {
     process.exit(result.status || 1)
   }
+}
+
+// The bare-pack output ships verbatim inside the Hermes bundle (see
+// app/_layout.tsx), so every byte of unminified backend JS lands 1:1 in the
+// APK/IPA. Minify each module inside the serialized bare-bundle in place.
+function minifyBundleOutput(bundle) {
+  const Bundle = require('bare-bundle')
+  const bundleId = require('bare-bundle-id')
+  const esbuild = require('esbuild')
+
+  const outputPath = resolveRepoPath(bundle.output)
+  const wrapped = fs.readFileSync(outputPath, 'utf8')
+  const prefix = 'module.exports = '
+  if (!wrapped.startsWith(prefix)) {
+    throw new Error(`Unexpected bundle wrapper in ${bundle.output}; expected bare-pack bundle.cjs format`)
+  }
+
+  const parsed = Bundle.from(JSON.parse(wrapped.slice(prefix.length)))
+  const sizeBefore = wrapped.length
+
+  for (const [key, data, mode] of parsed) {
+    if (!/\.(js|mjs|cjs)$/.test(key)) continue
+    const source = data.toString('utf8')
+    // keepNames protects constructor.name/fn.name checks used across the
+    // hypercore stack.
+    const { code } = esbuild.transformSync(source, {
+      minify: true,
+      target: 'es2022',
+      keepNames: true,
+    })
+    parsed.write(key, code, { mode })
+  }
+
+  parsed.id = bundleId(parsed).toString('hex')
+
+  const output = `${prefix}${JSON.stringify(parsed.toBuffer().toString('utf8'))}\n`
+  fs.writeFileSync(outputPath, output)
+
+  const savedPct = Math.round((1 - output.length / sizeBefore) * 100)
+  console.log(`[bundle:backend] ${bundle.id}: minified ${sizeBefore} -> ${output.length} bytes (-${savedPct}%)`)
 }
 
 function stripComments(source) {
@@ -115,7 +158,10 @@ async function main() {
 
   for (const bundle of bundles) {
     runBarePack(bundle)
+    // Verify bare-pack's lexer didn't drop modules before rewriting the
+    // bundle, so coverage is checked against the untouched pack output.
     await verifyBundleRequireCoverage(bundle)
+    if (bundle.minify !== false) minifyBundleOutput(bundle)
   }
 }
 

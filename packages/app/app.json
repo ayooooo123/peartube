@@ -56,12 +56,6 @@
         }
       ],
       [
-        "react-native-video",
-        {
-          "enableNotificationControls": true
-        }
-      ],
-      [
         "expo-video",
         {
           "supportsBackgroundPlayback": true,
@@ -77,16 +71,11 @@
           },
           "android": {
             "minSdkVersion": 29,
-            "usesCleartextTraffic": false
+            "usesCleartextTraffic": false,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "extraProguardRules": "-keep class to.holepunch.** { *; }"
           }
-        }
-      ],
-      [
-        "expo-media-library",
-        {
-          "photosPermission": "Allow PearTube to save videos to your device.",
-          "savePhotosPermission": "Allow PearTube to save videos to your device.",
-          "isAccessMediaLocationEnabled": true
         }
       ],
       "./plugins/withAndroidPiP.js",

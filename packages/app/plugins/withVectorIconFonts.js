@@ -9,6 +9,10 @@ const { withDangerousMod } = require('expo/config-plugins')
 const fs = require('fs')
 const path = require('path')
 
+// Only the icon families actually imported by the app. Shipping the full
+// @expo/vector-icons set adds ~3.6 MB of dead TTFs to the APK.
+const INCLUDED_FONTS = new Set(['Feather.ttf', 'Ionicons.ttf'])
+
 const FONTS_DIR = path.join(
   __dirname,
   '..',
@@ -41,7 +45,7 @@ function withVectorIconFonts(config) {
         return cfg
       }
 
-      const fonts = fs.readdirSync(FONTS_DIR).filter((f) => f.endsWith('.ttf'))
+      const fonts = fs.readdirSync(FONTS_DIR).filter((f) => INCLUDED_FONTS.has(f))
       let copied = 0
 
       for (const font of fonts) {

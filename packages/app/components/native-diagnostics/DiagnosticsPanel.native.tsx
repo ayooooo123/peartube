@@ -51,7 +51,7 @@ export default function DiagnosticsPanel({
 
   const p2pLabel = swarmStatus?.swarmOffline
     ? 'Network paused'
-    : (swarmStatus?.connected || 0) > 0
+    : swarmStatus?.connected
       ? 'Connected to peers'
       : 'Searching for peers'
 

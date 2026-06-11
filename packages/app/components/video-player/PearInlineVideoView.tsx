@@ -70,6 +70,19 @@ function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   return 0
 }
 
+/**
+ * Format/codec errors are deterministic — reloading the same source can never
+ * succeed, and on desktop web the watch page uses the surfaced error (code 4,
+ * MEDIA_ERR_SRC_NOT_SUPPORTED) to fall back to the MSE remux player. Those
+ * must bypass the stall-recovery retries and surface immediately.
+ */
+function isUnrecoverableSourceError(error: any) {
+  const code = Number(error?.code ?? error?.error?.code)
+  if (code === 4) return true
+  const message = String(error?.message || '')
+  return /not supported|MEDIA_ERR_SRC_NOT_SUPPORTED|cannot be played|unsupported/i.test(message)
+}
+
 function getExpoEventVideoSize(data: any, player?: VideoPlayer | null) {
   const track = data?.videoTrack ?? player?.videoTrack
   const width = Number(data?.videoSize?.width ?? data?.width ?? data?.naturalSize?.width ?? track?.size?.width ?? track?.width)
@@ -551,7 +564,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     }
     if (status === 'error') {
       console.error('[PearInlineVideoView] error:', error)
-      if (tryRecoverFromPlaybackError()) return
+      if (!isUnrecoverableSourceError(error) && tryRecoverFromPlaybackError()) return
       onError?.({
         message: error?.message || 'Unknown error',
         code: (error as any)?.code,

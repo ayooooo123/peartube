@@ -238,6 +238,21 @@ export async function createRelayRuntime({ config, logger } = {}) {
       if (typeof this.api.getFeedSnapshotEntries === 'function') {
         publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
       }
+      if (typeof this.api.getChannelSignedDescriptor === 'function') {
+        publicFeed.setSignedDescriptorProvider((driveKey) => this.api.getChannelSignedDescriptor(driveKey))
+      }
+
+      // Relay-owned channels created before descriptor signing (or with the
+      // descriptor bound to the identity key) gossip entries strict peers
+      // reject. Re-sign them before announcing.
+      const descriptorSummary = await this.identityManager.ensureSignedChannelDescriptors?.()
+        .catch((err) => {
+          logger.runtime?.warn('Descriptor backfill failed', { error: err?.message || String(err) })
+          return null
+        })
+      if (descriptorSummary) {
+        logger.runtime?.info('Descriptor backfill complete', descriptorSummary)
+      }
 
       await publicFeed.start()
 

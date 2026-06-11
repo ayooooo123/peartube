@@ -232,3 +232,35 @@ test('uploadVideo re-gossips an already-published mobile channel after thumbnail
     'submitToFeed',
   ])
 })
+
+test('getVideoThumbnail forwards feed preview blob refs to the API', async () => {
+  const backend = {}
+  const calls = []
+  const deps = createDeps({
+    api: {
+      async getVideoThumbnail(channelKey, videoId, refs) {
+        calls.push([channelKey, videoId, refs])
+        return { url: 'http://127.0.0.1:1/thumb', exists: true }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const result = await backend.getVideoThumbnail({
+    channelKey: 'channel-key',
+    videoId: 'video-1',
+    thumbnailBlobId: '0:4:0:1024',
+    thumbnailBlobsCoreKey: 'a'.repeat(64),
+  })
+
+  // Gossip-discovered channels have no locally resolvable video record, so
+  // dropping these refs (as the handler used to) meant mobile thumbnails for
+  // feed previews could never resolve at all.
+  assert.deepEqual(calls, [[
+    'channel-key',
+    'video-1',
+    { thumbnailBlobId: '0:4:0:1024', thumbnailBlobsCoreKey: 'a'.repeat(64) },
+  ]])
+  assert.deepEqual(result, { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: null })
+})

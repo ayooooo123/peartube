@@ -1440,9 +1440,14 @@ export function createApi({
      * Get video thumbnail URL
      * @param {string} driveKey
      * @param {string} videoId
+     * @param {{ thumbnailBlobId?: string|null, thumbnailBlobsCoreKey?: string|null, thumbnailMimeType?: string|null }} [refs]
+     *   Optional blob references from feed previews. When provided, the URL is
+     *   resolved directly — discovered channels whose metadata is not loaded
+     *   locally (gossip previews) have no resolvable video record, so without
+     *   these refs mobile thumbnails never resolved at all.
      * @returns {Promise<{url?: string, exists: boolean}>}
      */
-    async getVideoThumbnail(driveKey, videoId) {
+    async getVideoThumbnail(driveKey, videoId, refs = {}) {
       try {
         const normalizeVideoId = (value) => {
           if (!value || typeof value !== 'string') return value
@@ -1502,7 +1507,14 @@ export function createApi({
         } catch { /* best effort */ }
 
         let meta = null;
-        const cachedMeta = getThumbnailMetaFromCachedList()
+        if (refs?.thumbnailBlobId && refs?.thumbnailBlobsCoreKey) {
+          meta = {
+            thumbnailBlobId: refs.thumbnailBlobId,
+            thumbnailBlobsCoreKey: refs.thumbnailBlobsCoreKey,
+            thumbnailMimeType: refs.thumbnailMimeType || null,
+          }
+        }
+        const cachedMeta = meta ? null : getThumbnailMetaFromCachedList()
         if (cachedMeta) {
           meta = cachedMeta
         }

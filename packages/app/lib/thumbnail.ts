@@ -1,4 +1,17 @@
-type ThumbnailRequest = { channelKey: string; videoId: string }
+type ThumbnailRequest = {
+  channelKey: string
+  videoId: string
+  // Blob refs from feed previews. Discovered channels whose metadata is not
+  // loaded locally have no resolvable video record backend-side, so without
+  // forwarding these refs their thumbnails never resolve on mobile.
+  thumbnailBlobId?: string | null
+  thumbnailBlobsCoreKey?: string | null
+}
+
+export type ThumbnailBlobRefs = {
+  thumbnailBlobId?: string | null
+  thumbnailBlobsCoreKey?: string | null
+}
 
 type StatusResponse = {
   status?: {
@@ -100,12 +113,11 @@ export async function ensureThumbnailBackendReady(
 
 async function attemptThumbnailFetch(
   rpc: ThumbnailRPC,
-  channelKey: string,
-  videoId: string,
+  request: ThumbnailRequest,
   timeoutMs: number
 ): Promise<string | null> {
   try {
-    const response = await withTimeout(rpc.getVideoThumbnail({ channelKey, videoId }), timeoutMs)
+    const response = await withTimeout(rpc.getVideoThumbnail(request), timeoutMs)
     const url = response?.dataUrl || response?.url
     if (response?.exists && url) return url
   } catch {}
@@ -117,14 +129,22 @@ export async function fetchThumbnailUrlWithRetry(args: {
   channelKey: string
   videoId: string
   expectedPort?: number | null
+  blobRefs?: ThumbnailBlobRefs | null
 }): Promise<string | null> {
-  const { rpc, channelKey, videoId, expectedPort } = args
+  const { rpc, channelKey, videoId, expectedPort, blobRefs } = args
   if (!rpc || !channelKey || !videoId) return null
+
+  const request: ThumbnailRequest = {
+    channelKey,
+    videoId,
+    thumbnailBlobId: blobRefs?.thumbnailBlobId || undefined,
+    thumbnailBlobsCoreKey: blobRefs?.thumbnailBlobsCoreKey || undefined,
+  }
 
   // Fast path: fetch immediately. Feed previews already carry thumbnail refs
   // backend-side, so the first attempt usually succeeds without paying for a
   // readiness probe first.
-  const firstUrl = await attemptThumbnailFetch(rpc, channelKey, videoId, THUMBNAIL_TIMEOUT_MS)
+  const firstUrl = await attemptThumbnailFetch(rpc, request, THUMBNAIL_TIMEOUT_MS)
   if (firstUrl) {
     readinessCache.set(rpc as object, { checkedAt: Date.now(), ready: true })
     return firstUrl
@@ -137,7 +157,7 @@ export async function fetchThumbnailUrlWithRetry(args: {
 
   for (let attempt = 1; attempt < THUMBNAIL_ATTEMPTS; attempt += 1) {
     await sleep(THUMBNAIL_RETRY_DELAY_MS * attempt)
-    const url = await attemptThumbnailFetch(rpc, channelKey, videoId, THUMBNAIL_TIMEOUT_MS + attempt * 1000)
+    const url = await attemptThumbnailFetch(rpc, request, THUMBNAIL_TIMEOUT_MS + attempt * 1000)
     if (url) return url
   }
 

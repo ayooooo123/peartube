@@ -232,6 +232,10 @@ export default function VerticalDiscoveryScreen() {
           channelKey: video.channelKey,
           videoId: video.id,
           expectedPort: blobServerPort,
+          blobRefs: {
+            thumbnailBlobId: (video as any).thumbnailBlobId || null,
+            thumbnailBlobsCoreKey: (video as any).thumbnailBlobsCoreKey || null,
+          },
         })
         if (url) {
           setThumbnailCache((prev) => ({ ...prev, [cacheKey]: url }))

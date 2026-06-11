@@ -342,6 +342,29 @@ export async function createBackendContext(config) {
   const videoStats = new VideoStatsTracker();
   const identityManager = createIdentityManager({ ctx });
   const personalManager = createPersonalManager({ ctx, identityManager });
+
+  // Keep the active personal store in sync with the active identity across all
+  // platforms by wrapping the identity-manager mutators in one place (every
+  // platform changes identities through these). Best-effort: a personal-store
+  // failure must not break identity switching/creation.
+  const refreshActivePersonalStore = (publicKey) => {
+    const pk = publicKey || identityManager.getActivePublicKey?.()
+    if (!pk) return
+    personalManager.setActive(pk).catch((err) => ipcLog('[orchestrator] personal store switch failed: ' + (err?.message || err)))
+  }
+  const origSetActiveIdentity = identityManager.setActiveIdentity.bind(identityManager)
+  identityManager.setActiveIdentity = async (publicKey) => {
+    const result = await origSetActiveIdentity(publicKey)
+    refreshActivePersonalStore(publicKey)
+    return result
+  }
+  const origCreateIdentity = identityManager.createIdentity.bind(identityManager)
+  identityManager.createIdentity = async (...args) => {
+    const result = await origCreateIdentity(...args)
+    refreshActivePersonalStore(result?.publicKey)
+    return result
+  }
+
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath),

@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "id": 0,
@@ -1485,6 +1485,175 @@
         "stream": false
       },
       "version": 2
+    },
+    {
+      "id": 25,
+      "name": "@peartube/get-playlists",
+      "request": {
+        "name": "@peartube/get-playlists-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-playlists-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 26,
+      "name": "@peartube/get-playlist-items",
+      "request": {
+        "name": "@peartube/get-playlist-items-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-playlist-items-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 27,
+      "name": "@peartube/create-playlist",
+      "request": {
+        "name": "@peartube/create-playlist-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/create-playlist-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 28,
+      "name": "@peartube/update-playlist",
+      "request": {
+        "name": "@peartube/update-playlist-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/update-playlist-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 29,
+      "name": "@peartube/delete-playlist",
+      "request": {
+        "name": "@peartube/delete-playlist-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/delete-playlist-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 30,
+      "name": "@peartube/add-to-playlist",
+      "request": {
+        "name": "@peartube/add-to-playlist-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/add-to-playlist-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 31,
+      "name": "@peartube/remove-from-playlist",
+      "request": {
+        "name": "@peartube/remove-from-playlist-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/remove-from-playlist-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 32,
+      "name": "@peartube/log-watch-history",
+      "request": {
+        "name": "@peartube/log-watch-history-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/log-watch-history-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 33,
+      "name": "@peartube/get-watch-history",
+      "request": {
+        "name": "@peartube/get-watch-history-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-watch-history-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 34,
+      "name": "@peartube/get-resume-position",
+      "request": {
+        "name": "@peartube/get-resume-position-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-resume-position-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 35,
+      "name": "@peartube/list-resume-positions",
+      "request": {
+        "name": "@peartube/list-resume-positions-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/list-resume-positions-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 36,
+      "name": "@peartube/set-personal-setting",
+      "request": {
+        "name": "@peartube/set-personal-setting-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-personal-setting-response",
+        "stream": false
+      },
+      "version": 3
+    },
+    {
+      "id": 37,
+      "name": "@peartube/get-personal-settings",
+      "request": {
+        "name": "@peartube/get-personal-settings-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-personal-settings-response",
+        "stream": false
+      },
+      "version": 3
     }
   ]
 }

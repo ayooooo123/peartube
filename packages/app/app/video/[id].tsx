@@ -462,7 +462,7 @@ function MobileVideoPlayerScreen() {
     statsPollingRef.current = setInterval(pollStats, 1000)
   }, [clearStatsPolling, rpc, videoData])
 
-  const scheduleStatsPolling = useCallback((delayMs = 500) => {
+  const scheduleStatsPolling = useCallback((delayMs = 0) => {
     if (statsPollingDelayRef.current) {
       clearTimeout(statsPollingDelayRef.current)
     }
@@ -516,12 +516,12 @@ function MobileVideoPlayerScreen() {
               setLocalStats(result.stats as VideoStats)
             }
             if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
-              scheduleStatsPolling(500)
+              scheduleStatsPolling(0)
             }
           }).catch((err: any) => {
             console.error('[VideoPlayer] preparePlayback failed:', err)
             if (!mountedRef.current || loadGenerationRef.current !== generation) return
-            scheduleStatsPolling(500)
+            scheduleStatsPolling(0)
           })
         }
         return
@@ -547,14 +547,14 @@ function MobileVideoPlayerScreen() {
 
         if (Platform.OS !== 'web' || isPear) {
           if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
-            scheduleStatsPolling(500)
+            scheduleStatsPolling(0)
           }
         }
       } else {
         if (result?.stats) {
           setLocalStats(result.stats as VideoStats)
         }
-        scheduleStatsPolling(500)
+        scheduleStatsPolling(0)
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)

@@ -1746,6 +1746,13 @@ export function createApi({
         console.log('[API] subscribeChannel: channel load warning:', err.message, '- continuing anyway');
       }
 
+      // Prefer the synced personal store when available so subscriptions
+      // follow the user across devices; fall back to device-local metaDb.
+      if (ctx.personal?.writable) {
+        await ctx.personal.subscribe(driveKey, {});
+        return { success: true };
+      }
+
       const existing = await ctx.metaDb.get('subscriptions');
       const subs = existing?.value || [];
 
@@ -1766,6 +1773,11 @@ export function createApi({
      * @returns {Promise<{success: boolean}>}
      */
     async unsubscribeChannel(driveKey) {
+      if (ctx.personal?.writable) {
+        await ctx.personal.unsubscribe(driveKey);
+        return { success: true };
+      }
+
       const existing = await ctx.metaDb.get('subscriptions');
       const subs = existing?.value || [];
 
@@ -1780,12 +1792,22 @@ export function createApi({
      * @returns {Promise<Array<{driveKey: string, name: string, subscribedAt?: number}>>}
      */
     async getSubscriptions() {
-      const existing = await ctx.metaDb.get('subscriptions');
-      const subs = existing?.value || [];
+      let subs;
+      if (ctx.personal) {
+        // Normalize personal-store rows to the legacy { driveKey, subscribedAt } shape.
+        subs = (await ctx.personal.listSubscriptions()).map((s) => ({
+          driveKey: s.channelKey,
+          subscribedAt: s.subscribedAt,
+          name: s.name || undefined
+        }));
+      } else {
+        const existing = await ctx.metaDb.get('subscriptions');
+        subs = existing?.value || [];
+      }
 
       const enriched = [];
       for (const sub of subs) {
-        let name = 'Unknown';
+        let name = sub.name || 'Unknown';
         try {
           const channel = await loadChannel(ctx, sub.driveKey)
           const meta = await channel?.getMetadata().catch(() => null)
@@ -1795,6 +1817,72 @@ export function createApi({
       }
 
       return enriched;
+    },
+
+    // ============================================
+    // Personal Sync: Playlists / History / Settings
+    // (private per-identity multi-writer store, synced across the user's devices)
+    // ============================================
+
+    /** @returns {Promise<import('./personal/personal-store.js').PersonalStore>} */
+    async _personal() {
+      if (!ctx.personal) throw new Error('No active personal store (create or activate an identity first)');
+      return ctx.personal;
+    },
+
+    async getPlaylists() {
+      if (!ctx.personal) return [];
+      return ctx.personal.listPlaylists();
+    },
+    async getPlaylistItems(playlistId) {
+      if (!ctx.personal) return [];
+      return ctx.personal.listPlaylistItems(playlistId);
+    },
+    async createPlaylist({ name = '', description = '' } = {}) {
+      const id = await (await this._personal()).createPlaylist({ name, description });
+      return { success: true, id };
+    },
+    async updatePlaylist({ id, name, description } = {}) {
+      await (await this._personal()).updatePlaylist(id, { name, description });
+      return { success: true };
+    },
+    async deletePlaylist(id) {
+      await (await this._personal()).deletePlaylist(id);
+      return { success: true };
+    },
+    async addToPlaylist({ playlistId, channelKey, videoId, videoKey } = {}) {
+      await (await this._personal()).addToPlaylist(playlistId, { channelKey, videoId, videoKey });
+      return { success: true };
+    },
+    async removeFromPlaylist({ playlistId, videoKey } = {}) {
+      await (await this._personal()).removeFromPlaylist(playlistId, videoKey);
+      return { success: true };
+    },
+
+    async logWatchHistory(event) {
+      const eventId = await (await this._personal()).logHistory(event || {});
+      return { success: true, eventId };
+    },
+    async getWatchHistory({ limit = 100 } = {}) {
+      if (!ctx.personal) return [];
+      return ctx.personal.listHistory({ limit });
+    },
+    async getResumePosition(videoKey) {
+      if (!ctx.personal) return null;
+      return ctx.personal.getResume(videoKey);
+    },
+    async listResumePositions() {
+      if (!ctx.personal) return [];
+      return ctx.personal.listResume();
+    },
+
+    async setPersonalSetting({ key, value } = {}) {
+      await (await this._personal()).setSetting(key, value);
+      return { success: true };
+    },
+    async getPersonalSettings() {
+      if (!ctx.personal) return {};
+      return ctx.personal.getSettings();
     },
 
     /**

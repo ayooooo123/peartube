@@ -1246,6 +1246,50 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": true,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 18,
+      "command": "start-livestream",
+      "method": "startLivestream",
+      "handler": "StartLivestream",
+      "request": "@peartube/start-livestream-request",
+      "response": "@peartube/start-livestream-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 19,
+      "command": "stop-livestream",
+      "method": "stopLivestream",
+      "handler": "StopLivestream",
+      "request": "@peartube/stop-livestream-request",
+      "response": "@peartube/stop-livestream-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 20,
+      "command": "get-livestream-status",
+      "method": "getLivestreamStatus",
+      "handler": "GetLivestreamStatus",
+      "request": "@peartube/get-livestream-status-request",
+      "response": "@peartube/get-livestream-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 21,
+      "command": "prepare-live-playback",
+      "method": "prepareLivePlayback",
+      "handler": "PrepareLivePlayback",
+      "request": "@peartube/prepare-live-playback-request",
+      "response": "@peartube/prepare-live-playback-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -1831,6 +1875,52 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       }
     ],
+    "live": [
+      {
+        "id": 18,
+        "command": "start-livestream",
+        "method": "startLivestream",
+        "handler": "StartLivestream",
+        "request": "@peartube/start-livestream-request",
+        "response": "@peartube/start-livestream-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 19,
+        "command": "stop-livestream",
+        "method": "stopLivestream",
+        "handler": "StopLivestream",
+        "request": "@peartube/stop-livestream-request",
+        "response": "@peartube/stop-livestream-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 20,
+        "command": "get-livestream-status",
+        "method": "getLivestreamStatus",
+        "handler": "GetLivestreamStatus",
+        "request": "@peartube/get-livestream-status-request",
+        "response": "@peartube/get-livestream-status-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 21,
+        "command": "prepare-live-playback",
+        "method": "prepareLivePlayback",
+        "handler": "PrepareLivePlayback",
+        "request": "@peartube/prepare-live-playback-request",
+        "response": "@peartube/prepare-live-playback-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      }
+    ],
     "watch": [
       {
         "id": 90,
@@ -2367,6 +2457,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "get-channel-meta",
     "get-identities",
     "get-identity",
+    "get-livestream-status",
     "get-pinned-channels",
     "get-public-feed",
     "get-reactions",
@@ -2407,6 +2498,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "pick-video-file",
     "pin-channel",
     "prefetch-video",
+    "prepare-live-playback",
     "prepare-playback",
     "recover-identity",
     "refresh-feed",
@@ -2419,6 +2511,8 @@ export const APP_RPC_METADATA = Object.freeze({
     "set-transcode-settings",
     "set-video-thumbnail",
     "set-video-thumbnail-from-file",
+    "start-livestream",
+    "stop-livestream",
     "submit-to-feed",
     "subscribe-channel",
     "transcode-start",

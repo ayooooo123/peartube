@@ -468,6 +468,89 @@ ns.register({
   ]
 })
 
+// Livestreaming structs
+ns.register({
+  name: 'start-livestream-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'targetFragmentDurationMs', type: 'uint', required: false },
+    { name: 'width', type: 'uint', required: false },
+    { name: 'height', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'start-livestream-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'liveCoreKey', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'stop-livestream-request',
+  fields: [
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'livestream-status',
+  fields: [
+    { name: 'state', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'liveCoreKey', type: 'string', required: false },
+    { name: 'mediaBlocks', type: 'uint', required: false },
+    { name: 'durationMs', type: 'uint', required: false },
+    { name: 'peerCount', type: 'uint', required: false },
+    { name: 'startedAt', type: 'uint', required: false },
+    { name: 'endedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'stop-livestream-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'status', type: '@peartube/livestream-status', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-livestream-status-request',
+  fields: [
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-livestream-status-response',
+  fields: [
+    { name: 'status', type: '@peartube/livestream-status', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-live-playback-request',
+  fields: [
+    { name: 'liveCoreKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'prepare-live-playback-response',
+  fields: [
+    { name: 'url', type: 'string', required: false },
+    { name: 'isLive', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
 ns.register({
   name: 'update-video-metadata-request',
   fields: [
@@ -2468,6 +2551,31 @@ rpcNs.register({
   name: 'delete-video',
   request: { name: '@peartube/delete-video-request', stream: false },
   response: { name: '@peartube/delete-video-response', stream: false }
+})
+
+// Livestreaming commands
+rpcNs.register({
+  name: 'start-livestream',
+  request: { name: '@peartube/start-livestream-request', stream: false },
+  response: { name: '@peartube/start-livestream-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'stop-livestream',
+  request: { name: '@peartube/stop-livestream-request', stream: false },
+  response: { name: '@peartube/stop-livestream-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-livestream-status',
+  request: { name: '@peartube/get-livestream-status-request', stream: false },
+  response: { name: '@peartube/get-livestream-status-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'prepare-live-playback',
+  request: { name: '@peartube/prepare-live-playback-request', stream: false },
+  response: { name: '@peartube/prepare-live-playback-response', stream: false }
 })
 
 // Subscription commands

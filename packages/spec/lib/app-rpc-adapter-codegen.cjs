@@ -66,6 +66,12 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'remove-reaction',
     'get-reactions'
   ],
+  live: [
+    'start-livestream',
+    'stop-livestream',
+    'get-livestream-status',
+    'prepare-live-playback'
+  ],
   watch: [
     'log-watch-event',
     'get-recommendations',

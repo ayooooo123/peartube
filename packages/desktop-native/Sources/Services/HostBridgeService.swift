@@ -62,9 +62,6 @@ final class HostBridgeService {
   private(set) var thumbnailURLs: [String: URL] = [:]
   private(set) var thumbnailRefreshTokens: [String: Int] = [:]
   private(set) var activeAVPlayer: AVPlayer?
-  private(set) var activeMpvPlayerID: String?
-  private(set) var activeMpvFrameServerPort: Int?
-  private(set) var mpvAvailable = false
   private(set) var ffmpegDecodeAvailable = false
   private(set) var ffmpegDecodeAvailabilityError: String?
   private(set) var networkStatus: NativeNetworkStatus?
@@ -79,7 +76,6 @@ final class HostBridgeService {
   @ObservationIgnored private let logLimit = 120
   @ObservationIgnored private(set) var selectedStoragePath: String?
   @ObservationIgnored private var lastPlaybackRenderSize = CGSize(width: 1280, height: 720)
-  @ObservationIgnored private var forceAVPlayerFallback = false
   @ObservationIgnored private var playbackStatsTask: Task<Void, Never>?
   @ObservationIgnored private var feedWarmupTask: Task<Void, Never>?
   @ObservationIgnored private var feedUpdateRefreshTask: Task<Void, Never>?
@@ -88,18 +84,6 @@ final class HostBridgeService {
   @ObservationIgnored private let snapshotCacheURL: URL
   @ObservationIgnored private weak var observedAppState: AppState?
   @ObservationIgnored private var currentHostTransportMode: NativeHostTransportMode?
-
-  struct NativePlaybackSession: Equatable {
-    enum Mode: Equatable {
-      case mpv
-      case avPlayer
-    }
-
-    let mode: Mode
-    let url: URL
-    let playerId: String?
-    let frameServerPort: Int?
-  }
 
   struct NativeNetworkStatus: Equatable {
     let connected: Bool
@@ -955,273 +939,6 @@ final class HostBridgeService {
     return url
   }
 
-  func startPlaybackSession(
-    for video: NativeVideo,
-    renderSize: CGSize
-  ) async -> NativePlaybackSession? {
-    guard isReady else { return nil }
-
-    let normalizedSize = CGSize(
-      width: max(640, renderSize.width.rounded(.up)),
-      height: max(360, renderSize.height.rounded(.up))
-    )
-    lastPlaybackRenderSize = normalizedSize
-
-    guard let url = await resolvePlayback(for: video) else {
-      return nil
-    }
-
-    await destroyActiveMpvPlayer()
-    activePlaybackVideoID = video.id
-    startPlaybackStatsPolling(for: video)
-
-    let prefersFFmpegDecode = Self.prefersNativeFFmpegDecodePlayback(for: video)
-    let prefersMpv = Self.prefersNativeMpvPlayback(for: video)
-
-    guard prefersMpv || prefersFFmpegDecode else {
-      mpvAvailable = false
-      appendLog("Using AVPlayer for native playback.")
-      return NativePlaybackSession(
-        mode: .avPlayer,
-        url: url,
-        playerId: nil,
-        frameServerPort: nil
-      )
-    }
-
-    do {
-      if prefersFFmpegDecode {
-        let availability = await refreshFFmpegDecodeAvailability()
-        if availability?.available == true {
-          appendLog("Experimental bare-ffmpeg decode path selected for \(video.title), but the custom renderer is not wired yet. Falling back to bare-mpv.")
-        } else {
-          appendLog(
-            "Experimental bare-ffmpeg decode path requested for \(video.title), but bare-ffmpeg is unavailable: \(availability?.error ?? ffmpegDecodeAvailabilityError ?? "Unknown error"). Falling back to bare-mpv."
-          )
-        }
-      }
-
-      if forceAVPlayerFallback {
-        appendLog("Using AVPlayer fallback while bare-mpv is disabled for this native session.")
-        return NativePlaybackSession(
-          mode: .avPlayer,
-          url: url,
-          playerId: nil,
-          frameServerPort: nil
-        )
-      }
-
-      let (availability, createResponse, playerId) = try await gatedRPC { hrpc -> (MpvAvailableResponse, MpvCreateResponse?, String?) in
-        let availability = try await hrpc.mpvAvailable(MpvAvailableRequest())
-
-        var createResponse: MpvCreateResponse?
-        var playerId: String?
-
-        if availability.available {
-          let response = try await hrpc.mpvCreate(
-            MpvCreateRequest(
-              width: UInt(normalizedSize.width),
-              height: UInt(normalizedSize.height)
-            )
-          )
-          createResponse = response
-
-          if response.success, response.playerId?.isEmpty == false {
-            let pid = response.playerId!
-
-            let loadResponse = try await hrpc.mpvLoadFile(
-              MpvLoadFileRequest(playerId: pid, url: url.absoluteString)
-            )
-
-            if loadResponse.success {
-              let playResponse = try await hrpc.mpvPlay(MpvPlayerRequest(playerId: pid))
-
-              if playResponse.success {
-                playerId = pid
-              } else {
-                self.appendLog("bare-mpv play failed: \(playResponse.error?.isEmpty == false ? playResponse.error! : "Unknown error"). Falling back to AVPlayer.")
-                _ = try? await hrpc.mpvDestroy(MpvPlayerRequest(playerId: pid))
-              }
-            } else {
-              self.appendLog("bare-mpv load failed: \(loadResponse.error?.isEmpty == false ? loadResponse.error! : "Unknown error"). Falling back to AVPlayer.")
-              _ = try? await hrpc.mpvDestroy(MpvPlayerRequest(playerId: pid))
-            }
-          }
-        }
-
-        return (availability, createResponse, playerId)
-      }
-      self.mpvAvailable = availability.available
-
-      guard let createResponse else {
-        appendLog("bare-mpv unavailable. Falling back to AVPlayer.")
-        return NativePlaybackSession(
-          mode: .avPlayer,
-          url: url,
-          playerId: nil,
-          frameServerPort: nil
-        )
-      }
-
-      guard let playerId else {
-        if createResponse.playerId?.isEmpty == false {
-          // load or play failed — already logged above
-        } else {
-          appendLog("bare-mpv create failed: \(createResponse.error?.isEmpty == false ? createResponse.error! : "Unknown error"). Falling back to AVPlayer.")
-        }
-        return NativePlaybackSession(
-          mode: .avPlayer,
-          url: url,
-          playerId: nil,
-          frameServerPort: nil
-        )
-      }
-
-      activePlaybackVideoID = video.id
-      activeMpvPlayerID = playerId
-      activeMpvFrameServerPort = createResponse.frameServerPort.map { Int($0) }
-      appendLog("bare-mpv playback session started for \(video.title).")
-
-      Task { @MainActor [weak self] in
-        guard let self else { return }
-
-        let didProducePlayback = await self.waitForMpvPlaybackSignal(playerId: playerId, maxAttempts: 60)
-        guard self.activeMpvPlayerID == playerId else { return }
-
-        if didProducePlayback {
-          self.appendLog("bare-mpv produced its first playback signal for \(video.title).")
-        } else {
-          self.appendLog("bare-mpv has not produced a playback frame yet for \(video.title). Keeping the mpv session alive and waiting in the player surface.")
-        }
-      }
-
-      return NativePlaybackSession(
-        mode: .mpv,
-        url: url,
-        playerId: playerId,
-        frameServerPort: createResponse.frameServerPort.map { Int($0) }
-      )
-    } catch {
-      appendLog("bare-mpv session failed: \(error.localizedDescription). Falling back to AVPlayer.")
-      mpvAvailable = false
-      return NativePlaybackSession(
-        mode: .avPlayer,
-        url: url,
-        playerId: nil,
-        frameServerPort: nil
-      )
-    }
-  }
-
-  static func shouldAcceptPlaybackCommand(
-    activeVideoID: NativeVideo.ID?,
-    activePlayerID: String?,
-    requestedVideoID: NativeVideo.ID,
-    requestedPlayerID: String
-  ) -> Bool {
-    activeVideoID == requestedVideoID && activePlayerID == requestedPlayerID
-  }
-
-  private func shouldAcceptActivePlaybackCommand(for videoID: NativeVideo.ID, playerId: String) -> Bool {
-    Self.shouldAcceptPlaybackCommand(
-      activeVideoID: activePlaybackVideoID,
-      activePlayerID: activeMpvPlayerID,
-      requestedVideoID: videoID,
-      requestedPlayerID: playerId
-    )
-  }
-
-  func pauseActivePlayback(for video: NativeVideo) async {
-    guard let playerId = activeMpvPlayerID else { return }
-    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else {
-      appendLog("Ignoring stale bare-mpv pause for \(video.title).")
-      return
-    }
-
-    do {
-      _ = try await gatedRPC { hrpc in
-        try await hrpc.mpvPause(MpvPlayerRequest(playerId: playerId))
-      }
-    } catch {
-      appendLog("bare-mpv pause failed: \(error.localizedDescription)")
-    }
-  }
-
-  func resumeActivePlayback(for video: NativeVideo) async {
-    guard let playerId = activeMpvPlayerID else { return }
-    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else {
-      appendLog("Ignoring stale bare-mpv resume for \(video.title).")
-      return
-    }
-
-    do {
-      _ = try await gatedRPC { hrpc in
-        try await hrpc.mpvPlay(MpvPlayerRequest(playerId: playerId))
-      }
-    } catch {
-      appendLog("bare-mpv resume failed: \(error.localizedDescription)")
-    }
-  }
-
-  func seekActivePlayback(for video: NativeVideo, to time: Double) async {
-    guard let playerId = activeMpvPlayerID else { return }
-    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else {
-      appendLog("Ignoring stale bare-mpv seek for \(video.title).")
-      return
-    }
-
-    do {
-      _ = try await gatedRPC { hrpc in
-        try await hrpc.mpvSeek(MpvSeekRequest(playerId: playerId, time: String(time)))
-      }
-    } catch {
-      appendLog("bare-mpv seek failed: \(error.localizedDescription)")
-    }
-  }
-
-  func activePlaybackState(for video: NativeVideo) async -> NativeMpvState? {
-    guard let playerId = activeMpvPlayerID else { return nil }
-    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else { return nil }
-
-    do {
-      return try await gatedRPC { hrpc in
-        let response = try await hrpc.mpvGetState(MpvPlayerRequest(playerId: playerId))
-        return NativeMpvState(schema: response)
-      }
-    } catch {
-      appendLog("bare-mpv state polling failed: \(error.localizedDescription)")
-      return nil
-    }
-  }
-
-  func activePlaybackFrame(for video: NativeVideo) async -> NativeMpvRenderFrame? {
-    guard let playerId = activeMpvPlayerID else { return nil }
-    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else { return nil }
-
-    do {
-      return try await gatedRPC { hrpc in
-        let response = try await hrpc.mpvRenderFrame(MpvPlayerRequest(playerId: playerId))
-        return NativeMpvRenderFrame(schema: response)
-      }
-    } catch {
-      appendLog("bare-mpv frame fetch failed: \(error.localizedDescription)")
-      return nil
-    }
-  }
-
-  func activePlaybackFrameURL() -> URL? {
-    guard let playerId = activeMpvPlayerID,
-          let frameServerPort = activeMpvFrameServerPort else {
-      return nil
-    }
-
-    guard let encodedPlayerId = playerId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
-      return nil
-    }
-
-    return URL(string: "http://127.0.0.1:\(frameServerPort)/frame/\(encodedPlayerId)")
-  }
-
   func thumbnailURL(for video: NativeVideo) -> URL? {
     guard let baseURL = thumbnailURLs[video.thumbnailCacheKey] ?? video.thumbnailURL else {
       return nil
@@ -1658,18 +1375,10 @@ final class HostBridgeService {
     // instead of queueing serially.
     stopPlaybackStatsPolling()
     releaseAVPlayer()
-    let playerId = activeMpvPlayerID
-    if let playerId {
-      Task { [weak self] in
-        await self?.destroyMpvPlayer(playerId: playerId)
-      }
-    }
     activePlaybackVideoID = nil
     resolvedPlaybackURL = nil
     isResolvingPlayback = false
     lastPlaybackErrorMessage = nil
-    activeMpvPlayerID = nil
-    activeMpvFrameServerPort = nil
   }
 
   func recordPlaybackUIEvent(_ line: String) {
@@ -1738,63 +1447,6 @@ final class HostBridgeService {
     )
     let nativeVideos = (videos.videos ?? []).map { NativeVideo(video: $0, channelKey: channelKey) }
     return (profile, nativeVideos)
-  }
-
-  private func destroyActiveMpvPlayer() async {
-    guard let playerId = activeMpvPlayerID else {
-      activeMpvFrameServerPort = nil
-      return
-    }
-
-    await destroyMpvPlayer(playerId: playerId)
-  }
-
-  private func destroyMpvPlayer(playerId: String) async {
-    if activeMpvPlayerID == playerId {
-      activeMpvPlayerID = nil
-    }
-
-    do {
-      _ = try await gatedRPC { hrpc in
-        try await hrpc.mpvDestroy(MpvPlayerRequest(playerId: playerId))
-      }
-    } catch {
-      appendLog("bare-mpv destroy failed: \(error.localizedDescription)")
-    }
-
-    activeMpvFrameServerPort = nil
-  }
-
-  private func waitForMpvPlaybackSignal(playerId: String, maxAttempts: Int = 20) async -> Bool {
-    for _ in 0..<maxAttempts {
-      guard !Task.isCancelled else { return false }
-
-      var state: NativeMpvState?
-      var frame: NativeMpvRenderFrame?
-
-      if let responses = try? await gatedRPC({ hrpc in
-        let stateResponse = try? await hrpc.mpvGetState(MpvPlayerRequest(playerId: playerId))
-        let frameResponse = try? await hrpc.mpvRenderFrame(MpvPlayerRequest(playerId: playerId))
-        return (stateResponse, frameResponse)
-      }) {
-        if let stateResponse = responses.0 {
-          state = NativeMpvState(schema: stateResponse)
-        }
-        if let frameResponse = responses.1 {
-          frame = NativeMpvRenderFrame(schema: frameResponse)
-        }
-      }
-
-      guard !Task.isCancelled else { return false }
-
-      if Self.mpvSessionHasPlaybackSignal(state: state, frame: frame) {
-        return true
-      }
-
-      try? await Task.sleep(for: .milliseconds(250))
-    }
-
-    return false
   }
 
   private func ensureReady(into appState: AppState) async -> Bool {
@@ -1879,10 +1531,6 @@ final class HostBridgeService {
     inFlightThumbnailIDs.removeAll()
     thumbnailURLs.removeAll()
     stopPlaybackStatsPolling()
-    mpvAvailable = false
-    forceAVPlayerFallback = false
-    activeMpvPlayerID = nil
-    activeMpvFrameServerPort = nil
     networkStatus = nil
   }
 
@@ -2441,74 +2089,6 @@ final class HostBridgeService {
     return message.contains("timed out") || message.contains("timeout")
   }
 
-  static func mpvSessionHasPlaybackSignal(
-    state: NativeMpvState?,
-    frame: NativeMpvRenderFrame?
-  ) -> Bool {
-    if let frame, frame.success, frame.hasFrame {
-      return true
-    }
-
-    if let state, state.success {
-      if state.currentTime > 0 {
-        return true
-      }
-
-      if state.duration > 0 {
-        return true
-      }
-    }
-
-    return false
-  }
-
-  static func shouldUseNativeMpvPlayback(
-    for video: NativeVideo,
-    environment: [String: String] = ProcessInfo.processInfo.environment
-  ) -> Bool {
-    if let override = nativeMpvPlaybackOverride(environment: environment) {
-      return override
-    }
-
-    return false
-  }
-
-  static func prefersNativeMpvPlayback(
-    for video: NativeVideo,
-    environment: [String: String] = ProcessInfo.processInfo.environment
-  ) -> Bool {
-    if let override = nativeMpvPlaybackOverride(environment: environment) {
-      return override
-    }
-
-    if prefersNativeFFmpegDecodePlayback(for: video, environment: environment) {
-      return false
-    }
-
-    if ProfessionalVideoWorkflowExtensions.isExperimentalRoutingEnabled(environment: environment),
-       !isLikelyAVPlayerCompatible(video: video),
-       hasKnownPlaybackFormat(video: video) {
-      return false
-    }
-
-    return !isLikelyAVPlayerCompatible(video: video) && hasKnownPlaybackFormat(video: video)
-  }
-
-  static func prefersNativeFFmpegDecodePlayback(
-    for video: NativeVideo,
-    environment: [String: String] = ProcessInfo.processInfo.environment
-  ) -> Bool {
-    if nativeMpvPlaybackOverride(environment: environment) != nil {
-      return false
-    }
-
-    guard isExperimentalFFmpegDecodeEnabled(environment: environment) else {
-      return false
-    }
-
-    return !isLikelyAVPlayerCompatible(video: video) && hasKnownPlaybackFormat(video: video)
-  }
-
   static func isExperimentalFFmpegDecodeEnabled(
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Bool {
@@ -2551,25 +2131,6 @@ final class HostBridgeService {
     return false
   }
 
-  private static func nativeMpvPlaybackOverride(
-    environment: [String: String]
-  ) -> Bool? {
-    guard let rawValue = environment["PEARTUBE_NATIVE_ENABLE_MPV"]?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased() else {
-      return nil
-    }
-
-    switch rawValue {
-    case "1", "true", "yes", "on":
-      return true
-    case "0", "false", "no", "off":
-      return false
-    default:
-      return nil
-    }
-  }
-
   @discardableResult
   func refreshFFmpegDecodeAvailability() async -> FfmpegDecodeAvailableResponse? {
     guard isReady else { return nil }
@@ -2608,63 +2169,6 @@ final class HostBridgeService {
       || line.hasPrefix("Dispatching ")
       || line.hasPrefix("Finished writing ")
       || line.hasPrefix("Read ")
-  }
-
-  private static func isLikelyAVPlayerCompatible(video: NativeVideo) -> Bool {
-    let avMimeTypes = Set([
-      "application/vnd.apple.mpegurl",
-      "audio/aac",
-      "audio/mp4",
-      "audio/mpeg",
-      "video/mp2t",
-      "video/mp4",
-      "video/quicktime",
-      "video/x-m4v",
-    ])
-    let avExtensions = Set([
-      "aac",
-      "m3u8",
-      "m4a",
-      "m4v",
-      "mov",
-      "mp3",
-      "mp4",
-      "ts",
-    ])
-
-    if let mimeType = video.mimeType?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .lowercased(),
-       !mimeType.isEmpty {
-      return avMimeTypes.contains(mimeType)
-    }
-
-    if let path = video.path?
-      .trimmingCharacters(in: .whitespacesAndNewlines),
-       !path.isEmpty {
-      let pathExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
-      if !pathExtension.isEmpty {
-        return avExtensions.contains(pathExtension)
-      }
-    }
-
-    return false
-  }
-
-  private static func hasKnownPlaybackFormat(video: NativeVideo) -> Bool {
-    if let mimeType = video.mimeType?
-      .trimmingCharacters(in: .whitespacesAndNewlines),
-       !mimeType.isEmpty {
-      return true
-    }
-
-    if let path = video.path?
-      .trimmingCharacters(in: .whitespacesAndNewlines),
-       !path.isEmpty {
-      return !URL(fileURLWithPath: path).pathExtension.isEmpty
-    }
-
-    return false
   }
 
   private static func defaultDiagnosticsLogURL(

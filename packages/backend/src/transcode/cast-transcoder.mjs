@@ -1,6 +1,7 @@
 import http from 'bare-http1'
 
-import { probeMedia, loadBareFfmpeg, checkWebTranscodeNeeded } from './transcoder.mjs'
+import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'
+import { decidePlayback } from './playback-compat.mjs'
 import { safeDestroy, safeUnref, copyCodecParameters } from './ffmpeg-utils.mjs'
 import { TempFileReader } from './temp-file-reader.mjs'
 import { getHttpFileSize } from './http-file-size.mjs'
@@ -1254,8 +1255,22 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
  * Probes the source and only transcodes what's needed for Chromium playback.
  * If only audio needs transcoding (AC3/EAC3/DTS → AAC), uses fast video-copy path.
  */
-async function startWebTranscode(sourceUrl, options = {}) {
-  const { sourceKey = null, onProgress, isVideoComplete = true } = options
+/**
+ * Start a transcode session targeting a specific OS-native player, using the
+ * per-player capability policy in playback-compat.mjs. Produces fMP4 HLS served
+ * by the cast file server (bound 0.0.0.0, so reachable at 127.0.0.1 for local
+ * device/AVPlayer playback as well as Chromecast).
+ *
+ * @param {string} sourceUrl
+ * @param {object} [options]
+ * @param {string} [options.player='webkit'] - avplayer | exoplayer | webkit | chromecast
+ * @param {string|null} [options.sourceKey]
+ * @param {Function} [options.onProgress]
+ * @param {boolean} [options.isVideoComplete=true]
+ * @returns {Promise<{success:boolean, sessionId:string, mode?:string, reused?:boolean, reason?:string, error?:string}>}
+ */
+async function startCompatTranscode(sourceUrl, options = {}) {
+  const { player = 'webkit', sourceKey = null, onProgress, isVideoComplete = true } = options
 
   if (sourceKey) {
     const existing = findSessionBySourceKey(sourceKey)
@@ -1274,32 +1289,30 @@ async function startWebTranscode(sourceUrl, options = {}) {
     await ensureFfmpegLoaded()
     const probeResult = await probeMedia(sourceUrl)
 
-    // Use web-specific codec check (broader than Chromecast)
-    checkWebTranscodeNeeded(probeResult)
-    const needsVideoTranscode = !!probeResult.needsVideoTranscode
-    const needsAudioTranscode = !!probeResult.needsAudioTranscode
+    const decision = decidePlayback({
+      player,
+      videoCodec: probeResult.videoCodec,
+      audioCodec: probeResult.audioCodec,
+      container: probeResult.container,
+      videoProfile: probeResult.videoProfile,
+      videoLevel: probeResult.videoLevel,
+    })
 
-    // Also check container — MKV needs remux even if codecs are web-compatible
-    const needsRemux = probeResult.container && (
-      probeResult.container.includes('matroska') || probeResult.container.includes('mkv')
-    )
-
-    if (!needsVideoTranscode && !needsAudioTranscode && !needsRemux) {
+    if (decision.mode === 'direct') {
       session.status = 'complete'
       return { success: false, sessionId: session.id, reason: 'no-transcode-needed' }
     }
 
-    const mode = needsVideoTranscode ? 'full' : needsAudioTranscode ? 'audio-only' : 'remux'
-    console.log('[WebTranscode] Starting:', mode, '|', probeResult.reason || `container: ${probeResult.container}`)
+    console.log('[CompatTranscode] Starting:', decision.mode, 'for', player, '|', decision.reason)
 
     ;(async () => {
       try {
-        if (needsVideoTranscode) {
+        if (decision.mode === 'full') {
           await runFullTranscodeCast(session, sourceUrl, { isVideoComplete })
-        } else if (needsAudioTranscode) {
+        } else if (decision.mode === 'audio-only') {
           await runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete })
         } else {
-          // Remux only (MKV → MP4, no re-encoding)
+          // Remux only (e.g. MKV → fMP4, no re-encoding)
           await runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete })
         }
       } catch (err) {
@@ -1308,19 +1321,27 @@ async function startWebTranscode(sourceUrl, options = {}) {
           session.error = session.error || 'cancelled'
         } else {
           session.status = 'error'
-          session.error = err?.message || 'Web transcode failed'
-          console.error('[WebTranscode] Error:', err?.message || err)
+          session.error = err?.message || 'Compat transcode failed'
+          console.error('[CompatTranscode] Error:', err?.message || err)
         }
         try { session.segmentStore?.setFinished?.() } catch {}
       }
     })()
 
-    return { success: true, sessionId: session.id, reused: false }
+    return { success: true, sessionId: session.id, mode: decision.mode, reused: false }
   } catch (err) {
     session.status = 'error'
-    session.error = err?.message || 'Web transcode startup failed'
+    session.error = err?.message || 'Compat transcode startup failed'
     return { success: false, error: session.error, sessionId: session.id }
   }
+}
+
+/**
+ * Back-compat entry for Electrobun/web (WKWebView/Chromium) playback.
+ * Delegates to startCompatTranscode with the webkit policy.
+ */
+async function startWebTranscode(sourceUrl, options = {}) {
+  return startCompatTranscode(sourceUrl, { ...options, player: 'webkit' })
 }
 
 async function startCastTranscode(sourceUrl, options = {}) {
@@ -1395,3 +1416,4 @@ export { createCastSession, getCastSession, findSessionBySourceKey, getCastStatu
 export { generatePlaylist }
 export { startCastTranscode }
 export { startWebTranscode }
+export { startCompatTranscode }

@@ -18,8 +18,8 @@ const READY_ATTEMPTS = 5
 const READY_TIMEOUT_MS = 1_500
 const READY_RETRY_DELAY_MS = 250
 
-const THUMBNAIL_ATTEMPTS = 4
-const THUMBNAIL_TIMEOUT_MS = 2_500
+const THUMBNAIL_ATTEMPTS = 3
+const THUMBNAIL_TIMEOUT_MS = 1_500
 const THUMBNAIL_RETRY_DELAY_MS = 300
 
 const readinessCache = new WeakMap<object, { checkedAt: number; ready: boolean }>()
@@ -94,6 +94,20 @@ export async function ensureThumbnailBackendReady(
   }
 }
 
+async function attemptThumbnailFetch(
+  rpc: ThumbnailRPC,
+  channelKey: string,
+  videoId: string,
+  timeoutMs: number
+): Promise<string | null> {
+  try {
+    const response = await withTimeout(rpc.getVideoThumbnail({ channelKey, videoId }), timeoutMs)
+    const url = response?.dataUrl || response?.url
+    if (response?.exists && url) return url
+  } catch {}
+  return null
+}
+
 export async function fetchThumbnailUrlWithRetry(args: {
   rpc: ThumbnailRPC | null | undefined
   channelKey: string
@@ -103,24 +117,24 @@ export async function fetchThumbnailUrlWithRetry(args: {
   const { rpc, channelKey, videoId, expectedPort } = args
   if (!rpc || !channelKey || !videoId) return null
 
+  // Fast path: fetch immediately. Feed previews already carry thumbnail refs
+  // backend-side, so the first attempt usually succeeds without paying for a
+  // readiness probe first.
+  const firstUrl = await attemptThumbnailFetch(rpc, channelKey, videoId, THUMBNAIL_TIMEOUT_MS)
+  if (firstUrl) {
+    readinessCache.set(rpc as object, { checkedAt: Date.now(), ready: true })
+    return firstUrl
+  }
+
+  // Slow path: the immediate fetch failed — gate the remaining retries on
+  // backend readiness so we don't hammer a worklet that is still booting.
   const backendReady = await ensureThumbnailBackendReady(rpc, expectedPort)
   if (!backendReady) return null
 
-  for (let attempt = 0; attempt < THUMBNAIL_ATTEMPTS; attempt += 1) {
-    try {
-      const response = await withTimeout(
-        rpc.getVideoThumbnail({ channelKey, videoId }),
-        THUMBNAIL_TIMEOUT_MS + attempt * 500
-      )
-      const url = response?.dataUrl || response?.url
-      if (response?.exists && url) {
-        return url
-      }
-    } catch {}
-
-    if (attempt < THUMBNAIL_ATTEMPTS - 1) {
-      await sleep(THUMBNAIL_RETRY_DELAY_MS * (attempt + 1))
-    }
+  for (let attempt = 1; attempt < THUMBNAIL_ATTEMPTS; attempt += 1) {
+    await sleep(THUMBNAIL_RETRY_DELAY_MS * attempt)
+    const url = await attemptThumbnailFetch(rpc, channelKey, videoId, THUMBNAIL_TIMEOUT_MS + attempt * 500)
+    if (url) return url
   }
 
   return null

@@ -21,6 +21,7 @@ import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, par
 import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { SeedingAuthorizationError } from './seeding.js'
+import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -104,6 +105,9 @@ export function createApi({
   const loadChannelBounded = async (channelKey, timeoutMs = 2500) => {
     return withTimeout(loadChannel(ctx, channelKey), timeoutMs, `loadChannel ${channelKey?.slice?.(0, 16) || ''}`)
   }
+
+  /** @type {Map<string, {value: object|null, at: number}>} driveKey → cached signed channel root descriptor (misses retried after 60s) */
+  const signedDescriptorCache = new Map()
 
   /**
    * Ensure SemanticFinder is initialized with persistence
@@ -1563,6 +1567,37 @@ export function createApi({
       }
 
       return enriched;
+    },
+
+    /**
+     * Resolve the signed channel root descriptor for a locally available
+     * channel by reading `channel/root` from its public bee. The feed gossip
+     * layer uses this to announce locally backed entries with the signature
+     * strict peers require. Returns null when the channel has no verifiable
+     * descriptor bound to this drive key.
+     * @param {string} driveKey
+     * @returns {Promise<object|null>}
+     */
+    async getChannelSignedDescriptor(driveKey) {
+      if (!driveKey || !/^[a-f0-9]{64}$/i.test(driveKey)) return null
+      const cached = signedDescriptorCache.get(driveKey)
+      if (cached && (cached.value || Date.now() - cached.at < 60_000)) return cached.value
+
+      let value = null
+      try {
+        const channel = await loadChannelBounded(driveKey)
+        const root = await channel?.publicBee?.bee?.get('channel/root').catch(() => null)
+        const signed = root?.value || null
+        if (signed) {
+          const verified = await verifySignedChannelRootDescriptor(signed)
+          if (verified?.valid && verified.descriptor?.channelId === driveKey.toLowerCase()) {
+            value = signed
+          }
+        }
+      } catch { /* unavailable channels simply stay unsigned */ }
+
+      signedDescriptorCache.set(driveKey, { value, at: Date.now() })
+      return value
     },
 
     /**

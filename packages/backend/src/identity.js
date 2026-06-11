@@ -16,7 +16,8 @@ import {
 } from './peartube-identity.js'
 import {
   createChannelRootDescriptor,
-  signChannelRootDescriptor
+  signChannelRootDescriptor,
+  verifySignedChannelRootDescriptor
 } from './channel-descriptor.js'
 
 // Lazy load IdentityKey to support both Node.js and Bare runtime
@@ -216,6 +217,10 @@ export function createIdentityManager({ ctx }) {
         if (metadataKey && mediaKey) {
           const descriptor = createChannelRootDescriptor({
             identityPublicKey: publicKey,
+            // Peers verify gossip entries by binding the descriptor to the
+            // key the channel is announced under (the multi-writer channel
+            // key), not the identity key.
+            channelId: channelKeyHex,
             metadataKey,
             mediaKey,
             seq: 1,
@@ -572,6 +577,129 @@ export function createIdentityManager({ ctx }) {
 
         return fallback
       }
+    },
+
+    /**
+     * Backfill signed channel root descriptors for locally owned channels.
+     *
+     * Channels created before descriptor signing existed (or before the
+     * descriptor was bound to the channel key) have no usable
+     * `channel/root` record, so strict peers reject their gossip entries
+     * with missing-signed-descriptor / descriptor-channel-mismatch.
+     * Re-signing only needs the device (swarm) keypair plus a persisted
+     * attestation proof — never the identity secret key. Channels without
+     * a stored proof are skipped and reported.
+     *
+     * @returns {Promise<{checked: number, signed: number, ok: number, missingProof: number, skipped: number, failed: number}>}
+     */
+    async ensureSignedChannelDescriptors() {
+      const summary = { checked: 0, signed: 0, ok: 0, missingProof: 0, skipped: 0, failed: 0 }
+      if (!ctx?.swarm?.keyPair?.publicKey || !ctx?.swarm?.keyPair?.secretKey) {
+        log.warn(' Descriptor backfill skipped: device swarm keypair unavailable')
+        return summary
+      }
+
+      let identitiesChanged = false
+      for (const identity of identities) {
+        const channelKey = identity?.channelKey || identity?.driveKey
+        if (!channelKey) continue
+        summary.checked++
+
+        try {
+          const channel = await loadChannel(ctx, channelKey, {
+            encryptionKeyHex: identity.channelEncryptionKey || null,
+            writerKeyName: identity.channelWriterKeyName || null,
+            preferWritable: true
+          })
+          if (!channel?.publicBee?.writable) {
+            summary.skipped++
+            continue
+          }
+
+          const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
+          const mediaKey = channel.blobsKeyHex
+          if (!metadataKey || !mediaKey) {
+            summary.skipped++
+            continue
+          }
+
+          const existing = await channel.publicBee.bee.get('channel/root').catch(() => null)
+          const existingSigned = existing?.value || null
+          if (existingSigned) {
+            const verified = await verifySignedChannelRootDescriptor(existingSigned)
+            if (
+              verified?.valid &&
+              verified.descriptor?.channelId === channelKey.toLowerCase() &&
+              verified.descriptor?.metadataKey === metadataKey.toLowerCase()
+            ) {
+              summary.ok++
+              continue
+            }
+          }
+
+          const proofHex = identity.attestationProof || identity.signedDescriptor?.proof || null
+          if (!proofHex) {
+            summary.missingProof++
+            log.warn(' Descriptor backfill: no attestation proof for channel', channelKey.slice(0, 16), '- recover with mnemonic to re-sign')
+            continue
+          }
+
+          const previousSeq = Number(
+            existingSigned?.descriptor?.seq ?? identity.signedDescriptor?.descriptor?.seq ?? 0
+          ) || 0
+          const descriptor = createChannelRootDescriptor({
+            identityPublicKey: identity.publicKey,
+            channelId: channelKey,
+            metadataKey,
+            mediaKey,
+            seq: previousSeq + 1,
+            createdAt: identity.createdAt || Date.now(),
+            updatedAt: Date.now(),
+            profile: { name: identity.name || 'Channel' }
+          })
+          const signed = await signChannelRootDescriptor({
+            descriptor,
+            deviceKeyPair: ctx.swarm.keyPair,
+            deviceProof: proofHex
+          })
+
+          // Never write a descriptor peers would reject.
+          const check = await verifySignedChannelRootDescriptor(signed)
+          if (!check?.valid) {
+            summary.failed++
+            log.warn(' Descriptor backfill: self-verification failed for channel', channelKey.slice(0, 16), check?.error || '')
+            continue
+          }
+
+          await channel.publicBee.bee.put('channel/root', signed)
+          try {
+            await channel.publicBee.setMetadata({
+              channelId: descriptor.channelId,
+              identityPublicKey: identity.publicKey,
+              mediaKey,
+              signedDescriptor: signed
+            })
+          } catch (err) {
+            log.warn(' Descriptor backfill: metadata update skipped:', err?.message)
+          }
+
+          identity.signedDescriptor = signed
+          identity.channelId = descriptor.channelId
+          identitiesChanged = true
+          summary.signed++
+          log.info(' Descriptor backfill: signed channel root for', channelKey.slice(0, 16))
+        } catch (err) {
+          summary.failed++
+          log.warn(' Descriptor backfill failed for channel', String(channelKey).slice(0, 16), err?.message)
+        }
+      }
+
+      if (identitiesChanged) {
+        try { await this.saveIdentities() } catch (err) {
+          log.warn(' Descriptor backfill: persisting identities failed:', err?.message)
+        }
+      }
+      return summary
     }
   };
 }

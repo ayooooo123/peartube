@@ -78,6 +78,9 @@ export class PublicFeed {
     this.peerScorer = options.peerScorer || null;
     /** @type {((entries: any[], conn?: any) => Promise<any[]>) | null} */
     this.feedSnapshotProvider = null;
+    this.signedDescriptorProvider = null;
+    /** @type {Map<string, number>} driveKey → last descriptor lookup attempt */
+    this._descriptorLookupAttempts = new Map();
     /** @type {number} */
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
@@ -208,6 +211,46 @@ export class PublicFeed {
    * Provider must be cheap/local-only; no network waits.
    * @param {(entries: any[], conn?: any) => Promise<any[]>} callback
    */
+  /**
+   * Provide signed channel root descriptors for locally owned channels.
+   * Strict peers reject unsigned gossip entries, so announce paths use this
+   * to attach the `channel/root` descriptor to locally backed entries.
+   * @param {(driveKey: string) => Promise<object|null>} callback
+   */
+  setSignedDescriptorProvider(callback) {
+    this.signedDescriptorProvider = callback;
+  }
+
+  /**
+   * Attach signed descriptors to locally backed entries that are missing
+   * one. Failed lookups are retried at most once a minute per channel.
+   * @returns {Promise<number>} number of entries that gained a descriptor
+   */
+  async _ensureLocalSignedDescriptors() {
+    if (!this.signedDescriptorProvider) return 0
+    let changed = 0
+    for (const entry of this.entries.values()) {
+      if (!entry?.driveKey) continue
+      if (entry.signedDescriptor) continue
+      if (!this._isLocallyBackedEntry(entry)) continue
+
+      const lastAttempt = this._descriptorLookupAttempts.get(entry.driveKey) || 0
+      if (Date.now() - lastAttempt < 60_000) continue
+      this._descriptorLookupAttempts.set(entry.driveKey, Date.now())
+
+      try {
+        const signed = await this.signedDescriptorProvider(entry.driveKey)
+        const normalized = this._normalizeSignedDescriptor(signed)
+        if (normalized) {
+          entry.signedDescriptor = normalized
+          changed++
+        }
+      } catch { /* best effort; retried after the backoff window */ }
+    }
+    if (changed > 0) this._schedulePersistDiscovered()
+    return changed
+  }
+
   setFeedSnapshotProvider(callback) {
     this.feedSnapshotProvider = callback;
   }
@@ -1605,14 +1648,16 @@ export class PublicFeed {
     // Advertise entries that can resolve to a usable PublicBee key, including
     // migrated / verification-path entries that only expose the key via the
     // signed descriptor metadata.
-    const baseEntries = Array.from(this.entries.values())
+    // Do not re-gossip every stale peer-discovered channel. Android peers were
+    // OOMing after relays reset because old cached feeds ballooned to 100+
+    // mostly-unavailable entries. A relay should advertise what it can serve
+    // or has explicitly published, not every historical key it heard about.
+    const buildAnnounceEntries = () => Array.from(this.entries.values())
       .filter((entry) => isValidKey(this._resolvePublicBeeKey(entry)))
-      // Do not re-gossip every stale peer-discovered channel. Android peers were
-      // OOMing after relays reset because old cached feeds ballooned to 100+
-      // mostly-unavailable entries. A relay should advertise what it can serve
-      // or has explicitly published, not every historical key it heard about.
       .filter((entry) => this._isLocallyBackedEntry(entry))
       .map((entry) => this._serializeEntry(entry))
+
+    const baseEntries = buildAnnounceEntries()
 
     const sendEntries = (entries) => {
       const keys = entries.map(e => e.driveKey)
@@ -1628,16 +1673,24 @@ export class PublicFeed {
     }
 
     sendEntries(baseEntries)
-    if (!this.feedSnapshotProvider) return
+    if (!this.feedSnapshotProvider && !this.signedDescriptorProvider) return
 
     const baseEntriesHash = hashFeedEntries(baseEntries)
-    void this._resolveFeedSnapshots(baseEntries, conn)
-      .then((entries) => {
-        if (hashFeedEntries(entries) !== baseEntriesHash) {
-          sendEntries(entries)
-        }
-      })
-      .catch(() => {})
+    void (async () => {
+      // Strict peers drop unsigned entries, so attach signed descriptors
+      // before the enriched re-send. hashFeedEntries ignores descriptors;
+      // track the change explicitly.
+      let descriptorsAttached = 0
+      try { descriptorsAttached = await this._ensureLocalSignedDescriptors() } catch { /* best effort */ }
+
+      let entries = descriptorsAttached > 0 ? buildAnnounceEntries() : baseEntries
+      if (this.feedSnapshotProvider) {
+        entries = await this._resolveFeedSnapshots(entries, conn).catch(() => entries)
+      }
+      if (descriptorsAttached > 0 || hashFeedEntries(entries) !== baseEntriesHash) {
+        sendEntries(entries)
+      }
+    })().catch(() => {})
   }
 
   _applyPeerFeedKeys(conn, keys) {
@@ -1955,6 +2008,15 @@ export class PublicFeed {
       ...(snapshot || {}),
     }
 
+    // Attach the channel's signed root descriptor so strict peers accept the
+    // SUBMIT_CHANNEL broadcast and subsequent HAVE_FEED announcements.
+    if (!snapshot.signedDescriptor && this.signedDescriptorProvider) {
+      try {
+        const signed = this._normalizeSignedDescriptor(await this.signedDescriptorProvider(driveKey))
+        if (signed) snapshot.signedDescriptor = signed
+      } catch { /* best effort; HAVE_FEED enrichment retries later */ }
+    }
+
     if (this.addEntry(driveKey, 'local', resolvedPublicBeeKey, snapshot)) {
       console.log('[PublicFeed] Submitted local channel:', driveKey.slice(0, 16), 'publicBee:', resolvedPublicBeeKey?.slice(0, 16) || 'none');
       this.onFeedUpdate?.();
@@ -2033,6 +2095,13 @@ export class PublicFeed {
       relayServing: true,
       lastSeenAt: Date.now(),
       previewVideos: this._sanitizePreviewVideos(entry.previewVideos),
+    }
+
+    if (!snapshot.signedDescriptor && this.signedDescriptorProvider) {
+      try {
+        const signed = this._normalizeSignedDescriptor(await this.signedDescriptorProvider(driveKey))
+        if (signed) snapshot.signedDescriptor = signed
+      } catch { /* best effort; HAVE_FEED enrichment retries later */ }
     }
 
     const added = this.addEntry(driveKey, 'relay-cache', publicBeeKey, snapshot)

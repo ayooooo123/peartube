@@ -442,6 +442,18 @@ export async function createBackendContext(config) {
   if (typeof api.getFeedSnapshotEntries === 'function') {
     publicFeed.setFeedSnapshotProvider((entries) => api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
   }
+  if (typeof api.getChannelSignedDescriptor === 'function') {
+    publicFeed.setSignedDescriptorProvider((driveKey) => api.getChannelSignedDescriptor(driveKey))
+  }
+
+  // Re-sign channel root descriptors for locally owned channels in the
+  // background. Strict peers reject gossip entries whose descriptor is
+  // missing or bound to the identity key instead of the channel key.
+  void identityManager.ensureSignedChannelDescriptors?.()
+    .then((summary) => {
+      if (summary) ipcLog('[orchestrator] descriptor backfill: ' + JSON.stringify(summary))
+    })
+    .catch((err) => ipcLog('[orchestrator] descriptor backfill failed: ' + (err?.message || err)))
 
   // The early start may still be restoring cached feed entries. Await it before
   // exposing backend-ready so initial feed/status snapshots are consistent.

@@ -11,7 +11,6 @@ function isDirectory(dirPath) {
 
 export function getSidecarAddonRoots(repoRoot) {
   const candidates = [
-    path.join(repoRoot, 'packages', 'backend', 'node_modules', 'bare-media', 'node_modules', 'bare-ffmpeg'),
     path.join(repoRoot, 'packages', 'backend', 'node_modules', 'bare-ffmpeg'),
     path.join(repoRoot, 'packages', 'bare-ffmpeg'),
     path.join(repoRoot, 'packages', 'bare-mpv'),

@@ -15,7 +15,7 @@ test('resolves bare-ffmpeg addon roots for native sidecar packaging', () => {
   assert.ok(roots.length > 0, 'expected at least one addon root')
   assert.ok(
     roots.some((root) =>
-      root.includes(path.join('bare-media', 'node_modules', 'bare-ffmpeg')) ||
+      root.endsWith(path.join('node_modules', 'bare-ffmpeg')) ||
       root.endsWith(path.join('packages', 'bare-ffmpeg'))
     ),
     `expected bare-ffmpeg to be included in ${roots.join(', ')}`

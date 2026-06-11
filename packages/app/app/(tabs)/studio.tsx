@@ -378,8 +378,8 @@ export default function StudioScreen() {
       } else if (rpc) {
         // Native: use AppContext uploadVideo so we get streaming progress events.
         // Prefer the RN-generated thumbnail when available.
-        // Keep bare-media thumbnail generation available as a fallback on iOS only.
-        // (Android bare-media thumbnail generation has been crash-prone.)
+        // Keep backend (bare-ffmpeg) thumbnail generation available as a fallback
+        // on iOS only. (Android backend thumbnail generation has been crash-prone.)
         const skipThumbnail = Platform.OS === 'android'
           ? true
           : (thumbnailGenerating || !!thumbnailFilePath)

@@ -125,7 +125,6 @@
     "babel-plugin-module-resolver": "^5.0.2",
     "bare-build": "^0.5.3",
     "bare-fs": "^4.7.1",
-    "bare-media": "^2.6.0",
     "bare-pack": "^2.0.1",
     "bare-path": "^3.0.0",
     "blind-pairing": "^2.3.1",

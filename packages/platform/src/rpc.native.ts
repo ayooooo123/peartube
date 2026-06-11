@@ -6,7 +6,7 @@
  * Handles BareKit Worklet initialization, HRPC setup, and event subscriptions.
  */
 
-import { createPlatformRpcBridge } from './rpc.shared';
+import { createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
 import { createNativeRunner } from './runner.native';
 import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js';
 import {
@@ -937,6 +937,9 @@ function ensureRPC() {
  * Methods accept either individual args or object params for flexibility
  */
 export const rpc = {
+  // Personal sync (playlists / history / settings / encryption)
+  ...createPersonalRpc(ensureRPC),
+
   // Identity
   async createIdentity(nameOrReq: string | { name: string }) {
     const req = typeof nameOrReq === 'string' ? { name: nameOrReq } : nameOrReq;

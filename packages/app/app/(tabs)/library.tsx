@@ -165,6 +165,9 @@ export default function LibraryScreen() {
           <Pressable onPress={() => router.push('/search')} hitSlop={8} style={styles.headerButton}>
             <Feather name="search" color={colors.text} size={18} />
           </Pressable>
+          <Pressable onPress={() => router.push('/playlists')} hitSlop={8} style={styles.headerButton} accessibilityLabel="Playlists">
+            <Feather name="list" color={colors.text} size={18} />
+          </Pressable>
           <Pressable
             onPress={() => router.push('/profile')}
             hitSlop={8}

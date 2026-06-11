@@ -97,6 +97,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getIdentityResponse = GetIdentityResponseCodec()
   private let getLivestreamStatusRequest = GetLivestreamStatusRequestCodec()
   private let getLivestreamStatusResponse = GetLivestreamStatusResponseCodec()
+  private let getPersonalEncryptionSecretRequest = GetPersonalEncryptionSecretRequestCodec()
+  private let getPersonalEncryptionSecretResponse = GetPersonalEncryptionSecretResponseCodec()
   private let getPersonalSettingsRequest = GetPersonalSettingsRequestCodec()
   private let getPersonalSettingsResponse = GetPersonalSettingsResponseCodec()
   private let getPinnedChannelsRequest = GetPinnedChannelsRequestCodec()
@@ -187,6 +189,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let prepareLivePlaybackResponse = PrepareLivePlaybackResponseCodec()
   private let preparePlaybackRequest = PreparePlaybackRequestCodec()
   private let preparePlaybackResponse = PreparePlaybackResponseCodec()
+  private let provisionPersonalEncryptionRequest = ProvisionPersonalEncryptionRequestCodec()
+  private let provisionPersonalEncryptionResponse = ProvisionPersonalEncryptionResponseCodec()
   private let recoverIdentityRequest = RecoverIdentityRequestCodec()
   private let recoverIdentityResponse = RecoverIdentityResponseCodec()
   private let refreshFeedRequest = RefreshFeedRequestCodec()
@@ -1935,6 +1939,32 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
     _handlers["@peartube/get-personal-settings"] = handler
   }
 
+  // Request/response — client
+  public func provisionPersonalEncryption(_ args: ProvisionPersonalEncryptionRequest) async throws -> ProvisionPersonalEncryptionResponse {
+    let encoded = try _encode(provisionPersonalEncryptionRequest, args)
+    guard let raw = try await _rpc.request(38, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(provisionPersonalEncryptionResponse, raw)
+  }
+
+  public func onProvisionPersonalEncryption(_ handler: @escaping (ProvisionPersonalEncryptionRequest) async throws -> ProvisionPersonalEncryptionResponse) {
+    _handlers["@peartube/provision-personal-encryption"] = handler
+  }
+
+  // Request/response — client
+  public func getPersonalEncryptionSecret(_ args: GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse {
+    let encoded = try _encode(getPersonalEncryptionSecretRequest, args)
+    guard let raw = try await _rpc.request(39, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPersonalEncryptionSecretResponse, raw)
+  }
+
+  public func onGetPersonalEncryptionSecret(_ handler: @escaping (GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse) {
+    _handlers["@peartube/get-personal-encryption-secret"] = handler
+  }
+
   private func _dispatchRequest(_ req: IncomingRequest) async {
     switch req.command {
     case 0:   // @peartube/create-identity
@@ -3468,6 +3498,32 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(getPersonalSettingsRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(getPersonalSettingsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 38:   // @peartube/provision-personal-encryption
+      guard let handler = _handlers["@peartube/provision-personal-encryption"] as? (ProvisionPersonalEncryptionRequest) async throws -> ProvisionPersonalEncryptionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(provisionPersonalEncryptionRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(provisionPersonalEncryptionResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 39:   // @peartube/get-personal-encryption-secret
+      guard let handler = _handlers["@peartube/get-personal-encryption-secret"] as? (GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPersonalEncryptionSecretRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPersonalEncryptionSecretResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }

@@ -381,3 +381,70 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     }
   }
 }
+
+/**
+ * Personal-sync RPC methods (playlists / watch history / settings / at-rest
+ * encryption provisioning). Shared by the native and web flat `rpc` clients so
+ * the surface stays identical across platforms. Pass each platform's local
+ * `ensureRPC` accessor.
+ */
+export function createPersonalRpc(ensureRPC: () => any) {
+  return {
+    // Playlists
+    async getPlaylists() {
+      return ensureRPC().getPlaylists({});
+    },
+    async getPlaylistItems(playlistIdOrReq: string | { playlistId: string }) {
+      const req = typeof playlistIdOrReq === 'string' ? { playlistId: playlistIdOrReq } : playlistIdOrReq;
+      return ensureRPC().getPlaylistItems(req);
+    },
+    async createPlaylist(req: { name?: string; description?: string } = {}) {
+      return ensureRPC().createPlaylist(req);
+    },
+    async updatePlaylist(req: { id: string; name?: string; description?: string }) {
+      return ensureRPC().updatePlaylist(req);
+    },
+    async deletePlaylist(idOrReq: string | { id: string }) {
+      const req = typeof idOrReq === 'string' ? { id: idOrReq } : idOrReq;
+      return ensureRPC().deletePlaylist(req);
+    },
+    async addToPlaylist(req: { playlistId: string; channelKey?: string; videoId?: string; videoKey?: string }) {
+      return ensureRPC().addToPlaylist(req);
+    },
+    async removeFromPlaylist(req: { playlistId: string; videoKey: string }) {
+      return ensureRPC().removeFromPlaylist(req);
+    },
+
+    // Watch history / resume
+    async logWatchHistory(req: { channelKey?: string; videoId?: string; videoKey?: string; title?: string; duration?: number; position?: number; completed?: boolean; timestamp?: number }) {
+      return ensureRPC().logWatchHistory(req);
+    },
+    async getWatchHistory(req: { limit?: number } = {}) {
+      return ensureRPC().getWatchHistory(req);
+    },
+    async getResumePosition(videoKeyOrReq: string | { videoKey: string }) {
+      const req = typeof videoKeyOrReq === 'string' ? { videoKey: videoKeyOrReq } : videoKeyOrReq;
+      return ensureRPC().getResumePosition(req);
+    },
+    async listResumePositions() {
+      return ensureRPC().listResumePositions({});
+    },
+
+    // Settings
+    async setPersonalSetting(keyOrReq: string | { key: string; value?: string }, value?: string) {
+      const req = typeof keyOrReq === 'string' ? { key: keyOrReq, value } : keyOrReq;
+      return ensureRPC().setPersonalSetting(req);
+    },
+    async getPersonalSettings() {
+      return ensureRPC().getPersonalSettings({});
+    },
+
+    // At-rest encryption provisioning (keychain-backed)
+    async provisionPersonalEncryption(req: { secret?: string } = {}) {
+      return ensureRPC().provisionPersonalEncryption(req);
+    },
+    async getPersonalEncryptionSecret() {
+      return ensureRPC().getPersonalEncryptionSecret({});
+    }
+  };
+}

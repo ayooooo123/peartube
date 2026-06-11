@@ -7,6 +7,7 @@ import crypto from 'hypercore-crypto'
 import z32 from 'z32'
 
 import { fromHex } from '../channel/util.js'
+import { toSecret, deriveKeys, makeBlindEncryption } from './personal-crypto.js'
 
 /**
  * PersonalStore
@@ -64,6 +65,11 @@ export class PersonalStore extends ReadyResource {
    * @param {import('corestore')} store - Corestore (will be namespaced internally)
    * @param {Object} [opts]
    * @param {Buffer|string} [opts.key] - Autobase bootstrap key (omit to create a new store)
+   * @param {Buffer|string} [opts.secret] - 32-byte at-rest encryption secret, held in the
+   *   device's native keychain and shared with paired devices. When set, every Autobase
+   *   core (including the Hyperbee view) is encrypted on disk and the data-encryption key
+   *   is stored wrapped (blind encryption), so the data is unreadable from disk alone —
+   *   only a holder of the keychain secret can decrypt it.
    * @param {import('hyperswarm')} [opts.swarm]
    * @param {string} [opts.namespace] - Corestore namespace (default derived from key)
    */
@@ -76,6 +82,7 @@ export class PersonalStore extends ReadyResource {
     const ns = opts.namespace || (bootstrap ? `peartube-personal:${b4a.toString(bootstrap, 'hex')}` : `peartube-personal:${randomId()}`)
     this.store = typeof store.namespace === 'function' ? store.namespace(ns) : store
     this._bootstrap = bootstrap
+    this._secret = opts.secret ? toSecret(opts.secret) : null
 
     this.base = null
     this.pairing = null
@@ -87,7 +94,7 @@ export class PersonalStore extends ReadyResource {
   }
 
   async _open() {
-    this.base = new Autobase(this.store, this._bootstrap, {
+    const handlers = {
       valueEncoding: 'json',
       ackInterval: 1000,
       open: (viewStore) => new Hyperbee(viewStore.get('peartube-personal-view'), {
@@ -96,7 +103,18 @@ export class PersonalStore extends ReadyResource {
         extension: false
       }),
       apply: PersonalStore._apply
-    })
+    }
+    // When a keychain secret is present, encrypt every core with a derived
+    // data-encryption key and store that key wrapped (blind encryption) so it
+    // never lands on disk in plaintext. Autobase treats a present encryptionKey
+    // as "encrypted" and a null/absent one as plaintext.
+    if (this._secret) {
+      const { dek, wrapKey } = deriveKeys(this._secret)
+      handlers.encryptionKey = dek
+      handlers.blindEncryption = makeBlindEncryption(wrapKey)
+    }
+
+    this.base = new Autobase(this.store, this._bootstrap, handlers)
 
     await this.base.ready()
   }
@@ -220,6 +238,18 @@ export class PersonalStore extends ReadyResource {
 
   get discoveryKey() {
     return this.base?.discoveryKey || null
+  }
+
+  get secret() {
+    return this._secret || null
+  }
+
+  get secretHex() {
+    return this._secret ? b4a.toString(this._secret, 'hex') : null
+  }
+
+  get encrypted() {
+    return Boolean(this._secret)
   }
 
   get writable() {
@@ -454,7 +484,10 @@ export class PersonalStore extends ReadyResource {
           const userData = req.open(fromHex(inv.publicKeyHex))
           const newWriterKeyHex = b4a.toString(userData, 'hex')
           await this.addWriter(newWriterKeyHex, { deviceName: '' })
-          req.confirm({ key: this.key })
+          // Hand the joining device the keychain secret (in the encryptionKey
+          // slot of the confirm payload) so it can decrypt the synced cores and
+          // persist the secret into its own native keychain.
+          req.confirm({ key: this.key, encryptionKey: this._secret || undefined })
           await this._append({ type: 'delete-setting', key: `__invite__/${inv.idHex}` })
         } catch (err) {
           console.error('[PersonalStore] Pairing error:', err)

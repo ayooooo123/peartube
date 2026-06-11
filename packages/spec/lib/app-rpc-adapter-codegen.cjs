@@ -90,7 +90,9 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-resume-position',
     'list-resume-positions',
     'set-personal-setting',
-    'get-personal-settings'
+    'get-personal-settings',
+    'provision-personal-encryption',
+    'get-personal-encryption-secret'
   ],
   transfer: [
     'upload-video',

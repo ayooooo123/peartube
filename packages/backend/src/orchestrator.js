@@ -342,6 +342,7 @@ export async function createBackendContext(config) {
   const videoStats = new VideoStatsTracker();
   const identityManager = createIdentityManager({ ctx });
   const personalManager = createPersonalManager({ ctx, identityManager });
+  ctx.personalManager = personalManager;
 
   // Keep the active personal store in sync with the active identity across all
   // platforms by wrapping the identity-manager mutators in one place (every

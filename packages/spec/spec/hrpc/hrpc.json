@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "schema": [
     {
       "id": 0,
@@ -1654,6 +1654,32 @@
         "stream": false
       },
       "version": 3
+    },
+    {
+      "id": 38,
+      "name": "@peartube/provision-personal-encryption",
+      "request": {
+        "name": "@peartube/provision-personal-encryption-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/provision-personal-encryption-response",
+        "stream": false
+      },
+      "version": 4
+    },
+    {
+      "id": 39,
+      "name": "@peartube/get-personal-encryption-secret",
+      "request": {
+        "name": "@peartube/get-personal-encryption-secret-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-personal-encryption-secret-response",
+        "stream": false
+      },
+      "version": 4
     }
   ]
 }

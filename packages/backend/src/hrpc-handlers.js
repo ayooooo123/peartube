@@ -156,6 +156,8 @@ export const SHARED_HANDLER_NAMES = [
   'ListResumePositions',
   'SetPersonalSetting',
   'GetPersonalSettings',
+  'ProvisionPersonalEncryption',
+  'GetPersonalEncryptionSecret',
 ]
 
 function toCamelCase(name) {

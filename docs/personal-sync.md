@@ -70,12 +70,38 @@ Done (RPC + lifecycle):
   resolve to the api, and round-trip through a real `PersonalStore` with the
   correct envelopes.
 
+Done (at-rest encryption, keychain-backed):
+- The store is encrypted on disk with a 32-byte secret held in the device's
+  native keychain. A single secret derives both the Autobase data-encryption key
+  and a blind wrapping key (`src/personal/personal-crypto.js`): every core is
+  encrypted, and the data key itself is stored *blind-wrapped* — never in
+  plaintext — so the on-disk data is unreadable without the keychain secret.
+  Proven in `test/personal-store-encryption.test.mjs` (no plaintext/raw key on
+  disk; wrong secret cannot unwrap; two devices sharing the secret still sync).
+- The secret is the same across a user's devices (so encrypted cores replicate):
+  generated once, persisted to each device's keychain, and handed to a newly
+  paired device through the pairing `confirm` payload.
+- Provisioning: encryption is fixed at store-creation time, so the app provisions
+  the secret before the store opens. `personalManager.init()` defers opening;
+  the new RPCs `provision-personal-encryption` / `get-personal-encryption-secret`
+  let the app supply (or read back) the secret. The app side uses
+  `expo-secure-store` (iOS Keychain / Android Keystore) via
+  `packages/app/lib/secure-storage.ts` + `lib/personal-encryption.ts`, wired into
+  identity load/create in `app/_layout.tsx`. A document-directory fallback covers
+  platforms without a hardware keychain (clearly weaker, documented).
+
+Done (UI):
+- `app/playlists.tsx` (list + create/delete + "Continue watching" from synced
+  resume positions) and `app/playlist/[id].tsx` (items), reachable from a new
+  Playlists button in the Library header. Calls the `personal` RPC namespace via
+  the flat client (`createPersonalRpc` in `packages/platform/src/rpc.shared.ts`,
+  spread into the native and web clients).
+
 Remaining (follow-up):
-- Mobile/desktop UI for playlists and watch history (the RPC surface is ready;
-  `mobile-handlers.js` / the desktop worker may add thin convenience wrappers
-  if a platform wants a custom shape, but the shared handler already serves all
-  three).
-- Native Swift shell build is unverified in CI here (codegen ran clean; the
-  Xcode build wasn't exercised).
-- Optional: at-rest encryption of the personal store for defense-in-depth
-  (today privacy rests on the bootstrap key staying unpublished).
+- "Add to playlist" entry points from the video player / video menus, and a
+  richer continue-watching surface.
+- Native Swift shell build is unverified here (codegen ran clean; Xcode build
+  not exercised). The Expo app TypeScript wasn't compiled in this environment
+  (app deps not installed); the platform package typechecks clean.
+- Key rotation / re-encrypting a store that was first created unencrypted (the
+  manager logs and refuses to retro-encrypt an already-open plaintext store).

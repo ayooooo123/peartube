@@ -15,6 +15,7 @@ import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { SocialProvider } from '@/lib/SocialContext'
+import { ensurePersonalEncryption } from '@/lib/personal-encryption'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import * as ScreenOrientation from 'expo-screen-orientation'
@@ -1007,6 +1008,9 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       // Only update identity if we got a valid one (don't clear existing identity on error)
       if (id?.driveKey) {
         setIdentity(id)
+        // Provision keychain-backed at-rest encryption for the personal store
+        // before any personal feature is used. Non-blocking, best-effort.
+        void ensurePersonalEncryption(platformRPC.rpc, id.publicKey)
         await loadVideosFromBackend(id.driveKey)
       } else {
         console.warn('[App] getIdentity returned no identity, keeping current state')
@@ -1028,7 +1032,11 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       })
       const result = await Promise.race([createPromise, timeoutPromise]) as any
       const id = result?.identity
-      if (id) setIdentity(id)
+      if (id) {
+        setIdentity(id)
+        // Provision encryption now so this identity's store is created encrypted.
+        void ensurePersonalEncryption(platformRPC.rpc, id.publicKey)
+      }
       return id
     } finally {
       setLoading(false)

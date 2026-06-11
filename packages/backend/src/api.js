@@ -1899,6 +1899,31 @@ export function createApi({
     },
 
     /**
+     * Provision the at-rest encryption secret (from the device's native
+     * keychain) for the active identity's personal store, opening it encrypted.
+     * The platform reads-or-generates the secret in the keychain and passes it
+     * here; when omitted, the backend generates one and returns it so the
+     * platform can persist it to the keychain. Must be called before the store
+     * first opens to take effect.
+     */
+    async provisionPersonalEncryption(req = {}) {
+      if (!ctx.personalManager) return { success: false, error: 'personal store unavailable' };
+      const result = await ctx.personalManager.provisionSecret({ secret: req.secret || undefined });
+      return { success: !!result.success, secret: result.secret, encrypted: !!result.encrypted, error: result.error };
+    },
+
+    /**
+     * Read back the active personal store's encryption secret — used by a freshly
+     * paired device to persist the secret it received over pairing into its own
+     * keychain. Returns { provisioned, secret? }.
+     */
+    async getPersonalEncryptionSecret() {
+      if (!ctx.personalManager) return { provisioned: false };
+      const secret = ctx.personalManager.getActiveSecretHex();
+      return { provisioned: !!secret, secret: secret || undefined };
+    },
+
+    /**
      * Resolve the signed channel root descriptor for a locally available
      * channel by reading `channel/root` from its public bee. The feed gossip
      * layer uses this to announce locally backed entries with the signature

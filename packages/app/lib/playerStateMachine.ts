@@ -116,6 +116,11 @@ export type PlayerEvent =
       appState: 'active'
       wasInPip: boolean
       suppressRestore: boolean
+      // True when the native player kept playing through the background period
+      // (background audio via the media notification). Reopening the app then —
+      // most commonly by tapping the playback notification — should land on the
+      // player page, not on whatever screen hosted the mini player.
+      resumedWithBackgroundPlayback: boolean
     }
   | {
       type: 'REMOTE_PLAY'
@@ -604,7 +609,7 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           }
           return {
             ...state,
-            mode: event.wasInPip ? 'fullscreen' : 'mini',
+            mode: event.wasInPip || event.resumedWithBackgroundPlayback ? 'fullscreen' : 'mini',
           }
         case 'REMOTE_PLAY':
           return {

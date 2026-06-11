@@ -723,6 +723,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         const suppressWindow = suppressForegroundRestoreUntilRef.current > now
         const shouldSuppressRestore = suppressOnce || suppressWindow || wasInPip
 
+        // The native player kept playing through the background period
+        // (staysActiveInBackground + media notification). Reopening the app —
+        // most commonly by tapping the playback notification — should surface
+        // the player page rather than leave the session in the mini player.
+        const resumedWithBackgroundPlayback =
+          !wasInPip && Boolean(currentVideoRef.current) && wasPlayingWhenBackgroundedRef.current
+
         const skipLifecycleDispatchForSplitAndroid =
           Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
         const skipAppForegroundDispatchForPip = Platform.OS === 'android' && wasInPip
@@ -743,6 +750,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             appState: 'active',
             wasInPip,
             suppressRestore: shouldSuppressRestore,
+            resumedWithBackgroundPlayback,
           })
         }
 
@@ -760,9 +768,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           }
         }
 
-         // Foreground seek "nudge" is useful after backgrounding, but it can cause
-         // audible/visible stutter when returning from PiP (single-player continues).
-         if (!wasInPip && wasPlayingWhenBackgroundedRef.current && durationRef.current > 0) {
+         // Foreground seek "nudge" re-syncs the native player after backgrounding,
+         // but only when background playback actually stopped. If the player kept
+         // playing the whole time (background audio via the media notification),
+         // seeking forces ExoPlayer to rebuffer the P2P stream — an audible gap on
+         // resume — and can jump backwards when the JS-side position is stale.
+         if (!wasInPip && wasPlayingWhenBackgroundedRef.current && !isPlayingRef.current && durationRef.current > 0) {
            const seekValue = currentTimeRef.current / durationRef.current
            setSeekPosition(seekValue)
            setTimeout(() => setSeekPosition(undefined), 100)

@@ -1,54 +1,109 @@
 import React from 'react'
-import { StyleSheet } from 'react-native'
 import {
-  Button as ExpoButton,
-  Switch as ExpoSwitch,
-  TextInput as ExpoTextInput,
-  type ButtonProps as ExpoButtonProps,
-  type SwitchProps as ExpoSwitchProps,
-  type TextInputProps as ExpoTextInputProps,
-} from '@expo/ui'
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  type PressableProps,
+  type StyleProp,
+  type SwitchProps,
+  type TextInputProps,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native'
+import { colors } from '@/lib/colors'
 
-export type NativeButtonProps = ExpoButtonProps & {
+// Plain React Native replacements for the former @expo/ui pilot widgets.
+// @expo/ui pulled the whole Jetpack Compose runtime (~MBs of dex) into the
+// Android APK for three trivial controls, so the pilot was rolled back.
+
+export type NativeButtonProps = Omit<PressableProps, 'style'> & {
+  label: string
+  variant?: 'filled' | 'outlined'
+  style?: StyleProp<ViewStyle>
   className?: string
 }
 
-export function NativeButton({ style, className: _className, ...props }: NativeButtonProps) {
-  return <ExpoButton {...props} style={[styles.button, style]} />
+export function NativeButton({ label, variant = 'filled', style, disabled, className: _className, ...props }: NativeButtonProps) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      {...props}
+      style={({ pressed }) => [
+        styles.button,
+        variant === 'filled' ? styles.buttonFilled : styles.buttonOutlined,
+        disabled && styles.buttonDisabled,
+        pressed && styles.buttonPressed,
+        style,
+      ]}
+    >
+      <Text style={[styles.buttonLabel, variant === 'filled' ? styles.buttonLabelFilled : styles.buttonLabelOutlined]}>
+        {label}
+      </Text>
+    </Pressable>
+  )
 }
 
-export type NativeSwitchProps = ExpoSwitchProps & {
+export type NativeSwitchProps = SwitchProps & {
   className?: string
-  trackColor?: { false?: string; true?: string }
-  thumbColor?: string
 }
 
-export function NativeSwitch({ className: _className, trackColor: _trackColor, thumbColor: _thumbColor, ...props }: NativeSwitchProps) {
-  return <ExpoSwitch {...props} />
+export function NativeSwitch({ className: _className, ...props }: NativeSwitchProps) {
+  return <Switch {...props} />
 }
 
-export type NativeTextInputProps = ExpoTextInputProps & {
+export type NativeTextInputProps = TextInputProps & {
   className?: string
-  textAlignVertical?: 'auto' | 'top' | 'center' | 'bottom'
+  textStyle?: StyleProp<TextStyle>
 }
 
-export function NativeTextInput({ style, textStyle, className: _className, textAlignVertical: _textAlignVertical, ...props }: NativeTextInputProps) {
-  return <ExpoTextInput {...props} style={[styles.input, style]} textStyle={[styles.text, textStyle]} />
+export function NativeTextInput({ style, textStyle, className, ...props }: NativeTextInputProps) {
+  // Call sites style via nativewind `className`; only apply the fallback
+  // styles when no className is provided.
+  return (
+    <TextInput
+      className={className}
+      {...props}
+      style={[!className && styles.input, styles.text, style, textStyle]}
+    />
+  )
 }
-
-export {
-  Host as NativeHost,
-  Row as NativeRow,
-  Column as NativeColumn,
-  Spacer as NativeSpacer,
-  Text as NativeText,
-  type TextInputRef as NativeTextInputRef,
-  useNativeState,
-} from '@expo/ui'
 
 const styles = StyleSheet.create({
   button: {
     alignSelf: 'stretch',
+    minHeight: 44,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonFilled: {
+    backgroundColor: colors.primary,
+  },
+  buttonOutlined: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'transparent',
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  buttonPressed: {
+    opacity: 0.8,
+  },
+  buttonLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  buttonLabelFilled: {
+    color: colors.text,
+  },
+  buttonLabelOutlined: {
+    color: colors.text,
   },
   input: {
     minHeight: 48,

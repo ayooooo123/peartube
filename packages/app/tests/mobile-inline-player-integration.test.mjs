@@ -10,19 +10,19 @@ const __dirname = path.dirname(__filename)
 const appRoot = path.resolve(__dirname, '..')
 const require = createRequire(import.meta.url)
 const { _normalizePipActivities } = require(path.join(appRoot, 'plugins/withAndroidPiP.js'))
-const { _applyCanonicalMainActivityPiPCallbacks } = require(path.join(appRoot, 'plugins/withMainActivityPiPCallback.js'))
 
 function readAppFile(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 }
 
-test('native mobile inline player is backed by react-native-video', () => {
+test('native mobile inline player is backed by Expo Video', () => {
   const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
 
-  assert.match(source, /react-native-video/)
-  assert.match(source, /<Video/)
+  assert.match(source, /from 'expo-video'/)
+  assert.match(source, /<VideoView/)
+  assert.doesNotMatch(source, /react-native-video/)
   assert.equal(
-    source.includes("./MpvVideoView"),
+    source.includes('./MpvVideoView'),
     false,
     'native mobile inline player should not keep using the mpv-backed host view',
   )
@@ -33,38 +33,24 @@ test('native mobile inline player is backed by react-native-video', () => {
   )
 })
 
-test('Android inline PiP entry bypasses react-native-video PiP entry and patches its PiP param writer', () => {
-  const viewSource = readAppFile('components/video-player/PearInlineVideoView.tsx')
+test('react-native-video stays removed from the app package', () => {
   const packageJson = readAppFile('package.json')
-  const patchScript = readAppFile('scripts/patch-react-native-video-pip.js')
+  const appConfig = readAppFile('app.json')
 
-  assert.match(viewSource, /import \* as MediaSession from '\.\.\/\.\.\/modules\/expo-media-session\/src'/)
-  assert.match(viewSource, /void MediaSession\.enterPictureInPicture\(\)/)
-  assert.match(packageJson, /"android:prebuild": "node \.\/scripts\/patch-react-native-video-pip\.js &&/)
-  assert.match(packageJson, /"eas-build-post-install": "node \.\/scripts\/patch-react-native-video-pip\.js && npm run bundle:backend:ensure"/)
-  assert.match(patchScript, /PictureInPictureUtil\.kt/)
-  assert.match(patchScript, /PearTube manages Android PiP params from expo-media-session/)
-})
-
-test('Android VideoPlayerContext publishes the full media session state in addition to PiP state', () => {
-  const source = readAppFile('lib/VideoPlayerContext.tsx')
-
-  assert.match(source, /const syncMediaSessionPlaybackState = useCallback\(\(nextIsPlaying: boolean\) => \{/)
-  assert.doesNotMatch(source, /const syncMediaSessionPlaybackState = useCallback\(\(nextIsPlaying: boolean\) => \{[\s\S]*if \(Platform\.OS !== 'ios'\) return/)
-  assert.doesNotMatch(source, /const setMediaSessionActive = useCallback\(\(active: boolean\) => \{[\s\S]*if \(Platform\.OS !== 'ios'\) return/)
-  assert.doesNotMatch(source, /useEffect\(\(\) => \{[\s\S]*if \(Platform\.OS !== 'ios'\) return[\s\S]*const shouldBeActive = currentVideo !== null/)
-  assert.doesNotMatch(source, /useEffect\(\(\) => \{[\s\S]*if \(Platform\.OS !== 'ios'\) return[\s\S]*MediaSession\.setNowPlaying\(/)
-  assert.match(source, /const shouldUpdateMediaSession = Platform\.OS !== 'web'[\s\S]*now - lastMediaSessionUpdateRef\.current > 1000/)
-  assert.match(source, /MediaSession\.setPlaybackState\(\{/)
-  assert.match(source, /syncPictureInPicturePlaybackState\(isPlayingRef\.current\)/)
-  assert.doesNotMatch(source, /useEffect\(\(\) => \{[\s\S]*if \(Platform\.OS !== 'ios'\) return[\s\S]*const subscription = MediaSession\.addRemoteCommandListener/)
-  assert.match(source, /const skipForActivePlayback =[\s\S]*state\.mode === 'fullscreen'/)
+  assert.doesNotMatch(packageJson, /"react-native-video"/)
+  assert.doesNotMatch(packageJson, /patch-react-native-video-pip/)
+  assert.doesNotMatch(appConfig, /react-native-video/)
+  assert.equal(
+    fs.existsSync(path.join(appRoot, 'scripts/patch-react-native-video-pip.js')),
+    false,
+    'the react-native-video PiP patch script should stay deleted',
+  )
 })
 
 test('Android minimize restores the in-app mini player path', () => {
   const source = readAppFile('lib/VideoPlayerContext.tsx')
   const minimizeBody =
-    source.match(/const minimizePlayer = useCallback\(\(_optionsOrEvent\?: unknown\) => \{([\s\S]*?)\n  }, \[/)?.[1] ?? ''
+    source.match(/const minimizePlayer = useCallback\(\(_optionsOrEvent\?: unknown\) => \{([\s\S]*?)\n {2}}, \[/)?.[1] ?? ''
 
   assert.ok(minimizeBody, 'minimizePlayer callback should exist')
   assert.match(minimizeBody, /dispatch\(\{[\s\S]*type: 'MINIMIZE'/)
@@ -79,212 +65,18 @@ test('Android split-player mode stays removed from JS state management', () => {
   assert.doesNotMatch(playerStateMachine, /ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY/)
 })
 
+test('Android single-host playback no longer depends on expo-pear-player', () => {
+  const packageSource = readAppFile('package.json')
 
-test('VideoPlayerContext avoids split-player launch listeners but keeps PlayerActivity payloads primed for PiP handoff', () => {
-  const contextSource = readAppFile('lib/VideoPlayerContext.tsx')
-
-  assert.doesNotMatch(contextSource, /addPlayerLaunchPayloadListener/)
-  assert.doesNotMatch(contextSource, /consumePendingPlayerLaunchPayload/)
-  assert.match(contextSource, /MediaSession\.primePlayerActivityPayload\(/)
+  assert.doesNotMatch(packageSource, /"expo-pear-player"/)
 })
 
-test('expo-media-session keeps the PlayerActivity helpers wired to the native module', () => {
-  const source = readAppFile('modules/expo-media-session/src/index.ts')
+test('stale split-player experiment directories are absent from the app package', () => {
+  const pearPlayerModuleRoot = path.join(appRoot, 'modules/expo-pear-player')
+  const androidPlaybackRoot = path.join(appRoot, 'lib/android-playback')
 
-  assert.match(source, /if \(!native\.openPlayerActivity\) return false/)
-  assert.match(source, /return native\.openPlayerActivity\(payload \?\? null\)/)
-  assert.match(source, /primePlayerActivityPayload\(payload\?: any\): Promise<void>/)
-  assert.match(source, /launchPrimedPipPlayerActivity\(\): Promise<boolean> \{ return false }/)
-  assert.match(source, /if \(!native\.isInPlayerActivity\) return false/)
-})
-
-test('expo-media-session exposes a PiP-specific Android action/state surface', () => {
-  const source = readAppFile('modules/expo-media-session/src/index.ts')
-
-  assert.match(source, /export interface PictureInPicturePlaybackState \{/)
-  assert.match(source, /setPictureInPicturePlaybackState\?\(state: PictureInPicturePlaybackState\): Promise<void>/)
-  assert.match(source, /export async function setPictureInPicturePlaybackState\(state: PictureInPicturePlaybackState\): Promise<void> \{/)
-  assert.match(source, /if \(!native\.setPictureInPicturePlaybackState\) return/)
-  assert.match(source, /export function addPictureInPictureActionListener\(/)
-  assert.match(source, /addListener\('onPictureInPictureAction', listener\)/)
-})
-
-test('Android PlayerActivity is a native Media3 host instead of a ReactActivity shell', () => {
-  const source = readAppFile('android/app/src/main/java/com/peartube/app/PlayerActivity.kt')
-
-  assert.match(source, /class PlayerActivity : AppCompatActivity\(\)/)
-  assert.match(source, /PlayerView/)
-  assert.match(source, /ExoPlayer/)
-  assert.doesNotMatch(source, /ReactActivity/)
-  assert.match(source, /requestPipOnLaunch/)
-  assert.match(source, /PipBridge\.enterPictureInPictureDirect/)
-  assert.doesNotMatch(source, /PlaybackHostBridge\.setSessionActive\(true\)/)
-})
-
-test('Android PlayerActivity plugin sources the native host template for prebuilds', () => {
-  const pluginSource = readAppFile('plugins/withAndroidPiP.js')
-  const templateSource = readAppFile('plugins/templates/PlayerActivity.kt.template')
-
-  assert.match(pluginSource, /PlayerActivity\.kt\.template/)
-  assert.match(templateSource, /class PlayerActivity : AppCompatActivity\(\)/)
-  assert.match(templateSource, /PlayerView/)
-  assert.match(templateSource, /ExoPlayer/)
-  assert.doesNotMatch(templateSource, /ReactActivity/)
-})
-
-test('MainActivity PiP callbacks route directly into the native PiP bridge', () => {
-  const activitySource = readAppFile('android/app/src/main/java/com/peartube/app/MainActivity.kt')
-  const pluginSource = readAppFile('plugins/withMainActivityPiPCallback.js')
-
-  assert.match(activitySource, /PipBridge\.onUserLeaveHint\(this\)/)
-  assert.doesNotMatch(activitySource, /delegateMainActivityLeaveHintToPlayer/)
-  assert.match(activitySource, /PipBridge\.notifyPipBoundsChanged\(this, newConfig\)/)
-  assert.match(activitySource, /PipBridge\.notifyPipUiStateChanged\(this, pipState\)/)
-  assert.match(pluginSource, /PipBridge\.onUserLeaveHint\(this\)/)
-})
-
-test('MainActivity PiP callback plugin rewrites stale delegated callback blocks', () => {
-  const transformed = _applyCanonicalMainActivityPiPCallbacks(`package com.peartube.app
-
-import android.os.Build
-import com.facebook.react.ReactActivity
-import expo.modules.ReactActivityDelegateWrapper
-import to.holepunch.modules.mediasession.PipBridge
-
-class MainActivity : ReactActivity() {
-  override fun onUserLeaveHint() {
-      super.onUserLeaveHint()
-      PipBridge.delegateMainActivityLeaveHintToPlayer(this)
-  }
-
-  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
-      super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-      PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode, newConfig)
-  }
-}
-`)
-
-  assert.match(transformed, /import android\.content\.res\.Configuration/)
-  assert.match(transformed, /PipBridge\.onUserLeaveHint\(this\)/)
-  assert.doesNotMatch(transformed, /delegateMainActivityLeaveHintToPlayer/)
-  assert.match(transformed, /PipBridge\.notifyPipBoundsChanged\(this, newConfig\)/)
-  assert.match(transformed, /PipBridge\.notifyPipUiStateChanged\(this, pipState\)/)
-  assert.equal((transformed.match(/override fun onUserLeaveHint\(/g) ?? []).length, 1)
-  assert.equal((transformed.match(/override fun onPictureInPictureModeChanged\(/g) ?? []).length, 1)
-})
-
-test('Android PiP host checks are aligned to the MainActivity single-host flow', () => {
-  const source = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-  const bridgeSource = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/PlayerHostBridge.kt',
-  )
-
-  assert.match(bridgeSource, /interface NativePlaybackController/)
-  assert.match(bridgeSource, /fun dispatchPlay\(\): Boolean/)
-  assert.match(bridgeSource, /fun dispatchPause\(\): Boolean/)
-  assert.match(bridgeSource, /fun dispatchSeekBy\(deltaMs: Long\): Boolean/)
-  assert.match(source, /PlaybackHostBridge\.dispatchPlay\(\)/)
-  assert.match(source, /PlaybackHostBridge\.dispatchPause\(\)/)
-  assert.match(source, /PlaybackHostBridge\.dispatchStop\(/)
-  assert.match(source, /PlaybackHostBridge\.dispatchSeekTo\(pos\)/)
-  assert.match(source, /PlaybackHostBridge\.dispatchSeekBy\(10000\)/)
-  assert.match(source, /fun isPipHostActivity\(activity: Activity\): Boolean \{[\s\S]*className == "\$\{activity\.packageName}\.MainActivity"/)
-  assert.doesNotMatch(source, /className == "\$\{activity\.packageName}\.PlayerActivity"/)
-  assert.match(source, /if \(!PipBridge\.isPipHostActivity\(activity\)\) \{[\s\S]*skip non-PiP host/)
-})
-
-test('Android PiP keeps custom RemoteActions as the only visible transport controls while pinned', () => {
-  const source = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-  const receiverSource = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaControlReceiver.kt',
-  )
-
-  assert.match(source, /val actions = if \(PipBridge\.isLastKnownInPip\(\)\) \{[\s\S]*0L/)
-  assert.match(source, /actions\.add\(RemoteAction\([\s\S]*ACTION_PIP_BACKGROUND_AUDIO/)
-  assert.match(source, /actions\.add\(RemoteAction\([\s\S]*playPausePendingIntent\)\)/)
-  assert.match(source, /action = ACTION_PIP_TOGGLE_PLAYBACK/)
-  assert.match(source, /REQUEST_PIP_TOGGLE_PLAYBACK/)
-  assert.match(source, /Icon\.createWithResource\(context, R\.drawable\.ic_pip_play_pause\)/)
-  assert.match(source, /val playPauseLabel = "Play\/Pause"/)
-  assert.match(source, /internal fun handlePipTogglePlayPause\(\)/)
-  assert.match(receiverSource, /EVENT_TOGGLE_PLAY_PAUSE, MediaSessionModule\.ACTION_PIP_TOGGLE_PLAYBACK -> PipBridge\.onPipTogglePlayPauseAction\(\)/)
-})
-
-test('Android PiP actions are emitted through a dedicated PiP event channel', () => {
-  const source = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-
-  assert.match(source, /"onPictureInPictureAction"/)
-  assert.match(source, /sendEvent\("onPictureInPictureAction", mapOf\("action" to "playPause"/)
-  assert.match(source, /sendEvent\("onPictureInPictureAction", mapOf\("action" to "backgroundAudio"/)
-  assert.match(source, /AsyncFunction\("setPictureInPicturePlaybackState"\)/)
-})
-
-test('Android PiP drag callbacks do not rewrite PiP params after entry', () => {
-  const source = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-
-  assert.match(source, /fun notifyPipBoundsChanged\(activity: Activity, newConfig: Configuration\) \{[\s\S]*notifyPipModeChanged\(activity, true, newConfig\)/)
-  assert.match(source, /fun notifyPipUiStateChanged\(activity: Activity, pipState: android\.app\.PictureInPictureUiState\) \{/)
-  assert.doesNotMatch(source, /fun notifyPipBoundsChanged\(activity: Activity, newConfig: Configuration\) \{[\s\S]*refreshPipParamsLater\(/)
-  assert.doesNotMatch(source, /fun notifyPipUiStateChanged\(activity: Activity, pipState: android\.app\.PictureInPictureUiState\) \{[\s\S]*refreshPipParamsLater\(/)
-})
-
-test('Android PiP playback-state updates do not hot-reapply PiP params while pinned', () => {
-  const source = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-
-  assert.doesNotMatch(source, /if \(playStateChanged && Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.O\) \{[\s\S]*refreshPipParams\(activity\)/)
-  assert.doesNotMatch(source, /private fun updatePipPlayState\(isPlaying: Boolean\) \{[\s\S]*refreshPipParamsLater\(/)
-  assert.doesNotMatch(source, /notifyPipModeChanged:postEnterRefresh/)
-  assert.doesNotMatch(source, /notifyPipModeChanged:postEnterRefreshLate/)
-  assert.doesNotMatch(source, /internal fun refreshPipParamsLater\(activity: Activity, reason: String, delayMs: Long\)/)
-  assert.doesNotMatch(source, /internal fun refreshPipParams\(activity: Activity\)/)
-})
-
-test('Android inline PiP path still publishes the Android transport session outside PiP', () => {
-  const source = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-
-  assert.match(source, /val actions = if \(PipBridge\.isLastKnownInPip\(\)\) \{[\s\S]*0L/)
-  assert.match(source, /OnCreate \{[\s\S]*MediaSessionRegistry\.setCallback\(mediaSessionCallback\)/)
-  assert.match(source, /mediaSession = MediaSessionRegistry\.ensureSession\(context\)/)
-  assert.match(source, /mediaSession\?\.setCallback\(mediaSessionCallback\)/)
-  assert.match(source, /mediaSession\?\.isActive = true/)
-  assert.match(source, /startForegroundService\(\)/)
-  assert.match(source, /startMediaBrowserService\(\)/)
-  assert.doesNotMatch(source, /shouldPublishAndroidTransportSession/)
-  assert.doesNotMatch(source, /suppressAndroidTransportSession/)
-})
-
-test('Android PiP fallback stays eligible while peer-backed playback is rebuffering', () => {
-  const contextSource = readAppFile('lib/VideoPlayerContext.tsx')
-  const nativeSource = readAppFile(
-    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
-  )
-
-  assert.match(contextSource, /const isBufferingRef = useRef\(false\)/)
-  assert.match(contextSource, /MediaSession\.setPictureInPicturePlaybackState\(\{[\s\S]*isPlaying: nextIsPlaying,[\s\S]*isBuffering: nextIsBuffering/)
-  assert.match(contextSource, /isBufferingRef\.current = Boolean\(data\.isBuffering\)/)
-  assert.match(nativeSource, /private var currentIsBuffering: Boolean = false/)
-  assert.match(nativeSource, /currentIsBuffering = state\["isBuffering"\] as\? Boolean \?: currentIsBuffering/)
-  assert.match(nativeSource, /return isSessionActive && \(currentIsPlaying \|\| currentIsBuffering\)/)
-})
-
-test('Android VideoPlayerContext uses the PiP-specific action/state path instead of generic remote commands', () => {
-  const source = readAppFile('lib/VideoPlayerContext.tsx')
-
-  assert.match(source, /Platform\.OS === 'android'[\s\S]*MediaSession\.setPictureInPicturePlaybackState\(\{/)
-  assert.match(source, /if \(Platform\.OS !== 'android'\) return[\s\S]*MediaSession\.addPictureInPictureActionListener\(/)
-  assert.match(source, /if \(Platform\.OS === 'web'\) return[\s\S]*MediaSession\.addRemoteCommandListener\(/)
+  assert.equal(fs.existsSync(pearPlayerModuleRoot), false)
+  assert.equal(fs.existsSync(androidPlaybackRoot), false)
 })
 
 test('Android inline player suppresses stuck-playback reloads during PiP/background handoff', () => {
@@ -294,8 +86,8 @@ test('Android inline player suppresses stuck-playback reloads during PiP/backgro
   assert.match(source, /const shouldSuppressStuckPlaybackRecovery = useCallback\(\(\) => \{/)
   assert.match(source, /if \(isInPipMode\) return true/)
   assert.match(source, /if \(appStateRef\.current !== 'active'\) return true/)
-  assert.match(source, /!suppressStuckRecovery &&[\s\S]*!hasRenderedFrameRef\.current/)
-  assert.match(source, /!suppressStuckRecovery && playbackStartedAtRef\.current !== null && !hasAdvancedRef\.current/)
+  assert.match(source, /const suppressStuckRecovery = shouldSuppressStuckPlaybackRecovery\(\)/)
+  assert.match(source, /suppressStuckRecovery && playbackStartedAtRef\.current !== null/)
 })
 
 test('Android PiP manifest plugin strips stale PlayerActivity PiP attrs during prebuild', () => {
@@ -331,22 +123,6 @@ test('Android PiP manifest plugin strips stale PlayerActivity PiP attrs during p
   assert.equal(playerActivity?.$['android:theme'], '@style/PlayerActivityTheme')
 })
 
-test('Android single-host playback no longer depends on expo-pear-player', () => {
-  const packageSource = readAppFile('package.json')
-  const mediaSessionBuildGradle = readAppFile('modules/expo-media-session/android/build.gradle')
-
-  assert.doesNotMatch(packageSource, /"expo-pear-player"/)
-  assert.doesNotMatch(mediaSessionBuildGradle, /project\(':expo-pear-player'\)/)
-})
-
-test('stale split-player experiment directories are absent from the app package', () => {
-  const pearPlayerModuleRoot = path.join(appRoot, 'modules/expo-pear-player')
-  const androidPlaybackRoot = path.join(appRoot, 'lib/android-playback')
-
-  assert.equal(fs.existsSync(pearPlayerModuleRoot), false)
-  assert.equal(fs.existsSync(androidPlaybackRoot), false)
-})
-
 test('Expo Android plugins keep MainActivity as the PiP host and preserve ExoPlayer resources', () => {
   const appConfig = readAppFile('app.json')
   const pipPlugin = readAppFile('plugins/withAndroidPiP.js')
@@ -354,15 +130,13 @@ test('Expo Android plugins keep MainActivity as the PiP host and preserve ExoPla
   const keepXmlPath = path.join(appRoot, 'android/app/src/main/res/raw/keep.xml')
 
   assert.match(appConfig, /withExoplayerKeepResources\.js/)
-  assert.match(pipPlugin, /PlayerActivity/)
   assert.match(pipPlugin, /mainActivity\.\$\['android:supportsPictureInPicture'\] = 'true'/)
   assert.match(pipPlugin, /mainActivity\.\$\['android:resizeableActivity'\] = 'true'/)
-  assert.match(appConfig, /withMainActivityPiPCallback\.js/)
   assert.match(keepPlugin, /keep\.xml/)
   assert.equal(fs.existsSync(keepXmlPath), true)
 })
 
-test('Android app declares explicit Media3 dependencies for the native PlayerActivity host', () => {
+test('Android app declares explicit Media3 dependencies for native playback', () => {
   const buildGradle = readAppFile('android/app/build.gradle')
 
   assert.match(buildGradle, /implementation\("androidx\.media3:media3-exoplayer:1\.8\.0"\)/)

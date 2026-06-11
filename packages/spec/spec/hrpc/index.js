@@ -266,7 +266,11 @@ const methods = new Map([
   ['@peartube/set-personal-setting', 128],
   [128, '@peartube/set-personal-setting'],
   ['@peartube/get-personal-settings', 129],
-  [129, '@peartube/get-personal-settings']
+  [129, '@peartube/get-personal-settings'],
+  ['@peartube/provision-personal-encryption', 130],
+  [130, '@peartube/provision-personal-encryption'],
+  ['@peartube/get-personal-encryption-secret', 131],
+  [131, '@peartube/get-personal-encryption-secret']
 ])
 
 class HRPC {
@@ -403,7 +407,9 @@ class HRPC {
       ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-request')],
       ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-request')],
       ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-request')],
-      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-request')]
+      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-request')],
+      ['@peartube/provision-personal-encryption', getEncoding('@peartube/provision-personal-encryption-request')],
+      ['@peartube/get-personal-encryption-secret', getEncoding('@peartube/get-personal-encryption-secret-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -523,7 +529,9 @@ class HRPC {
       ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-response')],
       ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-response')],
       ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-response')],
-      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-response')]
+      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-response')],
+      ['@peartube/provision-personal-encryption', getEncoding('@peartube/provision-personal-encryption-response')],
+      ['@peartube/get-personal-encryption-secret', getEncoding('@peartube/get-personal-encryption-secret-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1142,6 +1150,14 @@ class HRPC {
     return this._call('@peartube/get-personal-settings', args)
   }
 
+  async provisionPersonalEncryption(args) {
+    return this._call('@peartube/provision-personal-encryption', args)
+  }
+
+  async getPersonalEncryptionSecret(args) {
+    return this._call('@peartube/get-personal-encryption-secret', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1660,6 +1676,14 @@ class HRPC {
 
   onGetPersonalSettings(responseFn) {
     this._handlers['@peartube/get-personal-settings'] = responseFn
+  }
+
+  onProvisionPersonalEncryption(responseFn) {
+    this._handlers['@peartube/provision-personal-encryption'] = responseFn
+  }
+
+  onGetPersonalEncryptionSecret(responseFn) {
+    this._handlers['@peartube/get-personal-encryption-secret'] = responseFn
   }
 
   _requestIsStream(command) {

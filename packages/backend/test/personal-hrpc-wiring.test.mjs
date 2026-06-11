@@ -18,7 +18,8 @@ import { PersonalStore } from '../src/personal/personal-store.js'
 const PERSONAL_HANDLERS = [
   'GetPlaylists', 'GetPlaylistItems', 'CreatePlaylist', 'UpdatePlaylist', 'DeletePlaylist',
   'AddToPlaylist', 'RemoveFromPlaylist', 'LogWatchHistory', 'GetWatchHistory',
-  'GetResumePosition', 'ListResumePositions', 'SetPersonalSetting', 'GetPersonalSettings'
+  'GetResumePosition', 'ListResumePositions', 'SetPersonalSetting', 'GetPersonalSettings',
+  'ProvisionPersonalEncryption', 'GetPersonalEncryptionSecret'
 ]
 
 test('personal-sync commands are registered as shared handlers', (t) => {

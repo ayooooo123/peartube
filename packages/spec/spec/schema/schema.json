@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "schema": [
     {
       "name": "empty",
@@ -7439,6 +7439,79 @@
           "array": true,
           "type": "@peartube/personal-setting",
           "version": 4
+        }
+      ]
+    },
+    {
+      "name": "provision-personal-encryption-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "secret",
+          "required": false,
+          "type": "string",
+          "version": 5
+        }
+      ]
+    },
+    {
+      "name": "provision-personal-encryption-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "secret",
+          "required": false,
+          "type": "string",
+          "version": 5
+        },
+        {
+          "name": "encrypted",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 5
+        }
+      ]
+    },
+    {
+      "name": "get-personal-encryption-secret-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-personal-encryption-secret-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "provisioned",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "secret",
+          "required": false,
+          "type": "string",
+          "version": 5
         }
       ]
     }

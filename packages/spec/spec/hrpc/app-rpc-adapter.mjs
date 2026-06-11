@@ -1433,6 +1433,28 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": false,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 38,
+      "command": "provision-personal-encryption",
+      "method": "provisionPersonalEncryption",
+      "handler": "ProvisionPersonalEncryption",
+      "request": "@peartube/provision-personal-encryption-request",
+      "response": "@peartube/provision-personal-encryption-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 39,
+      "command": "get-personal-encryption-secret",
+      "method": "getPersonalEncryptionSecret",
+      "handler": "GetPersonalEncryptionSecret",
+      "request": "@peartube/get-personal-encryption-secret-request",
+      "response": "@peartube/get-personal-encryption-secret-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -2242,6 +2264,28 @@ export const APP_RPC_METADATA = Object.freeze({
         "send": false,
         "requestStream": false,
         "responseStream": false
+      },
+      {
+        "id": 38,
+        "command": "provision-personal-encryption",
+        "method": "provisionPersonalEncryption",
+        "handler": "ProvisionPersonalEncryption",
+        "request": "@peartube/provision-personal-encryption-request",
+        "response": "@peartube/provision-personal-encryption-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 39,
+        "command": "get-personal-encryption-secret",
+        "method": "getPersonalEncryptionSecret",
+        "handler": "GetPersonalEncryptionSecret",
+        "request": "@peartube/get-personal-encryption-secret-request",
+        "response": "@peartube/get-personal-encryption-secret-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
       }
     ],
     "transfer": [
@@ -2749,6 +2793,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "get-identities",
     "get-identity",
     "get-livestream-status",
+    "get-personal-encryption-secret",
     "get-personal-settings",
     "get-pinned-channels",
     "get-playlist-items",
@@ -2798,6 +2843,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "prefetch-video",
     "prepare-live-playback",
     "prepare-playback",
+    "provision-personal-encryption",
     "recover-identity",
     "refresh-feed",
     "remove-comment",

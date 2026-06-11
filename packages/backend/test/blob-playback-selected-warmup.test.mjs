@@ -114,6 +114,35 @@ test('preparePlayback promotes source relay hints and reports blob bridge diagno
   t.is(JSON.parse(result.selectedBlobWarmup.promotedPeerHintsJson)[0].key, sourcePeer.slice(0, 16))
 })
 
+test('warmSelectedBlobRef promotes late-arriving availability hints without blocking', async (t) => {
+  const sourcePeer = '2'.repeat(64)
+  const { ctx } = createCtx({ peerCount: 0, hasHeadBlock: true })
+  const promoted = []
+  const service = new BlobPlaybackService({ ctx })
+  let resolveHints
+  const peerHintsPromise = new Promise((resolve) => { resolveHints = resolve })
+
+  const result = await service.warmSelectedBlobRef({
+    blobsCoreKey: VALID_KEY,
+    blobId: VALID_BLOB,
+    timeoutMs: 25,
+    promotePeerHints(peerIds, topic) {
+      promoted.push({ peerIds, topic })
+      return []
+    },
+    peerHintsPromise,
+  })
+
+  t.is(result.hasHeadBlock, true)
+  t.is(promoted.length, 0, 'no promotion before hints resolve')
+
+  resolveHints({ sourceFeedPeerIds: [sourcePeer], sourceRelayPeerIds: [] })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  t.alike(promoted[0]?.peerIds, [sourcePeer], 'late hints promoted after warmup returned')
+  t.is(result.sourceFeedPeerIdsJson, JSON.stringify([sourcePeer]))
+})
+
 test('preparePlayback returns URL with explicit selected blob diagnostics when no blob peer arrives', async (t) => {
   const { ctx } = createCtx({ peerCount: 0, hasHeadBlock: false })
   const service = new BlobPlaybackService({ ctx })

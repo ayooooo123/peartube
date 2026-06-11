@@ -148,6 +148,7 @@ export class BlobPlaybackService {
     sourceFeedPeerIds = [],
     sourceRelayPeerIds = [],
     promotePeerHints = null,
+    peerHintsPromise = null,
     timingBaseMs = Date.now(),
   }) {
     const ref = parseBlobRef({ blobsCoreKey, blobId, mimeType: 'video/mp4' })
@@ -203,6 +204,27 @@ export class BlobPlaybackService {
       diagnostics.readyForPlayback = diagnostics.hasHeadBlock
     }
 
+    const promotedPeerSummaries = []
+    const promoteHintIds = (ids) => {
+      const merged = uniquePeerIds(ids)
+      if (merged.length === 0 || typeof promotePeerHints !== 'function') return
+      try {
+        const promoted = promotePeerHints(merged, blobsCore.discoveryKey)
+        if (Array.isArray(promoted)) {
+          promotedPeerSummaries.push(...promoted.map((peer) => ({
+            key: typeof peer?.key === 'string' ? peer.key.slice(0, 16) : null,
+            connected: Boolean(peer?.connected),
+            explicit: Boolean(peer?.explicit),
+            relayAddresses: Number(peer?.relayAddresses || 0),
+          })))
+        }
+      } catch (err) {
+        promotedPeerSummaries.push({ error: err?.message || String(err) })
+      }
+      diagnostics.promotedPeerHintsJson = JSON.stringify(promotedPeerSummaries)
+      markTiming('hintsPromotedMs')
+    }
+
     try {
       await blobsCore.ready()
       markTiming('blobCoreReadyMs')
@@ -211,19 +233,23 @@ export class BlobPlaybackService {
       diagnostics.retainedDiscoveryLabel = retained.retainedDiscoveryLabel || diagnostics.retainedDiscoveryLabel
       diagnostics.retainedDiscoveryStatus = retained.retainedDiscoveryStatus || (retained.retained ? 'retained' : 'not-retained')
       updatePeerDiagnostics()
-      if (typeof promotePeerHints === 'function' && (feedIds.length > 0 || relayIds.length > 0)) {
-        try {
-          const promoted = promotePeerHints(uniquePeerIds([...feedIds, ...relayIds]), blobsCore.discoveryKey)
-          diagnostics.promotedPeerHintsJson = JSON.stringify(Array.isArray(promoted) ? promoted.map((peer) => ({
-            key: typeof peer?.key === 'string' ? peer.key.slice(0, 16) : null,
-            connected: Boolean(peer?.connected),
-            explicit: Boolean(peer?.explicit),
-            relayAddresses: Number(peer?.relayAddresses || 0),
-          })) : [])
-        } catch (err) {
-          diagnostics.promotedPeerHintsJson = JSON.stringify([{ error: err?.message || String(err) }])
-        }
-        markTiming('hintsPromotedMs')
+      promoteHintIds([...feedIds, ...relayIds])
+      // Late-arriving availability hints (the request is fired without
+      // blocking playback prep) still get promoted as soon as they resolve,
+      // even if the warmup below has already returned.
+      if (peerHintsPromise && typeof peerHintsPromise.then === 'function') {
+        peerHintsPromise.then((hintIds) => {
+          const newFeed = uniquePeerIds(hintIds?.sourceFeedPeerIds).filter((id) => !feedIds.includes(id))
+          const newRelay = uniquePeerIds(hintIds?.sourceRelayPeerIds).filter((id) => !relayIds.includes(id))
+          if (newFeed.length === 0 && newRelay.length === 0) return
+          feedIds.push(...newFeed)
+          relayIds.push(...newRelay)
+          diagnostics.sourceFeedPeerIdsJson = jsonArray(feedIds)
+          diagnostics.sourceRelayPeerIdsJson = jsonArray(relayIds)
+          markTiming('hintsArrivedMs')
+          promoteHintIds([...newFeed, ...newRelay])
+          updatePeerDiagnostics()
+        }).catch(() => {})
       }
 
       const startedAt = Date.now()
@@ -299,6 +325,7 @@ export class BlobPlaybackService {
     sourceFeedPeerIds = [],
     sourceRelayPeerIds = [],
     promotePeerHints = null,
+    peerHintsPromise = null,
     timingBaseMs = Date.now(),
   }) {
     let warmupStarted = false
@@ -328,6 +355,7 @@ export class BlobPlaybackService {
           sourceFeedPeerIds,
           sourceRelayPeerIds,
           promotePeerHints,
+          peerHintsPromise,
           timingBaseMs,
         })
         : null

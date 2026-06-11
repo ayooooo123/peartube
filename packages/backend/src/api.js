@@ -1153,25 +1153,31 @@ export function createApi({
 
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       let sourcePeerDiagnostics = { sourceFeedPeerIds: [], sourceRelayPeerIds: [] }
+      // Fire the availability-hint request without blocking playback prep.
+      // Hints feed peer promotion inside the blob warmup as they arrive.
+      let peerHintsPromise = null
       if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey && publicFeed?.requestAvailabilityHints) {
-        try {
-          const hints = await publicFeed.requestAvailabilityHints([{
-            driveKey,
-            publicBeeKey,
-            id: videoPath,
-            blobsCoreKey: playbackBlobRef.blobsCoreKey,
-            blobId: playbackBlobRef.blobId,
-          }], { timeoutMs: 500, maxPeers: 4 })
-          const matchingHints = Array.isArray(hints)
-            ? hints.filter((hint) => hintMatchesBlobRef(hint, {
+        peerHintsPromise = (async () => {
+          try {
+            const hints = await publicFeed.requestAvailabilityHints([{
+              driveKey,
+              publicBeeKey,
               id: videoPath,
               blobsCoreKey: playbackBlobRef.blobsCoreKey,
               blobId: playbackBlobRef.blobId,
-            }))
-            : []
-          sourcePeerDiagnostics = collectHintPeerIds(matchingHints)
-        } catch { /* best effort */ }
-        timingRecord.stages.hintsMs = Date.now() - startedAt
+            }], { timeoutMs: 500, maxPeers: 4 })
+            const matchingHints = Array.isArray(hints)
+              ? hints.filter((hint) => hintMatchesBlobRef(hint, {
+                id: videoPath,
+                blobsCoreKey: playbackBlobRef.blobsCoreKey,
+                blobId: playbackBlobRef.blobId,
+              }))
+              : []
+            sourcePeerDiagnostics = collectHintPeerIds(matchingHints)
+          } catch { /* best effort */ }
+          timingRecord.stages.hintsMs = Date.now() - startedAt
+          return sourcePeerDiagnostics
+        })()
       }
       const promotePeerHints = publicFeed?.promoteAvailabilityHintPeers
         ? (peerIds, topic) => publicFeed.promoteAvailabilityHintPeers(peerIds, topic)
@@ -1188,6 +1194,7 @@ export function createApi({
         sourceFeedPeerIds: sourcePeerDiagnostics.sourceFeedPeerIds,
         sourceRelayPeerIds: sourcePeerDiagnostics.sourceRelayPeerIds,
         promotePeerHints,
+        peerHintsPromise,
         timingBaseMs: startedAt,
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),

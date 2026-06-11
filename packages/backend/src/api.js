@@ -12,6 +12,7 @@ import z32 from 'z32';
 import c from 'compact-encoding';
 import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, setPlaybackActive as storageSetPlaybackActive, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
+import { subscribeBlobPlayhead } from './blob-range-priority.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { FederatedSearch } from './search/federated-search.js';
@@ -1999,6 +2000,7 @@ export function createApi({
       const existingRanges = activeRangeRequests.get(prefetchKey)
       if (existingRanges) {
         console.log('[API] Cancelling orphaned range requests for:', videoPath)
+        try { existingRanges.cancel?.() } catch { /* best effort */ }
         existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
         if (existingRanges.core) {
           try { existingRanges.core.off('download', existingRanges.onDownload) } catch { /* best effort */ }
@@ -2348,60 +2350,123 @@ export function createApi({
 
           if (!wasCached) {
             let fullDownloadStarted = false
-            const startFullDownload = () => {
-              if (fullDownloadStarted) return
-              fullDownloadStarted = true
-              // Stream the body in play order. Without `linear`, hypercore pulls
-              // blocks in rarest/availability order, so the background fill races
-              // ahead into the middle/end of the file while the player stalls
-              // waiting for the contiguous bytes right after its current position.
-              const downloadRange = core.download({ start: startBlock, end: endBlock, linear: true })
-              activeRangeRequests.get(prefetchKey)?.ranges.push(downloadRange)
-              downloadRange.done().then(async () => {
-                console.log('[API] Download complete (blobs)')
-                await deleteDownloadIntent(ctx, driveKey, videoPath).catch(err =>
-                  console.log('[API] Failed to delete download intent:', err?.message)
-                )
-                downloadSpeed = 0
-                if (videoStats) {
-                  videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
-                  videoStats.emitStats(driveKey, videoPath, true) // force=true for completion
-                  setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
-                }
-                activeRangeRequests.delete(prefetchKey)
-                // Register completed download as a seed for quota tracking
-                if (seedingManager) {
-                  seedingManager.addSeed(driveKey, videoPath, 'watched', {
-                    blockLength: totalBlocks,
-                    byteLength: totalBytes,
-                    publicBeeKey: publicBeeKey || v?.publicBeeKey || null,
-                    blobId: blobMeta.blobId,
-                    blobsCoreKey: blobMeta.blobsCoreKey,
-                    thumbnailBlobId: v?.thumbnailBlobId || null,
-                    thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
-                    mimeType: v?.mimeType || existingIntent?.mimeType || null,
-                    thumbnailMimeType: v?.thumbnailMimeType || null
-                  }, { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() })
-                    .catch(err => console.log('[API] Failed to register seed:', err?.message))
-                    .finally(releaseProtectedPrefetchBlobRef)
-                } else {
-                  releaseProtectedPrefetchBlobRef()
-                }
-              }).catch(err => {
-                if (err.message?.includes('closed') || ctx.store.closed) {
-                  console.log('[API] Prefetch cancelled (corestore closed)')
-                } else {
-                  console.error('[API] Prefetch error:', err.message)
-                }
-                if (videoStats) {
-                  videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' })
-                  videoStats.emitStats(driveKey, videoPath, true) // force=true for cancellation
-                  videoStats.cleanupMonitor(driveKey, videoPath)
-                }
-                activeRangeRequests.delete(prefetchKey)
-                releaseProtectedPrefetchBlobRef()
-              })
+            let fillCancelled = false
+            let currentFillRange = null
+            const blobCoreKeyHex = String(blobMeta.blobsCoreKey || '').toLowerCase()
+            const rangeEntry = activeRangeRequests.get(prefetchKey)
+            if (rangeEntry) {
+              rangeEntry.cancel = () => {
+                fillCancelled = true
+                unsubscribePlayhead()
+              }
             }
+
+            const finishFullDownload = async () => {
+              console.log('[API] Download complete (blobs)')
+              unsubscribePlayhead()
+              await deleteDownloadIntent(ctx, driveKey, videoPath).catch(err =>
+                console.log('[API] Failed to delete download intent:', err?.message)
+              )
+              downloadSpeed = 0
+              if (videoStats) {
+                videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
+                videoStats.emitStats(driveKey, videoPath, true) // force=true for completion
+                setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
+              }
+              activeRangeRequests.delete(prefetchKey)
+              // Register completed download as a seed for quota tracking
+              if (seedingManager) {
+                seedingManager.addSeed(driveKey, videoPath, 'watched', {
+                  blockLength: totalBlocks,
+                  byteLength: totalBytes,
+                  publicBeeKey: publicBeeKey || v?.publicBeeKey || null,
+                  blobId: blobMeta.blobId,
+                  blobsCoreKey: blobMeta.blobsCoreKey,
+                  thumbnailBlobId: v?.thumbnailBlobId || null,
+                  thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
+                  mimeType: v?.mimeType || existingIntent?.mimeType || null,
+                  thumbnailMimeType: v?.thumbnailMimeType || null
+                }, { protectSelf: true, protectedKeys: getActiveRangeSeedKeys() })
+                  .catch(err => console.log('[API] Failed to register seed:', err?.message))
+                  .finally(releaseProtectedPrefetchBlobRef)
+              } else {
+                releaseProtectedPrefetchBlobRef()
+              }
+            }
+
+            const failFullDownload = (err) => {
+              unsubscribePlayhead()
+              if (err.message?.includes('closed') || ctx.store.closed) {
+                console.log('[API] Prefetch cancelled (corestore closed)')
+              } else {
+                console.error('[API] Prefetch error:', err.message)
+              }
+              if (videoStats) {
+                videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' })
+                videoStats.emitStats(driveKey, videoPath, true) // force=true for cancellation
+                videoStats.cleanupMonitor(driveKey, videoPath)
+              }
+              activeRangeRequests.delete(prefetchKey)
+              releaseProtectedPrefetchBlobRef()
+            }
+
+            // Stream the body in play order. Without `linear`, hypercore pulls
+            // blocks in rarest/availability order, so the background fill races
+            // ahead into the middle/end of the file while the player stalls
+            // waiting for the contiguous bytes right after its current position.
+            const startFillPass = (anchor) => {
+              if (fillCancelled) return
+              const fillRange = core.download({ start: anchor, end: endBlock, linear: true })
+              currentFillRange = fillRange
+              const entry = activeRangeRequests.get(prefetchKey)
+              if (entry) entry.ranges.push(fillRange)
+              fillRange.done().then((completed) => {
+                // hypercore v11 resolves done() with `false` (instead of
+                // rejecting) when a range is destroyed or its session closes.
+                // Treating any resolution as success marked partially
+                // downloaded videos "complete": the UI said "Saved on this
+                // device", the resume intent was deleted, and a full-size seed
+                // was registered against the cache quota.
+                if (completed === false || fillCancelled || currentFillRange !== fillRange) return
+                if (anchor > startBlock) {
+                  // The fill re-anchored past a seek window at some point —
+                  // sweep the skipped stretch. Blocks already present are not
+                  // re-requested, so this pass only fetches the holes.
+                  startFillPass(startBlock)
+                  return
+                }
+                void finishFullDownload()
+              }).catch(failFullDownload)
+            }
+
+            const startFullDownload = () => {
+              if (fullDownloadStarted || fillCancelled) return
+              fullDownloadStarted = true
+              startFillPass(startBlock)
+            }
+
+            // Follow the playhead. When the blob server prioritizes a new
+            // window (seek, or the window advancing with playback), re-anchor
+            // the background fill just past it. Before this, a far seek left
+            // the full-file fill competing for peer bandwidth from the front
+            // of the file while the player starved at the seek point.
+            const unsubscribePlayhead = subscribeBlobPlayhead((event) => {
+              if (fillCancelled || !fullDownloadStarted) return
+              if (event.coreKeyHex !== blobCoreKeyHex) return
+              if (event.windowEnd <= startBlock || event.windowStart >= endBlock) return
+              const nextAnchor = Math.max(startBlock, Math.min(event.windowEnd, endBlock - 1))
+              const staleRange = currentFillRange
+              currentFillRange = null
+              if (staleRange) {
+                const entry = activeRangeRequests.get(prefetchKey)
+                if (entry) {
+                  const idx = entry.ranges.indexOf(staleRange)
+                  if (idx >= 0) entry.ranges.splice(idx, 1)
+                }
+                try { staleRange.destroy() } catch { /* best effort */ }
+              }
+              startFillPass(nextAnchor)
+            })
 
             const startInitPrefetch = () => {
               // Head prefetch: prioritize container headers and early samples.
@@ -2415,10 +2480,15 @@ export function createApi({
                   console.log('[API] Head prefetch slow, starting full download in parallel')
                   startFullDownload()
                 }, 1500)
-                headRange.done().then(() => {
+                headRange.done().then((completed) => {
+                  if (headTimeout) clearTimeout(headTimeout)
+                  // Resolved-false means the range was cancelled (session
+                  // re-prefetched or closed) — starting the full download here
+                  // would resurrect an untracked zombie download that competes
+                  // with the replacement session for peer bandwidth.
+                  if (completed === false || fillCancelled) return
                   console.log('[API] Head prefetch complete (blobs)')
                   resolvePlaybackReady?.()
-                  if (headTimeout) clearTimeout(headTimeout)
                   startFullDownload()
                 }).catch(err => {
                   console.log('[API] Head prefetch error (blobs):', err?.message)
@@ -2437,7 +2507,8 @@ export function createApi({
                   console.log('[API] Prefetch tail range (blobs):', (endBlock - tailStart), 'blocks')
                   const tailRange = core.download({ start: tailStart, end: endBlock })
                   activeRangeRequests.get(prefetchKey).ranges.push(tailRange)
-                  tailRange.done().then(() => {
+                  tailRange.done().then((completed) => {
+                    if (completed === false) return
                     console.log('[API] Tail prefetch complete (blobs)')
                   }).catch(err => {
                     console.log('[API] Tail prefetch error (blobs):', err?.message)
@@ -2458,7 +2529,8 @@ export function createApi({
                   console.log('[API] Prefetch mid range (blobs):', (midEnd - midStart), 'blocks')
                   const midRange = core.download({ start: midStart, end: midEnd })
                   activeRangeRequests.get(prefetchKey).ranges.push(midRange)
-                  midRange.done().then(() => {
+                  midRange.done().then((completed) => {
+                    if (completed === false) return
                     console.log('[API] Mid prefetch complete (blobs)')
                   }).catch(err => {
                     console.log('[API] Mid prefetch error (blobs):', err?.message)

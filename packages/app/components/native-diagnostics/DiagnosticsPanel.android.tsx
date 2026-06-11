@@ -60,6 +60,7 @@ export default function DiagnosticsPanel({
   const feedConnections = network?.feed?.feedConnections ?? swarmStatus?.feedConnections ?? 0
   const dht = network?.dht
   const lastHaveFeed = network?.feed?.lastHaveFeed
+  const lastPlayback = network?.playback?.lastPreparePlayback
 
   return (
     <View style={styles.root}>
@@ -123,6 +124,29 @@ export default function DiagnosticsPanel({
           </Text>
         ) : null}
       </View>
+
+      {lastPlayback ? (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Playback timing</Text>
+          <Text style={styles.statusText}>
+            {lastPlayback.videoId || 'unknown video'}
+            {lastPlayback.readyForPlayback === true ? ' • ready' : lastPlayback.readyForPlayback === false ? ' • not ready' : ''}
+          </Text>
+          <View style={styles.metricRow}>
+            <Metric label="Total" value={`${lastPlayback.stages?.totalMs ?? '—'} ms`} />
+            <Metric label="URL" value={`${lastPlayback.stages?.urlResolvedMs ?? '—'} ms`} />
+            <Metric label="Head block" value={`${lastPlayback.stages?.headBlockMs ?? '—'} ms`} />
+          </View>
+          <Text style={styles.detailText}>
+            Hints: {lastPlayback.stages?.hintsMs ?? '—'} ms • Core ready: {lastPlayback.stages?.blobCoreReadyMs ?? '—'} ms
+            {' '}• Peers retained: {lastPlayback.stages?.peersRetainedMs ?? '—'} ms
+          </Text>
+          <Text style={styles.detailText}>
+            First blob peer: {lastPlayback.stages?.firstBlobPeerMs ?? '—'} ms • Warmup done: {lastPlayback.stages?.warmupDoneMs ?? '—'} ms
+            {' '}• Blob peers: {lastPlayback.peerCount ?? '—'}
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Network info</Text>

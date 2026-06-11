@@ -16,6 +16,28 @@ export interface SeedingStatus {
   } | null
 }
 
+export interface PlaybackTimingRecord {
+  at?: number
+  driveKey?: string | null
+  videoId?: string | null
+  readyForPlayback?: boolean | null
+  peerCount?: number | null
+  hasHeadBlock?: boolean | null
+  stages?: {
+    hintsMs?: number
+    urlResolvedMs?: number
+    blobCoreReadyMs?: number
+    peersRetainedMs?: number
+    hintsPromotedMs?: number
+    updateWaitMs?: number
+    firstBlobPeerMs?: number
+    headBlockMs?: number
+    warmupDoneMs?: number
+    returnedMs?: number
+    totalMs?: number
+  } | null
+}
+
 export interface SwarmStatus {
   connected?: boolean
   peerCount?: number
@@ -58,6 +80,10 @@ export interface SwarmStatus {
         lastRejectReason?: string | null
       } | null
     }
+    playback?: {
+      lastPreparePlayback?: PlaybackTimingRecord | null
+      recentPreparePlayback?: PlaybackTimingRecord[]
+    } | null
     recommendedBoundary?: string | null
   } | null
   swarmOffline?: boolean

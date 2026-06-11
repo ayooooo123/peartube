@@ -3040,6 +3040,19 @@ export function createApi({
      */
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
+      // Stop live prefetch fills first: clearing blocks under an active linear
+      // download immediately re-fetches them, and the clear/download race
+      // thrashes storage. Cancelled ranges resolve done() with false, which
+      // the completion handlers treat as cancellation.
+      for (const [key, request] of Array.from(activeRangeRequests.entries())) {
+        try { request.cancel?.() } catch { /* best effort */ }
+        request.ranges?.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
+        if (request.core) {
+          try { request.core.off('download', request.onDownload) } catch { /* best effort */ }
+          try { request.core.off('upload', request.onUpload) } catch { /* best effort */ }
+        }
+        activeRangeRequests.delete(key)
+      }
       if (seedingManager) {
         const clearResult = await seedingManager.clearCache({ authorized: true });
         return { success: true, ...clearResult };

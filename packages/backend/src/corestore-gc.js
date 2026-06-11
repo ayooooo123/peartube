@@ -11,7 +11,7 @@ function describeError(error) {
  * not expose flush/compact or one of those calls fails.
  *
  * @param {import('corestore')} store
- * @param {{ label?: string, log?: (...args: any[]) => void }} [options]
+ * @param {{ label?: string, log?: (...args: any[]) => void, skipFlush?: boolean, skipCompact?: boolean }} [options]
  * @returns {Promise<{ flushed: boolean, compacted: boolean, error: string | null }>}
  */
 export async function collectCorestoreGarbage(store, options = {}) {
@@ -22,7 +22,7 @@ export async function collectCorestoreGarbage(store, options = {}) {
 
   if (!storage) return result
 
-  if (typeof storage.flush === 'function') {
+  if (!options.skipFlush && typeof storage.flush === 'function') {
     try {
       await storage.flush()
       result.flushed = true
@@ -32,7 +32,7 @@ export async function collectCorestoreGarbage(store, options = {}) {
     }
   }
 
-  if (typeof storage.compact === 'function') {
+  if (!options.skipCompact && typeof storage.compact === 'function') {
     try {
       await storage.compact()
       result.compacted = true

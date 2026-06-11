@@ -252,7 +252,6 @@ export type TransitionDecision<
 
 const DEV_INVALID_TRANSITION = '[player-state-machine] Invalid transition:'
 const DEV_CONTRACT_MISMATCH = '[player-state-machine] Contract mismatch:'
-const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
 
 function toUnifiedViewMode(mode: PlayerStateMode): PlayerViewMode {
   switch (mode) {
@@ -431,13 +430,6 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'FORCE_RELOAD_PLAYBACK':
           return invalidTransition(state, event)
         case 'MINIMIZE':
-          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            return {
-              ...state,
-              mode: 'pip_entering',
-              modeBeforePip: 'fullscreen',
-            }
-          }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
@@ -492,13 +484,6 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':
-          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            return {
-              ...state,
-              mode: 'pip_entering',
-              modeBeforePip: 'fullscreen',
-            }
-          }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
@@ -572,28 +557,13 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':
-          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            return {
-              ...state,
-              mode: 'pip_entering',
-              modeBeforePip: 'mini',
-            }
-          }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
         case 'ENTER_BACKGROUND_AUDIO':
           return withMode(state, 'background_audio')
         case 'APP_BACKGROUND':
-          if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            // KEEP: split-activity PiP handoff still needs a fullscreen-sized surface on Android.
-            return {
-              ...state,
-              mode: 'fullscreen',
-              wasPlayingWhenBackgrounded: event.isPlaying,
-            }
-          }
-          // SIMPLIFIED: keep mini mode stable on background in the state machine.
+          // Keep mini mode stable on background in the state machine.
           // Any Android-specific PiP handoff behavior should be handled explicitly
           // in VideoPlayerContext/native PiP code, not by silently coercing mini ->
           // fullscreen here.
@@ -603,10 +573,6 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
             wasPlayingWhenBackgrounded: event.isPlaying,
           }
         case 'APP_FOREGROUND':
-          if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            // KEEP: split-activity mode has no in-app mini surface to restore to.
-            return withMode(state, 'fullscreen')
-          }
           return {
             ...state,
             mode: event.wasInPip || event.resumedWithBackgroundPlayback ? 'fullscreen' : 'mini',

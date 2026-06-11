@@ -64,7 +64,7 @@ export function PillTabBar() {
   const pathname = usePathname()
   const router = useRouter()
   const { isDesktop } = usePlatform()
-  const { playerMode, isInPipMode, androidSplitPlayerEnabled } = useVideoPlayerSession()
+  const { playerMode, isInPipMode } = useVideoPlayerSession()
   const isAndroidWatchPathActive = Platform.OS === 'android' && pathname.startsWith('/video/')
 
   const barVisible = useSharedValue(1)
@@ -81,9 +81,9 @@ export function PillTabBar() {
     const shouldHide =
       playerMode === 'fullscreen' &&
       !isInPipMode &&
-      (Platform.OS !== 'android' || androidSplitPlayerEnabled || isAndroidWatchPathActive)
+      (Platform.OS !== 'android' || isAndroidWatchPathActive)
     barVisible.value = withTiming(shouldHide ? 0 : 1, { duration: 200 })
-  }, [androidSplitPlayerEnabled, isAndroidWatchPathActive, playerMode, isInPipMode, barVisible])
+  }, [isAndroidWatchPathActive, playerMode, isInPipMode, barVisible])
 
   useEffect(() => {
     const showSub = Keyboard.addListener(

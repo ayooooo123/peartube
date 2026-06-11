@@ -188,7 +188,6 @@ export function VideoPlayerOverlay() {
     playbackRate,
     seekPosition: playerSeekPosition,
     isInPipMode,
-    androidSplitPlayerEnabled,
     setIsInPipMode,
     pipWindowSize,
     setPipWindowSize,
@@ -352,7 +351,9 @@ export function VideoPlayerOverlay() {
         channelKey,
       }
     }
-    console.log('[VideoPlayerOverlay] Using player:', player, 'video:', currentVideo.id, 'channel:', channelKey)
+    if (__DEV__) {
+      console.log('[VideoPlayerOverlay] Using player:', player, 'video:', currentVideo.id, 'channel:', channelKey)
+    }
   }, [currentVideo?.id, currentVideo?.channelKey, currentVideo?.channel?.key, videoUrl, playerMode])
 
   const { height: reportedTabBarHeight, paddingBottom: reportedTabBarPadding } = useTabBarMetrics()
@@ -367,7 +368,6 @@ export function VideoPlayerOverlay() {
   const scrubPendingSinceRef = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
-  const pipExitNeedsRearmRef = useRef(false)
 
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
@@ -376,7 +376,6 @@ export function VideoPlayerOverlay() {
 
   // Mini player corner/drag state
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
-  const disableMiniLayoutOnAndroidSplit = Platform.OS === 'android' && androidSplitPlayerEnabled
   const isDiscoverPathActive =
     pathname === '/discover' ||
     pathname === '/(tabs)/discover' ||
@@ -386,8 +385,7 @@ export function VideoPlayerOverlay() {
     playerMode === 'mini' &&
     !isLandscapeFullscreen &&
     !isInPipMode &&
-    !hideGlobalOverlayOnDiscover &&
-    !disableMiniLayoutOnAndroidSplit
+    !hideGlobalOverlayOnDiscover
   const isLandscapeFullscreenShared = useSharedValue(false)
   const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
 
@@ -673,7 +671,6 @@ export function VideoPlayerOverlay() {
    const isPipLayoutActiveShared = useSharedValue(false)
    const isAutoPipEnabledShared = useSharedValue(false)
   const isFullscreenShared = useSharedValue(playerMode === 'fullscreen')
-  const splitPanTranslationY = useSharedValue(0)
   // Controls whether overlay elements (progress bar, time display, buttons) use
   // bottom-relative positioning (true) or top-computed positioning from
   // videoWrapperHeightShared (false). On mobile the container is already pushed
@@ -996,7 +993,7 @@ export function VideoPlayerOverlay() {
         setChannelMetaName(name)
       } catch (err) {
         if (cancelled) return
-        console.warn('[VideoPlayerOverlay] Failed to load channel meta:', err)
+        if (__DEV__) console.warn('[VideoPlayerOverlay] Failed to load channel meta:', err)
         setChannelMetaName(null)
       }
     }
@@ -1012,10 +1009,6 @@ export function VideoPlayerOverlay() {
     // Avoid forcing animProgress synchronously during render (it kills transitions
     // and can fight gesture worklets).
     if (isInPipMode) return
-    if (disableMiniLayoutOnAndroidSplit) {
-      animProgress.value = withTiming(1, { duration: 150 })
-      return
-    }
     if (playerMode === 'fullscreen') {
       if (maximizedForPipRef.current) {
         // Snap instantly — user is going to background, no need to animate
@@ -1028,7 +1021,7 @@ export function VideoPlayerOverlay() {
     } else if (playerMode === 'hidden') {
       animProgress.value = withTiming(0, { duration: 150 })
     }
-  }, [playerMode, isInPipMode, disableMiniLayoutOnAndroidSplit])
+  }, [playerMode, isInPipMode])
 
   const maximizeFromMini = useCallback(() => {
     maximizePlayer('overlay-mini-button')
@@ -1070,7 +1063,7 @@ export function VideoPlayerOverlay() {
     .maxPointers(1)
     .onStart(() => {
       'worklet'
-      if (isMiniPlayerModeShared.value && Platform.OS !== 'web' && !disableMiniLayoutOnAndroidSplit) {
+      if (isMiniPlayerModeShared.value && Platform.OS !== 'web') {
         isGestureActive.value = true
         isMiniPlayerDraggingShared.value = true
         cancelAnimation(miniPipX)
@@ -1078,14 +1071,6 @@ export function VideoPlayerOverlay() {
         miniDragStartXShared.value = miniPipX.value
         miniDragStartYShared.value = miniPipY.value
         runOnJS(setIsDraggingMiniPlayer)(true)
-        return
-      }
-      if (disableMiniLayoutOnAndroidSplit) {
-        if (!isFullscreenShared.value) return
-        if (isLandscapeFullscreenShared.value) return
-        if (isPipLayoutActiveShared.value) return
-        isGestureActive.value = true
-        splitPanTranslationY.value = 0
         return
       }
       if (isLandscapeFullscreenShared.value) return
@@ -1118,11 +1103,6 @@ export function VideoPlayerOverlay() {
           miniDragStartXShared.value + event.translationX))
         miniPipY.value = Math.max(bounds.topBound - MINI_DRAG_OVERSHOOT_TOP, Math.min(bounds.bottomBound + MINI_DRAG_OVERSHOOT_BOTTOM,
           miniDragStartYShared.value + event.translationY))
-        return
-      }
-      if (disableMiniLayoutOnAndroidSplit) {
-        if (!isGestureActive.value) return
-        splitPanTranslationY.value = event.translationY
         return
       }
       if (!isGestureActive.value) return
@@ -1167,19 +1147,6 @@ export function VideoPlayerOverlay() {
         runOnJS(setIsDraggingMiniPlayer)(false)
         return
       }
-      if (disableMiniLayoutOnAndroidSplit) {
-        const wasActive = isGestureActive.value
-        isGestureActive.value = false
-        const dragDownDistance = splitPanTranslationY.value
-        splitPanTranslationY.value = 0
-        if (wasActive && (dragDownDistance > 80 || event.velocityY > 500)) {
-          runOnJS(minimizePlayer)()
-          animProgress.value = withTiming(1, { duration: 120 })
-          return
-        }
-        animProgress.value = withTiming(1, { duration: 120 })
-        return
-      }
       const wasActive = isGestureActive.value
       isGestureActive.value = false
       if (!wasActive) return
@@ -1214,8 +1181,7 @@ export function VideoPlayerOverlay() {
         runOnJS(setIsDraggingMiniPlayer)(false)
       }
       isGestureActive.value = false
-      splitPanTranslationY.value = 0
-  }), [disableMiniLayoutOnAndroidSplit, minimizePlayer, maximizePlayer])
+  }), [minimizePlayer, maximizePlayer])
 
   const miniSingleTapGesture = useMemo(() => Gesture.Tap()
     .maxDuration(250)
@@ -1958,7 +1924,7 @@ export function VideoPlayerOverlay() {
         showControlsTemporarily()
       }
     } catch (err) {
-      console.error('[VideoPlayer] Failed to change orientation:', err)
+      if (__DEV__) console.error('[VideoPlayer] Failed to change orientation:', err)
       // If the orientation lock failed, force state to a consistent "not landscape" config.
       isLandscapeFullscreenShared.value = false
       setIsLandscapeFullscreen(false)
@@ -1985,7 +1951,7 @@ export function VideoPlayerOverlay() {
       if (!pendingLandscapeExit) {
         setPendingLandscapeExit(true)
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch((err) => {
-          console.error('[VideoPlayer] Failed to lock portrait on mode change:', err)
+          if (__DEV__) console.error('[VideoPlayer] Failed to lock portrait on mode change:', err)
           isLandscapeFullscreenShared.value = false
           setIsLandscapeFullscreen(false)
           setPendingLandscapeExit(false)
@@ -2013,13 +1979,13 @@ export function VideoPlayerOverlay() {
       return
     } else if (Platform.OS === 'ios') {
       const shouldEnable =
-        (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
+        (playerMode === 'fullscreen' || playerMode === 'mini') &&
         currentVideo !== null &&
         !isCasting
       autoPipEnabledRef.current = shouldEnable
       setIosPipEnabled(shouldEnable)
     }
-  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen])
+  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, isLandscapeFullscreen])
 
   // Downloads context for browser-style download manager
   const { addDownload } = useDownloads()
@@ -2080,10 +2046,6 @@ export function VideoPlayerOverlay() {
   }
 
   if (hideGlobalOverlayOnDiscover) {
-    return null
-  }
-
-  if (disableMiniLayoutOnAndroidSplit && playerMode === 'mini' && !isInPipMode) {
     return null
   }
 

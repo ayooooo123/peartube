@@ -17,7 +17,7 @@ test('VideoPlayerOverlay source keeps the PiP cleanup and modal tail after auto-
 
   assert.match(
     source,
-    /} else if \(Platform\.OS === 'ios'\) {\s+setIosPipEnabled\(shouldAutoPip\)\s+}\s+}, \[playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled\]\)/,
+    /} else if \(Platform\.OS === 'ios'\) {\s+const shouldEnable =[\s\S]*?setIosPipEnabled\(shouldEnable\)\s+}\s+}, \[playerMode, currentVideo, isCasting, pipSupported, isInPipMode, isLandscapeFullscreen\]\)/,
     'auto-PiP effect should complete with the iOS branch and dependency list',
   )
   assert.match(

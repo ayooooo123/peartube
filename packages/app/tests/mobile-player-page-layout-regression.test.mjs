@@ -129,18 +129,18 @@ test('fullscreen controls container lets empty-space taps fall through to the di
   )
 })
 
-test('Android mini-player layout is only disabled when split-player playback is enabled', () => {
+test('Android mini-player layout is no longer suppressed by the removed split-player flag', () => {
   const overlaySource = readAppFile('components/VideoPlayerOverlayImpl.tsx')
 
-  assert.match(
+  assert.doesNotMatch(
     overlaySource,
-    /const disableMiniLayoutOnAndroidSplit = Platform\.OS === 'android' && androidSplitPlayerEnabled/,
-    'the in-app Android mini player should stay available in single-host mode and only be suppressed for split-player playback',
+    /disableMiniLayoutOnAndroidSplit/,
+    'the split-player mini-layout guard was removed along with the permanently-disabled flag; the in-app Android mini player must stay available',
   )
-  assert.match(
+  assert.doesNotMatch(
     overlaySource,
-    /if \(disableMiniLayoutOnAndroidSplit && playerMode === 'mini' && !isInPipMode\) \{/,
-    'the legacy mini overlay suppression should remain tied to the split-player guard, not all Android playback',
+    /androidSplitPlayerEnabled/,
+    'the overlay should no longer consume the removed androidSplitPlayerEnabled context value',
   )
 })
 
@@ -180,7 +180,7 @@ test('mobile mini-player drag snaps to safe-area corners', () => {
   )
   assert.match(
     overlaySource,
-    /if \(isMiniPlayerModeShared\.value && Platform\.OS !== 'web' && !disableMiniLayoutOnAndroidSplit\) \{/,
+    /if \(isMiniPlayerModeShared\.value && Platform\.OS !== 'web'\) \{/,
     'the shared pan gesture should switch into mobile mini-player drag mode outside the web desktop branch',
   )
   assert.match(

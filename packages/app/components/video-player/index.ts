@@ -33,10 +33,8 @@ export { CommentsSection } from './CommentsSection'
 // Platform-specific components
 export { MiniPlayerControls } from './MiniPlayerControls'
 export { MiniPlayerProgressBar } from './MiniPlayerProgressBar'
-export { DesktopMiniPlayer } from './DesktopMiniPlayer'
 export { LoadingOverlay } from './LoadingOverlay'
 export { SeekFeedback } from './SeekFeedback'
-export { VideoContainer } from './VideoContainer'
 export { PearInlineVideoView, getPearInlinePlayerId } from './PearInlineVideoView'
 
 // Hooks

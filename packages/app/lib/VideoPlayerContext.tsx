@@ -54,15 +54,8 @@ function logWatchEventSafe(video: VideoData | null, durationSec: number, complet
     .catch(() => {})
 }
 
-const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
-const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
 let NEXT_VIDEO_PLAYER_CONTROLLER_ID = 1
-
-function isCastSessionLikelyActiveGlobally(): boolean {
-  const g = globalThis as Record<string, unknown>
-  return g[CAST_ACTIVE_GLOBAL_KEY] === true
-}
 
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
@@ -100,7 +93,6 @@ interface VideoPlayerContextType {
   
   // Unified PiP gating - single source of truth for whether PiP should be enabled
   shouldEnablePip: boolean
-  androidSplitPlayerEnabled: boolean
   videoAspectRatio: number | null
 
   // Playback position
@@ -157,7 +149,6 @@ type VideoPlayerSessionContextType = Pick<VideoPlayerContextType,
   | 'pipWindowSize'
   | 'setPipWindowSize'
   | 'shouldEnablePip'
-  | 'androidSplitPlayerEnabled'
   | 'videoAspectRatio'
   | 'playerRef'
 >
@@ -231,7 +222,6 @@ interface VideoPlayerProviderProps {
 export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const controllerIdRef = useRef<number>(NEXT_VIDEO_PLAYER_CONTROLLER_ID++)
   const [isPrimaryController, setIsPrimaryController] = useState(false)
-  const androidSplitPlayerEnabled = Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
   const initialState = useMemo<PlayerState>(() => ({
     mode: 'hidden',
     video: null,
@@ -249,7 +239,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [isLoading, setIsLoading] = useState(false)
   const playerMode: PlayerMode =
     state.mode === 'mini'
-      ? (androidSplitPlayerEnabled ? 'fullscreen' : 'mini')
+      ? 'mini'
       : state.mode === 'hidden' || state.mode === 'background_audio'
         ? 'hidden'
         : 'fullscreen'
@@ -305,11 +295,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const playbackStartDrainTimerRef = useRef<NodeJS.Timeout | null>(null)
   const playbackStartInFlightRef = useRef(false)
   const playbackStartCooldownUntilRef = useRef(0)
-  const splitPlayerLaunchInFlightRef = useRef(false)
   const seekConfirmRef = useRef<{ targetSeconds: number; startedAt: number } | null>(null)
   const seekClearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const closingVideoRef = useRef(false)
-  const pendingAndroidMinimizeCloseRef = useRef(false)
 
   // Background playback tracking refs
   const wasPlayingWhenBackgroundedRef = useRef(state.wasPlayingWhenBackgrounded)
@@ -479,13 +467,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   ) => {
     if (__DEV__) console.log('[VideoPlayerContext] Closing session:', reason)
 
-    const preserveNativeSession =
-      reason === 'android-minimize-close' &&
-      Platform.OS === 'android' &&
-      ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
-
     closingVideoRef.current = true
-    pendingAndroidMinimizeCloseRef.current = false
 
     queuedPlaybackStartRef.current = null
     playbackStartInFlightRef.current = false
@@ -593,9 +575,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     lastClosedTimeRef.current = null
   }, [])
 
-  // launchSplitPlayerActivity - Removed. Using react-native-video native PiP support instead.
-  // The split PlayerActivity architecture is no longer needed with react-native-video's built-in PiP.
-
   // Activate media session while a video is loaded (keeps lock screen controls visible)
   useEffect(() => {
     // react-native-video's VideoPlaybackService handles MediaSession natively
@@ -667,8 +646,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         isBackgroundedRef.current = true
         const wasPlaying = isPlayingRef.current
         const modeBeforeBackground = state.mode
-        const skipLifecycleDispatchForSplitAndroid =
-          Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
         const skipAppBackgroundDispatchForPip =
           Platform.OS === 'android' && (isInPipModeRef.current || pipTransitionInFlightRef.current)
 
@@ -730,8 +707,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         const resumedWithBackgroundPlayback =
           !wasInPip && Boolean(currentVideoRef.current) && wasPlayingWhenBackgroundedRef.current
 
-        const skipLifecycleDispatchForSplitAndroid =
-          Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
         const skipAppForegroundDispatchForPip = Platform.OS === 'android' && wasInPip
         // Also skip the foreground dispatch if we have an active video still playing.
         // When PiP silently fails (wasInPip=false but video is still playing),
@@ -743,7 +718,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           !wasInPip &&
           currentVideoRef.current &&
           wasPlayingWhenBackgroundedRef.current
-        if (!skipLifecycleDispatchForSplitAndroid && !skipAppForegroundDispatchForPip && !skipForActivePlayback) {
+        if (!skipAppForegroundDispatchForPip && !skipForActivePlayback) {
           dispatch({
             type: 'APP_FOREGROUND',
             source: 'appStateForegroundHiddenRestore',
@@ -754,8 +729,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           })
         }
 
-        const allowForegroundRestore = !(Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY)
-        if (!shouldSuppressRestore && allowForegroundRestore) {
+        if (!shouldSuppressRestore) {
           if (!currentVideoRef.current) {
             restoreLastClosedVideo('foreground')
           }
@@ -763,7 +737,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
         if (remotePlayWhileBackgroundedRef.current) {
           remotePlayWhileBackgroundedRef.current = false
-          if (allowForegroundRestore && !forceReloadPlayback('foreground-remote-play')) {
+          if (!forceReloadPlayback('foreground-remote-play')) {
             restoreLastClosedVideo('foreground-remote-play')
           }
         }
@@ -872,7 +846,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       getPlayerPort()?.stop?.()
       getPlayerPort()?.pause?.()
     } catch {}
-    pendingAndroidMinimizeCloseRef.current = false
     // MediaSession.clearPendingPlayerLaunchPayload removed - using react-native-video native PiP
     closingVideoRef.current = false
     pipExitShouldResumeRef.current = false
@@ -959,21 +932,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
     if (__DEV__) console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
-
-    const requestKey = `${video.channelKey || ''}:${video.id || video.path || ''}:${url}`
-
-    if (Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-      if (isCastSessionLikelyActiveGlobally()) {
-        startInActivityPlayback(video, url, 'direct-cast-active')
-        return
-      }
-
-      // Initial playback on the watch page stays inline/in-app.
-      // The native PlayerActivity host is only for the explicit Android split
-      // handoff path (for example minimize/fullscreen handoff), not first play.
-      startInActivityPlayback(video, url, 'direct-load')
-      return
-    }
 
     startInActivityPlayback(video, url, 'direct-load')
   }, [startInActivityPlayback])
@@ -1113,7 +1071,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       platform: 'android',
       wasInPip,
       shouldResume: wasPlaying,
-      restoreMode: ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY ? 'fullscreen' : modeBeforePipRef.current,
+      restoreMode: modeBeforePipRef.current,
       dimensions: pipWindowSizeRef.current ?? undefined,
     })
   }, [dispatch, setDesiredPlaying])
@@ -1365,8 +1323,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [setDesiredPlaying])
 
   const onError = useCallback((error: any) => {
-    const currentUrl = videoUrlRef.current
-    console.error('[VideoPlayerContext] Player error:', error, 'URL:', currentUrl)
+    if (__DEV__) {
+      const currentUrl = videoUrlRef.current
+      console.error('[VideoPlayerContext] Player error:', error, 'URL:', currentUrl)
+    }
     setIsLoading(false)
   }, [])
 
@@ -1408,7 +1368,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     pipWindowSize,
     setPipWindowSize,
     shouldEnablePip,
-    androidSplitPlayerEnabled,
     videoAspectRatio,
     playerRef,
   }), [
@@ -1423,7 +1382,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setIsInPipMode,
     pipWindowSize,
     shouldEnablePip,
-    androidSplitPlayerEnabled,
     videoAspectRatio,
   ])
 

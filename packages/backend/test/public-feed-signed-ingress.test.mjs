@@ -180,6 +180,78 @@ test('public feed rejects inbound relay-cache-like HAVE_FEED entries without sig
   }
 })
 
+test('public feed treats relay-served playable preview entries as locally backed for outbound gossip', () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  try {
+    assert.equal(manager._isLocallyBackedEntry({
+      driveKey: key(11),
+      publicBeeKey: key(12),
+      source: 'peer',
+      relayRole: 'cache',
+      relayServing: true,
+      discoveryOnly: true,
+      restoredFromCache: true,
+      requiresAvailabilityProbe: true,
+      previewVideos: [{
+        id: 'relay-restored-playable',
+        blobId: '0:8:0:1024',
+        blobsCoreKey: key(13),
+        availability: 'playable',
+        byteAvailability: 'playable',
+        readyForPlayback: false,
+        hasHeadBlock: false,
+        contiguousBlocks: 0,
+      }],
+    }), true)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('public feed re-sends relay-cache HAVE_FEED after snapshot enrichment', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const conn = {}
+  const sent = []
+  try {
+    manager.peerChannels.set(conn, {
+      messages: [{
+        send(msg) { sent.push(msg) },
+      }],
+    })
+    manager.entries.set(key(14), {
+      driveKey: key(14),
+      publicBeeKey: key(15),
+      source: 'peer',
+      relayRole: 'cache',
+      relayServing: true,
+      discoveryOnly: true,
+      restoredFromCache: true,
+      requiresAvailabilityProbe: true,
+    })
+    manager.feedSnapshotProvider = async (entries) => entries.map((entry) => ({
+      ...entry,
+      previewVideos: [{
+        id: 'relay-snapshot-video',
+        blobId: '0:8:0:1024',
+        blobsCoreKey: key(16),
+        availability: 'playable',
+        byteAvailability: 'playable',
+      }],
+    }))
+
+    manager.sendHaveFeed(conn)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(sent.length, 2)
+    assert.equal(sent[0].entries.length, 1)
+    assert.equal(sent[0].entries[0].previewVideos, undefined)
+    assert.equal(sent[1].entries.length, 1)
+    assert.equal(sent[1].entries[0].previewVideos.length, 1)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('public feed counts already-known async verified HAVE_FEED entries for the peer connection', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())
   const signed = await signedDescriptor({ channelId: key(7), metadataKey: key(8), mediaKey: key(9) })

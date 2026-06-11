@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  Clipboard,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +16,7 @@ import {
   View,
 } from 'react-native'
 import { useRouter } from 'expo-router'
+import * as Clipboard from 'expo-clipboard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import DiagnosticsPanel from '@/components/native-diagnostics/DiagnosticsPanel'
@@ -301,7 +301,7 @@ export default function ProfileScreen() {
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
-      await Clipboard.setString(text)
+      await Clipboard.setStringAsync(text)
       notify('Copied', `${label} copied to clipboard`)
     } catch {
       notify('Error', 'Failed to copy to clipboard')

@@ -84,7 +84,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               </div>
             )}
 
-            <button style={styles.retryButton} onClick={this.handleRetry}>
+            <button type="button" style={styles.retryButton} onClick={this.handleRetry}>
               <span style={styles.retryButtonText}>Try Again</span>
             </button>
 

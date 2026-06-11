@@ -85,6 +85,22 @@ export function useCommentsPolling({
     return `${channelKey}:${videoId}`
   }, [channelKey, videoId])
 
+  // Reset state during render when the video changes so the previous
+  // video's comments never paint against the new one
+  const [prevVideoKey, setPrevVideoKey] = useState(currentVideoKey)
+  if (prevVideoKey !== currentVideoKey) {
+    setPrevVideoKey(currentVideoKey)
+    if (currentVideoKey) {
+      setComments([])
+      setCommentText('')
+      setReplyToComment(null)
+      setCommentsPage(0)
+      setHasMoreComments(false)
+      setReactionCounts({})
+      setUserReaction(null)
+    }
+  }
+
   // Merge pending and confirmed comments
   const displayComments = useMemo(() => {
     if (pendingComments.length === 0) return comments
@@ -304,16 +320,9 @@ export function useCommentsPolling({
     )
   }, [channelKey, videoId, publicBeeKey, pendingComments])
 
-  // Reset state when video changes
+  // Load social data when video changes (state reset happens during render above)
   useEffect(() => {
     if (!currentVideoKey) return
-    setComments([])
-    setCommentText('')
-    setReplyToComment(null)
-    setCommentsPage(0)
-    setHasMoreComments(false)
-    setReactionCounts({})
-    setUserReaction(null)
     // Initial load
     loadSocial(0, false, true).catch(() => {})
     // Index vectors for semantic search

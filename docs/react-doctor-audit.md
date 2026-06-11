@@ -51,10 +51,21 @@ The raw report shows 2,187 issues, but the monorepo scan and the `@peartube/app`
 - **Accessibility (web):** `button-has-type` ×34, plus missing key handlers/labels on clickable elements in the desktop web UI.
 - **Maintainability:** ~17 unused (dev)dependencies flagged across package.json files — several (e.g. `bare-*` addons) are likely loaded dynamically by the Bare runtime, so verify before removing.
 
-## Suggested order of attack
+## Fixes applied (2026-06-11)
 
-1. Fix the `Clipboard` import (user-facing crash on profile screen).
-2. Commit the lock file; add pnpm hardening settings.
-3. Memoize `categories` on the home tab.
-4. Review the comments-polling reset-on-prop-change effects.
-5. Schedule an `exhaustive-deps` cleanup pass for playback/feed code.
+A follow-up pass fixed the actionable findings. Re-running react-doctor afterwards: unique issues 1,228 → 1,164; unique errors 46 → 29, where all 29 remaining are the verified false positives above (26 web-only raw-text flags, the misfiring `effect-needs-cleanup`, and the idiomatic fetch-effect loading pattern in `index.web.tsx`).
+
+- **Clipboard crash** — `profile.tsx` now uses `expo-clipboard` (`~56.0.4`, SDK-aligned) instead of the removed `react-native` `Clipboard`.
+- **Lock file** — `pnpm-lock.yaml` is now committed (`pnpm install --lockfile-only`). Generating it surfaced a broken dependency: `packages/app` declared `"react-native-mpv": "file:../react-native-mpv"`, a path that does not exist in the repo and is imported nowhere — it broke every fresh install and was removed.
+- **Supply-chain hardening** — `pnpm-workspace.yaml` gained `minimumReleaseAge: 10080` and `trustPolicy: no-downgrade`, with exclusions for `expo-clipboard` (SDK-aligned release younger than 7 days) and `semver`/`ua-parser-js`/`protobufjs` (legitimate backport releases on old major lines that pnpm flags as trust downgrades because newer provenance-signed versions were published first).
+- **Home-feed memoization** — the `categories` array is hoisted to module scope in `(tabs)/index.tsx` and `index.web.tsx`, so `renderVideoRow`'s `useCallback` holds between renders.
+- **Reset-state-on-prop-change** — `useCommentsPolling`, `shorts-social`, `ThumbnailImage`, and `CastRemoteModal` now reset state during render (React's adjust-state-during-render pattern) instead of in an effect, eliminating the one-frame flash of the previous video's comments/reactions; data-loading side effects stay in effects.
+- **`button-has-type`** — `type="button"` added to all 34 plain `<button>` elements in the desktop web UI.
+
+Verified: `npm run typecheck` passes; full-app `tsc --noEmit` and `npm run lint` produce byte-identical (pre-existing) errors before and after the changes. Jest is not runnable in this repo as configured (`jest-environment-jsdom` is not a dependency).
+
+## Deliberately not changed
+
+- `exhaustive-deps` (58) — adding dependencies changes *when* effects run; a blanket fix risks behavior regressions in playback/feed code and needs case-by-case review.
+- Unused (dev)dependency removals — several flagged packages (`bare-*` addons, etc.) are loaded dynamically by the Bare runtime and bare-pack tracing, which the analyzer cannot see.
+- `forwardRef` deprecations in vendored `components/ui/` (gluestack) and the remaining performance/maintainability warnings — churn outweighs benefit.

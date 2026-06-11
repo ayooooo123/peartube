@@ -91,7 +91,5 @@ jobs:
       - name: Run workflow regression tests
         run: |
           node --test \
-            packages/app/tests/ci-lockfile-install-regression.test.mjs \
-            packages/app/tests/android-apk-build-pipeline-regression.test.mjs \
-            packages/app/tests/ci-workflow-split-regression.test.mjs \
-            packages/app/tests/ci-generated-schema-workflow-regression.test.mjs
+            packages/app/tests/ci-*.test.mjs \
+            packages/app/tests/android-apk-build-pipeline-regression.test.mjs

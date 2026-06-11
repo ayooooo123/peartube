@@ -3086,6 +3086,13 @@ export function createApi({
       const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
       const networkDebug = getNetworkStats()
       const feedStats = publicFeed?.getStats?.() || {}
+      // Report what the user can actually SEE. The raw entries map includes
+      // hidden/filtered entries, so diagnostics (and the home screen's
+      // discovery-state classifier) were fed counts that didn't match the
+      // rendered feed.
+      const visibleFeedEntries = (() => {
+        try { return publicFeed?.getFeed?.()?.length ?? (publicFeed?.entries?.size || 0) } catch { return publicFeed?.entries?.size || 0 }
+      })()
       const startupTiming = {
         storage: networkDebug?.startupTiming || null,
         publicFeed: feedStats.startupTiming || null,
@@ -3112,7 +3119,7 @@ export function createApi({
         },
         feed: {
           feedConnections: publicFeed?.feedConnections?.size || 0,
-          feedEntries: publicFeed?.entries?.size || 0,
+          feedEntries: visibleFeedEntries,
           directPeerDial: feedStats.directPeerDial || null,
           lastHaveFeed: feedStats.lastHaveFeed || null,
         },
@@ -3131,7 +3138,7 @@ export function createApi({
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
         feedConnections: publicFeed?.feedConnections?.size || 0,
-        feedEntries: publicFeed?.entries?.size || 0,
+        feedEntries: visibleFeedEntries,
         feedTopicHex: topicHex,
         network: networkDebug,
         startupTiming,
@@ -3144,7 +3151,7 @@ export function createApi({
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',
-        channelsLoaded: ctx.channels?.size || 0,
+        channelsLoaded: Math.max(ctx.channels?.size || 0, visibleFeedEntries),
       };
     }
 

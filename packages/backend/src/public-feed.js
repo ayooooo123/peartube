@@ -1804,11 +1804,13 @@ export class PublicFeed {
         // Prefer new entries format (with publicBeeKey).
         // Cap processed entries per message: each verified entry costs a
         // signature check, and a hostile peer must not be able to pin the CPU
-        // or balloon memory with one oversized HAVE_FEED.
+        // or balloon memory with one oversized HAVE_FEED. Keep the TAIL of the
+        // batch — senders append newest entries last, so slicing the head kept
+        // the oldest channels and silently dropped the most recent ones.
         if (msg.entries && Array.isArray(msg.entries)) {
           log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
           receivedCount = msg.entries.length
-          for (const entry of msg.entries.slice(0, this._persistMaxEntries)) {
+          for (const entry of msg.entries.slice(-this._persistMaxEntries)) {
             if (!entry?.driveKey) continue
             const entrySource = 'peer'
             const resolvedPublicBeeKey = this._resolvePublicBeeKey(entry)
@@ -1830,7 +1832,7 @@ export class PublicFeed {
           receivedCount = msg.keys.length
           announcedKeys = msg.keys
             .filter((key) => typeof key === 'string' && key.length > 0)
-            .slice(0, this._persistMaxEntries)
+            .slice(-this._persistMaxEntries)
         }
 
         this._lastHaveFeed = {

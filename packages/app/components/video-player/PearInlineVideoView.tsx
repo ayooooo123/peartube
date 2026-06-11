@@ -64,10 +64,11 @@ const PLAYBACK_ERROR_RECOVERY_PROGRESS_SEC = 2
 // The playingChange/statusChange guards only run when the native player emits
 // an event. On Android, a play() issued while ExoPlayer is mid source-replace
 // can be dropped, leaving the player parked at readyToPlay + paused with no
-// further events — so videos open frozen on the first frame. Poll the actual
-// native playing state until the first real play event arrives and reassert.
-const AUTOPLAY_WATCHDOG_INTERVAL_MS = 500
-const AUTOPLAY_WATCHDOG_MAX_MS = 10000
+// further events — so videos open frozen on the first frame. Verify shortly
+// after each play request that the native player actually started, re-asserting
+// with backoff (0.4s/0.8s/1.6s/3.2s) until the first real play event arrives.
+const AUTOPLAY_VERIFY_BASE_DELAY_MS = 400
+const AUTOPLAY_VERIFY_MAX_ATTEMPTS = 4
 
 function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   const rawDurationSeconds = Number(data?.duration ?? player?.duration ?? 0)
@@ -149,7 +150,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const errorRecoveryAttemptsRef = useRef(0)
   const errorRecoveryResumePositionRef = useRef(0)
   const errorRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const autoplayWatchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const autoplayVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const videoSource = useMemo<VideoSource>(() => ({
     uri: videoUrl,
@@ -193,9 +194,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       clearTimeout(errorRecoveryTimerRef.current)
       errorRecoveryTimerRef.current = null
     }
-    if (autoplayWatchdogTimerRef.current) {
-      clearInterval(autoplayWatchdogTimerRef.current)
-      autoplayWatchdogTimerRef.current = null
+    if (autoplayVerifyTimerRef.current) {
+      clearTimeout(autoplayVerifyTimerRef.current)
+      autoplayVerifyTimerRef.current = null
     }
     playerRefForCallbacks.current = player
   }, [player, videoUrl, playbackSession, currentVideoKey])
@@ -205,9 +206,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       clearTimeout(errorRecoveryTimerRef.current)
       errorRecoveryTimerRef.current = null
     }
-    if (autoplayWatchdogTimerRef.current) {
-      clearInterval(autoplayWatchdogTimerRef.current)
-      autoplayWatchdogTimerRef.current = null
+    if (autoplayVerifyTimerRef.current) {
+      clearTimeout(autoplayVerifyTimerRef.current)
+      autoplayVerifyTimerRef.current = null
     }
   }, [])
 
@@ -227,33 +228,31 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     onErrorRef.current = onError
   }, [onError])
 
-  const clearAutoplayWatchdog = useCallback(() => {
-    if (autoplayWatchdogTimerRef.current) {
-      clearInterval(autoplayWatchdogTimerRef.current)
-      autoplayWatchdogTimerRef.current = null
+  const clearAutoplayVerify = useCallback(() => {
+    if (autoplayVerifyTimerRef.current) {
+      clearTimeout(autoplayVerifyTimerRef.current)
+      autoplayVerifyTimerRef.current = null
     }
   }, [])
 
-  const startAutoplayWatchdog = useCallback(() => {
+  const scheduleAutoplayVerify = useCallback((attempt: number = 0) => {
     if (Platform.OS === 'web') return
-    clearAutoplayWatchdog()
-    const deadline = Date.now() + AUTOPLAY_WATCHDOG_MAX_MS
-    autoplayWatchdogTimerRef.current = setInterval(() => {
-      if (hasReceivedPlayEventRef.current || Date.now() > deadline) {
-        clearAutoplayWatchdog()
-        return
-      }
-      if (!isPlayingRef.current) return
+    clearAutoplayVerify()
+    if (attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS) return
+    autoplayVerifyTimerRef.current = setTimeout(() => {
+      autoplayVerifyTimerRef.current = null
+      if (hasReceivedPlayEventRef.current || !isPlayingRef.current) return
       const currentPlayer = playerRefForCallbacks.current
       if (!currentPlayer) return
       try {
         if (!currentPlayer.playing) currentPlayer.play()
       } catch {
         // The player can be mid source-replace or already released; the next
-        // tick retries until the deadline.
+        // verification retries.
       }
-    }, AUTOPLAY_WATCHDOG_INTERVAL_MS)
-  }, [clearAutoplayWatchdog])
+      scheduleAutoplayVerify(attempt + 1)
+    }, AUTOPLAY_VERIFY_BASE_DELAY_MS * 2 ** attempt)
+  }, [clearAutoplayVerify])
 
   useEffect(() => {
     let cancelled = false
@@ -275,7 +274,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         player.staysActiveInBackground = notificationControlsRef.current
         if (isPlayingRef.current) {
           player.play()
-          startAutoplayWatchdog()
+          scheduleAutoplayVerify()
         }
       } catch (error) {
         if (cancelled || sourceReplaceGenerationRef.current !== generation) return
@@ -446,12 +445,12 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (isPlaying) {
       player.play()
       if (!hasReceivedPlayEventRef.current) {
-        startAutoplayWatchdog()
+        scheduleAutoplayVerify()
       }
     } else {
       player.pause()
     }
-  }, [player, isPlaying, startAutoplayWatchdog])
+  }, [player, isPlaying, scheduleAutoplayVerify])
 
   useEffect(() => {
     applyPendingSeek(seekPosition)
@@ -570,7 +569,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       hasReceivedPlayEventRef.current = true
       pipExitPlayingRef.current = false
       seekPlaybackRecoveryUntilRef.current = 0
-      clearAutoplayWatchdog()
+      clearAutoplayVerify()
       onPlaying?.()
       return
     }

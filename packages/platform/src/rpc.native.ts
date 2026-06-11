@@ -514,6 +514,7 @@ export async function initPlatformRPC(config: {
   launchOptions?: {
     network?: Record<string, unknown>;
     swarmOptions?: Record<string, unknown>;
+    player?: string;
   };
 } = {}): Promise<void> {
   if (_isInitialized && mainBridge.isInitialized()) {
@@ -601,11 +602,22 @@ export async function initPlatformRPC(config: {
 
     nativeRuntimeConfig.backendPath = backendPath;
     nativeRuntimeConfig.backendSource = backendPath ? '' : backendSource;
-    const launchOptionsArg = config.launchOptions
+    // OS-native player id for the playback compatibility layer (consumed by the
+    // worklet only when PEARTUBE_AVPLAYER_COMPAT is enabled; harmless otherwise).
+    let derivedPlayer: string | null = config.launchOptions?.player ?? null;
+    if (!derivedPlayer) {
+      try {
+        const os = require('react-native')?.Platform?.OS;
+        if (os === 'ios') derivedPlayer = 'avplayer';
+        else if (os === 'android') derivedPlayer = 'exoplayer';
+      } catch { /* Platform unavailable — leave player unset */ }
+    }
+    const launchOptionsArg = (config.launchOptions || derivedPlayer)
       ? JSON.stringify({
         __peartubeLaunchOptions: true,
-        network: config.launchOptions.network,
-        swarmOptions: config.launchOptions.swarmOptions,
+        network: config.launchOptions?.network,
+        swarmOptions: config.launchOptions?.swarmOptions,
+        player: derivedPlayer ?? undefined,
       })
       : null;
     nativeRuntimeConfig.workerArgs = [

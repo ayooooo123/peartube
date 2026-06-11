@@ -53,6 +53,7 @@
     "typescript": "~6.0.3"
   },
   "overrides": {
+    "bare-module-lexer": ">=1.5.2",
     "eslint-plugin-react-hooks": "^4.6.2",
     "@peartube/spec": "file:packages/spec"
   },

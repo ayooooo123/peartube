@@ -19,25 +19,26 @@ test('Android keeps initial desired play state when expo-video emits a pre-play 
   assert.doesNotMatch(handler, /Platform\.OS === 'web' && !hasReceivedPlayEventRef\.current/, 'the pre-play paused guard must not be web-only')
 })
 
-test('Android autoplay watchdog polls native playing state until the first play event', async () => {
+test('Android verifies each play request against native state until the first play event', async () => {
   const src = await source(inlineViewPath)
 
-  const watchdogStart = src.indexOf('const startAutoplayWatchdog')
-  assert.notEqual(watchdogStart, -1, 'expected a startAutoplayWatchdog helper — event-driven guards alone miss dropped play() calls that leave ExoPlayer paused without emitting further events')
-  const watchdog = src.slice(watchdogStart, src.indexOf('}, [clearAutoplayWatchdog])', watchdogStart))
+  const verifyStart = src.indexOf('const scheduleAutoplayVerify')
+  assert.notEqual(verifyStart, -1, 'expected a scheduleAutoplayVerify helper — event-driven guards alone miss dropped play() calls that leave ExoPlayer paused without emitting further events')
+  const verify = src.slice(verifyStart, src.indexOf('}, [clearAutoplayVerify])', verifyStart))
 
-  assert.match(watchdog, /setInterval/, 'the watchdog must poll — a one-shot check can race the same dropped event it guards against')
-  assert.match(watchdog, /hasReceivedPlayEventRef\.current[\s\S]*clearAutoplayWatchdog\(\)/, 'the watchdog stops once a real native play event has been received')
-  assert.match(watchdog, /\.playing\)[\s\S]*\.play\(\)/, 'the watchdog reasserts play() based on the actual native playing state, not JS-side bookkeeping')
+  assert.match(verify, /attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS\) return/, 'verification must be bounded — no standing interval, just a capped retry chain')
+  assert.match(verify, /scheduleAutoplayVerify\(attempt \+ 1\)/, 'a failed verification must re-arm itself, since the dropped-play state emits no event to react to')
+  assert.match(verify, /hasReceivedPlayEventRef\.current \|\| !isPlayingRef\.current\) return/, 'verification stops once a real play event arrived or playback is no longer desired')
+  assert.match(verify, /\.playing\)[\s\S]*\.play\(\)/, 'verification reasserts play() based on the actual native playing state, not JS-side bookkeeping')
 
   const applySourceStart = src.indexOf('const applySource = async () => {')
   assert.notEqual(applySourceStart, -1, 'expected the applySource effect')
   const applySource = src.slice(applySourceStart, src.indexOf('void applySource()', applySourceStart))
-  assert.match(applySource, /player\.play\(\)\s*\n\s*startAutoplayWatchdog\(\)/, 'applying a source with desired playback must arm the watchdog')
+  assert.match(applySource, /player\.play\(\)\s*\n\s*scheduleAutoplayVerify\(\)/, 'applying a source with desired playback must schedule a verification')
 
   const playingChangeStart = src.indexOf("useEventListener(player, 'playingChange'")
   const playingChange = src.slice(playingChangeStart, src.indexOf("useEventListener(player, 'statusChange'", playingChangeStart))
-  assert.match(playingChange, /hasReceivedPlayEventRef\.current = true[\s\S]*clearAutoplayWatchdog\(\)/, 'the first native play event must disarm the watchdog')
+  assert.match(playingChange, /hasReceivedPlayEventRef\.current = true[\s\S]*clearAutoplayVerify\(\)/, 'the first native play event must cancel pending verification')
 })
 
 test('Android reasserts desired play when source first becomes ready before native playing event', async () => {

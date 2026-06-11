@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 
 import { normalizeBlobRefInput, parseBlobRef } from './blob-ref.js'
+import { attachBlobPlaybackProfile } from './blob-playback-profile.js'
 import { retainSwarmDiscovery } from './storage.js'
 
 function getCorePeerList(core) {
@@ -74,6 +75,17 @@ export class BlobPlaybackService {
     })
 
     this.warmDirectBlobRef(ref.blobsCoreKey, keyBuffer)
+
+    // Make the blob's playback profile (keyframe index + moov position)
+    // available to range prioritization before the player's first range
+    // request: stored profile when this device probed the file, remote
+    // header probe otherwise. Best-effort and detached — URL resolution
+    // must never wait on it.
+    attachBlobPlaybackProfile(ctx, {
+      blobsCoreKey: ref.blobsCoreKey,
+      blobId: ref.blob,
+      mimeType: ref.mimeType || mimeType,
+    }).catch(() => {})
 
     return { url }
   }

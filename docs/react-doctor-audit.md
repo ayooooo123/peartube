@@ -24,7 +24,7 @@ The raw report shows 2,187 issues, but the monorepo scan and the `@peartube/app`
    The `useCallback` for `renderVideoRow` depends on `categories`, which is rebuilt every render, so the callback (and everything memoized downstream of it on the home feed) re-creates on every render. Fix: memoize `categories` with `useMemo` or hoist it.
 
 3. **No lock file committed (`expo-lockfile`, Correctness).**
-   There is a `pnpm-workspace.yaml` but no `pnpm-lock.yaml` (or any lock file) in the repo. Installs are not reproducible and EAS Build cannot infer the package manager. Fix: commit the lock file.
+   No lock file exists anywhere in the repo, and `.gitignore` excludes them deliberately. Installs are not reproducible and EAS Build cannot infer the package manager. The project installs with plain npm (`npm run install:all`), so fixing this means committing per-package `package-lock.json` files — left as a project-policy decision (see "Deliberately not changed").
 
 ## Worth reviewing (real pattern, intentional-looking code)
 
@@ -35,7 +35,7 @@ The raw report shows 2,187 issues, but the monorepo scan and the `@peartube/app`
 
 5. **`exhaustive-deps` ×58** — missing or unstable hook dependencies across the app. Worth a pass, since several are in playback and feed code where stale closures cause subtle bugs.
 
-6. **Security (2 warnings)** — `pnpm-workspace.yaml` is missing `minimumReleaseAge` and `trustPolicy: no-downgrade` supply-chain hardening. Cheap to add.
+6. **Security (2 warnings)** — `pnpm-workspace.yaml` is missing `minimumReleaseAge` and `trustPolicy: no-downgrade` supply-chain hardening. Moot in practice: the project installs with npm, not pnpm, so these settings would never apply (and the vestigial `pnpm-workspace.yaml` is what triggers the warnings).
 
 ## False positives (verified — no action needed)
 
@@ -56,8 +56,7 @@ The raw report shows 2,187 issues, but the monorepo scan and the `@peartube/app`
 A follow-up pass fixed the actionable findings. Re-running react-doctor afterwards: unique issues 1,228 → 1,164; unique errors 46 → 29, where all 29 remaining are the verified false positives above (26 web-only raw-text flags, the misfiring `effect-needs-cleanup`, and the idiomatic fetch-effect loading pattern in `index.web.tsx`).
 
 - **Clipboard crash** — `profile.tsx` now uses `expo-clipboard` (`~56.0.4`, SDK-aligned) instead of the removed `react-native` `Clipboard`.
-- **Lock file** — `pnpm-lock.yaml` is now committed (`pnpm install --lockfile-only`). Generating it surfaced a broken dependency: `packages/app` declared `"react-native-mpv": "file:../react-native-mpv"`, a path that does not exist in the repo and is imported nowhere — it broke every fresh install and was removed.
-- **Supply-chain hardening** — `pnpm-workspace.yaml` gained `minimumReleaseAge: 10080` and `trustPolicy: no-downgrade`, with exclusions for `expo-clipboard` (SDK-aligned release younger than 7 days) and `semver`/`ua-parser-js`/`protobufjs` (legitimate backport releases on old major lines that pnpm flags as trust downgrades because newer provenance-signed versions were published first).
+- **Broken dependency** — `packages/app` declared `"react-native-mpv": "file:../react-native-mpv"`, a path that does not exist in the repo and is imported nowhere — it broke every fresh install and was removed. (Surfaced while attempting lock file generation.)
 - **Home-feed memoization** — the `categories` array is hoisted to module scope in `(tabs)/index.tsx` and `index.web.tsx`, so `renderVideoRow`'s `useCallback` holds between renders.
 - **Reset-state-on-prop-change** — `useCommentsPolling`, `shorts-social`, `ThumbnailImage`, and `CastRemoteModal` now reset state during render (React's adjust-state-during-render pattern) instead of in an effect, eliminating the one-frame flash of the previous video's comments/reactions; data-loading side effects stay in effects.
 - **`button-has-type`** — `type="button"` added to all 34 plain `<button>` elements in the desktop web UI.
@@ -69,3 +68,4 @@ Verified: `npm run typecheck` passes; full-app `tsc --noEmit` and `npm run lint`
 - `exhaustive-deps` (58) — adding dependencies changes *when* effects run; a blanket fix risks behavior regressions in playback/feed code and needs case-by-case review.
 - Unused (dev)dependency removals — several flagged packages (`bare-*` addons, etc.) are loaded dynamically by the Bare runtime and bare-pack tracing, which the analyzer cannot see.
 - `forwardRef` deprecations in vendored `components/ui/` (gluestack) and the remaining performance/maintainability warnings — churn outweighs benefit.
+- Lock file + pnpm hardening — the project installs with plain npm (`npm run install:all`, per-package `--prefix` installs; `pnpm-workspace.yaml` is vestigial) and `.gitignore` deliberately excludes all lock files, so the lock-file and pnpm-settings findings were left as-is. Reproducible installs would require committing per-package `package-lock.json` files (and un-ignoring them) — a project-policy decision.

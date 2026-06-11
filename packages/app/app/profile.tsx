@@ -78,6 +78,11 @@ export default function ProfileScreen() {
   const { identity, createIdentity, rpc, loadIdentity } = useApp()
 
   const [newName, setNewName] = useState('')
+  // One-time recovery phrase display after channel creation (never persisted).
+  const [recoveryPhrase, setRecoveryPhrase] = useState<string | null>(null)
+  const [restorePhrase, setRestorePhrase] = useState('')
+  const [restoring, setRestoring] = useState(false)
+  const [restoreOpen, setRestoreOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [customStorageLimit, setCustomStorageLimit] = useState('')
@@ -329,31 +334,83 @@ export default function ProfileScreen() {
     try {
       const newIdentity = await createIdentity(newName.trim())
       setNewName('')
-      if (newIdentity?.driveKey && rpc && Platform.OS !== 'web') {
-        Alert.alert(
-          'Share your channel?',
-          'Add your channel to the public feed so others can discover it. You can keep it private if you prefer.',
-          [
-            { text: 'Keep private', style: 'cancel' },
-            {
-              text: 'Publish',
-              onPress: async () => {
-                try {
-                  const result = await rpc.submitToFeed({})
-                  if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
-                  setIsPublished(true)
-                } catch (err) {
-                  console.error('Failed to publish to feed:', err)
-                }
-              },
-            },
-          ]
-        )
+      // The recovery phrase is derived at creation and never persisted by the
+      // backend — this is the only chance to show it. The publish prompt waits
+      // until the user confirms they saved it.
+      const phrase = newIdentity?.seedPhrase
+      if (typeof phrase === 'string' && phrase.trim().length > 0) {
+        setRecoveryPhrase(phrase.trim())
+        return
       }
+      promptPublishNewChannel()
     } catch (err: any) {
       notify('Error', err.message || 'Failed to create channel')
     } finally {
       setCreating(false)
+    }
+  }
+
+  const promptPublishNewChannel = () => {
+    if (!rpc || Platform.OS === 'web') return
+    Alert.alert(
+      'Share your channel?',
+      'Add your channel to the public feed so others can discover it. You can keep it private if you prefer.',
+      [
+        { text: 'Keep private', style: 'cancel' },
+        {
+          text: 'Publish',
+          onPress: async () => {
+            try {
+              const result = await rpc.submitToFeed({})
+              if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
+              setIsPublished(true)
+            } catch (err) {
+              console.error('Failed to publish to feed:', err)
+            }
+          },
+        },
+      ]
+    )
+  }
+
+  const confirmRecoveryPhraseSaved = () => {
+    confirmDestructive(
+      'Phrase saved?',
+      'PearTube cannot show this phrase again. Without it, your channel cannot be recovered if you lose this device.',
+      "I've saved it",
+      () => {
+        setRecoveryPhrase(null)
+        promptPublishNewChannel()
+      }
+    )
+  }
+
+  const handleRestoreIdentity = async () => {
+    if (!rpc) return
+    const phrase = restorePhrase.trim().toLowerCase().split(/\s+/).join(' ')
+    const wordCount = phrase ? phrase.split(' ').length : 0
+    if (wordCount !== 12 && wordCount !== 24) {
+      notify('Invalid phrase', 'Enter the 12-word recovery phrase, separated by spaces.')
+      return
+    }
+    setRestoring(true)
+    try {
+      const result = await (rpc as any).recoverIdentity({ seedPhrase: phrase })
+      const recovered = result?.identity
+      if (!recovered?.publicKey) throw new Error(result?.error || 'Recovery failed')
+      // recoverIdentity registers the identity but does not activate it.
+      try { await (rpc as any).setActiveIdentity({ publicKey: recovered.publicKey }) } catch { /* best effort */ }
+      await loadIdentity()
+      setRestorePhrase('')
+      setRestoreOpen(false)
+      notify(
+        'Channel restored',
+        'Your channel key was recovered. Restart the app to finish applying the recovery key, then give the network a moment to re-sync your videos.'
+      )
+    } catch (err: any) {
+      notify('Restore failed', err?.message || 'Could not recover a channel from that phrase.')
+    } finally {
+      setRestoring(false)
     }
   }
 
@@ -476,6 +533,9 @@ export default function ProfileScreen() {
             </Pressable>
           </GlassCard>
 
+          <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
+          {renderRestoreCard()}
+
           <SectionHeader title="Network cache" subtitle="Works even without a channel" />
           {renderStorageCard()}
 
@@ -498,6 +558,64 @@ export default function ProfileScreen() {
           </GlassCard>
         </ScrollView>
       </View>
+    )
+  }
+
+  function renderRecoveryPhraseCard() {
+    if (!recoveryPhrase) return null
+    return (
+      <>
+        <SectionHeader title="Recovery phrase" subtitle="Shown once — write these words down" />
+        <GlassCard highlight style={styles.sectionCard}>
+          <Text style={styles.recoveryWarning}>
+            These 12 words are the only way to recover your channel on a new device.
+            Anyone who has them controls your channel — store them somewhere safe, offline.
+          </Text>
+          <View style={styles.recoveryPhraseBox}>
+            <Text selectable style={styles.recoveryPhraseText}>{recoveryPhrase}</Text>
+          </View>
+          <Pressable
+            onPress={() => copyToClipboard(recoveryPhrase, 'Recovery phrase')}
+            style={styles.secondaryButton}
+          >
+            <Feather name="copy" size={15} color={colors.text} />
+            <Text style={styles.secondaryLabel}>Copy phrase</Text>
+          </Pressable>
+          <Pressable onPress={confirmRecoveryPhraseSaved} style={styles.primaryButton}>
+            <Feather name="check" size={16} color={colors.onPrimary} />
+            <Text style={styles.primaryLabel}>I&apos;ve saved my phrase</Text>
+          </Pressable>
+        </GlassCard>
+      </>
+    )
+  }
+
+  function renderRestoreCard() {
+    return (
+      <GlassCard style={styles.sectionCard}>
+        <TextInput
+          placeholder="Enter your 12-word recovery phrase"
+          value={restorePhrase}
+          onChangeText={setRestorePhrase}
+          placeholderTextColor={colors.textMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          multiline
+          style={[styles.input, styles.phraseInput]}
+        />
+        <Pressable
+          onPress={handleRestoreIdentity}
+          disabled={restoring || !restorePhrase.trim()}
+          style={[styles.secondaryButton, (restoring || !restorePhrase.trim()) && { opacity: 0.4 }]}
+        >
+          {restoring ? <ActivityIndicator size="small" color={colors.text} /> : (
+            <>
+              <Feather name="rotate-ccw" size={15} color={colors.text} />
+              <Text style={styles.secondaryLabel}>Restore channel</Text>
+            </>
+          )}
+        </Pressable>
+      </GlassCard>
     )
   }
 
@@ -586,6 +704,8 @@ export default function ProfileScreen() {
     <View style={styles.screen}>
       {header}
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
+        {renderRecoveryPhraseCard()}
+
         {/* Identity */}
         <GlassCard highlight style={[styles.sectionCard, { marginTop: 8 }]}>
           <View style={styles.identityRow}>
@@ -717,6 +837,18 @@ export default function ProfileScreen() {
             </View>
           )}
         </GlassCard>
+
+        {/* Backup & recovery */}
+        <SectionHeader title="Backup & recovery" subtitle="Restore a channel from its 12-word phrase" />
+        {restoreOpen ? renderRestoreCard() : (
+          <GlassCard padded={false} style={styles.sectionCard}>
+            <Pressable onPress={() => setRestoreOpen(true)} style={styles.advancedToggle}>
+              <Feather name="rotate-ccw" size={15} color={colors.textMuted} />
+              <Text style={styles.advancedLabel}>Restore from recovery phrase</Text>
+              <Feather name="chevron-down" size={17} color={colors.textMuted} />
+            </Pressable>
+          </GlassCard>
+        )}
 
         {/* Storage / network support */}
         <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
@@ -858,6 +990,30 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
     marginBottom: 10,
+  },
+  phraseInput: {
+    minHeight: 76,
+    textAlignVertical: 'top',
+  },
+  recoveryWarning: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 12,
+  },
+  recoveryPhraseBox: {
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+  },
+  recoveryPhraseText: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 26,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   primaryButton: {
     flexDirection: 'row',

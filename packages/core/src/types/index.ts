@@ -11,6 +11,12 @@ export interface Identity {
   createdAt: number;
   secretKey?: string;
   isActive?: boolean;
+  /**
+   * BIP39 recovery phrase. Only present on the createIdentity response —
+   * the backend never persists it, so the UI must show it immediately
+   * (one-time) for the user to back up.
+   */
+  seedPhrase?: string;
 }
 
 export interface CreateIdentityResult {

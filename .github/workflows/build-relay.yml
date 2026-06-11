@@ -41,16 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
-      - uses: ./.github/actions/setup-node-workspace
-        with:
-          node-version: 22.x
-          install: 'false'
-
-      - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
-
-      - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
+      - uses: ./.github/actions/setup-relay-workspace
 
       - name: Run relay CLI tests
         run: npm test --prefix packages/cli
@@ -65,16 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
-      - uses: ./.github/actions/setup-node-workspace
-        with:
-          node-version: 22.x
-          install: 'false'
-
-      - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
-
-      - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
+      - uses: ./.github/actions/setup-relay-workspace
 
       - name: Build relay standalone executable (x64)
         run: npm run build:standalone:linux-x64 --prefix packages/cli
@@ -108,16 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
-      - uses: ./.github/actions/setup-node-workspace
-        with:
-          node-version: 22.x
-          install: 'false'
-
-      - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
-
-      - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
+      - uses: ./.github/actions/setup-relay-workspace
 
       - name: Build relay standalone executable
         run: npm run build:standalone:${{ matrix.host }} --prefix packages/cli

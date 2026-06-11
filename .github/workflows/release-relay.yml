@@ -51,16 +51,7 @@ jobs:
           REQUESTED_TAG: ${{ github.event.inputs.tag }}
         run: git checkout --detach "refs/tags/$REQUESTED_TAG"
 
-      - uses: ./.github/actions/setup-node-workspace
-        with:
-          node-version: 22.x
-          install: 'false'
-
-      - name: Install backend dependencies
-        run: npm install --prefix packages/backend --ignore-scripts
-
-      - name: Install relay dependencies
-        run: npm install --prefix packages/cli --ignore-scripts
+      - uses: ./.github/actions/setup-relay-workspace
 
       - name: Build relay standalone executable (x64)
         run: npm run build:standalone:linux-x64 --prefix packages/cli

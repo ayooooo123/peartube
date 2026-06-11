@@ -212,6 +212,10 @@ export default function ChannelScreen() {
         channelKey,
         videoId: video.id,
         expectedPort: blobServerPort,
+        blobRefs: {
+          thumbnailBlobId: (video as any).thumbnailBlobId || null,
+          thumbnailBlobsCoreKey: (video as any).thumbnailBlobsCoreKey || null,
+        },
       }).then((url) => {
         if (!url) return
         setThumbnailCache((prev) => {

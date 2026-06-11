@@ -252,7 +252,11 @@ export default function HomeScreen() {
   const appState = useRef<AppStateStatus>(AppState.currentState)
 
   // Fetch thumbnail for a video (non-blocking)
-  const fetchThumbnail = useCallback(async (driveKey: string, videoId: string) => {
+  const fetchThumbnail = useCallback(async (
+    driveKey: string,
+    videoId: string,
+    blobRefs?: { thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null },
+  ) => {
     if (isPear || !rpc) return // Desktop handles thumbnails differently
     const cacheKey = `${driveKey}:${videoId}`
     if (thumbnailCacheRef.current[cacheKey]) return // Already cached
@@ -266,6 +270,7 @@ export default function HomeScreen() {
         channelKey: driveKey,
         videoId,
         expectedPort: blobServerPort,
+        blobRefs,
       })
 
       if (url) {
@@ -286,7 +291,14 @@ export default function HomeScreen() {
     if (isPear) return
     for (const video of vids) {
       if (video.channelKey && video.id) {
-        fetchThumbnail(video.channelKey, video.id)
+        // Forward blob refs from feed previews: gossip-discovered channels
+        // have no locally resolvable video record, so the backend cannot
+        // find the thumbnail without them.
+        const videoAny = video as any
+        fetchThumbnail(video.channelKey, video.id, {
+          thumbnailBlobId: videoAny.thumbnailBlobId || null,
+          thumbnailBlobsCoreKey: videoAny.thumbnailBlobsCoreKey || null,
+        })
       }
     }
   }, [fetchThumbnail])

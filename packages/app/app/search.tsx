@@ -226,6 +226,10 @@ export default function SearchScreen() {
             channelKey: ck,
             videoId: v.id,
             expectedPort: blobServerPort,
+            blobRefs: {
+              thumbnailBlobId: (v as any).thumbnailBlobId || null,
+              thumbnailBlobsCoreKey: (v as any).thumbnailBlobsCoreKey || null,
+            },
           }).then((url) => {
             if (!url) return
             setThumbnailCache(prev => {

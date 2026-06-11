@@ -236,6 +236,16 @@ KeyframeIndexV1 = {
 }
 ```
 
+> **Implementation finding (phase 1):** both the channel HyperDB and public bee
+> `video` records are `compact: true` hyperschemas, and hyperschema hard-rejects
+> expanding compact structs (`A compact struct was expanded`). Propagating the
+> index through video metadata therefore requires a parallel non-compact
+> `videoExtras` collection (plus autobase op-schema plumbing), not a field
+> append. Deferred: viewers instead self-index via a hyperblobs remote header
+> probe cached in the local metaDb — for back-moov files the probe fetches
+> exactly the bytes the player is about to block on, so the marginal value of
+> metadata propagation is low.
+
 ### Uploads — tier 0 (index only, default, no transcoding)
 
 At upload time, run a **demux-only probe** with bare-ffmpeg: read container headers

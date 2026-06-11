@@ -37,7 +37,7 @@ export function isMp4MimeType(mimeType) {
   return MP4_MIME_TYPES.has(String(mimeType || '').toLowerCase())
 }
 
-function readBoxHeader(buf, offset) {
+export function readBoxHeader(buf, offset) {
   if (offset + 8 > buf.length) return null
   const size32 = buf.readUInt32BE(offset)
   const type = buf.toString('latin1', offset + 4, offset + 8)
@@ -51,7 +51,7 @@ function readBoxHeader(buf, offset) {
   return { type, size: size32, headerSize: 8 }
 }
 
-function* iterateChildBoxes(buf, start, end) {
+export function* iterateChildBoxes(buf, start, end) {
   let offset = start
   while (offset + 8 <= end) {
     const header = readBoxHeader(buf, offset)
@@ -63,14 +63,14 @@ function* iterateChildBoxes(buf, start, end) {
   }
 }
 
-function findChildBox(buf, start, end, type) {
+export function findChildBox(buf, start, end, type) {
   for (const box of iterateChildBoxes(buf, start, end)) {
     if (box.type === type) return box
   }
   return null
 }
 
-function findBoxPath(buf, start, end, path) {
+export function findBoxPath(buf, start, end, path) {
   let range = { contentStart: start, contentEnd: end }
   for (const type of path) {
     range = findChildBox(buf, range.contentStart, range.contentEnd, type)

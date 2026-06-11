@@ -1045,6 +1045,24 @@ export class PublicFeed {
     return true
   }
 
+  /**
+   * Peer ids (noise key hex) of currently connected feed peers that announced
+   * the given drive key. Lets playback prep promote/dial known seeders
+   * immediately instead of waiting for an availability-hint round trip.
+   * @param {string} driveKey
+   * @returns {string[]}
+   */
+  getEntryFeedPeerIds(driveKey) {
+    if (!driveKey || !this.peerFeedKeys) return []
+    const ids = new Set()
+    for (const [conn, keys] of this.peerFeedKeys) {
+      if (!keys?.has?.(driveKey)) continue
+      const keyHex = this._connectionPeerKeyHex(conn)
+      if (keyHex) ids.add(keyHex)
+    }
+    return Array.from(ids)
+  }
+
   promoteAvailabilityHintPeers(peerIds = [], topic = null) {
     const ids = Array.isArray(peerIds) ? peerIds : [peerIds]
     const promoted = []

@@ -1153,10 +1153,18 @@ export function createApi({
 
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       let sourcePeerDiagnostics = { sourceFeedPeerIds: [], sourceRelayPeerIds: [] }
+      const hasDirectBlobRef = Boolean(playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey)
+      // Known feed peers that announced this channel are available synchronously
+      // — promote them right away instead of waiting on any hint round trip.
+      if (hasDirectBlobRef && typeof publicFeed?.getEntryFeedPeerIds === 'function') {
+        try {
+          sourcePeerDiagnostics.sourceFeedPeerIds = publicFeed.getEntryFeedPeerIds(driveKey) || []
+        } catch { /* best effort */ }
+      }
       // Fire the availability-hint request without blocking playback prep.
       // Hints feed peer promotion inside the blob warmup as they arrive.
       let peerHintsPromise = null
-      if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey && publicFeed?.requestAvailabilityHints) {
+      if (hasDirectBlobRef && publicFeed?.requestAvailabilityHints) {
         peerHintsPromise = (async () => {
           try {
             const hints = await publicFeed.requestAvailabilityHints([{
@@ -1173,7 +1181,11 @@ export function createApi({
                 blobId: playbackBlobRef.blobId,
               }))
               : []
-            sourcePeerDiagnostics = collectHintPeerIds(matchingHints)
+            const hinted = collectHintPeerIds(matchingHints)
+            sourcePeerDiagnostics = {
+              sourceFeedPeerIds: Array.from(new Set([...sourcePeerDiagnostics.sourceFeedPeerIds, ...hinted.sourceFeedPeerIds])),
+              sourceRelayPeerIds: Array.from(new Set([...sourcePeerDiagnostics.sourceRelayPeerIds, ...hinted.sourceRelayPeerIds])),
+            }
           } catch { /* best effort */ }
           timingRecord.stages.hintsMs = Date.now() - startedAt
           return sourcePeerDiagnostics

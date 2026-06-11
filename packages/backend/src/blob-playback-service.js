@@ -253,18 +253,16 @@ export class BlobPlaybackService {
       }
 
       const startedAt = Date.now()
-      try {
-        await Promise.race([
-          blobsCore.update({ wait: true }),
-          wait(Math.max(1, Math.min(timeoutMs, 250))),
-        ])
-      } catch { /* best effort */ }
-      markTiming('updateWaitMs')
+      // Kick a DHT/network update without blocking the head-block wait —
+      // known peers were already promoted above, so replication can start
+      // over existing connections while discovery catches up.
+      try { blobsCore.update({ wait: true }).catch(() => {}) } catch { /* best effort */ }
 
       updatePeerDiagnostics()
       await updateHeadAvailability()
-      while (!diagnostics.hasHeadBlock && Date.now() - startedAt < timeoutMs) {
-        await wait(Math.min(100, Math.max(1, timeoutMs - (Date.now() - startedAt))))
+      if (!diagnostics.hasHeadBlock) {
+        const deadline = startedAt + timeoutMs
+        await this._waitForHeadBlock(blobsCore, ref.blob.blockOffset, deadline)
         updatePeerDiagnostics()
         await updateHeadAvailability()
       }
@@ -277,6 +275,54 @@ export class BlobPlaybackService {
       markTiming('warmupDoneMs')
       return diagnostics
     }
+  }
+
+  /**
+   * Wait for the head block of the selected blob to become available, bounded
+   * by `deadline`. Prefers requesting the block directly (hypercore downloads
+   * it from any connected peer and resolves the moment it lands) over passive
+   * polling.
+   */
+  async _waitForHeadBlock(blobsCore, blockIndex, deadline) {
+    const remaining = () => deadline - Date.now()
+    if (remaining() <= 0) return false
+
+    if (typeof blobsCore.get === 'function') {
+      try {
+        const block = await blobsCore.get(blockIndex, { wait: true, timeout: Math.max(1, remaining()) })
+        return block != null
+      } catch {
+        return false
+      }
+    }
+
+    // Event-driven fallback for cores without get(): resolve on append/download.
+    if (typeof blobsCore.on === 'function' && typeof blobsCore.off === 'function') {
+      return await new Promise((resolve) => {
+        let settled = false
+        const finish = (value) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          try { blobsCore.off('append', onEvent) } catch { /* best effort */ }
+          try { blobsCore.off('download', onEvent) } catch { /* best effort */ }
+          resolve(value)
+        }
+        const onEvent = () => {
+          Promise.resolve(blobsCore.has?.(blockIndex, blockIndex + 1))
+            .then((has) => { if (has) finish(true) })
+            .catch(() => {})
+        }
+        const timer = setTimeout(() => finish(false), Math.max(1, remaining()))
+        blobsCore.on('append', onEvent)
+        blobsCore.on('download', onEvent)
+        onEvent()
+      })
+    }
+
+    // Last resort (minimal cores/mocks): single bounded sleep, caller rechecks.
+    await wait(Math.max(1, remaining()))
+    return false
   }
 
   async resolveFromMetadata(meta, { channel } = {}) {

@@ -43,7 +43,7 @@ export default function DiagnosticsPanel({
     if (swarmStatus?.network) return swarmStatus.network
     for (const raw of [swarmStatus?.doctorJson, swarmStatus?.networkJson]) {
       if (typeof raw === 'string' && raw) {
-        try { return JSON.parse(raw) } catch {}
+        try { return JSON.parse(raw) } catch { /* fall through to next source */ }
       }
     }
     return null

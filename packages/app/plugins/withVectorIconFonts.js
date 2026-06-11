@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Expo config plugin to link @expo/vector-icons font files into the native
  * Android and iOS projects so icon glyphs render instead of text fallbacks.

@@ -654,10 +654,21 @@ export class SeedingManager {
     await this.persistSeeds();
 
     if (clearedBlob) {
+      // Flush synchronously so the cleared ranges are durable, but run the
+      // RocksDB compaction in the background: on multi-GB stores it can take
+      // minutes on mobile flash, and awaiting it here held the clearCache RPC
+      // reply (and starved every other storage op) until it finished — the
+      // app appeared to hang on "Clear cache".
       await collectCorestoreGarbage(this.store, {
         label: 'cache clear',
-        log: console.log
+        log: console.log,
+        skipCompact: true
       });
+      void collectCorestoreGarbage(this.store, {
+        label: 'cache clear compaction',
+        log: console.log,
+        skipFlush: true
+      }).catch(() => {});
     }
 
     console.log('[SeedingManager] Cleared cache:', clearedBytes, 'bytes from', toRemove.length, 'seeds');

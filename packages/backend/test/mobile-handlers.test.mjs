@@ -62,6 +62,8 @@ test('feed handlers use getPublicFeed for public and canonical RPC names', async
       peerCount: 2,
       lastSeen: 123,
       manifestUpdatedAt: 456,
+      isLive: false,
+      liveStreams: [],
       previewVideos: [{ id: 'preview-1', title: 'Preview', byteAvailability: null, hasHeadBlock: false, contiguousBlocks: 0, readyForPlayback: false }],
     }],
     stats: {

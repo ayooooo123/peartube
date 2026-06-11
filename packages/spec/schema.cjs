@@ -673,6 +673,16 @@ ns.register({
 })
 
 ns.register({
+  name: 'feed-live-stream',
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'liveCoreKey', type: 'string', required: true },
+    { name: 'title', type: 'string', required: false },
+    { name: 'startedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
   name: 'feed-entry',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -687,7 +697,9 @@ ns.register({
     { name: 'driveKey', type: 'string', required: false },
     { name: 'relayRole', type: 'string', required: false },
     { name: 'relayServing', type: 'bool', required: false },
-    { name: 'previewVideosHash', type: 'string', required: false }
+    { name: 'previewVideosHash', type: 'string', required: false },
+    { name: 'isLive', type: 'bool', required: false },
+    { name: 'liveStreams', type: '@peartube/feed-live-stream', array: true }
   ]
 })
 

@@ -1510,19 +1510,29 @@ export function createApi({
             try { ctx.swarm.join(blobsCore.discoveryKey) } catch { /* best effort */ }
           }
 
-          try {
-            await Promise.race([
-              blobsCore.update({ wait: true }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 10000))
-            ]);
-          } catch { /* best effort */ }
-
           const blob = normalizeBlobRefInput(meta.thumbnailBlobId) || parseBlobRef({
             blobsCoreKey: meta.thumbnailBlobsCoreKey,
             blobId: meta.thumbnailBlobId,
           })?.blob
           if (!blob) {
             return { exists: false, error: 'Invalid thumbnail blob ID format' }
+          }
+
+          // Serve immediately when the thumbnail bytes are already local;
+          // update({wait: true}) would otherwise block on the network (it
+          // used to stall thumbnail loads for up to 10s). The blob server
+          // fetches missing bytes on demand anyway.
+          let thumbnailLocal = false
+          try {
+            thumbnailLocal = Boolean(await blobsCore.has(blob.blockOffset, blob.blockOffset + Math.max(1, blob.blockLength || 1)))
+          } catch { /* best effort */ }
+          if (!thumbnailLocal) {
+            try {
+              await Promise.race([
+                blobsCore.update({ wait: true }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
+              ]);
+            } catch { /* best effort */ }
           }
 
           const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0

@@ -23,6 +23,22 @@ const MAX_TRACKED_PRIORITY_BLOBS = 8
 // registryKey -> { core, range, timer, createdAt, start, end }
 const activePriorityRanges = new Map()
 
+// Subscribers that want to follow the playhead (e.g. the background full-file
+// fill re-anchoring itself past the prioritized window after a seek).
+const playheadListeners = new Set()
+
+export function subscribeBlobPlayhead(listener) {
+  if (typeof listener !== 'function') return () => {}
+  playheadListeners.add(listener)
+  return () => playheadListeners.delete(listener)
+}
+
+function emitBlobPlayhead(event) {
+  for (const listener of playheadListeners) {
+    try { listener(event) } catch { /* listener errors must not break serving */ }
+  }
+}
+
 function getPriorityRegistryKey(key, blob) {
   return `${key.toString('hex')}:${blob.blockOffset}:${blob.blockLength}`
 }
@@ -303,6 +319,14 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
   Promise.resolve(done)
     .catch(() => {})
     .finally(cleanup)
+
+  emitBlobPlayhead({
+    coreKeyHex: request.key.toString('hex'),
+    blockOffset: request.blob.blockOffset,
+    blockLength: request.blob.blockLength,
+    windowStart: downloadRange.start,
+    windowEnd: downloadRange.end,
+  })
 
   return downloadRange
 }

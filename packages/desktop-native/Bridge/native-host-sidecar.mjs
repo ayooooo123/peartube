@@ -170,6 +170,50 @@ function createLazyTranscoder() {
   }
 }
 
+let castTranscoderModule = null
+let castTranscoderModulePromise = null
+
+async function ensureCastTranscoderModule() {
+  if (castTranscoderModule) return castTranscoderModule
+  if (!castTranscoderModulePromise) {
+    castTranscoderModulePromise = import('../../backend/src/transcode/cast-transcoder.mjs')
+      .then((module) => {
+        castTranscoderModule = module?.default ?? module
+        return castTranscoderModule
+      })
+      .catch((error) => {
+        castTranscoderModulePromise = null
+        throw error
+      })
+  }
+
+  return castTranscoderModulePromise
+}
+
+// Lazy cast-transcoder wrapper used by the AVPlayer compatibility layer. Methods
+// are async so the underlying module loads on first use; the runtime helper
+// awaits them all.
+function createLazyCastTranscoder() {
+  return {
+    async startCompatTranscode(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.startCompatTranscode(...args)
+    },
+    async getCastHlsUrl(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.getCastHlsUrl(...args)
+    },
+    async getCastStatus(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.getCastStatus(...args)
+    },
+    async stopCastTranscode(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.stopCastTranscode(...args)
+    },
+  }
+}
+
 function createKeepAliveCleanup() {
   let keepAliveTimer = setInterval(() => {}, 1 << 30)
 
@@ -481,6 +525,11 @@ async function createNativeSidecarBackend(options = {}) {
     const generateAndStoreThumbnail = thumbnailModule?.generateAndStoreThumbnail
     const transcoder = createLazyTranscoder()
 
+    // Experimental: route AVPlayer-incompatible codecs (MKV/Opus/AC-3/DTS, …)
+    // through a local-HLS bare-ffmpeg transcode so the macOS app can drop bare-mpv.
+    // Off by default — enable with PEARTUBE_AVPLAYER_COMPAT=1 for on-device validation.
+    const avplayerCompatEnabled = globalThis.process?.env?.PEARTUBE_AVPLAYER_COMPAT === '1'
+
     attachMobileHandlers(backend, {
       api: backend.api,
       identityManager: backend.identityManager,
@@ -493,8 +542,10 @@ async function createNativeSidecarBackend(options = {}) {
       path,
       generateAndStoreThumbnail,
       transcoder,
+      ...(avplayerCompatEnabled ? { castTranscoder: createLazyCastTranscoder(), player: 'avplayer' } : {}),
       storagePath: options.storagePath,
     })
+    if (avplayerCompatEnabled) console.log(`[${runtimeLabel}] AVPlayer compatibility layer enabled`)
 
     console.log(`[${runtimeLabel}] Attached shared app handler layer`)
   }

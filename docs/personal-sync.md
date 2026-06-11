@@ -51,12 +51,31 @@ Done (backend, tested):
   proves two separate corestores both writing and converging, including
   concurrent-write convergence.
 
+Done (RPC + lifecycle):
+- HRPC schema (`packages/spec/schema.cjs`) message types + 13 commands for
+  playlists/history/settings, classified under a new `personal` app namespace
+  (`packages/spec/lib/app-rpc-adapter-codegen.cjs`), regenerated via
+  `node schema.cjs` (JS + Swift). The generated Swift is copied into
+  `packages/desktop-native/Sources/Support/` per the documented workflow (those
+  files are gitignored — regenerated at build).
+- Backend handlers wired centrally: the new commands are added to
+  `SHARED_HANDLER_NAMES` and resolve to `backend.api.<method>` through
+  `registerSharedHandlers` — so all platforms (mobile, Electrobun desktop,
+  native shell) get them with no per-platform adapter code. The `api.*` methods
+  take the decoded request and return the response envelope directly.
+- Active personal store follows the active identity: the orchestrator wraps
+  `identityManager.setActiveIdentity` / `createIdentity` to call
+  `personalManager.setActive`, covering every platform in one place.
+- Tests: `test/personal-hrpc-wiring.test.mjs` proves the commands register,
+  resolve to the api, and round-trip through a real `PersonalStore` with the
+  correct envelopes.
+
 Remaining (follow-up):
-- HRPC schema (`packages/spec/schema.cjs`) entries for the new methods + JS/Swift
-  codegen (`node schema.cjs`) so the app/native shell can call them, plus
-  `mobile-handlers.js` / desktop worker passthroughs.
-- Switch the active personal store when the active identity changes
-  (`personalManager.setActive`) from the `setActiveIdentity` handler.
-- Mobile/desktop UI for playlists and watch history.
+- Mobile/desktop UI for playlists and watch history (the RPC surface is ready;
+  `mobile-handlers.js` / the desktop worker may add thin convenience wrappers
+  if a platform wants a custom shape, but the shared handler already serves all
+  three).
+- Native Swift shell build is unverified in CI here (codegen ran clean; the
+  Xcode build wasn't exercised).
 - Optional: at-rest encryption of the personal store for defense-in-depth
-  (today privacy rests on the key staying unpublished).
+  (today privacy rests on the bootstrap key staying unpublished).

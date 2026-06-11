@@ -2,7 +2,7 @@
 /**
  * PearTube Desktop Worker — Thin HRPC Handler Shim
  * Initializes via createBackend() from @peartube/backend, which registers
- * all 99 shared HRPC handlers via registerSharedHandlers(). Handler dispatch
+ * all shared HRPC handlers via registerSharedHandlers(). Handler dispatch
  * resolves methods on the `backend` object at call-time, so we attach
  * desktop-specific implementations AFTER createBackend() returns.
  */

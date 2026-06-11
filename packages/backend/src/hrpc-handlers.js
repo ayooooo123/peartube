@@ -27,6 +27,7 @@ function loadSharedBackendModules() {
 export const SHARED_HANDLER_NAMES = [
   'AddComment',
   'AddReaction',
+  'AddToPlaylist',
   'AttestDevice',
   'BootstrapDevice',
   'CastAddManualDevice',
@@ -142,6 +143,19 @@ export const SHARED_HANDLER_NAMES = [
   'UploadVideo',
   'VerifyAttestation',
   'WebPreparePlayback',
+  // Personal Sync (playlists / history / settings)
+  'CreatePlaylist',
+  'UpdatePlaylist',
+  'DeletePlaylist',
+  'RemoveFromPlaylist',
+  'GetPlaylists',
+  'GetPlaylistItems',
+  'LogWatchHistory',
+  'GetWatchHistory',
+  'GetResumePosition',
+  'ListResumePositions',
+  'SetPersonalSetting',
+  'GetPersonalSettings',
 ]
 
 function toCamelCase(name) {

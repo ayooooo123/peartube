@@ -240,7 +240,33 @@ const methods = new Map([
   ['@peartube/get-livestream-status', 115],
   [115, '@peartube/get-livestream-status'],
   ['@peartube/prepare-live-playback', 116],
-  [116, '@peartube/prepare-live-playback']
+  [116, '@peartube/prepare-live-playback'],
+  ['@peartube/get-playlists', 117],
+  [117, '@peartube/get-playlists'],
+  ['@peartube/get-playlist-items', 118],
+  [118, '@peartube/get-playlist-items'],
+  ['@peartube/create-playlist', 119],
+  [119, '@peartube/create-playlist'],
+  ['@peartube/update-playlist', 120],
+  [120, '@peartube/update-playlist'],
+  ['@peartube/delete-playlist', 121],
+  [121, '@peartube/delete-playlist'],
+  ['@peartube/add-to-playlist', 122],
+  [122, '@peartube/add-to-playlist'],
+  ['@peartube/remove-from-playlist', 123],
+  [123, '@peartube/remove-from-playlist'],
+  ['@peartube/log-watch-history', 124],
+  [124, '@peartube/log-watch-history'],
+  ['@peartube/get-watch-history', 125],
+  [125, '@peartube/get-watch-history'],
+  ['@peartube/get-resume-position', 126],
+  [126, '@peartube/get-resume-position'],
+  ['@peartube/list-resume-positions', 127],
+  [127, '@peartube/list-resume-positions'],
+  ['@peartube/set-personal-setting', 128],
+  [128, '@peartube/set-personal-setting'],
+  ['@peartube/get-personal-settings', 129],
+  [129, '@peartube/get-personal-settings']
 ])
 
 class HRPC {
@@ -364,7 +390,20 @@ class HRPC {
       ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-request')],
       ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-request')],
       ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-request')],
-      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-request')]
+      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-request')],
+      ['@peartube/get-playlists', getEncoding('@peartube/get-playlists-request')],
+      ['@peartube/get-playlist-items', getEncoding('@peartube/get-playlist-items-request')],
+      ['@peartube/create-playlist', getEncoding('@peartube/create-playlist-request')],
+      ['@peartube/update-playlist', getEncoding('@peartube/update-playlist-request')],
+      ['@peartube/delete-playlist', getEncoding('@peartube/delete-playlist-request')],
+      ['@peartube/add-to-playlist', getEncoding('@peartube/add-to-playlist-request')],
+      ['@peartube/remove-from-playlist', getEncoding('@peartube/remove-from-playlist-request')],
+      ['@peartube/log-watch-history', getEncoding('@peartube/log-watch-history-request')],
+      ['@peartube/get-watch-history', getEncoding('@peartube/get-watch-history-request')],
+      ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-request')],
+      ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-request')],
+      ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-request')],
+      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -471,7 +510,20 @@ class HRPC {
       ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-response')],
       ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-response')],
       ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-response')],
-      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-response')]
+      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-response')],
+      ['@peartube/get-playlists', getEncoding('@peartube/get-playlists-response')],
+      ['@peartube/get-playlist-items', getEncoding('@peartube/get-playlist-items-response')],
+      ['@peartube/create-playlist', getEncoding('@peartube/create-playlist-response')],
+      ['@peartube/update-playlist', getEncoding('@peartube/update-playlist-response')],
+      ['@peartube/delete-playlist', getEncoding('@peartube/delete-playlist-response')],
+      ['@peartube/add-to-playlist', getEncoding('@peartube/add-to-playlist-response')],
+      ['@peartube/remove-from-playlist', getEncoding('@peartube/remove-from-playlist-response')],
+      ['@peartube/log-watch-history', getEncoding('@peartube/log-watch-history-response')],
+      ['@peartube/get-watch-history', getEncoding('@peartube/get-watch-history-response')],
+      ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-response')],
+      ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-response')],
+      ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-response')],
+      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1038,6 +1090,58 @@ class HRPC {
     return this._call('@peartube/prepare-live-playback', args)
   }
 
+  async getPlaylists(args) {
+    return this._call('@peartube/get-playlists', args)
+  }
+
+  async getPlaylistItems(args) {
+    return this._call('@peartube/get-playlist-items', args)
+  }
+
+  async createPlaylist(args) {
+    return this._call('@peartube/create-playlist', args)
+  }
+
+  async updatePlaylist(args) {
+    return this._call('@peartube/update-playlist', args)
+  }
+
+  async deletePlaylist(args) {
+    return this._call('@peartube/delete-playlist', args)
+  }
+
+  async addToPlaylist(args) {
+    return this._call('@peartube/add-to-playlist', args)
+  }
+
+  async removeFromPlaylist(args) {
+    return this._call('@peartube/remove-from-playlist', args)
+  }
+
+  async logWatchHistory(args) {
+    return this._call('@peartube/log-watch-history', args)
+  }
+
+  async getWatchHistory(args) {
+    return this._call('@peartube/get-watch-history', args)
+  }
+
+  async getResumePosition(args) {
+    return this._call('@peartube/get-resume-position', args)
+  }
+
+  async listResumePositions(args) {
+    return this._call('@peartube/list-resume-positions', args)
+  }
+
+  async setPersonalSetting(args) {
+    return this._call('@peartube/set-personal-setting', args)
+  }
+
+  async getPersonalSettings(args) {
+    return this._call('@peartube/get-personal-settings', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1504,6 +1608,58 @@ class HRPC {
 
   onPrepareLivePlayback(responseFn) {
     this._handlers['@peartube/prepare-live-playback'] = responseFn
+  }
+
+  onGetPlaylists(responseFn) {
+    this._handlers['@peartube/get-playlists'] = responseFn
+  }
+
+  onGetPlaylistItems(responseFn) {
+    this._handlers['@peartube/get-playlist-items'] = responseFn
+  }
+
+  onCreatePlaylist(responseFn) {
+    this._handlers['@peartube/create-playlist'] = responseFn
+  }
+
+  onUpdatePlaylist(responseFn) {
+    this._handlers['@peartube/update-playlist'] = responseFn
+  }
+
+  onDeletePlaylist(responseFn) {
+    this._handlers['@peartube/delete-playlist'] = responseFn
+  }
+
+  onAddToPlaylist(responseFn) {
+    this._handlers['@peartube/add-to-playlist'] = responseFn
+  }
+
+  onRemoveFromPlaylist(responseFn) {
+    this._handlers['@peartube/remove-from-playlist'] = responseFn
+  }
+
+  onLogWatchHistory(responseFn) {
+    this._handlers['@peartube/log-watch-history'] = responseFn
+  }
+
+  onGetWatchHistory(responseFn) {
+    this._handlers['@peartube/get-watch-history'] = responseFn
+  }
+
+  onGetResumePosition(responseFn) {
+    this._handlers['@peartube/get-resume-position'] = responseFn
+  }
+
+  onListResumePositions(responseFn) {
+    this._handlers['@peartube/list-resume-positions'] = responseFn
+  }
+
+  onSetPersonalSetting(responseFn) {
+    this._handlers['@peartube/set-personal-setting'] = responseFn
+  }
+
+  onGetPersonalSettings(responseFn) {
+    this._handlers['@peartube/get-personal-settings'] = responseFn
   }
 
   _requestIsStream(command) {

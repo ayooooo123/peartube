@@ -77,6 +77,21 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-recommendations',
     'get-video-recommendations'
   ],
+  personal: [
+    'get-playlists',
+    'get-playlist-items',
+    'create-playlist',
+    'update-playlist',
+    'delete-playlist',
+    'add-to-playlist',
+    'remove-from-playlist',
+    'log-watch-history',
+    'get-watch-history',
+    'get-resume-position',
+    'list-resume-positions',
+    'set-personal-setting',
+    'get-personal-settings'
+  ],
   transfer: [
     'upload-video',
     'download-video',

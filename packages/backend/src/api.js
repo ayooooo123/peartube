@@ -1822,67 +1822,80 @@ export function createApi({
     // ============================================
     // Personal Sync: Playlists / History / Settings
     // (private per-identity multi-writer store, synced across the user's devices)
+    //
+    // These are registered through the shared HRPC handler table, which calls
+    // them as `api.method(request)` with `this` unbound — so they take the
+    // decoded request object and return the response envelope directly, and
+    // must not rely on `this`.
     // ============================================
 
-    /** @returns {Promise<import('./personal/personal-store.js').PersonalStore>} */
-    async _personal() {
-      if (!ctx.personal) throw new Error('No active personal store (create or activate an identity first)');
-      return ctx.personal;
-    },
-
     async getPlaylists() {
-      if (!ctx.personal) return [];
-      return ctx.personal.listPlaylists();
+      if (!ctx.personal) return { playlists: [] };
+      return { playlists: await ctx.personal.listPlaylists() };
     },
-    async getPlaylistItems(playlistId) {
-      if (!ctx.personal) return [];
-      return ctx.personal.listPlaylistItems(playlistId);
+    async getPlaylistItems(req = {}) {
+      if (!ctx.personal) return { items: [] };
+      return { items: await ctx.personal.listPlaylistItems(req.playlistId) };
     },
-    async createPlaylist({ name = '', description = '' } = {}) {
-      const id = await (await this._personal()).createPlaylist({ name, description });
+    async createPlaylist(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store (create or activate an identity first)');
+      const id = await ctx.personal.createPlaylist({ name: req.name || '', description: req.description || '' });
       return { success: true, id };
     },
-    async updatePlaylist({ id, name, description } = {}) {
-      await (await this._personal()).updatePlaylist(id, { name, description });
+    async updatePlaylist(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      await ctx.personal.updatePlaylist(req.id, { name: req.name, description: req.description });
       return { success: true };
     },
-    async deletePlaylist(id) {
-      await (await this._personal()).deletePlaylist(id);
+    async deletePlaylist(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      await ctx.personal.deletePlaylist(req.id);
       return { success: true };
     },
-    async addToPlaylist({ playlistId, channelKey, videoId, videoKey } = {}) {
-      await (await this._personal()).addToPlaylist(playlistId, { channelKey, videoId, videoKey });
+    async addToPlaylist(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      await ctx.personal.addToPlaylist(req.playlistId, { channelKey: req.channelKey, videoId: req.videoId, videoKey: req.videoKey });
       return { success: true };
     },
-    async removeFromPlaylist({ playlistId, videoKey } = {}) {
-      await (await this._personal()).removeFromPlaylist(playlistId, videoKey);
+    async removeFromPlaylist(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      await ctx.personal.removeFromPlaylist(req.playlistId, req.videoKey);
       return { success: true };
     },
 
-    async logWatchHistory(event) {
-      const eventId = await (await this._personal()).logHistory(event || {});
+    async logWatchHistory(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      const eventId = await ctx.personal.logHistory(req);
       return { success: true, eventId };
     },
-    async getWatchHistory({ limit = 100 } = {}) {
-      if (!ctx.personal) return [];
-      return ctx.personal.listHistory({ limit });
+    async getWatchHistory(req = {}) {
+      if (!ctx.personal) return { entries: [] };
+      return { entries: await ctx.personal.listHistory({ limit: req.limit || 100 }) };
     },
-    async getResumePosition(videoKey) {
-      if (!ctx.personal) return null;
-      return ctx.personal.getResume(videoKey);
+    async getResumePosition(req = {}) {
+      if (!ctx.personal) return { found: false };
+      const resume = await ctx.personal.getResume(req.videoKey);
+      return resume ? { found: true, resume } : { found: false };
     },
     async listResumePositions() {
-      if (!ctx.personal) return [];
-      return ctx.personal.listResume();
+      if (!ctx.personal) return { entries: [] };
+      return { entries: await ctx.personal.listResume() };
     },
 
-    async setPersonalSetting({ key, value } = {}) {
-      await (await this._personal()).setSetting(key, value);
+    async setPersonalSetting(req = {}) {
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
+      // Values arrive JSON-encoded over HRPC so a setting can hold any JSON type.
+      let value = req.value;
+      if (typeof value === 'string') {
+        try { value = JSON.parse(value); } catch { /* keep raw string */ }
+      }
+      await ctx.personal.setSetting(req.key, value);
       return { success: true };
     },
     async getPersonalSettings() {
-      if (!ctx.personal) return {};
-      return ctx.personal.getSettings();
+      if (!ctx.personal) return { settings: [] };
+      const settings = await ctx.personal.getSettings();
+      return { settings: Object.entries(settings).map(([key, value]) => ({ key, value: JSON.stringify(value) })) };
     },
 
     /**

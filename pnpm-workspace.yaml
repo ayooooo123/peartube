@@ -1,19 +1,5 @@
 packages:
   - 'packages/*'
-# Supply-chain hardening: wait 7 days before installing newly published
-# versions, and refuse packages whose trust signals downgrade.
-minimumReleaseAge: 10080
-minimumReleaseAgeExclude:
-  # Expo SDK packages are version-locked to the installed SDK release
-  - expo-clipboard
-trustPolicy: no-downgrade
-trustPolicyExclude:
-  # Backport releases published after newer provenance-signed versions,
-  # so they look like trust downgrades; verified legitimate maintenance
-  # releases on old major lines.
-  - semver
-  - ua-parser-js
-  - protobufjs
 nodeLinker: hoisted
 shamefullyHoist: true
 publicHoistPattern:

@@ -52,6 +52,15 @@ const IOS_BUFFER_OPTIONS = {
   waitsToMinimizeStalling: true,
 }
 const SEEK_PLAYBACK_RECOVERY_MS = 6000
+// Fatal player errors used to leave the surface frozen forever. The common
+// trigger is seeking into an uncached region of a P2P-streamed file: the blob
+// server resets the HTTP range request when peers don't deliver the blocks in
+// time, and the native player gives up with a network error. Re-attach the
+// source and resume from the last position a few times before surfacing the
+// error — by then the prioritized download usually has the seek target cached.
+const PLAYBACK_ERROR_RECOVERY_MAX_ATTEMPTS = 4
+const PLAYBACK_ERROR_RECOVERY_BASE_DELAY_MS = 1000
+const PLAYBACK_ERROR_RECOVERY_PROGRESS_SEC = 2
 
 function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   const rawDurationSeconds = Number(data?.duration ?? player?.duration ?? 0)
@@ -116,6 +125,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const notificationControlsRef = useRef(showNotificationControls)
   const onErrorRef = useRef(onError)
   const sourceReplaceGenerationRef = useRef(0)
+  const lastPlaybackPositionSecRef = useRef(0)
+  const errorRecoveryAttemptsRef = useRef(0)
+  const errorRecoveryResumePositionRef = useRef(0)
+  const errorRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const videoSource = useMemo<VideoSource>(() => ({
     uri: videoUrl,
@@ -152,8 +165,22 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     lastAppliedSeekRef.current = null
     previousStatusRef.current = null
     seekPlaybackRecoveryUntilRef.current = 0
+    lastPlaybackPositionSecRef.current = 0
+    errorRecoveryAttemptsRef.current = 0
+    errorRecoveryResumePositionRef.current = 0
+    if (errorRecoveryTimerRef.current) {
+      clearTimeout(errorRecoveryTimerRef.current)
+      errorRecoveryTimerRef.current = null
+    }
     playerRefForCallbacks.current = player
   }, [player, videoUrl, playbackSession, currentVideoKey])
+
+  useEffect(() => () => {
+    if (errorRecoveryTimerRef.current) {
+      clearTimeout(errorRecoveryTimerRef.current)
+      errorRecoveryTimerRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     isPlayingRef.current = isPlaying
@@ -238,6 +265,60 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     seekPlaybackRecoveryUntilRef.current = Date.now() + SEEK_PLAYBACK_RECOVERY_MS
     player.currentTime = Math.max(0, targetSeconds)
   }, [player])
+
+  /**
+   * Re-attach the current source and resume from the last playback position.
+   * Returns false once the attempt budget is exhausted (attempts reset when
+   * playback advances past the recovery point), letting the caller surface
+   * the error instead.
+   */
+  const tryRecoverFromPlaybackError = useCallback(() => {
+    if (errorRecoveryAttemptsRef.current >= PLAYBACK_ERROR_RECOVERY_MAX_ATTEMPTS) return false
+    errorRecoveryAttemptsRef.current += 1
+    const attempt = errorRecoveryAttemptsRef.current
+    // Rewind slightly so resume lands on data that was already playable.
+    const resumeAt = Math.max(0, lastPlaybackPositionSecRef.current - 0.5)
+    errorRecoveryResumePositionRef.current = resumeAt
+    const generation = sourceReplaceGenerationRef.current
+    onBuffering?.({ isBuffering: true })
+    if (errorRecoveryTimerRef.current) clearTimeout(errorRecoveryTimerRef.current)
+    errorRecoveryTimerRef.current = setTimeout(() => {
+      errorRecoveryTimerRef.current = null
+      if (sourceReplaceGenerationRef.current !== generation) return
+      void (async () => {
+        try {
+          if (typeof player.replaceAsync === 'function') {
+            await player.replaceAsync(videoSource)
+          } else {
+            player.replace(videoSource)
+          }
+          if (sourceReplaceGenerationRef.current !== generation) return
+          player.playbackRate = playbackRateRef.current
+          if (resumeAt > 0) {
+            seekPlaybackRecoveryUntilRef.current = Date.now() + SEEK_PLAYBACK_RECOVERY_MS
+            player.currentTime = resumeAt
+          }
+          if (isPlayingRef.current) {
+            player.play()
+          }
+        } catch (recoveryError) {
+          if (sourceReplaceGenerationRef.current !== generation) return
+          if (!tryRecoverFromPlaybackErrorRef.current()) {
+            onErrorRef.current?.({
+              message: recoveryError instanceof Error ? recoveryError.message : 'Playback recovery failed',
+              engine: 'expo-video',
+            })
+          }
+        }
+      })()
+    }, PLAYBACK_ERROR_RECOVERY_BASE_DELAY_MS * attempt)
+    return true
+  }, [onBuffering, player, videoSource])
+
+  const tryRecoverFromPlaybackErrorRef = useRef(tryRecoverFromPlaybackError)
+  useEffect(() => {
+    tryRecoverFromPlaybackErrorRef.current = tryRecoverFromPlaybackError
+  }, [tryRecoverFromPlaybackError])
 
   const adapter = useMemo(
     () => createPlayerPort(
@@ -397,6 +478,15 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (durationMs > 0) durationMsRef.current = durationMs
 
     const currentTime = Math.max(0, Number(event.currentTime || 0))
+    lastPlaybackPositionSecRef.current = currentTime
+    if (
+      errorRecoveryAttemptsRef.current > 0 &&
+      currentTime > errorRecoveryResumePositionRef.current + PLAYBACK_ERROR_RECOVERY_PROGRESS_SEC
+    ) {
+      // Playback advanced past the recovery point — the stall is over, so a
+      // future error gets a fresh attempt budget.
+      errorRecoveryAttemptsRef.current = 0
+    }
     const suppressStuckRecovery = shouldSuppressStuckPlaybackRecovery()
     if (suppressStuckRecovery && playbackStartedAtRef.current !== null) {
       playbackStartedAtRef.current = Date.now()
@@ -461,6 +551,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     }
     if (status === 'error') {
       console.error('[PearInlineVideoView] error:', error)
+      if (tryRecoverFromPlaybackError()) return
       onError?.({
         message: error?.message || 'Unknown error',
         code: (error as any)?.code,

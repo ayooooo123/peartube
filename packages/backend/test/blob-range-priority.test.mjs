@@ -10,6 +10,7 @@ import {
   getPrioritizedBlobDownloadRange,
   parseHttpByteRange,
   prioritizeBlobServerRangeRequest,
+  releaseAllPrioritizedBlobRanges,
 } from '../src/blob-range-priority.js'
 
 const blobIdEncoding = {
@@ -65,7 +66,7 @@ test('getPrioritizedBlobDownloadRange maps a seek byte range to the matching blo
   )
 })
 
-function createRangeRequest({ method = 'GET', token = 'test-token' } = {}) {
+function createRangeRequest({ method = 'GET', token = 'test-token', rangeStart = 4 * 65536, rangeEnd = (5 * 65536) - 1 } = {}) {
   const key = Buffer.from('b'.repeat(64), 'hex')
   const blob = {
     blockOffset: 10,
@@ -78,25 +79,24 @@ function createRangeRequest({ method = 'GET', token = 'test-token' } = {}) {
     method,
     url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=${token}`,
     headers: {
-      range: `bytes=${4 * 65536}-${(5 * 65536) - 1}`,
+      range: `bytes=${rangeStart}-${rangeEnd}`,
     },
   }
   return { key, blob, req }
 }
 
-test('prioritizeBlobServerRangeRequest starts a linear core download for the requested HTTP GET range', async (t) => {
-  const calls = []
-  const { key, blob, req } = createRangeRequest()
-  const blobServer = {
+function createMockBlobServer(calls, { resolveDone = true } = {}) {
+  return {
     token: 'test-token',
     async _getCore(requestKey, info, active) {
       calls.push(['_getCore', requestKey.toString('hex'), info.blob, active])
       return {
+        closed: false,
         download(options) {
           calls.push(['download', options])
           return {
-            done: () => Promise.resolve(),
-            destroy: () => calls.push(['destroy']),
+            done: () => (resolveDone ? Promise.resolve() : new Promise(() => {})),
+            destroy: () => calls.push(['destroy', options.start]),
           }
         },
         close() {
@@ -105,6 +105,13 @@ test('prioritizeBlobServerRangeRequest starts a linear core download for the req
       }
     },
   }
+}
+
+test('prioritizeBlobServerRangeRequest starts a linear core download for the requested HTTP GET range', async (t) => {
+  releaseAllPrioritizedBlobRanges()
+  const calls = []
+  const { key, blob, req } = createRangeRequest()
+  const blobServer = createMockBlobServer(calls)
 
   const result = await prioritizeBlobServerRangeRequest(blobServer, req, { readAheadBytes: 0 })
   await Promise.resolve()
@@ -113,10 +120,57 @@ test('prioritizeBlobServerRangeRequest starts a linear core download for the req
   t.alike(result, { start: 14, end: 15, blocks: 1 })
   t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
   t.alike(calls[1], ['download', { start: 14, end: 15, linear: true }])
-  // The shared serving core must NOT be closed on cleanup by default: it is the
-  // same core hypercore-blob-server streams playback ranges from. Closing it
-  // mid-stream causes constant playback stalls.
-  t.absent(calls.some((call) => call[0] === 'close'), 'shared serving core is not closed on default cleanup')
+  // The pooled core session must NOT be closed on default cleanup: it is kept
+  // in the registry so the next range request reuses it instead of opening a
+  // fresh session per request.
+  t.absent(calls.some((call) => call[0] === 'close'), 'pooled core session is not closed on default cleanup')
+})
+
+test('a seek outside the active window drops the stale prioritized range and reuses the core session', async (t) => {
+  releaseAllPrioritizedBlobRanges()
+  const calls = []
+  const blobServer = createMockBlobServer(calls, { resolveDone: false })
+
+  const first = createRangeRequest({ rangeStart: 4 * 65536, rangeEnd: (5 * 65536) - 1 })
+  const firstRange = await prioritizeBlobServerRangeRequest(blobServer, first.req, { readAheadBytes: 0 })
+  t.alike(firstRange, { start: 14, end: 15, blocks: 1 })
+
+  // Seek far ahead of the prioritized window while its download is in flight.
+  const second = createRangeRequest({ rangeStart: 90 * 65536, rangeEnd: (91 * 65536) - 1 })
+  const secondRange = await prioritizeBlobServerRangeRequest(blobServer, second.req, { readAheadBytes: 0 })
+  t.alike(secondRange, { start: 100, end: 101, blocks: 1 })
+
+  const downloads = calls.filter((call) => call[0] === 'download')
+  const destroys = calls.filter((call) => call[0] === 'destroy')
+  const getCores = calls.filter((call) => call[0] === '_getCore')
+
+  t.is(getCores.length, 1, 'core session is reused across range requests for the same blob')
+  t.is(downloads.length, 2, 'the seek starts a new prioritized download')
+  t.alike(destroys, [['destroy', 14]], 'the pre-seek prioritized range is destroyed so the seek target gets the bandwidth')
+  t.ok(calls.findIndex((call) => call[0] === 'destroy') < calls.lastIndexOf(downloads[1]), 'stale range is dropped before the new download starts')
+
+  releaseAllPrioritizedBlobRanges()
+})
+
+test('requests inside a fresh prioritized window reuse the in-flight download', async (t) => {
+  releaseAllPrioritizedBlobRanges()
+  const calls = []
+  const blobServer = createMockBlobServer(calls, { resolveDone: false })
+
+  const first = createRangeRequest({ rangeStart: 4 * 65536, rangeEnd: (5 * 65536) - 1 })
+  await prioritizeBlobServerRangeRequest(blobServer, first.req, { readAheadBytes: 4 * 65536 })
+
+  // Progressive playback re-requests a couple of blocks ahead, still inside
+  // the prioritized window that was just created.
+  const second = createRangeRequest({ rangeStart: 6 * 65536, rangeEnd: (7 * 65536) - 1 })
+  const secondRange = await prioritizeBlobServerRangeRequest(blobServer, second.req, { readAheadBytes: 4 * 65536 })
+
+  t.ok(secondRange, 'contained request still resolves a download range')
+  t.is(calls.filter((call) => call[0] === 'download').length, 1, 'in-flight window download is not restarted')
+  t.is(calls.filter((call) => call[0] === 'destroy').length, 0, 'in-flight window download is not destroyed')
+  t.is(calls.filter((call) => call[0] === '_getCore').length, 1, 'no extra core session is opened')
+
+  releaseAllPrioritizedBlobRanges()
 })
 
 test('prioritizeBlobServerRangeRequest closes the core when closeCoreOnCleanup is set', async (t) => {
@@ -165,13 +219,22 @@ test('prioritizeBlobServerRangeRequest ignores HEAD range probes', async (t) => 
 })
 
 test('storage wires blob range prioritization before delegating blob-server requests', (t) => {
-  const importIndex = storageSource.indexOf("import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'")
+  const importIndex = storageSource.indexOf("import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'")
   const wrapperIndex = storageSource.indexOf('blobServer._onrequest = async function (req, res)')
   const priorityIndex = storageSource.indexOf('await prioritizeBlobServerRangeRequest(blobServer, req)')
   const delegateIndex = storageSource.indexOf('return origOnRequest(req, res)')
 
-  t.ok(importIndex >= 0, 'storage imports range priority helper')
+  t.ok(importIndex >= 0, 'storage imports range priority helpers')
   t.ok(wrapperIndex >= 0, 'storage wraps blob-server requests')
   t.ok(priorityIndex > wrapperIndex, 'range priority runs inside the request wrapper')
   t.ok(priorityIndex < delegateIndex, 'range priority runs before blob-server serves the range')
+})
+
+test('storage releases pooled priority ranges during backend shutdown', (t) => {
+  const releaseIndex = storageSource.indexOf('releaseAllPrioritizedBlobRanges()')
+  const blobServerCloseIndex = storageSource.indexOf("runShutdownStep('blobServer close'")
+
+  t.ok(releaseIndex >= 0, 'shutdown releases pooled priority ranges')
+  t.ok(blobServerCloseIndex >= 0, 'shutdown closes the blob server')
+  t.ok(releaseIndex < blobServerCloseIndex, 'priority ranges are released before the blob server closes')
 })

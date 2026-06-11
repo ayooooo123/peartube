@@ -26,7 +26,7 @@ import {
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache } from './known-peers.js'
-import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'
+import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -2208,6 +2208,9 @@ export async function shutdownBackend(ctx) {
 
     if (ctx.blobServer) {
       console.log('[Backend] Shutdown: closing blobServer...')
+      try {
+        releaseAllPrioritizedBlobRanges()
+      } catch { /* best effort */ }
       await runShutdownStep('blobServer close', async () => {
         await ctx.blobServer.close()
       }, 2000)

@@ -101,12 +101,15 @@ benefit.
   `PEARTUBE_AVPLAYER_COMPAT=1` the sidecar injects a lazy cast-transcoder +
   `player: 'avplayer'`, so AVPlayer-incompatible codecs route through local-HLS
   transcode. Off by default.
+- ✅ Mobile player threading: `rpc.native` derives the player id from `Platform.OS`
+  (iOS → `avplayer`, Android → `exoplayer`) and passes it via the worklet
+  `__peartubeLaunchOptions`; `createMobileRuntimeBackend` reads `launchOptions.player`
+  and injects `player` + a lazy cast-transcoder into the handler deps — gated by the
+  same `PEARTUBE_AVPLAYER_COMPAT` flag, inert otherwise.
 - ⏭ **Remaining (needs a device):** flip the flag and validate AVPlayer plays the
-  local-HLS output for MKV/Opus/AC-3/DTS on macOS; then **Phase 3** — drop
-  `prefersNativeMpvPlayback` so the Swift app always uses AVPlayer (no longer mpv)
-  for those, completing the desktop-native retirement. Mobile (iOS `avplayer` vs
-  Android `exoplayer`) needs the per-OS player id threaded to the worklet at launch
-  (`rpc.native` → worklet args → `attachMobileHandlers` deps) before enabling there.
+  local-HLS output for MKV/Opus/AC-3/DTS on macOS **and iOS**; then **Phase 3** —
+  drop `prefersNativeMpvPlayback` so the Swift app always uses AVPlayer (no longer
+  mpv) for those, completing the desktop-native retirement.
 
 ### Phase 1 — iOS (delete dead mpv)
 4. Remove `MpvPlayerCore.swift`, `MpvPlayerView.swift`, `MpvPlayerViewManager.swift`,

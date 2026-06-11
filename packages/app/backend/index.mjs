@@ -170,6 +170,24 @@ async function ensureCastTranscoderModule() {
   return castTranscoderPromise
 }
 
+// Lazy cast-transcoder wrapper for the AVPlayer/OS-native compatibility layer.
+function createLazyCastTranscoder() {
+  return {
+    async startCompatTranscode(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.startCompatTranscode(...args)
+    },
+    async getCastHlsUrl(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.getCastHlsUrl(...args)
+    },
+    async getCastStatus(...args) {
+      const module = await ensureCastTranscoderModule()
+      return module.getCastStatus(...args)
+    },
+  }
+}
+
 function formatError(error) {
   if (!error) return 'Unknown error'
   if (error instanceof Error) return error.stack || error.message || String(error)
@@ -362,6 +380,15 @@ export async function createMobileRuntimeBackend(options = {}) {
   const { launchOptions, workerArgs } = parseMobileLaunchArgs(args)
   const workerBundlePath = workerArgs[0] || ''
   if (workerBundlePath) globalThis.__PEARTUBE_WORKER_PATH__ = workerBundlePath
+
+  // OS-native-player compatibility layer (off unless PEARTUBE_AVPLAYER_COMPAT=1).
+  // launchOptions.player ('avplayer' on iOS / 'exoplayer' on Android) is supplied
+  // by the RN side; when enabled it routes codecs the player can't decode through
+  // a local-HLS bare-ffmpeg transcode in preparePlayback.
+  const avplayerCompatEnabled = globalThis.process?.env?.PEARTUBE_AVPLAYER_COMPAT === '1'
+  const compatDeps = (avplayerCompatEnabled && launchOptions?.player)
+    ? { player: launchOptions.player, castTranscoder: createLazyCastTranscoder() }
+    : {}
 
   let rpc = null
   let handlersRegistered = false
@@ -608,6 +635,7 @@ function removeStaleLocks(storageDir) {
       return module.generateAndStoreThumbnail(...args)
     },
     transcoder: lazyTranscoder,
+    ...compatDeps,
     storagePath
   })
 
@@ -784,6 +812,7 @@ function removeStaleLocks(storageDir) {
         return module.generateAndStoreThumbnail(...args)
       },
       transcoder: lazyTranscoder,
+      ...compatDeps,
       storagePath
     },
     destroy

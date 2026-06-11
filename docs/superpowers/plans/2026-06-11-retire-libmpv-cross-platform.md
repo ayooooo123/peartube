@@ -77,6 +77,25 @@ benefit.
    `api.preparePlayback` / `getVideoUrl` (`api.js`, `blob-playback-service.js`).
 3. Reuse `probeWithBareFFmpeg` and `runVideoCopyAudioTranscode`.
 
+**Progress (2026-06-11):**
+- ✅ `playback-compat.mjs` — pure per-player capability policy
+  (`avplayer`/`exoplayer`/`webkit`/`chromecast`) + `decidePlayback` /
+  `osPlayerCanHandle`, faithful to the existing Chromecast/web checks. Unit-tested
+  (`test/playback-compat.test.mjs`, 22 cases).
+- ✅ `cast-transcoder.startCompatTranscode(sourceUrl, { player })` — generalizes
+  the dormant `startWebTranscode` to any player via the policy, reusing the proven
+  full/audio-only/remux dispatch. `startWebTranscode` now delegates (player:
+  `webkit`). Output is fMP4 HLS via the cast file server.
+- ✅ Local reachability: the cast file server binds `0.0.0.0` and
+  `getCastHlsUrl(sessionId, '127.0.0.1')` already returns a loopback URL — usable
+  by local AVPlayer, not just Chromecast. (A dedicated `127.0.0.1`-only bind can
+  be tightened later.)
+- ⏭ **Remaining:** thread the requesting `player`/capabilities through the
+  `preparePlayback` HRPC and branch there (probe → `decidePlayback` → either the
+  direct blob URL or `startCompatTranscode` + `getCastHlsUrl`). Backward-compatible
+  (absent player ⇒ today's direct-URL behavior). Needs on-device validation, so
+  staged separately from the pure/unit-tested core above.
+
 ### Phase 1 — iOS (delete dead mpv)
 4. Remove `MpvPlayerCore.swift`, `MpvPlayerView.swift`, `MpvPlayerViewManager.swift`,
    `MpvPlayerManager.m`, `MpvHttpStreamBridge.swift`, `MpvPipController.swift` and

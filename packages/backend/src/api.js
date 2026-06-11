@@ -103,7 +103,21 @@ export function createApi({
   }
 
   const loadChannelBounded = async (channelKey, timeoutMs = 2500) => {
-    return withTimeout(loadChannel(ctx, channelKey), timeoutMs, `loadChannel ${channelKey?.slice?.(0, 16) || ''}`)
+    const label = `loadChannel ${channelKey?.slice?.(0, 16) || ''}`
+    // Already-loaded channels resolve from the in-memory cache — no timeout needed.
+    if (ctx.channels?.has?.(channelKey)) {
+      return loadChannel(ctx, channelKey)
+    }
+    try {
+      return await withTimeout(loadChannel(ctx, channelKey), timeoutMs, label)
+    } catch (err) {
+      if (!/timeout/i.test(err?.message || '')) throw err
+      // Slow networks routinely blow the first deadline while the underlying
+      // load keeps going (loadChannel dedupes concurrent loads), so retry once
+      // with a doubled budget instead of failing hard.
+      console.warn(`[API] ${label} timed out after ${timeoutMs}ms, retrying once`)
+      return withTimeout(loadChannel(ctx, channelKey), timeoutMs * 2, `${label} retry`)
+    }
   }
 
   /** @type {Map<string, {value: object|null, at: number}>} driveKey → cached signed channel root descriptor (misses retried after 60s) */

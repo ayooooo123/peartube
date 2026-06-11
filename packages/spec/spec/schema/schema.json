@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "empty",
@@ -1778,6 +1778,18 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "isLive",
+          "required": false,
+          "type": "bool",
+          "version": 3
+        },
+        {
+          "name": "liveStreams",
+          "array": true,
+          "type": "@peartube/feed-live-stream",
+          "version": 3
         }
       ]
     },
@@ -6736,6 +6748,38 @@
           "required": false,
           "type": "string",
           "version": 2
+        }
+      ]
+    },
+    {
+      "name": "feed-live-stream",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "liveCoreKey",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "startedAt",
+          "required": false,
+          "type": "uint",
+          "version": 3
         }
       ]
     }

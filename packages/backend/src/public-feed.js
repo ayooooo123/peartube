@@ -255,6 +255,26 @@ export class PublicFeed {
     this.feedSnapshotProvider = callback;
   }
 
+  // Live stream announcements ride feed entries as a small capped manifest,
+  // exactly like previewVideos. liveCoreKey must be a hypercore key so
+  // viewers can join the live core's swarm topic directly from the feed.
+  _sanitizeLiveStreams(streams) {
+    if (!Array.isArray(streams)) return []
+    return streams
+      .filter((stream) =>
+        stream && typeof stream === 'object' &&
+        typeof stream.videoId === 'string' && stream.videoId.length > 0 &&
+        typeof stream.liveCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(stream.liveCoreKey)
+      )
+      .slice(0, 4)
+      .map((stream) => ({
+        videoId: String(stream.videoId),
+        liveCoreKey: String(stream.liveCoreKey).toLowerCase(),
+        title: stream.title ? String(stream.title) : null,
+        startedAt: Number(stream.startedAt || 0) || 0,
+      }))
+  }
+
   _sanitizePreviewVideos(videos) {
     if (!Array.isArray(videos)) return []
     return videos
@@ -457,6 +477,13 @@ export class PublicFeed {
     if (previewVideos.length > 0) serialized.previewVideos = previewVideos
     const previewVideosHash = entry.previewVideosHash || hashPreviewVideos(previewVideos)
     if (previewVideosHash) serialized.previewVideosHash = previewVideosHash
+    // liveUpdatedAt is always serialized once set so peers can apply a
+    // newer empty list (stream ended) over a stale live announcement.
+    if (Number(entry.liveUpdatedAt || 0) > 0) {
+      serialized.liveUpdatedAt = Number(entry.liveUpdatedAt)
+      const liveStreams = this._sanitizeLiveStreams(entry.liveStreams)
+      if (liveStreams.length > 0) serialized.liveStreams = liveStreams
+    }
     const signedDescriptor = this._normalizeSignedDescriptor(entry.signedDescriptor)
     if (signedDescriptor) serialized.signedDescriptor = signedDescriptor
     return serialized
@@ -538,6 +565,20 @@ export class PublicFeed {
         changed = true
       } else if (!entry.manifestUpdatedAt && incomingPreviewVideos.length > 0) {
         entry.manifestUpdatedAt = Date.now()
+        changed = true
+      }
+    }
+
+    // Live announcements are last-writer-wins on the broadcaster's clock:
+    // a newer liveUpdatedAt replaces the list wholesale (including with an
+    // empty list when the stream ended).
+    const nextLiveUpdatedAt = Number(snapshot.liveUpdatedAt || 0) || 0
+    if (nextLiveUpdatedAt > Number(entry.liveUpdatedAt || 0)) {
+      const incomingLiveStreams = this._sanitizeLiveStreams(snapshot.liveStreams)
+      const currentLiveStreams = this._sanitizeLiveStreams(entry.liveStreams)
+      entry.liveUpdatedAt = nextLiveUpdatedAt
+      if (JSON.stringify(incomingLiveStreams) !== JSON.stringify(currentLiveStreams)) {
+        entry.liveStreams = incomingLiveStreams
         changed = true
       }
     }
@@ -1992,6 +2033,8 @@ export class PublicFeed {
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
       previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
+      liveUpdatedAt: Number(snapshot?.liveUpdatedAt || 0) || 0,
+      liveStreams: this._sanitizeLiveStreams(snapshot?.liveStreams),
       signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor),
     });
 
@@ -2064,6 +2107,42 @@ export class PublicFeed {
     // Broadcast to all peers (include publicBeeKey)
     this.broadcastSubmitChannel(driveKey, null, resolvedPublicBeeKey, snapshot);
     this._schedulePersistDiscovered()
+  }
+
+  /**
+   * Announce (or clear, with an empty array) the channel's active live
+   * streams. Last-writer-wins on liveUpdatedAt so an end-of-stream update
+   * beats stale live announcements still circulating in the gossip.
+   *
+   * @param {string} driveKey
+   * @param {Array<{videoId: string, liveCoreKey: string, title?: string, startedAt?: number}>} liveStreams
+   * @returns {boolean} whether the local entry changed
+   */
+  setChannelLiveStreams(driveKey, liveStreams = []) {
+    const entry = this.entries.get(driveKey)
+    if (!entry) {
+      console.log('[PublicFeed] setChannelLiveStreams: channel not in feed:', String(driveKey || '').slice(0, 16))
+      return false
+    }
+
+    const changed = this._applyEntrySnapshot(driveKey, {
+      liveStreams,
+      // Strictly after any previous update so back-to-back local calls
+      // within the same millisecond still win the last-writer-wins merge.
+      liveUpdatedAt: Math.max(Date.now(), Number(entry.liveUpdatedAt || 0) + 1),
+    })
+
+    if (changed) {
+      console.log(
+        '[PublicFeed] Live streams updated:',
+        driveKey.slice(0, 16),
+        'count=', this._sanitizeLiveStreams(entry.liveStreams).length
+      )
+      this.onFeedUpdate?.()
+      this._schedulePersistDiscovered()
+      this.broadcastSubmitChannel(driveKey, null, this._resolvePublicBeeKey(entry), this._serializeEntry(entry))
+    }
+    return changed
   }
 
   /**
@@ -2189,6 +2268,8 @@ export class PublicFeed {
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
       previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
+      liveUpdatedAt: Number(snapshot?.liveUpdatedAt || 0) || 0,
+      liveStreams: this._sanitizeLiveStreams(snapshot?.liveStreams),
       signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor),
     };
 

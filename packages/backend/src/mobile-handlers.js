@@ -191,6 +191,13 @@ export function attachMobileHandlers(B, deps) {
         peerCount: e.peerCount || 0,
         lastSeen: e.lastSeen || 0,
         manifestUpdatedAt: e.manifestUpdatedAt || 0,
+        isLive: Array.isArray(e.liveStreams) && e.liveStreams.length > 0,
+        liveStreams: Array.isArray(e.liveStreams) ? e.liveStreams.map((s) => ({
+          videoId: s.videoId,
+          liveCoreKey: s.liveCoreKey,
+          title: s.title || null,
+          startedAt: Number(s.startedAt || 0) || 0,
+        })) : [],
         previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos.map((v) => ({
           ...v,
           byteAvailability: v?.byteAvailability ?? null,

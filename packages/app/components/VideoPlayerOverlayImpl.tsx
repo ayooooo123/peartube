@@ -2319,7 +2319,7 @@ export function VideoPlayerOverlay() {
           </div>
 
           {/* Control buttons */}
-          <button
+          <button type="button"
             onClick={handlePlayPause}
             style={{
               width: 32,
@@ -2343,7 +2343,7 @@ export function VideoPlayerOverlay() {
             )}
           </button>
 
-          <button
+          <button type="button"
             onClick={maximizeFromMini}
             style={{
               width: 32,
@@ -2364,7 +2364,7 @@ export function VideoPlayerOverlay() {
             <Feather name="chevron-up" color={colors.text} size={18} />
           </button>
 
-          <button
+          <button type="button"
             onClick={closeVideo}
             style={{
               width: 32,
@@ -2450,7 +2450,7 @@ export function VideoPlayerOverlay() {
 
             {/* Desktop playback controls */}
             <div style={desktopStyles.playerControls}>
-              <button onClick={handlePlayPause} style={desktopStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
+              <button type="button" onClick={handlePlayPause} style={desktopStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
                 <Feather name={effectiveIsPlaying ? 'pause' : 'play'} color={colors.text} size={16} />
               </button>
               <div style={desktopStyles.seekRow}>
@@ -2481,7 +2481,7 @@ export function VideoPlayerOverlay() {
                 <div style={desktopStyles.castBanner}>
                   <Feather name="cast" color={colors.primary} size={14} />
                   <span style={desktopStyles.castBannerText}>Casting to {castDeviceName}</span>
-                  <button
+                  <button type="button"
                     onClick={handleCastDisconnect}
                     style={desktopStyles.castDisconnectButton}
                     aria-label="Disconnect casting"
@@ -2547,7 +2547,7 @@ export function VideoPlayerOverlay() {
 
               {/* Action buttons - Like, Dislike, Download */}
               <div style={desktopStyles.actions}>
-                <button
+                <button type="button"
                   onClick={() => toggleReaction('like')}
                   style={{
                     ...desktopStyles.reactionButton,
@@ -2558,7 +2558,7 @@ export function VideoPlayerOverlay() {
                     Like ({reactionCounts.like || 0})
                   </span>
                 </button>
-                <button
+                <button type="button"
                   onClick={() => toggleReaction('dislike')}
                   style={{
                     ...desktopStyles.reactionButton,
@@ -2569,7 +2569,7 @@ export function VideoPlayerOverlay() {
                     Dislike ({reactionCounts.dislike || 0})
                   </span>
                 </button>
-                <button
+                <button type="button"
                   onClick={isDownloaded ? undefined : handleDownload}
                   disabled={isDownloaded || isDownloading}
                   style={{
@@ -2598,7 +2598,7 @@ export function VideoPlayerOverlay() {
                   <h3 style={desktopStyles.commentsTitle}>
                     {displayComments.length > 0 ? `${displayComments.length} Comment${displayComments.length !== 1 ? 's' : ''}` : 'Comments'}
                   </h3>
-                  <button onClick={refreshComments} disabled={refreshingComments} style={desktopStyles.refreshButton}>
+                  <button type="button" onClick={refreshComments} disabled={refreshingComments} style={desktopStyles.refreshButton}>
                     <Feather name="rotate-ccw" color={colors.primary} size={14} />
                     <span>{refreshingComments ? 'Refreshing...' : 'Refresh'}</span>
                   </button>
@@ -2614,7 +2614,7 @@ export function VideoPlayerOverlay() {
                     style={desktopStyles.commentInput}
                     onKeyDown={(e) => { if (e.key === 'Enter' && commentText.trim()) postComment() }}
                   />
-                  <button
+                  <button type="button"
                     onClick={postComment}
                     disabled={postingComment || !commentText.trim()}
                     style={{ ...desktopStyles.postButton, opacity: (postingComment || !commentText.trim()) ? 0.5 : 1 }}
@@ -2663,12 +2663,12 @@ export function VideoPlayerOverlay() {
           </div>
 
           {/* Minimize button */}
-          <button onClick={minimizePlayer} style={desktopStyles.minimizeButton} aria-label="Minimize">
+          <button type="button" onClick={minimizePlayer} style={desktopStyles.minimizeButton} aria-label="Minimize">
             <Feather name="minus" color={colors.text} size={24} />
           </button>
 
           {/* Close button */}
-          <button onClick={closeVideo} style={desktopStyles.closeButton} aria-label="Close">
+          <button type="button" onClick={closeVideo} style={desktopStyles.closeButton} aria-label="Close">
             <Feather name="x" color={colors.text} size={24} />
           </button>
         </div>

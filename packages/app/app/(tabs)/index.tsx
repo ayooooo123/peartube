@@ -137,6 +137,8 @@ function getHomePlaybackKey(video: VideoData) {
   return `${video.channelKey || video.driveKey || 'local'}:${video.id}`
 }
 
+const CATEGORIES = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -240,7 +242,7 @@ export default function HomeScreen() {
   const feedSnapshotWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Category filter state
-  const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+  const categories = CATEGORIES
   const [activeCategory, setActiveCategory] = useState('All')
 
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url

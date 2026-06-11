@@ -36,6 +36,8 @@ const isPear = typeof window !== 'undefined' && (
   !!(window as any).bridge
 )
 
+const CATEGORIES = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+
 // Module-level feed cache — survives component remounts on desktop navigation.
 // On mobile, Expo Router's <Tabs> keeps the component mounted so this is a no-op.
 const feedCache = {
@@ -936,7 +938,7 @@ function WatchPageView({
             {error ? (
               <div style={watchStyles.errorState}>
                 <p style={{ color: colors.textMuted }}>{error}</p>
-                <button onClick={onBack} style={watchStyles.backButton}>Go Back</button>
+                <button type="button" onClick={onBack} style={watchStyles.backButton}>Go Back</button>
               </div>
             ) : isCasting ? (
               <div style={watchStyles.castPlaceholder}>
@@ -1013,7 +1015,7 @@ function WatchPageView({
 
             {showCastControls && (
               <div style={watchStyles.controlsOverlay} onClick={(e) => e.stopPropagation()}>
-                <button onClick={handlePlayPause} style={watchStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
+                <button type="button" onClick={handlePlayPause} style={watchStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
                   <Feather name={effectiveIsPlaying ? 'pause' : 'play'} color="#fff" size={16} />
                 </button>
                 <input
@@ -1033,7 +1035,7 @@ function WatchPageView({
                 <span style={watchStyles.timeLabel}>
                   {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
                 </span>
-                <button
+                <button type="button"
                   onClick={() => {
                     cast.startDiscovery()
                     setShowCastPicker(true)
@@ -1046,7 +1048,7 @@ function WatchPageView({
                 >
                   <Feather name="cast" color={cast.isConnected ? colors.primary : '#fff'} size={16} />
                 </button>
-                <button
+                <button type="button"
                   onClick={handleFullscreenToggle}
                   style={watchStyles.controlButton}
                   aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
@@ -1062,7 +1064,7 @@ function WatchPageView({
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
               <h1 style={watchStyles.title}>{videoRefreshData?.title ?? video.title}</h1>
               {isOwner && (
-                <button
+                <button type="button"
                   onClick={() => setEditingVideo(video)}
                   style={watchStyles.editButton}
                   aria-label="Edit video"
@@ -1075,7 +1077,7 @@ function WatchPageView({
               <div style={watchStyles.castBanner}>
                 <Feather name="cast" color={colors.primary} size={14} />
                 <span style={watchStyles.castBannerText}>Casting to {castDeviceName}</span>
-                <button
+                <button type="button"
                   onClick={() => cast.disconnect()}
                   style={watchStyles.castDisconnectButton}
                   aria-label="Disconnect casting"
@@ -1160,19 +1162,19 @@ function WatchPageView({
 
             {/* Reactions */}
             <div style={watchStyles.actionsRow}>
-              <button
+              <button type="button"
                 style={{ ...watchStyles.actionButton, ...(userReaction === 'like' ? watchStyles.actionButtonActive : {}) }}
                 onClick={() => toggleReaction('like')}
               >
                 Like{reactionCounts.like ? ` (${reactionCounts.like})` : ''}
               </button>
-              <button
+              <button type="button"
                 style={{ ...watchStyles.actionButton, ...(userReaction === 'dislike' ? watchStyles.actionButtonActive : {}) }}
                 onClick={() => toggleReaction('dislike')}
               >
                 Dislike{reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}
               </button>
-              <button
+              <button type="button"
                 style={{
                   ...watchStyles.actionButton,
                   ...(isDownloaded ? watchStyles.actionButtonActive : {}),
@@ -1207,7 +1209,7 @@ function WatchPageView({
                 <h3 style={watchStyles.commentsTitle}>
                   {displayComments.length > 0 ? `${displayComments.length} Comment${displayComments.length !== 1 ? 's' : ''}` : 'Comments'}
                 </h3>
-                <button
+                <button type="button"
                   onClick={refreshComments}
                   disabled={refreshingComments}
                   style={{ ...watchStyles.commentRefreshButton, opacity: refreshingComments ? 0.6 : 1 }}
@@ -1223,7 +1225,7 @@ function WatchPageView({
                   <span style={watchStyles.replyIndicatorText}>
                     Replying to {(replyToComment.authorKeyHex || '').slice(0, 8)}…
                   </span>
-                  <button onClick={cancelReply} style={watchStyles.cancelReplyButton}>
+                  <button type="button" onClick={cancelReply} style={watchStyles.cancelReplyButton}>
                     <CloseIcon color={colors.textMuted} size={14} />
                   </button>
                 </div>
@@ -1236,7 +1238,7 @@ function WatchPageView({
                   placeholder={replyToComment ? 'Write a reply…' : 'Add a comment…'}
                   style={watchStyles.commentInput}
                 />
-                <button
+                <button type="button"
                   onClick={postComment}
                   disabled={postingComment || !commentText.trim()}
                   style={{ ...watchStyles.commentButton, opacity: (postingComment || !commentText.trim()) ? 0.5 : 1 }}
@@ -1267,14 +1269,14 @@ function WatchPageView({
                             </span>
                           )}
                           <div style={watchStyles.commentActions}>
-                            <button
+                            <button type="button"
                               onClick={() => setReplyToComment(c)}
                               style={watchStyles.commentActionButton}
                               title="Reply"
                             >
                               <ReplyIcon color={colors.textMuted} size={14} />
                             </button>
-                            <button
+                            <button type="button"
                               onClick={() => deleteComment(c.commentId)}
                               disabled={deletingCommentId === c.commentId}
                               style={watchStyles.commentActionButton}
@@ -1308,7 +1310,7 @@ function WatchPageView({
                                     {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
                                   </span>
                                 )}
-                                <button
+                                <button type="button"
                                   onClick={() => deleteComment(reply.commentId)}
                                   disabled={deletingCommentId === reply.commentId}
                                   style={watchStyles.commentActionButton}
@@ -1331,7 +1333,7 @@ function WatchPageView({
 
                   {/* Load more button */}
                   {hasMoreComments && (
-                    <button
+                    <button type="button"
                       onClick={loadMoreComments}
                       disabled={loadingMoreComments}
                       style={watchStyles.loadMoreButton}
@@ -1385,7 +1387,7 @@ function WatchPageView({
         )}
 
         {/* Back button */}
-        <button onClick={onBack} style={watchStyles.closeButton} aria-label="Back to Home">
+        <button type="button" onClick={onBack} style={watchStyles.closeButton} aria-label="Back to Home">
           <CloseIcon color={colors.text} size={24} />
         </button>
       </div>
@@ -2049,7 +2051,7 @@ export default function HomeScreen() {
   const [feedVideosLoading, setFeedVideosLoading] = useState(false)
 
   // Category filter state
-  const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+  const categories = CATEGORIES
   const [activeCategory, setActiveCategory] = useState('All')
 
   // Channel viewing state
@@ -2569,7 +2571,7 @@ export default function HomeScreen() {
         <div style={styles.modalOverlay}>
           <div style={styles.modal}>
             <div style={styles.modalHeader}>
-              <button onClick={closeChannelView} style={styles.closeButton}>
+              <button type="button" onClick={closeChannelView} style={styles.closeButton}>
                 <CloseIcon color={colors.text} size={24} />
               </button>
               <div style={styles.modalTitle}>
@@ -2630,7 +2632,7 @@ export default function HomeScreen() {
                   </span>
                 )}
               </div>
-              <button
+              <button type="button"
                 onClick={refreshFeed}
                 style={styles.refreshButton}
                 disabled={feedLoading}
@@ -2645,7 +2647,7 @@ export default function HomeScreen() {
             {/* Category Filter Chips */}
             <div style={styles.categoryRow}>
               {categories.map((cat) => (
-                <button
+                <button type="button"
                   key={cat}
                   onClick={() => setActiveCategory(cat)}
                   style={activeCategory === cat ? styles.categoryChipActive : styles.categoryChip}
@@ -2696,7 +2698,7 @@ export default function HomeScreen() {
           <div style={styles.videosSection}>
             <div style={styles.sectionHeader}>
               <h2 style={styles.sectionTitle}>Your Videos</h2>
-              <button
+              <button type="button"
                 onClick={refreshMyVideos}
                 style={styles.refreshButton}
                 disabled={refreshingMyVideos || !identity?.driveKey}

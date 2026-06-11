@@ -40,6 +40,20 @@ export function useShortsSocial(video: VideoData | null) {
     return `${video.channelKey}:${video.id}`
   }, [video])
 
+  // Reset state during render when the video changes so the previous
+  // video's comments never paint against the new one
+  const [prevVideoKey, setPrevVideoKey] = useState(videoKey)
+  if (prevVideoKey !== videoKey) {
+    setPrevVideoKey(videoKey)
+    if (videoKey) {
+      setComments([])
+      setCommentText('')
+      setReplyToComment(null)
+      setCommentsPage(0)
+      setHasMoreComments(false)
+    }
+  }
+
   const displayComments = useMemo(() => {
     if (pendingComments.length === 0) return comments
     const merged = new Map<string, any>()
@@ -122,13 +136,9 @@ export function useShortsSocial(video: VideoData | null) {
     }
   }, [video])
 
+  // Load social data when video changes (state reset happens during render above)
   useEffect(() => {
     if (!videoKey) return
-    setComments([])
-    setCommentText('')
-    setReplyToComment(null)
-    setCommentsPage(0)
-    setHasMoreComments(false)
     loadSocial(0, false, true).catch(() => {})
     if (!video?.channelKey || !video?.id) return
     rpc?.indexVideoVectors?.({ channelKey: video.channelKey, videoId: video.id }).catch(() => {})

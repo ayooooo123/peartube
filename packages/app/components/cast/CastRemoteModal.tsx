@@ -57,12 +57,10 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
   const [pendingSeekTime, setPendingSeekTime] = useState<number | null>(null)
   const pendingSeekSinceRef = useMemo(() => ({ t: 0 }), [])
 
-  useEffect(() => {
-    if (!visible) {
-      setPendingSeekTime(null)
-      return
-    }
-  }, [visible])
+  // Clear any pending seek during render when the modal is hidden
+  if (!visible && pendingSeekTime !== null) {
+    setPendingSeekTime(null)
+  }
 
   useEffect(() => {
     if (pendingSeekTime === null) return

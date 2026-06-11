@@ -29,6 +29,16 @@ function ThumbnailImageComponent({
   const [imageLoading, setImageLoading] = useState(true)
   const [retryAttempt, setRetryAttempt] = useState(0)
 
+  // Reset error state during render when the URL changes so a stale
+  // error/loading frame never paints for the new thumbnail
+  const [prevThumbnailUrl, setPrevThumbnailUrl] = useState(thumbnailUrl)
+  if (prevThumbnailUrl !== thumbnailUrl) {
+    setPrevThumbnailUrl(thumbnailUrl)
+    setImageError(false)
+    setImageLoading(Boolean(thumbnailUrl))
+    setRetryAttempt(0)
+  }
+
   // Memoize duration text
   const durationText = useMemo(
     () => duration ? formatDuration(duration) : null,
@@ -73,13 +83,6 @@ function ThumbnailImageComponent({
       return () => clearTimeout(timeout)
     }
   }, [thumbnailUrl, imageLoading, imageError, handleRecoverableError])
-
-  // Reset error state when URL changes
-  useEffect(() => {
-    setImageError(false)
-    setImageLoading(Boolean(thumbnailUrl))
-    setRetryAttempt(0)
-  }, [thumbnailUrl])
 
   // Memoize callbacks for Image component
   const handleError = useCallback(() => {

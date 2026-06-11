@@ -1,5 +1,13 @@
 # Replace MpvPlayer with HTML5 Video (react-native-video web) Implementation Plan
 
+> **Superseded/extended by `2026-06-11-retire-libmpv-cross-platform.md`** — this doc
+> is the Electrobun/web slice of a broader cross-platform libmpv retirement. Two
+> updates since this was written: (1) the "Known tradeoffs" codec loss below is no
+> longer accepted — `MseVideoPlayer.web.tsx` + mediabunny already remux MKV, and a
+> bare-ffmpeg audio-transcode fallback (`2026-06-11-desktop-mse-audio-transcode-fallback.md`)
+> covers AC-3/DTS, so this becomes a **regression-free** swap; (2) the desktop-native
+> app is now **in scope** of the umbrella plan, not permanently out of scope.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Unify all platforms on `react-native-video` by removing the MpvPlayer/bare-mpv desktop playback path and using react-native-video's built-in web implementation (which renders a standard HTML5 `<video>` tag) on Pear Desktop.

@@ -1074,6 +1074,107 @@ export async function initializeStorage(config) {
     console.warn('[Storage] Consider using --store flag for persistent storage.');
   }
 
+  // Create the Hyperswarm instance and kick off DHT bootstrap BEFORE the
+  // Corestore/Hyperbee/blob-server warmup below. On mobile the DHT bootstrap
+  // is the long pole for topic discovery, so it should overlap local disk I/O
+  // instead of starting after it. We intentionally do NOT join() or listen()
+  // here — the network topic join happens after metadata storage is ready, so
+  // peer discovery still flows exclusively through the Hyperswarm topic.
+  let keyPair = null;
+  const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null);
+
+  if (resolvedSwarmKeyPath && fs) {
+    try {
+      const raw = fs.readFileSync(resolvedSwarmKeyPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed?.publicKey && parsed?.secretKey) {
+        keyPair = {
+          publicKey: b4a.from(parsed.publicKey, 'hex'),
+          secretKey: b4a.from(parsed.secretKey, 'hex')
+        };
+        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16));
+      }
+    } catch (e) {
+      // If missing or invalid, we'll generate below
+    }
+  }
+
+  if (!keyPair) {
+    keyPair = crypto.keyPair();
+    if (resolvedSwarmKeyPath && fs) {
+      try {
+        fs.mkdirSync(path.dirname(resolvedSwarmKeyPath), { recursive: true });
+        fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
+          publicKey: b4a.toString(keyPair.publicKey, 'hex'),
+          secretKey: b4a.toString(keyPair.secretKey, 'hex')
+        }));
+        console.log('[Storage] Persisted new swarm key to', resolvedSwarmKeyPath);
+      } catch (e) {
+        console.log('[Storage] Could not persist swarm key:', e.message);
+      }
+    }
+  }
+
+  console.log('[Storage] Creating Hyperswarm (early, before storage warmup)...');
+  await appendDebugLine('[storage] creating hyperswarm early')
+  const LoadedHyperswarm = await waitForHyperswarmModule()
+  let swarm
+  if (typeof LoadedHyperswarm !== 'function') {
+    console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
+    await appendDebugLine('[storage] hyperswarm unavailable; using offline swarm')
+    swarm = createOfflineSwarm(keyPair, 'module-unavailable')
+  } else {
+    try {
+      swarm = new LoadedHyperswarm({ keyPair });
+    } catch (err) {
+      console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
+      await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
+      swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
+    }
+  }
+  console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
+  globalNetworkStartupTiming?.record('swarm-created', { offline: Boolean(swarm._peartubeOffline) })
+  const initialDhtState = describeDhtState(swarm.dht)
+  if (initialDhtState) {
+    console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
+  }
+  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
+  globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
+  installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
+
+  // Set global references for suspend/resume and stats
+  globalSwarm = swarm;
+
+  // Start DHT bind + bootstrap in the background while storage initializes.
+  // listen()/join() later reuse the same bootstrap, so this only moves the
+  // network wait earlier — it does not add work or connect to any peer.
+  if (!swarm._peartubeOffline && typeof swarm.dht?.ready === 'function') {
+    swarm.dht.ready()
+      .then(() => {
+        globalNetworkStartupTiming?.record('dht-early-bootstrap', { bootstrapped: swarm.dht?.bootstrapped, firewalled: swarm.dht?.firewalled })
+        console.log('[Storage] Early DHT bootstrap done, bootstrapped:', swarm.dht?.bootstrapped, 'firewalled:', swarm.dht?.firewalled)
+        void appendDebugLine(`[storage] early dht bootstrap done bootstrapped=${swarm.dht?.bootstrapped} firewalled=${swarm.dht?.firewalled}`)
+      })
+      .catch((err) => {
+        console.log('[Storage] Early DHT bootstrap failed (non-fatal):', err?.message)
+        void appendDebugLine(`[storage] early dht bootstrap failed ${err?.message || String(err)}`)
+      })
+  }
+
+  // The swarm now exists before storage init, so every storage failure path
+  // below must tear it down or a failed attempt leaks the DHT socket (and the
+  // orchestrator's retry would stack a second swarm on top).
+  const destroySwarmAfterInitFailure = async (label) => {
+    try {
+      if (globalSwarm === swarm) globalSwarm = null
+      globalSwarmDiagnostics = null
+      await swarm?.destroy?.()
+      await appendDebugLine(`[storage] swarm destroyed after init failure ${label}`)
+    } catch (error) {
+      await appendDebugLine(`[storage] swarm destroy after init failure failed ${label} ${describeDebugError(error)}`)
+    }
+  }
+
   if (isEmbeddedBareKitStoragePath()) {
     await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
   } else {
@@ -1122,7 +1223,14 @@ export async function initializeStorage(config) {
   const corestoreOptions = primaryKey
     ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
     : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
-  let store = await createCorestoreInstance(storagePath, corestoreOptions)
+  let store
+  try {
+    store = await createCorestoreInstance(storagePath, corestoreOptions)
+  } catch (error) {
+    await appendDebugLine(`[storage] corestore create failed ${describeDebugError(error)}`)
+    await destroySwarmAfterInitFailure('corestore create')
+    throw error
+  }
 
   console.log('[Storage] Waiting for Corestore ready...');
   await appendDebugLine('[storage] awaiting corestore ready')
@@ -1134,6 +1242,7 @@ export async function initializeStorage(config) {
       appendDebugLine,
       describeError: describeDebugError
     })
+    await destroySwarmAfterInitFailure('corestore ready')
     throw error
   }
   console.log('[Storage] Corestore ready, opened:', store.opened, 'closed:', store.closed);
@@ -1198,13 +1307,21 @@ export async function initializeStorage(config) {
       describeError: describeDebugError
     })
 
+    await destroySwarmAfterInitFailure(label)
+
     throw originalError
   }
 
   // Initialize metadata database
   await appendDebugLine('[storage] metaCore get start')
   console.log('[Storage] metaCore get start')
-  metaCore = await openDeterministicNamedCore(store, 'peartube-meta');
+  try {
+    metaCore = await openDeterministicNamedCore(store, 'peartube-meta');
+  } catch (error) {
+    await appendDebugLine(`[storage] metaCore get failed ${describeDebugError(error)}`)
+    console.error('[Storage] metaCore get failed:', describeDebugError(error))
+    await cleanupFailedMetadataStartup('metaCore.get', error)
+  }
   await appendDebugLine('[storage] metaCore get returned')
   console.log('[Storage] metaCore get returned')
   try {
@@ -1313,71 +1430,11 @@ export async function initializeStorage(config) {
     // Continue without blob server - will need alternative video streaming
   }
 
-  // Initialize Hyperswarm for P2P networking
-  let keyPair = null;
-  const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null);
-
-  if (resolvedSwarmKeyPath && fs) {
-    try {
-      const raw = fs.readFileSync(resolvedSwarmKeyPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed?.publicKey && parsed?.secretKey) {
-        keyPair = {
-          publicKey: b4a.from(parsed.publicKey, 'hex'),
-          secretKey: b4a.from(parsed.secretKey, 'hex')
-        };
-        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16));
-      }
-    } catch (e) {
-      // If missing or invalid, we'll generate below
-    }
-  }
-
-  if (!keyPair) {
-    keyPair = crypto.keyPair();
-    if (resolvedSwarmKeyPath && fs) {
-      try {
-        fs.mkdirSync(path.dirname(resolvedSwarmKeyPath), { recursive: true });
-        fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
-          publicKey: b4a.toString(keyPair.publicKey, 'hex'),
-          secretKey: b4a.toString(keyPair.secretKey, 'hex')
-        }));
-        console.log('[Storage] Persisted new swarm key to', resolvedSwarmKeyPath);
-      } catch (e) {
-        console.log('[Storage] Could not persist swarm key:', e.message);
-      }
-    }
-  }
-
-  console.log('[Storage] Creating Hyperswarm...');
-  await appendDebugLine('[storage] creating hyperswarm')
-  const LoadedHyperswarm = await waitForHyperswarmModule()
-  let swarm
-  if (typeof LoadedHyperswarm !== 'function') {
-    console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
-    await appendDebugLine('[storage] hyperswarm unavailable; using offline swarm')
-    swarm = createOfflineSwarm(keyPair, 'module-unavailable')
-  } else {
-    try {
-      swarm = new LoadedHyperswarm({ keyPair });
-    } catch (err) {
-      console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
-      await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
-      swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
-    }
-  }
-  console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
-  globalNetworkStartupTiming?.record('swarm-created', { offline: Boolean(swarm._peartubeOffline) })
-  const initialDhtState = describeDhtState(swarm.dht)
-  if (initialDhtState) {
-    console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
-  }
-  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
-  globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
-  installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
-
-  // Set global references for suspend/resume and stats
-  globalSwarm = swarm;
+  // Hyperswarm was created (and DHT bootstrap kicked off) before storage init
+  // above so the network warmup overlaps disk I/O. From here on we only wire
+  // handlers and join the discovery topic.
+  console.log('[Storage] Wiring early-created Hyperswarm, DHT bootstrapped:', swarm.dht?.bootstrapped ?? null);
+  await appendDebugLine(`[storage] wiring early hyperswarm bootstrapped=${swarm.dht?.bootstrapped ?? null}`)
 
   // Initialize network stats for debugging
   if (HyperswarmStats) {

@@ -41,8 +41,10 @@ test('blob server watchdog lazily loads HTTP only when cast probing is needed', 
 })
 
 test('blob server startup does not await listen before storage init can finish', () => {
+  // End anchor matches the outer try/catch (2-space indent) so the capture is
+  // not cut short by the `catch (err)` inside the patched _onrequest handler.
   const blobServerBody = storageSource.match(
-    /const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)catch \(err\) \{/
+    /const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)\n  \} catch \(err\) \{/
   )?.[1] ?? ''
 
   assert.ok(blobServerBody, 'blob server startup block should exist')
@@ -58,6 +60,24 @@ test('storage joins the PearTube network topic immediately without DHT bootstrap
   assert.match(storageSource, /joinPeerPoolDiscoveryImmediately\('startup'\)/)
   assert.match(storageSource, /swarm\.join\(PEARTUBE_NETWORK_TOPIC, \{ server: true, client: true \}\)/)
   assert.match(storageSource, /swarm\.peerPoolDiscovery = poolDiscovery/)
+})
+
+test('storage creates Hyperswarm and starts DHT bootstrap before Corestore warmup', () => {
+  // The DHT bootstrap is the long pole for topic discovery on mobile, so the
+  // swarm must be created (and dht.ready() kicked) before local disk warmup —
+  // while the topic join itself still happens only after storage is ready.
+  assert.match(storageSource, /creating hyperswarm early[\s\S]*?creating corestore/)
+  assert.match(storageSource, /swarm\.dht\.ready\(\)/)
+  assert.doesNotMatch(storageSource, /await swarm\.dht\.ready\(\)/)
+  // Topic join must remain gated behind metadata storage readiness.
+  assert.match(storageSource, /metaDb ready[\s\S]*?joinPeerPoolDiscoveryImmediately\('startup'\)/)
+})
+
+test('storage tears down the early swarm on every storage init failure path', () => {
+  assert.match(storageSource, /const destroySwarmAfterInitFailure = async/)
+  assert.match(storageSource, /destroySwarmAfterInitFailure\('corestore create'\)/)
+  assert.match(storageSource, /destroySwarmAfterInitFailure\('corestore ready'\)/)
+  assert.match(storageSource, /destroySwarmAfterInitFailure\(label\)/)
 })
 
 test('storage persists and restores DHT routing table state around lifecycle events', () => {

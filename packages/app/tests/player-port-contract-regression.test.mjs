@@ -66,10 +66,6 @@ test('native and web player components publish typed PlayerPort adapters', () =>
   assert.match(mseSource, /playerRef\?: React\.RefObject<PlayerPort \| null>/)
   assert.match(mseSource, /playerRef\.current = createWebMsePlayerPort\(el\)/)
 
-  const videoContainerSource = readAppFile('components/video-player/VideoContainer.tsx')
-  assert.match(videoContainerSource, /playerRef: RefObject<PlayerPort \| null>/)
-  const desktopMiniSource = readAppFile('components/video-player/DesktopMiniPlayer.tsx')
-  assert.match(desktopMiniSource, /playerRef: React\.RefObject<PlayerPort \| null>/)
   const verticalShortsSource = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
   assert.match(verticalShortsSource, /playerRef: RefObject<PlayerPort \| null>/)
 })

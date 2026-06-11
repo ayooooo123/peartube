@@ -98,11 +98,10 @@ test('video-player index exports PearInlineVideoView without hiding it behind mp
   assert.match(source, /getPearInlinePlayerId/)
 })
 
-test('VideoContainer uses PearInlineVideoView directly and the dead native MpvVideoView file stays removed', () => {
-  const source = readAppFile('components/video-player/VideoContainer.tsx')
+test('dead VideoContainer and native MpvVideoView player hosts stay removed', () => {
+  const deadContainerPath = path.join(appRoot, 'components/video-player/VideoContainer.tsx')
   const deadHostPath = path.join(appRoot, 'components/video-player/MpvVideoView.tsx')
 
-  assert.match(source, /PearInlineVideoView/)
-  assert.doesNotMatch(source, /MpvMobileVideoView/)
+  assert.equal(fs.existsSync(deadContainerPath), false)
   assert.equal(fs.existsSync(deadHostPath), false)
 })

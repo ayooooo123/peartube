@@ -71,12 +71,12 @@ test('Android minimize restores the in-app mini player path', () => {
   assert.doesNotMatch(minimizeBody, /MediaSession\.openPlayerActivity\(/)
 })
 
-test('Android split-player mode is disabled in JS state management', () => {
+test('Android split-player mode stays removed from JS state management', () => {
   const videoPlayerContext = readAppFile('lib/VideoPlayerContext.tsx')
   const playerStateMachine = readAppFile('lib/playerStateMachine.ts')
 
-  assert.match(videoPlayerContext, /const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false/)
-  assert.match(playerStateMachine, /const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false/)
+  assert.doesNotMatch(videoPlayerContext, /ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY/)
+  assert.doesNotMatch(playerStateMachine, /ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY/)
 })
 
 

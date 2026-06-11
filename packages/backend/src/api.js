@@ -961,21 +961,35 @@ export function createApi({
         }
 
         const attachVideoAvailability = async (videos) => {
-          return await Promise.all(cloneArrayOfObjects(videos).map(async (video) => {
-            const localHint = await getLocalVideoAvailabilityHint(video)
-            let peerHint = null
-            if (publicFeed && typeof publicFeed.requestAvailabilityHints === 'function') {
-              try {
-                const hints = await publicFeed.requestAvailabilityHints([{
-                  driveKey,
-                  publicBeeKey,
-                  id: video?.id,
-                  blobsCoreKey: video?.blobsCoreKey,
-                  blobId: video?.blobId,
-                }])
-                peerHint = Array.isArray(hints) ? hints.find((hint) => hintMatchesBlobRef(hint, video)) || null : null
-              } catch { /* best effort */ }
-            }
+          const cloned = cloneArrayOfObjects(videos)
+          const localHints = await Promise.all(cloned.map((video) => getLocalVideoAvailabilityHint(video)))
+
+          // One bounded, batched hint round trip for videos that still lack
+          // local byte proof — instead of a per-video network RPC (each riding
+          // the peer scorer's multi-second timeout) across the whole list.
+          const MAX_NETWORK_HINTS = 12
+          let peerHints = []
+          const hintRequests = cloned
+            .filter((video, index) => !hasPlayableByteProof(localHints[index]) &&
+              extractVideoId(video) && video?.blobsCoreKey && video?.blobId)
+            .slice(0, MAX_NETWORK_HINTS)
+            .map((video) => ({
+              driveKey,
+              publicBeeKey,
+              id: extractVideoId(video),
+              blobsCoreKey: video.blobsCoreKey,
+              blobId: video.blobId,
+            }))
+          if (hintRequests.length > 0 && publicFeed && typeof publicFeed.requestAvailabilityHints === 'function') {
+            try {
+              const hints = await publicFeed.requestAvailabilityHints(hintRequests, { timeoutMs: 600, maxPeers: 4 })
+              peerHints = Array.isArray(hints) ? hints : []
+            } catch { /* best effort */ }
+          }
+
+          return cloned.map((video, index) => {
+            const localHint = localHints[index]
+            const peerHint = peerHints.find((hint) => hintMatchesBlobRef(hint, video)) || null
             const availability = resolveExplicitVideoAvailability({ localHint, peerHint, video })
             const proofHint = hasPlayableByteProof(localHint)
               ? localHint
@@ -992,7 +1006,7 @@ export function createApi({
               hasHeadBlock: Boolean(proofHint?.hasHeadBlock),
               readyForPlayback: availability === 'playable' && Boolean(proofHint),
             }
-          }))
+          })
         }
 
         const cached = listVideosCache.get(driveKey)

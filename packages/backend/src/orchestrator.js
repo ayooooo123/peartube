@@ -15,6 +15,7 @@ import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
+import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import {
   readIdentityKeyFile,
@@ -340,6 +341,7 @@ export async function createBackendContext(config) {
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
   const identityManager = createIdentityManager({ ctx });
+  const personalManager = createPersonalManager({ ctx, identityManager });
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath),
@@ -427,6 +429,11 @@ export async function createBackendContext(config) {
   await appendDebugLine('[orchestrator] loadIdentities done')
   ipcLog('[orchestrator] loadIdentities done')
 
+  // Open the active identity's private multi-writer personal store (subscriptions,
+  // playlists, watch history, settings) and expose it on ctx. Best-effort: a
+  // failure here must not block backend startup.
+  await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
+
   // Phase 6: Create unified API before feed start so the initial HAVE_FEED
   // exchange can already include local availability hints and serving manifests.
   const api = createApi({
@@ -469,6 +476,7 @@ export async function createBackendContext(config) {
     seedingManager,
     videoStats,
     identityManager,
+    personalManager,
     uploadManager,
     async initializeIdentityFromMnemonic(mnemonic) {
       const pk = await derivePrimaryKey(mnemonic);

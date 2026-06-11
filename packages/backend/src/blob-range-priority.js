@@ -2,6 +2,8 @@ import c from 'compact-encoding'
 import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
 
+import { getBlobPlaybackProfile } from './blob-playback-profile.js'
+
 // Keep the prioritized read-ahead window comfortably larger than the player's
 // forward buffer (ExoPlayer/AVPlayer buffer ~20s ahead). A 2MB window was only
 // ~2s of video for large archived files, so the player constantly outran the
@@ -18,6 +20,12 @@ const PRIORITY_RANGE_REUSE_WINDOW_MS = 5000
 // Bound how many blob core sessions the priority registry keeps alive for
 // reuse across range requests.
 const MAX_TRACKED_PRIORITY_BLOBS = 8
+// A seek that lands mid-GOP forces the player to scan back to the previous
+// keyframe before it can render. When a playback profile supplies keyframe
+// byte offsets, snap the prioritized window back to that keyframe — but only
+// within a bounded distance so a sparse-keyframe file can't drag the window
+// megabytes behind the playhead.
+const DEFAULT_KEYFRAME_SNAP_BACK_BYTES = 8 * 1024 * 1024
 
 // One entry per blob currently being prioritized for playback:
 // registryKey -> { core, range, timer, createdAt, start, end }
@@ -102,6 +110,19 @@ function isFiniteNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0
 }
 
+// Largest offset in the sorted array that is <= target, or null.
+function findSnapOffsetAtMost(sortedOffsets, target) {
+  if (sortedOffsets.length === 0 || sortedOffsets[0] > target) return null
+  let lo = 0
+  let hi = sortedOffsets.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (sortedOffsets[mid] <= target) lo = mid
+    else hi = mid - 1
+  }
+  return sortedOffsets[lo]
+}
+
 export function parseHttpByteRange(rangeHeader, byteLength) {
   if (typeof rangeHeader !== 'string' || !rangeHeader.startsWith('bytes=')) return null
   const totalBytes = Number(byteLength)
@@ -149,10 +170,26 @@ export function getPrioritizedBlobDownloadRange(blob, byteRange, options = {}) {
   if (!isFiniteNonNegativeInteger(rangeStart) || !isFiniteNonNegativeInteger(rangeEnd)) return null
   if (rangeEnd < rangeStart || rangeStart >= byteLength) return null
 
+  // Snap the window start back to the nearest preceding keyframe so the
+  // prioritized region begins at a decodable boundary (MoQ "group is a join
+  // point"). The HTTP response still serves exactly the requested bytes; only
+  // download prioritization widens.
+  let effectiveRangeStart = rangeStart
+  const snapOffsets = Array.isArray(options.snapOffsets) && options.snapOffsets.length > 0
+    ? options.snapOffsets
+    : null
+  if (snapOffsets && rangeStart > 0) {
+    const maxSnapBackBytes = Math.max(0, Number(options.maxSnapBackBytes ?? DEFAULT_KEYFRAME_SNAP_BACK_BYTES) || 0)
+    const snapped = findSnapOffsetAtMost(snapOffsets, rangeStart)
+    if (snapped != null && snapped < rangeStart && rangeStart - snapped <= maxSnapBackBytes) {
+      effectiveRangeStart = snapped
+    }
+  }
+
   const readAheadBytes = Math.max(0, Number(options.readAheadBytes ?? DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES) || 0)
   const bytesPerBlock = Math.max(1, byteLength / blockLength)
   const prioritizedEndByte = Math.min(byteLength - 1, rangeEnd + readAheadBytes)
-  const relativeStartBlock = Math.max(0, Math.min(blockLength - 1, Math.floor(rangeStart / bytesPerBlock)))
+  const relativeStartBlock = Math.max(0, Math.min(blockLength - 1, Math.floor(effectiveRangeStart / bytesPerBlock)))
   const relativeEndBlock = Math.max(
     relativeStartBlock + 1,
     Math.min(blockLength, Math.ceil((prioritizedEndByte + 1) / bytesPerBlock))
@@ -206,13 +243,55 @@ function decodeBlobRangeRequest(blobServer, req) {
   return { key, blob, byteRange }
 }
 
+// Back-moov MP4s cannot start rendering until the tail-of-file moov box is
+// local: the player's very next request after probing the head is the tail.
+// Pull those blocks proactively the moment playback traffic appears for the
+// blob, instead of waiting out that extra request round trip. One shot per
+// registered profile; downloads of already-local blocks resolve immediately.
+function boostBackMoovDownload(core, blob, profile, options = {}) {
+  if (!profile || profile.moovPosition !== 'back' || profile._moovBoosted) return
+  if (!isFiniteNonNegativeInteger(profile.moovStart) || !Number.isInteger(profile.moovEnd)) return
+  if (profile.moovEnd <= profile.moovStart) return
+  profile._moovBoosted = true
+
+  const moovRange = getPrioritizedBlobDownloadRange(
+    blob,
+    { start: profile.moovStart, end: profile.moovEnd - 1 },
+    { readAheadBytes: 0 }
+  )
+  if (!moovRange) return
+
+  let range
+  try {
+    range = core.download({ start: moovRange.start, end: moovRange.end, linear: true })
+  } catch {
+    return
+  }
+
+  const timeoutMs = Math.max(
+    1000,
+    Number(options.timeoutMs ?? DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS) || DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS
+  )
+  const stop = () => {
+    clearTimeout(timer)
+    try { range?.destroy?.() } catch { /* best effort */ }
+  }
+  const timer = setTimeout(stop, timeoutMs)
+  const done = typeof range?.done === 'function' ? range.done() : Promise.resolve()
+  Promise.resolve(done).catch(() => {}).finally(stop)
+}
+
 export async function prioritizeBlobServerRangeRequest(blobServer, req, options = {}) {
   if (!blobServer || typeof blobServer._getCore !== 'function') return null
 
   const request = decodeBlobRangeRequest(blobServer, req)
   if (!request) return null
 
-  const downloadRange = getPrioritizedBlobDownloadRange(request.blob, request.byteRange, options)
+  const profile = getBlobPlaybackProfile(request.key.toString('hex'), request.blob)
+  const downloadRange = getPrioritizedBlobDownloadRange(request.blob, request.byteRange, {
+    ...options,
+    snapOffsets: options.snapOffsets ?? profile?.keyframeOffsets,
+  })
   if (!downloadRange) return null
 
   // Transient callers own the core session lifecycle for this single request
@@ -254,6 +333,8 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
     }
     return null
   }
+
+  boostBackMoovDownload(core, request.blob, profile, options)
 
   // Video playback reads bytes sequentially from the seek point forward, so the
   // prioritized region must download in play order. `linear: false` let

@@ -13,6 +13,9 @@
 import crypto from 'hypercore-crypto';
 import b4a from 'b4a';
 
+import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
+import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
+
 /**
  * Detect MIME type from file magic bytes
  * Simple implementation without external dependencies for Bare runtime compatibility
@@ -160,6 +163,35 @@ function getExtensionForMime(mimeType) {
  * @returns {Object} Upload manager API
  */
 export function createUploadManager({ ctx }) {
+  /**
+   * Probe the uploaded MP4 for its playback profile (moov position +
+   * keyframe index) and persist it for range prioritization at playback
+   * time. Header-only parse — no transcoding, no decoding. Best-effort:
+   * uploads must never fail or slow down because probing did.
+   */
+  async function persistPlaybackProfile(channel, blobId, mimeType, probe) {
+    if (!isMp4MimeType(mimeType)) return
+    try {
+      const profile = await probe()
+      if (!profile) return
+      const saved = await saveBlobPlaybackProfile(
+        ctx,
+        { blobsCoreKey: channel.blobsKeyHex, blobId },
+        profile
+      )
+      if (saved) {
+        console.log(
+          '[Upload] Playback profile saved:',
+          'moov:', profile.moovPosition,
+          'keyframes:', profile.keyframeOffsets.length,
+          'maxGopMs:', profile.maxGopMs ?? 'n/a'
+        )
+      }
+    } catch (err) {
+      console.log('[Upload] Playback probe skipped:', err?.message || err)
+    }
+  }
+
   return {
     /**
      * Upload video from a file path (desktop)
@@ -261,6 +293,8 @@ export function createUploadManager({ ctx }) {
         const avgSpeed = fileSize / totalTime;
         console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
 
+        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
+
         // Create video metadata and store in channel HyperDB
         // Ensure all string fields are actually strings to pass validation
         const playbackSupport = getPlaybackSupportForMimeType(mimeType);
@@ -336,6 +370,8 @@ export function createUploadManager({ ctx }) {
         if (onProgress) {
           onProgress(100, fileSize, fileSize);
         }
+
+        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
 
         // Create video metadata and store in channel HyperDB
         // Ensure all string fields are actually strings to pass validation

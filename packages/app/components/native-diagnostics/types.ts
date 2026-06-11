@@ -29,7 +29,7 @@ export interface PlaybackTimingRecord {
     blobCoreReadyMs?: number
     peersRetainedMs?: number
     hintsPromotedMs?: number
-    updateWaitMs?: number
+    hintsArrivedMs?: number
     firstBlobPeerMs?: number
     headBlockMs?: number
     warmupDoneMs?: number

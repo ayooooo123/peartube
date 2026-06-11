@@ -1670,9 +1670,6 @@ final class HostBridgeService {
       environment["DYLD_FRAMEWORK_PATH"] = frameworkPath
       appendLog("Native host sidecar linked addons: \(frameworkPath)")
     }
-    if let mpvPrebuildRoot = bundledMpvPrebuildRootPath() {
-      environment["BARE_MPV_PREBUILD_ROOT"] = mpvPrebuildRoot
-    }
 
     let session = try BareRuntimeSidecarSession(
       runtimeURL: runtimeURL,
@@ -1712,34 +1709,10 @@ final class HostBridgeService {
     if let frameworkPath = linkedAddonFrameworkPath() {
       setenv("DYLD_FRAMEWORK_PATH", frameworkPath, 1)
     }
-    if let mpvPrebuildRoot = bundledMpvPrebuildRootPath() {
-      setenv("BARE_MPV_PREBUILD_ROOT", mpvPrebuildRoot, 1)
-    }
   }
 
   private func linkedAddonFrameworkPath(fileManager: FileManager = .default) -> String? {
     Self.preferredLinkedAddonFrameworkPath(fileManager: fileManager)
-  }
-
-  private func bundledMpvPrebuildRootPath(fileManager: FileManager = .default) -> String? {
-    if let bundledPath = Bundle.main.resourceURL?
-      .appendingPathComponent("Generated", isDirectory: true)
-      .appendingPathComponent("bare-mpv-prebuilds", isDirectory: true).path,
-       fileManager.fileExists(atPath: bundledPath) {
-      return bundledPath
-    }
-
-    do {
-      let workspaceRoot = try Self.workspaceRootURL()
-      let workspacePath = workspaceRoot
-        .appendingPathComponent("packages/desktop-native/Resources/Generated/bare-mpv-prebuilds", isDirectory: true)
-        .path
-      if fileManager.fileExists(atPath: workspacePath) {
-        return workspacePath
-      }
-    } catch {}
-
-    return nil
   }
 
   private func handleBridgeOutputData(_ data: Data) {

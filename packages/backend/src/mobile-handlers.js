@@ -323,16 +323,6 @@ export function attachMobileHandlers(B, deps) {
   B.pickVideoFile = async () => ({ filePath: null, cancelled: true })
   B.pickImageFile = async () => ({ filePath: null, cancelled: true })
 
-  B.mpvAvailable = async () => ({ available: false, error: 'MPV not supported on mobile' })
-  B.mpvCreate = async () => ({ success: false, error: 'MPV not supported on mobile' })
-  B.mpvLoadFile = async () => ({ success: false, error: 'MPV not supported on mobile' })
-  B.mpvPlay = async () => ({ success: false, error: 'MPV not supported on mobile' })
-  B.mpvPause = async () => ({ success: false, error: 'MPV not supported on mobile' })
-  B.mpvSeek = async () => ({ success: false, error: 'MPV not supported on mobile' })
-  B.mpvGetState = async () => ({ success: false, paused: true })
-  B.mpvRenderFrame = async () => ({ success: false, error: 'MPV not supported on mobile' })
-  B.mpvDestroy = async () => ({ success: false, error: 'MPV not supported on mobile' })
-
   B.eventReady = () => {}; B.eventError = () => {}
   B.eventCastDeviceFound = () => {}; B.eventCastDeviceLost = () => {}
   B.eventCastPlaybackState = () => {}; B.eventCastTimeUpdate = () => {}

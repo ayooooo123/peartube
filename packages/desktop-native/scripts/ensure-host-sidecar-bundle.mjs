@@ -22,7 +22,6 @@ const sourceRoots = [
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
-  path.join(repoRoot, 'packages', 'bare-mpv'),
   ...getSidecarAddonRoots(repoRoot),
 ]
 

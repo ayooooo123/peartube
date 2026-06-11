@@ -72,7 +72,6 @@ peartube/
 │   ├── spec/             # HRPC schema
 │   ├── bare-ffmpeg/      # Bare ffmpeg binding
 │   ├── backend/src/cast/ # Cast integration
-│   ├── bare-mpv/         # mpv integration
 │   └── bare-tls/         # Bare TLS support
 │
 └── package.json          # Root package with scripts

@@ -22,7 +22,7 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
   assert.match(
     workflow,
     /validate-submodules/,
-    'desktop CI must initialize real gitlink submodules before native desktop bundles import bare-mpv',
+    'desktop CI must initialize real gitlink submodules before native desktop bundles import bare-ffmpeg',
   )
   assert.match(
     workflow,

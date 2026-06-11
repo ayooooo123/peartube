@@ -34,7 +34,7 @@ packages/
 ├── spec/               # HRPC schema -- single source of truth for JS + Swift
 │   ├── schema.cjs      # Schema definition + codegen
 │   └── lib/            # Custom Swift codegen (wire-compatible compact-encoding)
-└── bare-*/             # Native addon submodules (bare-mpv, bare-ffmpeg, bare-tls)
+└── bare-*/             # Native addon submodules (bare-ffmpeg, bare-tls)
 ```
 
 ### Tech Stack
@@ -50,7 +50,7 @@ packages/
 | Networking | Hyperswarm (P2P discovery + connections) |
 | Video storage | Hyperdrive (distributed filesystem) |
 | Metadata | Hyperbee (key-value database) |
-| Video playback | AVPlayer, bare-mpv (libmpv), react-native-video |
+| Video playback | OS-native players (AVPlayer, ExoPlayer, MSE) backed by bare-ffmpeg |
 
 ## Generated RPC surfaces
 
@@ -86,7 +86,7 @@ npm test --prefix packages/spec
 # Install all dependencies
 npm run install:all
 
-# Initialize submodules (bare-mpv, bare-ffmpeg)
+# Initialize submodules (bare-ffmpeg)
 git submodule update --init --recursive
 ```
 
@@ -231,7 +231,7 @@ All platforms share:
 - Each channel has a **Hyperdrive** for storing video files
 - Videos stored as MP4/MKV/WebM with thumbnail images
 - **Sparse replication** -- only download chunks you watch
-- **Streaming playback** -- bare-mpv configured for progressive streaming from peers
+- **Streaming playback** -- progressive streaming from peers into OS-native players
 
 ### P2P Networking
 - **Hyperswarm** manages peer connections via a distributed hash table

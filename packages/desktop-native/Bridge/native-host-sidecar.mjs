@@ -18,8 +18,6 @@ import { resolvePlaybackViaClient } from './playback-resolution.mjs'
 import { attachMobileHandlers } from '../../backend/src/mobile-handlers.js'
 import * as thumbnailModule from '../../backend/src/thumbnail.js'
 
-const defaultMpvWidth = 1280
-const defaultMpvHeight = 720
 if (!globalThis.process) {
   globalThis.process = bareProcess
 }
@@ -28,17 +26,9 @@ const runtimeLabel = globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT
   ? 'native-host-embedded'
   : 'native-host-sidecar'
 
-let MpvPlayer = null
-let mpvLoadError = null
-let mpvLoadPromise = null
 let bareFFmpeg = null
 let ffmpegLoadError = null
 let ffmpegLoadPromise = null
-const mpvPlayers = new Map()
-let mpvPlayerIdCounter = 0
-let mpvFrameServer = null
-let mpvFrameServerPort = 0
-let mpvFrameServerReady = null
 let bareHttp1Promise = null
 let platformPromise = null
 let transcoderModule = null
@@ -71,39 +61,6 @@ async function currentPlatform() {
     })
 
   return platformPromise
-}
-
-async function loadBareMpv() {
-  if (MpvPlayer || mpvLoadError) return
-  if (mpvLoadPromise) return mpvLoadPromise
-
-  mpvLoadPromise = (async () => {
-    try {
-      const platform = await currentPlatform()
-      const isMpvSupported = platform === 'darwin' || platform === 'linux' || platform === 'win32'
-      if (!isMpvSupported) {
-        mpvLoadError = `bare-mpv not available on ${platform}`
-        return
-      }
-
-      if (typeof require === 'function') {
-        const required = require('../../bare-mpv/index.js')
-        MpvPlayer = required?.MpvPlayer ?? required?.default?.MpvPlayer ?? required?.default ?? required ?? null
-        if (MpvPlayer) return
-      }
-
-      const imported = await import('../../bare-mpv/index.js')
-      MpvPlayer = imported?.MpvPlayer ?? imported?.default?.MpvPlayer ?? imported?.default ?? null
-      if (!MpvPlayer) {
-        throw new Error('bare-mpv export missing MpvPlayer')
-      }
-    } catch (error) {
-      mpvLoadError = error?.message || String(error)
-      console.warn(`[${runtimeLabel}] bare-mpv not available:`, mpvLoadError)
-    }
-  })()
-
-  return mpvLoadPromise
 }
 
 async function loadBareFFmpeg() {
@@ -221,100 +178,6 @@ function createKeepAliveCleanup() {
     if (!keepAliveTimer) return
     clearInterval(keepAliveTimer)
     keepAliveTimer = null
-  }
-}
-
-function handleMpvFrameRequest(req, res) {
-  const cors = { 'Access-Control-Allow-Origin': '*' }
-
-  try {
-    if (req.method !== 'GET') {
-      res.writeHead(405, cors)
-      res.end()
-      return
-    }
-
-    const parts = (req.url || '/').split('?')[0].split('/').filter(Boolean)
-    if (parts[0] !== 'frame' || !parts[1]) {
-      res.writeHead(404, cors)
-      res.end()
-      return
-    }
-
-    const state = mpvPlayers.get(decodeURIComponent(parts[1]))
-    if (!state) {
-      res.writeHead(404, cors)
-      res.end()
-      return
-    }
-
-    if (!state.player.needsRender()) {
-      res.writeHead(204, cors)
-      res.end()
-      return
-    }
-
-    const frameData = state.player.renderFrame()
-    if (!frameData?.length) {
-      res.writeHead(204, cors)
-      res.end()
-      return
-    }
-
-    const buffer = Buffer.from(frameData)
-    res.writeHead(200, {
-      ...cors,
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': buffer.byteLength,
-      'Cache-Control': 'no-store',
-      'X-Frame-Width': String(state.width),
-      'X-Frame-Height': String(state.height),
-    })
-    res.end(buffer)
-  } catch {
-    try {
-      res.writeHead(500, cors)
-      res.end()
-    } catch {}
-  }
-}
-
-async function ensureMpvFrameServer() {
-  if (mpvFrameServerPort) return mpvFrameServerPort
-  if (mpvFrameServerReady) return mpvFrameServerReady
-
-  mpvFrameServerReady = new Promise((resolve, reject) => {
-    const createServer = async () => {
-      const http1 = await loadBareHTTP1()
-      mpvFrameServer = http1.createServer(handleMpvFrameRequest)
-      mpvFrameServer.on('error', (error) => reject(error))
-      mpvFrameServer.listen(0, '127.0.0.1', () => {
-        mpvFrameServerPort = mpvFrameServer.address().port || 0
-        resolve(mpvFrameServerPort)
-      })
-    }
-
-    void createServer().catch(reject)
-  })
-
-  return mpvFrameServerReady
-}
-
-async function destroyAllMpvPlayers() {
-  for (const [playerId, state] of mpvPlayers) {
-    try {
-      state.player.destroy()
-    } catch {}
-    mpvPlayers.delete(playerId)
-  }
-
-  if (mpvFrameServer) {
-    try {
-      mpvFrameServer.close()
-    } catch {}
-    mpvFrameServer = null
-    mpvFrameServerPort = 0
-    mpvFrameServerReady = null
   }
 }
 
@@ -525,8 +388,8 @@ async function createNativeSidecarBackend(options = {}) {
     const generateAndStoreThumbnail = thumbnailModule?.generateAndStoreThumbnail
     const transcoder = createLazyTranscoder()
 
-    // Experimental: route AVPlayer-incompatible codecs (MKV/Opus/AC-3/DTS, …)
-    // through a local-HLS bare-ffmpeg transcode so the macOS app can drop bare-mpv.
+    // Route AVPlayer-incompatible codecs (MKV/Opus/AC-3/DTS, …) through a
+    // local-HLS bare-ffmpeg transcode — the codec coverage bare-mpv used to provide.
     // Off by default — enable with PEARTUBE_AVPLAYER_COMPAT=1 for on-device validation.
     const avplayerCompatEnabled = globalThis.process?.env?.PEARTUBE_AVPLAYER_COMPAT === '1'
 
@@ -729,7 +592,6 @@ function createChannelDataFetcher(client) {
 
 async function shutdownBridge(state, cleanupKeepAlive = null) {
   cleanupKeepAlive?.()
-  await destroyAllMpvPlayers()
   await state.hostSession?.terminate?.()
   state.hostSession = null
   state.client = null
@@ -1176,202 +1038,12 @@ function registerHandlers(hrpcInstance, state, reportFatal, cleanupKeepAlive = n
     }
   })
 
-  hrpcInstance.onMpvAvailable(async () => {
-    await loadBareMpv()
-    return {
-      available: MpvPlayer !== null,
-      error: MpvPlayer ? '' : (mpvLoadError || 'bare-mpv not available'),
-    }
-  })
-
   hrpcInstance.onFfmpegDecodeAvailable(async () => {
     await loadBareFFmpeg()
     return {
       available: bareFFmpeg !== null,
       error: bareFFmpeg ? '' : (ffmpegLoadError || 'bare-ffmpeg not available'),
     }
-  })
-
-  hrpcInstance.onMpvCreate(async (req) => {
-    await loadBareMpv()
-
-    if (!MpvPlayer) {
-      return {
-        success: false,
-        playerId: '',
-        frameServerPort: 0,
-        error: mpvLoadError || 'bare-mpv not available',
-      }
-    }
-
-    try {
-      const width = Math.max(defaultMpvWidth, req.width || defaultMpvWidth)
-      const height = Math.max(defaultMpvHeight, req.height || defaultMpvHeight)
-      const frameServerPort = await ensureMpvFrameServer()
-      const playerId = `mpv_${++mpvPlayerIdCounter}`
-      const player = new MpvPlayer()
-      if (player.initialize() !== 0) {
-        throw new Error('Failed to initialize mpv')
-      }
-
-      // Enable streaming mode — play as data arrives from peers instead of
-      // buffering the entire file. The blob server streams Hypercore data
-      // over HTTP; without these settings mpv tries to determine file size
-      // by seeking to the end, which blocks on incomplete downloads.
-      player.setProperty('cache', 'yes')
-      player.setProperty('cache-secs', 10)
-      player.setProperty('demuxer-max-bytes', '50MiB')
-      player.setProperty('demuxer-readahead-secs', 10)
-      player.setProperty('force-seekable', 'yes')
-
-      player.initRender(width, height)
-      mpvPlayers.set(playerId, { player, width, height })
-      return { success: true, playerId, frameServerPort, error: '' }
-    } catch (error) {
-      return {
-        success: false,
-        playerId: '',
-        frameServerPort: 0,
-        error: error?.message || String(error),
-      }
-    }
-  })
-
-  hrpcInstance.onMpvLoadFile(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) {
-      return { success: false, error: 'Player not found' }
-    }
-
-    try {
-      stateEntry.player.loadFile(req.url)
-      return { success: true, error: '' }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  })
-
-  hrpcInstance.onMpvPlay(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.play()
-      return { success: true, error: '' }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  })
-
-  hrpcInstance.onMpvPause(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.pause()
-      return { success: true, error: '' }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  })
-
-  hrpcInstance.onMpvSeek(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.seek(parseFloat(req.time) || 0)
-      return { success: true, error: '' }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  })
-
-  hrpcInstance.onMpvGetState(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) {
-      return { success: false, currentTime: '0', duration: '0', paused: true, error: 'Player not found' }
-    }
-
-    try {
-      return {
-        success: true,
-        currentTime: String(stateEntry.player.currentTime || 0),
-        duration: String(stateEntry.player.duration || 0),
-        paused: stateEntry.player.paused ?? true,
-        error: '',
-      }
-    } catch {
-      return { success: false, currentTime: '0', duration: '0', paused: true, error: 'Failed to read state' }
-    }
-  })
-
-  hrpcInstance.onMpvRenderFrame(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) {
-      return {
-        success: false,
-        hasFrame: false,
-        width: 0,
-        height: 0,
-        frameData: Buffer.alloc(0),
-        error: 'Player not found',
-      }
-    }
-
-    try {
-      if (!stateEntry.player.needsRender()) {
-        return {
-          success: true,
-          hasFrame: false,
-          width: stateEntry.width,
-          height: stateEntry.height,
-          frameData: Buffer.alloc(0),
-          error: '',
-        }
-      }
-
-      const frameData = stateEntry.player.renderFrame()
-      if (!frameData?.length) {
-        return {
-          success: true,
-          hasFrame: false,
-          width: stateEntry.width,
-          height: stateEntry.height,
-          frameData: Buffer.alloc(0),
-          error: '',
-        }
-      }
-
-      return {
-        success: true,
-        hasFrame: true,
-        width: stateEntry.width,
-        height: stateEntry.height,
-        frameData: Buffer.from(frameData),
-        error: '',
-      }
-    } catch {
-      return {
-        success: false,
-        hasFrame: false,
-        width: stateEntry.width,
-        height: stateEntry.height,
-        frameData: Buffer.alloc(0),
-        error: 'render failed',
-      }
-    }
-  })
-
-  hrpcInstance.onMpvDestroy(async (req) => {
-    const stateEntry = mpvPlayers.get(req.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.destroy()
-    } catch {}
-    mpvPlayers.delete(req.playerId)
-    return { success: true, error: '' }
   })
 }
 

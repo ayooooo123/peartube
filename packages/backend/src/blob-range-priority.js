@@ -10,6 +10,54 @@ import z32 from 'z32'
 // scheduler with the whole file.
 const DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES = 16 * 1024 * 1024
 const DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS = 15000
+// Progressive playback re-requests ranges that land inside the window we just
+// started downloading (connection churn, players probing ahead). Reuse that
+// in-flight download instead of restarting it, but only while it is fresh so
+// the window still advances with playback.
+const PRIORITY_RANGE_REUSE_WINDOW_MS = 5000
+// Bound how many blob core sessions the priority registry keeps alive for
+// reuse across range requests.
+const MAX_TRACKED_PRIORITY_BLOBS = 8
+
+// One entry per blob currently being prioritized for playback:
+// registryKey -> { core, range, timer, createdAt, start, end }
+const activePriorityRanges = new Map()
+
+function getPriorityRegistryKey(key, blob) {
+  return `${key.toString('hex')}:${blob.blockOffset}:${blob.blockLength}`
+}
+
+function destroyPriorityRange(entry) {
+  if (!entry) return
+  if (entry.timer) {
+    clearTimeout(entry.timer)
+    entry.timer = null
+  }
+  if (entry.range) {
+    try { entry.range.destroy?.() } catch { /* best effort */ }
+    entry.range = null
+  }
+}
+
+function closePriorityCore(core) {
+  if (!core) return
+  try {
+    const closing = core.close?.()
+    if (closing && typeof closing.catch === 'function') closing.catch(() => {})
+  } catch { /* best effort */ }
+}
+
+function releasePriorityEntry(entry) {
+  destroyPriorityRange(entry)
+  if (!entry?.core) return
+  closePriorityCore(entry.core)
+  entry.core = null
+}
+
+export function releaseAllPrioritizedBlobRanges() {
+  for (const entry of activePriorityRanges.values()) releasePriorityEntry(entry)
+  activePriorityRanges.clear()
+}
 
 const blobIdEncoding = {
   preencode(state, blob) {
@@ -151,12 +199,45 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
   const downloadRange = getPrioritizedBlobDownloadRange(request.blob, request.byteRange, options)
   if (!downloadRange) return null
 
-  const core = await blobServer._getCore(request.key, {
-    key: request.key,
-    blob: request.blob,
-    range: request.byteRange
-  }, true)
-  if (!core || typeof core.download !== 'function') return null
+  // Transient callers own the core session lifecycle for this single request
+  // and bypass the shared registry entirely.
+  const transient = options.closeCoreOnCleanup === true
+  const registryKey = getPriorityRegistryKey(request.key, request.blob)
+  const existing = activePriorityRanges.get(registryKey) || null
+
+  if (
+    !transient &&
+    existing?.range &&
+    downloadRange.start >= existing.start &&
+    downloadRange.start < existing.end &&
+    Date.now() - existing.createdAt < PRIORITY_RANGE_REUSE_WINDOW_MS
+  ) {
+    return downloadRange
+  }
+
+  // Anything outside the fresh window is a seek (or the window advancing with
+  // playback): drop the stale prioritized range immediately so replication
+  // bandwidth refocuses on the bytes the player is about to block on, instead
+  // of letting up to 16MB of pre-seek window keep competing for peers for the
+  // rest of its timeout lifetime. This is what makes seeks into uncached
+  // regions start delivering quickly.
+  destroyPriorityRange(existing)
+
+  let core = !transient && existing?.core && existing.core.closed !== true ? existing.core : null
+  if (!core) {
+    core = await blobServer._getCore(request.key, {
+      key: request.key,
+      blob: request.blob,
+      range: request.byteRange
+    }, true)
+  }
+  if (!core || typeof core.download !== 'function') {
+    if (existing) {
+      activePriorityRanges.delete(registryKey)
+      releasePriorityEntry(existing)
+    }
+    return null
+  }
 
   // Video playback reads bytes sequentially from the seek point forward, so the
   // prioritized region must download in play order. `linear: false` let
@@ -168,6 +249,32 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
     end: downloadRange.end,
     linear: true
   })
+
+  const entry = {
+    core,
+    range,
+    timer: null,
+    createdAt: Date.now(),
+    start: downloadRange.start,
+    end: downloadRange.end
+  }
+
+  if (!transient) {
+    // The session moves to the new entry; make sure no stale reference can
+    // close it underneath the active download.
+    if (existing) existing.core = null
+    activePriorityRanges.delete(registryKey)
+    activePriorityRanges.set(registryKey, entry)
+    // Keep the session pool bounded (Map preserves insertion order = LRU).
+    while (activePriorityRanges.size > MAX_TRACKED_PRIORITY_BLOBS) {
+      const oldestKey = activePriorityRanges.keys().next().value
+      if (oldestKey === registryKey) break
+      const oldest = activePriorityRanges.get(oldestKey)
+      activePriorityRanges.delete(oldestKey)
+      releasePriorityEntry(oldest)
+    }
+  }
+
   const timeoutMs = Math.max(
     1000,
     Number(options.timeoutMs ?? DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS) || DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS
@@ -176,20 +283,17 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
   const cleanup = () => {
     if (cleanedUp) return
     cleanedUp = true
-    try { range?.destroy?.() } catch { /* best effort */ }
-    // Do NOT close the shared serving core by default: `_getCore` returns the
-    // core that hypercore-blob-server is actively streaming byte ranges from to
-    // the player. Closing it on range-priority cleanup tears down playback
-    // mid-stream, causing constant stalls. Only close when a caller explicitly
-    // owns the core lifecycle for this request.
-    if (options.closeCoreOnCleanup === true) {
-      try {
-        const closeResult = core.close?.()
-        if (closeResult && typeof closeResult.catch === 'function') closeResult.catch(() => {})
-      } catch { /* best effort */ }
+    destroyPriorityRange(entry)
+    if (entry.range !== range) {
+      try { range?.destroy?.() } catch { /* best effort */ }
     }
+    // Do NOT close the registry-held core session here: it stays pooled so the
+    // next range request for this blob reuses it instead of leaking a fresh
+    // session per request. Transient callers opted into owning the lifecycle.
+    if (transient) closePriorityCore(core)
   }
-  const timer = setTimeout(cleanup, timeoutMs)
+  entry.timer = setTimeout(cleanup, timeoutMs)
+
   const done = typeof range?.done === 'function'
     ? range.done()
     : typeof range?.downloaded === 'function'
@@ -198,10 +302,7 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
 
   Promise.resolve(done)
     .catch(() => {})
-    .finally(() => {
-      clearTimeout(timer)
-      cleanup()
-    })
+    .finally(cleanup)
 
   return downloadRange
 }

@@ -153,6 +153,10 @@ export function attachMobileHandlers(B, deps) {
     r.mimeType
   )
   B.setPlaybackActive = async (r = {}) => api.setPlaybackActive(r)
+  B.startLivestream = async (r = {}) => api.startLivestream(r)
+  B.stopLivestream = async (r) => api.stopLivestream(r.videoId)
+  B.getLivestreamStatus = async (r) => api.getLivestreamStatus(r.videoId)
+  B.prepareLivePlayback = async (r) => api.prepareLivePlayback(r.liveCoreKey)
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null }); return { url: res.url || null, exists: res.exists || false, dataUrl: null } }

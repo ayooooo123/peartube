@@ -89,6 +89,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getIdentitiesResponse = GetIdentitiesResponseCodec()
   private let getIdentityRequest = GetIdentityRequestCodec()
   private let getIdentityResponse = GetIdentityResponseCodec()
+  private let getLivestreamStatusRequest = GetLivestreamStatusRequestCodec()
+  private let getLivestreamStatusResponse = GetLivestreamStatusResponseCodec()
   private let getPinnedChannelsRequest = GetPinnedChannelsRequestCodec()
   private let getPinnedChannelsResponse = GetPinnedChannelsResponseCodec()
   private let getPublicFeedRequest = GetPublicFeedRequestCodec()
@@ -161,6 +163,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let pinChannelResponse = PinChannelResponseCodec()
   private let prefetchVideoRequest = PrefetchVideoRequestCodec()
   private let prefetchVideoResponse = PrefetchVideoResponseCodec()
+  private let prepareLivePlaybackRequest = PrepareLivePlaybackRequestCodec()
+  private let prepareLivePlaybackResponse = PrepareLivePlaybackResponseCodec()
   private let preparePlaybackRequest = PreparePlaybackRequestCodec()
   private let preparePlaybackResponse = PreparePlaybackResponseCodec()
   private let recoverIdentityRequest = RecoverIdentityRequestCodec()
@@ -187,6 +191,10 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let setVideoThumbnailFromFileResponse = SetVideoThumbnailFromFileResponseCodec()
   private let setVideoThumbnailRequest = SetVideoThumbnailRequestCodec()
   private let setVideoThumbnailResponse = SetVideoThumbnailResponseCodec()
+  private let startLivestreamRequest = StartLivestreamRequestCodec()
+  private let startLivestreamResponse = StartLivestreamResponseCodec()
+  private let stopLivestreamRequest = StopLivestreamRequestCodec()
+  private let stopLivestreamResponse = StopLivestreamResponseCodec()
   private let submitToFeedRequest = SubmitToFeedRequestCodec()
   private let submitToFeedResponse = SubmitToFeedResponseCodec()
   private let subscribeChannelRequest = SubscribeChannelRequestCodec()
@@ -1680,6 +1688,58 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
     _handlers["@peartube/event-transcode-progress"] = handler
   }
 
+  // Request/response — client
+  public func startLivestream(_ args: StartLivestreamRequest) async throws -> StartLivestreamResponse {
+    let encoded = try _encode(startLivestreamRequest, args)
+    guard let raw = try await _rpc.request(18, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(startLivestreamResponse, raw)
+  }
+
+  public func onStartLivestream(_ handler: @escaping (StartLivestreamRequest) async throws -> StartLivestreamResponse) {
+    _handlers["@peartube/start-livestream"] = handler
+  }
+
+  // Request/response — client
+  public func stopLivestream(_ args: StopLivestreamRequest) async throws -> StopLivestreamResponse {
+    let encoded = try _encode(stopLivestreamRequest, args)
+    guard let raw = try await _rpc.request(19, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(stopLivestreamResponse, raw)
+  }
+
+  public func onStopLivestream(_ handler: @escaping (StopLivestreamRequest) async throws -> StopLivestreamResponse) {
+    _handlers["@peartube/stop-livestream"] = handler
+  }
+
+  // Request/response — client
+  public func getLivestreamStatus(_ args: GetLivestreamStatusRequest) async throws -> GetLivestreamStatusResponse {
+    let encoded = try _encode(getLivestreamStatusRequest, args)
+    guard let raw = try await _rpc.request(20, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getLivestreamStatusResponse, raw)
+  }
+
+  public func onGetLivestreamStatus(_ handler: @escaping (GetLivestreamStatusRequest) async throws -> GetLivestreamStatusResponse) {
+    _handlers["@peartube/get-livestream-status"] = handler
+  }
+
+  // Request/response — client
+  public func prepareLivePlayback(_ args: PrepareLivePlaybackRequest) async throws -> PrepareLivePlaybackResponse {
+    let encoded = try _encode(prepareLivePlaybackRequest, args)
+    guard let raw = try await _rpc.request(21, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(prepareLivePlaybackResponse, raw)
+  }
+
+  public func onPrepareLivePlayback(_ handler: @escaping (PrepareLivePlaybackRequest) async throws -> PrepareLivePlaybackResponse) {
+    _handlers["@peartube/prepare-live-playback"] = handler
+  }
+
   private func _dispatchRequest(_ req: IncomingRequest) async {
     switch req.command {
     case 0:   // @peartube/create-identity
@@ -2992,6 +3052,58 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(transcodeStatusRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(transcodeStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 18:   // @peartube/start-livestream
+      guard let handler = _handlers["@peartube/start-livestream"] as? (StartLivestreamRequest) async throws -> StartLivestreamResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(startLivestreamRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(startLivestreamResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 19:   // @peartube/stop-livestream
+      guard let handler = _handlers["@peartube/stop-livestream"] as? (StopLivestreamRequest) async throws -> StopLivestreamResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(stopLivestreamRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(stopLivestreamResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 20:   // @peartube/get-livestream-status
+      guard let handler = _handlers["@peartube/get-livestream-status"] as? (GetLivestreamStatusRequest) async throws -> GetLivestreamStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getLivestreamStatusRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getLivestreamStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 21:   // @peartube/prepare-live-playback
+      guard let handler = _handlers["@peartube/prepare-live-playback"] as? (PrepareLivePlaybackRequest) async throws -> PrepareLivePlaybackResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(prepareLivePlaybackRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(prepareLivePlaybackResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }

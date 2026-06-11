@@ -232,7 +232,15 @@ const methods = new Map([
   ['@peartube/transcode-status', 111],
   [111, '@peartube/transcode-status'],
   ['@peartube/event-transcode-progress', 112],
-  [112, '@peartube/event-transcode-progress']
+  [112, '@peartube/event-transcode-progress'],
+  ['@peartube/start-livestream', 113],
+  [113, '@peartube/start-livestream'],
+  ['@peartube/stop-livestream', 114],
+  [114, '@peartube/stop-livestream'],
+  ['@peartube/get-livestream-status', 115],
+  [115, '@peartube/get-livestream-status'],
+  ['@peartube/prepare-live-playback', 116],
+  [116, '@peartube/prepare-live-playback']
 ])
 
 class HRPC {
@@ -352,7 +360,11 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
+      ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-request')],
+      ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-request')],
+      ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-request')],
+      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -455,7 +467,11 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
+      ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-response')],
+      ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-response')],
+      ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-response')],
+      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1006,6 +1022,22 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
+  async startLivestream(args) {
+    return this._call('@peartube/start-livestream', args)
+  }
+
+  async stopLivestream(args) {
+    return this._call('@peartube/stop-livestream', args)
+  }
+
+  async getLivestreamStatus(args) {
+    return this._call('@peartube/get-livestream-status', args)
+  }
+
+  async prepareLivePlayback(args) {
+    return this._call('@peartube/prepare-live-playback', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1456,6 +1488,22 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
+  onStartLivestream(responseFn) {
+    this._handlers['@peartube/start-livestream'] = responseFn
+  }
+
+  onStopLivestream(responseFn) {
+    this._handlers['@peartube/stop-livestream'] = responseFn
+  }
+
+  onGetLivestreamStatus(responseFn) {
+    this._handlers['@peartube/get-livestream-status'] = responseFn
+  }
+
+  onPrepareLivePlayback(responseFn) {
+    this._handlers['@peartube/prepare-live-playback'] = responseFn
   }
 
   _requestIsStream(command) {

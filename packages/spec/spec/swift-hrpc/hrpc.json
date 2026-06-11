@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -1433,6 +1433,58 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 18,
+      "name": "@peartube/start-livestream",
+      "request": {
+        "name": "@peartube/start-livestream-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/start-livestream-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 19,
+      "name": "@peartube/stop-livestream",
+      "request": {
+        "name": "@peartube/stop-livestream-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/stop-livestream-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 20,
+      "name": "@peartube/get-livestream-status",
+      "request": {
+        "name": "@peartube/get-livestream-status-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-livestream-status-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 21,
+      "name": "@peartube/prepare-live-playback",
+      "request": {
+        "name": "@peartube/prepare-live-playback-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/prepare-live-playback-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

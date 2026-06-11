@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -6496,6 +6496,246 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "start-livestream-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "targetFragmentDurationMs",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "start-livestream-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "videoId",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "liveCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "stop-livestream-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "livestream-status",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "videoId",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "liveCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "mediaBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "durationMs",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "peerCount",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "startedAt",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "endedAt",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "stop-livestream-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "status",
+          "required": false,
+          "type": "@peartube/livestream-status",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "get-livestream-status-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "get-livestream-status-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "status",
+          "required": false,
+          "type": "@peartube/livestream-status",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "prepare-live-playback-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "liveCoreKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "prepare-live-playback-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "url",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "isLive",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
         }
       ]
     }

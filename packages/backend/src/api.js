@@ -110,6 +110,18 @@ export function createApi({
   const signedDescriptorCache = new Map()
 
   /**
+   * Recent preparePlayback timing breakdowns (per-stage ms offsets from request
+   * start). Surfaced via getSwarmStatus doctor.playback so the on-device
+   * diagnostics panel can show where time-to-first-frame goes.
+   */
+  const recentPlaybackTimings = []
+  const trackPlaybackTiming = (record) => {
+    recentPlaybackTimings.push(record)
+    while (recentPlaybackTimings.length > 8) recentPlaybackTimings.shift()
+    return record
+  }
+
+  /**
    * Ensure SemanticFinder is initialized with persistence
    * YouTube-Fast: loads persisted index on first use for instant search
    */
@@ -1128,6 +1140,16 @@ export function createApi({
      */
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
+      const startedAt = Date.now()
+      const timingRecord = trackPlaybackTiming({
+        at: startedAt,
+        driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
+        videoId: videoPath || null,
+        stages: {},
+        readyForPlayback: null,
+        peerCount: null,
+        hasHeadBlock: null,
+      })
 
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       let sourcePeerDiagnostics = { sourceFeedPeerIds: [], sourceRelayPeerIds: [] }
@@ -1149,6 +1171,7 @@ export function createApi({
             : []
           sourcePeerDiagnostics = collectHintPeerIds(matchingHints)
         } catch { /* best effort */ }
+        timingRecord.stages.hintsMs = Date.now() - startedAt
       }
       const promotePeerHints = publicFeed?.promoteAvailabilityHintPeers
         ? (peerIds, topic) => publicFeed.promoteAvailabilityHintPeers(peerIds, topic)
@@ -1165,10 +1188,16 @@ export function createApi({
         sourceFeedPeerIds: sourcePeerDiagnostics.sourceFeedPeerIds,
         sourceRelayPeerIds: sourcePeerDiagnostics.sourceRelayPeerIds,
         promotePeerHints,
+        timingBaseMs: startedAt,
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),
       })
+      Object.assign(timingRecord.stages, prepared?.timing || {})
+      timingRecord.stages.totalMs = Date.now() - startedAt
+      timingRecord.readyForPlayback = prepared?.selectedBlobWarmup?.readyForPlayback ?? null
+      timingRecord.peerCount = prepared?.selectedBlobWarmup?.peerCount ?? null
+      timingRecord.hasHeadBlock = prepared?.selectedBlobWarmup?.hasHeadBlock ?? null
       if (prepared?.selectedBlobWarmup && prepared.selectedBlobWarmup.readyForPlayback !== true) {
         const warm = prepared.selectedBlobWarmup
         console.log(
@@ -2932,6 +2961,10 @@ export function createApi({
           feedEntries: publicFeed?.entries?.size || 0,
           directPeerDial: feedStats.directPeerDial || null,
           lastHaveFeed: feedStats.lastHaveFeed || null,
+        },
+        playback: {
+          lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
+          recentPreparePlayback: recentPlaybackTimings.slice(-5),
         },
         recommendedBoundary: null,
       }

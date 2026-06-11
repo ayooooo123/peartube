@@ -148,11 +148,17 @@ export class BlobPlaybackService {
     sourceFeedPeerIds = [],
     sourceRelayPeerIds = [],
     promotePeerHints = null,
+    timingBaseMs = Date.now(),
   }) {
     const ref = parseBlobRef({ blobsCoreKey, blobId, mimeType: 'video/mp4' })
     const feedIds = uniquePeerIds(sourceFeedPeerIds)
     const relayIds = uniquePeerIds(sourceRelayPeerIds)
+    const timing = {}
+    const markTiming = (name) => {
+      if (timing[name] === undefined) timing[name] = Date.now() - timingBaseMs
+    }
     const diagnostics = {
+      timing,
       blobsCoreKey: ref?.blobsCoreKey || blobsCoreKey || null,
       blobId: blobId ? String(blobId) : null,
       peerCount: 0,
@@ -184,6 +190,7 @@ export class BlobPlaybackService {
       diagnostics.blobPeerIds = peerIds
       diagnostics.blobPeerIdsJson = JSON.stringify(peerIds)
       diagnostics.feedRelayAlsoBlobPeer = relayIds.some((id) => peerIds.includes(id)) || feedIds.some((id) => peerIds.includes(id))
+      if (diagnostics.peerCount > 0) markTiming('firstBlobPeerMs')
     }
 
     const updateHeadAvailability = async () => {
@@ -198,7 +205,9 @@ export class BlobPlaybackService {
 
     try {
       await blobsCore.ready()
+      markTiming('blobCoreReadyMs')
       const retained = await this.retainBlobCorePeers(ref.blobsCoreKey, blobsCore)
+      markTiming('peersRetainedMs')
       diagnostics.retainedDiscoveryLabel = retained.retainedDiscoveryLabel || diagnostics.retainedDiscoveryLabel
       diagnostics.retainedDiscoveryStatus = retained.retainedDiscoveryStatus || (retained.retained ? 'retained' : 'not-retained')
       updatePeerDiagnostics()
@@ -214,6 +223,7 @@ export class BlobPlaybackService {
         } catch (err) {
           diagnostics.promotedPeerHintsJson = JSON.stringify([{ error: err?.message || String(err) }])
         }
+        markTiming('hintsPromotedMs')
       }
 
       const startedAt = Date.now()
@@ -223,6 +233,7 @@ export class BlobPlaybackService {
           wait(Math.max(1, Math.min(timeoutMs, 250))),
         ])
       } catch { /* best effort */ }
+      markTiming('updateWaitMs')
 
       updatePeerDiagnostics()
       await updateHeadAvailability()
@@ -231,10 +242,13 @@ export class BlobPlaybackService {
         updatePeerDiagnostics()
         await updateHeadAvailability()
       }
+      if (diagnostics.hasHeadBlock) markTiming('headBlockMs')
+      markTiming('warmupDoneMs')
 
       return diagnostics
     } catch (err) {
       diagnostics.error = err?.message || String(err)
+      markTiming('warmupDoneMs')
       return diagnostics
     }
   }
@@ -285,12 +299,14 @@ export class BlobPlaybackService {
     sourceFeedPeerIds = [],
     sourceRelayPeerIds = [],
     promotePeerHints = null,
+    timingBaseMs = Date.now(),
   }) {
     let warmupStarted = false
 
     const result = resolveUrl
       ? await resolveUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       : this.resolveDirectBlobUrl({ blobsCoreKey, blobId, mimeType })
+    const urlResolvedMs = Date.now() - timingBaseMs
 
     try {
       if (warmup) {
@@ -312,6 +328,7 @@ export class BlobPlaybackService {
           sourceFeedPeerIds,
           sourceRelayPeerIds,
           promotePeerHints,
+          timingBaseMs,
         })
         : null
       const peerWarmup = this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 }).catch((err) => {
@@ -324,6 +341,11 @@ export class BlobPlaybackService {
         warmupStarted,
         peerWarmupStarted: true,
         selectedBlobWarmup,
+        timing: {
+          urlResolvedMs,
+          ...(selectedBlobWarmup?.timing || {}),
+          returnedMs: Date.now() - timingBaseMs,
+        },
         peerWarmup: await Promise.race([
           peerWarmup,
           wait(0).then(() => ({ peerCount: 0, blobPeerIds: [], retained: false, timedOut: false })),
@@ -336,6 +358,10 @@ export class BlobPlaybackService {
       stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
       warmupStarted,
       peerWarmupStarted: false,
+      timing: {
+        urlResolvedMs,
+        returnedMs: Date.now() - timingBaseMs,
+      },
     }
   }
 }

@@ -39,6 +39,56 @@ tracked separately (see "Out of scope" below).
   trick; WebView2 and WebKitGTK don't do it reliably. MSE works across all three
   webviews, so we keep one playback path. HLS stays Chromecast-only.
 
+## Considered: mediabunny + WebCodecs for transcode (rejected)
+
+mediabunny is already in the renderer doing remux; could it also do the audio
+transcode and avoid the worker entirely? It does support transcoding — but it
+carries **no codecs of its own**: it orchestrates the browser's **WebCodecs API**,
+and for codecs WebCodecs lacks it requires WASM extension packages. That creates
+hard gaps exactly where we need coverage:
+
+- **No WebCodecs AAC *encoder* on desktop Linux.** WebCodecs `AudioEncoder` AAC
+  exists on macOS (Safari 26+/WKWebView) and Windows (WebView2) but is unavailable
+  in any browser on desktop Linux (AAC is patent-encumbered; Linux builds omit it).
+  So mediabunny cannot produce AAC on **WebKitGTK** at all — a hard wall, mirroring
+  the H.264-on-Linux gap.
+- **AC-3 / E-AC-3 / DTS / TrueHD are not in WebCodecs.** mediabunny's answer is
+  extensions like `@mediabunny/ac3`, which are themselves "size-optimized WASM
+  builds of FFmpeg's AC-3/E-AC-3 coders" — i.e. reintroducing scoped WASM-FFmpeg
+  blobs piecemeal (and DTS/TrueHD have no extension).
+- WebCodecs draws on the **same OS codec set** as the `<video>`/MSE pipeline, so
+  for the very codecs that force a transcode, WebCodecs typically can't decode them
+  either — which is why the extensions exist.
+
+`bare-ffmpeg` already contains all of those decoders (default FFmpeg build) plus an
+AAC encoder, runs uniformly across all three webviews, and is independent of
+WebCodecs availability / OS version. Given "full codec support on every desktop" is
+a requirement, bare-ffmpeg is the dependable single fallback. mediabunny-transcode
+would at best cover macOS/Windows for WebCodecs-decodable sources — a second code
+path for a subset of what bare-ffmpeg already covers. Not worth the complexity.
+
+Refs: MDN WebCodecs codec selection; caniuse "webcodecs"; mediabunny `@mediabunny/ac3`
+extension docs.
+
+## Division of labor: keep mediabunny for remux
+
+mediabunny is **not** redundant with bare-ffmpeg and is **not** a native blob (pure
+JS/TS). The two occupy different layers and compose cleanly:
+
+- **mediabunny = container layer.** Remux / stream-copy, runs in the **renderer**,
+  reads the local blob server via HTTP range requests, appends straight to the
+  SourceBuffer. No decode, no WebCodecs, no worker, no native code. This is the
+  ~90% path (supported codecs that just need repackaging).
+- **bare-ffmpeg = codec layer.** Decode / re-encode, runs in the **worker**, used
+  only when `isTypeSupported` says the webview can't decode a track.
+
+Routing remux through bare-ffmpeg instead would push every video's full bitstream
+worker → Bun main → renderer (two IPC hops) and require SourceBuffer backpressure
+across that boundary — making the majority path more expensive to retire a
+zero-blob JS dependency. The unification we want is at the `FragmentSource`
+**interface** (one abstraction, two implementations), not by collapsing onto one
+engine.
+
 ## Capability gate: let the renderer decide
 
 Do **not** hardcode a per-webview codec matrix. The renderer knows its own

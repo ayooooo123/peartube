@@ -19,7 +19,11 @@ const READY_TIMEOUT_MS = 1_500
 const READY_RETRY_DELAY_MS = 250
 
 const THUMBNAIL_ATTEMPTS = 3
-const THUMBNAIL_TIMEOUT_MS = 1_500
+// The backend handler can legitimately spend up to 1.5s on a bounded network
+// wait (plus channel/bee lookups) before answering, and on Android cold start
+// the worklet is saturated by P2P bootstrap. A 1.5s timeout abandoned replies
+// that were about to arrive, so feed cards stayed on placeholders.
+const THUMBNAIL_TIMEOUT_MS = 4_000
 const THUMBNAIL_RETRY_DELAY_MS = 300
 
 const readinessCache = new WeakMap<object, { checkedAt: number; ready: boolean }>()
@@ -133,7 +137,7 @@ export async function fetchThumbnailUrlWithRetry(args: {
 
   for (let attempt = 1; attempt < THUMBNAIL_ATTEMPTS; attempt += 1) {
     await sleep(THUMBNAIL_RETRY_DELAY_MS * attempt)
-    const url = await attemptThumbnailFetch(rpc, channelKey, videoId, THUMBNAIL_TIMEOUT_MS + attempt * 500)
+    const url = await attemptThumbnailFetch(rpc, channelKey, videoId, THUMBNAIL_TIMEOUT_MS + attempt * 1000)
     if (url) return url
   }
 

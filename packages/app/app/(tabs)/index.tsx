@@ -49,6 +49,12 @@ import {
   writeFeedSnapshotToDisk,
 } from '@/lib/feed-snapshot-storage'
 import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
+
+// Backoff schedule for re-fetching feed thumbnails that missed their initial
+// fetch window: sweeps at ~5s, 10s, 20s, 40s after the feed renders.
+const THUMBNAIL_RESWEEP_MAX_ATTEMPTS = 4
+const THUMBNAIL_RESWEEP_BASE_DELAY_MS = 5000
+
 // Public feed types
 interface FeedEntry {
   driveKey: string
@@ -431,6 +437,33 @@ export default function HomeScreen() {
       fetchThumbnailsForVideos(vidsWithKey as VideoData[])
     }
   }, [videos, identity?.driveKey, fetchThumbnailsForVideos])
+
+  // Re-sweep feed cards still missing a thumbnail. The initial fetches run
+  // while the backend is busiest (P2P bootstrap, feed hydration), so they can
+  // exhaust their retries; without a later sweep those cards stayed on
+  // placeholders for the whole session.
+  const thumbnailResweepAttemptsRef = useRef(0)
+  const [thumbnailResweepNonce, setThumbnailResweepNonce] = useState(0)
+  useEffect(() => {
+    if (!ready || isPear) return
+    const missing = feedVideos.filter((v) =>
+      v.channelKey && v.id &&
+      !thumbnailCache[`${v.channelKey}:${v.id}`] &&
+      !v.thumbnailUrl && !(v as any).thumbnail
+    )
+    if (missing.length === 0) {
+      thumbnailResweepAttemptsRef.current = 0
+      return
+    }
+    if (thumbnailResweepAttemptsRef.current >= THUMBNAIL_RESWEEP_MAX_ATTEMPTS) return
+    const timer = setTimeout(() => {
+      thumbnailResweepAttemptsRef.current += 1
+      fetchThumbnailsForVideos(missing)
+      // Reschedule the next sweep even when every fetch misses (no state change).
+      setThumbnailResweepNonce((nonce) => nonce + 1)
+    }, THUMBNAIL_RESWEEP_BASE_DELAY_MS * 2 ** thumbnailResweepAttemptsRef.current)
+    return () => clearTimeout(timer)
+  }, [ready, feedVideos, thumbnailCache, thumbnailResweepNonce, fetchThumbnailsForVideos])
 
   // Restore the last renderable Discover cards before P2P/feed hydration finishes.
   useEffect(() => {

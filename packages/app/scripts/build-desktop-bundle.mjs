@@ -20,9 +20,9 @@
  * launch and self-heal a stale bundle after a source change.
  */
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -112,6 +112,81 @@ function getBundleHosts() {
   return [`${process.platform}-${process.arch}`]
 }
 
+const peartubeWorkspacePackages = ['backend', 'host', 'core', 'protocol', 'spec', 'platform']
+
+// bare-pack resolves `@peartube/*` through node_modules. With npm `file:`
+// deps those entries are symlinks to the live packages/ source, so the pack
+// traces fresh code. But a stale *physical copy* (left by an older install
+// state or a different package manager) would be silently inlined into the
+// bundle and resurrect "does not provide an export named X" with up-to-date
+// source on disk. Detect that and re-link to the live package.
+function ensureLiveWorkspaceLinks() {
+  const scopeDirs = [
+    path.join(projectRoot, 'node_modules', '@peartube'),
+    path.join(repoRoot, 'node_modules', '@peartube'),
+  ]
+  for (const scopeDir of scopeDirs) {
+    if (!fs.existsSync(scopeDir)) continue
+    for (const name of peartubeWorkspacePackages) {
+      const linkPath = path.join(scopeDir, name)
+      const livePath = path.join(repoRoot, 'packages', name)
+      if (!fs.existsSync(linkPath) || !fs.existsSync(livePath)) continue
+      let resolved
+      try {
+        resolved = fs.realpathSync(linkPath)
+      } catch {
+        continue
+      }
+      if (resolved === fs.realpathSync(livePath)) continue
+      console.warn(
+        `[desktop:bundle] ${linkPath} resolves to ${resolved} instead of the live ` +
+        `${livePath} — replacing the stale copy with a symlink to live source`,
+      )
+      fs.rmSync(linkPath, { recursive: true, force: true })
+      fs.symlinkSync(livePath, linkPath, 'dir')
+    }
+  }
+}
+
+// Belt-and-braces: after packing, prove the bundle actually contains the live
+// source. Any packed @peartube file whose bytes differ from packages/<pkg>/...
+// means bare-pack traced a stale copy — fail loudly instead of shipping a
+// bundle that crashes the worker at link time.
+function verifyBundleFreshness() {
+  const require = createRequire(path.join(projectRoot, 'package.json'))
+  const Bundle = require('bare-bundle')
+  const packed = Bundle.from(fs.readFileSync(bundleFile))
+
+  const problems = []
+  let checked = 0
+  for (const key of packed.keys()) {
+    const match = key.match(/node_modules\/@peartube\/([^/]+)\/(.+)$/)
+    if (!match) continue
+    const livePath = path.join(repoRoot, 'packages', match[1], match[2])
+    let liveSource
+    try {
+      liveSource = fs.readFileSync(livePath)
+    } catch {
+      continue
+    }
+    checked++
+    if (!packed.read(key).equals(liveSource)) {
+      problems.push(`${key}\n    differs from ${livePath}`)
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      `[desktop:bundle] Packed bundle contains STALE @peartube source (${problems.length} file(s)):\n` +
+      `  ${problems.join('\n  ')}\n` +
+      'A stale physical copy of @peartube/* shadowed the live packages/ source during the pack.\n' +
+      'Fix: rm -rf packages/app/node_modules/@peartube && npm run install:all, then rebuild.',
+    )
+  }
+
+  console.log(`[desktop:bundle] Verified ${checked} packed @peartube file(s) match live source`)
+}
+
 function runBarePack() {
   if (!fs.existsSync(entryFile)) {
     throw new Error(
@@ -121,6 +196,7 @@ function runBarePack() {
   }
 
   fs.mkdirSync(path.dirname(bundleFile), { recursive: true })
+  ensureLiveWorkspaceLinks()
 
   const barePackBin = findBarePackBin()
   const args = ['--out', bundleFile, '--format', 'bundle', '--linked']
@@ -147,6 +223,7 @@ if (forced || missingBundle || staleBundle) {
   const reason = forced ? 'forced rebuild' : missingBundle ? 'missing bundle' : 'stale bundle'
   console.log(`[desktop:bundle] Rebuilding desktop worker bundle (${reason})`)
   runBarePack()
+  verifyBundleFreshness()
   console.log(`[desktop:bundle] Wrote ${path.relative(projectRoot, bundleFile)}`)
 } else {
   console.log('[desktop:bundle] Desktop worker bundle is up to date')

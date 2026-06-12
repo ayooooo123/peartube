@@ -75,6 +75,19 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')
+  // Must guard against a stale physical copy of @peartube/* shadowing live
+  // source during the pack (the silent path back to "does not provide an
+  // export named X"), and prove post-pack that bundled bytes match live source.
+  assert.match(
+    source,
+    /ensureLiveWorkspaceLinks\(\)/,
+    'should re-link stale @peartube node_modules copies before packing',
+  )
+  assert.match(
+    source,
+    /verifyBundleFreshness\(\)/,
+    'should verify packed @peartube files match live source after packing',
+  )
 })
 
 test('desktop launcher prefers the bare bundle over the loose worker', () => {

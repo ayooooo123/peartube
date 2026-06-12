@@ -624,6 +624,295 @@ ns.register({
   ]
 })
 
+// ============================================
+// Personal Sync Types (playlists / history / settings)
+// Private per-identity multi-writer store, synced across the user's devices.
+// ============================================
+
+ns.register({
+  name: 'playlist',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'name', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false },
+    { name: 'createdAt', type: 'uint', required: false },
+    { name: 'updatedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'playlist-item',
+  fields: [
+    { name: 'playlistId', type: 'string', required: true },
+    { name: 'videoKey', type: 'string', required: true },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'history-entry',
+  fields: [
+    { name: 'eventId', type: 'string', required: false },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'videoKey', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'position', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'timestamp', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'resume-entry',
+  fields: [
+    { name: 'videoKey', type: 'string', required: true },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'position', type: 'uint', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'updatedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'personal-setting',
+  fields: [
+    { name: 'key', type: 'string', required: true },
+    // JSON-encoded value so the setting can hold strings, numbers, or bools.
+    { name: 'value', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-playlists-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-playlists-response',
+  fields: [
+    { name: 'playlists', type: '@peartube/playlist', array: true }
+  ]
+})
+
+ns.register({
+  name: 'get-playlist-items-request',
+  fields: [
+    { name: 'playlistId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-playlist-items-response',
+  fields: [
+    { name: 'items', type: '@peartube/playlist-item', array: true }
+  ]
+})
+
+ns.register({
+  name: 'create-playlist-request',
+  fields: [
+    { name: 'name', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'create-playlist-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'id', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'update-playlist-request',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'name', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'update-playlist-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'delete-playlist-request',
+  fields: [
+    { name: 'id', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'delete-playlist-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'add-to-playlist-request',
+  fields: [
+    { name: 'playlistId', type: 'string', required: true },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'videoKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-to-playlist-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'remove-from-playlist-request',
+  fields: [
+    { name: 'playlistId', type: 'string', required: true },
+    { name: 'videoKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'remove-from-playlist-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-history-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'videoKey', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'position', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'timestamp', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-history-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'eventId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-watch-history-request',
+  fields: [
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-watch-history-response',
+  fields: [
+    { name: 'entries', type: '@peartube/history-entry', array: true }
+  ]
+})
+
+ns.register({
+  name: 'get-resume-position-request',
+  fields: [
+    { name: 'videoKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-resume-position-response',
+  fields: [
+    { name: 'found', type: 'bool', required: true },
+    { name: 'resume', type: '@peartube/resume-entry', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-resume-positions-request',
+  fields: []
+})
+
+ns.register({
+  name: 'list-resume-positions-response',
+  fields: [
+    { name: 'entries', type: '@peartube/resume-entry', array: true }
+  ]
+})
+
+ns.register({
+  name: 'set-personal-setting-request',
+  fields: [
+    { name: 'key', type: 'string', required: true },
+    { name: 'value', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-personal-setting-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-personal-settings-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-personal-settings-response',
+  fields: [
+    { name: 'settings', type: '@peartube/personal-setting', array: true }
+  ]
+})
+
+ns.register({
+  name: 'provision-personal-encryption-request',
+  fields: [
+    // 32-byte secret (hex) from the device keychain; omit to have one generated.
+    { name: 'secret', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'provision-personal-encryption-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'secret', type: 'string', required: false },
+    { name: 'encrypted', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-personal-encryption-secret-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-personal-encryption-secret-response',
+  fields: [
+    { name: 'provisioned', type: 'bool', required: true },
+    { name: 'secret', type: 'string', required: false }
+  ]
+})
+
 ns.register({
   name: 'join-channel-request',
   fields: [
@@ -2520,6 +2809,97 @@ rpcNs.register({
   name: 'get-subscriptions',
   request: { name: '@peartube/get-subscriptions-request', stream: false },
   response: { name: '@peartube/get-subscriptions-response', stream: false }
+})
+
+// Personal Sync commands (playlists / history / settings)
+rpcNs.register({
+  name: 'get-playlists',
+  request: { name: '@peartube/get-playlists-request', stream: false },
+  response: { name: '@peartube/get-playlists-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-playlist-items',
+  request: { name: '@peartube/get-playlist-items-request', stream: false },
+  response: { name: '@peartube/get-playlist-items-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'create-playlist',
+  request: { name: '@peartube/create-playlist-request', stream: false },
+  response: { name: '@peartube/create-playlist-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'update-playlist',
+  request: { name: '@peartube/update-playlist-request', stream: false },
+  response: { name: '@peartube/update-playlist-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'delete-playlist',
+  request: { name: '@peartube/delete-playlist-request', stream: false },
+  response: { name: '@peartube/delete-playlist-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'add-to-playlist',
+  request: { name: '@peartube/add-to-playlist-request', stream: false },
+  response: { name: '@peartube/add-to-playlist-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'remove-from-playlist',
+  request: { name: '@peartube/remove-from-playlist-request', stream: false },
+  response: { name: '@peartube/remove-from-playlist-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'log-watch-history',
+  request: { name: '@peartube/log-watch-history-request', stream: false },
+  response: { name: '@peartube/log-watch-history-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-watch-history',
+  request: { name: '@peartube/get-watch-history-request', stream: false },
+  response: { name: '@peartube/get-watch-history-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-resume-position',
+  request: { name: '@peartube/get-resume-position-request', stream: false },
+  response: { name: '@peartube/get-resume-position-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'list-resume-positions',
+  request: { name: '@peartube/list-resume-positions-request', stream: false },
+  response: { name: '@peartube/list-resume-positions-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-personal-setting',
+  request: { name: '@peartube/set-personal-setting-request', stream: false },
+  response: { name: '@peartube/set-personal-setting-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-personal-settings',
+  request: { name: '@peartube/get-personal-settings-request', stream: false },
+  response: { name: '@peartube/get-personal-settings-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'provision-personal-encryption',
+  request: { name: '@peartube/provision-personal-encryption-request', stream: false },
+  response: { name: '@peartube/provision-personal-encryption-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-personal-encryption-secret',
+  request: { name: '@peartube/get-personal-encryption-secret-request', stream: false },
+  response: { name: '@peartube/get-personal-encryption-secret-response', stream: false }
 })
 
 rpcNs.register({

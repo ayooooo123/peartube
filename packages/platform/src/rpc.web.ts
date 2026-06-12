@@ -9,7 +9,7 @@
  */
 
 import { createProtocolClient } from '@peartube/protocol';
-import { createPlatformRpcBridge } from './rpc.shared';
+import { createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
@@ -286,6 +286,9 @@ function normalizeParam<T extends string>(
  * Methods accept either individual args or object params for flexibility
  */
 export const rpc = {
+  // Personal sync (playlists / history / settings / encryption)
+  ...createPersonalRpc(ensureRPC),
+
   // Identity
   async createIdentity(nameOrReq: string | { name: string }) {
     const req = typeof nameOrReq === 'string' ? { name: nameOrReq } : nameOrReq;

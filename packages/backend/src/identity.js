@@ -112,6 +112,9 @@ export function createIdentityManager({ ctx }) {
             channelKey,
             channelEncryptionKey: i.channelEncryptionKey || null,
             channelWriterKeyName: i.channelWriterKeyName || null,
+            // Private per-identity multi-writer personal store (subscriptions,
+            // playlists, watch history, settings) shared across the user's devices.
+            personalKey: i.personalKey || null,
             driveKey: channelKey,
             isActive: i.publicKey === activeIdentity,
             createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0
@@ -519,6 +522,25 @@ export function createIdentityManager({ ctx }) {
 
       await this.saveIdentities();
       log.info(' Active identity set to:', publicKey.slice(0, 16));
+    },
+
+    /**
+     * Persist the personal-store bootstrap key for an identity so the user's
+     * other devices can open and pair into the same private multi-writer store.
+     * @param {string} publicKey
+     * @param {string} personalKey - hex bootstrap key of the personal store
+     * @returns {Promise<void>}
+     */
+    async setPersonalKey(publicKey, personalKey) {
+      let changed = false
+      identities = identities.map((i) => {
+        if (i.publicKey === publicKey && i.personalKey !== personalKey) {
+          changed = true
+          return { ...i, personalKey }
+        }
+        return i
+      })
+      if (changed) await this.saveIdentities()
     },
 
     /**

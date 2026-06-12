@@ -13,6 +13,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let addCommentResponse = AddCommentResponseCodec()
   private let addReactionRequest = AddReactionRequestCodec()
   private let addReactionResponse = AddReactionResponseCodec()
+  private let addToPlaylistRequest = AddToPlaylistRequestCodec()
+  private let addToPlaylistResponse = AddToPlaylistResponseCodec()
   private let attestDeviceRequest = AttestDeviceRequestCodec()
   private let attestDeviceResponse = AttestDeviceResponseCodec()
   private let bootstrapDeviceRequest = BootstrapDeviceRequestCodec()
@@ -53,6 +55,10 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let createDeviceInviteResponse = CreateDeviceInviteResponseCodec()
   private let createIdentityRequest = CreateIdentityRequestCodec()
   private let createIdentityResponse = CreateIdentityResponseCodec()
+  private let createPlaylistRequest = CreatePlaylistRequestCodec()
+  private let createPlaylistResponse = CreatePlaylistResponseCodec()
+  private let deletePlaylistRequest = DeletePlaylistRequestCodec()
+  private let deletePlaylistResponse = DeletePlaylistResponseCodec()
   private let deleteVideoRequest = DeleteVideoRequestCodec()
   private let deleteVideoResponse = DeleteVideoResponseCodec()
   private let desktopBootstrapRequest = DesktopBootstrapRequestCodec()
@@ -91,14 +97,24 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getIdentityResponse = GetIdentityResponseCodec()
   private let getLivestreamStatusRequest = GetLivestreamStatusRequestCodec()
   private let getLivestreamStatusResponse = GetLivestreamStatusResponseCodec()
+  private let getPersonalEncryptionSecretRequest = GetPersonalEncryptionSecretRequestCodec()
+  private let getPersonalEncryptionSecretResponse = GetPersonalEncryptionSecretResponseCodec()
+  private let getPersonalSettingsRequest = GetPersonalSettingsRequestCodec()
+  private let getPersonalSettingsResponse = GetPersonalSettingsResponseCodec()
   private let getPinnedChannelsRequest = GetPinnedChannelsRequestCodec()
   private let getPinnedChannelsResponse = GetPinnedChannelsResponseCodec()
+  private let getPlaylistItemsRequest = GetPlaylistItemsRequestCodec()
+  private let getPlaylistItemsResponse = GetPlaylistItemsResponseCodec()
+  private let getPlaylistsRequest = GetPlaylistsRequestCodec()
+  private let getPlaylistsResponse = GetPlaylistsResponseCodec()
   private let getPublicFeedRequest = GetPublicFeedRequestCodec()
   private let getPublicFeedResponse = GetPublicFeedResponseCodec()
   private let getReactionsRequest = GetReactionsRequestCodec()
   private let getReactionsResponse = GetReactionsResponseCodec()
   private let getRecommendationsRequest = GetRecommendationsRequestCodec()
   private let getRecommendationsResponse = GetRecommendationsResponseCodec()
+  private let getResumePositionRequest = GetResumePositionRequestCodec()
+  private let getResumePositionResponse = GetResumePositionResponseCodec()
   private let getSeedingStatusRequest = GetSeedingStatusRequestCodec()
   private let getSeedingStatusResponse = GetSeedingStatusResponseCodec()
   private let getStatusRequest = GetStatusRequestCodec()
@@ -123,6 +139,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getVideoThumbnailResponse = GetVideoThumbnailResponseCodec()
   private let getVideoUrlRequest = GetVideoUrlRequestCodec()
   private let getVideoUrlResponse = GetVideoUrlResponseCodec()
+  private let getWatchHistoryRequest = GetWatchHistoryRequestCodec()
+  private let getWatchHistoryResponse = GetWatchHistoryResponseCodec()
   private let globalSearchVideosRequest = GlobalSearchVideosRequestCodec()
   private let globalSearchVideosResponse = GlobalSearchVideosResponseCodec()
   private let hideChannelRequest = HideChannelRequestCodec()
@@ -139,10 +157,14 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let listCommentsResponse = ListCommentsResponseCodec()
   private let listDevicesRequest = ListDevicesRequestCodec()
   private let listDevicesResponse = ListDevicesResponseCodec()
+  private let listResumePositionsRequest = ListResumePositionsRequestCodec()
+  private let listResumePositionsResponse = ListResumePositionsResponseCodec()
   private let listVideosRequest = ListVideosRequestCodec()
   private let listVideosResponse = ListVideosResponseCodec()
   private let logWatchEventRequest = LogWatchEventRequestCodec()
   private let logWatchEventResponse = LogWatchEventResponseCodec()
+  private let logWatchHistoryRequest = LogWatchHistoryRequestCodec()
+  private let logWatchHistoryResponse = LogWatchHistoryResponseCodec()
   private let pairDeviceRequest = PairDeviceRequestCodec()
   private let pairDeviceResponse = PairDeviceResponseCodec()
   private let pickImageFileRequest = PickImageFileRequestCodec()
@@ -157,12 +179,16 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let prepareLivePlaybackResponse = PrepareLivePlaybackResponseCodec()
   private let preparePlaybackRequest = PreparePlaybackRequestCodec()
   private let preparePlaybackResponse = PreparePlaybackResponseCodec()
+  private let provisionPersonalEncryptionRequest = ProvisionPersonalEncryptionRequestCodec()
+  private let provisionPersonalEncryptionResponse = ProvisionPersonalEncryptionResponseCodec()
   private let recoverIdentityRequest = RecoverIdentityRequestCodec()
   private let recoverIdentityResponse = RecoverIdentityResponseCodec()
   private let refreshFeedRequest = RefreshFeedRequestCodec()
   private let refreshFeedResponse = RefreshFeedResponseCodec()
   private let removeCommentRequest = RemoveCommentRequestCodec()
   private let removeCommentResponse = RemoveCommentResponseCodec()
+  private let removeFromPlaylistRequest = RemoveFromPlaylistRequestCodec()
+  private let removeFromPlaylistResponse = RemoveFromPlaylistResponseCodec()
   private let removeReactionRequest = RemoveReactionRequestCodec()
   private let removeReactionResponse = RemoveReactionResponseCodec()
   private let retrySyncChannelRequest = RetrySyncChannelRequestCodec()
@@ -171,6 +197,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let searchVideosResponse = SearchVideosResponseCodec()
   private let setActiveIdentityRequest = SetActiveIdentityRequestCodec()
   private let setActiveIdentityResponse = SetActiveIdentityResponseCodec()
+  private let setPersonalSettingRequest = SetPersonalSettingRequestCodec()
+  private let setPersonalSettingResponse = SetPersonalSettingResponseCodec()
   private let setSeedingConfigRequest = SetSeedingConfigRequestCodec()
   private let setSeedingConfigResponse = SetSeedingConfigResponseCodec()
   private let setStorageLimitRequest = SetStorageLimitRequestCodec()
@@ -205,6 +233,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let updateChannelAvatarResponse = UpdateChannelAvatarResponseCodec()
   private let updateChannelRequest = UpdateChannelRequestCodec()
   private let updateChannelResponse = UpdateChannelResponseCodec()
+  private let updatePlaylistRequest = UpdatePlaylistRequestCodec()
+  private let updatePlaylistResponse = UpdatePlaylistResponseCodec()
   private let updateVideoMetadataRequest = UpdateVideoMetadataRequestCodec()
   private let updateVideoMetadataResponse = UpdateVideoMetadataResponseCodec()
   private let uploadVideoRequest = UploadVideoRequestCodec()
@@ -1613,6 +1643,201 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
     _handlers["@peartube/prepare-live-playback"] = handler
   }
 
+  // Request/response — client
+  public func getPlaylists(_ args: GetPlaylistsRequest) async throws -> GetPlaylistsResponse {
+    let encoded = try _encode(getPlaylistsRequest, args)
+    guard let raw = try await _rpc.request(25, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPlaylistsResponse, raw)
+  }
+
+  public func onGetPlaylists(_ handler: @escaping (GetPlaylistsRequest) async throws -> GetPlaylistsResponse) {
+    _handlers["@peartube/get-playlists"] = handler
+  }
+
+  // Request/response — client
+  public func getPlaylistItems(_ args: GetPlaylistItemsRequest) async throws -> GetPlaylistItemsResponse {
+    let encoded = try _encode(getPlaylistItemsRequest, args)
+    guard let raw = try await _rpc.request(26, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPlaylistItemsResponse, raw)
+  }
+
+  public func onGetPlaylistItems(_ handler: @escaping (GetPlaylistItemsRequest) async throws -> GetPlaylistItemsResponse) {
+    _handlers["@peartube/get-playlist-items"] = handler
+  }
+
+  // Request/response — client
+  public func createPlaylist(_ args: CreatePlaylistRequest) async throws -> CreatePlaylistResponse {
+    let encoded = try _encode(createPlaylistRequest, args)
+    guard let raw = try await _rpc.request(27, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(createPlaylistResponse, raw)
+  }
+
+  public func onCreatePlaylist(_ handler: @escaping (CreatePlaylistRequest) async throws -> CreatePlaylistResponse) {
+    _handlers["@peartube/create-playlist"] = handler
+  }
+
+  // Request/response — client
+  public func updatePlaylist(_ args: UpdatePlaylistRequest) async throws -> UpdatePlaylistResponse {
+    let encoded = try _encode(updatePlaylistRequest, args)
+    guard let raw = try await _rpc.request(28, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(updatePlaylistResponse, raw)
+  }
+
+  public func onUpdatePlaylist(_ handler: @escaping (UpdatePlaylistRequest) async throws -> UpdatePlaylistResponse) {
+    _handlers["@peartube/update-playlist"] = handler
+  }
+
+  // Request/response — client
+  public func deletePlaylist(_ args: DeletePlaylistRequest) async throws -> DeletePlaylistResponse {
+    let encoded = try _encode(deletePlaylistRequest, args)
+    guard let raw = try await _rpc.request(29, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(deletePlaylistResponse, raw)
+  }
+
+  public func onDeletePlaylist(_ handler: @escaping (DeletePlaylistRequest) async throws -> DeletePlaylistResponse) {
+    _handlers["@peartube/delete-playlist"] = handler
+  }
+
+  // Request/response — client
+  public func addToPlaylist(_ args: AddToPlaylistRequest) async throws -> AddToPlaylistResponse {
+    let encoded = try _encode(addToPlaylistRequest, args)
+    guard let raw = try await _rpc.request(30, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(addToPlaylistResponse, raw)
+  }
+
+  public func onAddToPlaylist(_ handler: @escaping (AddToPlaylistRequest) async throws -> AddToPlaylistResponse) {
+    _handlers["@peartube/add-to-playlist"] = handler
+  }
+
+  // Request/response — client
+  public func removeFromPlaylist(_ args: RemoveFromPlaylistRequest) async throws -> RemoveFromPlaylistResponse {
+    let encoded = try _encode(removeFromPlaylistRequest, args)
+    guard let raw = try await _rpc.request(31, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(removeFromPlaylistResponse, raw)
+  }
+
+  public func onRemoveFromPlaylist(_ handler: @escaping (RemoveFromPlaylistRequest) async throws -> RemoveFromPlaylistResponse) {
+    _handlers["@peartube/remove-from-playlist"] = handler
+  }
+
+  // Request/response — client
+  public func logWatchHistory(_ args: LogWatchHistoryRequest) async throws -> LogWatchHistoryResponse {
+    let encoded = try _encode(logWatchHistoryRequest, args)
+    guard let raw = try await _rpc.request(32, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(logWatchHistoryResponse, raw)
+  }
+
+  public func onLogWatchHistory(_ handler: @escaping (LogWatchHistoryRequest) async throws -> LogWatchHistoryResponse) {
+    _handlers["@peartube/log-watch-history"] = handler
+  }
+
+  // Request/response — client
+  public func getWatchHistory(_ args: GetWatchHistoryRequest) async throws -> GetWatchHistoryResponse {
+    let encoded = try _encode(getWatchHistoryRequest, args)
+    guard let raw = try await _rpc.request(33, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getWatchHistoryResponse, raw)
+  }
+
+  public func onGetWatchHistory(_ handler: @escaping (GetWatchHistoryRequest) async throws -> GetWatchHistoryResponse) {
+    _handlers["@peartube/get-watch-history"] = handler
+  }
+
+  // Request/response — client
+  public func getResumePosition(_ args: GetResumePositionRequest) async throws -> GetResumePositionResponse {
+    let encoded = try _encode(getResumePositionRequest, args)
+    guard let raw = try await _rpc.request(34, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getResumePositionResponse, raw)
+  }
+
+  public func onGetResumePosition(_ handler: @escaping (GetResumePositionRequest) async throws -> GetResumePositionResponse) {
+    _handlers["@peartube/get-resume-position"] = handler
+  }
+
+  // Request/response — client
+  public func listResumePositions(_ args: ListResumePositionsRequest) async throws -> ListResumePositionsResponse {
+    let encoded = try _encode(listResumePositionsRequest, args)
+    guard let raw = try await _rpc.request(35, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(listResumePositionsResponse, raw)
+  }
+
+  public func onListResumePositions(_ handler: @escaping (ListResumePositionsRequest) async throws -> ListResumePositionsResponse) {
+    _handlers["@peartube/list-resume-positions"] = handler
+  }
+
+  // Request/response — client
+  public func setPersonalSetting(_ args: SetPersonalSettingRequest) async throws -> SetPersonalSettingResponse {
+    let encoded = try _encode(setPersonalSettingRequest, args)
+    guard let raw = try await _rpc.request(36, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setPersonalSettingResponse, raw)
+  }
+
+  public func onSetPersonalSetting(_ handler: @escaping (SetPersonalSettingRequest) async throws -> SetPersonalSettingResponse) {
+    _handlers["@peartube/set-personal-setting"] = handler
+  }
+
+  // Request/response — client
+  public func getPersonalSettings(_ args: GetPersonalSettingsRequest) async throws -> GetPersonalSettingsResponse {
+    let encoded = try _encode(getPersonalSettingsRequest, args)
+    guard let raw = try await _rpc.request(37, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPersonalSettingsResponse, raw)
+  }
+
+  public func onGetPersonalSettings(_ handler: @escaping (GetPersonalSettingsRequest) async throws -> GetPersonalSettingsResponse) {
+    _handlers["@peartube/get-personal-settings"] = handler
+  }
+
+  // Request/response — client
+  public func provisionPersonalEncryption(_ args: ProvisionPersonalEncryptionRequest) async throws -> ProvisionPersonalEncryptionResponse {
+    let encoded = try _encode(provisionPersonalEncryptionRequest, args)
+    guard let raw = try await _rpc.request(38, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(provisionPersonalEncryptionResponse, raw)
+  }
+
+  public func onProvisionPersonalEncryption(_ handler: @escaping (ProvisionPersonalEncryptionRequest) async throws -> ProvisionPersonalEncryptionResponse) {
+    _handlers["@peartube/provision-personal-encryption"] = handler
+  }
+
+  // Request/response — client
+  public func getPersonalEncryptionSecret(_ args: GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse {
+    let encoded = try _encode(getPersonalEncryptionSecretRequest, args)
+    guard let raw = try await _rpc.request(39, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPersonalEncryptionSecretResponse, raw)
+  }
+
+  public func onGetPersonalEncryptionSecret(_ handler: @escaping (GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse) {
+    _handlers["@peartube/get-personal-encryption-secret"] = handler
+  }
+
   private func _dispatchRequest(_ req: IncomingRequest) async {
     switch req.command {
     case 0:   // @peartube/create-identity
@@ -2860,6 +3085,201 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(prepareLivePlaybackRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(prepareLivePlaybackResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 25:   // @peartube/get-playlists
+      guard let handler = _handlers["@peartube/get-playlists"] as? (GetPlaylistsRequest) async throws -> GetPlaylistsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPlaylistsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPlaylistsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 26:   // @peartube/get-playlist-items
+      guard let handler = _handlers["@peartube/get-playlist-items"] as? (GetPlaylistItemsRequest) async throws -> GetPlaylistItemsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPlaylistItemsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPlaylistItemsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 27:   // @peartube/create-playlist
+      guard let handler = _handlers["@peartube/create-playlist"] as? (CreatePlaylistRequest) async throws -> CreatePlaylistResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(createPlaylistRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(createPlaylistResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 28:   // @peartube/update-playlist
+      guard let handler = _handlers["@peartube/update-playlist"] as? (UpdatePlaylistRequest) async throws -> UpdatePlaylistResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(updatePlaylistRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(updatePlaylistResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 29:   // @peartube/delete-playlist
+      guard let handler = _handlers["@peartube/delete-playlist"] as? (DeletePlaylistRequest) async throws -> DeletePlaylistResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(deletePlaylistRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(deletePlaylistResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 30:   // @peartube/add-to-playlist
+      guard let handler = _handlers["@peartube/add-to-playlist"] as? (AddToPlaylistRequest) async throws -> AddToPlaylistResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(addToPlaylistRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(addToPlaylistResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 31:   // @peartube/remove-from-playlist
+      guard let handler = _handlers["@peartube/remove-from-playlist"] as? (RemoveFromPlaylistRequest) async throws -> RemoveFromPlaylistResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(removeFromPlaylistRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(removeFromPlaylistResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 32:   // @peartube/log-watch-history
+      guard let handler = _handlers["@peartube/log-watch-history"] as? (LogWatchHistoryRequest) async throws -> LogWatchHistoryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(logWatchHistoryRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(logWatchHistoryResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 33:   // @peartube/get-watch-history
+      guard let handler = _handlers["@peartube/get-watch-history"] as? (GetWatchHistoryRequest) async throws -> GetWatchHistoryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getWatchHistoryRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getWatchHistoryResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 34:   // @peartube/get-resume-position
+      guard let handler = _handlers["@peartube/get-resume-position"] as? (GetResumePositionRequest) async throws -> GetResumePositionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getResumePositionRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getResumePositionResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 35:   // @peartube/list-resume-positions
+      guard let handler = _handlers["@peartube/list-resume-positions"] as? (ListResumePositionsRequest) async throws -> ListResumePositionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(listResumePositionsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(listResumePositionsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 36:   // @peartube/set-personal-setting
+      guard let handler = _handlers["@peartube/set-personal-setting"] as? (SetPersonalSettingRequest) async throws -> SetPersonalSettingResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setPersonalSettingRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setPersonalSettingResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 37:   // @peartube/get-personal-settings
+      guard let handler = _handlers["@peartube/get-personal-settings"] as? (GetPersonalSettingsRequest) async throws -> GetPersonalSettingsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPersonalSettingsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPersonalSettingsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 38:   // @peartube/provision-personal-encryption
+      guard let handler = _handlers["@peartube/provision-personal-encryption"] as? (ProvisionPersonalEncryptionRequest) async throws -> ProvisionPersonalEncryptionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(provisionPersonalEncryptionRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(provisionPersonalEncryptionResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 39:   // @peartube/get-personal-encryption-secret
+      guard let handler = _handlers["@peartube/get-personal-encryption-secret"] as? (GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPersonalEncryptionSecretRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPersonalEncryptionSecretResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }

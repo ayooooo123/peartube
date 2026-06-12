@@ -37,13 +37,3 @@ export function mapHydratedVerticalFeedVideos<T = any>(
 
 export function clearHydratedFeedChannels(hydratedChannelsRef: { current?: { clear?: () => void } } | null | undefined): void
 
-export function warmNextPlaybackUrls(options: {
-  videos: any[]
-  activeIndex: number
-  makePlaybackRequest: (video: any) => { cacheKey?: string | null; playbackRequest: any }
-  getCachedVideoUrl: (cacheKey: string, options?: { requireReady?: boolean }) => string | null | undefined
-  setCachedVideoUrl: (cacheKey: string, url: string, readyForPlayback?: boolean) => void
-  preparePlayback?: (request: any) => Promise<{ url?: string | null; selectedBlobWarmup?: { readyForPlayback?: boolean } | null } | null | undefined>
-  windowSize?: number
-  inflightPlaybackWarmups?: { current?: Set<string> } | null
-}): Promise<void>

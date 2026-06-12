@@ -34,11 +34,9 @@ import {
   mergeUniqueFeedVideos,
   mergeVerticalFeedEntries,
   pruneHydratedFeedChannels,
-  warmNextPlaybackUrls,
   withFeedTimeout,
 } from '@/lib/discover-feed-controller'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
-import { isWaitingForSelectedBlob, preparePlaybackWhenReady } from '@/lib/playback-readiness'
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
 import { formatTimeAgo } from '@/lib/formatters'
@@ -169,7 +167,6 @@ export default function VerticalDiscoveryScreen() {
   const playbackRequestSeqRef = useRef(0)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
   const feedLoadInFlightRef = useRef(false)
-  const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
 
   const loadSwarmStatus = useCallback(async () => {
     if (!rpc) return
@@ -426,15 +423,14 @@ export default function VerticalDiscoveryScreen() {
     const isStalePlaybackRequest = () => pendingPlayKeyRef.current !== playKey || playbackRequestSeqRef.current !== requestSeq
 
     try {
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
+        // Instant replay from the in-memory URL cache. Re-resolve in the
+        // background to refresh the entry and keep the blob core joined to
+        // swarm discovery so the player can keep streaming on demand.
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (isStalePlaybackRequest()) return
-          if (result?.url && !isWaitingForSelectedBlob(result)) {
-            if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
-            setShortsVideoUrl(result.url)
-            setShortsPlaybackSession((prev) => prev + 1)
-          }
+          if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
         }).catch(() => undefined)
         if (isStalePlaybackRequest()) return
         setShortsVideoUrl(cachedUrl)
@@ -444,19 +440,12 @@ export default function VerticalDiscoveryScreen() {
       }
       setShortsLoading(true)
       setShortsPlaybackMessage({ key: playKey, text: 'Fetching video from peers…' })
-      const result = await preparePlaybackWhenReady({
-        preparePlayback: rpc.preparePlayback.bind(rpc),
-        playbackRequest,
-        isCurrent: () => !isStalePlaybackRequest(),
-      })
+      // Resolve-and-stream: hand the blob-server URL to the player and let it
+      // fetch byte ranges on demand. No prewarming.
+      const result = await rpc.preparePlayback(playbackRequest)
       if (isStalePlaybackRequest() || !result) return
-      // Best-effort warmup, not a gate: after the bounded readiness retries,
-      // play the resolved URL regardless of head-block warmup and let the blob
-      // server stream on demand (same as the full-screen player). The old
-      // readiness gate left slow single-peer links stuck on a non-retrying
-      // "try again" toast even while the bytes were still arriving.
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         setShortsPlaybackMessage(null)
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
@@ -481,19 +470,6 @@ export default function VerticalDiscoveryScreen() {
     setShortsChromeVisible(true)
     void playVideo(activeVideo)
   }, [activeVideo, playVideo, ready])
-
-  useEffect(() => {
-    if (!rpc) return
-    void warmNextPlaybackUrls({
-      videos,
-      activeIndex,
-      makePlaybackRequest,
-      getCachedVideoUrl,
-      setCachedVideoUrl,
-      preparePlayback: rpc.preparePlayback?.bind(rpc),
-      inflightPlaybackWarmups,
-    })
-  }, [activeIndex, makePlaybackRequest, rpc, videos])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)

@@ -2,9 +2,22 @@ import test from 'brittle'
 
 import { createApi } from '../src/api.js'
 
-test('preparePlayback returns a playable URL before warmup settles or fails', async (t) => {
+test('preparePlayback returns a streamable URL and stats without prewarming', async (t) => {
   const api = createApi({ ctx: {} })
   const calls = []
+  const statsValue = {
+    status: 'unknown',
+    progress: 0,
+    totalBlocks: 0,
+    downloadedBlocks: 0,
+    totalBytes: 0,
+    downloadedBytes: 0,
+    peerCount: 0,
+    swarmConnections: 0,
+    speedMBps: '0',
+    elapsed: 0,
+    isComplete: false,
+  }
 
   api.getVideoUrl = async (...args) => {
     calls.push(['getVideoUrl', args])
@@ -13,24 +26,12 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
 
   api.prefetchVideo = async (...args) => {
     calls.push(['prefetchVideo', args])
-    throw new Error('warmup failed')
+    throw new Error('prefetch must not run during playback')
   }
 
   api.getVideoStats = (...args) => {
     calls.push(['getVideoStats', args])
-    return {
-      status: 'unknown',
-      progress: 0,
-      totalBlocks: 0,
-      downloadedBlocks: 0,
-      totalBytes: 0,
-      downloadedBytes: 0,
-      peerCount: 0,
-      swarmConnections: 0,
-      speedMBps: '0',
-      elapsed: 0,
-      isComplete: false,
-    }
+    return { ...statsValue }
   }
 
   const result = await api.preparePlayback(
@@ -43,33 +44,15 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
   )
 
   t.is(result.url, 'http://127.0.0.1:60023/video.mp4')
-  t.alike(result.stats, {
-    status: 'unknown',
-    progress: 0,
-    totalBlocks: 0,
-    downloadedBlocks: 0,
-    totalBytes: 0,
-    downloadedBytes: 0,
-    peerCount: 0,
-    swarmConnections: 0,
-    speedMBps: '0',
-    elapsed: 0,
-    isComplete: false,
-  })
-  t.is(result.warmupStarted, true)
-  t.is(result.peerWarmupStarted, true)
-  t.alike(result.peerWarmup, {
-    peerCount: 0,
-    blobPeerIds: [],
-    retained: false,
-    timedOut: false,
-  })
-  t.is(result.selectedBlobWarmup.readyForPlayback, false)
-  t.is(result.selectedBlobWarmup.error, 'invalid-blob-ref')
+  t.alike(result.stats, statsValue)
+  // No prewarming: just the streamable URL + stats, no warmup diagnostics.
+  t.is(result.warmupStarted, undefined)
+  t.is(result.peerWarmupStarted, undefined)
+  t.is(result.selectedBlobWarmup, undefined)
 
+  // preparePlayback resolves the URL then reads stats — and never prefetches.
   t.alike(calls, [
     ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
-    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
     ['getVideoStats', ['channel-key', 'videos/demo.mp4']],
   ])
 })
@@ -158,12 +141,15 @@ test('preparePlayback resolves feed preview blob refs when playback request omit
   const result = await api.preparePlayback(driveKey, 'feed-video', publicBeeKey)
 
   t.is(result.url, 'http://127.0.0.1:60023/feed-video.webm')
-  t.is(result.peerWarmupStarted, true)
-  t.is(result.selectedBlobWarmup.blobId, blobId)
-  t.is(result.selectedBlobWarmup.blobsCoreKey, blobsCoreKey)
-  t.is(result.selectedBlobWarmup.readyForPlayback, true)
+  t.alike(result.stats, { peerCount: 1 })
+  t.is(result.selectedBlobWarmup, undefined)
   t.ok(calls.some((call) => call[0] === 'getLink' && call[2] === 'video/webm'), 'uses feed preview mime type for the blob-server URL')
-  t.ok(calls.some((call) => call[0] === 'swarm.join'), 'joins selected blob discovery before returning playback diagnostics')
+
+  // The blob core joins swarm discovery so the blob server can stream byte
+  // ranges on demand. The join is fired (not awaited) during URL resolution,
+  // so flush the microtask that follows blobsCore.ready().
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  t.ok(calls.some((call) => call[0] === 'swarm.join'), 'joins selected blob discovery so the blob server can stream on demand')
 })
 
 test('prefetchNextVideos lists channel videos with the correct signature', async (t) => {

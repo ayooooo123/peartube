@@ -20,7 +20,6 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
-import { isWaitingForSelectedBlob, preparePlaybackWhenReady } from '@/lib/playback-readiness'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-virtualization'
 import {
@@ -250,7 +249,6 @@ export default function HomeScreen() {
   const thumbnailCacheRef = useRef(thumbnailCache)
   thumbnailCacheRef.current = thumbnailCache
   const inflightThumbnailFetches = useRef<Set<string>>(new Set())
-  const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
   const appState = useRef<AppStateStatus>(AppState.currentState)
 
   // Fetch thumbnail for a video (non-blocking)
@@ -304,37 +302,6 @@ export default function HomeScreen() {
       }
     }
   }, [fetchThumbnail])
-
-  const warmPlaybackUrl = useCallback(async (video: VideoData) => {
-    if (!rpc || !video?.channelKey) return
-    const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
-      ? video.path
-      : video.id
-    const videoAny = video as any
-    const cacheKey = makeVideoUrlCacheKey(
-      video.channelKey,
-      videoRef,
-      videoAny.blobId || undefined,
-      videoAny.blobsCoreKey || undefined,
-    )
-    if (!cacheKey || getCachedVideoUrl(cacheKey) || inflightPlaybackWarmups.current.has(cacheKey)) return
-    inflightPlaybackWarmups.current.add(cacheKey)
-    try {
-      const result = await rpc.preparePlayback({
-        channelKey: video.channelKey,
-        videoId: videoRef,
-        publicBeeKey: videoAny.publicBeeKey || undefined,
-        blobId: videoAny.blobId || undefined,
-        blobsCoreKey: videoAny.blobsCoreKey || undefined,
-        mimeType: videoAny.mimeType || undefined,
-      })
-      if (result?.url) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
-    } catch {
-      // Best-effort URL warming; playback still resolves on tap.
-    } finally {
-      inflightPlaybackWarmups.current.delete(cacheKey)
-    }
-  }, [rpc])
 
   // Effects that depend on loadPublicFeed/refreshFeed are declared below those callbacks.
 
@@ -890,7 +857,7 @@ export default function HomeScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -900,34 +867,25 @@ export default function HomeScreen() {
         mimeType: videoAny.mimeType || undefined,
       }
       if (cachedUrl) {
+        // Instant replay from the in-memory URL cache. Re-resolve in the
+        // background to refresh the entry and keep the blob core joined to
+        // swarm discovery so the player can keep streaming on demand.
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (!isCurrentPlaybackRequest()) return
-          if (result?.url && !isWaitingForSelectedBlob(result)) {
-            if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
-            loadAndPlayVideo(video, result.url)
-          }
+          if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
         }).catch(() => {})
         loadAndPlayVideo(video, cachedUrl)
         return
       }
       const playKey = getHomePlaybackKey(video)
       setPlaybackFetchState({ key: playKey, message: 'Fetching video from peers…' })
-      const result = await preparePlaybackWhenReady({
-        preparePlayback: rpc.preparePlayback.bind(rpc),
-        playbackRequest,
-        isCurrent: isCurrentPlaybackRequest,
-      })
+      // Resolve-and-stream: get the blob-server URL and hand it to the player,
+      // which fetches byte ranges on demand. No prewarming.
+      const result = await rpc.preparePlayback(playbackRequest)
       if (!isCurrentPlaybackRequest() || !result) return
 
-      // The bounded readiness wait is a best-effort pre-buffer, not a gate:
-      // once we have a blob-server URL, play it and let the server stream the
-      // head block on demand (core.get(..., { wait: true })) — same as the
-      // full-screen player in video/[id].tsx. Gating on selected-blob warmup
-      // readiness here left slow single-peer links (e.g. Android with one peer
-      // and no fresh gossip) stuck on a non-retrying "try again" toast even
-      // though the bytes were still arriving.
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         setPlaybackFetchState((state) => state?.key === playKey ? null : state)
         loadAndPlayVideo(video, result.url)
       } else {
@@ -964,7 +922,7 @@ export default function HomeScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -974,30 +932,23 @@ export default function HomeScreen() {
         mimeType: videoAny.mimeType || undefined,
       }
       if (cachedUrl) {
+        // Instant replay from the in-memory URL cache (see playVideo).
         void rpc.preparePlayback(playbackRequest).then((result: any) => {
           if (!isCurrentPlaybackRequest()) return
-          if (result?.url && !isWaitingForSelectedBlob(result)) {
-            if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
-            loadAndPlayVideo(video, result.url)
-          }
+          if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
         }).catch(() => {})
         loadAndPlayVideo(video, cachedUrl)
         return
       }
       const playKey = getHomePlaybackKey(video)
       setPlaybackFetchState({ key: playKey, message: 'Fetching video from peers…' })
-      const result = await preparePlaybackWhenReady({
-        preparePlayback: rpc.preparePlayback.bind(rpc),
-        playbackRequest,
-        isCurrent: isCurrentPlaybackRequest,
-      })
+      // Resolve-and-stream: hand the blob-server URL to the player and let it
+      // fetch byte ranges on demand. No prewarming.
+      const result = await rpc.preparePlayback(playbackRequest)
       if (!isCurrentPlaybackRequest() || !result) return
 
-      // Best-effort warmup, not a gate: play the resolved URL after the bounded
-      // readiness wait and let the blob server stream the head block on demand
-      // (same as the full-screen player). See playVideo above.
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         setPlaybackFetchState((state) => state?.key === playKey ? null : state)
         // Load video into the overlay player (animates from mini to fullscreen)
         loadAndPlayVideo(video, result.url)
@@ -1072,13 +1023,6 @@ export default function HomeScreen() {
         thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
       }
     })
-
-  useEffect(() => {
-    const nextVideos = feedVideosWithThumbs.slice(0, 4)
-    for (const video of nextVideos) {
-      void warmPlaybackUrl(video)
-    }
-  }, [feedVideosWithThumbs, warmPlaybackUrl])
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)

@@ -177,30 +177,3 @@ export function mapHydratedVerticalFeedVideos(entry, videoList, { identityDriveK
 export function clearHydratedFeedChannels(hydratedChannelsRef) {
   hydratedChannelsRef?.current?.clear?.()
 }
-
-export async function warmNextPlaybackUrls({
-  videos,
-  activeIndex,
-  makePlaybackRequest,
-  getCachedVideoUrl,
-  setCachedVideoUrl,
-  preparePlayback,
-  windowSize = 4,
-  inflightPlaybackWarmups = null,
-}) {
-  const nextVideos = (videos || []).slice(activeIndex + 1, activeIndex + 1 + windowSize)
-
-  await Promise.allSettled(nextVideos.map(async (video) => {
-    const { cacheKey, playbackRequest } = makePlaybackRequest(video)
-    if (cacheKey && getCachedVideoUrl(cacheKey, { requireReady: true })) return null
-    if (cacheKey && inflightPlaybackWarmups?.current?.has?.(cacheKey)) return null
-    if (cacheKey) inflightPlaybackWarmups?.current?.add?.(cacheKey)
-    try {
-      const result = await preparePlayback?.(playbackRequest)
-      if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result?.selectedBlobWarmup?.readyForPlayback))
-      return result?.url || null
-    } finally {
-      if (cacheKey) inflightPlaybackWarmups?.current?.delete?.(cacheKey)
-    }
-  }))
-}

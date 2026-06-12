@@ -1,7 +1,6 @@
 type CacheEntry = {
   url: string
   expiresAt: number
-  readyForPlayback?: boolean
 }
 
 const VIDEO_URL_CACHE_TTL_MS = 2 * 60 * 1000
@@ -19,7 +18,7 @@ export function makeVideoUrlCacheKey(
   return `${normalizedChannelKey}:${normalizedVideoRef}:${blobId || ''}:${blobsCoreKey || ''}`
 }
 
-export function getCachedVideoUrl(cacheKey: string, options: { requireReady?: boolean } = {}): string | null {
+export function getCachedVideoUrl(cacheKey: string): string | null {
   const now = Date.now()
   const cached = videoUrlCache.get(cacheKey)
   if (!cached) return null
@@ -27,14 +26,12 @@ export function getCachedVideoUrl(cacheKey: string, options: { requireReady?: bo
     videoUrlCache.delete(cacheKey)
     return null
   }
-  if (options.requireReady && !cached.readyForPlayback) return null
   return cached.url
 }
 
-export function setCachedVideoUrl(cacheKey: string, url: string, readyForPlayback?: boolean): void {
+export function setCachedVideoUrl(cacheKey: string, url: string): void {
   videoUrlCache.set(cacheKey, {
     url,
-    readyForPlayback,
     expiresAt: Date.now() + VIDEO_URL_CACHE_TTL_MS,
   })
 }

@@ -330,12 +330,11 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     })
   }, [loadInitialData, startupLog])
 
-  // Subscribe to video load events to trigger prefetch
+  // Subscribe to video load events to drive the stats-polling fallback
   useEffect(() => {
     if (!ready || !platformRPC) return
 
     const unsubscribe = videoLoadEventEmitter.subscribe(async (video: VideoData) => {
-      console.log('[App] Video loaded, starting prefetch for:', video.title)
       try {
         const resolvedChannelKey =
           video.channelKey
@@ -349,23 +348,9 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
           ? video.path
           : video.id
         if (!resolvedChannelKey) {
-          console.log('[App] Prefetch skipped: missing channel key for video', videoRef)
+          console.log('[App] Stats polling skipped: missing channel key for video', videoRef)
           return
         }
-        await platformRPC.rpc.prefetchVideo({
-          channelKey: resolvedChannelKey,
-          videoId: videoRef,
-          publicBeeKey: (video as any).publicBeeKey || undefined
-        })
-        console.log('[App] prefetchVideo sent for:', videoRef)
-
-        setTimeout(() => {
-          platformRPC.rpc.prefetchNextVideos?.(resolvedChannelKey, videoRef, 3).then((res: any) => {
-            if (res?.prefetchedCount > 0) {
-              console.log('[App] Prefetching', res.prefetchedCount, 'next videos in background')
-            }
-          }).catch(() => {})
-        }, 1500)
 
         // Fallback: poll getVideoStats and feed into the context emitter.
         // Some mobile runtimes can be flaky with push events (eventVideoStats) over BareKit IPC.
@@ -415,7 +400,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
           statsPollersRef.current.set(pollKey, interval)
         }
       } catch (err) {
-        console.error('[App] Failed to start prefetch:', err)
+        console.error('[App] Failed to start stats polling:', err)
       }
     })
 

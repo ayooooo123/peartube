@@ -504,28 +504,6 @@ export function createApi({
     }
   }
 
-  function addPeerId(set, value) {
-    if (typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)) set.add(value.toLowerCase())
-  }
-
-  function collectHintPeerIds(hints = []) {
-    const sourceFeedPeerIds = new Set()
-    const sourceRelayPeerIds = new Set()
-    for (const hint of hints || []) {
-      addPeerId(sourceFeedPeerIds, hint?.sourceFeedPeerId)
-      addPeerId(sourceRelayPeerIds, hint?.sourcePeerId)
-      addPeerId(sourceRelayPeerIds, hint?.sourceFeedPeerId)
-      addPeerId(sourceRelayPeerIds, hint?.relayPeerId)
-      if (Array.isArray(hint?.sourceFeedPeerIds)) for (const id of hint.sourceFeedPeerIds) addPeerId(sourceFeedPeerIds, id)
-      if (Array.isArray(hint?.sourceRelayPeerIds)) for (const id of hint.sourceRelayPeerIds) addPeerId(sourceRelayPeerIds, id)
-      if (Array.isArray(hint?.relayHintIds)) for (const id of hint.relayHintIds) addPeerId(sourceRelayPeerIds, id)
-    }
-    return {
-      sourceFeedPeerIds: Array.from(sourceFeedPeerIds),
-      sourceRelayPeerIds: Array.from(sourceRelayPeerIds),
-    }
-  }
-
   function hintMatchesBlobRef(hint, video) {
     if (!hint || !video) return false
     if (hint.id && video.id && hint.id !== video.id) return false
@@ -1208,107 +1186,46 @@ export function createApi({
     },
 
     /**
-     * Prepare normal watch playback without forcing the UI to orchestrate warmup and URL resolution separately.
-     * Warmup is best-effort and must not block returning a playable blob-server URL.
+     * Prepare watch playback by resolving a streamable blob-server URL. Playback
+     * is pure on-demand streaming — the blob server fetches byte ranges from
+     * peers as the player requests them. No head-block warmup or prefetching.
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey]
      * @param {string} [blobId]
      * @param {string} [blobsCoreKey]
      * @param {string} [mimeType]
-     * @returns {Promise<{url: string, stats: Object, warmupStarted: boolean, selectedBlobWarmup?: Object}>}
+     * @returns {Promise<{url: string, stats: Object}>}
      */
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
       const startedAt = Date.now()
-      const timingRecord = trackPlaybackTiming({
+
+      // Resolve-and-stream: getVideoUrl returns a blob-server URL and joins the
+      // blob core to swarm discovery so the server can fetch byte ranges on
+      // demand. No head-block warmup or peer pre-fetching — the player streams
+      // straight off the URL.
+      const prepared = await blobPlayback.preparePlayback({
+        driveKey,
+        videoPath,
+        publicBeeKey,
+        blobId,
+        blobsCoreKey,
+        mimeType,
+        resolveUrl: (...args) => this.getVideoUrl(...args),
+        getStats: (...args) => this.getVideoStats(...args),
+      })
+
+      trackPlaybackTiming({
         at: startedAt,
         driveKey: driveKey ? String(driveKey).slice(0, 16) : null,
         videoId: videoPath || null,
-        stages: {},
+        stages: { totalMs: Date.now() - startedAt },
         readyForPlayback: null,
         peerCount: null,
         hasHeadBlock: null,
       })
 
-      const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
-      let sourcePeerDiagnostics = { sourceFeedPeerIds: [], sourceRelayPeerIds: [] }
-      const hasDirectBlobRef = Boolean(playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey)
-      // Known feed peers that announced this channel are available synchronously
-      // — promote them right away instead of waiting on any hint round trip.
-      if (hasDirectBlobRef && typeof publicFeed?.getEntryFeedPeerIds === 'function') {
-        try {
-          sourcePeerDiagnostics.sourceFeedPeerIds = publicFeed.getEntryFeedPeerIds(driveKey) || []
-        } catch { /* best effort */ }
-      }
-      // Fire the availability-hint request without blocking playback prep.
-      // Hints feed peer promotion inside the blob warmup as they arrive.
-      let peerHintsPromise = null
-      if (hasDirectBlobRef && publicFeed?.requestAvailabilityHints) {
-        peerHintsPromise = (async () => {
-          try {
-            const hints = await publicFeed.requestAvailabilityHints([{
-              driveKey,
-              publicBeeKey,
-              id: videoPath,
-              blobsCoreKey: playbackBlobRef.blobsCoreKey,
-              blobId: playbackBlobRef.blobId,
-            }], { timeoutMs: 500, maxPeers: 4 })
-            const matchingHints = Array.isArray(hints)
-              ? hints.filter((hint) => hintMatchesBlobRef(hint, {
-                id: videoPath,
-                blobsCoreKey: playbackBlobRef.blobsCoreKey,
-                blobId: playbackBlobRef.blobId,
-              }))
-              : []
-            const hinted = collectHintPeerIds(matchingHints)
-            sourcePeerDiagnostics = {
-              sourceFeedPeerIds: Array.from(new Set([...sourcePeerDiagnostics.sourceFeedPeerIds, ...hinted.sourceFeedPeerIds])),
-              sourceRelayPeerIds: Array.from(new Set([...sourcePeerDiagnostics.sourceRelayPeerIds, ...hinted.sourceRelayPeerIds])),
-            }
-          } catch { /* best effort */ }
-          timingRecord.stages.hintsMs = Date.now() - startedAt
-          return sourcePeerDiagnostics
-        })()
-      }
-      const promotePeerHints = publicFeed?.promoteAvailabilityHintPeers
-        ? (peerIds, topic) => publicFeed.promoteAvailabilityHintPeers(peerIds, topic)
-        : null
-
-      const prepared = await blobPlayback.preparePlayback({
-        driveKey,
-        videoPath,
-        publicBeeKey,
-        blobId: playbackBlobRef?.blobId,
-        blobsCoreKey: playbackBlobRef?.blobsCoreKey,
-        mimeType: playbackBlobRef?.mimeType,
-        warmSelectedBlob: Boolean(playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey),
-        sourceFeedPeerIds: sourcePeerDiagnostics.sourceFeedPeerIds,
-        sourceRelayPeerIds: sourcePeerDiagnostics.sourceRelayPeerIds,
-        promotePeerHints,
-        peerHintsPromise,
-        timingBaseMs: startedAt,
-        warmup: (...args) => this.prefetchVideo(...args),
-        resolveUrl: (...args) => this.getVideoUrl(...args),
-        getStats: (...args) => this.getVideoStats(...args),
-      })
-      Object.assign(timingRecord.stages, prepared?.timing || {})
-      timingRecord.stages.totalMs = Date.now() - startedAt
-      timingRecord.readyForPlayback = prepared?.selectedBlobWarmup?.readyForPlayback ?? null
-      timingRecord.peerCount = prepared?.selectedBlobWarmup?.peerCount ?? null
-      timingRecord.hasHeadBlock = prepared?.selectedBlobWarmup?.hasHeadBlock ?? null
-      if (prepared?.selectedBlobWarmup && prepared.selectedBlobWarmup.readyForPlayback !== true) {
-        const warm = prepared.selectedBlobWarmup
-        console.log(
-          '[API] preparePlayback unready:',
-          'blobCore=', playbackBlobRef?.blobsCoreKey?.slice(0, 16) || 'none',
-          'blobId=', playbackBlobRef?.blobId || 'none',
-          'blobPeers=', Number(warm.peerCount || 0),
-          'feedPeers=', sourcePeerDiagnostics.sourceFeedPeerIds.map((id) => id.slice(0, 16)).join(',') || 'none',
-          'relayHints=', sourcePeerDiagnostics.sourceRelayPeerIds.map((id) => id.slice(0, 16)).join(',') || 'none',
-          'hasHeadBlock=', Boolean(warm.hasHeadBlock)
-        )
-      }
       return prepared
     },
 

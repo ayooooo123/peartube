@@ -111,7 +111,7 @@ npm run bundle:backend  # bare-pack → backend.bundle.js
 1. `desktop:export` - Expo web export to `.desktop-export/`
 2. `desktop:merge` - Copy to `desktop-build/`
 3. `desktop:worker` - SWC compile `workers/desktop/index.ts` → `index.mjs`
-4. `desktop:bundle` - bare-pack `index.mjs` (+ `@peartube/backend` source) into a self-contained, runnable `index.bundle` (mtime-gated). The launcher prefers this bundle over the loose `.mjs`, so the `.app` runs one frozen artifact instead of a copied source tree.
+4. `desktop:bundle` - bare-pack `index.mjs` (+ `@peartube/backend` source) into a self-contained, runnable `index.bundle` (mtime-gated). `desktop:ecopy` ships **only** this bundle into the `.app` (no `node_modules/@peartube` source tree), and the launcher (`src/bun/index.ts`) loads it — so the `.app` runs one frozen artifact. Native addons are linked (`--linked`) to the dev monorepo, not copied.
 
 **Native Desktop Build (desktop:native:build):**
 1. `ensure:host-sidecar` - Bundle JS sidecar via bare-pack
@@ -172,7 +172,7 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 
 **"Cannot find module" in desktop builds:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`) and verify `packages/app/src/bun/index.ts` resolves the compiled worker under `desktop-build/build/workers/`. Rebuild with `npm run desktop:build`.
 
-**Desktop worker "does not provide an export named 'X'" (e.g. `createUniversalHrpcSurface` from `./universal-core.js`):** A **stale artifact**, not a code bug — the source already exports it. The Electrobun worker now loads a self-contained bare bundle: `desktop:bundle` (`scripts/build-desktop-bundle.mjs`) bare-packs `desktop-build/build/workers/core/index.mjs` (+ `@peartube/backend` source) into `index.bundle`, and the launcher (`src/bun/index.ts`) prefers that `.bundle` over the loose `.mjs` + copied `node_modules/@peartube/*` tree. The bundle is mtime-gated and rebuilt by both `desktop:build` and `desktop:start`, so a source change is picked up on the next launch. If you still hit this: the launched `.app` has a stale bundle (e.g. launched directly via Finder/`open` without `npm run desktop:start`). Fix: rebuild + relaunch with `cd packages/app && npm run desktop:start` (or a full `npm run desktop:dev`); force a rebuild with `PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle`.
+**Desktop worker "does not provide an export named 'X'" (e.g. `createUniversalHrpcSurface` from `./universal-core.js`):** A **stale artifact**, not a code bug — the source already exports it. The Electrobun worker loads a self-contained bare bundle: `desktop:bundle` (`scripts/build-desktop-bundle.mjs`) bare-packs `desktop-build/build/workers/core/index.mjs` (+ `@peartube/backend` source, all inlined) into `index.bundle`; `desktop:ecopy` ships only that bundle and the launcher (`src/bun/index.ts`) loads it. The `node_modules/@peartube/*` source rsync that used to go stale is gone. The bundle is mtime-gated and rebuilt by both `desktop:build` and `desktop:start`. **The launcher change ships in the bun main, which only recompiles via `electrobun build`** — if the log still shows it spawning `index.mjs` (not `index.bundle`), you're on the old launcher: run a full `npm run desktop` (= `desktop:dev`, which runs `electrobun build`) once. Force a bundle rebuild with `PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle`.
 
 **Native Desktop "Unsupported native bridge command: N":** The sidecar binary is stale. Rebuild: `cd packages/desktop-native && node scripts/build-native-sidecar.mjs`.
 

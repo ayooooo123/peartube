@@ -89,7 +89,10 @@ function getSourceNewestMtimeMs() {
   // entry: `desktop:worker` rewrites index.mjs on every build, so keying off it
   // would force a rebundle every launch. The bundle content only depends on the
   // traced source, and `workers/desktop` is included below.
-  let newest = 0
+  // Include this script's own mtime: when the packing logic/flags change (e.g.
+  // dropping --linked), the bundle must be rebuilt even if no source changed —
+  // otherwise a mtime-fresh bundle from the old logic is silently kept.
+  let newest = getMtimeMs(fileURLToPath(import.meta.url))
   for (const root of sourceRoots) newest = Math.max(newest, walkNewestMtimeMs(root))
   for (const filePath of sourceFiles) newest = Math.max(newest, getMtimeMs(filePath))
   return newest

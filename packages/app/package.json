@@ -86,7 +86,7 @@
     "expo-document-picker": "~56.0.4",
     "expo-file-system": "~56.0.7",
     "expo-font": "~56.0.5",
-    "expo-secure-store": "~15.0.7",
+    "expo-secure-store": "~56.0.4",
     "expo-haptics": "~56.0.3",
     "expo-image-picker": "~56.0.12",
     "expo-linear-gradient": "~56.0.4",

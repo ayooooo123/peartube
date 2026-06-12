@@ -35,16 +35,24 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:start should ensure a fresh bundle before launch',
   )
 
-  // ecopy must ship the whole workers/core dir so index.bundle lands in the .app.
+  // ecopy must ship the self-contained bundle into the .app...
   assert.match(
     scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/core\/ /,
-    'desktop:ecopy should copy the workers/core directory (including index.bundle)',
+    /rsync -a desktop-build\/build\/workers\/core\/index\.bundle /,
+    'desktop:ecopy should copy index.bundle into the .app',
+  )
+  // ...and must NOT rsync the raw @peartube source trees anymore (the bundle
+  // inlines all @peartube JS, so the copied node_modules tree was the stale
+  // load path we are eliminating).
+  assert.doesNotMatch(
+    scripts['desktop:ecopy'],
+    /packages\/(backend|host|core|protocol|spec)\//,
+    'desktop:ecopy should no longer rsync @peartube source packages',
   )
   assert.doesNotMatch(
     scripts['desktop:ecopy'],
-    /workers\/core\/index\.mjs build/,
-    'desktop:ecopy should no longer copy only index.mjs',
+    /node_modules\/@peartube/,
+    'desktop:ecopy should no longer create a node_modules/@peartube tree',
   )
 })
 

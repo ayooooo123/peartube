@@ -450,13 +450,16 @@ export default function VerticalDiscoveryScreen() {
         isCurrent: () => !isStalePlaybackRequest(),
       })
       if (isStalePlaybackRequest() || !result) return
-      if (result?.url && !isWaitingForSelectedBlob(result)) {
+      // Best-effort warmup, not a gate: after the bounded readiness retries,
+      // play the resolved URL regardless of head-block warmup and let the blob
+      // server stream on demand (same as the full-screen player). The old
+      // readiness gate left slow single-peer links stuck on a non-retrying
+      // "try again" toast even while the bytes were still arriving.
+      if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         setShortsPlaybackMessage(null)
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
-      } else if (result?.url && isWaitingForSelectedBlob(result)) {
-        setShortsPlaybackMessage({ key: playKey, text: 'Video is still fetching from peers. Try again shortly.', isError: true })
       } else {
         setShortsPlaybackMessage({ key: playKey, text: 'Could not prepare playback. Try again shortly.', isError: true })
       }

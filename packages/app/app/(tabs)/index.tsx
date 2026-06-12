@@ -919,12 +919,17 @@ export default function HomeScreen() {
       })
       if (!isCurrentPlaybackRequest() || !result) return
 
-      if (result?.url && !isWaitingForSelectedBlob(result)) {
+      // The bounded readiness wait is a best-effort pre-buffer, not a gate:
+      // once we have a blob-server URL, play it and let the server stream the
+      // head block on demand (core.get(..., { wait: true })) — same as the
+      // full-screen player in video/[id].tsx. Gating on selected-blob warmup
+      // readiness here left slow single-peer links (e.g. Android with one peer
+      // and no fresh gossip) stuck on a non-retrying "try again" toast even
+      // though the bytes were still arriving.
+      if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         setPlaybackFetchState((state) => state?.key === playKey ? null : state)
         loadAndPlayVideo(video, result.url)
-      } else if (result?.url && isWaitingForSelectedBlob(result)) {
-        setPlaybackFetchState({ key: playKey, message: 'Video is still fetching from peers. Try again shortly.', isError: true })
       } else {
         setPlaybackFetchState({ key: playKey, message: 'Could not prepare playback. Try again shortly.', isError: true })
       }
@@ -988,13 +993,14 @@ export default function HomeScreen() {
       })
       if (!isCurrentPlaybackRequest() || !result) return
 
-      if (result?.url && !isWaitingForSelectedBlob(result)) {
+      // Best-effort warmup, not a gate: play the resolved URL after the bounded
+      // readiness wait and let the blob server stream the head block on demand
+      // (same as the full-screen player). See playVideo above.
+      if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         setPlaybackFetchState((state) => state?.key === playKey ? null : state)
         // Load video into the overlay player (animates from mini to fullscreen)
         loadAndPlayVideo(video, result.url)
-      } else if (result?.url && isWaitingForSelectedBlob(result)) {
-        setPlaybackFetchState({ key: playKey, message: 'Video is still fetching from peers. Try again shortly.', isError: true })
       } else {
         setPlaybackFetchState({ key: playKey, message: 'Could not prepare playback. Try again shortly.', isError: true })
       }

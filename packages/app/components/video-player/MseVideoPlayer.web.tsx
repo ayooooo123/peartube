@@ -664,7 +664,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
           activeOutput = null
           try { oldOutput?.cancel?.()?.catch?.(() => {}) } catch {}
 
-          ;(async () => {
+          (async () => {
             try {
               if (sb!.updating) {
                 try { sb!.abort() } catch {}

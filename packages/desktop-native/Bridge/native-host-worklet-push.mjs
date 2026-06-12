@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-undef, @typescript-eslint/no-require-imports */
 import bareProcess from 'bare-process'
 import http1 from 'bare-http1'
 import os from 'bare-os'
@@ -56,6 +57,191 @@ async function loadBareFFmpeg() {
   })()
 
   return ffmpegLoadPromise
+}
+
+function writeLog(level, args) {
+  const rendered = args.map((value) => {
+    if (typeof value === 'string') return value
+
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return String(value)
+    }
+  }).join(' ')
+
+  try {
+    process.stderr?.write?.(`[native-host-worklet:${level}] ${rendered}\n`)
+  } catch {}
+}
+
+console.log = (...args) => writeLog('log', args)
+console.info = (...args) => writeLog('info', args)
+console.warn = (...args) => writeLog('warn', args)
+console.error = (...args) => writeLog('error', args)
+
+function formatError(error) {
+  if (!error) return 'Unknown error'
+  if (typeof error === 'string') return error
+  if (error instanceof Error) return error.stack || error.message
+
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+function createEmitter() {
+  const listeners = new Map()
+
+  return {
+    add(event, listener) {
+      if (!listeners.has(event)) listeners.set(event, new Set())
+      listeners.get(event).add(listener)
+    },
+    remove(event, listener) {
+      listeners.get(event)?.delete(listener)
+    },
+    emit(event, value) {
+      const eventListeners = listeners.get(event)
+      if (!eventListeners) return
+      for (const listener of eventListeners) listener(value)
+    }
+  }
+}
+
+function createLoopbackPair() {
+  const endpointA = createEndpoint()
+  const endpointB = createEndpoint()
+  endpointA.connect(endpointB)
+  endpointB.connect(endpointA)
+  return [endpointA.transport, endpointB.transport]
+}
+
+function createEndpoint() {
+  const emitter = createEmitter()
+  let peer = null
+  let destroyed = false
+
+  const transport = {
+    on(event, listener) {
+      emitter.add(event, listener)
+      return transport
+    },
+    once(event, listener) {
+      const wrapped = (value) => {
+        emitter.remove(event, wrapped)
+        listener(value)
+      }
+      emitter.add(event, wrapped)
+      return transport
+    },
+    off(event, listener) {
+      emitter.remove(event, listener)
+      return transport
+    },
+    removeListener(event, listener) {
+      emitter.remove(event, listener)
+      return transport
+    },
+    write(chunk) {
+      if (destroyed || !peer) return false
+      const payload = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      queueMicrotask(() => peer?.emit('data', payload))
+      return true
+    },
+    end(chunk) {
+      if (chunk !== undefined) transport.write(chunk)
+      destroyed = true
+      queueMicrotask(() => {
+        peer?.emit('end')
+        peer?.emit('close')
+        emitter.emit('close')
+      })
+      return transport
+    },
+    destroy(error) {
+      destroyed = true
+      queueMicrotask(() => {
+        if (error) peer?.emit('error', error)
+        peer?.emit('close')
+        emitter.emit('close')
+      })
+      return transport
+    }
+  }
+
+  return {
+    transport,
+    connect(other) {
+      peer = other
+    },
+    emit(event, value) {
+      emitter.emit(event, value)
+    }
+  }
+}
+
+function withTimeout(task, fallback, timeoutMs = 3000) {
+  return Promise.race([
+    Promise.resolve().then(task),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
+  ]).catch(() => fallback)
+}
+
+function createBridgeState() {
+  return {
+    hostSession: null,
+    client: null,
+    currentStoragePath: null,
+    feedUpdateCount: 0,
+    lastFeedUpdateAt: null,
+    lastBrowseSnapshot: createEmptyBrowseSnapshot(),
+  }
+}
+
+function defaultStoragePath() {
+  const override = process?.env?.PEARTUBE_NATIVE_STORAGE_PATH
+  if (override && override.length > 0) return override
+  return `${os.homedir()}/.peartube`
+}
+
+if (process?.env) {
+  process.env.PEARTUBE_NATIVE_EMBEDDED_BAREKIT = '1'
+}
+
+function writeStderr(line) {
+  try {
+    process.stderr?.write?.(`${line}\n`)
+  } catch {}
+}
+
+let debugFs = null
+let debugLogPath = null
+
+function resolveDebugLogPath() {
+  if (debugLogPath !== null) return debugLogPath
+  debugLogPath = process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
+  return debugLogPath
+}
+
+function getDebugFs() {
+  if (debugFs !== null) return debugFs
+
+  if (typeof require !== 'function') {
+    debugFs = null
+    return debugFs
+  }
+
+  try {
+    const required = require('bare-fs')
+    debugFs = required?.default || required
+  } catch {
+    debugFs = null
+  }
+
+  return debugFs
 }
 
 function writeDebugLog(line) {

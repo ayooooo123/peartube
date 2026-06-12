@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import http from 'bare-http1'
 
 import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'

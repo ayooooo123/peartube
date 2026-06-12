@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-undef, @typescript-eslint/no-require-imports */
 import bareProcess from 'bare-process'
 import http1 from 'bare-http1'
 import os from 'bare-os'
@@ -20,51 +21,11 @@ if (!globalThis.process?.stdin || !globalThis.process?.stdout || !globalThis.pro
   globalThis.process = bareProcess
 }
 
-const currentPlatform = os.platform()
-const isMpvSupported = currentPlatform === 'darwin' || currentPlatform === 'linux' || currentPlatform === 'win32'
-const defaultMpvWidth = 1280
-const defaultMpvHeight = 720
 const DIAGNOSTIC_READ_IDENTITY_KEY_FILE_COMMAND = 255
 
-let MpvPlayer = null
-let mpvLoadError = null
-let mpvLoadPromise = null
 let bareFFmpeg = null
 let ffmpegLoadError = null
 let ffmpegLoadPromise = null
-const mpvPlayers = new Map()
-let mpvPlayerIdCounter = 0
-let mpvFrameServer = null
-let mpvFrameServerPort = 0
-let mpvFrameServerReady = null
-
-async function loadBareMpv() {
-  if (MpvPlayer || mpvLoadError) return
-  if (mpvLoadPromise) return mpvLoadPromise
-
-  mpvLoadPromise = (async () => {
-    try {
-      if (typeof require === 'function') {
-        const required = require('../../bare-mpv/index.js')
-        MpvPlayer = required?.MpvPlayer ?? required?.default?.MpvPlayer ?? required?.default ?? required ?? null
-        if (MpvPlayer) return
-      }
-
-      const imported = await import('../../bare-mpv/index.js')
-      MpvPlayer = imported?.MpvPlayer ?? imported?.default?.MpvPlayer ?? imported?.default ?? null
-      if (!MpvPlayer) {
-        throw new Error('bare-mpv export missing MpvPlayer')
-      }
-
-      console.log('[native-host-worklet] bare-mpv loaded')
-    } catch (error) {
-      mpvLoadError = error?.message || String(error)
-      console.warn('[native-host-worklet] bare-mpv not available:', mpvLoadError)
-    }
-  })()
-
-  return mpvLoadPromise
-}
 
 async function loadBareFFmpeg() {
   if (bareFFmpeg || ffmpegLoadError) return
@@ -96,99 +57,6 @@ async function loadBareFFmpeg() {
   })()
 
   return ffmpegLoadPromise
-}
-
-if (!isMpvSupported) {
-  mpvLoadError = `bare-mpv not available on ${currentPlatform}`
-}
-
-function handleMpvFrameRequest(req, res) {
-  const cors = { 'Access-Control-Allow-Origin': '*' }
-
-  try {
-    if (req.method !== 'GET') {
-      res.writeHead(405, cors)
-      res.end()
-      return
-    }
-
-    const parts = (req.url || '/').split('?')[0].split('/').filter(Boolean)
-    if (parts[0] !== 'frame' || !parts[1]) {
-      res.writeHead(404, cors)
-      res.end()
-      return
-    }
-
-    const state = mpvPlayers.get(decodeURIComponent(parts[1]))
-    if (!state) {
-      res.writeHead(404, cors)
-      res.end()
-      return
-    }
-
-    if (!state.player.needsRender()) {
-      res.writeHead(204, cors)
-      res.end()
-      return
-    }
-
-    const frameData = state.player.renderFrame()
-    if (!frameData?.length) {
-      res.writeHead(204, cors)
-      res.end()
-      return
-    }
-
-    const buffer = Buffer.from(frameData)
-    res.writeHead(200, {
-      ...cors,
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': buffer.byteLength,
-      'Cache-Control': 'no-store',
-      'X-Frame-Width': String(state.width),
-      'X-Frame-Height': String(state.height),
-    })
-    res.end(buffer)
-  } catch {
-    try {
-      res.writeHead(500, cors)
-      res.end()
-    } catch {}
-  }
-}
-
-async function ensureMpvFrameServer() {
-  if (mpvFrameServerPort) return mpvFrameServerPort
-  if (mpvFrameServerReady) return mpvFrameServerReady
-
-  mpvFrameServerReady = new Promise((resolve, reject) => {
-    mpvFrameServer = http1.createServer(handleMpvFrameRequest)
-    mpvFrameServer.on('error', (error) => reject(error))
-    mpvFrameServer.listen(0, '127.0.0.1', () => {
-      mpvFrameServerPort = mpvFrameServer.address().port || 0
-      resolve(mpvFrameServerPort)
-    })
-  })
-
-  return mpvFrameServerReady
-}
-
-async function destroyAllMpvPlayers() {
-  for (const [playerId, state] of mpvPlayers) {
-    try {
-      state.player.destroy()
-    } catch {}
-    mpvPlayers.delete(playerId)
-  }
-
-  if (mpvFrameServer) {
-    try {
-      mpvFrameServer.close()
-    } catch {}
-    mpvFrameServer = null
-    mpvFrameServerPort = 0
-    mpvFrameServerReady = null
-  }
 }
 
 function writeLog(level, args) {
@@ -546,34 +414,8 @@ function encodeResultPayload(command, result) {
     return bridgeRPC.encodePayload(bridgeRPC.videoStatsResponseCodec, result)
   }
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvAvailable) {
-    return bridgeRPC.encodePayload(bridgeRPC.mpvAvailableResponseCodec, result)
-  }
-
   if (command === bridgeRPC.BRIDGE_COMMANDS.ffmpegDecodeAvailable) {
     return bridgeRPC.encodePayload(bridgeRPC.ffmpegDecodeAvailableResponseCodec, result)
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvCreate) {
-    return bridgeRPC.encodePayload(bridgeRPC.mpvCreateResponseCodec, result)
-  }
-
-  if (
-    command === bridgeRPC.BRIDGE_COMMANDS.mpvLoadFile ||
-    command === bridgeRPC.BRIDGE_COMMANDS.mpvPlay ||
-    command === bridgeRPC.BRIDGE_COMMANDS.mpvPause ||
-    command === bridgeRPC.BRIDGE_COMMANDS.mpvSeek ||
-    command === bridgeRPC.BRIDGE_COMMANDS.mpvDestroy
-  ) {
-    return bridgeRPC.encodePayload(bridgeRPC.mpvPlayerCommandResponseCodec, result)
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvGetState) {
-    return bridgeRPC.encodePayload(bridgeRPC.mpvGetStateResponseCodec, result)
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvRenderFrame) {
-    return bridgeRPC.encodePayload(bridgeRPC.mpvRenderFrameResponseCodec, result)
   }
 
   return Buffer.alloc(0)
@@ -718,7 +560,6 @@ function createChannelDataFetcher(client) {
 }
 
 async function shutdownBridge(state) {
-  await destroyAllMpvPlayers()
   await state.hostSession?.terminate?.()
   state.hostSession = null
   state.client = null
@@ -1037,199 +878,12 @@ async function handleRequest(state, request, onError) {
     }
   }
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvAvailable) {
-    await loadBareMpv()
-    return {
-      available: MpvPlayer !== null,
-      error: MpvPlayer ? null : (mpvLoadError || 'bare-mpv not available'),
-    }
-  }
-
   if (command === bridgeRPC.BRIDGE_COMMANDS.ffmpegDecodeAvailable) {
     await loadBareFFmpeg()
     return {
       available: bareFFmpeg !== null,
       error: bareFFmpeg ? null : (ffmpegLoadError || 'bare-ffmpeg not available'),
     }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvCreate) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvCreateRequestCodec, data)
-    await loadBareMpv()
-
-    if (!MpvPlayer) {
-      return {
-        success: false,
-        playerId: null,
-        frameServerPort: null,
-        error: mpvLoadError || 'bare-mpv not available',
-      }
-    }
-
-    try {
-      const width = Math.max(defaultMpvWidth, params.width || defaultMpvWidth)
-      const height = Math.max(defaultMpvHeight, params.height || defaultMpvHeight)
-      const frameServerPort = await ensureMpvFrameServer()
-      const playerId = `mpv_${++mpvPlayerIdCounter}`
-      const player = new MpvPlayer()
-      if (player.initialize() !== 0) {
-        throw new Error('Failed to initialize mpv')
-      }
-      player.initRender(width, height)
-      mpvPlayers.set(playerId, { player, width, height })
-      return { success: true, playerId, frameServerPort, error: null }
-    } catch (error) {
-      return {
-        success: false,
-        playerId: null,
-        frameServerPort: null,
-        error: error?.message || String(error),
-      }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvLoadFile) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvLoadFileRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) {
-      return { success: false, error: 'Player not found' }
-    }
-
-    try {
-      stateEntry.player.loadFile(params.url)
-      return { success: true, error: null }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvPlay) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.play()
-      return { success: true, error: null }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvPause) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.pause()
-      return { success: true, error: null }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvSeek) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvSeekRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.seek(params.time)
-      return { success: true, error: null }
-    } catch (error) {
-      return { success: false, error: error?.message || String(error) }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvGetState) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) {
-      return { success: false, currentTime: 0, duration: 0, paused: true, error: 'Player not found' }
-    }
-
-    try {
-      return {
-        success: true,
-        currentTime: stateEntry.player.currentTime || 0,
-        duration: stateEntry.player.duration || 0,
-        paused: stateEntry.player.paused ?? true,
-        error: null,
-      }
-    } catch {
-      return { success: false, currentTime: 0, duration: 0, paused: true, error: 'Failed to read state' }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvRenderFrame) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) {
-      return {
-        success: false,
-        hasFrame: false,
-        width: 0,
-        height: 0,
-        frameData: null,
-        error: 'Player not found',
-      }
-    }
-
-    try {
-      if (!stateEntry.player.needsRender()) {
-        return {
-          success: true,
-          hasFrame: false,
-          width: stateEntry.width,
-          height: stateEntry.height,
-          frameData: null,
-          error: null,
-        }
-      }
-
-      const frameData = stateEntry.player.renderFrame()
-      if (!frameData?.length) {
-        return {
-          success: true,
-          hasFrame: false,
-          width: stateEntry.width,
-          height: stateEntry.height,
-          frameData: null,
-          error: null,
-        }
-      }
-
-      return {
-        success: true,
-        hasFrame: true,
-        width: stateEntry.width,
-        height: stateEntry.height,
-        frameData: Buffer.from(frameData),
-        error: null,
-      }
-    } catch {
-      return {
-        success: false,
-        hasFrame: false,
-        width: stateEntry.width,
-        height: stateEntry.height,
-        frameData: null,
-        error: 'render failed',
-      }
-    }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvDestroy) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
-    if (!stateEntry) return { success: false, error: 'Player not found' }
-
-    try {
-      stateEntry.player.destroy()
-    } catch {}
-    mpvPlayers.delete(params.playerId)
-    return { success: true, error: null }
   }
 
   if (command === bridgeRPC.BRIDGE_COMMANDS.shutdown) {

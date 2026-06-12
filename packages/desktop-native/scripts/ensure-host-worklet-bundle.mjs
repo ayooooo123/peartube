@@ -37,7 +37,6 @@ const watchedRoots = [
   path.join(repoRoot, 'packages', 'backend', 'node_modules', 'rocksdb-native'),
   path.join(repoRoot, 'packages', 'app', 'node_modules', 'hypercore-storage'),
   path.join(repoRoot, 'packages', 'app', 'node_modules', 'rocksdb-native'),
-  path.join(repoRoot, 'packages', 'bare-mpv'),
   ...getSidecarAddonRoots(repoRoot),
 ]
 
@@ -166,11 +165,6 @@ function copyOrTransformSourceTree(tempRoot) {
   for (const root of transformedSourceRoots) {
     copyOrTransformDirectory(root, tempRoot)
   }
-
-  linkDirectory(
-    path.join(repoRoot, 'packages', 'bare-mpv'),
-    path.join(tempRoot, 'packages', 'bare-mpv')
-  )
 
   linkDirectory(findNodeModulesRoot(), path.join(tempRoot, 'node_modules'))
   linkPackageNodeModules(tempRoot, 'backend')

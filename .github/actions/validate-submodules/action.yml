@@ -18,9 +18,6 @@ runs:
             packages/bare-ffmpeg)
               expected="https://github.com/ayooooo123/bare-ffmpeg.git"
               ;;
-            packages/bare-mpv)
-              expected="https://github.com/ayooooo123/bare-mpv.git"
-              ;;
             *)
               echo "::error::Unexpected git submodule path in repository tree: $path"
               exit 1

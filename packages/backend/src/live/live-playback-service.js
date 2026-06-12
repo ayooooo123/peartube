@@ -2,7 +2,7 @@
  * Live Playback Service
  *
  * Renders a live core (see live-core-format.js) as standard live HLS on a
- * loopback HTTP server, so every player we ship (mpv, AVPlayer, ExoPlayer)
+ * loopback HTTP server, so every player we ship (AVPlayer, ExoPlayer, MSE)
  * consumes P2P live streams natively:
  *
  *   GET /live/<coreKeyHex>/playlist.m3u8   sliding-window playlist from core state

@@ -20,9 +20,6 @@ import {
   ffmpegDecodeAvailableResponseCodec,
   listChannelVideosRequestCodec,
   listChannelVideosResponseCodec,
-  mpvAvailableResponseCodec,
-  mpvCreateRequestCodec,
-  mpvCreateResponseCodec,
   searchRequestCodec,
   searchResponseCodec,
 } from './native-rpc.mjs'
@@ -31,7 +28,6 @@ const packageRoot = path.resolve(import.meta.dirname, '..')
 const bundlePath = path.join(packageRoot, 'Resources', 'Generated', 'native-host-sidecar.bundle')
 const bareRuntimePath = path.join(packageRoot, 'Resources', 'Runtime', 'bare')
 const linkedFrameworksPath = path.join(packageRoot, 'Vendor', 'BareAddons')
-const bareMpvPrebuildRoot = path.join(packageRoot, 'Resources', 'Generated', 'bare-mpv-prebuilds')
 
 function waitForResponse(child, id) {
   return new Promise((resolve, reject) => {
@@ -91,7 +87,6 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
     env: {
       ...process.env,
       DYLD_FRAMEWORK_PATH: linkedFrameworksPath,
-      BARE_MPV_PREBUILD_ROOT: bareMpvPrebuildRoot,
     },
   })
 
@@ -181,43 +176,6 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
     const listChannelVideosPayload = decodePayload(listChannelVideosResponseCodec, listChannelVideosResponse.data)
     assert.equal(listChannelVideosPayload.channelKey, activeChannelKey)
     assert.ok(Array.isArray(listChannelVideosPayload.videos))
-
-    const mpvAvailableFrame = encodeRequestFrame({
-      id: 6,
-      command: BRIDGE_COMMANDS.mpvAvailable,
-      data: null,
-    })
-
-    child.stdin.write(mpvAvailableFrame)
-
-    const mpvAvailableResponse = await waitForResponse(child, 6)
-    assert.equal(mpvAvailableResponse.isError, false)
-
-    const mpvAvailablePayload = decodePayload(mpvAvailableResponseCodec, mpvAvailableResponse.data)
-    assert.equal(typeof mpvAvailablePayload.available, 'boolean')
-    assert.equal(
-      mpvAvailablePayload.available ? mpvAvailablePayload.error === null : typeof mpvAvailablePayload.error === 'string',
-      true
-    )
-
-    if (process.platform === 'darwin') {
-      assert.equal(mpvAvailablePayload.available, true, mpvAvailablePayload.error || 'expected bare-mpv to be available on macOS')
-
-      const mpvCreateFrame = encodeRequestFrame({
-        id: 7,
-        command: BRIDGE_COMMANDS.mpvCreate,
-        data: encodePayload(mpvCreateRequestCodec, { width: 1280, height: 720 }),
-      })
-
-      child.stdin.write(mpvCreateFrame)
-
-      const mpvCreateResponse = await waitForResponse(child, 7)
-      assert.equal(mpvCreateResponse.isError, false)
-
-      const mpvCreatePayload = decodePayload(mpvCreateResponseCodec, mpvCreateResponse.data)
-      assert.equal(mpvCreatePayload.success, true, mpvCreatePayload.error || 'expected bare-mpv player creation to succeed')
-      assert.equal(typeof mpvCreatePayload.playerId, 'string')
-    }
 
     const ffmpegAvailableFrame = encodeRequestFrame({
       id: 8,

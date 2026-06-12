@@ -68,7 +68,7 @@ packages/
 │   ├── spec/schema/  # Generated JS schema encodings
 │   ├── spec/swift-hrpc/    # Generated Swift HRPC class
 │   └── spec/swift-schema/  # Generated Swift struct/codec definitions
-└── bare-*/           # Native addon submodules (bare-mpv, bare-tls, bare-ffmpeg)
+└── bare-*/           # Native addon submodules (bare-ffmpeg, bare-tls)
 ```
 
 ### Platform Architecture
@@ -117,8 +117,7 @@ npm run bundle:backend  # bare-pack → backend.bundle.js
 2. `build:native-sidecar` - Build PearTubeHost.app via bare-build (codesigned)
 3. `ensure:host-worklet` - Bundle BareKit worklet
 4. `ensure:host-worklet-frameworks` - Link native addon frameworks (deduped by package name)
-5. `ensure:bare-mpv-prebuilds` - Copy bare-mpv prebuilds (skips gracefully if unavailable)
-6. Xcode build → PearTubeDesktop.app
+5. Xcode build → PearTubeDesktop.app
 
 ## Key Files
 
@@ -154,7 +153,6 @@ This project uses the Holepunch stack:
 Mobile uses **react-native-bare-kit** for running native P2P code. Main desktop uses **Electrobun + embedded `pear-runtime`**; the Swift native shell (SwiftUI + bare-native sidecar) is experimental. Do not add new `pear run` / `global.Pear.run` paths — upstream Pear CLI is removing `pear run`; see `docs/pear-runtime-evolution-readiness.md` for the current boundary.
 
 Native addon submodules:
-- **bare-mpv** - libmpv video player (fork at `ayooooo123/bare-mpv`, git submodule)
 - **bare-ffmpeg** - FFmpeg decode engine (fork at `ayooooo123/bare-ffmpeg`, git submodule)
 - **bare-tls** - TLS support
 
@@ -180,7 +178,5 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 **Native Desktop "No stats returned":** The sidecar handler response shape doesn't match the HRPC schema. Check that nested fields are wrapped correctly (e.g., `{ stats: { ... } }` not flat).
 
 **Native Desktop CompactEncoding.DecodingError:** Wire format mismatch between JS and Swift codecs. Ensure `lib/swift-codegen.cjs` is used (NOT `hyperschema-swift`). The `FrameCodec` must use varint length prefix (not uint32). Regenerate with `node schema.cjs`.
-
-**bare-mpv prebuilds missing:** Run `git submodule update --init packages/bare-mpv`. The prebuilds live in the submodule repo.
 
 **Duplicate addon linking during build:** Normal — `bare-pack` traces the full dependency graph. The `ensure-host-sidecar-frameworks.mjs` script deduplicates by package name.

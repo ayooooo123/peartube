@@ -4,6 +4,3 @@
 [submodule "packages/app/vendor/react-native-vlc-media-player"]
 	path = packages/app/vendor/react-native-vlc-media-player
 	url = https://github.com/ayooooo123/react-native-vlc-media-player.git
-[submodule "packages/bare-mpv"]
-	path = packages/bare-mpv
-	url = https://github.com/ayooooo123/bare-mpv.git

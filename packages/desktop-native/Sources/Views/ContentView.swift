@@ -253,11 +253,7 @@ private struct FloatingMiniPlayer: View {
         .fill(.black)
 
       if hostBridge.activePlaybackVideoID == video.id,
-         hostBridge.activeMpvPlayerID != nil {
-        MpvPlayerView(video: video)
-          .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-      } else if hostBridge.activePlaybackVideoID == video.id,
-                let player = hostBridge.activeAVPlayer {
+         let player = hostBridge.activeAVPlayer {
         NativeAVPlayerView(player: player, hidesControls: true)
           .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
       } else if let thumbnailURL = hostBridge.thumbnailURL(for: video) {
@@ -374,25 +370,12 @@ private struct FloatingMiniPlayer: View {
 
   private func togglePlayback() {
     if appState.isPlayingPreview {
-      if hostBridge.activeMpvPlayerID != nil {
-        Task {
-          await hostBridge.pauseActivePlayback(for: video)
-        }
-      } else {
-        hostBridge.pauseActiveAVPlayer()
-      }
+      hostBridge.pauseActiveAVPlayer()
       appState.pausePreview()
       return
     }
 
-    if hostBridge.activeMpvPlayerID != nil {
-      Task {
-        await hostBridge.resumeActivePlayback(for: video)
-      }
-    } else {
-      hostBridge.resumeActiveAVPlayer()
-    }
-
+    hostBridge.resumeActiveAVPlayer()
     appState.resumePlayback()
   }
 }

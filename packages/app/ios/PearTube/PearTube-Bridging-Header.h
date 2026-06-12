@@ -8,10 +8,3 @@
 #import <React/RCTUIManager.h>
 #import <React/RCTViewManager.h>
 #endif
-
-#if __has_include(<Libmpv/client.h>)
-#import <Libmpv/client.h>
-#import <Libmpv/render.h>
-#import <Libmpv/render_gl.h>
-#import <Libmpv/stream_cb.h>
-#endif

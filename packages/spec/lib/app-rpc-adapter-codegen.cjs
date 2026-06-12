@@ -1,4 +1,5 @@
 'use strict'
+/* eslint-disable @typescript-eslint/no-require-imports */
 
 const fs = require('fs')
 const path = require('path')
@@ -113,15 +114,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'pick-image-file',
     'get-transcode-settings',
     'set-transcode-settings',
-    'mpv-available',
-    'mpv-create',
-    'mpv-load-file',
-    'mpv-play',
-    'mpv-pause',
-    'mpv-seek',
-    'mpv-get-state',
-    'mpv-render-frame',
-    'mpv-destroy',
     'ffmpeg-decode-available',
     'cast-available',
     'cast-start-discovery',

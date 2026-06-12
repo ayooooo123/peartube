@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import http from 'bare-http1'
 
 import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'
@@ -1267,10 +1268,14 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
  * @param {string|null} [options.sourceKey]
  * @param {Function} [options.onProgress]
  * @param {boolean} [options.isVideoComplete=true]
+ * @param {boolean} [options.force=false] - the requesting player reported it
+ *   cannot play the source even if the policy table says it can (e.g. a webview
+ *   without Opus MSE support). When the policy decision is 'direct', force the
+ *   least-cost fallback (video stream-copy + audio→AAC) instead of refusing.
  * @returns {Promise<{success:boolean, sessionId:string, mode?:string, reused?:boolean, reason?:string, error?:string}>}
  */
 async function startCompatTranscode(sourceUrl, options = {}) {
-  const { player = 'webkit', sourceKey = null, onProgress, isVideoComplete = true } = options
+  const { player = 'webkit', sourceKey = null, onProgress, isVideoComplete = true, force = false } = options
 
   if (sourceKey) {
     const existing = findSessionBySourceKey(sourceKey)
@@ -1298,9 +1303,13 @@ async function startCompatTranscode(sourceUrl, options = {}) {
       videoLevel: probeResult.videoLevel,
     })
 
-    if (decision.mode === 'direct') {
+    if (decision.mode === 'direct' && !force) {
       session.status = 'complete'
       return { success: false, sessionId: session.id, reason: 'no-transcode-needed' }
+    }
+    if (decision.mode === 'direct') {
+      decision.mode = 'audio-only'
+      decision.reason = `forced by ${player}: player reported source unplayable`
     }
 
     console.log('[CompatTranscode] Starting:', decision.mode, 'for', player, '|', decision.reason)

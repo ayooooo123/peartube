@@ -14,12 +14,6 @@
 		4958506397AA1E01F0882164 /* libPods-PearTube.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1E3A982F26F26A64BBD30EEA /* libPods-PearTube.a */; };
 		5FF52A9B3A0951B25A874930 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 0B578897D873CF432CEB650B /* PrivacyInfo.xcprivacy */; };
 		6FD573CCDE534936A2EE838A /* Feather.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 14B2F55C2E074B85BE38586C /* Feather.ttf */; };
-		A9A100000000000000000010 /* MpvPlayerCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000014 /* MpvPlayerCore.swift */; };
-		A9A100000000000000000011 /* MpvPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000015 /* MpvPlayerView.swift */; };
-		A9A100000000000000000012 /* MpvPlayerViewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000016 /* MpvPlayerViewManager.swift */; };
-		A9A100000000000000000013 /* MpvPlayerManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000017 /* MpvPlayerManager.m */; };
-		A9A100000000000000000019 /* MpvHttpStreamBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000018 /* MpvHttpStreamBridge.swift */; };
-		A9A10000000000000000001B /* MpvPipController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A10000000000000000001A /* MpvPipController.swift */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
@@ -33,12 +27,6 @@
 		1E3A982F26F26A64BBD30EEA /* libPods-PearTube.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-PearTube.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A4BD87A92B24AAC9EFE2CB0 /* Pods-PearTube.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PearTube.debug.xcconfig"; path = "Target Support Files/Pods-PearTube/Pods-PearTube.debug.xcconfig"; sourceTree = "<group>"; };
 		64B56761789444159CDF2488 /* Ionicons.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = Ionicons.ttf; path = "../node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf"; sourceTree = "<group>"; };
-		A9A100000000000000000014 /* MpvPlayerCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPlayerCore.swift; path = PearTube/MpvPlayerCore.swift; sourceTree = "<group>"; };
-		A9A100000000000000000015 /* MpvPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPlayerView.swift; path = PearTube/MpvPlayerView.swift; sourceTree = "<group>"; };
-		A9A100000000000000000016 /* MpvPlayerViewManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPlayerViewManager.swift; path = PearTube/MpvPlayerViewManager.swift; sourceTree = "<group>"; };
-		A9A100000000000000000017 /* MpvPlayerManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = MpvPlayerManager.m; path = PearTube/MpvPlayerManager.m; sourceTree = "<group>"; };
-		A9A100000000000000000018 /* MpvHttpStreamBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvHttpStreamBridge.swift; path = PearTube/MpvHttpStreamBridge.swift; sourceTree = "<group>"; };
-		A9A10000000000000000001A /* MpvPipController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPipController.swift; path = PearTube/MpvPipController.swift; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = PearTube/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -65,12 +53,6 @@
 			children = (
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				F11748442D0722820044C1D9 /* PearTube-Bridging-Header.h */,
-				A9A100000000000000000014 /* MpvPlayerCore.swift */,
-				A9A100000000000000000015 /* MpvPlayerView.swift */,
-				A9A100000000000000000016 /* MpvPlayerViewManager.swift */,
-				A9A100000000000000000017 /* MpvPlayerManager.m */,
-				A9A100000000000000000018 /* MpvHttpStreamBridge.swift */,
-				A9A10000000000000000001A /* MpvPipController.swift */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
@@ -475,12 +457,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A9A100000000000000000013 /* MpvPlayerManager.m in Sources */,
-				A9A100000000000000000012 /* MpvPlayerViewManager.swift in Sources */,
-				A9A100000000000000000011 /* MpvPlayerView.swift in Sources */,
-				A9A100000000000000000010 /* MpvPlayerCore.swift in Sources */,
-				A9A100000000000000000019 /* MpvHttpStreamBridge.swift in Sources */,
-				A9A10000000000000000001B /* MpvPipController.swift in Sources */,
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				118FBCE4D3E1CB8EFA0A9E1D /* ExpoModulesProvider.swift in Sources */,
 			);

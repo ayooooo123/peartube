@@ -18,9 +18,6 @@ import {
   ffmpegDecodeAvailableResponseCodec,
   listChannelVideosRequestCodec,
   listChannelVideosResponseCodec,
-  mpvAvailableResponseCodec,
-  mpvCreateRequestCodec,
-  mpvCreateResponseCodec,
   encodeResponseFrame,
   hostReadyEventCodec,
   networkStatusEventCodec,
@@ -258,35 +255,6 @@ test('search payloads roundtrip through compact encoding', () => {
   assert.deepEqual(
     decodePayload(searchResponseCodec, encodePayload(searchResponseCodec, response)),
     response
-  )
-})
-
-test('mpv payloads roundtrip through compact encoding', () => {
-  const createRequest = { width: 1280, height: 720 }
-  const createResponse = {
-    success: true,
-    playerId: 'mpv_1',
-    frameServerPort: 48123,
-    error: null,
-  }
-  const availableResponse = {
-    available: true,
-    error: null,
-  }
-
-  assert.equal(BRIDGE_COMMANDS.mpvAvailable, 13)
-  assert.equal(BRIDGE_COMMANDS.mpvCreate, 14)
-  assert.deepEqual(
-    decodePayload(mpvCreateRequestCodec, encodePayload(mpvCreateRequestCodec, createRequest)),
-    createRequest
-  )
-  assert.deepEqual(
-    decodePayload(mpvCreateResponseCodec, encodePayload(mpvCreateResponseCodec, createResponse)),
-    createResponse
-  )
-  assert.deepEqual(
-    decodePayload(mpvAvailableResponseCodec, encodePayload(mpvAvailableResponseCodec, availableResponse)),
-    availableResponse
   )
 })
 

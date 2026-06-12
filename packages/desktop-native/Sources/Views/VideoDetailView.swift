@@ -56,11 +56,7 @@ struct VideoDetailView: View {
         .fill(.black)
         .overlay {
           if hostBridge.activePlaybackVideoID == video.id,
-             hostBridge.activeMpvPlayerID != nil {
-            MpvPlayerView(video: video)
-              .clipShape(RoundedRectangle(cornerRadius: 22))
-          } else if hostBridge.activePlaybackVideoID == video.id,
-                    let player = hostBridge.activeAVPlayer {
+             let player = hostBridge.activeAVPlayer {
             NativeAVPlayerView(player: player, hidesControls: false)
               .clipShape(RoundedRectangle(cornerRadius: 22))
           } else {
@@ -312,7 +308,7 @@ struct VideoDetailView: View {
 
   private func hasConcretePlaybackSession(for video: NativeVideo) -> Bool {
     hostBridge.activePlaybackVideoID == video.id
-      && (hostBridge.activeMpvPlayerID != nil || hostBridge.activeAVPlayer != nil)
+      && hostBridge.activeAVPlayer != nil
   }
 
   private var playbackInteractionDisabled: Bool {
@@ -331,20 +327,12 @@ struct VideoDetailView: View {
 
     let active = isPlaybackActive(for: video)
     hostBridge.recordPlaybackUIEvent(
-      "Playback \(source) tapped for \(video.id) active=\(active) hostVideo=\(hostBridge.activePlaybackVideoID ?? "nil") mpvPlayer=\(hostBridge.activeMpvPlayerID ?? "nil") localPlayer=\(hostBridge.activeAVPlayer == nil ? "nil" : "ready")"
+      "Playback \(source) tapped for \(video.id) active=\(active) hostVideo=\(hostBridge.activePlaybackVideoID ?? "nil") localPlayer=\(hostBridge.activeAVPlayer == nil ? "nil" : "ready")"
     )
 
     if active {
-      if hostBridge.activePlaybackVideoID == video.id,
-         hostBridge.activeMpvPlayerID != nil {
-        hostBridge.recordPlaybackUIEvent("Pausing active bare-mpv session for \(video.id).")
-        Task {
-          await hostBridge.pauseActivePlayback(for: video)
-        }
-      } else {
-        hostBridge.recordPlaybackUIEvent("Pausing active AVPlayer session for \(video.id).")
-        hostBridge.pauseActiveAVPlayer()
-      }
+      hostBridge.recordPlaybackUIEvent("Pausing active AVPlayer session for \(video.id).")
+      hostBridge.pauseActiveAVPlayer()
       appState.pausePreview()
       return
     }
@@ -361,15 +349,6 @@ struct VideoDetailView: View {
       }
 
       if hostBridge.activePlaybackVideoID == video.id,
-         hostBridge.activeMpvPlayerID != nil {
-        hostBridge.recordPlaybackUIEvent("Resuming existing bare-mpv session for \(video.id).")
-        await hostBridge.resumeActivePlayback(for: video)
-        appState.resumePlayback()
-        appState.setError(nil)
-        return
-      }
-
-      if hostBridge.activePlaybackVideoID == video.id,
          hostBridge.activeAVPlayer != nil {
         hostBridge.recordPlaybackUIEvent("Resuming existing AVPlayer session for \(video.id).")
         hostBridge.resumeActiveAVPlayer()
@@ -379,52 +358,17 @@ struct VideoDetailView: View {
       }
 
       hostBridge.recordPlaybackUIEvent("Starting new playback session for \(video.id).")
-      if !HostBridgeService.prefersNativeMpvPlayback(for: video) {
-        hostBridge.recordPlaybackUIEvent("Using direct AVPlayer startup path for \(video.id).")
-        if let url = await hostBridge.prepareAVPlayerURL(for: video) {
-          hostBridge.recordPlaybackUIEvent("Playback session resolved to AVPlayer for \(video.id).")
-          hostBridge.recordPlaybackUIEvent("Creating AVPlayer instance for \(video.id).")
-          let avPlayer = AVPlayer(url: url)
-          avPlayer.automaticallyWaitsToMinimizeStalling = true
-          hostBridge.recordPlaybackUIEvent("AVPlayer instance created for \(video.id).")
-          hostBridge.recordPlaybackUIEvent("Assigning AVPlayer state for \(video.id).")
-          hostBridge.installAVPlayer(avPlayer, for: video)
-          hostBridge.recordPlaybackUIEvent("Calling AVPlayer.play() for \(video.id).")
-          avPlayer.play()
-          hostBridge.recordPlaybackUIEvent("AVPlayer.play() returned for \(video.id).")
-          appState.playSelectedPreview()
-          appState.setError(nil)
-        } else {
-          hostBridge.recordPlaybackUIEvent("Playback session failed to start for \(video.id): \(hostBridge.lastPlaybackErrorMessage ?? "unknown").")
-          appState.setError(
-            hostBridge.lastPlaybackErrorMessage
-              ?? "Playback URL could not be resolved for \(video.title)."
-          )
-        }
-        return
-      }
-
-      if let session = await hostBridge.startPlaybackSession(
-        for: video,
-        renderSize: CGSize(width: 1280, height: 720)
-      ) {
-        switch session.mode {
-        case .mpv:
-          hostBridge.recordPlaybackUIEvent("Playback session resolved to bare-mpv for \(video.id).")
-          hostBridge.releaseAVPlayer()
-        case .avPlayer:
-          hostBridge.recordPlaybackUIEvent("Playback session resolved to AVPlayer for \(video.id).")
-          hostBridge.recordPlaybackUIEvent("Creating AVPlayer instance for \(video.id).")
-          let avPlayer = AVPlayer(url: session.url)
-          avPlayer.automaticallyWaitsToMinimizeStalling = true
-          hostBridge.recordPlaybackUIEvent("AVPlayer instance created for \(video.id).")
-          hostBridge.recordPlaybackUIEvent("Assigning AVPlayer state for \(video.id).")
-          hostBridge.installAVPlayer(avPlayer, for: video)
-          hostBridge.recordPlaybackUIEvent("Calling AVPlayer.play() for \(video.id).")
-          avPlayer.play()
-          hostBridge.recordPlaybackUIEvent("AVPlayer.play() returned for \(video.id).")
-        }
-
+      if let url = await hostBridge.prepareAVPlayerURL(for: video) {
+        hostBridge.recordPlaybackUIEvent("Playback session resolved to AVPlayer for \(video.id).")
+        hostBridge.recordPlaybackUIEvent("Creating AVPlayer instance for \(video.id).")
+        let avPlayer = AVPlayer(url: url)
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
+        hostBridge.recordPlaybackUIEvent("AVPlayer instance created for \(video.id).")
+        hostBridge.recordPlaybackUIEvent("Assigning AVPlayer state for \(video.id).")
+        hostBridge.installAVPlayer(avPlayer, for: video)
+        hostBridge.recordPlaybackUIEvent("Calling AVPlayer.play() for \(video.id).")
+        avPlayer.play()
+        hostBridge.recordPlaybackUIEvent("AVPlayer.play() returned for \(video.id).")
         appState.playSelectedPreview()
         appState.setError(nil)
       } else {

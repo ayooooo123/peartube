@@ -15,15 +15,6 @@ export const BRIDGE_COMMANDS = Object.freeze({
   unsubscribeChannel: 10,
   uploadVideo: 11,
   resolveThumbnail: 12,
-  mpvAvailable: 13,
-  mpvCreate: 14,
-  mpvLoadFile: 15,
-  mpvPlay: 16,
-  mpvPause: 17,
-  mpvSeek: 18,
-  mpvGetState: 19,
-  mpvRenderFrame: 20,
-  mpvDestroy: 21,
   getVideoStats: 22,
   addComment: 23,
   listComments: 24,
@@ -466,61 +457,8 @@ export const networkStatusEventCodec = objectCodec([
   field('offlineReason', optionalStringCodec, null),
 ])
 
-export const mpvAvailableResponseCodec = objectCodec([
-  field('available', c.bool, false),
-  field('error', optionalStringCodec, null),
-])
-
 export const ffmpegDecodeAvailableResponseCodec = objectCodec([
   field('available', c.bool, false),
-  field('error', optionalStringCodec, null),
-])
-
-export const mpvCreateRequestCodec = objectCodec([
-  field('width', c.uint, 1280),
-  field('height', c.uint, 720),
-])
-
-export const mpvCreateResponseCodec = objectCodec([
-  field('success', c.bool, false),
-  field('playerId', optionalStringCodec, null),
-  field('frameServerPort', optionalUIntCodec, null),
-  field('error', optionalStringCodec, null),
-])
-
-export const mpvLoadFileRequestCodec = objectCodec([
-  field('playerId', c.string),
-  field('url', c.string),
-])
-
-export const mpvPlayerCommandRequestCodec = objectCodec([
-  field('playerId', c.string),
-])
-
-export const mpvPlayerCommandResponseCodec = objectCodec([
-  field('success', c.bool, false),
-  field('error', optionalStringCodec, null),
-])
-
-export const mpvSeekRequestCodec = objectCodec([
-  field('playerId', c.string),
-  field('time', c.float64, 0),
-])
-
-export const mpvGetStateResponseCodec = objectCodec([
-  field('success', c.bool, false),
-  field('currentTime', c.float64, 0),
-  field('duration', c.float64, 0),
-  field('paused', c.bool, true),
-  field('error', optionalStringCodec, null),
-])
-
-export const mpvRenderFrameResponseCodec = objectCodec([
-  field('success', c.bool, false),
-  field('hasFrame', c.bool, false),
-  field('width', c.uint, 0),
-  field('height', c.uint, 0),
-  field('frameData', optionalBufferCodec, null),
   field('error', optionalStringCodec, null),
 ])
 

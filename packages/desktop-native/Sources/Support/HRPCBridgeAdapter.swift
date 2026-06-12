@@ -194,44 +194,6 @@ struct NativeVideoStats: Equatable {
   }
 }
 
-// MARK: - MPV State
-
-struct NativeMpvState: Equatable {
-  let success: Bool
-  let currentTime: Double
-  let duration: Double
-  let paused: Bool
-  let error: String?
-
-  init(schema s: MpvStateResponse) {
-    self.success = s.success
-    self.currentTime = s.currentTime.flatMap { Double($0) } ?? 0
-    self.duration = s.duration.flatMap { Double($0) } ?? 0
-    self.paused = s.paused
-    self.error = s.error?.isEmpty == false ? s.error : nil
-  }
-}
-
-// MARK: - MPV Render Frame
-
-struct NativeMpvRenderFrame: Equatable {
-  let success: Bool
-  let hasFrame: Bool
-  let width: Int
-  let height: Int
-  let frameData: Data?
-  let error: String?
-
-  init(schema s: MpvRenderFrameResponse) {
-    self.success = s.success
-    self.hasFrame = s.hasFrame
-    self.width = Int(s.width ?? 0)
-    self.height = Int(s.height ?? 0)
-    self.frameData = s.frameData.flatMap { $0.isEmpty ? nil : $0 }
-    self.error = s.error?.isEmpty == false ? s.error : nil
-  }
-}
-
 // MARK: - Upload Progress Event
 
 struct NativeUploadProgressEvent: Equatable {

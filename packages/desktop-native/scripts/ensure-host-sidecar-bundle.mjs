@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -22,7 +23,6 @@ const sourceRoots = [
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
-  path.join(repoRoot, 'packages', 'bare-mpv'),
   ...getSidecarAddonRoots(repoRoot),
 ]
 

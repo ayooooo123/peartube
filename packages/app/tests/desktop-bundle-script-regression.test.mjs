@@ -28,11 +28,22 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:build should bundle the worker after compiling it',
   )
 
-  // A bare `desktop:start` must self-heal a stale bundle before launching.
+  // A bare `desktop:start` must be self-sufficient: recompile the worker,
+  // re-bundle, AND rebuild the launcher (electrobun build, via desktop:ebuild)
+  // so it can never run a stale compiled bun main that spawns a leftover
+  // index.mjs.
   assert.match(
     scripts['desktop:start'],
-    /npm run desktop:bundle &&/,
-    'desktop:start should ensure a fresh bundle before launch',
+    /npm run desktop:worker && npm run desktop:bundle && npm run desktop:ebuild/,
+    'desktop:start should compile + bundle + rebuild the launcher before launch',
+  )
+
+  // ecopy must wipe any stale worker/node_modules left by older builds so the
+  // .app can only ever contain the fresh bundle.
+  assert.match(
+    scripts['desktop:ecopy'],
+    /rm -rf [^&]*\/workers [^&]*\/node_modules/,
+    'desktop:ecopy should clear stale workers/node_modules before copying',
   )
 
   // ecopy must ship the self-contained bundle into the .app...

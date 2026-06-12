@@ -681,7 +681,7 @@ function WatchPageView({
       .catch((err: any) => console.error('Failed to load channel:', err))
   }, [channelKey, channelMeta, rpc, publicBeeKey])
 
-  // Start prefetch and poll for video stats
+  // Poll for video stats while watching
   useEffect(() => {
     if (!video || !channelKey || !rpc || !isActiveWatch) return
 

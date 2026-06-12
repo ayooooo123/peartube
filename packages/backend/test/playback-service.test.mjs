@@ -95,12 +95,9 @@ test('channel metadata fallback uses getBlobEntry without blocking on prefetch w
   t.alike(seen, ['legacy-video'])
 })
 
-test('preparePlayback returns the player URL without waiting for large-video startup warmup', async (t) => {
+test('preparePlayback resolves the player URL and stats with no warmup', async (t) => {
   const { ctx } = createCtx()
   const service = new BlobPlaybackService({ ctx })
-  let warmupStarted = false
-  let releaseWarmup
-  const warmupPromise = new Promise((resolve) => { releaseWarmup = resolve })
 
   const result = await service.preparePlayback({
     driveKey: 'channel-key',
@@ -110,23 +107,17 @@ test('preparePlayback returns the player URL without waiting for large-video sta
     blobsCoreKey: VALID_KEY,
     mimeType: 'video/mp4',
     getStats: () => ({ progress: 0, peerCount: 2 }),
-    warmup: () => {
-      warmupStarted = true
-      return warmupPromise
-    },
   })
 
   t.is(result.url, VALID_URL)
   t.alike(result.stats, { progress: 0, peerCount: 2 })
-  t.is(result.warmupStarted, true)
-  t.is(result.peerWarmupStarted, true)
-  t.ok(warmupStarted)
-
-  releaseWarmup()
-  await Promise.resolve()
+  // No prewarming: the result is just the streamable URL + stats.
+  t.is(result.warmupStarted, undefined)
+  t.is(result.peerWarmupStarted, undefined)
+  t.is(result.selectedBlobWarmup, undefined)
 })
 
-test('preparePlayback still returns URL when background startup warmup later fails', async (t) => {
+test('preparePlayback resolves via resolveUrl when one is provided', async (t) => {
   const { ctx } = createCtx()
   const service = new BlobPlaybackService({ ctx })
 
@@ -134,18 +125,10 @@ test('preparePlayback still returns URL when background startup warmup later fai
     driveKey: 'channel-key',
     videoPath: 'videos/demo.mp4',
     publicBeeKey: 'public-bee-key',
-    blobId: VALID_BLOB,
-    blobsCoreKey: VALID_KEY,
-    mimeType: 'video/mp4',
-    getStats: () => ({ progress: 0 }),
-    warmup: async () => {
-      throw new Error('warmup failed')
-    },
+    resolveUrl: async () => ({ url: 'http://resolved/url.mp4' }),
+    getStats: () => ({ progress: 5 }),
   })
 
-  t.is(result.url, VALID_URL)
-  t.alike(result.stats, { progress: 0 })
-  t.is(result.warmupStarted, true)
-
-  await Promise.resolve()
+  t.is(result.url, 'http://resolved/url.mp4')
+  t.alike(result.stats, { progress: 5 })
 })

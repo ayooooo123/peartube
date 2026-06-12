@@ -19,7 +19,6 @@ import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
-import { isWaitingForSelectedBlob, preparePlaybackWhenReady } from '@/lib/playback-readiness'
 
 // HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
@@ -501,17 +500,16 @@ function MobileVideoPlayerScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
         if (!mountedRef.current || loadGenerationRef.current !== generation) return
         loadAndPlayVideo(videoData, cachedUrl)
         if (Platform.OS !== 'web' || isPear) {
+          // Re-resolve in the background to refresh the cache entry / swarm
+          // join and pull fresh stats.
           void rpc.preparePlayback(playbackRequest).then((result: any) => {
             if (!mountedRef.current || loadGenerationRef.current !== generation) return
-            if (result?.url && !isWaitingForSelectedBlob(result)) {
-              if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
-              loadAndPlayVideo(videoData, result.url)
-            }
+            if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
             if (result?.stats) {
               setLocalStats(result.stats as VideoStats)
             }
@@ -526,18 +524,13 @@ function MobileVideoPlayerScreen() {
         }
         return
       }
-      // Bounded readiness wait (same pattern as the feed cards): retry while the
-      // selected blob head block is still warming, then play the URL anyway and
-      // let the blob server stream/buffer on demand.
-      const result = await preparePlaybackWhenReady({
-        preparePlayback: (request) => rpc.preparePlayback(request),
-        playbackRequest,
-        isCurrent: () => mountedRef.current && loadGenerationRef.current === generation,
-      })
+      // Resolve-and-stream: get the blob-server URL and hand it to the player,
+      // which fetches byte ranges on demand. No prewarming.
+      const result = await rpc.preparePlayback(playbackRequest)
       if (!result || !mountedRef.current || loadGenerationRef.current !== generation) return
 
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 

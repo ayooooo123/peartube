@@ -86,29 +86,15 @@ export default function RootLayout() {
 
   // Backend init effect is declared after initPearBackend
 
-  // Subscribe to video load events to trigger prefetch
+  // Subscribe to video load events to drive the stats-polling fallback
   useEffect(() => {
     if (!ready || !platformRPC) return
 
     const unsubscribe = videoLoadEventEmitter.subscribe(async (video: VideoData) => {
-      console.log('[App] Video loaded, starting prefetch for:', video.title)
       try {
         const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
           ? video.path
           : video.id
-        await platformRPC.rpc.prefetchVideo({
-          channelKey: video.channelKey,
-          videoId: videoRef,
-          publicBeeKey: (video as any).publicBeeKey || undefined
-        })
-        console.log('[App] prefetchVideo sent for:', videoRef)
-
-        // Proactively prefetch next videos in background for smooth playback
-        platformRPC.rpc.prefetchNextVideos?.(video.channelKey, videoRef, 3).then((res: any) => {
-          if (res?.prefetchedCount > 0) {
-            console.log('[App] Prefetching', res.prefetchedCount, 'next videos in background')
-          }
-        }).catch(() => {})
 
         if (shouldUseStatsPollingFallback) {
           // Fallback: poll getVideoStats and feed into the context emitter.
@@ -151,7 +137,7 @@ export default function RootLayout() {
           }
         }
       } catch (err) {
-        console.error('[App] Failed to start prefetch:', err)
+        console.error('[App] Failed to start stats polling:', err)
       }
     })
 

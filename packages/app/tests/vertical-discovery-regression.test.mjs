@@ -39,7 +39,8 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.doesNotMatch(source, /setAmbientVideoContext\(/, 'Shorts playback and comments should not update global watch-player metadata')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
   assert.match(source, /const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\) : null/, 'cached Shorts playback should attach directly to the Shorts player')
-  assert.match(source, /const result = await preparePlaybackWhenReady\(\{[\s\S]*playbackRequest/, 'prepared Shorts playback should wait for selected direct blob readiness before attaching')
+  assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/, 'prepared Shorts playback should resolve through a single preparePlayback call and stream on demand')
+  assert.doesNotMatch(source, /preparePlaybackWhenReady/, 'Shorts playback should not poll a readiness warmup loop')
 })
 
 test('vertical discovery is isolated from the global watch player context', () => {
@@ -103,27 +104,22 @@ test('vertical discovery hydrates beyond sparse previews without permanently poi
   assert.match(source, /setHydrationErrors/, 'channel hydration failures should be represented in degraded UI state')
 })
 
-test('vertical discovery preloads the next few videos into the playback URL cache', () => {
+test('vertical discovery no longer prewarms upcoming playback URLs', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
   const controllerSource = readAppFile('lib/discover-feed-controller.js')
 
-  assert.match(source, /warmNextPlaybackUrls\(\{[\s\S]*videos,[\s\S]*activeIndex,[\s\S]*makePlaybackRequest/, 'shorts should warm the next few videos through the feed controller')
-  assert.match(source, /preparePlayback:\s*rpc\.preparePlayback\?\.bind\(rpc\)/, 'preload should route through backend preparePlayback')
-  assert.match(source, /inflightPlaybackWarmups/, 'preload should keep de-dupe state in the screen')
-  assert.match(controllerSource, /const nextVideos = \(videos \|\| \[\]\)\.slice\(activeIndex \+ 1, activeIndex \+ 1 \+ windowSize\)/, 'controller should warm the next few videos, not only one or two')
-  assert.match(controllerSource, /inflightPlaybackWarmups\?\.current\?\.has\?\.\(cacheKey\)/, 'controller preload should de-dupe overlapping preparePlayback warmups')
-  assert.match(controllerSource, /const result = await preparePlayback\?\.\(playbackRequest\)/, 'controller preload should await preparePlayback so it can keep the resolved URL')
-  assert.match(controllerSource, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url(?:, Boolean\(result\?\.selectedBlobWarmup\?\.readyForPlayback\))?\)/, 'controller preload should populate the playback URL cache for instant swipe playback')
+  // Warming was removed: opening a short resolves-and-streams on demand, and
+  // no upcoming videos are prefetched.
+  assert.doesNotMatch(source, /warmNextPlaybackUrls/, 'shorts should not prewarm upcoming playback URLs')
+  assert.doesNotMatch(source, /inflightPlaybackWarmups/, 'shorts should not keep playback warmup de-dupe state')
+  assert.doesNotMatch(controllerSource, /warmNextPlaybackUrls/, 'controller should not expose a playback warmup helper')
 })
 
-test('Home Discover preloads visible feed playback URLs into the shared URL cache', () => {
+test('Home Discover no longer prewarms visible feed playback URLs', () => {
   const source = readAppFile('app/(tabs)/index.tsx')
 
-  assert.match(source, /const warmPlaybackUrl = useCallback\(async \(video: VideoData\)/, 'Home should use a named playback URL warming helper')
-  assert.match(source, /inflightPlaybackWarmups\.current\.has\(cacheKey\)/, 'Home warmups should be de-duped')
-  assert.match(source, /const nextVideos = feedVideosWithThumbs\.slice\(0, 4\)/, 'Home should warm the first few visible Discover cards')
-  assert.match(source, /const result = await rpc\.preparePlayback\(\{[\s\S]*blobId:[\s\S]*blobsCoreKey:[\s\S]*mimeType:/, 'Home warmups should preserve direct blob playback refs')
-  assert.match(source, /if \(result\?\.url\) setCachedVideoUrl\(cacheKey, result\.url(?:, Boolean\(result\.selectedBlobWarmup\?\.readyForPlayback\))?\)/, 'Home warmups should populate the shared playback URL cache')
+  assert.doesNotMatch(source, /warmPlaybackUrl/, 'Home should not prewarm visible feed playback URLs')
+  assert.doesNotMatch(source, /inflightPlaybackWarmups/, 'Home should not keep playback warmup de-dupe state')
 })
 
 test('Home Discover falls back to public feed RPC and labels feed entries separately from live peers', () => {

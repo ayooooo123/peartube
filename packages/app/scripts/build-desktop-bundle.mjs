@@ -308,10 +308,12 @@ function verifyBundleLinks() {
 }
 
 // Native-addon deps (e.g. bare-ffmpeg, imported by backend/src/thumbnail.js)
-// ship as git submodules under packages/. If a submodule isn't initialized its
-// `file:` dep can't link and bare-pack dies tracing it with a cryptic
-// "MODULE_NOT_FOUND: Cannot find module 'bare-ffmpeg'". Catch it up front with
-// an actionable message.
+// ship as git submodules under packages/. Two failure modes bare-pack reports
+// only cryptically, caught here up front:
+//   1. submodule not initialized -> its `file:` dep can't link, bare-pack dies
+//      with "MODULE_NOT_FOUND: Cannot find module 'bare-ffmpeg'".
+//   2. submodule present but not compiled -> bare-pack can't embed the addon
+//      and dies looking for "prebuilds/<host>/<name>.node".
 function ensureNativeAddonSubmodules() {
   let gitmodules = ''
   try {
@@ -319,18 +321,57 @@ function ensureNativeAddonSubmodules() {
   } catch {
     return
   }
-  const missing = []
+
+  const uninitialized = []
+  const unbuilt = []
   for (const m of gitmodules.matchAll(/path\s*=\s*(packages\/bare-[^\s]+)/g)) {
     const subPath = m[1]
-    if (!fs.existsSync(path.join(repoRoot, subPath, 'package.json'))) missing.push(subPath)
+    const absPath = path.join(repoRoot, subPath)
+    if (!fs.existsSync(path.join(absPath, 'package.json'))) {
+      uninitialized.push(subPath)
+      continue
+    }
+    // cmake-bare native addon (has CMakeLists.txt) must be compiled into
+    // prebuilds/<host>/ before bare-pack can embed it.
+    const isNativeAddon = fs.existsSync(path.join(absPath, 'CMakeLists.txt'))
+    if (!isNativeAddon) continue
+    const prebuildsDir = path.join(absPath, 'prebuilds')
+    let built = false
+    try {
+      built = fs.readdirSync(prebuildsDir).some((host) => {
+        try {
+          return fs.readdirSync(path.join(prebuildsDir, host)).length > 0
+        } catch {
+          return false
+        }
+      })
+    } catch {
+      built = false
+    }
+    if (!built) unbuilt.push(subPath)
   }
-  if (missing.length > 0) {
+
+  if (uninitialized.length > 0) {
     throw new Error(
-      `[desktop:bundle] Native addon submodule(s) not initialized: ${missing.join(', ')}\n` +
+      `[desktop:bundle] Native addon submodule(s) not initialized: ${uninitialized.join(', ')}\n` +
       'bare-pack needs them on disk to trace the backend (bare-ffmpeg is imported by\n' +
       'packages/backend/src/thumbnail.js). They are git submodules, untouched by git pull/checkout.\n' +
-      `Fix: git submodule update --init ${missing.join(' ')} && npm run install:all\n` +
+      `Fix: git submodule update --init ${uninitialized.join(' ')} && npm run install:all\n` +
       'then rebuild with PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle.',
+    )
+  }
+
+  if (unbuilt.length > 0) {
+    const steps = unbuilt
+      .map((subPath) => `  ( cd ${subPath} && npm install && npx bare-make generate && npx bare-make build && npx bare-make install )`)
+      .join('\n')
+    throw new Error(
+      `[desktop:bundle] Native addon(s) not compiled (no prebuilds/): ${unbuilt.join(', ')}\n` +
+      'bare-pack embeds each addon\'s prebuilt binary into the bundle, so they must be built once.\n' +
+      'These are cmake-bare addons; build the host prebuild with:\n' +
+      `${steps}\n` +
+      'then rebuild with PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle.\n' +
+      '(If bare-make build fails on missing FFmpeg, install it first: brew install ffmpeg pkg-config.)',
     )
   }
 }

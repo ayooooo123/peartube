@@ -614,13 +614,15 @@ export class PublicFeed {
         const driveKey = snapshot?.driveKey
         if (!driveKey || !byKey.has(driveKey)) continue
 
+        const previewVideos = this._sanitizePreviewVideos(snapshot.previewVideos || byKey.get(driveKey)?.previewVideos)
         const merged = {
           ...byKey.get(driveKey),
           publicBeeKey: this._resolvePublicBeeKey(snapshot) || byKey.get(driveKey)?.publicBeeKey || null,
           channelName: snapshot.channelName || byKey.get(driveKey)?.channelName || null,
           videoCount: Number(snapshot.videoCount || byKey.get(driveKey)?.videoCount || 0) || 0,
           manifestUpdatedAt: Number(snapshot.manifestUpdatedAt || byKey.get(driveKey)?.manifestUpdatedAt || 0) || 0,
-          previewVideos: this._sanitizePreviewVideos(snapshot.previewVideos || byKey.get(driveKey)?.previewVideos),
+          previewVideos,
+          previewVideosHash: hashPreviewVideos(previewVideos),
         }
         byKey.set(driveKey, merged)
         this._applyEntrySnapshot(driveKey, merged)
@@ -1713,7 +1715,7 @@ export class PublicFeed {
     // or has explicitly published, not every historical key it heard about.
     const buildAnnounceEntries = () => Array.from(this.entries.values())
       .filter((entry) => isValidKey(this._resolvePublicBeeKey(entry)))
-      .filter((entry) => this._isLocallyBackedEntry(entry))
+      .filter((entry) => this._isLocallyBackedEntry(entry) || entry?.relayServing === true || entry?.relayRole === 'cache')
       .map((entry) => this._serializeEntry(entry))
 
     const baseEntries = buildAnnounceEntries()

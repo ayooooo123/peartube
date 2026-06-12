@@ -171,6 +171,8 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 
 **"Cannot find module" in desktop builds:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`) and verify `packages/app/src/bun/index.ts` resolves the compiled worker under `desktop-build/build/workers/`. Rebuild with `npm run desktop:build`.
 
+**Desktop worker "does not provide an export named 'X'" (e.g. `createUniversalHrpcSurface` from `./universal-core.js`):** The launched `.app` is running a **stale copy** of `@peartube/backend`. The worker (`workers/core/index.mjs`) imports backend source from `Contents/Resources/app/node_modules/@peartube/backend/`, which `desktop:ecopy` only refreshes when you launch via `npm run desktop:start`. Launching the `.app` directly (Finder/`open`/Spotlight) runs whatever was last copied, so a source file that gained a new export after the last copy will be missing it on disk while its importer expects it. Fix: recopy + relaunch with `cd packages/app && npm run desktop:start` (or a full `npm run desktop:dev`). The source `packages/backend/src/universal-core.js` already exports it — this is purely a stale-artifact mismatch, not a code bug.
+
 **Native Desktop "Unsupported native bridge command: N":** The sidecar binary is stale. Rebuild: `cd packages/desktop-native && node scripts/build-native-sidecar.mjs`.
 
 **Native Desktop crashes on video load (doesNotRecognizeSelector in RPC.request):** The `RPCGate` serializes bare-rpc-swift calls because `RPC` is not thread-safe. If you removed or weakened the gate, restore `maxConcurrent: 1`.

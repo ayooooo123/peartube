@@ -93,6 +93,11 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
     /verifyBundleLinks\(\)/,
     'should statically link-check the packed bundle after packing',
   )
+  assert.match(
+    source,
+    /ensureNativeAddonSubmodules\(\)/,
+    'should preflight native-addon submodules (bare-ffmpeg) before packing',
+  )
 })
 
 test('bundle link check catches a stale universal-core missing an export', async () => {

@@ -303,6 +303,34 @@ function verifyBundleLinks() {
   console.log('[desktop:bundle] Bundle link check passed (all named imports satisfied)')
 }
 
+// Native-addon deps (e.g. bare-ffmpeg, imported by backend/src/thumbnail.js)
+// ship as git submodules under packages/. If a submodule isn't initialized its
+// `file:` dep can't link and bare-pack dies tracing it with a cryptic
+// "MODULE_NOT_FOUND: Cannot find module 'bare-ffmpeg'". Catch it up front with
+// an actionable message.
+function ensureNativeAddonSubmodules() {
+  let gitmodules = ''
+  try {
+    gitmodules = fs.readFileSync(path.join(repoRoot, '.gitmodules'), 'utf8')
+  } catch {
+    return
+  }
+  const missing = []
+  for (const m of gitmodules.matchAll(/path\s*=\s*(packages\/bare-[^\s]+)/g)) {
+    const subPath = m[1]
+    if (!fs.existsSync(path.join(repoRoot, subPath, 'package.json'))) missing.push(subPath)
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[desktop:bundle] Native addon submodule(s) not initialized: ${missing.join(', ')}\n` +
+      'bare-pack needs them on disk to trace the backend (bare-ffmpeg is imported by\n' +
+      'packages/backend/src/thumbnail.js). They are git submodules, untouched by git pull/checkout.\n' +
+      `Fix: git submodule update --init ${missing.join(' ')} && npm run install:all\n` +
+      'then rebuild with PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle.',
+    )
+  }
+}
+
 function runBarePack() {
   if (!fs.existsSync(entryFile)) {
     throw new Error(
@@ -312,6 +340,7 @@ function runBarePack() {
   }
 
   fs.mkdirSync(path.dirname(bundleFile), { recursive: true })
+  ensureNativeAddonSubmodules()
   ensureLiveWorkspaceLinks()
 
   const barePackBin = findBarePackBin()

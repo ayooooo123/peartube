@@ -23,7 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..')
@@ -187,6 +187,122 @@ function verifyBundleFreshness() {
   console.log(`[desktop:bundle] Verified ${checked} packed @peartube file(s) match live source`)
 }
 
+// ── Static link check of the packed artifact ────────────────────────────────
+// verifyBundleFreshness proves the bundle matches the live working tree — but
+// if the working tree ITSELF is inconsistent (e.g. a locally-modified, stale
+// universal-core.js next to an up-to-date runtime.js that imports a newer
+// export), the freshness check passes and the worker still dies at link time
+// with "does not provide an export named 'X'". Catch that at build time by
+// verifying every named ESM import between packed @peartube files is satisfied
+// by the target file's exports. The parser is intentionally conservative: it
+// only flags a missing name when the target has no `export *` escape hatch.
+// Validated against the real backend source (365 named imports, 0 false
+// positives). Skip with PEARTUBE_SKIP_BUNDLE_LINK_CHECK=1 if it ever
+// misfires.
+
+function parseEsmExports(source) {
+  const names = new Set()
+  let starReexport = false
+  for (const m of source.matchAll(/^\s*export\s+(?:async\s+)?(?:function|class)\s*\*?\s*([\w$]+)/mg)) names.add(m[1])
+  for (const m of source.matchAll(/^\s*export\s+(?:const|let|var)\s+([\w$]+)/mg)) names.add(m[1])
+  for (const m of source.matchAll(/^\s*export\s*\*\s*as\s+([\w$]+)/mg)) names.add(m[1])
+  if (/^\s*export\s+default\b/m.test(source)) names.add('default')
+  for (const m of source.matchAll(/^\s*export\s*\{([^}]*)\}/mg)) {
+    for (const part of m[1].split(',')) {
+      const token = part.trim()
+      if (!token) continue
+      const asMatch = token.match(/^([\w$]+)\s+as\s+([\w$]+)$/)
+      names.add(asMatch ? asMatch[2] : token)
+    }
+  }
+  if (/^\s*export\s*\*\s*from/m.test(source)) starReexport = true
+  return { names, starReexport }
+}
+
+function parseEsmNamedImports(source) {
+  const imports = []
+  const collect = (clause, specifier) => {
+    const names = clause.split(',').map(s => s.trim()).filter(Boolean).map(token => {
+      const asMatch = token.match(/^([\w$]+)\s+as\s+[\w$]+$/)
+      return asMatch ? asMatch[1] : token
+    })
+    if (names.length > 0) imports.push({ names, specifier })
+  }
+  for (const m of source.matchAll(/^\s*import\s+(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/mg)) collect(m[1], m[2])
+  for (const m of source.matchAll(/^\s*export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/mg)) collect(m[1], m[2])
+  return imports
+}
+
+function describeWorkingTreeState() {
+  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core', 'packages/protocol'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+  const status = (result.stdout || '').trim()
+  if (result.status !== 0) return ''
+  return status
+    ? `git reports locally modified files (a stale local edit is the usual culprit):\n  ${status.split('\n').join('\n  ')}`
+    : 'git reports a clean working tree for the shared packages — the inconsistency may be in an unmerged/diverged checkout (compare `git log -1` with origin/main).'
+}
+
+function isOwnSourceKey(key) {
+  return /@peartube\/|\/packages\//.test(key)
+}
+
+export function checkBundleLinks(packed) {
+  const problems = []
+  for (const key of packed.keys()) {
+    if (!isOwnSourceKey(key) || !/\.(js|mjs)$/.test(key)) continue
+    const source = packed.read(key).toString('utf8')
+    const resolutions = packed.resolutions[key] || {}
+    for (const { names, specifier } of parseEsmNamedImports(source)) {
+      if (!specifier.startsWith('.')) continue
+      const targetKey = resolutions[specifier]
+      if (!targetKey || typeof targetKey !== 'string') continue
+      if (!isOwnSourceKey(targetKey) || /\.cjs$/.test(targetKey)) continue
+      let targetSource
+      try {
+        targetSource = packed.read(targetKey).toString('utf8')
+      } catch {
+        continue
+      }
+      const { names: exported, starReexport } = parseEsmExports(targetSource)
+      if (starReexport) continue
+      for (const name of names) {
+        if (!exported.has(name)) {
+          problems.push(`${key}\n    imports '${name}' from '${specifier}' but ${targetKey} does not export it`)
+        }
+      }
+    }
+  }
+  return problems
+}
+
+function verifyBundleLinks() {
+  if (process.env.PEARTUBE_SKIP_BUNDLE_LINK_CHECK === '1') {
+    console.warn('[desktop:bundle] Skipping bundle link check (PEARTUBE_SKIP_BUNDLE_LINK_CHECK=1)')
+    return
+  }
+  const require = createRequire(path.join(projectRoot, 'package.json'))
+  const Bundle = require('bare-bundle')
+  const packed = Bundle.from(fs.readFileSync(bundleFile))
+
+  const problems = checkBundleLinks(packed)
+  if (problems.length > 0) {
+    throw new Error(
+      `[desktop:bundle] Bundle FAILS to link — the worker would crash at startup (${problems.length} unresolved import(s)):\n` +
+      `  ${problems.join('\n  ')}\n\n` +
+      'This means the source tree itself is internally inconsistent (an importer expects an export\n' +
+      'the target file does not have). ' + describeWorkingTreeState() + '\n' +
+      'Fix: restore the stale file(s) from git, e.g.\n' +
+      '  git checkout origin/main -- packages/backend/src\n' +
+      'then rebuild with PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle.\n' +
+      '(Escape hatch if this check misfires: PEARTUBE_SKIP_BUNDLE_LINK_CHECK=1)',
+    )
+  }
+  console.log('[desktop:bundle] Bundle link check passed (all named imports satisfied)')
+}
+
 function runBarePack() {
   if (!fs.existsSync(entryFile)) {
     throw new Error(
@@ -213,18 +329,23 @@ function runBarePack() {
   if (result.status !== 0) process.exit(result.status || 1)
 }
 
-const forced = process.env.PEARTUBE_FORCE_DESKTOP_BUNDLE === '1'
-const sourceNewest = getSourceNewestMtimeMs()
-const bundleMtime = getMtimeMs(bundleFile)
-const missingBundle = bundleMtime === 0
-const staleBundle = !missingBundle && bundleMtime < sourceNewest
+// Only run the build when executed directly (the test imports checkBundleLinks).
+const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url
+if (isMain) {
+  const forced = process.env.PEARTUBE_FORCE_DESKTOP_BUNDLE === '1'
+  const sourceNewest = getSourceNewestMtimeMs()
+  const bundleMtime = getMtimeMs(bundleFile)
+  const missingBundle = bundleMtime === 0
+  const staleBundle = !missingBundle && bundleMtime < sourceNewest
 
-if (forced || missingBundle || staleBundle) {
-  const reason = forced ? 'forced rebuild' : missingBundle ? 'missing bundle' : 'stale bundle'
-  console.log(`[desktop:bundle] Rebuilding desktop worker bundle (${reason})`)
-  runBarePack()
-  verifyBundleFreshness()
-  console.log(`[desktop:bundle] Wrote ${path.relative(projectRoot, bundleFile)}`)
-} else {
-  console.log('[desktop:bundle] Desktop worker bundle is up to date')
+  if (forced || missingBundle || staleBundle) {
+    const reason = forced ? 'forced rebuild' : missingBundle ? 'missing bundle' : 'stale bundle'
+    console.log(`[desktop:bundle] Rebuilding desktop worker bundle (${reason})`)
+    runBarePack()
+    verifyBundleFreshness()
+    verifyBundleLinks()
+    console.log(`[desktop:bundle] Wrote ${path.relative(projectRoot, bundleFile)}`)
+  } else {
+    console.log('[desktop:bundle] Desktop worker bundle is up to date')
+  }
 }

@@ -71,7 +71,10 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
   const source = fs.readFileSync(path.join(appRoot, 'scripts', 'build-desktop-bundle.mjs'), 'utf8')
 
   assert.match(source, /'--format', 'bundle'/, 'should emit a runnable bare bundle')
-  assert.match(source, /'--linked'/, 'should link native addons')
+  // Must NOT pass --linked: a standalone `bare index.bundle` needs the prebuilt
+  // addons embedded, not referenced as external linked: frameworks.
+  assert.doesNotMatch(source, /'--linked'/, 'should embed addons, not link them externally')
+  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons embed')
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')

@@ -107,7 +107,8 @@ function findBarePackBin() {
 }
 
 // Hosts to pack native addons for. In dev we only need the host the developer
-// is running on; bare-pack records linked addon resolutions for it.
+// is running on; without --linked, bare-pack embeds that host's prebuilt
+// addons into the bundle so it is self-contained.
 function getBundleHosts() {
   return [`${process.platform}-${process.arch}`]
 }
@@ -344,7 +345,12 @@ function runBarePack() {
   ensureLiveWorkspaceLinks()
 
   const barePackBin = findBarePackBin()
-  const args = ['--out', bundleFile, '--format', 'bundle', '--linked']
+  // No --linked: embed the host's prebuilt native addons (bare-os, bare-ffmpeg,
+  // …) into the bundle so a standalone `bare index.bundle` is self-contained.
+  // --linked would emit `linked:` specifiers expecting the host to provide the
+  // addon frameworks (the mobile/native-sidecar model) — which a plain bare
+  // subprocess does not, so it would fail with ADDON_NOT_FOUND at startup.
+  const args = ['--out', bundleFile, '--format', 'bundle']
   for (const host of getBundleHosts()) args.push('--host', host)
   args.push(entryFile)
 

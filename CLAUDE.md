@@ -111,7 +111,7 @@ npm run bundle:backend  # bare-pack → backend.bundle.js
 1. `desktop:export` - Expo web export to `.desktop-export/`
 2. `desktop:merge` - Copy to `desktop-build/`
 3. `desktop:worker` - SWC compile `workers/desktop/index.ts` → `index.mjs`
-4. `desktop:bundle` - bare-pack `index.mjs` (+ `@peartube/backend` source) into a self-contained, runnable `index.bundle` (mtime-gated). `desktop:ecopy` ships **only** this bundle into the `.app` (no `node_modules/@peartube` source tree), and the launcher (`src/bun/index.ts`) loads it — so the `.app` runs one frozen artifact. Native addons are linked (`--linked`) to the dev monorepo, not copied.
+4. `desktop:bundle` - bare-pack `index.mjs` (+ `@peartube/backend` source) into a self-contained, runnable `index.bundle` (mtime-gated). `desktop:ecopy` ships **only** this bundle into the `.app` (no `node_modules/@peartube` source tree), and the launcher (`src/bun/index.ts`) loads it — so the `.app` runs one frozen artifact. The host's prebuilt native addons (bare-os, bare-ffmpeg, …) are **embedded** in the bundle (bare-pack without `--linked`); do not add `--linked` (that emits `linked:` specifiers expecting the host to ship addon frameworks — a standalone `bare index.bundle` then fails with `ADDON_NOT_FOUND`).
 
 **Native Desktop Build (desktop:native:build):**
 1. `ensure:host-sidecar` - Bundle JS sidecar via bare-pack

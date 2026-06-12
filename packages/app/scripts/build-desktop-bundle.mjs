@@ -89,7 +89,10 @@ function getSourceNewestMtimeMs() {
   // entry: `desktop:worker` rewrites index.mjs on every build, so keying off it
   // would force a rebundle every launch. The bundle content only depends on the
   // traced source, and `workers/desktop` is included below.
-  let newest = 0
+  // Include this script's own mtime: when the packing logic/flags change (e.g.
+  // dropping --linked), the bundle must be rebuilt even if no source changed —
+  // otherwise a mtime-fresh bundle from the old logic is silently kept.
+  let newest = getMtimeMs(fileURLToPath(import.meta.url))
   for (const root of sourceRoots) newest = Math.max(newest, walkNewestMtimeMs(root))
   for (const filePath of sourceFiles) newest = Math.max(newest, getMtimeMs(filePath))
   return newest
@@ -107,7 +110,8 @@ function findBarePackBin() {
 }
 
 // Hosts to pack native addons for. In dev we only need the host the developer
-// is running on; bare-pack records linked addon resolutions for it.
+// is running on; without --linked, bare-pack embeds that host's prebuilt
+// addons into the bundle so it is self-contained.
 function getBundleHosts() {
   return [`${process.platform}-${process.arch}`]
 }
@@ -303,6 +307,34 @@ function verifyBundleLinks() {
   console.log('[desktop:bundle] Bundle link check passed (all named imports satisfied)')
 }
 
+// Native-addon deps (e.g. bare-ffmpeg, imported by backend/src/thumbnail.js)
+// ship as git submodules under packages/. If a submodule isn't initialized its
+// `file:` dep can't link and bare-pack dies tracing it with a cryptic
+// "MODULE_NOT_FOUND: Cannot find module 'bare-ffmpeg'". Catch it up front with
+// an actionable message.
+function ensureNativeAddonSubmodules() {
+  let gitmodules = ''
+  try {
+    gitmodules = fs.readFileSync(path.join(repoRoot, '.gitmodules'), 'utf8')
+  } catch {
+    return
+  }
+  const missing = []
+  for (const m of gitmodules.matchAll(/path\s*=\s*(packages\/bare-[^\s]+)/g)) {
+    const subPath = m[1]
+    if (!fs.existsSync(path.join(repoRoot, subPath, 'package.json'))) missing.push(subPath)
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[desktop:bundle] Native addon submodule(s) not initialized: ${missing.join(', ')}\n` +
+      'bare-pack needs them on disk to trace the backend (bare-ffmpeg is imported by\n' +
+      'packages/backend/src/thumbnail.js). They are git submodules, untouched by git pull/checkout.\n' +
+      `Fix: git submodule update --init ${missing.join(' ')} && npm run install:all\n` +
+      'then rebuild with PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle.',
+    )
+  }
+}
+
 function runBarePack() {
   if (!fs.existsSync(entryFile)) {
     throw new Error(
@@ -312,10 +344,16 @@ function runBarePack() {
   }
 
   fs.mkdirSync(path.dirname(bundleFile), { recursive: true })
+  ensureNativeAddonSubmodules()
   ensureLiveWorkspaceLinks()
 
   const barePackBin = findBarePackBin()
-  const args = ['--out', bundleFile, '--format', 'bundle', '--linked']
+  // No --linked: embed the host's prebuilt native addons (bare-os, bare-ffmpeg,
+  // …) into the bundle so a standalone `bare index.bundle` is self-contained.
+  // --linked would emit `linked:` specifiers expecting the host to provide the
+  // addon frameworks (the mobile/native-sidecar model) — which a plain bare
+  // subprocess does not, so it would fail with ADDON_NOT_FOUND at startup.
+  const args = ['--out', bundleFile, '--format', 'bundle']
   for (const host of getBundleHosts()) args.push('--host', host)
   args.push(entryFile)
 

@@ -1,6 +1,7 @@
 # Retire libmpv across all platforms (bare-mpv → OS-native players)
 
-Status: design / proposal
+Status: in progress — Phases 1–4 code-complete (2026-06-11); device/Xcode/browser
+validation pending (see per-phase markers)
 Date: 2026-06-11
 Related: `2026-04-05-replace-mpv-with-html5-video.md` (Electrobun half — extended/superseded here),
 `2026-06-11-desktop-mse-audio-transcode-fallback.md` (web compat layer)
@@ -112,6 +113,14 @@ benefit.
   mpv) for those, completing the desktop-native retirement.
 
 ### Phase 1 — iOS (delete dead mpv)
+
+**Status: ✅ code-complete (2026-06-11)** — mpv Swift/ObjC files, pbxproj refs,
+MPVKit-GPL pod (Podfile + lock), and the Libmpv bridging-header block are gone.
+expo-video PiP is already configured (app.json `supportsPictureInPicture`,
+`UIBackgroundModes`, `allowsPictureInPicture`/`startsPictureInPictureAutomatically`
+in `PearInlineVideoView`). ⏭ Remaining: Xcode build + on-device PiP/background-audio
+pass (steps 6's UX confirmation).
+
 4. Remove `MpvPlayerCore.swift`, `MpvPlayerView.swift`, `MpvPlayerViewManager.swift`,
    `MpvPlayerManager.m`, `MpvHttpStreamBridge.swift`, `MpvPipController.swift` and
    their Xcode `project.pbxproj` refs.
@@ -122,12 +131,38 @@ benefit.
    strictly an improvement over today, where such files likely fail on iOS.
 
 ### Phase 2 — Electrobun desktop (execute 2026-04-05, regression-free)
+
+**Status: ✅ code-complete (2026-06-11)** — `MpvPlayer.web.tsx`/desktop-worker mpv
+handlers were already gone (removed in earlier merged work); the new piece is the
+MSE audio-transcode fallback: `MseVideoPlayer.web.tsx` now has two fragment
+sources behind one SourceBuffer contract — mediabunny remux (unchanged) and a
+compat source that calls `webPreparePlayback` (worker runs
+`startCompatTranscode({player:'webkit', force:true})`) and pulls fMP4 fragments
+from the cast file server on 127.0.0.1. The doc's open transport question is
+resolved: plain HTTP fetch of the fMP4-HLS playlist/segments (server already
+sends CORS \*), no IPC fragment relay, no schema change. Selection is
+`MediaSource.isTypeSupported` on mediabunny codec strings. Playlist parsing is
+unit-tested (`packages/app/tests/hls-fragment-source.test.mjs`).
+⏭ Remaining: in-webview validation (AC-3/DTS/Opus MKVs) on WKWebView/WebView2/
+WebKitGTK. Known limit: compat transcode is paced ~realtime (cast heritage), so
+far-forward seeks wait for the transcoder; seek-restart via input `onseek` is a
+follow-up.
+
 8. Implement the MSE audio-transcode `FragmentSource` (see MSE-fallback doc).
 9. Remove `MpvPlayer.web.tsx` and its render sites in `VideoPlayerOverlayImpl.tsx` /
    `index.web.tsx`; route everything through `MseVideoPlayer.web.tsx`.
 10. Remove the mpv handlers wired for the desktop worker.
 
 ### Phase 3 — desktop-native (make AVPlayer the only path)
+
+**Status: ✅ code-complete (2026-06-11)** — `startPlaybackSession`, the mpv RPC
+call sites, session state, the RGBA frame-server polling renderer
+(`Views/MpvPlayerView.swift`), and the `prefersNativeMpvPlayback`/
+`prefersNativeFFmpegDecodePlayback`/`PEARTUBE_NATIVE_ENABLE_MPV` machinery are
+deleted; the watch page/mini player always build an AVPlayer from
+`prepareAVPlayerURL`. ⏭ Remaining: Xcode build + Phase 0 on-device validation
+(flip `PEARTUBE_AVPLAYER_COMPAT=1`, play MKV/AC-3/Opus through local HLS).
+
 11. Make `startPlaybackSession` always return `.avPlayer`; route incompatible
     codecs to the Phase-0 local-HLS URL instead of mpv.
 12. Delete the mpv branch, the **RGBA-frame server + 30fps polling renderer**
@@ -136,6 +171,16 @@ benefit.
     machinery. (This also removes the inefficient frame-streaming hack.)
 
 ### Phase 4 — delete bare-mpv
+
+**Status: ✅ code-complete (2026-06-11)** — mpv messages/methods removed from
+`schema.cjs` *and* the persisted registries (`spec/hrpc/hrpc.json`,
+`spec/schema/schema.json`); JS + Swift regenerated with all surviving method ids
+unchanged (98–106 vacated). Submodule, prebuilds workflow,
+`ensure-bare-mpv-prebuilds.mjs`, addon-root/watch entries,
+`BARE_MPV_PREBUILD_ROOT` plumbing, sidecar/worklet mpv handlers, and the legacy
+numbered-command mpv codecs are all gone. ⏭ Remaining: native desktop Xcode
+build to confirm the regenerated Swift schema compiles into the app.
+
 13. Remove the `mpv*` HRPC methods + message types from `spec/schema.cjs`,
     regenerate JS + Swift schema.
 14. Delete the mpv RPC handlers in `native-host-sidecar.mjs` /

@@ -1,6 +1,8 @@
 # Desktop MSE fallback: real-time bare-ffmpeg audio transcode
 
-Status: design / proposal
+Status: implemented 2026-06-11 (renderer + worker; in-webview validation pending).
+Transport question resolved: the renderer fetches the fMP4-HLS init/segments from
+the cast file server over local HTTP (CORS already open) — no IPC fragment relay.
 Date: 2026-06-11
 Scope: Electrobun desktop (system WebView: WKWebView / WebView2 / WebKitGTK)
 

@@ -110,7 +110,8 @@ npm run bundle:backend  # bare-pack → backend.bundle.js
 **Electrobun Desktop Build (desktop:build):**
 1. `desktop:export` - Expo web export to `.desktop-export/`
 2. `desktop:merge` - Copy to `desktop-build/`
-3. `desktop:worker` - SWC compile `workers/desktop/index.ts`
+3. `desktop:worker` - SWC compile `workers/desktop/index.ts` → `index.mjs`
+4. `desktop:bundle` - bare-pack `index.mjs` (+ `@peartube/backend` source) into a self-contained, runnable `index.bundle` (mtime-gated). The launcher prefers this bundle over the loose `.mjs`, so the `.app` runs one frozen artifact instead of a copied source tree.
 
 **Native Desktop Build (desktop:native:build):**
 1. `ensure:host-sidecar` - Bundle JS sidecar via bare-pack
@@ -171,7 +172,7 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 
 **"Cannot find module" in desktop builds:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`) and verify `packages/app/src/bun/index.ts` resolves the compiled worker under `desktop-build/build/workers/`. Rebuild with `npm run desktop:build`.
 
-**Desktop worker "does not provide an export named 'X'" (e.g. `createUniversalHrpcSurface` from `./universal-core.js`):** The launched `.app` is running a **stale copy** of `@peartube/backend`. The worker (`workers/core/index.mjs`) imports backend source from `Contents/Resources/app/node_modules/@peartube/backend/`, which `desktop:ecopy` only refreshes when you launch via `npm run desktop:start`. Launching the `.app` directly (Finder/`open`/Spotlight) runs whatever was last copied, so a source file that gained a new export after the last copy will be missing it on disk while its importer expects it. Fix: recopy + relaunch with `cd packages/app && npm run desktop:start` (or a full `npm run desktop:dev`). The source `packages/backend/src/universal-core.js` already exports it — this is purely a stale-artifact mismatch, not a code bug.
+**Desktop worker "does not provide an export named 'X'" (e.g. `createUniversalHrpcSurface` from `./universal-core.js`):** A **stale artifact**, not a code bug — the source already exports it. The Electrobun worker now loads a self-contained bare bundle: `desktop:bundle` (`scripts/build-desktop-bundle.mjs`) bare-packs `desktop-build/build/workers/core/index.mjs` (+ `@peartube/backend` source) into `index.bundle`, and the launcher (`src/bun/index.ts`) prefers that `.bundle` over the loose `.mjs` + copied `node_modules/@peartube/*` tree. The bundle is mtime-gated and rebuilt by both `desktop:build` and `desktop:start`, so a source change is picked up on the next launch. If you still hit this: the launched `.app` has a stale bundle (e.g. launched directly via Finder/`open` without `npm run desktop:start`). Fix: rebuild + relaunch with `cd packages/app && npm run desktop:start` (or a full `npm run desktop:dev`); force a rebuild with `PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle`.
 
 **Native Desktop "Unsupported native bridge command: N":** The sidecar binary is stale. Rebuild: `cd packages/desktop-native && node scripts/build-native-sidecar.mjs`.
 

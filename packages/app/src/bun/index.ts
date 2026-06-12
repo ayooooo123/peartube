@@ -71,6 +71,15 @@ function getWorker(specifier: string) {
   if (!existsSync(workerPath)) {
     workerPath = workerPath.replace(/\.js$/, '.mjs')
   }
+  // Prefer the self-contained bare bundle when present. `desktop:bundle`
+  // bare-packs the worker (+ @peartube/backend source) into a single
+  // `.bundle` that `bare` loads natively, so we run one frozen artifact
+  // instead of resolving raw source from the copied node_modules tree (which
+  // could be stale — see the "does not provide an export named X" failure).
+  const bundlePath = workerPath.replace(/\.(js|mjs)$/, '.bundle')
+  if (existsSync(bundlePath)) {
+    workerPath = bundlePath
+  }
 
   console.log('[main] Spawning Bare worker:', workerPath, 'storage:', storagePath)
   const worker = PearRuntime.run(workerPath, [storagePath])

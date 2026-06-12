@@ -75,6 +75,104 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')
+  // Must guard against a stale physical copy of @peartube/* shadowing live
+  // source during the pack (the silent path back to "does not provide an
+  // export named X"), and prove post-pack that bundled bytes match live source.
+  assert.match(
+    source,
+    /ensureLiveWorkspaceLinks\(\)/,
+    'should re-link stale @peartube node_modules copies before packing',
+  )
+  assert.match(
+    source,
+    /verifyBundleFreshness\(\)/,
+    'should verify packed @peartube files match live source after packing',
+  )
+  assert.match(
+    source,
+    /verifyBundleLinks\(\)/,
+    'should statically link-check the packed bundle after packing',
+  )
+})
+
+test('bundle link check catches a stale universal-core missing an export', async () => {
+  const { checkBundleLinks } = await import('../scripts/build-desktop-bundle.mjs')
+
+  // Minimal Bundle-shaped fixture: keys() + read() + resolutions, mirroring
+  // bare-bundle's surface that checkBundleLinks consumes.
+  function makeBundle(files, resolutions) {
+    return {
+      keys: () => Object.keys(files),
+      read: (key) => Buffer.from(files[key]),
+      resolutions,
+    }
+  }
+
+  const entryKey = '/x/node_modules/@peartube/backend/src/backend-entry.js'
+  const coreKey = '/x/node_modules/@peartube/backend/src/universal-core.js'
+  const importer = "import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'\nexport function createBackend() {}\n"
+  const freshCore = 'export function createUniversalCore() {}\nexport function createUniversalHrpcSurface() {}\nexport default {}\n'
+  const staleCore = 'export function createUniversalCore() {}\nexport default {}\n'
+  const resolutions = { [entryKey]: { './universal-core.js': coreKey } }
+
+  const fresh = checkBundleLinks(makeBundle({ [entryKey]: importer, [coreKey]: freshCore }, resolutions))
+  assert.equal(fresh.length, 0, `fresh bundle should link cleanly, got: ${fresh.join('; ')}`)
+
+  const stale = checkBundleLinks(makeBundle({ [entryKey]: importer, [coreKey]: staleCore }, resolutions))
+  assert.equal(stale.length, 1, 'stale bundle should produce exactly one problem')
+  assert.match(stale[0], /createUniversalHrpcSurface/, 'problem should name the missing export')
+  assert.match(stale[0], /universal-core\.js/, 'problem should name the stale file')
+
+  // `export *` disables verification for that target (cannot check statically).
+  const starCore = "export * from './elsewhere.js'\n"
+  const star = checkBundleLinks(makeBundle({ [entryKey]: importer, [coreKey]: starCore }, resolutions))
+  assert.equal(star.length, 0, 'export * targets should be skipped, not flagged')
+})
+
+test('bundle link check has zero false positives across the real backend source', async () => {
+  const { checkBundleLinks } = await import('../scripts/build-desktop-bundle.mjs')
+  const repoRoot = path.resolve(appRoot, '..', '..')
+
+  // Build a synthetic bundle from the actual live source tree: every relative
+  // import between files maps through resolutions exactly like bare-pack
+  // records them. The real tree must link cleanly.
+  const files = {}
+  const resolutions = {}
+  const roots = ['packages/backend/src', 'packages/backend/lib', 'packages/host/src', 'packages/protocol/src', 'packages/core/src']
+
+  function walk(dir) {
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules') continue
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.(js|mjs)$/.test(entry.name)) files[full] = fs.readFileSync(full, 'utf8')
+    }
+  }
+  for (const root of roots) walk(path.join(repoRoot, root))
+
+  for (const key of Object.keys(files)) {
+    const map = {}
+    for (const m of files[key].matchAll(/from\s*['"](\.[^'"]+)['"]/g)) {
+      const resolved = path.resolve(path.dirname(key), m[1])
+      if (files[resolved]) map[m[1]] = resolved
+    }
+    resolutions[key] = map
+  }
+
+  const bundle = {
+    keys: () => Object.keys(files),
+    read: (key) => Buffer.from(files[key]),
+    resolutions,
+  }
+  const problems = checkBundleLinks(bundle)
+  assert.equal(problems.length, 0, `live source should link cleanly, got:\n${problems.join('\n')}`)
+  assert.ok(Object.keys(files).length > 50, 'sanity: should have scanned the real source tree')
 })
 
 test('desktop launcher prefers the bare bundle over the loose worker', () => {

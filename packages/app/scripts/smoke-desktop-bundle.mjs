@@ -3,55 +3,38 @@
  * Headless smoke test for the packed desktop worker bundle.
  *
  * `desktop:build` only proves the bundle *packs*; it never runs it, so a native
- * addon that packs fine but cannot be `dlopen`ed at runtime (the
+ * addon that packs but cannot be `dlopen`ed at runtime (the
  * `index.bundle/.../bare-os.bare` ENOTDIR crash this pipeline exists to prevent)
- * would sail through a build-only CI step. This runs the packed bundle with the
- * `bare` runtime and fails if any native addon (bare-os, bare-ffmpeg, …) fails
- * to load.
+ * would sail through a build-only CI step. This launches the packed bundle the
+ * exact way the desktop launcher does — `PearRuntime.run(bundle, [storage])`
+ * (see src/bun/index.ts) — and fails if any native addon (bare-os, bare-ffmpeg,
+ * …) fails to load. Using pear-runtime means we exercise the real embedded bare
+ * runtime and the offloaded-addon resolution (`<bundle>/../node_modules/…`).
  *
  * We only need the bundle to boot far enough to evaluate its top-level
  * `import … from 'bare-*'` statements (and the bare-ffmpeg import pulled in by
  * @peartube/backend/thumbnail) — that is where the addon `dlopen` happens. The
  * worker is NOT meant to fully start standalone (it needs a parent IPC peer), so
- * we do not assert a clean exit: we only fail on a native-addon load error seen
- * within a short window, then kill it. Non-addon crashes (e.g. a missing IPC
- * peer) are expected and ignored.
+ * we do not require a clean run: we fail only on a native-addon load error seen
+ * within a short window, then tear it down. A non-addon exit is expected.
  *
- * Runs against the bundle built for the current host (desktop:bundle targets
- * `${platform}-${arch}`), so it is meant to run on the same machine/arch that
- * built it — i.e. the macOS CI runner, or a dev Mac.
+ * Run under `bun` (the launcher's runtime), so pear-runtime behaves as it does
+ * in the app. Targets the bundle built for the current host.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import PearRuntime from 'pear-runtime'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..')
-const repoRoot = path.resolve(projectRoot, '..', '..')
 const bundleFile = path.join(projectRoot, 'desktop-build', 'build', 'workers', 'core', 'index.bundle')
 
 // Unambiguous native-addon load failures. A successful boot never prints these.
-// Scoped tightly so an unrelated JS error can't trip a false failure.
+// Scoped tightly so an unrelated JS/runtime error can't trip a false failure.
 const ADDON_ERROR = /dlopen|ENOTDIR|errno=20|ADDON_NOT_FOUND|Cannot find addon/i
 const RUN_MS = 8000
-
-function findBareBin() {
-  const candidates = [
-    path.join(projectRoot, 'node_modules', '.bin', 'bare'),
-    path.join(repoRoot, 'node_modules', '.bin', 'bare'),
-  ]
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate
-  }
-  const which = spawnSync('bash', ['-lc', 'command -v bare'], { encoding: 'utf8' })
-  const found = (which.stdout || '').trim()
-  if (found) return found
-  throw new Error(
-    'Could not locate the `bare` runtime binary (from bare-runtime). Run `npm run install:all`.',
-  )
-}
 
 if (!fs.existsSync(bundleFile)) {
   console.error(`[smoke] Bundle not found: ${bundleFile}\nRun \`npm run desktop:build\` first.`)
@@ -59,42 +42,34 @@ if (!fs.existsSync(bundleFile)) {
 }
 
 const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-smoke-'))
-const bareBin = findBareBin()
 
 function cleanup() {
   try { fs.rmSync(storageDir, { recursive: true, force: true }) } catch { /* best effort */ }
 }
 
-console.log(`[smoke] ${bareBin} ${path.relative(projectRoot, bundleFile)} ${storageDir}`)
-const child = spawn(bareBin, [bundleFile, storageDir], { cwd: projectRoot, env: process.env })
+console.log(`[smoke] PearRuntime.run(${path.relative(projectRoot, bundleFile)}, [${storageDir}])`)
+
+let worker
+try {
+  worker = PearRuntime.run(bundleFile, [storageDir])
+} catch (err) {
+  cleanup()
+  console.error('[smoke] Failed to launch the bundle via pear-runtime:', err?.message || err)
+  process.exit(1)
+}
 
 let addonError = null
-const onData = (chunk) => {
-  const text = chunk.toString()
-  if (!addonError && ADDON_ERROR.test(text)) {
-    addonError = text.trim()
-    try { child.kill('SIGKILL') } catch { /* already gone */ }
-  }
-}
-child.stdout.on('data', onData)
-child.stderr.on('data', onData)
+let settled = false
+let timer = null
 
-const timer = setTimeout(() => {
-  try { child.kill('SIGKILL') } catch { /* already gone */ }
-}, RUN_MS)
-
-child.on('error', (err) => {
-  clearTimeout(timer)
+function finish(ok, detail) {
+  if (settled) return
+  settled = true
+  if (timer) clearTimeout(timer)
+  try { worker.destroy?.() } catch { /* already gone */ }
   cleanup()
-  console.error('[smoke] Failed to spawn bare:', err.message)
-  process.exit(1)
-})
-
-child.on('exit', (code, signal) => {
-  clearTimeout(timer)
-  cleanup()
-  if (addonError) {
-    console.error('\n[smoke] FAIL: a native addon failed to load in the packed bundle:\n  ' + addonError)
+  if (!ok) {
+    console.error('\n[smoke] FAIL: a native addon failed to load in the packed bundle:\n  ' + detail)
     console.error(
       '\n[smoke] This is the dlopen/ENOTDIR regression: the addon was not offloaded to a real\n' +
       'file beside the bundle. Check --offload-addons / --base / the staging relocation in\n' +
@@ -102,9 +77,30 @@ child.on('exit', (code, signal) => {
     )
     process.exit(1)
   }
-  console.log(
-    `[smoke] PASS: native addons loaded (bare exited code=${code} signal=${signal} after boot; ` +
-    'a non-addon exit here is expected without a parent IPC peer).',
-  )
+  console.log('[smoke] PASS: ' + detail)
   process.exit(0)
+}
+
+const onData = (chunk) => {
+  const text = chunk.toString()
+  if (!addonError && ADDON_ERROR.test(text)) {
+    addonError = text.trim()
+    finish(false, addonError)
+  }
+}
+
+worker.stdout?.on('data', onData)
+worker.stderr?.on('data', onData)
+worker.on?.('error', (err) => {
+  const text = String(err?.message || err)
+  if (ADDON_ERROR.test(text)) finish(false, text.trim())
 })
+worker.once?.('exit', (code) => {
+  // No parent IPC peer, so the worker is expected to exit; reaching here without
+  // an addon error means every native addon loaded.
+  if (!addonError) finish(true, `native addons loaded (worker exited code=${code} after boot).`)
+})
+
+timer = setTimeout(() => {
+  finish(true, 'native addons loaded (no load error within the smoke window).')
+}, RUN_MS)

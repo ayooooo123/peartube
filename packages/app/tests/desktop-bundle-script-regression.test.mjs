@@ -33,8 +33,8 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
   // crash.
   assert.equal(
     scripts['desktop:smoke'],
-    'node ./scripts/smoke-desktop-bundle.mjs',
-    'desktop:smoke should run the bundle smoke test',
+    'bun ./scripts/smoke-desktop-bundle.mjs',
+    'desktop:smoke should run the bundle smoke test under bun (the launcher runtime)',
   )
 
   // A bare `desktop:start` must be self-sufficient: recompile the worker,

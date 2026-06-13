@@ -222,3 +222,60 @@ test('public feed counts already-known async verified HAVE_FEED entries for the 
     manager.stop()
   }
 })
+
+test('verified peer feed entries re-gossip even before relay byte cache is ready', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const conn = {}
+  const sent = []
+  const signed = await signedDescriptor({ channelId: key(4), metadataKey: key(5), mediaKey: key(6) })
+
+  try {
+    manager.handleMessage({
+      type: 'HAVE_FEED',
+      entries: [{
+        driveKey: key(4),
+        publicBeeKey: key(5),
+        channelName: 'verified relay-forwarded channel',
+        signedDescriptor: signed,
+      }],
+    }, {})
+    await new Promise((resolve) => setImmediate(resolve))
+
+    manager.peerChannels.set(conn, { messages: [{ send: (msg) => sent.push(msg) }] })
+    manager.sendHaveFeed(conn)
+
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0].type, 'HAVE_FEED')
+    assert.deepEqual(sent[0].keys, [key(4)])
+    assert.equal(sent[0].entries[0].driveKey, key(4))
+    assert.equal(sent[0].entries[0].publicBeeKey, key(5))
+    assert.equal(sent[0].entries[0].signedDescriptor.descriptor.channelId, key(4))
+    assert.equal(sent[0].entries[0].relayServing, false)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('syntactically valid but unverified cached peer descriptors do not re-gossip', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const conn = {}
+  const sent = []
+  const signed = await signedDescriptor({ channelId: key(11), metadataKey: key(12), mediaKey: key(13) })
+
+  try {
+    manager.addEntry(key(11), 'peer', key(12), {
+      driveKey: key(11),
+      publicBeeKey: key(12),
+      signedDescriptor: signed,
+      restoredFromCache: true,
+    })
+
+    manager.peerChannels.set(conn, { messages: [{ send: (msg) => sent.push(msg) }] })
+    manager.sendHaveFeed(conn)
+
+    assert.equal(sent.length, 1)
+    assert.deepEqual(sent[0].keys, [])
+  } finally {
+    manager.stop()
+  }
+})

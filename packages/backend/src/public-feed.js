@@ -243,6 +243,7 @@ export class PublicFeed {
         const normalized = this._normalizeSignedDescriptor(signed)
         if (normalized) {
           entry.signedDescriptor = normalized
+          entry.signedDescriptorVerified = true
           changed++
         }
       } catch { /* best effort; retried after the backoff window */ }
@@ -318,6 +319,7 @@ export class PublicFeed {
       restoredFromCache: true,
       restoredFrom,
       requiresAvailabilityProbe: true,
+      signedDescriptorVerified: false,
     }
     if (Array.isArray(marked.previewVideos)) {
       marked.previewVideos = marked.previewVideos.map((video) => ({
@@ -404,7 +406,7 @@ export class PublicFeed {
       return { added: false, updated: false, accepted: false, reason: verification.reason }
     }
     const verifiedSnapshot = verification.signedDescriptor
-      ? { ...(snapshot || {}), signedDescriptor: verification.signedDescriptor }
+      ? { ...(snapshot || {}), signedDescriptor: verification.signedDescriptor, signedDescriptorVerified: true }
       : snapshot
     const resolvedPublicBeeKey = this._resolvePublicBeeKey({ publicBeeKey, ...(verifiedSnapshot || {}) })
     if (this.addEntry(driveKey, source, resolvedPublicBeeKey, verifiedSnapshot)) {
@@ -454,6 +456,17 @@ export class PublicFeed {
     )
   }
 
+  _isVerifiedMetadataEntry(entry) {
+    if (!entry || typeof entry !== 'object') return false
+    if (entry.signedDescriptorVerified !== true) return false
+    const driveKey = (entry.driveKey || entry.channelKey || '').toLowerCase()
+    const publicBeeKey = this._resolvePublicBeeKey(entry)
+    const signedDescriptor = this._normalizeSignedDescriptor(entry.signedDescriptor)
+    if (!driveKey || !publicBeeKey || !signedDescriptor) return false
+    const descriptor = signedDescriptor.descriptor
+    return descriptor.channelId === driveKey && descriptor.metadataKey === publicBeeKey
+  }
+
   _serializeEntry(entry) {
     const publicBeeKey = this._resolvePublicBeeKey(entry)
     const serialized = {
@@ -486,6 +499,7 @@ export class PublicFeed {
     }
     const signedDescriptor = this._normalizeSignedDescriptor(entry.signedDescriptor)
     if (signedDescriptor) serialized.signedDescriptor = signedDescriptor
+    if (entry.signedDescriptorVerified === true) serialized.signedDescriptorVerified = true
     return serialized
   }
 
@@ -594,6 +608,11 @@ export class PublicFeed {
         }
         changed = true
       }
+    }
+
+    if (typeof snapshot.signedDescriptorVerified !== 'undefined' && Boolean(snapshot.signedDescriptorVerified) !== Boolean(entry.signedDescriptorVerified)) {
+      entry.signedDescriptorVerified = Boolean(snapshot.signedDescriptorVerified)
+      changed = true
     }
 
     if (changed) {
@@ -1516,6 +1535,7 @@ export class PublicFeed {
           manifestUpdatedAt: Number(e.manifestUpdatedAt || 0) || 0,
           previewVideos: this._sanitizePreviewVideos(e.previewVideos),
           signedDescriptor: this._normalizeSignedDescriptor(e.signedDescriptor),
+          signedDescriptorVerified: e.signedDescriptorVerified === true,
         }))
       await this.metaDb.put('discovered-channels-v2', entries)
 
@@ -1709,11 +1729,12 @@ export class PublicFeed {
     // signed descriptor metadata.
     // Do not re-gossip every stale peer-discovered channel. Android peers were
     // OOMing after relays reset because old cached feeds ballooned to 100+
-    // mostly-unavailable entries. A relay should advertise what it can serve
-    // or has explicitly published, not every historical key it heard about.
+    // mostly-unavailable entries. Relays may still forward cryptographically
+    // verified feed metadata before byte cache catches up; serving/availability
+    // remains a separate claim on the serialized entry.
     const buildAnnounceEntries = () => Array.from(this.entries.values())
       .filter((entry) => isValidKey(this._resolvePublicBeeKey(entry)))
-      .filter((entry) => this._isLocallyBackedEntry(entry))
+      .filter((entry) => this._isLocallyBackedEntry(entry) || this._isVerifiedMetadataEntry(entry))
       .map((entry) => this._serializeEntry(entry))
 
     const baseEntries = buildAnnounceEntries()
@@ -2036,6 +2057,7 @@ export class PublicFeed {
       liveUpdatedAt: Number(snapshot?.liveUpdatedAt || 0) || 0,
       liveStreams: this._sanitizeLiveStreams(snapshot?.liveStreams),
       signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor),
+      signedDescriptorVerified: snapshot?.signedDescriptorVerified === true,
     });
 
     // Persist (debounced) so restarts retain discovered keys.

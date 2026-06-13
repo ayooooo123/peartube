@@ -204,952 +204,6 @@ export const APP_RPC_METADATA = Object.freeze({
     },
     {
       "id": 18,
-      "command": "subscribe-channel",
-      "method": "subscribeChannel",
-      "handler": "SubscribeChannel",
-      "request": "@peartube/subscribe-channel-request",
-      "response": "@peartube/subscribe-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 19,
-      "command": "unsubscribe-channel",
-      "method": "unsubscribeChannel",
-      "handler": "UnsubscribeChannel",
-      "request": "@peartube/unsubscribe-channel-request",
-      "response": "@peartube/unsubscribe-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 20,
-      "command": "get-subscriptions",
-      "method": "getSubscriptions",
-      "handler": "GetSubscriptions",
-      "request": "@peartube/get-subscriptions-request",
-      "response": "@peartube/get-subscriptions-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 21,
-      "command": "join-channel",
-      "method": "joinChannel",
-      "handler": "JoinChannel",
-      "request": "@peartube/join-channel-request",
-      "response": "@peartube/join-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 22,
-      "command": "get-public-feed",
-      "method": "getPublicFeed",
-      "handler": "GetPublicFeed",
-      "request": "@peartube/get-public-feed-request",
-      "response": "@peartube/get-public-feed-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 23,
-      "command": "get-canonical-feed",
-      "method": "getCanonicalFeed",
-      "handler": "GetCanonicalFeed",
-      "request": "@peartube/get-canonical-feed-request",
-      "response": "@peartube/get-canonical-feed-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 24,
-      "command": "refresh-feed",
-      "method": "refreshFeed",
-      "handler": "RefreshFeed",
-      "request": "@peartube/refresh-feed-request",
-      "response": "@peartube/refresh-feed-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 25,
-      "command": "submit-to-feed",
-      "method": "submitToFeed",
-      "handler": "SubmitToFeed",
-      "request": "@peartube/submit-to-feed-request",
-      "response": "@peartube/submit-to-feed-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 26,
-      "command": "unpublish-from-feed",
-      "method": "unpublishFromFeed",
-      "handler": "UnpublishFromFeed",
-      "request": "@peartube/unpublish-from-feed-request",
-      "response": "@peartube/unpublish-from-feed-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 27,
-      "command": "is-channel-published",
-      "method": "isChannelPublished",
-      "handler": "IsChannelPublished",
-      "request": "@peartube/is-channel-published-request",
-      "response": "@peartube/is-channel-published-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 28,
-      "command": "hide-channel",
-      "method": "hideChannel",
-      "handler": "HideChannel",
-      "request": "@peartube/hide-channel-request",
-      "response": "@peartube/hide-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 29,
-      "command": "get-channel-meta",
-      "method": "getChannelMeta",
-      "handler": "GetChannelMeta",
-      "request": "@peartube/get-channel-meta-request",
-      "response": "@peartube/get-channel-meta-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 30,
-      "command": "get-swarm-status",
-      "method": "getSwarmStatus",
-      "handler": "GetSwarmStatus",
-      "request": "@peartube/get-swarm-status-request",
-      "response": "@peartube/get-swarm-status-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 31,
-      "command": "create-device-invite",
-      "method": "createDeviceInvite",
-      "handler": "CreateDeviceInvite",
-      "request": "@peartube/create-device-invite-request",
-      "response": "@peartube/create-device-invite-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 32,
-      "command": "pair-device",
-      "method": "pairDevice",
-      "handler": "PairDevice",
-      "request": "@peartube/pair-device-request",
-      "response": "@peartube/pair-device-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 33,
-      "command": "list-devices",
-      "method": "listDevices",
-      "handler": "ListDevices",
-      "request": "@peartube/list-devices-request",
-      "response": "@peartube/list-devices-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 34,
-      "command": "retry-sync-channel",
-      "method": "retrySyncChannel",
-      "handler": "RetrySyncChannel",
-      "request": "@peartube/retry-sync-channel-request",
-      "response": "@peartube/retry-sync-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 35,
-      "command": "prefetch-video",
-      "method": "prefetchVideo",
-      "handler": "PrefetchVideo",
-      "request": "@peartube/prefetch-video-request",
-      "response": "@peartube/prefetch-video-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 36,
-      "command": "get-video-stats",
-      "method": "getVideoStats",
-      "handler": "GetVideoStats",
-      "request": "@peartube/get-video-stats-request",
-      "response": "@peartube/get-video-stats-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 37,
-      "command": "get-seeding-status",
-      "method": "getSeedingStatus",
-      "handler": "GetSeedingStatus",
-      "request": "@peartube/get-seeding-status-request",
-      "response": "@peartube/get-seeding-status-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 38,
-      "command": "set-seeding-config",
-      "method": "setSeedingConfig",
-      "handler": "SetSeedingConfig",
-      "request": "@peartube/set-seeding-config-request",
-      "response": "@peartube/set-seeding-config-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 39,
-      "command": "get-transcode-settings",
-      "method": "getTranscodeSettings",
-      "handler": "GetTranscodeSettings",
-      "request": "@peartube/get-transcode-settings-request",
-      "response": "@peartube/get-transcode-settings-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 40,
-      "command": "set-transcode-settings",
-      "method": "setTranscodeSettings",
-      "handler": "SetTranscodeSettings",
-      "request": "@peartube/set-transcode-settings-request",
-      "response": "@peartube/set-transcode-settings-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 41,
-      "command": "pin-channel",
-      "method": "pinChannel",
-      "handler": "PinChannel",
-      "request": "@peartube/pin-channel-request",
-      "response": "@peartube/pin-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 42,
-      "command": "unpin-channel",
-      "method": "unpinChannel",
-      "handler": "UnpinChannel",
-      "request": "@peartube/unpin-channel-request",
-      "response": "@peartube/unpin-channel-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 43,
-      "command": "get-pinned-channels",
-      "method": "getPinnedChannels",
-      "handler": "GetPinnedChannels",
-      "request": "@peartube/get-pinned-channels-request",
-      "response": "@peartube/get-pinned-channels-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 44,
-      "command": "get-storage-stats",
-      "method": "getStorageStats",
-      "handler": "GetStorageStats",
-      "request": "@peartube/get-storage-stats-request",
-      "response": "@peartube/get-storage-stats-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 45,
-      "command": "set-storage-limit",
-      "method": "setStorageLimit",
-      "handler": "SetStorageLimit",
-      "request": "@peartube/set-storage-limit-request",
-      "response": "@peartube/set-storage-limit-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 46,
-      "command": "clear-cache",
-      "method": "clearCache",
-      "handler": "ClearCache",
-      "request": "@peartube/clear-cache-request",
-      "response": "@peartube/clear-cache-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 47,
-      "command": "get-video-thumbnail",
-      "method": "getVideoThumbnail",
-      "handler": "GetVideoThumbnail",
-      "request": "@peartube/get-video-thumbnail-request",
-      "response": "@peartube/get-video-thumbnail-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 48,
-      "command": "get-video-metadata",
-      "method": "getVideoMetadata",
-      "handler": "GetVideoMetadata",
-      "request": "@peartube/get-video-metadata-request",
-      "response": "@peartube/get-video-metadata-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 49,
-      "command": "set-video-thumbnail",
-      "method": "setVideoThumbnail",
-      "handler": "SetVideoThumbnail",
-      "request": "@peartube/set-video-thumbnail-request",
-      "response": "@peartube/set-video-thumbnail-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 50,
-      "command": "set-video-thumbnail-from-file",
-      "method": "setVideoThumbnailFromFile",
-      "handler": "SetVideoThumbnailFromFile",
-      "request": "@peartube/set-video-thumbnail-from-file-request",
-      "response": "@peartube/set-video-thumbnail-from-file-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 51,
-      "command": "get-status",
-      "method": "getStatus",
-      "handler": "GetStatus",
-      "request": "@peartube/get-status-request",
-      "response": "@peartube/get-status-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 52,
-      "command": "pick-video-file",
-      "method": "pickVideoFile",
-      "handler": "PickVideoFile",
-      "request": "@peartube/pick-video-file-request",
-      "response": "@peartube/pick-video-file-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 53,
-      "command": "pick-image-file",
-      "method": "pickImageFile",
-      "handler": "PickImageFile",
-      "request": "@peartube/pick-image-file-request",
-      "response": "@peartube/pick-image-file-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 54,
-      "command": "get-blob-server-port",
-      "method": "getBlobServerPort",
-      "handler": "GetBlobServerPort",
-      "request": "@peartube/get-blob-server-port-request",
-      "response": "@peartube/get-blob-server-port-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 55,
-      "command": "global-search-videos",
-      "method": "globalSearchVideos",
-      "handler": "GlobalSearchVideos",
-      "request": "@peartube/global-search-videos-request",
-      "response": "@peartube/global-search-videos-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 56,
-      "command": "add-comment",
-      "method": "addComment",
-      "handler": "AddComment",
-      "request": "@peartube/add-comment-request",
-      "response": "@peartube/add-comment-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 57,
-      "command": "list-comments",
-      "method": "listComments",
-      "handler": "ListComments",
-      "request": "@peartube/list-comments-request",
-      "response": "@peartube/list-comments-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 58,
-      "command": "hide-comment",
-      "method": "hideComment",
-      "handler": "HideComment",
-      "request": "@peartube/hide-comment-request",
-      "response": "@peartube/hide-comment-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 59,
-      "command": "remove-comment",
-      "method": "removeComment",
-      "handler": "RemoveComment",
-      "request": "@peartube/remove-comment-request",
-      "response": "@peartube/remove-comment-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 60,
-      "command": "add-reaction",
-      "method": "addReaction",
-      "handler": "AddReaction",
-      "request": "@peartube/add-reaction-request",
-      "response": "@peartube/add-reaction-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 61,
-      "command": "remove-reaction",
-      "method": "removeReaction",
-      "handler": "RemoveReaction",
-      "request": "@peartube/remove-reaction-request",
-      "response": "@peartube/remove-reaction-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 62,
-      "command": "get-reactions",
-      "method": "getReactions",
-      "handler": "GetReactions",
-      "request": "@peartube/get-reactions-request",
-      "response": "@peartube/get-reactions-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 63,
-      "command": "event-ready",
-      "method": "eventReady",
-      "handler": "EventReady",
-      "request": "@peartube/event-ready",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 64,
-      "command": "event-error",
-      "method": "eventError",
-      "handler": "EventError",
-      "request": "@peartube/event-error",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 65,
-      "command": "event-upload-progress",
-      "method": "eventUploadProgress",
-      "handler": "EventUploadProgress",
-      "request": "@peartube/event-upload-progress",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 66,
-      "command": "event-download-progress",
-      "method": "eventDownloadProgress",
-      "handler": "EventDownloadProgress",
-      "request": "@peartube/event-download-progress",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 67,
-      "command": "event-feed-update",
-      "method": "eventFeedUpdate",
-      "handler": "EventFeedUpdate",
-      "request": "@peartube/event-feed-update",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 68,
-      "command": "event-log",
-      "method": "eventLog",
-      "handler": "EventLog",
-      "request": "@peartube/event-log",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 69,
-      "command": "event-video-stats",
-      "method": "eventVideoStats",
-      "handler": "EventVideoStats",
-      "request": "@peartube/event-video-stats",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 70,
-      "command": "cast-available",
-      "method": "castAvailable",
-      "handler": "CastAvailable",
-      "request": "@peartube/cast-available-request",
-      "response": "@peartube/cast-available-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 71,
-      "command": "cast-start-discovery",
-      "method": "castStartDiscovery",
-      "handler": "CastStartDiscovery",
-      "request": "@peartube/cast-start-discovery-request",
-      "response": "@peartube/cast-start-discovery-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 72,
-      "command": "cast-stop-discovery",
-      "method": "castStopDiscovery",
-      "handler": "CastStopDiscovery",
-      "request": "@peartube/cast-stop-discovery-request",
-      "response": "@peartube/cast-stop-discovery-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 73,
-      "command": "cast-get-devices",
-      "method": "castGetDevices",
-      "handler": "CastGetDevices",
-      "request": "@peartube/cast-get-devices-request",
-      "response": "@peartube/cast-get-devices-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 74,
-      "command": "cast-add-manual-device",
-      "method": "castAddManualDevice",
-      "handler": "CastAddManualDevice",
-      "request": "@peartube/cast-add-manual-device-request",
-      "response": "@peartube/cast-add-manual-device-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 75,
-      "command": "cast-connect",
-      "method": "castConnect",
-      "handler": "CastConnect",
-      "request": "@peartube/cast-connect-request",
-      "response": "@peartube/cast-connect-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 76,
-      "command": "cast-disconnect",
-      "method": "castDisconnect",
-      "handler": "CastDisconnect",
-      "request": "@peartube/cast-disconnect-request",
-      "response": "@peartube/cast-disconnect-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 77,
-      "command": "cast-play",
-      "method": "castPlay",
-      "handler": "CastPlay",
-      "request": "@peartube/cast-play-request",
-      "response": "@peartube/cast-play-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 78,
-      "command": "cast-pause",
-      "method": "castPause",
-      "handler": "CastPause",
-      "request": "@peartube/cast-pause-request",
-      "response": "@peartube/cast-pause-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 79,
-      "command": "cast-resume",
-      "method": "castResume",
-      "handler": "CastResume",
-      "request": "@peartube/cast-resume-request",
-      "response": "@peartube/cast-resume-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 80,
-      "command": "cast-stop",
-      "method": "castStop",
-      "handler": "CastStop",
-      "request": "@peartube/cast-stop-request",
-      "response": "@peartube/cast-stop-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 81,
-      "command": "cast-seek",
-      "method": "castSeek",
-      "handler": "CastSeek",
-      "request": "@peartube/cast-seek-request",
-      "response": "@peartube/cast-seek-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 82,
-      "command": "cast-set-volume",
-      "method": "castSetVolume",
-      "handler": "CastSetVolume",
-      "request": "@peartube/cast-set-volume-request",
-      "response": "@peartube/cast-set-volume-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 83,
-      "command": "cast-get-state",
-      "method": "castGetState",
-      "handler": "CastGetState",
-      "request": "@peartube/cast-get-state-request",
-      "response": "@peartube/cast-get-state-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 84,
-      "command": "cast-is-connected",
-      "method": "castIsConnected",
-      "handler": "CastIsConnected",
-      "request": "@peartube/cast-is-connected-request",
-      "response": "@peartube/cast-is-connected-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 85,
-      "command": "event-cast-device-found",
-      "method": "eventCastDeviceFound",
-      "handler": "EventCastDeviceFound",
-      "request": "@peartube/event-cast-device-found",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 86,
-      "command": "event-cast-device-lost",
-      "method": "eventCastDeviceLost",
-      "handler": "EventCastDeviceLost",
-      "request": "@peartube/event-cast-device-lost",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 87,
-      "command": "event-cast-playback-state",
-      "method": "eventCastPlaybackState",
-      "handler": "EventCastPlaybackState",
-      "request": "@peartube/event-cast-playback-state",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 88,
-      "command": "event-cast-time-update",
-      "method": "eventCastTimeUpdate",
-      "handler": "EventCastTimeUpdate",
-      "request": "@peartube/event-cast-time-update",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 89,
-      "command": "search-videos",
-      "method": "searchVideos",
-      "handler": "SearchVideos",
-      "request": "@peartube/search-videos-request",
-      "response": "@peartube/search-videos-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 90,
-      "command": "log-watch-event",
-      "method": "logWatchEvent",
-      "handler": "LogWatchEvent",
-      "request": "@peartube/log-watch-event-request",
-      "response": "@peartube/log-watch-event-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 91,
-      "command": "index-video-vectors",
-      "method": "indexVideoVectors",
-      "handler": "IndexVideoVectors",
-      "request": "@peartube/index-video-vectors-request",
-      "response": "@peartube/index-video-vectors-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 92,
-      "command": "get-recommendations",
-      "method": "getRecommendations",
-      "handler": "GetRecommendations",
-      "request": "@peartube/get-recommendations-request",
-      "response": "@peartube/get-recommendations-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 93,
-      "command": "get-video-recommendations",
-      "method": "getVideoRecommendations",
-      "handler": "GetVideoRecommendations",
-      "request": "@peartube/get-video-recommendations-request",
-      "response": "@peartube/get-video-recommendations-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 94,
-      "command": "update-video-metadata",
-      "method": "updateVideoMetadata",
-      "handler": "UpdateVideoMetadata",
-      "request": "@peartube/update-video-metadata-request",
-      "response": "@peartube/update-video-metadata-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 95,
-      "command": "desktop-bootstrap",
-      "method": "desktopBootstrap",
-      "handler": "DesktopBootstrap",
-      "request": "@peartube/desktop-bootstrap-request",
-      "response": "@peartube/desktop-bootstrap-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 96,
-      "command": "desktop-shutdown",
-      "method": "desktopShutdown",
-      "handler": "DesktopShutdown",
-      "request": "@peartube/desktop-shutdown-request",
-      "response": "@peartube/desktop-shutdown-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 97,
-      "command": "desktop-refresh-browse",
-      "method": "desktopRefreshBrowse",
-      "handler": "DesktopRefreshBrowse",
-      "request": "@peartube/desktop-refresh-browse-request",
-      "response": "@peartube/desktop-refresh-browse-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 107,
-      "command": "ffmpeg-decode-available",
-      "method": "ffmpegDecodeAvailable",
-      "handler": "FfmpegDecodeAvailable",
-      "request": "@peartube/ffmpeg-decode-available-request",
-      "response": "@peartube/ffmpeg-decode-available-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 108,
-      "command": "update-channel-avatar",
-      "method": "updateChannelAvatar",
-      "handler": "UpdateChannelAvatar",
-      "request": "@peartube/update-channel-avatar-request",
-      "response": "@peartube/update-channel-avatar-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 109,
-      "command": "transcode-start",
-      "method": "transcodeStart",
-      "handler": "TranscodeStart",
-      "request": "@peartube/transcode-start-request",
-      "response": "@peartube/transcode-start-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 110,
-      "command": "transcode-stop",
-      "method": "transcodeStop",
-      "handler": "TranscodeStop",
-      "request": "@peartube/transcode-stop-request",
-      "response": "@peartube/transcode-stop-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 111,
-      "command": "transcode-status",
-      "method": "transcodeStatus",
-      "handler": "TranscodeStatus",
-      "request": "@peartube/transcode-status-request",
-      "response": "@peartube/transcode-status-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 112,
-      "command": "event-transcode-progress",
-      "method": "eventTranscodeProgress",
-      "handler": "EventTranscodeProgress",
-      "request": "@peartube/event-transcode-progress",
-      "response": null,
-      "send": true,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 18,
       "command": "start-livestream",
       "method": "startLivestream",
       "handler": "StartLivestream",
@@ -1188,6 +242,39 @@ export const APP_RPC_METADATA = Object.freeze({
       "handler": "PrepareLivePlayback",
       "request": "@peartube/prepare-live-playback-request",
       "response": "@peartube/prepare-live-playback-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 22,
+      "command": "subscribe-channel",
+      "method": "subscribeChannel",
+      "handler": "SubscribeChannel",
+      "request": "@peartube/subscribe-channel-request",
+      "response": "@peartube/subscribe-channel-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 23,
+      "command": "unsubscribe-channel",
+      "method": "unsubscribeChannel",
+      "handler": "UnsubscribeChannel",
+      "request": "@peartube/unsubscribe-channel-request",
+      "response": "@peartube/unsubscribe-channel-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 24,
+      "command": "get-subscriptions",
+      "method": "getSubscriptions",
+      "handler": "GetSubscriptions",
+      "request": "@peartube/get-subscriptions-request",
+      "response": "@peartube/get-subscriptions-response",
       "send": false,
       "requestStream": false,
       "responseStream": false
@@ -1348,12 +435,914 @@ export const APP_RPC_METADATA = Object.freeze({
     },
     {
       "id": 39,
-      "command": "get-personal-encryption-secret",
-      "method": "getPersonalEncryptionSecret",
-      "handler": "GetPersonalEncryptionSecret",
-      "request": "@peartube/get-personal-encryption-secret-request",
-      "response": "@peartube/get-personal-encryption-secret-response",
+      "command": "join-channel",
+      "method": "joinChannel",
+      "handler": "JoinChannel",
+      "request": "@peartube/join-channel-request",
+      "response": "@peartube/join-channel-response",
       "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 40,
+      "command": "get-public-feed",
+      "method": "getPublicFeed",
+      "handler": "GetPublicFeed",
+      "request": "@peartube/get-public-feed-request",
+      "response": "@peartube/get-public-feed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 41,
+      "command": "get-canonical-feed",
+      "method": "getCanonicalFeed",
+      "handler": "GetCanonicalFeed",
+      "request": "@peartube/get-canonical-feed-request",
+      "response": "@peartube/get-canonical-feed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 42,
+      "command": "refresh-feed",
+      "method": "refreshFeed",
+      "handler": "RefreshFeed",
+      "request": "@peartube/refresh-feed-request",
+      "response": "@peartube/refresh-feed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 43,
+      "command": "submit-to-feed",
+      "method": "submitToFeed",
+      "handler": "SubmitToFeed",
+      "request": "@peartube/submit-to-feed-request",
+      "response": "@peartube/submit-to-feed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 44,
+      "command": "unpublish-from-feed",
+      "method": "unpublishFromFeed",
+      "handler": "UnpublishFromFeed",
+      "request": "@peartube/unpublish-from-feed-request",
+      "response": "@peartube/unpublish-from-feed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 45,
+      "command": "is-channel-published",
+      "method": "isChannelPublished",
+      "handler": "IsChannelPublished",
+      "request": "@peartube/is-channel-published-request",
+      "response": "@peartube/is-channel-published-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 46,
+      "command": "hide-channel",
+      "method": "hideChannel",
+      "handler": "HideChannel",
+      "request": "@peartube/hide-channel-request",
+      "response": "@peartube/hide-channel-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 47,
+      "command": "get-channel-meta",
+      "method": "getChannelMeta",
+      "handler": "GetChannelMeta",
+      "request": "@peartube/get-channel-meta-request",
+      "response": "@peartube/get-channel-meta-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 48,
+      "command": "get-swarm-status",
+      "method": "getSwarmStatus",
+      "handler": "GetSwarmStatus",
+      "request": "@peartube/get-swarm-status-request",
+      "response": "@peartube/get-swarm-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 49,
+      "command": "create-device-invite",
+      "method": "createDeviceInvite",
+      "handler": "CreateDeviceInvite",
+      "request": "@peartube/create-device-invite-request",
+      "response": "@peartube/create-device-invite-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 50,
+      "command": "pair-device",
+      "method": "pairDevice",
+      "handler": "PairDevice",
+      "request": "@peartube/pair-device-request",
+      "response": "@peartube/pair-device-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 51,
+      "command": "list-devices",
+      "method": "listDevices",
+      "handler": "ListDevices",
+      "request": "@peartube/list-devices-request",
+      "response": "@peartube/list-devices-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 52,
+      "command": "retry-sync-channel",
+      "method": "retrySyncChannel",
+      "handler": "RetrySyncChannel",
+      "request": "@peartube/retry-sync-channel-request",
+      "response": "@peartube/retry-sync-channel-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 53,
+      "command": "prefetch-video",
+      "method": "prefetchVideo",
+      "handler": "PrefetchVideo",
+      "request": "@peartube/prefetch-video-request",
+      "response": "@peartube/prefetch-video-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 54,
+      "command": "get-video-stats",
+      "method": "getVideoStats",
+      "handler": "GetVideoStats",
+      "request": "@peartube/get-video-stats-request",
+      "response": "@peartube/get-video-stats-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 55,
+      "command": "get-seeding-status",
+      "method": "getSeedingStatus",
+      "handler": "GetSeedingStatus",
+      "request": "@peartube/get-seeding-status-request",
+      "response": "@peartube/get-seeding-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 56,
+      "command": "set-seeding-config",
+      "method": "setSeedingConfig",
+      "handler": "SetSeedingConfig",
+      "request": "@peartube/set-seeding-config-request",
+      "response": "@peartube/set-seeding-config-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 57,
+      "command": "get-transcode-settings",
+      "method": "getTranscodeSettings",
+      "handler": "GetTranscodeSettings",
+      "request": "@peartube/get-transcode-settings-request",
+      "response": "@peartube/get-transcode-settings-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 58,
+      "command": "set-transcode-settings",
+      "method": "setTranscodeSettings",
+      "handler": "SetTranscodeSettings",
+      "request": "@peartube/set-transcode-settings-request",
+      "response": "@peartube/set-transcode-settings-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 59,
+      "command": "pin-channel",
+      "method": "pinChannel",
+      "handler": "PinChannel",
+      "request": "@peartube/pin-channel-request",
+      "response": "@peartube/pin-channel-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 60,
+      "command": "unpin-channel",
+      "method": "unpinChannel",
+      "handler": "UnpinChannel",
+      "request": "@peartube/unpin-channel-request",
+      "response": "@peartube/unpin-channel-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 61,
+      "command": "get-pinned-channels",
+      "method": "getPinnedChannels",
+      "handler": "GetPinnedChannels",
+      "request": "@peartube/get-pinned-channels-request",
+      "response": "@peartube/get-pinned-channels-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 62,
+      "command": "get-storage-stats",
+      "method": "getStorageStats",
+      "handler": "GetStorageStats",
+      "request": "@peartube/get-storage-stats-request",
+      "response": "@peartube/get-storage-stats-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 63,
+      "command": "set-storage-limit",
+      "method": "setStorageLimit",
+      "handler": "SetStorageLimit",
+      "request": "@peartube/set-storage-limit-request",
+      "response": "@peartube/set-storage-limit-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 64,
+      "command": "clear-cache",
+      "method": "clearCache",
+      "handler": "ClearCache",
+      "request": "@peartube/clear-cache-request",
+      "response": "@peartube/clear-cache-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 65,
+      "command": "get-video-thumbnail",
+      "method": "getVideoThumbnail",
+      "handler": "GetVideoThumbnail",
+      "request": "@peartube/get-video-thumbnail-request",
+      "response": "@peartube/get-video-thumbnail-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 66,
+      "command": "get-video-metadata",
+      "method": "getVideoMetadata",
+      "handler": "GetVideoMetadata",
+      "request": "@peartube/get-video-metadata-request",
+      "response": "@peartube/get-video-metadata-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 67,
+      "command": "set-video-thumbnail",
+      "method": "setVideoThumbnail",
+      "handler": "SetVideoThumbnail",
+      "request": "@peartube/set-video-thumbnail-request",
+      "response": "@peartube/set-video-thumbnail-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 68,
+      "command": "set-video-thumbnail-from-file",
+      "method": "setVideoThumbnailFromFile",
+      "handler": "SetVideoThumbnailFromFile",
+      "request": "@peartube/set-video-thumbnail-from-file-request",
+      "response": "@peartube/set-video-thumbnail-from-file-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 69,
+      "command": "get-status",
+      "method": "getStatus",
+      "handler": "GetStatus",
+      "request": "@peartube/get-status-request",
+      "response": "@peartube/get-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 70,
+      "command": "pick-video-file",
+      "method": "pickVideoFile",
+      "handler": "PickVideoFile",
+      "request": "@peartube/pick-video-file-request",
+      "response": "@peartube/pick-video-file-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 71,
+      "command": "pick-image-file",
+      "method": "pickImageFile",
+      "handler": "PickImageFile",
+      "request": "@peartube/pick-image-file-request",
+      "response": "@peartube/pick-image-file-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 72,
+      "command": "get-blob-server-port",
+      "method": "getBlobServerPort",
+      "handler": "GetBlobServerPort",
+      "request": "@peartube/get-blob-server-port-request",
+      "response": "@peartube/get-blob-server-port-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 73,
+      "command": "global-search-videos",
+      "method": "globalSearchVideos",
+      "handler": "GlobalSearchVideos",
+      "request": "@peartube/global-search-videos-request",
+      "response": "@peartube/global-search-videos-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 74,
+      "command": "add-comment",
+      "method": "addComment",
+      "handler": "AddComment",
+      "request": "@peartube/add-comment-request",
+      "response": "@peartube/add-comment-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 75,
+      "command": "list-comments",
+      "method": "listComments",
+      "handler": "ListComments",
+      "request": "@peartube/list-comments-request",
+      "response": "@peartube/list-comments-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 76,
+      "command": "hide-comment",
+      "method": "hideComment",
+      "handler": "HideComment",
+      "request": "@peartube/hide-comment-request",
+      "response": "@peartube/hide-comment-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 77,
+      "command": "remove-comment",
+      "method": "removeComment",
+      "handler": "RemoveComment",
+      "request": "@peartube/remove-comment-request",
+      "response": "@peartube/remove-comment-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 78,
+      "command": "add-reaction",
+      "method": "addReaction",
+      "handler": "AddReaction",
+      "request": "@peartube/add-reaction-request",
+      "response": "@peartube/add-reaction-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 79,
+      "command": "remove-reaction",
+      "method": "removeReaction",
+      "handler": "RemoveReaction",
+      "request": "@peartube/remove-reaction-request",
+      "response": "@peartube/remove-reaction-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 80,
+      "command": "get-reactions",
+      "method": "getReactions",
+      "handler": "GetReactions",
+      "request": "@peartube/get-reactions-request",
+      "response": "@peartube/get-reactions-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 81,
+      "command": "event-ready",
+      "method": "eventReady",
+      "handler": "EventReady",
+      "request": "@peartube/event-ready",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 82,
+      "command": "event-error",
+      "method": "eventError",
+      "handler": "EventError",
+      "request": "@peartube/event-error",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 83,
+      "command": "event-upload-progress",
+      "method": "eventUploadProgress",
+      "handler": "EventUploadProgress",
+      "request": "@peartube/event-upload-progress",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 84,
+      "command": "event-download-progress",
+      "method": "eventDownloadProgress",
+      "handler": "EventDownloadProgress",
+      "request": "@peartube/event-download-progress",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 85,
+      "command": "event-feed-update",
+      "method": "eventFeedUpdate",
+      "handler": "EventFeedUpdate",
+      "request": "@peartube/event-feed-update",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 86,
+      "command": "event-log",
+      "method": "eventLog",
+      "handler": "EventLog",
+      "request": "@peartube/event-log",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 87,
+      "command": "event-video-stats",
+      "method": "eventVideoStats",
+      "handler": "EventVideoStats",
+      "request": "@peartube/event-video-stats",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 88,
+      "command": "cast-available",
+      "method": "castAvailable",
+      "handler": "CastAvailable",
+      "request": "@peartube/cast-available-request",
+      "response": "@peartube/cast-available-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 89,
+      "command": "cast-start-discovery",
+      "method": "castStartDiscovery",
+      "handler": "CastStartDiscovery",
+      "request": "@peartube/cast-start-discovery-request",
+      "response": "@peartube/cast-start-discovery-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 90,
+      "command": "cast-stop-discovery",
+      "method": "castStopDiscovery",
+      "handler": "CastStopDiscovery",
+      "request": "@peartube/cast-stop-discovery-request",
+      "response": "@peartube/cast-stop-discovery-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 91,
+      "command": "cast-get-devices",
+      "method": "castGetDevices",
+      "handler": "CastGetDevices",
+      "request": "@peartube/cast-get-devices-request",
+      "response": "@peartube/cast-get-devices-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 92,
+      "command": "cast-add-manual-device",
+      "method": "castAddManualDevice",
+      "handler": "CastAddManualDevice",
+      "request": "@peartube/cast-add-manual-device-request",
+      "response": "@peartube/cast-add-manual-device-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 93,
+      "command": "cast-connect",
+      "method": "castConnect",
+      "handler": "CastConnect",
+      "request": "@peartube/cast-connect-request",
+      "response": "@peartube/cast-connect-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 94,
+      "command": "cast-disconnect",
+      "method": "castDisconnect",
+      "handler": "CastDisconnect",
+      "request": "@peartube/cast-disconnect-request",
+      "response": "@peartube/cast-disconnect-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 95,
+      "command": "cast-play",
+      "method": "castPlay",
+      "handler": "CastPlay",
+      "request": "@peartube/cast-play-request",
+      "response": "@peartube/cast-play-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 96,
+      "command": "cast-pause",
+      "method": "castPause",
+      "handler": "CastPause",
+      "request": "@peartube/cast-pause-request",
+      "response": "@peartube/cast-pause-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 97,
+      "command": "cast-resume",
+      "method": "castResume",
+      "handler": "CastResume",
+      "request": "@peartube/cast-resume-request",
+      "response": "@peartube/cast-resume-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 98,
+      "command": "cast-stop",
+      "method": "castStop",
+      "handler": "CastStop",
+      "request": "@peartube/cast-stop-request",
+      "response": "@peartube/cast-stop-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 99,
+      "command": "cast-seek",
+      "method": "castSeek",
+      "handler": "CastSeek",
+      "request": "@peartube/cast-seek-request",
+      "response": "@peartube/cast-seek-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 100,
+      "command": "cast-set-volume",
+      "method": "castSetVolume",
+      "handler": "CastSetVolume",
+      "request": "@peartube/cast-set-volume-request",
+      "response": "@peartube/cast-set-volume-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 101,
+      "command": "cast-get-state",
+      "method": "castGetState",
+      "handler": "CastGetState",
+      "request": "@peartube/cast-get-state-request",
+      "response": "@peartube/cast-get-state-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 102,
+      "command": "cast-is-connected",
+      "method": "castIsConnected",
+      "handler": "CastIsConnected",
+      "request": "@peartube/cast-is-connected-request",
+      "response": "@peartube/cast-is-connected-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 103,
+      "command": "event-cast-device-found",
+      "method": "eventCastDeviceFound",
+      "handler": "EventCastDeviceFound",
+      "request": "@peartube/event-cast-device-found",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 104,
+      "command": "event-cast-device-lost",
+      "method": "eventCastDeviceLost",
+      "handler": "EventCastDeviceLost",
+      "request": "@peartube/event-cast-device-lost",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 105,
+      "command": "event-cast-playback-state",
+      "method": "eventCastPlaybackState",
+      "handler": "EventCastPlaybackState",
+      "request": "@peartube/event-cast-playback-state",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 106,
+      "command": "event-cast-time-update",
+      "method": "eventCastTimeUpdate",
+      "handler": "EventCastTimeUpdate",
+      "request": "@peartube/event-cast-time-update",
+      "response": null,
+      "send": true,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 107,
+      "command": "search-videos",
+      "method": "searchVideos",
+      "handler": "SearchVideos",
+      "request": "@peartube/search-videos-request",
+      "response": "@peartube/search-videos-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 108,
+      "command": "log-watch-event",
+      "method": "logWatchEvent",
+      "handler": "LogWatchEvent",
+      "request": "@peartube/log-watch-event-request",
+      "response": "@peartube/log-watch-event-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 109,
+      "command": "index-video-vectors",
+      "method": "indexVideoVectors",
+      "handler": "IndexVideoVectors",
+      "request": "@peartube/index-video-vectors-request",
+      "response": "@peartube/index-video-vectors-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 110,
+      "command": "get-recommendations",
+      "method": "getRecommendations",
+      "handler": "GetRecommendations",
+      "request": "@peartube/get-recommendations-request",
+      "response": "@peartube/get-recommendations-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 111,
+      "command": "get-video-recommendations",
+      "method": "getVideoRecommendations",
+      "handler": "GetVideoRecommendations",
+      "request": "@peartube/get-video-recommendations-request",
+      "response": "@peartube/get-video-recommendations-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 112,
+      "command": "update-video-metadata",
+      "method": "updateVideoMetadata",
+      "handler": "UpdateVideoMetadata",
+      "request": "@peartube/update-video-metadata-request",
+      "response": "@peartube/update-video-metadata-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 113,
+      "command": "desktop-bootstrap",
+      "method": "desktopBootstrap",
+      "handler": "DesktopBootstrap",
+      "request": "@peartube/desktop-bootstrap-request",
+      "response": "@peartube/desktop-bootstrap-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 114,
+      "command": "desktop-shutdown",
+      "method": "desktopShutdown",
+      "handler": "DesktopShutdown",
+      "request": "@peartube/desktop-shutdown-request",
+      "response": "@peartube/desktop-shutdown-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 115,
+      "command": "desktop-refresh-browse",
+      "method": "desktopRefreshBrowse",
+      "handler": "DesktopRefreshBrowse",
+      "request": "@peartube/desktop-refresh-browse-request",
+      "response": "@peartube/desktop-refresh-browse-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 116,
+      "command": "ffmpeg-decode-available",
+      "method": "ffmpegDecodeAvailable",
+      "handler": "FfmpegDecodeAvailable",
+      "request": "@peartube/ffmpeg-decode-available-request",
+      "response": "@peartube/ffmpeg-decode-available-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 117,
+      "command": "update-channel-avatar",
+      "method": "updateChannelAvatar",
+      "handler": "UpdateChannelAvatar",
+      "request": "@peartube/update-channel-avatar-request",
+      "response": "@peartube/update-channel-avatar-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 118,
+      "command": "transcode-start",
+      "method": "transcodeStart",
+      "handler": "TranscodeStart",
+      "request": "@peartube/transcode-start-request",
+      "response": "@peartube/transcode-start-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 119,
+      "command": "transcode-stop",
+      "method": "transcodeStop",
+      "handler": "TranscodeStop",
+      "request": "@peartube/transcode-stop-request",
+      "response": "@peartube/transcode-stop-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 120,
+      "command": "transcode-status",
+      "method": "transcodeStatus",
+      "handler": "TranscodeStatus",
+      "request": "@peartube/transcode-status-request",
+      "response": "@peartube/transcode-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 121,
+      "command": "event-transcode-progress",
+      "method": "eventTranscodeProgress",
+      "handler": "EventTranscodeProgress",
+      "request": "@peartube/event-transcode-progress",
+      "response": null,
+      "send": true,
       "requestStream": false,
       "responseStream": false
     }
@@ -1361,7 +1350,7 @@ export const APP_RPC_METADATA = Object.freeze({
   "namespaces": {
     "system": [
       {
-        "id": 51,
+        "id": 69,
         "command": "get-status",
         "method": "getStatus",
         "handler": "GetStatus",
@@ -1372,7 +1361,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 30,
+        "id": 48,
         "command": "get-swarm-status",
         "method": "getSwarmStatus",
         "handler": "GetSwarmStatus",
@@ -1383,7 +1372,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 54,
+        "id": 72,
         "command": "get-blob-server-port",
         "method": "getBlobServerPort",
         "handler": "GetBlobServerPort",
@@ -1451,7 +1440,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 31,
+        "id": 49,
         "command": "create-device-invite",
         "method": "createDeviceInvite",
         "handler": "CreateDeviceInvite",
@@ -1462,7 +1451,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 32,
+        "id": 50,
         "command": "pair-device",
         "method": "pairDevice",
         "handler": "PairDevice",
@@ -1473,7 +1462,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 33,
+        "id": 51,
         "command": "list-devices",
         "method": "listDevices",
         "handler": "ListDevices",
@@ -1519,7 +1508,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "feed": [
       {
-        "id": 23,
+        "id": 41,
         "command": "get-canonical-feed",
         "method": "getCanonicalFeed",
         "handler": "GetCanonicalFeed",
@@ -1530,7 +1519,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 22,
+        "id": 40,
         "command": "get-public-feed",
         "method": "getPublicFeed",
         "handler": "GetPublicFeed",
@@ -1541,7 +1530,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 24,
+        "id": 42,
         "command": "refresh-feed",
         "method": "refreshFeed",
         "handler": "RefreshFeed",
@@ -1552,7 +1541,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 25,
+        "id": 43,
         "command": "submit-to-feed",
         "method": "submitToFeed",
         "handler": "SubmitToFeed",
@@ -1563,7 +1552,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 26,
+        "id": 44,
         "command": "unpublish-from-feed",
         "method": "unpublishFromFeed",
         "handler": "UnpublishFromFeed",
@@ -1574,7 +1563,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 27,
+        "id": 45,
         "command": "is-channel-published",
         "method": "isChannelPublished",
         "handler": "IsChannelPublished",
@@ -1585,7 +1574,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 18,
+        "id": 22,
         "command": "subscribe-channel",
         "method": "subscribeChannel",
         "handler": "SubscribeChannel",
@@ -1596,7 +1585,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 19,
+        "id": 23,
         "command": "unsubscribe-channel",
         "method": "unsubscribeChannel",
         "handler": "UnsubscribeChannel",
@@ -1607,7 +1596,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 20,
+        "id": 24,
         "command": "get-subscriptions",
         "method": "getSubscriptions",
         "handler": "GetSubscriptions",
@@ -1618,7 +1607,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 21,
+        "id": 39,
         "command": "join-channel",
         "method": "joinChannel",
         "handler": "JoinChannel",
@@ -1629,7 +1618,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 28,
+        "id": 46,
         "command": "hide-channel",
         "method": "hideChannel",
         "handler": "HideChannel",
@@ -1640,7 +1629,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 41,
+        "id": 59,
         "command": "pin-channel",
         "method": "pinChannel",
         "handler": "PinChannel",
@@ -1651,7 +1640,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 42,
+        "id": 60,
         "command": "unpin-channel",
         "method": "unpinChannel",
         "handler": "UnpinChannel",
@@ -1662,7 +1651,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 43,
+        "id": 61,
         "command": "get-pinned-channels",
         "method": "getPinnedChannels",
         "handler": "GetPinnedChannels",
@@ -1686,7 +1675,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 29,
+        "id": 47,
         "command": "get-channel-meta",
         "method": "getChannelMeta",
         "handler": "GetChannelMeta",
@@ -1708,7 +1697,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 108,
+        "id": 117,
         "command": "update-channel-avatar",
         "method": "updateChannelAvatar",
         "handler": "UpdateChannelAvatar",
@@ -1776,7 +1765,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 48,
+        "id": 66,
         "command": "get-video-metadata",
         "method": "getVideoMetadata",
         "handler": "GetVideoMetadata",
@@ -1787,7 +1776,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 47,
+        "id": 65,
         "command": "get-video-thumbnail",
         "method": "getVideoThumbnail",
         "handler": "GetVideoThumbnail",
@@ -1798,7 +1787,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 36,
+        "id": 54,
         "command": "get-video-stats",
         "method": "getVideoStats",
         "handler": "GetVideoStats",
@@ -1809,7 +1798,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 35,
+        "id": 53,
         "command": "prefetch-video",
         "method": "prefetchVideo",
         "handler": "PrefetchVideo",
@@ -1831,7 +1820,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 94,
+        "id": 112,
         "command": "update-video-metadata",
         "method": "updateVideoMetadata",
         "handler": "UpdateVideoMetadata",
@@ -1842,7 +1831,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 49,
+        "id": 67,
         "command": "set-video-thumbnail",
         "method": "setVideoThumbnail",
         "handler": "SetVideoThumbnail",
@@ -1853,7 +1842,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 50,
+        "id": 68,
         "command": "set-video-thumbnail-from-file",
         "method": "setVideoThumbnailFromFile",
         "handler": "SetVideoThumbnailFromFile",
@@ -1864,7 +1853,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 56,
+        "id": 74,
         "command": "add-comment",
         "method": "addComment",
         "handler": "AddComment",
@@ -1875,7 +1864,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 57,
+        "id": 75,
         "command": "list-comments",
         "method": "listComments",
         "handler": "ListComments",
@@ -1886,7 +1875,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 58,
+        "id": 76,
         "command": "hide-comment",
         "method": "hideComment",
         "handler": "HideComment",
@@ -1897,7 +1886,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 59,
+        "id": 77,
         "command": "remove-comment",
         "method": "removeComment",
         "handler": "RemoveComment",
@@ -1908,7 +1897,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 60,
+        "id": 78,
         "command": "add-reaction",
         "method": "addReaction",
         "handler": "AddReaction",
@@ -1919,7 +1908,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 61,
+        "id": 79,
         "command": "remove-reaction",
         "method": "removeReaction",
         "handler": "RemoveReaction",
@@ -1930,7 +1919,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 62,
+        "id": 80,
         "command": "get-reactions",
         "method": "getReactions",
         "handler": "GetReactions",
@@ -1989,7 +1978,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "watch": [
       {
-        "id": 90,
+        "id": 108,
         "command": "log-watch-event",
         "method": "logWatchEvent",
         "handler": "LogWatchEvent",
@@ -2000,7 +1989,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 92,
+        "id": 110,
         "command": "get-recommendations",
         "method": "getRecommendations",
         "handler": "GetRecommendations",
@@ -2011,7 +2000,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 93,
+        "id": 111,
         "command": "get-video-recommendations",
         "method": "getVideoRecommendations",
         "handler": "GetVideoRecommendations",
@@ -2176,17 +2165,6 @@ export const APP_RPC_METADATA = Object.freeze({
         "send": false,
         "requestStream": false,
         "responseStream": false
-      },
-      {
-        "id": 39,
-        "command": "get-personal-encryption-secret",
-        "method": "getPersonalEncryptionSecret",
-        "handler": "GetPersonalEncryptionSecret",
-        "request": "@peartube/get-personal-encryption-secret-request",
-        "response": "@peartube/get-personal-encryption-secret-response",
-        "send": false,
-        "requestStream": false,
-        "responseStream": false
       }
     ],
     "transfer": [
@@ -2213,7 +2191,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 37,
+        "id": 55,
         "command": "get-seeding-status",
         "method": "getSeedingStatus",
         "handler": "GetSeedingStatus",
@@ -2224,7 +2202,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 38,
+        "id": 56,
         "command": "set-seeding-config",
         "method": "setSeedingConfig",
         "handler": "SetSeedingConfig",
@@ -2235,7 +2213,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 44,
+        "id": 62,
         "command": "get-storage-stats",
         "method": "getStorageStats",
         "handler": "GetStorageStats",
@@ -2246,7 +2224,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 45,
+        "id": 63,
         "command": "set-storage-limit",
         "method": "setStorageLimit",
         "handler": "SetStorageLimit",
@@ -2257,7 +2235,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 46,
+        "id": 64,
         "command": "clear-cache",
         "method": "clearCache",
         "handler": "ClearCache",
@@ -2270,7 +2248,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "search": [
       {
-        "id": 89,
+        "id": 107,
         "command": "search-videos",
         "method": "searchVideos",
         "handler": "SearchVideos",
@@ -2281,7 +2259,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 55,
+        "id": 73,
         "command": "global-search-videos",
         "method": "globalSearchVideos",
         "handler": "GlobalSearchVideos",
@@ -2292,7 +2270,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 91,
+        "id": 109,
         "command": "index-video-vectors",
         "method": "indexVideoVectors",
         "handler": "IndexVideoVectors",
@@ -2305,7 +2283,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "shell": [
       {
-        "id": 52,
+        "id": 70,
         "command": "pick-video-file",
         "method": "pickVideoFile",
         "handler": "PickVideoFile",
@@ -2316,7 +2294,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 53,
+        "id": 71,
         "command": "pick-image-file",
         "method": "pickImageFile",
         "handler": "PickImageFile",
@@ -2327,7 +2305,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 39,
+        "id": 57,
         "command": "get-transcode-settings",
         "method": "getTranscodeSettings",
         "handler": "GetTranscodeSettings",
@@ -2338,7 +2316,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 40,
+        "id": 58,
         "command": "set-transcode-settings",
         "method": "setTranscodeSettings",
         "handler": "SetTranscodeSettings",
@@ -2349,7 +2327,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 107,
+        "id": 116,
         "command": "ffmpeg-decode-available",
         "method": "ffmpegDecodeAvailable",
         "handler": "FfmpegDecodeAvailable",
@@ -2360,7 +2338,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 70,
+        "id": 88,
         "command": "cast-available",
         "method": "castAvailable",
         "handler": "CastAvailable",
@@ -2371,7 +2349,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 71,
+        "id": 89,
         "command": "cast-start-discovery",
         "method": "castStartDiscovery",
         "handler": "CastStartDiscovery",
@@ -2382,7 +2360,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 72,
+        "id": 90,
         "command": "cast-stop-discovery",
         "method": "castStopDiscovery",
         "handler": "CastStopDiscovery",
@@ -2393,7 +2371,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 73,
+        "id": 91,
         "command": "cast-get-devices",
         "method": "castGetDevices",
         "handler": "CastGetDevices",
@@ -2404,7 +2382,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 74,
+        "id": 92,
         "command": "cast-add-manual-device",
         "method": "castAddManualDevice",
         "handler": "CastAddManualDevice",
@@ -2415,7 +2393,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 75,
+        "id": 93,
         "command": "cast-connect",
         "method": "castConnect",
         "handler": "CastConnect",
@@ -2426,7 +2404,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 76,
+        "id": 94,
         "command": "cast-disconnect",
         "method": "castDisconnect",
         "handler": "CastDisconnect",
@@ -2437,7 +2415,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 77,
+        "id": 95,
         "command": "cast-play",
         "method": "castPlay",
         "handler": "CastPlay",
@@ -2448,7 +2426,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 78,
+        "id": 96,
         "command": "cast-pause",
         "method": "castPause",
         "handler": "CastPause",
@@ -2459,7 +2437,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 79,
+        "id": 97,
         "command": "cast-resume",
         "method": "castResume",
         "handler": "CastResume",
@@ -2470,7 +2448,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 80,
+        "id": 98,
         "command": "cast-stop",
         "method": "castStop",
         "handler": "CastStop",
@@ -2481,7 +2459,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 81,
+        "id": 99,
         "command": "cast-seek",
         "method": "castSeek",
         "handler": "CastSeek",
@@ -2492,7 +2470,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 82,
+        "id": 100,
         "command": "cast-set-volume",
         "method": "castSetVolume",
         "handler": "CastSetVolume",
@@ -2503,7 +2481,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 83,
+        "id": 101,
         "command": "cast-get-state",
         "method": "castGetState",
         "handler": "CastGetState",
@@ -2514,7 +2492,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 84,
+        "id": 102,
         "command": "cast-is-connected",
         "method": "castIsConnected",
         "handler": "CastIsConnected",
@@ -2525,7 +2503,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 109,
+        "id": 118,
         "command": "transcode-start",
         "method": "transcodeStart",
         "handler": "TranscodeStart",
@@ -2536,7 +2514,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 110,
+        "id": 119,
         "command": "transcode-stop",
         "method": "transcodeStop",
         "handler": "TranscodeStop",
@@ -2547,7 +2525,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 111,
+        "id": 120,
         "command": "transcode-status",
         "method": "transcodeStatus",
         "handler": "TranscodeStatus",
@@ -2595,7 +2573,6 @@ export const APP_RPC_METADATA = Object.freeze({
     "get-identities",
     "get-identity",
     "get-livestream-status",
-    "get-personal-encryption-secret",
     "get-personal-settings",
     "get-pinned-channels",
     "get-playlist-items",
@@ -2670,7 +2647,7 @@ export const APP_RPC_METADATA = Object.freeze({
   ],
   "platformOnlyCommands": [
     {
-      "id": 95,
+      "id": 113,
       "command": "desktop-bootstrap",
       "method": "desktopBootstrap",
       "handler": "DesktopBootstrap",
@@ -2681,7 +2658,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 96,
+      "id": 114,
       "command": "desktop-shutdown",
       "method": "desktopShutdown",
       "handler": "DesktopShutdown",
@@ -2692,7 +2669,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 97,
+      "id": 115,
       "command": "desktop-refresh-browse",
       "method": "desktopRefreshBrowse",
       "handler": "DesktopRefreshBrowse",
@@ -2703,7 +2680,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 63,
+      "id": 81,
       "command": "event-ready",
       "method": "eventReady",
       "handler": "EventReady",
@@ -2714,7 +2691,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 64,
+      "id": 82,
       "command": "event-error",
       "method": "eventError",
       "handler": "EventError",
@@ -2725,7 +2702,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 65,
+      "id": 83,
       "command": "event-upload-progress",
       "method": "eventUploadProgress",
       "handler": "EventUploadProgress",
@@ -2736,7 +2713,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 66,
+      "id": 84,
       "command": "event-download-progress",
       "method": "eventDownloadProgress",
       "handler": "EventDownloadProgress",
@@ -2747,7 +2724,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 67,
+      "id": 85,
       "command": "event-feed-update",
       "method": "eventFeedUpdate",
       "handler": "EventFeedUpdate",
@@ -2758,7 +2735,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 68,
+      "id": 86,
       "command": "event-log",
       "method": "eventLog",
       "handler": "EventLog",
@@ -2769,7 +2746,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 69,
+      "id": 87,
       "command": "event-video-stats",
       "method": "eventVideoStats",
       "handler": "EventVideoStats",
@@ -2780,7 +2757,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 112,
+      "id": 121,
       "command": "event-transcode-progress",
       "method": "eventTranscodeProgress",
       "handler": "EventTranscodeProgress",
@@ -2791,7 +2768,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 85,
+      "id": 103,
       "command": "event-cast-device-found",
       "method": "eventCastDeviceFound",
       "handler": "EventCastDeviceFound",
@@ -2802,7 +2779,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 86,
+      "id": 104,
       "command": "event-cast-device-lost",
       "method": "eventCastDeviceLost",
       "handler": "EventCastDeviceLost",
@@ -2813,7 +2790,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 87,
+      "id": 105,
       "command": "event-cast-playback-state",
       "method": "eventCastPlaybackState",
       "handler": "EventCastPlaybackState",
@@ -2824,7 +2801,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 88,
+      "id": 106,
       "command": "event-cast-time-update",
       "method": "eventCastTimeUpdate",
       "handler": "EventCastTimeUpdate",
@@ -2835,7 +2812,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 34,
+      "id": 52,
       "command": "retry-sync-channel",
       "method": "retrySyncChannel",
       "handler": "RetrySyncChannel",

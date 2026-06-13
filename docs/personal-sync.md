@@ -83,8 +83,10 @@ Done (at-rest encryption, keychain-backed):
   paired device through the pairing `confirm` payload.
 - Provisioning: encryption is fixed at store-creation time, so the app provisions
   the secret before the store opens. `personalManager.init()` defers opening;
-  the new RPCs `provision-personal-encryption` / `get-personal-encryption-secret`
-  let the app supply (or read back) the secret. The app side uses
+  the `provision-personal-encryption` RPC lets the app supply an existing
+  keychain secret or request first-device generation. Raw active secrets are not
+  exported over shared app RPC; paired devices must receive/import the secret
+  through the pairing flow. The app side uses
   `expo-secure-store` (iOS Keychain / Android Keystore) via
   `packages/app/lib/secure-storage.ts` + `lib/personal-encryption.ts`, wired into
   identity load/create in `app/_layout.tsx`. A document-directory fallback covers

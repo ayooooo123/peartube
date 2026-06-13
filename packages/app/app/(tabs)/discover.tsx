@@ -167,6 +167,10 @@ export default function VerticalDiscoveryScreen() {
   const playbackRequestSeqRef = useRef(0)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
   const feedLoadInFlightRef = useRef(false)
+  const feedEntriesRef = useRef<FeedEntry[]>(feedEntries)
+  const videosRef = useRef<VideoData[]>(videos)
+  feedEntriesRef.current = feedEntries
+  videosRef.current = videos
 
   const loadSwarmStatus = useCallback(async () => {
     if (!rpc) return
@@ -323,13 +327,13 @@ export default function VerticalDiscoveryScreen() {
       if (result === timeoutToken) {
         setFeedTimedOut(true)
         setFeedError('Feed refresh timed out; showing cached snapshot.')
-        setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntries, videos))
+        setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntriesRef.current, videosRef.current))
         return
       }
       if ((result as any)?.success === false || (result as any)?.error) {
         setFeedTimedOut(false)
         setFeedError((result as any)?.error || 'Feed refresh failed; showing cached snapshot.')
-        setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntries, videos))
+        setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntriesRef.current, videosRef.current))
         return
       }
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
@@ -359,13 +363,13 @@ export default function VerticalDiscoveryScreen() {
     } catch (err) {
       setFeedTimedOut(false)
       setFeedError((err as any)?.message || String(err))
-      setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntries, videos))
+      setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntriesRef.current, videosRef.current))
       console.log('[VerticalDiscovery] Feed load failed:', (err as any)?.message || err)
     } finally {
       feedLoadInFlightRef.current = false
       setFeedLoading(false)
     }
-  }, [feedEntries, hydrateChannelVideos, loadSwarmStatus, rpc, seedFromFeedEntries, videos])
+  }, [hydrateChannelVideos, loadSwarmStatus, rpc, seedFromFeedEntries])
 
   useEffect(() => {
     if (!ready || !rpc) return

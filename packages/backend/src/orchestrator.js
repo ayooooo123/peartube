@@ -348,21 +348,26 @@ export async function createBackendContext(config) {
   // platforms by wrapping the identity-manager mutators in one place (every
   // platform changes identities through these). Best-effort: a personal-store
   // failure must not break identity switching/creation.
-  const refreshActivePersonalStore = (publicKey) => {
+  const refreshActivePersonalStore = async (publicKey) => {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
-    personalManager.setActive(pk).catch((err) => ipcLog('[orchestrator] personal store switch failed: ' + (err?.message || err)))
+    ctx.personal = null
+    try {
+      await personalManager.setActive(pk)
+    } catch (err) {
+      ipcLog('[orchestrator] personal store switch failed: ' + (err?.message || err))
+    }
   }
   const origSetActiveIdentity = identityManager.setActiveIdentity.bind(identityManager)
   identityManager.setActiveIdentity = async (publicKey) => {
     const result = await origSetActiveIdentity(publicKey)
-    refreshActivePersonalStore(publicKey)
+    await refreshActivePersonalStore(publicKey)
     return result
   }
   const origCreateIdentity = identityManager.createIdentity.bind(identityManager)
   identityManager.createIdentity = async (...args) => {
     const result = await origCreateIdentity(...args)
-    refreshActivePersonalStore(result?.publicKey)
+    await refreshActivePersonalStore(result?.publicKey)
     return result
   }
 

@@ -148,7 +148,6 @@ export const SHARED_HANDLER_NAMES = [
   'SetPersonalSetting',
   'GetPersonalSettings',
   'ProvisionPersonalEncryption',
-  'GetPersonalEncryptionSecret',
 ]
 
 function toCamelCase(name) {

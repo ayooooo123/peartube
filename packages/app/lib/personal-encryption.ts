@@ -9,10 +9,11 @@
  *
  * Flow per identity:
  *   1. If the keychain already holds the secret -> provision it to the backend.
- *   2. Else if the backend already holds it (a freshly *paired* device receives
- *      the secret over the pairing handshake) -> persist it to the keychain.
- *   3. Else (first device for this identity) -> have the backend generate one,
+ *   2. Else (first device for this identity) -> have the backend generate one,
  *      then persist the returned secret to the keychain.
+ *
+ * Paired-device imports must provision an explicit secret received through the
+ * pairing flow. Do not export the active backend secret over shared app RPC.
  */
 
 import { secureGet, secureSet } from './secure-storage'
@@ -37,19 +38,7 @@ export async function ensurePersonalEncryption(rpc: any, publicKey?: string | nu
       return
     }
 
-    // 2. Paired device: the backend received the secret during pairing.
-    try {
-      const got = await rpc.getPersonalEncryptionSecret?.()
-      if (got?.provisioned && got?.secret) {
-        await secureSet(k, got.secret)
-        provisioned.add(publicKey)
-        return
-      }
-    } catch {
-      // older backend without the getter — fall through to generate
-    }
-
-    // 3. First device for this identity: backend generates, we persist it.
+    // 2. First device for this identity: backend generates, we persist it.
     const res = await rpc.provisionPersonalEncryption({})
     if (res?.success && res?.secret) {
       await secureSet(k, res.secret)

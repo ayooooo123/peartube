@@ -405,8 +405,14 @@ if (runtimeStorage) { storage = runtimeStorage }
 else { try { const dir = require('bare-storage'); storage = path.join(dir.persistent(), 'peartube') } catch { storage = path.join(os.homedir(), '.peartube') } }
 console.log('[Worker] Storage:', storage)
 
-const workerBaseDir = runtimeStorage || os.cwd()
-;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerBaseDir || '.', 'build/workers/hypercore-reader-worker.mjs')
+const workerResourceDir = (() => {
+  try {
+    return path.dirname(decodeURIComponent(new URL(import.meta.url).pathname))
+  } catch {
+    return runtimeStorage || os.cwd()
+  }
+})()
+;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerResourceDir, '..', 'hypercore-reader-worker.mjs')
 
 // Transport: Bare.IPC (Electrobun sidecar), then injected pipe
 const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null

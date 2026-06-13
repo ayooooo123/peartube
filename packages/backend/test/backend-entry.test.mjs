@@ -136,7 +136,7 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(session.runtime, session.core)
   t.is(session.backend.universalCore, session.core)
   t.is(session.core.state, 'started')
-  t.is(readyPayload.protocolVersion, 2)
+  t.is(readyPayload.protocolVersion, 3)
   t.ok(responses.has('GetUniversalCoreStatus'))
   t.alike(await responses.get('GetUniversalCoreStatus')(), session.core.getStatus())
   t.ok(lifecycle.includes('hc:init'))

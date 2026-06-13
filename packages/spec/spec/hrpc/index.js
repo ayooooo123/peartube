@@ -43,216 +43,214 @@ const methods = new Map([
   [16, '@peartube/download-video'],
   ['@peartube/delete-video', 17],
   [17, '@peartube/delete-video'],
-  ['@peartube/subscribe-channel', 18],
-  [18, '@peartube/subscribe-channel'],
-  ['@peartube/unsubscribe-channel', 19],
-  [19, '@peartube/unsubscribe-channel'],
-  ['@peartube/get-subscriptions', 20],
-  [20, '@peartube/get-subscriptions'],
-  ['@peartube/join-channel', 21],
-  [21, '@peartube/join-channel'],
-  ['@peartube/get-public-feed', 22],
-  [22, '@peartube/get-public-feed'],
-  ['@peartube/get-canonical-feed', 23],
-  [23, '@peartube/get-canonical-feed'],
-  ['@peartube/refresh-feed', 24],
-  [24, '@peartube/refresh-feed'],
-  ['@peartube/submit-to-feed', 25],
-  [25, '@peartube/submit-to-feed'],
-  ['@peartube/unpublish-from-feed', 26],
-  [26, '@peartube/unpublish-from-feed'],
-  ['@peartube/is-channel-published', 27],
-  [27, '@peartube/is-channel-published'],
-  ['@peartube/hide-channel', 28],
-  [28, '@peartube/hide-channel'],
-  ['@peartube/get-channel-meta', 29],
-  [29, '@peartube/get-channel-meta'],
-  ['@peartube/get-swarm-status', 30],
-  [30, '@peartube/get-swarm-status'],
-  ['@peartube/create-device-invite', 31],
-  [31, '@peartube/create-device-invite'],
-  ['@peartube/pair-device', 32],
-  [32, '@peartube/pair-device'],
-  ['@peartube/list-devices', 33],
-  [33, '@peartube/list-devices'],
-  ['@peartube/retry-sync-channel', 34],
-  [34, '@peartube/retry-sync-channel'],
-  ['@peartube/prefetch-video', 35],
-  [35, '@peartube/prefetch-video'],
-  ['@peartube/get-video-stats', 36],
-  [36, '@peartube/get-video-stats'],
-  ['@peartube/get-seeding-status', 37],
-  [37, '@peartube/get-seeding-status'],
-  ['@peartube/set-seeding-config', 38],
-  [38, '@peartube/set-seeding-config'],
-  ['@peartube/get-transcode-settings', 39],
-  [39, '@peartube/get-transcode-settings'],
-  ['@peartube/set-transcode-settings', 40],
-  [40, '@peartube/set-transcode-settings'],
-  ['@peartube/pin-channel', 41],
-  [41, '@peartube/pin-channel'],
-  ['@peartube/unpin-channel', 42],
-  [42, '@peartube/unpin-channel'],
-  ['@peartube/get-pinned-channels', 43],
-  [43, '@peartube/get-pinned-channels'],
-  ['@peartube/get-storage-stats', 44],
-  [44, '@peartube/get-storage-stats'],
-  ['@peartube/set-storage-limit', 45],
-  [45, '@peartube/set-storage-limit'],
-  ['@peartube/clear-cache', 46],
-  [46, '@peartube/clear-cache'],
-  ['@peartube/get-video-thumbnail', 47],
-  [47, '@peartube/get-video-thumbnail'],
-  ['@peartube/get-video-metadata', 48],
-  [48, '@peartube/get-video-metadata'],
-  ['@peartube/set-video-thumbnail', 49],
-  [49, '@peartube/set-video-thumbnail'],
-  ['@peartube/set-video-thumbnail-from-file', 50],
-  [50, '@peartube/set-video-thumbnail-from-file'],
-  ['@peartube/get-status', 51],
-  [51, '@peartube/get-status'],
-  ['@peartube/pick-video-file', 52],
-  [52, '@peartube/pick-video-file'],
-  ['@peartube/pick-image-file', 53],
-  [53, '@peartube/pick-image-file'],
-  ['@peartube/get-blob-server-port', 54],
-  [54, '@peartube/get-blob-server-port'],
-  ['@peartube/global-search-videos', 55],
-  [55, '@peartube/global-search-videos'],
-  ['@peartube/add-comment', 56],
-  [56, '@peartube/add-comment'],
-  ['@peartube/list-comments', 57],
-  [57, '@peartube/list-comments'],
-  ['@peartube/hide-comment', 58],
-  [58, '@peartube/hide-comment'],
-  ['@peartube/remove-comment', 59],
-  [59, '@peartube/remove-comment'],
-  ['@peartube/add-reaction', 60],
-  [60, '@peartube/add-reaction'],
-  ['@peartube/remove-reaction', 61],
-  [61, '@peartube/remove-reaction'],
-  ['@peartube/get-reactions', 62],
-  [62, '@peartube/get-reactions'],
-  ['@peartube/event-ready', 63],
-  [63, '@peartube/event-ready'],
-  ['@peartube/event-error', 64],
-  [64, '@peartube/event-error'],
-  ['@peartube/event-upload-progress', 65],
-  [65, '@peartube/event-upload-progress'],
-  ['@peartube/event-download-progress', 66],
-  [66, '@peartube/event-download-progress'],
-  ['@peartube/event-feed-update', 67],
-  [67, '@peartube/event-feed-update'],
-  ['@peartube/event-log', 68],
-  [68, '@peartube/event-log'],
-  ['@peartube/event-video-stats', 69],
-  [69, '@peartube/event-video-stats'],
-  ['@peartube/cast-available', 70],
-  [70, '@peartube/cast-available'],
-  ['@peartube/cast-start-discovery', 71],
-  [71, '@peartube/cast-start-discovery'],
-  ['@peartube/cast-stop-discovery', 72],
-  [72, '@peartube/cast-stop-discovery'],
-  ['@peartube/cast-get-devices', 73],
-  [73, '@peartube/cast-get-devices'],
-  ['@peartube/cast-add-manual-device', 74],
-  [74, '@peartube/cast-add-manual-device'],
-  ['@peartube/cast-connect', 75],
-  [75, '@peartube/cast-connect'],
-  ['@peartube/cast-disconnect', 76],
-  [76, '@peartube/cast-disconnect'],
-  ['@peartube/cast-play', 77],
-  [77, '@peartube/cast-play'],
-  ['@peartube/cast-pause', 78],
-  [78, '@peartube/cast-pause'],
-  ['@peartube/cast-resume', 79],
-  [79, '@peartube/cast-resume'],
-  ['@peartube/cast-stop', 80],
-  [80, '@peartube/cast-stop'],
-  ['@peartube/cast-seek', 81],
-  [81, '@peartube/cast-seek'],
-  ['@peartube/cast-set-volume', 82],
-  [82, '@peartube/cast-set-volume'],
-  ['@peartube/cast-get-state', 83],
-  [83, '@peartube/cast-get-state'],
-  ['@peartube/cast-is-connected', 84],
-  [84, '@peartube/cast-is-connected'],
-  ['@peartube/event-cast-device-found', 85],
-  [85, '@peartube/event-cast-device-found'],
-  ['@peartube/event-cast-device-lost', 86],
-  [86, '@peartube/event-cast-device-lost'],
-  ['@peartube/event-cast-playback-state', 87],
-  [87, '@peartube/event-cast-playback-state'],
-  ['@peartube/event-cast-time-update', 88],
-  [88, '@peartube/event-cast-time-update'],
-  ['@peartube/search-videos', 89],
-  [89, '@peartube/search-videos'],
-  ['@peartube/log-watch-event', 90],
-  [90, '@peartube/log-watch-event'],
-  ['@peartube/index-video-vectors', 91],
-  [91, '@peartube/index-video-vectors'],
-  ['@peartube/get-recommendations', 92],
-  [92, '@peartube/get-recommendations'],
-  ['@peartube/get-video-recommendations', 93],
-  [93, '@peartube/get-video-recommendations'],
-  ['@peartube/update-video-metadata', 94],
-  [94, '@peartube/update-video-metadata'],
-  ['@peartube/desktop-bootstrap', 95],
-  [95, '@peartube/desktop-bootstrap'],
-  ['@peartube/desktop-shutdown', 96],
-  [96, '@peartube/desktop-shutdown'],
-  ['@peartube/desktop-refresh-browse', 97],
-  [97, '@peartube/desktop-refresh-browse'],
-  ['@peartube/ffmpeg-decode-available', 98],
-  [98, '@peartube/ffmpeg-decode-available'],
-  ['@peartube/update-channel-avatar', 99],
-  [99, '@peartube/update-channel-avatar'],
-  ['@peartube/transcode-start', 100],
-  [100, '@peartube/transcode-start'],
-  ['@peartube/transcode-stop', 101],
-  [101, '@peartube/transcode-stop'],
-  ['@peartube/transcode-status', 102],
-  [102, '@peartube/transcode-status'],
-  ['@peartube/event-transcode-progress', 103],
-  [103, '@peartube/event-transcode-progress'],
-  ['@peartube/start-livestream', 104],
-  [104, '@peartube/start-livestream'],
-  ['@peartube/stop-livestream', 105],
-  [105, '@peartube/stop-livestream'],
-  ['@peartube/get-livestream-status', 106],
-  [106, '@peartube/get-livestream-status'],
-  ['@peartube/prepare-live-playback', 107],
-  [107, '@peartube/prepare-live-playback'],
-  ['@peartube/get-playlists', 108],
-  [108, '@peartube/get-playlists'],
-  ['@peartube/get-playlist-items', 109],
-  [109, '@peartube/get-playlist-items'],
-  ['@peartube/create-playlist', 110],
-  [110, '@peartube/create-playlist'],
-  ['@peartube/update-playlist', 111],
-  [111, '@peartube/update-playlist'],
-  ['@peartube/delete-playlist', 112],
-  [112, '@peartube/delete-playlist'],
-  ['@peartube/add-to-playlist', 113],
-  [113, '@peartube/add-to-playlist'],
-  ['@peartube/remove-from-playlist', 114],
-  [114, '@peartube/remove-from-playlist'],
-  ['@peartube/log-watch-history', 115],
-  [115, '@peartube/log-watch-history'],
-  ['@peartube/get-watch-history', 116],
-  [116, '@peartube/get-watch-history'],
-  ['@peartube/get-resume-position', 117],
-  [117, '@peartube/get-resume-position'],
-  ['@peartube/list-resume-positions', 118],
-  [118, '@peartube/list-resume-positions'],
-  ['@peartube/set-personal-setting', 119],
-  [119, '@peartube/set-personal-setting'],
-  ['@peartube/get-personal-settings', 120],
-  [120, '@peartube/get-personal-settings'],
-  ['@peartube/provision-personal-encryption', 121],
-  [121, '@peartube/provision-personal-encryption'],
-  ['@peartube/get-personal-encryption-secret', 122],
-  [122, '@peartube/get-personal-encryption-secret']
+  ['@peartube/start-livestream', 18],
+  [18, '@peartube/start-livestream'],
+  ['@peartube/stop-livestream', 19],
+  [19, '@peartube/stop-livestream'],
+  ['@peartube/get-livestream-status', 20],
+  [20, '@peartube/get-livestream-status'],
+  ['@peartube/prepare-live-playback', 21],
+  [21, '@peartube/prepare-live-playback'],
+  ['@peartube/subscribe-channel', 22],
+  [22, '@peartube/subscribe-channel'],
+  ['@peartube/unsubscribe-channel', 23],
+  [23, '@peartube/unsubscribe-channel'],
+  ['@peartube/get-subscriptions', 24],
+  [24, '@peartube/get-subscriptions'],
+  ['@peartube/get-playlists', 25],
+  [25, '@peartube/get-playlists'],
+  ['@peartube/get-playlist-items', 26],
+  [26, '@peartube/get-playlist-items'],
+  ['@peartube/create-playlist', 27],
+  [27, '@peartube/create-playlist'],
+  ['@peartube/update-playlist', 28],
+  [28, '@peartube/update-playlist'],
+  ['@peartube/delete-playlist', 29],
+  [29, '@peartube/delete-playlist'],
+  ['@peartube/add-to-playlist', 30],
+  [30, '@peartube/add-to-playlist'],
+  ['@peartube/remove-from-playlist', 31],
+  [31, '@peartube/remove-from-playlist'],
+  ['@peartube/log-watch-history', 32],
+  [32, '@peartube/log-watch-history'],
+  ['@peartube/get-watch-history', 33],
+  [33, '@peartube/get-watch-history'],
+  ['@peartube/get-resume-position', 34],
+  [34, '@peartube/get-resume-position'],
+  ['@peartube/list-resume-positions', 35],
+  [35, '@peartube/list-resume-positions'],
+  ['@peartube/set-personal-setting', 36],
+  [36, '@peartube/set-personal-setting'],
+  ['@peartube/get-personal-settings', 37],
+  [37, '@peartube/get-personal-settings'],
+  ['@peartube/provision-personal-encryption', 38],
+  [38, '@peartube/provision-personal-encryption'],
+  ['@peartube/join-channel', 39],
+  [39, '@peartube/join-channel'],
+  ['@peartube/get-public-feed', 40],
+  [40, '@peartube/get-public-feed'],
+  ['@peartube/get-canonical-feed', 41],
+  [41, '@peartube/get-canonical-feed'],
+  ['@peartube/refresh-feed', 42],
+  [42, '@peartube/refresh-feed'],
+  ['@peartube/submit-to-feed', 43],
+  [43, '@peartube/submit-to-feed'],
+  ['@peartube/unpublish-from-feed', 44],
+  [44, '@peartube/unpublish-from-feed'],
+  ['@peartube/is-channel-published', 45],
+  [45, '@peartube/is-channel-published'],
+  ['@peartube/hide-channel', 46],
+  [46, '@peartube/hide-channel'],
+  ['@peartube/get-channel-meta', 47],
+  [47, '@peartube/get-channel-meta'],
+  ['@peartube/get-swarm-status', 48],
+  [48, '@peartube/get-swarm-status'],
+  ['@peartube/create-device-invite', 49],
+  [49, '@peartube/create-device-invite'],
+  ['@peartube/pair-device', 50],
+  [50, '@peartube/pair-device'],
+  ['@peartube/list-devices', 51],
+  [51, '@peartube/list-devices'],
+  ['@peartube/retry-sync-channel', 52],
+  [52, '@peartube/retry-sync-channel'],
+  ['@peartube/prefetch-video', 53],
+  [53, '@peartube/prefetch-video'],
+  ['@peartube/get-video-stats', 54],
+  [54, '@peartube/get-video-stats'],
+  ['@peartube/get-seeding-status', 55],
+  [55, '@peartube/get-seeding-status'],
+  ['@peartube/set-seeding-config', 56],
+  [56, '@peartube/set-seeding-config'],
+  ['@peartube/get-transcode-settings', 57],
+  [57, '@peartube/get-transcode-settings'],
+  ['@peartube/set-transcode-settings', 58],
+  [58, '@peartube/set-transcode-settings'],
+  ['@peartube/pin-channel', 59],
+  [59, '@peartube/pin-channel'],
+  ['@peartube/unpin-channel', 60],
+  [60, '@peartube/unpin-channel'],
+  ['@peartube/get-pinned-channels', 61],
+  [61, '@peartube/get-pinned-channels'],
+  ['@peartube/get-storage-stats', 62],
+  [62, '@peartube/get-storage-stats'],
+  ['@peartube/set-storage-limit', 63],
+  [63, '@peartube/set-storage-limit'],
+  ['@peartube/clear-cache', 64],
+  [64, '@peartube/clear-cache'],
+  ['@peartube/get-video-thumbnail', 65],
+  [65, '@peartube/get-video-thumbnail'],
+  ['@peartube/get-video-metadata', 66],
+  [66, '@peartube/get-video-metadata'],
+  ['@peartube/set-video-thumbnail', 67],
+  [67, '@peartube/set-video-thumbnail'],
+  ['@peartube/set-video-thumbnail-from-file', 68],
+  [68, '@peartube/set-video-thumbnail-from-file'],
+  ['@peartube/get-status', 69],
+  [69, '@peartube/get-status'],
+  ['@peartube/pick-video-file', 70],
+  [70, '@peartube/pick-video-file'],
+  ['@peartube/pick-image-file', 71],
+  [71, '@peartube/pick-image-file'],
+  ['@peartube/get-blob-server-port', 72],
+  [72, '@peartube/get-blob-server-port'],
+  ['@peartube/global-search-videos', 73],
+  [73, '@peartube/global-search-videos'],
+  ['@peartube/add-comment', 74],
+  [74, '@peartube/add-comment'],
+  ['@peartube/list-comments', 75],
+  [75, '@peartube/list-comments'],
+  ['@peartube/hide-comment', 76],
+  [76, '@peartube/hide-comment'],
+  ['@peartube/remove-comment', 77],
+  [77, '@peartube/remove-comment'],
+  ['@peartube/add-reaction', 78],
+  [78, '@peartube/add-reaction'],
+  ['@peartube/remove-reaction', 79],
+  [79, '@peartube/remove-reaction'],
+  ['@peartube/get-reactions', 80],
+  [80, '@peartube/get-reactions'],
+  ['@peartube/event-ready', 81],
+  [81, '@peartube/event-ready'],
+  ['@peartube/event-error', 82],
+  [82, '@peartube/event-error'],
+  ['@peartube/event-upload-progress', 83],
+  [83, '@peartube/event-upload-progress'],
+  ['@peartube/event-download-progress', 84],
+  [84, '@peartube/event-download-progress'],
+  ['@peartube/event-feed-update', 85],
+  [85, '@peartube/event-feed-update'],
+  ['@peartube/event-log', 86],
+  [86, '@peartube/event-log'],
+  ['@peartube/event-video-stats', 87],
+  [87, '@peartube/event-video-stats'],
+  ['@peartube/cast-available', 88],
+  [88, '@peartube/cast-available'],
+  ['@peartube/cast-start-discovery', 89],
+  [89, '@peartube/cast-start-discovery'],
+  ['@peartube/cast-stop-discovery', 90],
+  [90, '@peartube/cast-stop-discovery'],
+  ['@peartube/cast-get-devices', 91],
+  [91, '@peartube/cast-get-devices'],
+  ['@peartube/cast-add-manual-device', 92],
+  [92, '@peartube/cast-add-manual-device'],
+  ['@peartube/cast-connect', 93],
+  [93, '@peartube/cast-connect'],
+  ['@peartube/cast-disconnect', 94],
+  [94, '@peartube/cast-disconnect'],
+  ['@peartube/cast-play', 95],
+  [95, '@peartube/cast-play'],
+  ['@peartube/cast-pause', 96],
+  [96, '@peartube/cast-pause'],
+  ['@peartube/cast-resume', 97],
+  [97, '@peartube/cast-resume'],
+  ['@peartube/cast-stop', 98],
+  [98, '@peartube/cast-stop'],
+  ['@peartube/cast-seek', 99],
+  [99, '@peartube/cast-seek'],
+  ['@peartube/cast-set-volume', 100],
+  [100, '@peartube/cast-set-volume'],
+  ['@peartube/cast-get-state', 101],
+  [101, '@peartube/cast-get-state'],
+  ['@peartube/cast-is-connected', 102],
+  [102, '@peartube/cast-is-connected'],
+  ['@peartube/event-cast-device-found', 103],
+  [103, '@peartube/event-cast-device-found'],
+  ['@peartube/event-cast-device-lost', 104],
+  [104, '@peartube/event-cast-device-lost'],
+  ['@peartube/event-cast-playback-state', 105],
+  [105, '@peartube/event-cast-playback-state'],
+  ['@peartube/event-cast-time-update', 106],
+  [106, '@peartube/event-cast-time-update'],
+  ['@peartube/search-videos', 107],
+  [107, '@peartube/search-videos'],
+  ['@peartube/log-watch-event', 108],
+  [108, '@peartube/log-watch-event'],
+  ['@peartube/index-video-vectors', 109],
+  [109, '@peartube/index-video-vectors'],
+  ['@peartube/get-recommendations', 110],
+  [110, '@peartube/get-recommendations'],
+  ['@peartube/get-video-recommendations', 111],
+  [111, '@peartube/get-video-recommendations'],
+  ['@peartube/update-video-metadata', 112],
+  [112, '@peartube/update-video-metadata'],
+  ['@peartube/desktop-bootstrap', 113],
+  [113, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 114],
+  [114, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 115],
+  [115, '@peartube/desktop-refresh-browse'],
+  ['@peartube/ffmpeg-decode-available', 116],
+  [116, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 117],
+  [117, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 118],
+  [118, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 119],
+  [119, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 120],
+  [120, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 121],
+  [121, '@peartube/event-transcode-progress']
 ])
 
 class HRPC {
@@ -278,9 +276,27 @@ class HRPC {
       ['@peartube/upload-video', getEncoding('@peartube/upload-video-request')],
       ['@peartube/download-video', getEncoding('@peartube/download-video-request')],
       ['@peartube/delete-video', getEncoding('@peartube/delete-video-request')],
+      ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-request')],
+      ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-request')],
+      ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-request')],
+      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-request')],
       ['@peartube/subscribe-channel', getEncoding('@peartube/subscribe-channel-request')],
       ['@peartube/unsubscribe-channel', getEncoding('@peartube/unsubscribe-channel-request')],
       ['@peartube/get-subscriptions', getEncoding('@peartube/get-subscriptions-request')],
+      ['@peartube/get-playlists', getEncoding('@peartube/get-playlists-request')],
+      ['@peartube/get-playlist-items', getEncoding('@peartube/get-playlist-items-request')],
+      ['@peartube/create-playlist', getEncoding('@peartube/create-playlist-request')],
+      ['@peartube/update-playlist', getEncoding('@peartube/update-playlist-request')],
+      ['@peartube/delete-playlist', getEncoding('@peartube/delete-playlist-request')],
+      ['@peartube/add-to-playlist', getEncoding('@peartube/add-to-playlist-request')],
+      ['@peartube/remove-from-playlist', getEncoding('@peartube/remove-from-playlist-request')],
+      ['@peartube/log-watch-history', getEncoding('@peartube/log-watch-history-request')],
+      ['@peartube/get-watch-history', getEncoding('@peartube/get-watch-history-request')],
+      ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-request')],
+      ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-request')],
+      ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-request')],
+      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-request')],
+      ['@peartube/provision-personal-encryption', getEncoding('@peartube/provision-personal-encryption-request')],
       ['@peartube/join-channel', getEncoding('@peartube/join-channel-request')],
       ['@peartube/get-public-feed', getEncoding('@peartube/get-public-feed-request')],
       ['@peartube/get-canonical-feed', getEncoding('@peartube/get-canonical-feed-request')],
@@ -363,26 +379,7 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
-      ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-request')],
-      ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-request')],
-      ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-request')],
-      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-request')],
-      ['@peartube/get-playlists', getEncoding('@peartube/get-playlists-request')],
-      ['@peartube/get-playlist-items', getEncoding('@peartube/get-playlist-items-request')],
-      ['@peartube/create-playlist', getEncoding('@peartube/create-playlist-request')],
-      ['@peartube/update-playlist', getEncoding('@peartube/update-playlist-request')],
-      ['@peartube/delete-playlist', getEncoding('@peartube/delete-playlist-request')],
-      ['@peartube/add-to-playlist', getEncoding('@peartube/add-to-playlist-request')],
-      ['@peartube/remove-from-playlist', getEncoding('@peartube/remove-from-playlist-request')],
-      ['@peartube/log-watch-history', getEncoding('@peartube/log-watch-history-request')],
-      ['@peartube/get-watch-history', getEncoding('@peartube/get-watch-history-request')],
-      ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-request')],
-      ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-request')],
-      ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-request')],
-      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-request')],
-      ['@peartube/provision-personal-encryption', getEncoding('@peartube/provision-personal-encryption-request')],
-      ['@peartube/get-personal-encryption-secret', getEncoding('@peartube/get-personal-encryption-secret-request')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -403,9 +400,27 @@ class HRPC {
       ['@peartube/upload-video', getEncoding('@peartube/upload-video-response')],
       ['@peartube/download-video', getEncoding('@peartube/download-video-response')],
       ['@peartube/delete-video', getEncoding('@peartube/delete-video-response')],
+      ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-response')],
+      ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-response')],
+      ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-response')],
+      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-response')],
       ['@peartube/subscribe-channel', getEncoding('@peartube/subscribe-channel-response')],
       ['@peartube/unsubscribe-channel', getEncoding('@peartube/unsubscribe-channel-response')],
       ['@peartube/get-subscriptions', getEncoding('@peartube/get-subscriptions-response')],
+      ['@peartube/get-playlists', getEncoding('@peartube/get-playlists-response')],
+      ['@peartube/get-playlist-items', getEncoding('@peartube/get-playlist-items-response')],
+      ['@peartube/create-playlist', getEncoding('@peartube/create-playlist-response')],
+      ['@peartube/update-playlist', getEncoding('@peartube/update-playlist-response')],
+      ['@peartube/delete-playlist', getEncoding('@peartube/delete-playlist-response')],
+      ['@peartube/add-to-playlist', getEncoding('@peartube/add-to-playlist-response')],
+      ['@peartube/remove-from-playlist', getEncoding('@peartube/remove-from-playlist-response')],
+      ['@peartube/log-watch-history', getEncoding('@peartube/log-watch-history-response')],
+      ['@peartube/get-watch-history', getEncoding('@peartube/get-watch-history-response')],
+      ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-response')],
+      ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-response')],
+      ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-response')],
+      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-response')],
+      ['@peartube/provision-personal-encryption', getEncoding('@peartube/provision-personal-encryption-response')],
       ['@peartube/join-channel', getEncoding('@peartube/join-channel-response')],
       ['@peartube/get-public-feed', getEncoding('@peartube/get-public-feed-response')],
       ['@peartube/get-canonical-feed', getEncoding('@peartube/get-canonical-feed-response')],
@@ -476,26 +491,7 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
-      ['@peartube/start-livestream', getEncoding('@peartube/start-livestream-response')],
-      ['@peartube/stop-livestream', getEncoding('@peartube/stop-livestream-response')],
-      ['@peartube/get-livestream-status', getEncoding('@peartube/get-livestream-status-response')],
-      ['@peartube/prepare-live-playback', getEncoding('@peartube/prepare-live-playback-response')],
-      ['@peartube/get-playlists', getEncoding('@peartube/get-playlists-response')],
-      ['@peartube/get-playlist-items', getEncoding('@peartube/get-playlist-items-response')],
-      ['@peartube/create-playlist', getEncoding('@peartube/create-playlist-response')],
-      ['@peartube/update-playlist', getEncoding('@peartube/update-playlist-response')],
-      ['@peartube/delete-playlist', getEncoding('@peartube/delete-playlist-response')],
-      ['@peartube/add-to-playlist', getEncoding('@peartube/add-to-playlist-response')],
-      ['@peartube/remove-from-playlist', getEncoding('@peartube/remove-from-playlist-response')],
-      ['@peartube/log-watch-history', getEncoding('@peartube/log-watch-history-response')],
-      ['@peartube/get-watch-history', getEncoding('@peartube/get-watch-history-response')],
-      ['@peartube/get-resume-position', getEncoding('@peartube/get-resume-position-response')],
-      ['@peartube/list-resume-positions', getEncoding('@peartube/list-resume-positions-response')],
-      ['@peartube/set-personal-setting', getEncoding('@peartube/set-personal-setting-response')],
-      ['@peartube/get-personal-settings', getEncoding('@peartube/get-personal-settings-response')],
-      ['@peartube/provision-personal-encryption', getEncoding('@peartube/provision-personal-encryption-response')],
-      ['@peartube/get-personal-encryption-secret', getEncoding('@peartube/get-personal-encryption-secret-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -666,6 +662,22 @@ class HRPC {
     return this._call('@peartube/delete-video', args)
   }
 
+  async startLivestream(args) {
+    return this._call('@peartube/start-livestream', args)
+  }
+
+  async stopLivestream(args) {
+    return this._call('@peartube/stop-livestream', args)
+  }
+
+  async getLivestreamStatus(args) {
+    return this._call('@peartube/get-livestream-status', args)
+  }
+
+  async prepareLivePlayback(args) {
+    return this._call('@peartube/prepare-live-playback', args)
+  }
+
   async subscribeChannel(args) {
     return this._call('@peartube/subscribe-channel', args)
   }
@@ -676,6 +688,62 @@ class HRPC {
 
   async getSubscriptions(args) {
     return this._call('@peartube/get-subscriptions', args)
+  }
+
+  async getPlaylists(args) {
+    return this._call('@peartube/get-playlists', args)
+  }
+
+  async getPlaylistItems(args) {
+    return this._call('@peartube/get-playlist-items', args)
+  }
+
+  async createPlaylist(args) {
+    return this._call('@peartube/create-playlist', args)
+  }
+
+  async updatePlaylist(args) {
+    return this._call('@peartube/update-playlist', args)
+  }
+
+  async deletePlaylist(args) {
+    return this._call('@peartube/delete-playlist', args)
+  }
+
+  async addToPlaylist(args) {
+    return this._call('@peartube/add-to-playlist', args)
+  }
+
+  async removeFromPlaylist(args) {
+    return this._call('@peartube/remove-from-playlist', args)
+  }
+
+  async logWatchHistory(args) {
+    return this._call('@peartube/log-watch-history', args)
+  }
+
+  async getWatchHistory(args) {
+    return this._call('@peartube/get-watch-history', args)
+  }
+
+  async getResumePosition(args) {
+    return this._call('@peartube/get-resume-position', args)
+  }
+
+  async listResumePositions(args) {
+    return this._call('@peartube/list-resume-positions', args)
+  }
+
+  async setPersonalSetting(args) {
+    return this._call('@peartube/set-personal-setting', args)
+  }
+
+  async getPersonalSettings(args) {
+    return this._call('@peartube/get-personal-settings', args)
+  }
+
+  async provisionPersonalEncryption(args) {
+    return this._call('@peartube/provision-personal-encryption', args)
   }
 
   async joinChannel(args) {
@@ -1010,82 +1078,6 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
-  async startLivestream(args) {
-    return this._call('@peartube/start-livestream', args)
-  }
-
-  async stopLivestream(args) {
-    return this._call('@peartube/stop-livestream', args)
-  }
-
-  async getLivestreamStatus(args) {
-    return this._call('@peartube/get-livestream-status', args)
-  }
-
-  async prepareLivePlayback(args) {
-    return this._call('@peartube/prepare-live-playback', args)
-  }
-
-  async getPlaylists(args) {
-    return this._call('@peartube/get-playlists', args)
-  }
-
-  async getPlaylistItems(args) {
-    return this._call('@peartube/get-playlist-items', args)
-  }
-
-  async createPlaylist(args) {
-    return this._call('@peartube/create-playlist', args)
-  }
-
-  async updatePlaylist(args) {
-    return this._call('@peartube/update-playlist', args)
-  }
-
-  async deletePlaylist(args) {
-    return this._call('@peartube/delete-playlist', args)
-  }
-
-  async addToPlaylist(args) {
-    return this._call('@peartube/add-to-playlist', args)
-  }
-
-  async removeFromPlaylist(args) {
-    return this._call('@peartube/remove-from-playlist', args)
-  }
-
-  async logWatchHistory(args) {
-    return this._call('@peartube/log-watch-history', args)
-  }
-
-  async getWatchHistory(args) {
-    return this._call('@peartube/get-watch-history', args)
-  }
-
-  async getResumePosition(args) {
-    return this._call('@peartube/get-resume-position', args)
-  }
-
-  async listResumePositions(args) {
-    return this._call('@peartube/list-resume-positions', args)
-  }
-
-  async setPersonalSetting(args) {
-    return this._call('@peartube/set-personal-setting', args)
-  }
-
-  async getPersonalSettings(args) {
-    return this._call('@peartube/get-personal-settings', args)
-  }
-
-  async provisionPersonalEncryption(args) {
-    return this._call('@peartube/provision-personal-encryption', args)
-  }
-
-  async getPersonalEncryptionSecret(args) {
-    return this._call('@peartube/get-personal-encryption-secret', args)
-  }
-
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1158,6 +1150,22 @@ class HRPC {
     this._handlers['@peartube/delete-video'] = responseFn
   }
 
+  onStartLivestream(responseFn) {
+    this._handlers['@peartube/start-livestream'] = responseFn
+  }
+
+  onStopLivestream(responseFn) {
+    this._handlers['@peartube/stop-livestream'] = responseFn
+  }
+
+  onGetLivestreamStatus(responseFn) {
+    this._handlers['@peartube/get-livestream-status'] = responseFn
+  }
+
+  onPrepareLivePlayback(responseFn) {
+    this._handlers['@peartube/prepare-live-playback'] = responseFn
+  }
+
   onSubscribeChannel(responseFn) {
     this._handlers['@peartube/subscribe-channel'] = responseFn
   }
@@ -1168,6 +1176,62 @@ class HRPC {
 
   onGetSubscriptions(responseFn) {
     this._handlers['@peartube/get-subscriptions'] = responseFn
+  }
+
+  onGetPlaylists(responseFn) {
+    this._handlers['@peartube/get-playlists'] = responseFn
+  }
+
+  onGetPlaylistItems(responseFn) {
+    this._handlers['@peartube/get-playlist-items'] = responseFn
+  }
+
+  onCreatePlaylist(responseFn) {
+    this._handlers['@peartube/create-playlist'] = responseFn
+  }
+
+  onUpdatePlaylist(responseFn) {
+    this._handlers['@peartube/update-playlist'] = responseFn
+  }
+
+  onDeletePlaylist(responseFn) {
+    this._handlers['@peartube/delete-playlist'] = responseFn
+  }
+
+  onAddToPlaylist(responseFn) {
+    this._handlers['@peartube/add-to-playlist'] = responseFn
+  }
+
+  onRemoveFromPlaylist(responseFn) {
+    this._handlers['@peartube/remove-from-playlist'] = responseFn
+  }
+
+  onLogWatchHistory(responseFn) {
+    this._handlers['@peartube/log-watch-history'] = responseFn
+  }
+
+  onGetWatchHistory(responseFn) {
+    this._handlers['@peartube/get-watch-history'] = responseFn
+  }
+
+  onGetResumePosition(responseFn) {
+    this._handlers['@peartube/get-resume-position'] = responseFn
+  }
+
+  onListResumePositions(responseFn) {
+    this._handlers['@peartube/list-resume-positions'] = responseFn
+  }
+
+  onSetPersonalSetting(responseFn) {
+    this._handlers['@peartube/set-personal-setting'] = responseFn
+  }
+
+  onGetPersonalSettings(responseFn) {
+    this._handlers['@peartube/get-personal-settings'] = responseFn
+  }
+
+  onProvisionPersonalEncryption(responseFn) {
+    this._handlers['@peartube/provision-personal-encryption'] = responseFn
   }
 
   onJoinChannel(responseFn) {
@@ -1500,82 +1564,6 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
-  }
-
-  onStartLivestream(responseFn) {
-    this._handlers['@peartube/start-livestream'] = responseFn
-  }
-
-  onStopLivestream(responseFn) {
-    this._handlers['@peartube/stop-livestream'] = responseFn
-  }
-
-  onGetLivestreamStatus(responseFn) {
-    this._handlers['@peartube/get-livestream-status'] = responseFn
-  }
-
-  onPrepareLivePlayback(responseFn) {
-    this._handlers['@peartube/prepare-live-playback'] = responseFn
-  }
-
-  onGetPlaylists(responseFn) {
-    this._handlers['@peartube/get-playlists'] = responseFn
-  }
-
-  onGetPlaylistItems(responseFn) {
-    this._handlers['@peartube/get-playlist-items'] = responseFn
-  }
-
-  onCreatePlaylist(responseFn) {
-    this._handlers['@peartube/create-playlist'] = responseFn
-  }
-
-  onUpdatePlaylist(responseFn) {
-    this._handlers['@peartube/update-playlist'] = responseFn
-  }
-
-  onDeletePlaylist(responseFn) {
-    this._handlers['@peartube/delete-playlist'] = responseFn
-  }
-
-  onAddToPlaylist(responseFn) {
-    this._handlers['@peartube/add-to-playlist'] = responseFn
-  }
-
-  onRemoveFromPlaylist(responseFn) {
-    this._handlers['@peartube/remove-from-playlist'] = responseFn
-  }
-
-  onLogWatchHistory(responseFn) {
-    this._handlers['@peartube/log-watch-history'] = responseFn
-  }
-
-  onGetWatchHistory(responseFn) {
-    this._handlers['@peartube/get-watch-history'] = responseFn
-  }
-
-  onGetResumePosition(responseFn) {
-    this._handlers['@peartube/get-resume-position'] = responseFn
-  }
-
-  onListResumePositions(responseFn) {
-    this._handlers['@peartube/list-resume-positions'] = responseFn
-  }
-
-  onSetPersonalSetting(responseFn) {
-    this._handlers['@peartube/set-personal-setting'] = responseFn
-  }
-
-  onGetPersonalSettings(responseFn) {
-    this._handlers['@peartube/get-personal-settings'] = responseFn
-  }
-
-  onProvisionPersonalEncryption(responseFn) {
-    this._handlers['@peartube/provision-personal-encryption'] = responseFn
-  }
-
-  onGetPersonalEncryptionSecret(responseFn) {
-    this._handlers['@peartube/get-personal-encryption-secret'] = responseFn
   }
 
   _requestIsStream(command) {

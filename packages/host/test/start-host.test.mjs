@@ -46,7 +46,7 @@ test('startHost forwards ready payload with protocolVersion and lifecycle event'
 
   const ready = await session.waitUntilReady()
 
-  t.alike(ready, { blobServerPort: 7777, blobServerReady: true, blobServerError: null, protocolVersion: 2 })
+  t.alike(ready, { blobServerPort: 7777, blobServerReady: true, blobServerError: null, protocolVersion: 3 })
   t.alike(lifecycleEvents, [{ type: 'host.ready', data: ready }])
 })
 
@@ -61,14 +61,14 @@ test('startHost forwards degraded blob server readiness details', async (t) => {
     stream: createFakeStream(),
     onLifecycle: (event) => lifecycleEvents.push(event),
     createBackendImpl: async ({ onReady }) => {
-      onReady({ blobServerPort: null, blobServerReady: false, blobServerError: 'address in use', protocolVersion: 2 })
+      onReady({ blobServerPort: null, blobServerReady: false, blobServerError: 'address in use', protocolVersion: 3 })
       return { destroy: async () => {} }
     }
   })
 
   const ready = await session.waitUntilReady()
 
-  t.alike(ready, { blobServerPort: null, blobServerReady: false, blobServerError: 'address in use', protocolVersion: 2 })
+  t.alike(ready, { blobServerPort: null, blobServerReady: false, blobServerError: 'address in use', protocolVersion: 3 })
   t.alike(lifecycleEvents, [{ type: 'host.ready', data: ready }])
 })
 
@@ -82,7 +82,7 @@ test('startHost terminate is idempotent', async (t) => {
     args: [],
     stream: createFakeStream(),
     createBackendImpl: async ({ onReady }) => {
-      onReady({ blobServerPort: 7777, protocolVersion: 2 })
+      onReady({ blobServerPort: 7777, protocolVersion: 3 })
       return {
         destroy: async () => {
           destroyCalls++
@@ -112,7 +112,7 @@ test('startHost forwards feed and video callbacks to createBackend', async (t) =
     createBackendImpl: async ({ onReady, onFeedUpdate, onVideoStats }) => {
       onFeedUpdate?.()
       onVideoStats?.('channel-key', 'video-id', { peerCount: 3 })
-      onReady({ blobServerPort: 7777, protocolVersion: 2 })
+      onReady({ blobServerPort: 7777, protocolVersion: 3 })
       return { destroy: async () => {} }
     }
   })
@@ -137,7 +137,7 @@ test('startHost forwards explicit network options to createBackend', async (t) =
     swarmOptions,
     createBackendImpl: async ({ onReady, network: backendNetwork, swarmOptions: backendSwarmOptions }) => {
       received = { network: backendNetwork, swarmOptions: backendSwarmOptions }
-      onReady({ blobServerPort: 7777, protocolVersion: 2 })
+      onReady({ blobServerPort: 7777, protocolVersion: 3 })
       return { destroy: async () => {} }
     }
   })

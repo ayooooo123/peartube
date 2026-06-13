@@ -1830,17 +1830,6 @@ export function createApi({
     },
 
     /**
-     * Read back the active personal store's encryption secret — used by a freshly
-     * paired device to persist the secret it received over pairing into its own
-     * keychain. Returns { provisioned, secret? }.
-     */
-    async getPersonalEncryptionSecret() {
-      if (!ctx.personalManager) return { provisioned: false };
-      const secret = ctx.personalManager.getActiveSecretHex();
-      return { provisioned: !!secret, secret: secret || undefined };
-    },
-
-    /**
      * Resolve the signed channel root descriptor for a locally available
      * channel by reading `channel/root` from its public bee. The feed gossip
      * layer uses this to announce locally backed entries with the signature

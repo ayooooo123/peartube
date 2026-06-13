@@ -7,7 +7,7 @@ type BlobServerStatus = {
 }
 
 export type HostReadyData = BlobServerStatus & {
-  protocolVersion: 2
+  protocolVersion: 3
 }
 
 export type HostErrorData = {
@@ -47,10 +47,10 @@ type PlatformRunner = {
     args?: string[]
   }): Promise<{
     stream: any
-    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 2 }>
+    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 3 }>
     terminate(): Promise<void>
     onLifecycle(cb: (event:
-      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 2 } }
+      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 3 } }
       | { type: 'host.error', code: string, message: string, retryable: boolean }
       | { type: 'transport.closed', reason?: string }
     ) => void): () => void
@@ -442,9 +442,6 @@ export function createPersonalRpc(ensureRPC: () => any) {
     // At-rest encryption provisioning (keychain-backed)
     async provisionPersonalEncryption(req: { secret?: string } = {}) {
       return ensureRPC().provisionPersonalEncryption(req);
-    },
-    async getPersonalEncryptionSecret() {
-      return ensureRPC().getPersonalEncryptionSecret({});
     }
   };
 }

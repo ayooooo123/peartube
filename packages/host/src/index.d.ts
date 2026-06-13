@@ -2,7 +2,7 @@ export type HostReadyData = {
   blobServerPort: number | null
   blobServerReady?: boolean
   blobServerError?: string | null
-  protocolVersion: 2
+  protocolVersion: 3
 }
 
 export type HostLifecycleEvent =

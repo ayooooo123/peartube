@@ -19,8 +19,24 @@ const PERSONAL_HANDLERS = [
   'GetPlaylists', 'GetPlaylistItems', 'CreatePlaylist', 'UpdatePlaylist', 'DeletePlaylist',
   'AddToPlaylist', 'RemoveFromPlaylist', 'LogWatchHistory', 'GetWatchHistory',
   'GetResumePosition', 'ListResumePositions', 'SetPersonalSetting', 'GetPersonalSettings',
-  'ProvisionPersonalEncryption', 'GetPersonalEncryptionSecret'
+  'ProvisionPersonalEncryption'
 ]
+
+test('raw personal encryption secret is not exposed as a shared app HRPC handler', (t) => {
+  t.absent(SHARED_HANDLER_NAMES.includes('GetPersonalEncryptionSecret'), 'shared app RPC must not expose key export')
+})
+
+test('identity switching awaits personal store activation before returning', (t) => {
+  const source = fs.readFileSync(new URL('../src/orchestrator.js', import.meta.url), 'utf8')
+  t.ok(
+    source.includes('await refreshActivePersonalStore(publicKey)'),
+    'setActiveIdentity wrapper should await personal store activation',
+  )
+  t.ok(
+    source.includes('await refreshActivePersonalStore(result?.publicKey)'),
+    'createIdentity wrapper should await personal store activation',
+  )
+})
 
 test('personal-sync commands are registered as shared handlers', (t) => {
   for (const name of PERSONAL_HANDLERS) {

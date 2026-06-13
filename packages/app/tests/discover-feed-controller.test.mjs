@@ -170,3 +170,14 @@ test('vertical feed hydration keys include changing content signatures and prune
   assert.deepEqual(Array.from(hydratedChannelsRef.current), [freshKey])
 })
 
+test('vertical discovery feed load is not recreated by feed/video state updates', async () => {
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const source = fs.readFileSync(path.resolve(import.meta.dirname, '../app/(tabs)/discover.tsx'), 'utf8')
+  const loadFeedMatch = source.match(/const loadFeed = useCallback\(async \(\) => \{[\s\S]*?\n  \}, \[([^\]]*)\]\)/)
+  assert.ok(loadFeedMatch, 'loadFeed useCallback should be present')
+  const deps = loadFeedMatch[1].split(',').map((dep) => dep.trim()).filter(Boolean)
+  assert.equal(deps.includes('feedEntries'), false, 'feedEntries should be read through refs, not recreate loadFeed')
+  assert.equal(deps.includes('videos'), false, 'videos should be read through refs, not recreate loadFeed')
+})
+

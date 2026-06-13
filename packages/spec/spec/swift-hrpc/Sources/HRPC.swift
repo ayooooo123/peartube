@@ -97,8 +97,6 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getIdentityResponse = GetIdentityResponseCodec()
   private let getLivestreamStatusRequest = GetLivestreamStatusRequestCodec()
   private let getLivestreamStatusResponse = GetLivestreamStatusResponseCodec()
-  private let getPersonalEncryptionSecretRequest = GetPersonalEncryptionSecretRequestCodec()
-  private let getPersonalEncryptionSecretResponse = GetPersonalEncryptionSecretResponseCodec()
   private let getPersonalSettingsRequest = GetPersonalSettingsRequestCodec()
   private let getPersonalSettingsResponse = GetPersonalSettingsResponseCodec()
   private let getPinnedChannelsRequest = GetPinnedChannelsRequestCodec()
@@ -510,1088 +508,6 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   }
 
   // Request/response — client
-  public func subscribeChannel(_ args: SubscribeChannelRequest) async throws -> SubscribeChannelResponse {
-    let encoded = try _encode(subscribeChannelRequest, args)
-    guard let raw = try await _rpc.request(18, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(subscribeChannelResponse, raw)
-  }
-
-  public func onSubscribeChannel(_ handler: @escaping (SubscribeChannelRequest) async throws -> SubscribeChannelResponse) {
-    _handlers["@peartube/subscribe-channel"] = handler
-  }
-
-  // Request/response — client
-  public func unsubscribeChannel(_ args: UnsubscribeChannelRequest) async throws -> UnsubscribeChannelResponse {
-    let encoded = try _encode(unsubscribeChannelRequest, args)
-    guard let raw = try await _rpc.request(19, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(unsubscribeChannelResponse, raw)
-  }
-
-  public func onUnsubscribeChannel(_ handler: @escaping (UnsubscribeChannelRequest) async throws -> UnsubscribeChannelResponse) {
-    _handlers["@peartube/unsubscribe-channel"] = handler
-  }
-
-  // Request/response — client
-  public func getSubscriptions(_ args: GetSubscriptionsRequest) async throws -> GetSubscriptionsResponse {
-    let encoded = try _encode(getSubscriptionsRequest, args)
-    guard let raw = try await _rpc.request(20, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getSubscriptionsResponse, raw)
-  }
-
-  public func onGetSubscriptions(_ handler: @escaping (GetSubscriptionsRequest) async throws -> GetSubscriptionsResponse) {
-    _handlers["@peartube/get-subscriptions"] = handler
-  }
-
-  // Request/response — client
-  public func joinChannel(_ args: JoinChannelRequest) async throws -> JoinChannelResponse {
-    let encoded = try _encode(joinChannelRequest, args)
-    guard let raw = try await _rpc.request(21, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(joinChannelResponse, raw)
-  }
-
-  public func onJoinChannel(_ handler: @escaping (JoinChannelRequest) async throws -> JoinChannelResponse) {
-    _handlers["@peartube/join-channel"] = handler
-  }
-
-  // Request/response — client
-  public func getPublicFeed(_ args: GetPublicFeedRequest) async throws -> GetPublicFeedResponse {
-    let encoded = try _encode(getPublicFeedRequest, args)
-    guard let raw = try await _rpc.request(22, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getPublicFeedResponse, raw)
-  }
-
-  public func onGetPublicFeed(_ handler: @escaping (GetPublicFeedRequest) async throws -> GetPublicFeedResponse) {
-    _handlers["@peartube/get-public-feed"] = handler
-  }
-
-  // Request/response — client
-  public func getCanonicalFeed(_ args: GetCanonicalFeedRequest) async throws -> GetCanonicalFeedResponse {
-    let encoded = try _encode(getCanonicalFeedRequest, args)
-    guard let raw = try await _rpc.request(23, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getCanonicalFeedResponse, raw)
-  }
-
-  public func onGetCanonicalFeed(_ handler: @escaping (GetCanonicalFeedRequest) async throws -> GetCanonicalFeedResponse) {
-    _handlers["@peartube/get-canonical-feed"] = handler
-  }
-
-  // Request/response — client
-  public func refreshFeed(_ args: RefreshFeedRequest) async throws -> RefreshFeedResponse {
-    let encoded = try _encode(refreshFeedRequest, args)
-    guard let raw = try await _rpc.request(24, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(refreshFeedResponse, raw)
-  }
-
-  public func onRefreshFeed(_ handler: @escaping (RefreshFeedRequest) async throws -> RefreshFeedResponse) {
-    _handlers["@peartube/refresh-feed"] = handler
-  }
-
-  // Request/response — client
-  public func submitToFeed(_ args: SubmitToFeedRequest) async throws -> SubmitToFeedResponse {
-    let encoded = try _encode(submitToFeedRequest, args)
-    guard let raw = try await _rpc.request(25, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(submitToFeedResponse, raw)
-  }
-
-  public func onSubmitToFeed(_ handler: @escaping (SubmitToFeedRequest) async throws -> SubmitToFeedResponse) {
-    _handlers["@peartube/submit-to-feed"] = handler
-  }
-
-  // Request/response — client
-  public func unpublishFromFeed(_ args: UnpublishFromFeedRequest) async throws -> UnpublishFromFeedResponse {
-    let encoded = try _encode(unpublishFromFeedRequest, args)
-    guard let raw = try await _rpc.request(26, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(unpublishFromFeedResponse, raw)
-  }
-
-  public func onUnpublishFromFeed(_ handler: @escaping (UnpublishFromFeedRequest) async throws -> UnpublishFromFeedResponse) {
-    _handlers["@peartube/unpublish-from-feed"] = handler
-  }
-
-  // Request/response — client
-  public func isChannelPublished(_ args: IsChannelPublishedRequest) async throws -> IsChannelPublishedResponse {
-    let encoded = try _encode(isChannelPublishedRequest, args)
-    guard let raw = try await _rpc.request(27, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(isChannelPublishedResponse, raw)
-  }
-
-  public func onIsChannelPublished(_ handler: @escaping (IsChannelPublishedRequest) async throws -> IsChannelPublishedResponse) {
-    _handlers["@peartube/is-channel-published"] = handler
-  }
-
-  // Request/response — client
-  public func hideChannel(_ args: HideChannelRequest) async throws -> HideChannelResponse {
-    let encoded = try _encode(hideChannelRequest, args)
-    guard let raw = try await _rpc.request(28, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(hideChannelResponse, raw)
-  }
-
-  public func onHideChannel(_ handler: @escaping (HideChannelRequest) async throws -> HideChannelResponse) {
-    _handlers["@peartube/hide-channel"] = handler
-  }
-
-  // Request/response — client
-  public func getChannelMeta(_ args: GetChannelMetaRequest) async throws -> GetChannelMetaResponse {
-    let encoded = try _encode(getChannelMetaRequest, args)
-    guard let raw = try await _rpc.request(29, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getChannelMetaResponse, raw)
-  }
-
-  public func onGetChannelMeta(_ handler: @escaping (GetChannelMetaRequest) async throws -> GetChannelMetaResponse) {
-    _handlers["@peartube/get-channel-meta"] = handler
-  }
-
-  // Request/response — client
-  public func getSwarmStatus(_ args: GetSwarmStatusRequest) async throws -> GetSwarmStatusResponse {
-    let encoded = try _encode(getSwarmStatusRequest, args)
-    guard let raw = try await _rpc.request(30, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getSwarmStatusResponse, raw)
-  }
-
-  public func onGetSwarmStatus(_ handler: @escaping (GetSwarmStatusRequest) async throws -> GetSwarmStatusResponse) {
-    _handlers["@peartube/get-swarm-status"] = handler
-  }
-
-  // Request/response — client
-  public func createDeviceInvite(_ args: CreateDeviceInviteRequest) async throws -> CreateDeviceInviteResponse {
-    let encoded = try _encode(createDeviceInviteRequest, args)
-    guard let raw = try await _rpc.request(31, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(createDeviceInviteResponse, raw)
-  }
-
-  public func onCreateDeviceInvite(_ handler: @escaping (CreateDeviceInviteRequest) async throws -> CreateDeviceInviteResponse) {
-    _handlers["@peartube/create-device-invite"] = handler
-  }
-
-  // Request/response — client
-  public func pairDevice(_ args: PairDeviceRequest) async throws -> PairDeviceResponse {
-    let encoded = try _encode(pairDeviceRequest, args)
-    guard let raw = try await _rpc.request(32, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(pairDeviceResponse, raw)
-  }
-
-  public func onPairDevice(_ handler: @escaping (PairDeviceRequest) async throws -> PairDeviceResponse) {
-    _handlers["@peartube/pair-device"] = handler
-  }
-
-  // Request/response — client
-  public func listDevices(_ args: ListDevicesRequest) async throws -> ListDevicesResponse {
-    let encoded = try _encode(listDevicesRequest, args)
-    guard let raw = try await _rpc.request(33, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(listDevicesResponse, raw)
-  }
-
-  public func onListDevices(_ handler: @escaping (ListDevicesRequest) async throws -> ListDevicesResponse) {
-    _handlers["@peartube/list-devices"] = handler
-  }
-
-  // Request/response — client
-  public func retrySyncChannel(_ args: RetrySyncChannelRequest) async throws -> RetrySyncChannelResponse {
-    let encoded = try _encode(retrySyncChannelRequest, args)
-    guard let raw = try await _rpc.request(34, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(retrySyncChannelResponse, raw)
-  }
-
-  public func onRetrySyncChannel(_ handler: @escaping (RetrySyncChannelRequest) async throws -> RetrySyncChannelResponse) {
-    _handlers["@peartube/retry-sync-channel"] = handler
-  }
-
-  // Request/response — client
-  public func prefetchVideo(_ args: PrefetchVideoRequest) async throws -> PrefetchVideoResponse {
-    let encoded = try _encode(prefetchVideoRequest, args)
-    guard let raw = try await _rpc.request(35, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(prefetchVideoResponse, raw)
-  }
-
-  public func onPrefetchVideo(_ handler: @escaping (PrefetchVideoRequest) async throws -> PrefetchVideoResponse) {
-    _handlers["@peartube/prefetch-video"] = handler
-  }
-
-  // Request/response — client
-  public func getVideoStats(_ args: GetVideoStatsRequest) async throws -> GetVideoStatsResponse {
-    let encoded = try _encode(getVideoStatsRequest, args)
-    guard let raw = try await _rpc.request(36, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getVideoStatsResponse, raw)
-  }
-
-  public func onGetVideoStats(_ handler: @escaping (GetVideoStatsRequest) async throws -> GetVideoStatsResponse) {
-    _handlers["@peartube/get-video-stats"] = handler
-  }
-
-  // Request/response — client
-  public func getSeedingStatus(_ args: GetSeedingStatusRequest) async throws -> GetSeedingStatusResponse {
-    let encoded = try _encode(getSeedingStatusRequest, args)
-    guard let raw = try await _rpc.request(37, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getSeedingStatusResponse, raw)
-  }
-
-  public func onGetSeedingStatus(_ handler: @escaping (GetSeedingStatusRequest) async throws -> GetSeedingStatusResponse) {
-    _handlers["@peartube/get-seeding-status"] = handler
-  }
-
-  // Request/response — client
-  public func setSeedingConfig(_ args: SetSeedingConfigRequest) async throws -> SetSeedingConfigResponse {
-    let encoded = try _encode(setSeedingConfigRequest, args)
-    guard let raw = try await _rpc.request(38, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(setSeedingConfigResponse, raw)
-  }
-
-  public func onSetSeedingConfig(_ handler: @escaping (SetSeedingConfigRequest) async throws -> SetSeedingConfigResponse) {
-    _handlers["@peartube/set-seeding-config"] = handler
-  }
-
-  // Request/response — client
-  public func getTranscodeSettings(_ args: GetTranscodeSettingsRequest) async throws -> GetTranscodeSettingsResponse {
-    let encoded = try _encode(getTranscodeSettingsRequest, args)
-    guard let raw = try await _rpc.request(39, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getTranscodeSettingsResponse, raw)
-  }
-
-  public func onGetTranscodeSettings(_ handler: @escaping (GetTranscodeSettingsRequest) async throws -> GetTranscodeSettingsResponse) {
-    _handlers["@peartube/get-transcode-settings"] = handler
-  }
-
-  // Request/response — client
-  public func setTranscodeSettings(_ args: SetTranscodeSettingsRequest) async throws -> SetTranscodeSettingsResponse {
-    let encoded = try _encode(setTranscodeSettingsRequest, args)
-    guard let raw = try await _rpc.request(40, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(setTranscodeSettingsResponse, raw)
-  }
-
-  public func onSetTranscodeSettings(_ handler: @escaping (SetTranscodeSettingsRequest) async throws -> SetTranscodeSettingsResponse) {
-    _handlers["@peartube/set-transcode-settings"] = handler
-  }
-
-  // Request/response — client
-  public func pinChannel(_ args: PinChannelRequest) async throws -> PinChannelResponse {
-    let encoded = try _encode(pinChannelRequest, args)
-    guard let raw = try await _rpc.request(41, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(pinChannelResponse, raw)
-  }
-
-  public func onPinChannel(_ handler: @escaping (PinChannelRequest) async throws -> PinChannelResponse) {
-    _handlers["@peartube/pin-channel"] = handler
-  }
-
-  // Request/response — client
-  public func unpinChannel(_ args: UnpinChannelRequest) async throws -> UnpinChannelResponse {
-    let encoded = try _encode(unpinChannelRequest, args)
-    guard let raw = try await _rpc.request(42, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(unpinChannelResponse, raw)
-  }
-
-  public func onUnpinChannel(_ handler: @escaping (UnpinChannelRequest) async throws -> UnpinChannelResponse) {
-    _handlers["@peartube/unpin-channel"] = handler
-  }
-
-  // Request/response — client
-  public func getPinnedChannels(_ args: GetPinnedChannelsRequest) async throws -> GetPinnedChannelsResponse {
-    let encoded = try _encode(getPinnedChannelsRequest, args)
-    guard let raw = try await _rpc.request(43, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getPinnedChannelsResponse, raw)
-  }
-
-  public func onGetPinnedChannels(_ handler: @escaping (GetPinnedChannelsRequest) async throws -> GetPinnedChannelsResponse) {
-    _handlers["@peartube/get-pinned-channels"] = handler
-  }
-
-  // Request/response — client
-  public func getStorageStats(_ args: GetStorageStatsRequest) async throws -> GetStorageStatsResponse {
-    let encoded = try _encode(getStorageStatsRequest, args)
-    guard let raw = try await _rpc.request(44, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getStorageStatsResponse, raw)
-  }
-
-  public func onGetStorageStats(_ handler: @escaping (GetStorageStatsRequest) async throws -> GetStorageStatsResponse) {
-    _handlers["@peartube/get-storage-stats"] = handler
-  }
-
-  // Request/response — client
-  public func setStorageLimit(_ args: SetStorageLimitRequest) async throws -> SetStorageLimitResponse {
-    let encoded = try _encode(setStorageLimitRequest, args)
-    guard let raw = try await _rpc.request(45, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(setStorageLimitResponse, raw)
-  }
-
-  public func onSetStorageLimit(_ handler: @escaping (SetStorageLimitRequest) async throws -> SetStorageLimitResponse) {
-    _handlers["@peartube/set-storage-limit"] = handler
-  }
-
-  // Request/response — client
-  public func clearCache(_ args: ClearCacheRequest) async throws -> ClearCacheResponse {
-    let encoded = try _encode(clearCacheRequest, args)
-    guard let raw = try await _rpc.request(46, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(clearCacheResponse, raw)
-  }
-
-  public func onClearCache(_ handler: @escaping (ClearCacheRequest) async throws -> ClearCacheResponse) {
-    _handlers["@peartube/clear-cache"] = handler
-  }
-
-  // Request/response — client
-  public func getVideoThumbnail(_ args: GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse {
-    let encoded = try _encode(getVideoThumbnailRequest, args)
-    guard let raw = try await _rpc.request(47, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getVideoThumbnailResponse, raw)
-  }
-
-  public func onGetVideoThumbnail(_ handler: @escaping (GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse) {
-    _handlers["@peartube/get-video-thumbnail"] = handler
-  }
-
-  // Request/response — client
-  public func getVideoMetadata(_ args: GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse {
-    let encoded = try _encode(getVideoMetadataRequest, args)
-    guard let raw = try await _rpc.request(48, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getVideoMetadataResponse, raw)
-  }
-
-  public func onGetVideoMetadata(_ handler: @escaping (GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse) {
-    _handlers["@peartube/get-video-metadata"] = handler
-  }
-
-  // Request/response — client
-  public func setVideoThumbnail(_ args: SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse {
-    let encoded = try _encode(setVideoThumbnailRequest, args)
-    guard let raw = try await _rpc.request(49, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(setVideoThumbnailResponse, raw)
-  }
-
-  public func onSetVideoThumbnail(_ handler: @escaping (SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse) {
-    _handlers["@peartube/set-video-thumbnail"] = handler
-  }
-
-  // Request/response — client
-  public func setVideoThumbnailFromFile(_ args: SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse {
-    let encoded = try _encode(setVideoThumbnailFromFileRequest, args)
-    guard let raw = try await _rpc.request(50, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(setVideoThumbnailFromFileResponse, raw)
-  }
-
-  public func onSetVideoThumbnailFromFile(_ handler: @escaping (SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse) {
-    _handlers["@peartube/set-video-thumbnail-from-file"] = handler
-  }
-
-  // Request/response — client
-  public func getStatus(_ args: GetStatusRequest) async throws -> GetStatusResponse {
-    let encoded = try _encode(getStatusRequest, args)
-    guard let raw = try await _rpc.request(51, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getStatusResponse, raw)
-  }
-
-  public func onGetStatus(_ handler: @escaping (GetStatusRequest) async throws -> GetStatusResponse) {
-    _handlers["@peartube/get-status"] = handler
-  }
-
-  // Request/response — client
-  public func pickVideoFile(_ args: PickVideoFileRequest) async throws -> PickVideoFileResponse {
-    let encoded = try _encode(pickVideoFileRequest, args)
-    guard let raw = try await _rpc.request(52, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(pickVideoFileResponse, raw)
-  }
-
-  public func onPickVideoFile(_ handler: @escaping (PickVideoFileRequest) async throws -> PickVideoFileResponse) {
-    _handlers["@peartube/pick-video-file"] = handler
-  }
-
-  // Request/response — client
-  public func pickImageFile(_ args: PickImageFileRequest) async throws -> PickImageFileResponse {
-    let encoded = try _encode(pickImageFileRequest, args)
-    guard let raw = try await _rpc.request(53, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(pickImageFileResponse, raw)
-  }
-
-  public func onPickImageFile(_ handler: @escaping (PickImageFileRequest) async throws -> PickImageFileResponse) {
-    _handlers["@peartube/pick-image-file"] = handler
-  }
-
-  // Request/response — client
-  public func getBlobServerPort(_ args: GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse {
-    let encoded = try _encode(getBlobServerPortRequest, args)
-    guard let raw = try await _rpc.request(54, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getBlobServerPortResponse, raw)
-  }
-
-  public func onGetBlobServerPort(_ handler: @escaping (GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse) {
-    _handlers["@peartube/get-blob-server-port"] = handler
-  }
-
-  // Request/response — client
-  public func globalSearchVideos(_ args: GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse {
-    let encoded = try _encode(globalSearchVideosRequest, args)
-    guard let raw = try await _rpc.request(55, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(globalSearchVideosResponse, raw)
-  }
-
-  public func onGlobalSearchVideos(_ handler: @escaping (GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse) {
-    _handlers["@peartube/global-search-videos"] = handler
-  }
-
-  // Request/response — client
-  public func addComment(_ args: AddCommentRequest) async throws -> AddCommentResponse {
-    let encoded = try _encode(addCommentRequest, args)
-    guard let raw = try await _rpc.request(56, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(addCommentResponse, raw)
-  }
-
-  public func onAddComment(_ handler: @escaping (AddCommentRequest) async throws -> AddCommentResponse) {
-    _handlers["@peartube/add-comment"] = handler
-  }
-
-  // Request/response — client
-  public func listComments(_ args: ListCommentsRequest) async throws -> ListCommentsResponse {
-    let encoded = try _encode(listCommentsRequest, args)
-    guard let raw = try await _rpc.request(57, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(listCommentsResponse, raw)
-  }
-
-  public func onListComments(_ handler: @escaping (ListCommentsRequest) async throws -> ListCommentsResponse) {
-    _handlers["@peartube/list-comments"] = handler
-  }
-
-  // Request/response — client
-  public func hideComment(_ args: HideCommentRequest) async throws -> HideCommentResponse {
-    let encoded = try _encode(hideCommentRequest, args)
-    guard let raw = try await _rpc.request(58, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(hideCommentResponse, raw)
-  }
-
-  public func onHideComment(_ handler: @escaping (HideCommentRequest) async throws -> HideCommentResponse) {
-    _handlers["@peartube/hide-comment"] = handler
-  }
-
-  // Request/response — client
-  public func removeComment(_ args: RemoveCommentRequest) async throws -> RemoveCommentResponse {
-    let encoded = try _encode(removeCommentRequest, args)
-    guard let raw = try await _rpc.request(59, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(removeCommentResponse, raw)
-  }
-
-  public func onRemoveComment(_ handler: @escaping (RemoveCommentRequest) async throws -> RemoveCommentResponse) {
-    _handlers["@peartube/remove-comment"] = handler
-  }
-
-  // Request/response — client
-  public func addReaction(_ args: AddReactionRequest) async throws -> AddReactionResponse {
-    let encoded = try _encode(addReactionRequest, args)
-    guard let raw = try await _rpc.request(60, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(addReactionResponse, raw)
-  }
-
-  public func onAddReaction(_ handler: @escaping (AddReactionRequest) async throws -> AddReactionResponse) {
-    _handlers["@peartube/add-reaction"] = handler
-  }
-
-  // Request/response — client
-  public func removeReaction(_ args: RemoveReactionRequest) async throws -> RemoveReactionResponse {
-    let encoded = try _encode(removeReactionRequest, args)
-    guard let raw = try await _rpc.request(61, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(removeReactionResponse, raw)
-  }
-
-  public func onRemoveReaction(_ handler: @escaping (RemoveReactionRequest) async throws -> RemoveReactionResponse) {
-    _handlers["@peartube/remove-reaction"] = handler
-  }
-
-  // Request/response — client
-  public func getReactions(_ args: GetReactionsRequest) async throws -> GetReactionsResponse {
-    let encoded = try _encode(getReactionsRequest, args)
-    guard let raw = try await _rpc.request(62, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getReactionsResponse, raw)
-  }
-
-  public func onGetReactions(_ handler: @escaping (GetReactionsRequest) async throws -> GetReactionsResponse) {
-    _handlers["@peartube/get-reactions"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventReady(_ args: EventReady) throws {
-    let encoded = try _encode(eventReady, args)
-    _rpc.event(63, data: encoded)
-  }
-
-  public func onEventReady(_ handler: @escaping (EventReady) async -> Void) {
-    _handlers["@peartube/event-ready"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventError(_ args: EventError) throws {
-    let encoded = try _encode(eventError, args)
-    _rpc.event(64, data: encoded)
-  }
-
-  public func onEventError(_ handler: @escaping (EventError) async -> Void) {
-    _handlers["@peartube/event-error"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventUploadProgress(_ args: EventUploadProgress) throws {
-    let encoded = try _encode(eventUploadProgress, args)
-    _rpc.event(65, data: encoded)
-  }
-
-  public func onEventUploadProgress(_ handler: @escaping (EventUploadProgress) async -> Void) {
-    _handlers["@peartube/event-upload-progress"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventDownloadProgress(_ args: EventDownloadProgress) throws {
-    let encoded = try _encode(eventDownloadProgress, args)
-    _rpc.event(66, data: encoded)
-  }
-
-  public func onEventDownloadProgress(_ handler: @escaping (EventDownloadProgress) async -> Void) {
-    _handlers["@peartube/event-download-progress"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventFeedUpdate(_ args: EventFeedUpdate) throws {
-    let encoded = try _encode(eventFeedUpdate, args)
-    _rpc.event(67, data: encoded)
-  }
-
-  public func onEventFeedUpdate(_ handler: @escaping (EventFeedUpdate) async -> Void) {
-    _handlers["@peartube/event-feed-update"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventLog(_ args: EventLog) throws {
-    let encoded = try _encode(eventLog, args)
-    _rpc.event(68, data: encoded)
-  }
-
-  public func onEventLog(_ handler: @escaping (EventLog) async -> Void) {
-    _handlers["@peartube/event-log"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventVideoStats(_ args: EventVideoStats) throws {
-    let encoded = try _encode(eventVideoStats, args)
-    _rpc.event(69, data: encoded)
-  }
-
-  public func onEventVideoStats(_ handler: @escaping (EventVideoStats) async -> Void) {
-    _handlers["@peartube/event-video-stats"] = handler
-  }
-
-  // Request/response — client
-  public func castAvailable(_ args: CastAvailableRequest) async throws -> CastAvailableResponse {
-    let encoded = try _encode(castAvailableRequest, args)
-    guard let raw = try await _rpc.request(70, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castAvailableResponse, raw)
-  }
-
-  public func onCastAvailable(_ handler: @escaping (CastAvailableRequest) async throws -> CastAvailableResponse) {
-    _handlers["@peartube/cast-available"] = handler
-  }
-
-  // Request/response — client
-  public func castStartDiscovery(_ args: CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse {
-    let encoded = try _encode(castStartDiscoveryRequest, args)
-    guard let raw = try await _rpc.request(71, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castStartDiscoveryResponse, raw)
-  }
-
-  public func onCastStartDiscovery(_ handler: @escaping (CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse) {
-    _handlers["@peartube/cast-start-discovery"] = handler
-  }
-
-  // Request/response — client
-  public func castStopDiscovery(_ args: CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse {
-    let encoded = try _encode(castStopDiscoveryRequest, args)
-    guard let raw = try await _rpc.request(72, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castStopDiscoveryResponse, raw)
-  }
-
-  public func onCastStopDiscovery(_ handler: @escaping (CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse) {
-    _handlers["@peartube/cast-stop-discovery"] = handler
-  }
-
-  // Request/response — client
-  public func castGetDevices(_ args: CastGetDevicesRequest) async throws -> CastGetDevicesResponse {
-    let encoded = try _encode(castGetDevicesRequest, args)
-    guard let raw = try await _rpc.request(73, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castGetDevicesResponse, raw)
-  }
-
-  public func onCastGetDevices(_ handler: @escaping (CastGetDevicesRequest) async throws -> CastGetDevicesResponse) {
-    _handlers["@peartube/cast-get-devices"] = handler
-  }
-
-  // Request/response — client
-  public func castAddManualDevice(_ args: CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse {
-    let encoded = try _encode(castAddManualDeviceRequest, args)
-    guard let raw = try await _rpc.request(74, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castAddManualDeviceResponse, raw)
-  }
-
-  public func onCastAddManualDevice(_ handler: @escaping (CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse) {
-    _handlers["@peartube/cast-add-manual-device"] = handler
-  }
-
-  // Request/response — client
-  public func castConnect(_ args: CastConnectRequest) async throws -> CastConnectResponse {
-    let encoded = try _encode(castConnectRequest, args)
-    guard let raw = try await _rpc.request(75, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castConnectResponse, raw)
-  }
-
-  public func onCastConnect(_ handler: @escaping (CastConnectRequest) async throws -> CastConnectResponse) {
-    _handlers["@peartube/cast-connect"] = handler
-  }
-
-  // Request/response — client
-  public func castDisconnect(_ args: CastDisconnectRequest) async throws -> CastDisconnectResponse {
-    let encoded = try _encode(castDisconnectRequest, args)
-    guard let raw = try await _rpc.request(76, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castDisconnectResponse, raw)
-  }
-
-  public func onCastDisconnect(_ handler: @escaping (CastDisconnectRequest) async throws -> CastDisconnectResponse) {
-    _handlers["@peartube/cast-disconnect"] = handler
-  }
-
-  // Request/response — client
-  public func castPlay(_ args: CastPlayRequest) async throws -> CastPlayResponse {
-    let encoded = try _encode(castPlayRequest, args)
-    guard let raw = try await _rpc.request(77, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castPlayResponse, raw)
-  }
-
-  public func onCastPlay(_ handler: @escaping (CastPlayRequest) async throws -> CastPlayResponse) {
-    _handlers["@peartube/cast-play"] = handler
-  }
-
-  // Request/response — client
-  public func castPause(_ args: CastPauseRequest) async throws -> CastPauseResponse {
-    let encoded = try _encode(castPauseRequest, args)
-    guard let raw = try await _rpc.request(78, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castPauseResponse, raw)
-  }
-
-  public func onCastPause(_ handler: @escaping (CastPauseRequest) async throws -> CastPauseResponse) {
-    _handlers["@peartube/cast-pause"] = handler
-  }
-
-  // Request/response — client
-  public func castResume(_ args: CastResumeRequest) async throws -> CastResumeResponse {
-    let encoded = try _encode(castResumeRequest, args)
-    guard let raw = try await _rpc.request(79, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castResumeResponse, raw)
-  }
-
-  public func onCastResume(_ handler: @escaping (CastResumeRequest) async throws -> CastResumeResponse) {
-    _handlers["@peartube/cast-resume"] = handler
-  }
-
-  // Request/response — client
-  public func castStop(_ args: CastStopRequest) async throws -> CastStopResponse {
-    let encoded = try _encode(castStopRequest, args)
-    guard let raw = try await _rpc.request(80, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castStopResponse, raw)
-  }
-
-  public func onCastStop(_ handler: @escaping (CastStopRequest) async throws -> CastStopResponse) {
-    _handlers["@peartube/cast-stop"] = handler
-  }
-
-  // Request/response — client
-  public func castSeek(_ args: CastSeekRequest) async throws -> CastSeekResponse {
-    let encoded = try _encode(castSeekRequest, args)
-    guard let raw = try await _rpc.request(81, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castSeekResponse, raw)
-  }
-
-  public func onCastSeek(_ handler: @escaping (CastSeekRequest) async throws -> CastSeekResponse) {
-    _handlers["@peartube/cast-seek"] = handler
-  }
-
-  // Request/response — client
-  public func castSetVolume(_ args: CastSetVolumeRequest) async throws -> CastSetVolumeResponse {
-    let encoded = try _encode(castSetVolumeRequest, args)
-    guard let raw = try await _rpc.request(82, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castSetVolumeResponse, raw)
-  }
-
-  public func onCastSetVolume(_ handler: @escaping (CastSetVolumeRequest) async throws -> CastSetVolumeResponse) {
-    _handlers["@peartube/cast-set-volume"] = handler
-  }
-
-  // Request/response — client
-  public func castGetState(_ args: CastGetStateRequest) async throws -> CastGetStateResponse {
-    let encoded = try _encode(castGetStateRequest, args)
-    guard let raw = try await _rpc.request(83, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castGetStateResponse, raw)
-  }
-
-  public func onCastGetState(_ handler: @escaping (CastGetStateRequest) async throws -> CastGetStateResponse) {
-    _handlers["@peartube/cast-get-state"] = handler
-  }
-
-  // Request/response — client
-  public func castIsConnected(_ args: CastIsConnectedRequest) async throws -> CastIsConnectedResponse {
-    let encoded = try _encode(castIsConnectedRequest, args)
-    guard let raw = try await _rpc.request(84, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(castIsConnectedResponse, raw)
-  }
-
-  public func onCastIsConnected(_ handler: @escaping (CastIsConnectedRequest) async throws -> CastIsConnectedResponse) {
-    _handlers["@peartube/cast-is-connected"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventCastDeviceFound(_ args: EventCastDeviceFound) throws {
-    let encoded = try _encode(eventCastDeviceFound, args)
-    _rpc.event(85, data: encoded)
-  }
-
-  public func onEventCastDeviceFound(_ handler: @escaping (EventCastDeviceFound) async -> Void) {
-    _handlers["@peartube/event-cast-device-found"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventCastDeviceLost(_ args: EventCastDeviceLost) throws {
-    let encoded = try _encode(eventCastDeviceLost, args)
-    _rpc.event(86, data: encoded)
-  }
-
-  public func onEventCastDeviceLost(_ handler: @escaping (EventCastDeviceLost) async -> Void) {
-    _handlers["@peartube/event-cast-device-lost"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventCastPlaybackState(_ args: EventCastPlaybackState) throws {
-    let encoded = try _encode(eventCastPlaybackState, args)
-    _rpc.event(87, data: encoded)
-  }
-
-  public func onEventCastPlaybackState(_ handler: @escaping (EventCastPlaybackState) async -> Void) {
-    _handlers["@peartube/event-cast-playback-state"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventCastTimeUpdate(_ args: EventCastTimeUpdate) throws {
-    let encoded = try _encode(eventCastTimeUpdate, args)
-    _rpc.event(88, data: encoded)
-  }
-
-  public func onEventCastTimeUpdate(_ handler: @escaping (EventCastTimeUpdate) async -> Void) {
-    _handlers["@peartube/event-cast-time-update"] = handler
-  }
-
-  // Request/response — client
-  public func searchVideos(_ args: SearchVideosRequest) async throws -> SearchVideosResponse {
-    let encoded = try _encode(searchVideosRequest, args)
-    guard let raw = try await _rpc.request(89, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(searchVideosResponse, raw)
-  }
-
-  public func onSearchVideos(_ handler: @escaping (SearchVideosRequest) async throws -> SearchVideosResponse) {
-    _handlers["@peartube/search-videos"] = handler
-  }
-
-  // Request/response — client
-  public func logWatchEvent(_ args: LogWatchEventRequest) async throws -> LogWatchEventResponse {
-    let encoded = try _encode(logWatchEventRequest, args)
-    guard let raw = try await _rpc.request(90, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(logWatchEventResponse, raw)
-  }
-
-  public func onLogWatchEvent(_ handler: @escaping (LogWatchEventRequest) async throws -> LogWatchEventResponse) {
-    _handlers["@peartube/log-watch-event"] = handler
-  }
-
-  // Request/response — client
-  public func indexVideoVectors(_ args: IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse {
-    let encoded = try _encode(indexVideoVectorsRequest, args)
-    guard let raw = try await _rpc.request(91, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(indexVideoVectorsResponse, raw)
-  }
-
-  public func onIndexVideoVectors(_ handler: @escaping (IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse) {
-    _handlers["@peartube/index-video-vectors"] = handler
-  }
-
-  // Request/response — client
-  public func getRecommendations(_ args: GetRecommendationsRequest) async throws -> GetRecommendationsResponse {
-    let encoded = try _encode(getRecommendationsRequest, args)
-    guard let raw = try await _rpc.request(92, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getRecommendationsResponse, raw)
-  }
-
-  public func onGetRecommendations(_ handler: @escaping (GetRecommendationsRequest) async throws -> GetRecommendationsResponse) {
-    _handlers["@peartube/get-recommendations"] = handler
-  }
-
-  // Request/response — client
-  public func getVideoRecommendations(_ args: GetVideoRecommendationsRequest) async throws -> GetVideoRecommendationsResponse {
-    let encoded = try _encode(getVideoRecommendationsRequest, args)
-    guard let raw = try await _rpc.request(93, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getVideoRecommendationsResponse, raw)
-  }
-
-  public func onGetVideoRecommendations(_ handler: @escaping (GetVideoRecommendationsRequest) async throws -> GetVideoRecommendationsResponse) {
-    _handlers["@peartube/get-video-recommendations"] = handler
-  }
-
-  // Request/response — client
-  public func updateVideoMetadata(_ args: UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse {
-    let encoded = try _encode(updateVideoMetadataRequest, args)
-    guard let raw = try await _rpc.request(94, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(updateVideoMetadataResponse, raw)
-  }
-
-  public func onUpdateVideoMetadata(_ handler: @escaping (UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse) {
-    _handlers["@peartube/update-video-metadata"] = handler
-  }
-
-  // Request/response — client
-  public func desktopBootstrap(_ args: DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse {
-    let encoded = try _encode(desktopBootstrapRequest, args)
-    guard let raw = try await _rpc.request(95, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(desktopBootstrapResponse, raw)
-  }
-
-  public func onDesktopBootstrap(_ handler: @escaping (DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse) {
-    _handlers["@peartube/desktop-bootstrap"] = handler
-  }
-
-  // Request/response — client
-  public func desktopShutdown(_ args: DesktopShutdownRequest) async throws -> DesktopShutdownResponse {
-    let encoded = try _encode(desktopShutdownRequest, args)
-    guard let raw = try await _rpc.request(96, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(desktopShutdownResponse, raw)
-  }
-
-  public func onDesktopShutdown(_ handler: @escaping (DesktopShutdownRequest) async throws -> DesktopShutdownResponse) {
-    _handlers["@peartube/desktop-shutdown"] = handler
-  }
-
-  // Request/response — client
-  public func desktopRefreshBrowse(_ args: DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse {
-    let encoded = try _encode(desktopRefreshBrowseRequest, args)
-    guard let raw = try await _rpc.request(97, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(desktopRefreshBrowseResponse, raw)
-  }
-
-  public func onDesktopRefreshBrowse(_ handler: @escaping (DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse) {
-    _handlers["@peartube/desktop-refresh-browse"] = handler
-  }
-
-  // Request/response — client
-  public func ffmpegDecodeAvailable(_ args: FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse {
-    let encoded = try _encode(ffmpegDecodeAvailableRequest, args)
-    guard let raw = try await _rpc.request(107, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(ffmpegDecodeAvailableResponse, raw)
-  }
-
-  public func onFfmpegDecodeAvailable(_ handler: @escaping (FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse) {
-    _handlers["@peartube/ffmpeg-decode-available"] = handler
-  }
-
-  // Request/response — client
-  public func updateChannelAvatar(_ args: UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse {
-    let encoded = try _encode(updateChannelAvatarRequest, args)
-    guard let raw = try await _rpc.request(108, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(updateChannelAvatarResponse, raw)
-  }
-
-  public func onUpdateChannelAvatar(_ handler: @escaping (UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse) {
-    _handlers["@peartube/update-channel-avatar"] = handler
-  }
-
-  // Request/response — client
-  public func transcodeStart(_ args: TranscodeStartRequest) async throws -> TranscodeStartResponse {
-    let encoded = try _encode(transcodeStartRequest, args)
-    guard let raw = try await _rpc.request(109, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(transcodeStartResponse, raw)
-  }
-
-  public func onTranscodeStart(_ handler: @escaping (TranscodeStartRequest) async throws -> TranscodeStartResponse) {
-    _handlers["@peartube/transcode-start"] = handler
-  }
-
-  // Request/response — client
-  public func transcodeStop(_ args: TranscodeStopRequest) async throws -> TranscodeStopResponse {
-    let encoded = try _encode(transcodeStopRequest, args)
-    guard let raw = try await _rpc.request(110, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(transcodeStopResponse, raw)
-  }
-
-  public func onTranscodeStop(_ handler: @escaping (TranscodeStopRequest) async throws -> TranscodeStopResponse) {
-    _handlers["@peartube/transcode-stop"] = handler
-  }
-
-  // Request/response — client
-  public func transcodeStatus(_ args: TranscodeStatusRequest) async throws -> TranscodeStatusResponse {
-    let encoded = try _encode(transcodeStatusRequest, args)
-    guard let raw = try await _rpc.request(111, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(transcodeStatusResponse, raw)
-  }
-
-  public func onTranscodeStatus(_ handler: @escaping (TranscodeStatusRequest) async throws -> TranscodeStatusResponse) {
-    _handlers["@peartube/transcode-status"] = handler
-  }
-
-  // Send-only — client (fire and forget)
-  public func eventTranscodeProgress(_ args: EventTranscodeProgress) throws {
-    let encoded = try _encode(eventTranscodeProgress, args)
-    _rpc.event(112, data: encoded)
-  }
-
-  public func onEventTranscodeProgress(_ handler: @escaping (EventTranscodeProgress) async -> Void) {
-    _handlers["@peartube/event-transcode-progress"] = handler
-  }
-
-  // Request/response — client
   public func startLivestream(_ args: StartLivestreamRequest) async throws -> StartLivestreamResponse {
     let encoded = try _encode(startLivestreamRequest, args)
     guard let raw = try await _rpc.request(18, data: encoded) else {
@@ -1641,6 +557,45 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
 
   public func onPrepareLivePlayback(_ handler: @escaping (PrepareLivePlaybackRequest) async throws -> PrepareLivePlaybackResponse) {
     _handlers["@peartube/prepare-live-playback"] = handler
+  }
+
+  // Request/response — client
+  public func subscribeChannel(_ args: SubscribeChannelRequest) async throws -> SubscribeChannelResponse {
+    let encoded = try _encode(subscribeChannelRequest, args)
+    guard let raw = try await _rpc.request(22, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(subscribeChannelResponse, raw)
+  }
+
+  public func onSubscribeChannel(_ handler: @escaping (SubscribeChannelRequest) async throws -> SubscribeChannelResponse) {
+    _handlers["@peartube/subscribe-channel"] = handler
+  }
+
+  // Request/response — client
+  public func unsubscribeChannel(_ args: UnsubscribeChannelRequest) async throws -> UnsubscribeChannelResponse {
+    let encoded = try _encode(unsubscribeChannelRequest, args)
+    guard let raw = try await _rpc.request(23, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(unsubscribeChannelResponse, raw)
+  }
+
+  public func onUnsubscribeChannel(_ handler: @escaping (UnsubscribeChannelRequest) async throws -> UnsubscribeChannelResponse) {
+    _handlers["@peartube/unsubscribe-channel"] = handler
+  }
+
+  // Request/response — client
+  public func getSubscriptions(_ args: GetSubscriptionsRequest) async throws -> GetSubscriptionsResponse {
+    let encoded = try _encode(getSubscriptionsRequest, args)
+    guard let raw = try await _rpc.request(24, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getSubscriptionsResponse, raw)
+  }
+
+  public func onGetSubscriptions(_ handler: @escaping (GetSubscriptionsRequest) async throws -> GetSubscriptionsResponse) {
+    _handlers["@peartube/get-subscriptions"] = handler
   }
 
   // Request/response — client
@@ -1826,16 +781,1046 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   }
 
   // Request/response — client
-  public func getPersonalEncryptionSecret(_ args: GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse {
-    let encoded = try _encode(getPersonalEncryptionSecretRequest, args)
+  public func joinChannel(_ args: JoinChannelRequest) async throws -> JoinChannelResponse {
+    let encoded = try _encode(joinChannelRequest, args)
     guard let raw = try await _rpc.request(39, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
-    return try _decode(getPersonalEncryptionSecretResponse, raw)
+    return try _decode(joinChannelResponse, raw)
   }
 
-  public func onGetPersonalEncryptionSecret(_ handler: @escaping (GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse) {
-    _handlers["@peartube/get-personal-encryption-secret"] = handler
+  public func onJoinChannel(_ handler: @escaping (JoinChannelRequest) async throws -> JoinChannelResponse) {
+    _handlers["@peartube/join-channel"] = handler
+  }
+
+  // Request/response — client
+  public func getPublicFeed(_ args: GetPublicFeedRequest) async throws -> GetPublicFeedResponse {
+    let encoded = try _encode(getPublicFeedRequest, args)
+    guard let raw = try await _rpc.request(40, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPublicFeedResponse, raw)
+  }
+
+  public func onGetPublicFeed(_ handler: @escaping (GetPublicFeedRequest) async throws -> GetPublicFeedResponse) {
+    _handlers["@peartube/get-public-feed"] = handler
+  }
+
+  // Request/response — client
+  public func getCanonicalFeed(_ args: GetCanonicalFeedRequest) async throws -> GetCanonicalFeedResponse {
+    let encoded = try _encode(getCanonicalFeedRequest, args)
+    guard let raw = try await _rpc.request(41, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getCanonicalFeedResponse, raw)
+  }
+
+  public func onGetCanonicalFeed(_ handler: @escaping (GetCanonicalFeedRequest) async throws -> GetCanonicalFeedResponse) {
+    _handlers["@peartube/get-canonical-feed"] = handler
+  }
+
+  // Request/response — client
+  public func refreshFeed(_ args: RefreshFeedRequest) async throws -> RefreshFeedResponse {
+    let encoded = try _encode(refreshFeedRequest, args)
+    guard let raw = try await _rpc.request(42, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(refreshFeedResponse, raw)
+  }
+
+  public func onRefreshFeed(_ handler: @escaping (RefreshFeedRequest) async throws -> RefreshFeedResponse) {
+    _handlers["@peartube/refresh-feed"] = handler
+  }
+
+  // Request/response — client
+  public func submitToFeed(_ args: SubmitToFeedRequest) async throws -> SubmitToFeedResponse {
+    let encoded = try _encode(submitToFeedRequest, args)
+    guard let raw = try await _rpc.request(43, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(submitToFeedResponse, raw)
+  }
+
+  public func onSubmitToFeed(_ handler: @escaping (SubmitToFeedRequest) async throws -> SubmitToFeedResponse) {
+    _handlers["@peartube/submit-to-feed"] = handler
+  }
+
+  // Request/response — client
+  public func unpublishFromFeed(_ args: UnpublishFromFeedRequest) async throws -> UnpublishFromFeedResponse {
+    let encoded = try _encode(unpublishFromFeedRequest, args)
+    guard let raw = try await _rpc.request(44, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(unpublishFromFeedResponse, raw)
+  }
+
+  public func onUnpublishFromFeed(_ handler: @escaping (UnpublishFromFeedRequest) async throws -> UnpublishFromFeedResponse) {
+    _handlers["@peartube/unpublish-from-feed"] = handler
+  }
+
+  // Request/response — client
+  public func isChannelPublished(_ args: IsChannelPublishedRequest) async throws -> IsChannelPublishedResponse {
+    let encoded = try _encode(isChannelPublishedRequest, args)
+    guard let raw = try await _rpc.request(45, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(isChannelPublishedResponse, raw)
+  }
+
+  public func onIsChannelPublished(_ handler: @escaping (IsChannelPublishedRequest) async throws -> IsChannelPublishedResponse) {
+    _handlers["@peartube/is-channel-published"] = handler
+  }
+
+  // Request/response — client
+  public func hideChannel(_ args: HideChannelRequest) async throws -> HideChannelResponse {
+    let encoded = try _encode(hideChannelRequest, args)
+    guard let raw = try await _rpc.request(46, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(hideChannelResponse, raw)
+  }
+
+  public func onHideChannel(_ handler: @escaping (HideChannelRequest) async throws -> HideChannelResponse) {
+    _handlers["@peartube/hide-channel"] = handler
+  }
+
+  // Request/response — client
+  public func getChannelMeta(_ args: GetChannelMetaRequest) async throws -> GetChannelMetaResponse {
+    let encoded = try _encode(getChannelMetaRequest, args)
+    guard let raw = try await _rpc.request(47, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getChannelMetaResponse, raw)
+  }
+
+  public func onGetChannelMeta(_ handler: @escaping (GetChannelMetaRequest) async throws -> GetChannelMetaResponse) {
+    _handlers["@peartube/get-channel-meta"] = handler
+  }
+
+  // Request/response — client
+  public func getSwarmStatus(_ args: GetSwarmStatusRequest) async throws -> GetSwarmStatusResponse {
+    let encoded = try _encode(getSwarmStatusRequest, args)
+    guard let raw = try await _rpc.request(48, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getSwarmStatusResponse, raw)
+  }
+
+  public func onGetSwarmStatus(_ handler: @escaping (GetSwarmStatusRequest) async throws -> GetSwarmStatusResponse) {
+    _handlers["@peartube/get-swarm-status"] = handler
+  }
+
+  // Request/response — client
+  public func createDeviceInvite(_ args: CreateDeviceInviteRequest) async throws -> CreateDeviceInviteResponse {
+    let encoded = try _encode(createDeviceInviteRequest, args)
+    guard let raw = try await _rpc.request(49, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(createDeviceInviteResponse, raw)
+  }
+
+  public func onCreateDeviceInvite(_ handler: @escaping (CreateDeviceInviteRequest) async throws -> CreateDeviceInviteResponse) {
+    _handlers["@peartube/create-device-invite"] = handler
+  }
+
+  // Request/response — client
+  public func pairDevice(_ args: PairDeviceRequest) async throws -> PairDeviceResponse {
+    let encoded = try _encode(pairDeviceRequest, args)
+    guard let raw = try await _rpc.request(50, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(pairDeviceResponse, raw)
+  }
+
+  public func onPairDevice(_ handler: @escaping (PairDeviceRequest) async throws -> PairDeviceResponse) {
+    _handlers["@peartube/pair-device"] = handler
+  }
+
+  // Request/response — client
+  public func listDevices(_ args: ListDevicesRequest) async throws -> ListDevicesResponse {
+    let encoded = try _encode(listDevicesRequest, args)
+    guard let raw = try await _rpc.request(51, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(listDevicesResponse, raw)
+  }
+
+  public func onListDevices(_ handler: @escaping (ListDevicesRequest) async throws -> ListDevicesResponse) {
+    _handlers["@peartube/list-devices"] = handler
+  }
+
+  // Request/response — client
+  public func retrySyncChannel(_ args: RetrySyncChannelRequest) async throws -> RetrySyncChannelResponse {
+    let encoded = try _encode(retrySyncChannelRequest, args)
+    guard let raw = try await _rpc.request(52, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(retrySyncChannelResponse, raw)
+  }
+
+  public func onRetrySyncChannel(_ handler: @escaping (RetrySyncChannelRequest) async throws -> RetrySyncChannelResponse) {
+    _handlers["@peartube/retry-sync-channel"] = handler
+  }
+
+  // Request/response — client
+  public func prefetchVideo(_ args: PrefetchVideoRequest) async throws -> PrefetchVideoResponse {
+    let encoded = try _encode(prefetchVideoRequest, args)
+    guard let raw = try await _rpc.request(53, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(prefetchVideoResponse, raw)
+  }
+
+  public func onPrefetchVideo(_ handler: @escaping (PrefetchVideoRequest) async throws -> PrefetchVideoResponse) {
+    _handlers["@peartube/prefetch-video"] = handler
+  }
+
+  // Request/response — client
+  public func getVideoStats(_ args: GetVideoStatsRequest) async throws -> GetVideoStatsResponse {
+    let encoded = try _encode(getVideoStatsRequest, args)
+    guard let raw = try await _rpc.request(54, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getVideoStatsResponse, raw)
+  }
+
+  public func onGetVideoStats(_ handler: @escaping (GetVideoStatsRequest) async throws -> GetVideoStatsResponse) {
+    _handlers["@peartube/get-video-stats"] = handler
+  }
+
+  // Request/response — client
+  public func getSeedingStatus(_ args: GetSeedingStatusRequest) async throws -> GetSeedingStatusResponse {
+    let encoded = try _encode(getSeedingStatusRequest, args)
+    guard let raw = try await _rpc.request(55, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getSeedingStatusResponse, raw)
+  }
+
+  public func onGetSeedingStatus(_ handler: @escaping (GetSeedingStatusRequest) async throws -> GetSeedingStatusResponse) {
+    _handlers["@peartube/get-seeding-status"] = handler
+  }
+
+  // Request/response — client
+  public func setSeedingConfig(_ args: SetSeedingConfigRequest) async throws -> SetSeedingConfigResponse {
+    let encoded = try _encode(setSeedingConfigRequest, args)
+    guard let raw = try await _rpc.request(56, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setSeedingConfigResponse, raw)
+  }
+
+  public func onSetSeedingConfig(_ handler: @escaping (SetSeedingConfigRequest) async throws -> SetSeedingConfigResponse) {
+    _handlers["@peartube/set-seeding-config"] = handler
+  }
+
+  // Request/response — client
+  public func getTranscodeSettings(_ args: GetTranscodeSettingsRequest) async throws -> GetTranscodeSettingsResponse {
+    let encoded = try _encode(getTranscodeSettingsRequest, args)
+    guard let raw = try await _rpc.request(57, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getTranscodeSettingsResponse, raw)
+  }
+
+  public func onGetTranscodeSettings(_ handler: @escaping (GetTranscodeSettingsRequest) async throws -> GetTranscodeSettingsResponse) {
+    _handlers["@peartube/get-transcode-settings"] = handler
+  }
+
+  // Request/response — client
+  public func setTranscodeSettings(_ args: SetTranscodeSettingsRequest) async throws -> SetTranscodeSettingsResponse {
+    let encoded = try _encode(setTranscodeSettingsRequest, args)
+    guard let raw = try await _rpc.request(58, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setTranscodeSettingsResponse, raw)
+  }
+
+  public func onSetTranscodeSettings(_ handler: @escaping (SetTranscodeSettingsRequest) async throws -> SetTranscodeSettingsResponse) {
+    _handlers["@peartube/set-transcode-settings"] = handler
+  }
+
+  // Request/response — client
+  public func pinChannel(_ args: PinChannelRequest) async throws -> PinChannelResponse {
+    let encoded = try _encode(pinChannelRequest, args)
+    guard let raw = try await _rpc.request(59, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(pinChannelResponse, raw)
+  }
+
+  public func onPinChannel(_ handler: @escaping (PinChannelRequest) async throws -> PinChannelResponse) {
+    _handlers["@peartube/pin-channel"] = handler
+  }
+
+  // Request/response — client
+  public func unpinChannel(_ args: UnpinChannelRequest) async throws -> UnpinChannelResponse {
+    let encoded = try _encode(unpinChannelRequest, args)
+    guard let raw = try await _rpc.request(60, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(unpinChannelResponse, raw)
+  }
+
+  public func onUnpinChannel(_ handler: @escaping (UnpinChannelRequest) async throws -> UnpinChannelResponse) {
+    _handlers["@peartube/unpin-channel"] = handler
+  }
+
+  // Request/response — client
+  public func getPinnedChannels(_ args: GetPinnedChannelsRequest) async throws -> GetPinnedChannelsResponse {
+    let encoded = try _encode(getPinnedChannelsRequest, args)
+    guard let raw = try await _rpc.request(61, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getPinnedChannelsResponse, raw)
+  }
+
+  public func onGetPinnedChannels(_ handler: @escaping (GetPinnedChannelsRequest) async throws -> GetPinnedChannelsResponse) {
+    _handlers["@peartube/get-pinned-channels"] = handler
+  }
+
+  // Request/response — client
+  public func getStorageStats(_ args: GetStorageStatsRequest) async throws -> GetStorageStatsResponse {
+    let encoded = try _encode(getStorageStatsRequest, args)
+    guard let raw = try await _rpc.request(62, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getStorageStatsResponse, raw)
+  }
+
+  public func onGetStorageStats(_ handler: @escaping (GetStorageStatsRequest) async throws -> GetStorageStatsResponse) {
+    _handlers["@peartube/get-storage-stats"] = handler
+  }
+
+  // Request/response — client
+  public func setStorageLimit(_ args: SetStorageLimitRequest) async throws -> SetStorageLimitResponse {
+    let encoded = try _encode(setStorageLimitRequest, args)
+    guard let raw = try await _rpc.request(63, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setStorageLimitResponse, raw)
+  }
+
+  public func onSetStorageLimit(_ handler: @escaping (SetStorageLimitRequest) async throws -> SetStorageLimitResponse) {
+    _handlers["@peartube/set-storage-limit"] = handler
+  }
+
+  // Request/response — client
+  public func clearCache(_ args: ClearCacheRequest) async throws -> ClearCacheResponse {
+    let encoded = try _encode(clearCacheRequest, args)
+    guard let raw = try await _rpc.request(64, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(clearCacheResponse, raw)
+  }
+
+  public func onClearCache(_ handler: @escaping (ClearCacheRequest) async throws -> ClearCacheResponse) {
+    _handlers["@peartube/clear-cache"] = handler
+  }
+
+  // Request/response — client
+  public func getVideoThumbnail(_ args: GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse {
+    let encoded = try _encode(getVideoThumbnailRequest, args)
+    guard let raw = try await _rpc.request(65, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getVideoThumbnailResponse, raw)
+  }
+
+  public func onGetVideoThumbnail(_ handler: @escaping (GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse) {
+    _handlers["@peartube/get-video-thumbnail"] = handler
+  }
+
+  // Request/response — client
+  public func getVideoMetadata(_ args: GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse {
+    let encoded = try _encode(getVideoMetadataRequest, args)
+    guard let raw = try await _rpc.request(66, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getVideoMetadataResponse, raw)
+  }
+
+  public func onGetVideoMetadata(_ handler: @escaping (GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse) {
+    _handlers["@peartube/get-video-metadata"] = handler
+  }
+
+  // Request/response — client
+  public func setVideoThumbnail(_ args: SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse {
+    let encoded = try _encode(setVideoThumbnailRequest, args)
+    guard let raw = try await _rpc.request(67, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setVideoThumbnailResponse, raw)
+  }
+
+  public func onSetVideoThumbnail(_ handler: @escaping (SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse) {
+    _handlers["@peartube/set-video-thumbnail"] = handler
+  }
+
+  // Request/response — client
+  public func setVideoThumbnailFromFile(_ args: SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse {
+    let encoded = try _encode(setVideoThumbnailFromFileRequest, args)
+    guard let raw = try await _rpc.request(68, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(setVideoThumbnailFromFileResponse, raw)
+  }
+
+  public func onSetVideoThumbnailFromFile(_ handler: @escaping (SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse) {
+    _handlers["@peartube/set-video-thumbnail-from-file"] = handler
+  }
+
+  // Request/response — client
+  public func getStatus(_ args: GetStatusRequest) async throws -> GetStatusResponse {
+    let encoded = try _encode(getStatusRequest, args)
+    guard let raw = try await _rpc.request(69, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getStatusResponse, raw)
+  }
+
+  public func onGetStatus(_ handler: @escaping (GetStatusRequest) async throws -> GetStatusResponse) {
+    _handlers["@peartube/get-status"] = handler
+  }
+
+  // Request/response — client
+  public func pickVideoFile(_ args: PickVideoFileRequest) async throws -> PickVideoFileResponse {
+    let encoded = try _encode(pickVideoFileRequest, args)
+    guard let raw = try await _rpc.request(70, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(pickVideoFileResponse, raw)
+  }
+
+  public func onPickVideoFile(_ handler: @escaping (PickVideoFileRequest) async throws -> PickVideoFileResponse) {
+    _handlers["@peartube/pick-video-file"] = handler
+  }
+
+  // Request/response — client
+  public func pickImageFile(_ args: PickImageFileRequest) async throws -> PickImageFileResponse {
+    let encoded = try _encode(pickImageFileRequest, args)
+    guard let raw = try await _rpc.request(71, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(pickImageFileResponse, raw)
+  }
+
+  public func onPickImageFile(_ handler: @escaping (PickImageFileRequest) async throws -> PickImageFileResponse) {
+    _handlers["@peartube/pick-image-file"] = handler
+  }
+
+  // Request/response — client
+  public func getBlobServerPort(_ args: GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse {
+    let encoded = try _encode(getBlobServerPortRequest, args)
+    guard let raw = try await _rpc.request(72, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getBlobServerPortResponse, raw)
+  }
+
+  public func onGetBlobServerPort(_ handler: @escaping (GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse) {
+    _handlers["@peartube/get-blob-server-port"] = handler
+  }
+
+  // Request/response — client
+  public func globalSearchVideos(_ args: GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse {
+    let encoded = try _encode(globalSearchVideosRequest, args)
+    guard let raw = try await _rpc.request(73, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(globalSearchVideosResponse, raw)
+  }
+
+  public func onGlobalSearchVideos(_ handler: @escaping (GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse) {
+    _handlers["@peartube/global-search-videos"] = handler
+  }
+
+  // Request/response — client
+  public func addComment(_ args: AddCommentRequest) async throws -> AddCommentResponse {
+    let encoded = try _encode(addCommentRequest, args)
+    guard let raw = try await _rpc.request(74, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(addCommentResponse, raw)
+  }
+
+  public func onAddComment(_ handler: @escaping (AddCommentRequest) async throws -> AddCommentResponse) {
+    _handlers["@peartube/add-comment"] = handler
+  }
+
+  // Request/response — client
+  public func listComments(_ args: ListCommentsRequest) async throws -> ListCommentsResponse {
+    let encoded = try _encode(listCommentsRequest, args)
+    guard let raw = try await _rpc.request(75, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(listCommentsResponse, raw)
+  }
+
+  public func onListComments(_ handler: @escaping (ListCommentsRequest) async throws -> ListCommentsResponse) {
+    _handlers["@peartube/list-comments"] = handler
+  }
+
+  // Request/response — client
+  public func hideComment(_ args: HideCommentRequest) async throws -> HideCommentResponse {
+    let encoded = try _encode(hideCommentRequest, args)
+    guard let raw = try await _rpc.request(76, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(hideCommentResponse, raw)
+  }
+
+  public func onHideComment(_ handler: @escaping (HideCommentRequest) async throws -> HideCommentResponse) {
+    _handlers["@peartube/hide-comment"] = handler
+  }
+
+  // Request/response — client
+  public func removeComment(_ args: RemoveCommentRequest) async throws -> RemoveCommentResponse {
+    let encoded = try _encode(removeCommentRequest, args)
+    guard let raw = try await _rpc.request(77, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(removeCommentResponse, raw)
+  }
+
+  public func onRemoveComment(_ handler: @escaping (RemoveCommentRequest) async throws -> RemoveCommentResponse) {
+    _handlers["@peartube/remove-comment"] = handler
+  }
+
+  // Request/response — client
+  public func addReaction(_ args: AddReactionRequest) async throws -> AddReactionResponse {
+    let encoded = try _encode(addReactionRequest, args)
+    guard let raw = try await _rpc.request(78, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(addReactionResponse, raw)
+  }
+
+  public func onAddReaction(_ handler: @escaping (AddReactionRequest) async throws -> AddReactionResponse) {
+    _handlers["@peartube/add-reaction"] = handler
+  }
+
+  // Request/response — client
+  public func removeReaction(_ args: RemoveReactionRequest) async throws -> RemoveReactionResponse {
+    let encoded = try _encode(removeReactionRequest, args)
+    guard let raw = try await _rpc.request(79, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(removeReactionResponse, raw)
+  }
+
+  public func onRemoveReaction(_ handler: @escaping (RemoveReactionRequest) async throws -> RemoveReactionResponse) {
+    _handlers["@peartube/remove-reaction"] = handler
+  }
+
+  // Request/response — client
+  public func getReactions(_ args: GetReactionsRequest) async throws -> GetReactionsResponse {
+    let encoded = try _encode(getReactionsRequest, args)
+    guard let raw = try await _rpc.request(80, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getReactionsResponse, raw)
+  }
+
+  public func onGetReactions(_ handler: @escaping (GetReactionsRequest) async throws -> GetReactionsResponse) {
+    _handlers["@peartube/get-reactions"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventReady(_ args: EventReady) throws {
+    let encoded = try _encode(eventReady, args)
+    _rpc.event(81, data: encoded)
+  }
+
+  public func onEventReady(_ handler: @escaping (EventReady) async -> Void) {
+    _handlers["@peartube/event-ready"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventError(_ args: EventError) throws {
+    let encoded = try _encode(eventError, args)
+    _rpc.event(82, data: encoded)
+  }
+
+  public func onEventError(_ handler: @escaping (EventError) async -> Void) {
+    _handlers["@peartube/event-error"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventUploadProgress(_ args: EventUploadProgress) throws {
+    let encoded = try _encode(eventUploadProgress, args)
+    _rpc.event(83, data: encoded)
+  }
+
+  public func onEventUploadProgress(_ handler: @escaping (EventUploadProgress) async -> Void) {
+    _handlers["@peartube/event-upload-progress"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventDownloadProgress(_ args: EventDownloadProgress) throws {
+    let encoded = try _encode(eventDownloadProgress, args)
+    _rpc.event(84, data: encoded)
+  }
+
+  public func onEventDownloadProgress(_ handler: @escaping (EventDownloadProgress) async -> Void) {
+    _handlers["@peartube/event-download-progress"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventFeedUpdate(_ args: EventFeedUpdate) throws {
+    let encoded = try _encode(eventFeedUpdate, args)
+    _rpc.event(85, data: encoded)
+  }
+
+  public func onEventFeedUpdate(_ handler: @escaping (EventFeedUpdate) async -> Void) {
+    _handlers["@peartube/event-feed-update"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventLog(_ args: EventLog) throws {
+    let encoded = try _encode(eventLog, args)
+    _rpc.event(86, data: encoded)
+  }
+
+  public func onEventLog(_ handler: @escaping (EventLog) async -> Void) {
+    _handlers["@peartube/event-log"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventVideoStats(_ args: EventVideoStats) throws {
+    let encoded = try _encode(eventVideoStats, args)
+    _rpc.event(87, data: encoded)
+  }
+
+  public func onEventVideoStats(_ handler: @escaping (EventVideoStats) async -> Void) {
+    _handlers["@peartube/event-video-stats"] = handler
+  }
+
+  // Request/response — client
+  public func castAvailable(_ args: CastAvailableRequest) async throws -> CastAvailableResponse {
+    let encoded = try _encode(castAvailableRequest, args)
+    guard let raw = try await _rpc.request(88, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castAvailableResponse, raw)
+  }
+
+  public func onCastAvailable(_ handler: @escaping (CastAvailableRequest) async throws -> CastAvailableResponse) {
+    _handlers["@peartube/cast-available"] = handler
+  }
+
+  // Request/response — client
+  public func castStartDiscovery(_ args: CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse {
+    let encoded = try _encode(castStartDiscoveryRequest, args)
+    guard let raw = try await _rpc.request(89, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castStartDiscoveryResponse, raw)
+  }
+
+  public func onCastStartDiscovery(_ handler: @escaping (CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse) {
+    _handlers["@peartube/cast-start-discovery"] = handler
+  }
+
+  // Request/response — client
+  public func castStopDiscovery(_ args: CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse {
+    let encoded = try _encode(castStopDiscoveryRequest, args)
+    guard let raw = try await _rpc.request(90, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castStopDiscoveryResponse, raw)
+  }
+
+  public func onCastStopDiscovery(_ handler: @escaping (CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse) {
+    _handlers["@peartube/cast-stop-discovery"] = handler
+  }
+
+  // Request/response — client
+  public func castGetDevices(_ args: CastGetDevicesRequest) async throws -> CastGetDevicesResponse {
+    let encoded = try _encode(castGetDevicesRequest, args)
+    guard let raw = try await _rpc.request(91, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castGetDevicesResponse, raw)
+  }
+
+  public func onCastGetDevices(_ handler: @escaping (CastGetDevicesRequest) async throws -> CastGetDevicesResponse) {
+    _handlers["@peartube/cast-get-devices"] = handler
+  }
+
+  // Request/response — client
+  public func castAddManualDevice(_ args: CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse {
+    let encoded = try _encode(castAddManualDeviceRequest, args)
+    guard let raw = try await _rpc.request(92, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castAddManualDeviceResponse, raw)
+  }
+
+  public func onCastAddManualDevice(_ handler: @escaping (CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse) {
+    _handlers["@peartube/cast-add-manual-device"] = handler
+  }
+
+  // Request/response — client
+  public func castConnect(_ args: CastConnectRequest) async throws -> CastConnectResponse {
+    let encoded = try _encode(castConnectRequest, args)
+    guard let raw = try await _rpc.request(93, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castConnectResponse, raw)
+  }
+
+  public func onCastConnect(_ handler: @escaping (CastConnectRequest) async throws -> CastConnectResponse) {
+    _handlers["@peartube/cast-connect"] = handler
+  }
+
+  // Request/response — client
+  public func castDisconnect(_ args: CastDisconnectRequest) async throws -> CastDisconnectResponse {
+    let encoded = try _encode(castDisconnectRequest, args)
+    guard let raw = try await _rpc.request(94, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castDisconnectResponse, raw)
+  }
+
+  public func onCastDisconnect(_ handler: @escaping (CastDisconnectRequest) async throws -> CastDisconnectResponse) {
+    _handlers["@peartube/cast-disconnect"] = handler
+  }
+
+  // Request/response — client
+  public func castPlay(_ args: CastPlayRequest) async throws -> CastPlayResponse {
+    let encoded = try _encode(castPlayRequest, args)
+    guard let raw = try await _rpc.request(95, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castPlayResponse, raw)
+  }
+
+  public func onCastPlay(_ handler: @escaping (CastPlayRequest) async throws -> CastPlayResponse) {
+    _handlers["@peartube/cast-play"] = handler
+  }
+
+  // Request/response — client
+  public func castPause(_ args: CastPauseRequest) async throws -> CastPauseResponse {
+    let encoded = try _encode(castPauseRequest, args)
+    guard let raw = try await _rpc.request(96, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castPauseResponse, raw)
+  }
+
+  public func onCastPause(_ handler: @escaping (CastPauseRequest) async throws -> CastPauseResponse) {
+    _handlers["@peartube/cast-pause"] = handler
+  }
+
+  // Request/response — client
+  public func castResume(_ args: CastResumeRequest) async throws -> CastResumeResponse {
+    let encoded = try _encode(castResumeRequest, args)
+    guard let raw = try await _rpc.request(97, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castResumeResponse, raw)
+  }
+
+  public func onCastResume(_ handler: @escaping (CastResumeRequest) async throws -> CastResumeResponse) {
+    _handlers["@peartube/cast-resume"] = handler
+  }
+
+  // Request/response — client
+  public func castStop(_ args: CastStopRequest) async throws -> CastStopResponse {
+    let encoded = try _encode(castStopRequest, args)
+    guard let raw = try await _rpc.request(98, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castStopResponse, raw)
+  }
+
+  public func onCastStop(_ handler: @escaping (CastStopRequest) async throws -> CastStopResponse) {
+    _handlers["@peartube/cast-stop"] = handler
+  }
+
+  // Request/response — client
+  public func castSeek(_ args: CastSeekRequest) async throws -> CastSeekResponse {
+    let encoded = try _encode(castSeekRequest, args)
+    guard let raw = try await _rpc.request(99, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castSeekResponse, raw)
+  }
+
+  public func onCastSeek(_ handler: @escaping (CastSeekRequest) async throws -> CastSeekResponse) {
+    _handlers["@peartube/cast-seek"] = handler
+  }
+
+  // Request/response — client
+  public func castSetVolume(_ args: CastSetVolumeRequest) async throws -> CastSetVolumeResponse {
+    let encoded = try _encode(castSetVolumeRequest, args)
+    guard let raw = try await _rpc.request(100, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castSetVolumeResponse, raw)
+  }
+
+  public func onCastSetVolume(_ handler: @escaping (CastSetVolumeRequest) async throws -> CastSetVolumeResponse) {
+    _handlers["@peartube/cast-set-volume"] = handler
+  }
+
+  // Request/response — client
+  public func castGetState(_ args: CastGetStateRequest) async throws -> CastGetStateResponse {
+    let encoded = try _encode(castGetStateRequest, args)
+    guard let raw = try await _rpc.request(101, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castGetStateResponse, raw)
+  }
+
+  public func onCastGetState(_ handler: @escaping (CastGetStateRequest) async throws -> CastGetStateResponse) {
+    _handlers["@peartube/cast-get-state"] = handler
+  }
+
+  // Request/response — client
+  public func castIsConnected(_ args: CastIsConnectedRequest) async throws -> CastIsConnectedResponse {
+    let encoded = try _encode(castIsConnectedRequest, args)
+    guard let raw = try await _rpc.request(102, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(castIsConnectedResponse, raw)
+  }
+
+  public func onCastIsConnected(_ handler: @escaping (CastIsConnectedRequest) async throws -> CastIsConnectedResponse) {
+    _handlers["@peartube/cast-is-connected"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventCastDeviceFound(_ args: EventCastDeviceFound) throws {
+    let encoded = try _encode(eventCastDeviceFound, args)
+    _rpc.event(103, data: encoded)
+  }
+
+  public func onEventCastDeviceFound(_ handler: @escaping (EventCastDeviceFound) async -> Void) {
+    _handlers["@peartube/event-cast-device-found"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventCastDeviceLost(_ args: EventCastDeviceLost) throws {
+    let encoded = try _encode(eventCastDeviceLost, args)
+    _rpc.event(104, data: encoded)
+  }
+
+  public func onEventCastDeviceLost(_ handler: @escaping (EventCastDeviceLost) async -> Void) {
+    _handlers["@peartube/event-cast-device-lost"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventCastPlaybackState(_ args: EventCastPlaybackState) throws {
+    let encoded = try _encode(eventCastPlaybackState, args)
+    _rpc.event(105, data: encoded)
+  }
+
+  public func onEventCastPlaybackState(_ handler: @escaping (EventCastPlaybackState) async -> Void) {
+    _handlers["@peartube/event-cast-playback-state"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventCastTimeUpdate(_ args: EventCastTimeUpdate) throws {
+    let encoded = try _encode(eventCastTimeUpdate, args)
+    _rpc.event(106, data: encoded)
+  }
+
+  public func onEventCastTimeUpdate(_ handler: @escaping (EventCastTimeUpdate) async -> Void) {
+    _handlers["@peartube/event-cast-time-update"] = handler
+  }
+
+  // Request/response — client
+  public func searchVideos(_ args: SearchVideosRequest) async throws -> SearchVideosResponse {
+    let encoded = try _encode(searchVideosRequest, args)
+    guard let raw = try await _rpc.request(107, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(searchVideosResponse, raw)
+  }
+
+  public func onSearchVideos(_ handler: @escaping (SearchVideosRequest) async throws -> SearchVideosResponse) {
+    _handlers["@peartube/search-videos"] = handler
+  }
+
+  // Request/response — client
+  public func logWatchEvent(_ args: LogWatchEventRequest) async throws -> LogWatchEventResponse {
+    let encoded = try _encode(logWatchEventRequest, args)
+    guard let raw = try await _rpc.request(108, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(logWatchEventResponse, raw)
+  }
+
+  public func onLogWatchEvent(_ handler: @escaping (LogWatchEventRequest) async throws -> LogWatchEventResponse) {
+    _handlers["@peartube/log-watch-event"] = handler
+  }
+
+  // Request/response — client
+  public func indexVideoVectors(_ args: IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse {
+    let encoded = try _encode(indexVideoVectorsRequest, args)
+    guard let raw = try await _rpc.request(109, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(indexVideoVectorsResponse, raw)
+  }
+
+  public func onIndexVideoVectors(_ handler: @escaping (IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse) {
+    _handlers["@peartube/index-video-vectors"] = handler
+  }
+
+  // Request/response — client
+  public func getRecommendations(_ args: GetRecommendationsRequest) async throws -> GetRecommendationsResponse {
+    let encoded = try _encode(getRecommendationsRequest, args)
+    guard let raw = try await _rpc.request(110, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getRecommendationsResponse, raw)
+  }
+
+  public func onGetRecommendations(_ handler: @escaping (GetRecommendationsRequest) async throws -> GetRecommendationsResponse) {
+    _handlers["@peartube/get-recommendations"] = handler
+  }
+
+  // Request/response — client
+  public func getVideoRecommendations(_ args: GetVideoRecommendationsRequest) async throws -> GetVideoRecommendationsResponse {
+    let encoded = try _encode(getVideoRecommendationsRequest, args)
+    guard let raw = try await _rpc.request(111, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getVideoRecommendationsResponse, raw)
+  }
+
+  public func onGetVideoRecommendations(_ handler: @escaping (GetVideoRecommendationsRequest) async throws -> GetVideoRecommendationsResponse) {
+    _handlers["@peartube/get-video-recommendations"] = handler
+  }
+
+  // Request/response — client
+  public func updateVideoMetadata(_ args: UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse {
+    let encoded = try _encode(updateVideoMetadataRequest, args)
+    guard let raw = try await _rpc.request(112, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(updateVideoMetadataResponse, raw)
+  }
+
+  public func onUpdateVideoMetadata(_ handler: @escaping (UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse) {
+    _handlers["@peartube/update-video-metadata"] = handler
+  }
+
+  // Request/response — client
+  public func desktopBootstrap(_ args: DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse {
+    let encoded = try _encode(desktopBootstrapRequest, args)
+    guard let raw = try await _rpc.request(113, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(desktopBootstrapResponse, raw)
+  }
+
+  public func onDesktopBootstrap(_ handler: @escaping (DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse) {
+    _handlers["@peartube/desktop-bootstrap"] = handler
+  }
+
+  // Request/response — client
+  public func desktopShutdown(_ args: DesktopShutdownRequest) async throws -> DesktopShutdownResponse {
+    let encoded = try _encode(desktopShutdownRequest, args)
+    guard let raw = try await _rpc.request(114, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(desktopShutdownResponse, raw)
+  }
+
+  public func onDesktopShutdown(_ handler: @escaping (DesktopShutdownRequest) async throws -> DesktopShutdownResponse) {
+    _handlers["@peartube/desktop-shutdown"] = handler
+  }
+
+  // Request/response — client
+  public func desktopRefreshBrowse(_ args: DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse {
+    let encoded = try _encode(desktopRefreshBrowseRequest, args)
+    guard let raw = try await _rpc.request(115, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(desktopRefreshBrowseResponse, raw)
+  }
+
+  public func onDesktopRefreshBrowse(_ handler: @escaping (DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse) {
+    _handlers["@peartube/desktop-refresh-browse"] = handler
+  }
+
+  // Request/response — client
+  public func ffmpegDecodeAvailable(_ args: FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse {
+    let encoded = try _encode(ffmpegDecodeAvailableRequest, args)
+    guard let raw = try await _rpc.request(116, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(ffmpegDecodeAvailableResponse, raw)
+  }
+
+  public func onFfmpegDecodeAvailable(_ handler: @escaping (FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse) {
+    _handlers["@peartube/ffmpeg-decode-available"] = handler
+  }
+
+  // Request/response — client
+  public func updateChannelAvatar(_ args: UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse {
+    let encoded = try _encode(updateChannelAvatarRequest, args)
+    guard let raw = try await _rpc.request(117, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(updateChannelAvatarResponse, raw)
+  }
+
+  public func onUpdateChannelAvatar(_ handler: @escaping (UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse) {
+    _handlers["@peartube/update-channel-avatar"] = handler
+  }
+
+  // Request/response — client
+  public func transcodeStart(_ args: TranscodeStartRequest) async throws -> TranscodeStartResponse {
+    let encoded = try _encode(transcodeStartRequest, args)
+    guard let raw = try await _rpc.request(118, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(transcodeStartResponse, raw)
+  }
+
+  public func onTranscodeStart(_ handler: @escaping (TranscodeStartRequest) async throws -> TranscodeStartResponse) {
+    _handlers["@peartube/transcode-start"] = handler
+  }
+
+  // Request/response — client
+  public func transcodeStop(_ args: TranscodeStopRequest) async throws -> TranscodeStopResponse {
+    let encoded = try _encode(transcodeStopRequest, args)
+    guard let raw = try await _rpc.request(119, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(transcodeStopResponse, raw)
+  }
+
+  public func onTranscodeStop(_ handler: @escaping (TranscodeStopRequest) async throws -> TranscodeStopResponse) {
+    _handlers["@peartube/transcode-stop"] = handler
+  }
+
+  // Request/response — client
+  public func transcodeStatus(_ args: TranscodeStatusRequest) async throws -> TranscodeStatusResponse {
+    let encoded = try _encode(transcodeStatusRequest, args)
+    guard let raw = try await _rpc.request(120, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(transcodeStatusResponse, raw)
+  }
+
+  public func onTranscodeStatus(_ handler: @escaping (TranscodeStatusRequest) async throws -> TranscodeStatusResponse) {
+    _handlers["@peartube/transcode-status"] = handler
+  }
+
+  // Send-only — client (fire and forget)
+  public func eventTranscodeProgress(_ args: EventTranscodeProgress) throws {
+    let encoded = try _encode(eventTranscodeProgress, args)
+    _rpc.event(121, data: encoded)
+  }
+
+  public func onEventTranscodeProgress(_ handler: @escaping (EventTranscodeProgress) async -> Void) {
+    _handlers["@peartube/event-transcode-progress"] = handler
   }
 
   private func _dispatchRequest(_ req: IncomingRequest) async {
@@ -2074,968 +2059,6 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 18:   // @peartube/subscribe-channel
-      guard let handler = _handlers["@peartube/subscribe-channel"] as? (SubscribeChannelRequest) async throws -> SubscribeChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(subscribeChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(subscribeChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 19:   // @peartube/unsubscribe-channel
-      guard let handler = _handlers["@peartube/unsubscribe-channel"] as? (UnsubscribeChannelRequest) async throws -> UnsubscribeChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(unsubscribeChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(unsubscribeChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 20:   // @peartube/get-subscriptions
-      guard let handler = _handlers["@peartube/get-subscriptions"] as? (GetSubscriptionsRequest) async throws -> GetSubscriptionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getSubscriptionsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getSubscriptionsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 21:   // @peartube/join-channel
-      guard let handler = _handlers["@peartube/join-channel"] as? (JoinChannelRequest) async throws -> JoinChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(joinChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(joinChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 22:   // @peartube/get-public-feed
-      guard let handler = _handlers["@peartube/get-public-feed"] as? (GetPublicFeedRequest) async throws -> GetPublicFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getPublicFeedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getPublicFeedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 23:   // @peartube/get-canonical-feed
-      guard let handler = _handlers["@peartube/get-canonical-feed"] as? (GetCanonicalFeedRequest) async throws -> GetCanonicalFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getCanonicalFeedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getCanonicalFeedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 24:   // @peartube/refresh-feed
-      guard let handler = _handlers["@peartube/refresh-feed"] as? (RefreshFeedRequest) async throws -> RefreshFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(refreshFeedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(refreshFeedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 25:   // @peartube/submit-to-feed
-      guard let handler = _handlers["@peartube/submit-to-feed"] as? (SubmitToFeedRequest) async throws -> SubmitToFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(submitToFeedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(submitToFeedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 26:   // @peartube/unpublish-from-feed
-      guard let handler = _handlers["@peartube/unpublish-from-feed"] as? (UnpublishFromFeedRequest) async throws -> UnpublishFromFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(unpublishFromFeedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(unpublishFromFeedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 27:   // @peartube/is-channel-published
-      guard let handler = _handlers["@peartube/is-channel-published"] as? (IsChannelPublishedRequest) async throws -> IsChannelPublishedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(isChannelPublishedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(isChannelPublishedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 28:   // @peartube/hide-channel
-      guard let handler = _handlers["@peartube/hide-channel"] as? (HideChannelRequest) async throws -> HideChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(hideChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(hideChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 29:   // @peartube/get-channel-meta
-      guard let handler = _handlers["@peartube/get-channel-meta"] as? (GetChannelMetaRequest) async throws -> GetChannelMetaResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getChannelMetaRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getChannelMetaResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 30:   // @peartube/get-swarm-status
-      guard let handler = _handlers["@peartube/get-swarm-status"] as? (GetSwarmStatusRequest) async throws -> GetSwarmStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getSwarmStatusRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getSwarmStatusResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 31:   // @peartube/create-device-invite
-      guard let handler = _handlers["@peartube/create-device-invite"] as? (CreateDeviceInviteRequest) async throws -> CreateDeviceInviteResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(createDeviceInviteRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(createDeviceInviteResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 32:   // @peartube/pair-device
-      guard let handler = _handlers["@peartube/pair-device"] as? (PairDeviceRequest) async throws -> PairDeviceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(pairDeviceRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(pairDeviceResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 33:   // @peartube/list-devices
-      guard let handler = _handlers["@peartube/list-devices"] as? (ListDevicesRequest) async throws -> ListDevicesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(listDevicesRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(listDevicesResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 34:   // @peartube/retry-sync-channel
-      guard let handler = _handlers["@peartube/retry-sync-channel"] as? (RetrySyncChannelRequest) async throws -> RetrySyncChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(retrySyncChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(retrySyncChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 35:   // @peartube/prefetch-video
-      guard let handler = _handlers["@peartube/prefetch-video"] as? (PrefetchVideoRequest) async throws -> PrefetchVideoResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(prefetchVideoRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(prefetchVideoResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 36:   // @peartube/get-video-stats
-      guard let handler = _handlers["@peartube/get-video-stats"] as? (GetVideoStatsRequest) async throws -> GetVideoStatsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getVideoStatsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getVideoStatsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 37:   // @peartube/get-seeding-status
-      guard let handler = _handlers["@peartube/get-seeding-status"] as? (GetSeedingStatusRequest) async throws -> GetSeedingStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getSeedingStatusRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getSeedingStatusResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 38:   // @peartube/set-seeding-config
-      guard let handler = _handlers["@peartube/set-seeding-config"] as? (SetSeedingConfigRequest) async throws -> SetSeedingConfigResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(setSeedingConfigRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(setSeedingConfigResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 39:   // @peartube/get-transcode-settings
-      guard let handler = _handlers["@peartube/get-transcode-settings"] as? (GetTranscodeSettingsRequest) async throws -> GetTranscodeSettingsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getTranscodeSettingsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getTranscodeSettingsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 40:   // @peartube/set-transcode-settings
-      guard let handler = _handlers["@peartube/set-transcode-settings"] as? (SetTranscodeSettingsRequest) async throws -> SetTranscodeSettingsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(setTranscodeSettingsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(setTranscodeSettingsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 41:   // @peartube/pin-channel
-      guard let handler = _handlers["@peartube/pin-channel"] as? (PinChannelRequest) async throws -> PinChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(pinChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(pinChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 42:   // @peartube/unpin-channel
-      guard let handler = _handlers["@peartube/unpin-channel"] as? (UnpinChannelRequest) async throws -> UnpinChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(unpinChannelRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(unpinChannelResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 43:   // @peartube/get-pinned-channels
-      guard let handler = _handlers["@peartube/get-pinned-channels"] as? (GetPinnedChannelsRequest) async throws -> GetPinnedChannelsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getPinnedChannelsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getPinnedChannelsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 44:   // @peartube/get-storage-stats
-      guard let handler = _handlers["@peartube/get-storage-stats"] as? (GetStorageStatsRequest) async throws -> GetStorageStatsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getStorageStatsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getStorageStatsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 45:   // @peartube/set-storage-limit
-      guard let handler = _handlers["@peartube/set-storage-limit"] as? (SetStorageLimitRequest) async throws -> SetStorageLimitResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(setStorageLimitRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(setStorageLimitResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 46:   // @peartube/clear-cache
-      guard let handler = _handlers["@peartube/clear-cache"] as? (ClearCacheRequest) async throws -> ClearCacheResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(clearCacheRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(clearCacheResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 47:   // @peartube/get-video-thumbnail
-      guard let handler = _handlers["@peartube/get-video-thumbnail"] as? (GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getVideoThumbnailRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getVideoThumbnailResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 48:   // @peartube/get-video-metadata
-      guard let handler = _handlers["@peartube/get-video-metadata"] as? (GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getVideoMetadataRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getVideoMetadataResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 49:   // @peartube/set-video-thumbnail
-      guard let handler = _handlers["@peartube/set-video-thumbnail"] as? (SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(setVideoThumbnailRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(setVideoThumbnailResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 50:   // @peartube/set-video-thumbnail-from-file
-      guard let handler = _handlers["@peartube/set-video-thumbnail-from-file"] as? (SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(setVideoThumbnailFromFileRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(setVideoThumbnailFromFileResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 51:   // @peartube/get-status
-      guard let handler = _handlers["@peartube/get-status"] as? (GetStatusRequest) async throws -> GetStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getStatusRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getStatusResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 52:   // @peartube/pick-video-file
-      guard let handler = _handlers["@peartube/pick-video-file"] as? (PickVideoFileRequest) async throws -> PickVideoFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(pickVideoFileRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(pickVideoFileResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 53:   // @peartube/pick-image-file
-      guard let handler = _handlers["@peartube/pick-image-file"] as? (PickImageFileRequest) async throws -> PickImageFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(pickImageFileRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(pickImageFileResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 54:   // @peartube/get-blob-server-port
-      guard let handler = _handlers["@peartube/get-blob-server-port"] as? (GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getBlobServerPortRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getBlobServerPortResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 55:   // @peartube/global-search-videos
-      guard let handler = _handlers["@peartube/global-search-videos"] as? (GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(globalSearchVideosRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(globalSearchVideosResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 56:   // @peartube/add-comment
-      guard let handler = _handlers["@peartube/add-comment"] as? (AddCommentRequest) async throws -> AddCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(addCommentRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(addCommentResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 57:   // @peartube/list-comments
-      guard let handler = _handlers["@peartube/list-comments"] as? (ListCommentsRequest) async throws -> ListCommentsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(listCommentsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(listCommentsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 58:   // @peartube/hide-comment
-      guard let handler = _handlers["@peartube/hide-comment"] as? (HideCommentRequest) async throws -> HideCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(hideCommentRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(hideCommentResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 59:   // @peartube/remove-comment
-      guard let handler = _handlers["@peartube/remove-comment"] as? (RemoveCommentRequest) async throws -> RemoveCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(removeCommentRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(removeCommentResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 60:   // @peartube/add-reaction
-      guard let handler = _handlers["@peartube/add-reaction"] as? (AddReactionRequest) async throws -> AddReactionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(addReactionRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(addReactionResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 61:   // @peartube/remove-reaction
-      guard let handler = _handlers["@peartube/remove-reaction"] as? (RemoveReactionRequest) async throws -> RemoveReactionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(removeReactionRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(removeReactionResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 62:   // @peartube/get-reactions
-      guard let handler = _handlers["@peartube/get-reactions"] as? (GetReactionsRequest) async throws -> GetReactionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getReactionsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getReactionsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 70:   // @peartube/cast-available
-      guard let handler = _handlers["@peartube/cast-available"] as? (CastAvailableRequest) async throws -> CastAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castAvailableRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castAvailableResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 71:   // @peartube/cast-start-discovery
-      guard let handler = _handlers["@peartube/cast-start-discovery"] as? (CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castStartDiscoveryRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castStartDiscoveryResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 72:   // @peartube/cast-stop-discovery
-      guard let handler = _handlers["@peartube/cast-stop-discovery"] as? (CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castStopDiscoveryRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castStopDiscoveryResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 73:   // @peartube/cast-get-devices
-      guard let handler = _handlers["@peartube/cast-get-devices"] as? (CastGetDevicesRequest) async throws -> CastGetDevicesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castGetDevicesRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castGetDevicesResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 74:   // @peartube/cast-add-manual-device
-      guard let handler = _handlers["@peartube/cast-add-manual-device"] as? (CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castAddManualDeviceRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castAddManualDeviceResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 75:   // @peartube/cast-connect
-      guard let handler = _handlers["@peartube/cast-connect"] as? (CastConnectRequest) async throws -> CastConnectResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castConnectRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castConnectResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 76:   // @peartube/cast-disconnect
-      guard let handler = _handlers["@peartube/cast-disconnect"] as? (CastDisconnectRequest) async throws -> CastDisconnectResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castDisconnectRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castDisconnectResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 77:   // @peartube/cast-play
-      guard let handler = _handlers["@peartube/cast-play"] as? (CastPlayRequest) async throws -> CastPlayResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castPlayRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castPlayResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 78:   // @peartube/cast-pause
-      guard let handler = _handlers["@peartube/cast-pause"] as? (CastPauseRequest) async throws -> CastPauseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castPauseRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castPauseResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 79:   // @peartube/cast-resume
-      guard let handler = _handlers["@peartube/cast-resume"] as? (CastResumeRequest) async throws -> CastResumeResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castResumeRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castResumeResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 80:   // @peartube/cast-stop
-      guard let handler = _handlers["@peartube/cast-stop"] as? (CastStopRequest) async throws -> CastStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castStopRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castStopResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 81:   // @peartube/cast-seek
-      guard let handler = _handlers["@peartube/cast-seek"] as? (CastSeekRequest) async throws -> CastSeekResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castSeekRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castSeekResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 82:   // @peartube/cast-set-volume
-      guard let handler = _handlers["@peartube/cast-set-volume"] as? (CastSetVolumeRequest) async throws -> CastSetVolumeResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castSetVolumeRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castSetVolumeResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 83:   // @peartube/cast-get-state
-      guard let handler = _handlers["@peartube/cast-get-state"] as? (CastGetStateRequest) async throws -> CastGetStateResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castGetStateRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castGetStateResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 84:   // @peartube/cast-is-connected
-      guard let handler = _handlers["@peartube/cast-is-connected"] as? (CastIsConnectedRequest) async throws -> CastIsConnectedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(castIsConnectedRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(castIsConnectedResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 89:   // @peartube/search-videos
-      guard let handler = _handlers["@peartube/search-videos"] as? (SearchVideosRequest) async throws -> SearchVideosResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(searchVideosRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(searchVideosResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 90:   // @peartube/log-watch-event
-      guard let handler = _handlers["@peartube/log-watch-event"] as? (LogWatchEventRequest) async throws -> LogWatchEventResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(logWatchEventRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(logWatchEventResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 91:   // @peartube/index-video-vectors
-      guard let handler = _handlers["@peartube/index-video-vectors"] as? (IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(indexVideoVectorsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(indexVideoVectorsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 92:   // @peartube/get-recommendations
-      guard let handler = _handlers["@peartube/get-recommendations"] as? (GetRecommendationsRequest) async throws -> GetRecommendationsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getRecommendationsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getRecommendationsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 93:   // @peartube/get-video-recommendations
-      guard let handler = _handlers["@peartube/get-video-recommendations"] as? (GetVideoRecommendationsRequest) async throws -> GetVideoRecommendationsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getVideoRecommendationsRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getVideoRecommendationsResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 94:   // @peartube/update-video-metadata
-      guard let handler = _handlers["@peartube/update-video-metadata"] as? (UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(updateVideoMetadataRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(updateVideoMetadataResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 95:   // @peartube/desktop-bootstrap
-      guard let handler = _handlers["@peartube/desktop-bootstrap"] as? (DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(desktopBootstrapRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(desktopBootstrapResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 96:   // @peartube/desktop-shutdown
-      guard let handler = _handlers["@peartube/desktop-shutdown"] as? (DesktopShutdownRequest) async throws -> DesktopShutdownResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(desktopShutdownRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(desktopShutdownResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 97:   // @peartube/desktop-refresh-browse
-      guard let handler = _handlers["@peartube/desktop-refresh-browse"] as? (DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(desktopRefreshBrowseRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(desktopRefreshBrowseResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 107:   // @peartube/ffmpeg-decode-available
-      guard let handler = _handlers["@peartube/ffmpeg-decode-available"] as? (FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(ffmpegDecodeAvailableRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(ffmpegDecodeAvailableResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 108:   // @peartube/update-channel-avatar
-      guard let handler = _handlers["@peartube/update-channel-avatar"] as? (UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(updateChannelAvatarRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(updateChannelAvatarResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 109:   // @peartube/transcode-start
-      guard let handler = _handlers["@peartube/transcode-start"] as? (TranscodeStartRequest) async throws -> TranscodeStartResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(transcodeStartRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(transcodeStartResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 110:   // @peartube/transcode-stop
-      guard let handler = _handlers["@peartube/transcode-stop"] as? (TranscodeStopRequest) async throws -> TranscodeStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(transcodeStopRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(transcodeStopResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 111:   // @peartube/transcode-status
-      guard let handler = _handlers["@peartube/transcode-status"] as? (TranscodeStatusRequest) async throws -> TranscodeStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(transcodeStatusRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(transcodeStatusResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
     case 18:   // @peartube/start-livestream
       guard let handler = _handlers["@peartube/start-livestream"] as? (StartLivestreamRequest) async throws -> StartLivestreamResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
@@ -3085,6 +2108,45 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(prepareLivePlaybackRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(prepareLivePlaybackResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 22:   // @peartube/subscribe-channel
+      guard let handler = _handlers["@peartube/subscribe-channel"] as? (SubscribeChannelRequest) async throws -> SubscribeChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(subscribeChannelRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(subscribeChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 23:   // @peartube/unsubscribe-channel
+      guard let handler = _handlers["@peartube/unsubscribe-channel"] as? (UnsubscribeChannelRequest) async throws -> UnsubscribeChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(unsubscribeChannelRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(unsubscribeChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 24:   // @peartube/get-subscriptions
+      guard let handler = _handlers["@peartube/get-subscriptions"] as? (GetSubscriptionsRequest) async throws -> GetSubscriptionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getSubscriptionsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getSubscriptionsResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
@@ -3270,16 +2332,926 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 39:   // @peartube/get-personal-encryption-secret
-      guard let handler = _handlers["@peartube/get-personal-encryption-secret"] as? (GetPersonalEncryptionSecretRequest) async throws -> GetPersonalEncryptionSecretResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+    case 39:   // @peartube/join-channel
+      guard let handler = _handlers["@peartube/join-channel"] as? (JoinChannelRequest) async throws -> JoinChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
         return
       }
       do {
-        let args = try _decode(getPersonalEncryptionSecretRequest, rawData)
+        let args = try _decode(joinChannelRequest, rawData)
         let response = try await handler(args)
-        req.reply(try _encode(getPersonalEncryptionSecretResponse, response))
+        req.reply(try _encode(joinChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 40:   // @peartube/get-public-feed
+      guard let handler = _handlers["@peartube/get-public-feed"] as? (GetPublicFeedRequest) async throws -> GetPublicFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPublicFeedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPublicFeedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 41:   // @peartube/get-canonical-feed
+      guard let handler = _handlers["@peartube/get-canonical-feed"] as? (GetCanonicalFeedRequest) async throws -> GetCanonicalFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getCanonicalFeedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getCanonicalFeedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 42:   // @peartube/refresh-feed
+      guard let handler = _handlers["@peartube/refresh-feed"] as? (RefreshFeedRequest) async throws -> RefreshFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(refreshFeedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(refreshFeedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 43:   // @peartube/submit-to-feed
+      guard let handler = _handlers["@peartube/submit-to-feed"] as? (SubmitToFeedRequest) async throws -> SubmitToFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(submitToFeedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(submitToFeedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 44:   // @peartube/unpublish-from-feed
+      guard let handler = _handlers["@peartube/unpublish-from-feed"] as? (UnpublishFromFeedRequest) async throws -> UnpublishFromFeedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(unpublishFromFeedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(unpublishFromFeedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 45:   // @peartube/is-channel-published
+      guard let handler = _handlers["@peartube/is-channel-published"] as? (IsChannelPublishedRequest) async throws -> IsChannelPublishedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(isChannelPublishedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(isChannelPublishedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 46:   // @peartube/hide-channel
+      guard let handler = _handlers["@peartube/hide-channel"] as? (HideChannelRequest) async throws -> HideChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(hideChannelRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(hideChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 47:   // @peartube/get-channel-meta
+      guard let handler = _handlers["@peartube/get-channel-meta"] as? (GetChannelMetaRequest) async throws -> GetChannelMetaResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getChannelMetaRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getChannelMetaResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 48:   // @peartube/get-swarm-status
+      guard let handler = _handlers["@peartube/get-swarm-status"] as? (GetSwarmStatusRequest) async throws -> GetSwarmStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getSwarmStatusRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getSwarmStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 49:   // @peartube/create-device-invite
+      guard let handler = _handlers["@peartube/create-device-invite"] as? (CreateDeviceInviteRequest) async throws -> CreateDeviceInviteResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(createDeviceInviteRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(createDeviceInviteResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 50:   // @peartube/pair-device
+      guard let handler = _handlers["@peartube/pair-device"] as? (PairDeviceRequest) async throws -> PairDeviceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(pairDeviceRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(pairDeviceResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 51:   // @peartube/list-devices
+      guard let handler = _handlers["@peartube/list-devices"] as? (ListDevicesRequest) async throws -> ListDevicesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(listDevicesRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(listDevicesResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 52:   // @peartube/retry-sync-channel
+      guard let handler = _handlers["@peartube/retry-sync-channel"] as? (RetrySyncChannelRequest) async throws -> RetrySyncChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(retrySyncChannelRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(retrySyncChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 53:   // @peartube/prefetch-video
+      guard let handler = _handlers["@peartube/prefetch-video"] as? (PrefetchVideoRequest) async throws -> PrefetchVideoResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(prefetchVideoRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(prefetchVideoResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 54:   // @peartube/get-video-stats
+      guard let handler = _handlers["@peartube/get-video-stats"] as? (GetVideoStatsRequest) async throws -> GetVideoStatsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getVideoStatsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getVideoStatsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 55:   // @peartube/get-seeding-status
+      guard let handler = _handlers["@peartube/get-seeding-status"] as? (GetSeedingStatusRequest) async throws -> GetSeedingStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getSeedingStatusRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getSeedingStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 56:   // @peartube/set-seeding-config
+      guard let handler = _handlers["@peartube/set-seeding-config"] as? (SetSeedingConfigRequest) async throws -> SetSeedingConfigResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setSeedingConfigRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setSeedingConfigResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 57:   // @peartube/get-transcode-settings
+      guard let handler = _handlers["@peartube/get-transcode-settings"] as? (GetTranscodeSettingsRequest) async throws -> GetTranscodeSettingsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getTranscodeSettingsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getTranscodeSettingsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 58:   // @peartube/set-transcode-settings
+      guard let handler = _handlers["@peartube/set-transcode-settings"] as? (SetTranscodeSettingsRequest) async throws -> SetTranscodeSettingsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setTranscodeSettingsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setTranscodeSettingsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 59:   // @peartube/pin-channel
+      guard let handler = _handlers["@peartube/pin-channel"] as? (PinChannelRequest) async throws -> PinChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(pinChannelRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(pinChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 60:   // @peartube/unpin-channel
+      guard let handler = _handlers["@peartube/unpin-channel"] as? (UnpinChannelRequest) async throws -> UnpinChannelResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(unpinChannelRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(unpinChannelResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 61:   // @peartube/get-pinned-channels
+      guard let handler = _handlers["@peartube/get-pinned-channels"] as? (GetPinnedChannelsRequest) async throws -> GetPinnedChannelsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getPinnedChannelsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getPinnedChannelsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 62:   // @peartube/get-storage-stats
+      guard let handler = _handlers["@peartube/get-storage-stats"] as? (GetStorageStatsRequest) async throws -> GetStorageStatsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getStorageStatsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getStorageStatsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 63:   // @peartube/set-storage-limit
+      guard let handler = _handlers["@peartube/set-storage-limit"] as? (SetStorageLimitRequest) async throws -> SetStorageLimitResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setStorageLimitRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setStorageLimitResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 64:   // @peartube/clear-cache
+      guard let handler = _handlers["@peartube/clear-cache"] as? (ClearCacheRequest) async throws -> ClearCacheResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(clearCacheRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(clearCacheResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 65:   // @peartube/get-video-thumbnail
+      guard let handler = _handlers["@peartube/get-video-thumbnail"] as? (GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getVideoThumbnailRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getVideoThumbnailResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 66:   // @peartube/get-video-metadata
+      guard let handler = _handlers["@peartube/get-video-metadata"] as? (GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getVideoMetadataRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getVideoMetadataResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 67:   // @peartube/set-video-thumbnail
+      guard let handler = _handlers["@peartube/set-video-thumbnail"] as? (SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setVideoThumbnailRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setVideoThumbnailResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 68:   // @peartube/set-video-thumbnail-from-file
+      guard let handler = _handlers["@peartube/set-video-thumbnail-from-file"] as? (SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(setVideoThumbnailFromFileRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(setVideoThumbnailFromFileResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 69:   // @peartube/get-status
+      guard let handler = _handlers["@peartube/get-status"] as? (GetStatusRequest) async throws -> GetStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getStatusRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 70:   // @peartube/pick-video-file
+      guard let handler = _handlers["@peartube/pick-video-file"] as? (PickVideoFileRequest) async throws -> PickVideoFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(pickVideoFileRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(pickVideoFileResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 71:   // @peartube/pick-image-file
+      guard let handler = _handlers["@peartube/pick-image-file"] as? (PickImageFileRequest) async throws -> PickImageFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(pickImageFileRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(pickImageFileResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 72:   // @peartube/get-blob-server-port
+      guard let handler = _handlers["@peartube/get-blob-server-port"] as? (GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getBlobServerPortRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getBlobServerPortResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 73:   // @peartube/global-search-videos
+      guard let handler = _handlers["@peartube/global-search-videos"] as? (GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(globalSearchVideosRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(globalSearchVideosResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 74:   // @peartube/add-comment
+      guard let handler = _handlers["@peartube/add-comment"] as? (AddCommentRequest) async throws -> AddCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(addCommentRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(addCommentResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 75:   // @peartube/list-comments
+      guard let handler = _handlers["@peartube/list-comments"] as? (ListCommentsRequest) async throws -> ListCommentsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(listCommentsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(listCommentsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 76:   // @peartube/hide-comment
+      guard let handler = _handlers["@peartube/hide-comment"] as? (HideCommentRequest) async throws -> HideCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(hideCommentRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(hideCommentResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 77:   // @peartube/remove-comment
+      guard let handler = _handlers["@peartube/remove-comment"] as? (RemoveCommentRequest) async throws -> RemoveCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(removeCommentRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(removeCommentResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 78:   // @peartube/add-reaction
+      guard let handler = _handlers["@peartube/add-reaction"] as? (AddReactionRequest) async throws -> AddReactionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(addReactionRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(addReactionResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 79:   // @peartube/remove-reaction
+      guard let handler = _handlers["@peartube/remove-reaction"] as? (RemoveReactionRequest) async throws -> RemoveReactionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(removeReactionRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(removeReactionResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 80:   // @peartube/get-reactions
+      guard let handler = _handlers["@peartube/get-reactions"] as? (GetReactionsRequest) async throws -> GetReactionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getReactionsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getReactionsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 88:   // @peartube/cast-available
+      guard let handler = _handlers["@peartube/cast-available"] as? (CastAvailableRequest) async throws -> CastAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castAvailableRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castAvailableResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 89:   // @peartube/cast-start-discovery
+      guard let handler = _handlers["@peartube/cast-start-discovery"] as? (CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castStartDiscoveryRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castStartDiscoveryResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 90:   // @peartube/cast-stop-discovery
+      guard let handler = _handlers["@peartube/cast-stop-discovery"] as? (CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castStopDiscoveryRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castStopDiscoveryResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 91:   // @peartube/cast-get-devices
+      guard let handler = _handlers["@peartube/cast-get-devices"] as? (CastGetDevicesRequest) async throws -> CastGetDevicesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castGetDevicesRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castGetDevicesResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 92:   // @peartube/cast-add-manual-device
+      guard let handler = _handlers["@peartube/cast-add-manual-device"] as? (CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castAddManualDeviceRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castAddManualDeviceResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 93:   // @peartube/cast-connect
+      guard let handler = _handlers["@peartube/cast-connect"] as? (CastConnectRequest) async throws -> CastConnectResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castConnectRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castConnectResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 94:   // @peartube/cast-disconnect
+      guard let handler = _handlers["@peartube/cast-disconnect"] as? (CastDisconnectRequest) async throws -> CastDisconnectResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castDisconnectRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castDisconnectResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 95:   // @peartube/cast-play
+      guard let handler = _handlers["@peartube/cast-play"] as? (CastPlayRequest) async throws -> CastPlayResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castPlayRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castPlayResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 96:   // @peartube/cast-pause
+      guard let handler = _handlers["@peartube/cast-pause"] as? (CastPauseRequest) async throws -> CastPauseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castPauseRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castPauseResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 97:   // @peartube/cast-resume
+      guard let handler = _handlers["@peartube/cast-resume"] as? (CastResumeRequest) async throws -> CastResumeResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castResumeRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castResumeResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 98:   // @peartube/cast-stop
+      guard let handler = _handlers["@peartube/cast-stop"] as? (CastStopRequest) async throws -> CastStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castStopRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castStopResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 99:   // @peartube/cast-seek
+      guard let handler = _handlers["@peartube/cast-seek"] as? (CastSeekRequest) async throws -> CastSeekResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castSeekRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castSeekResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 100:   // @peartube/cast-set-volume
+      guard let handler = _handlers["@peartube/cast-set-volume"] as? (CastSetVolumeRequest) async throws -> CastSetVolumeResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castSetVolumeRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castSetVolumeResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 101:   // @peartube/cast-get-state
+      guard let handler = _handlers["@peartube/cast-get-state"] as? (CastGetStateRequest) async throws -> CastGetStateResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castGetStateRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castGetStateResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 102:   // @peartube/cast-is-connected
+      guard let handler = _handlers["@peartube/cast-is-connected"] as? (CastIsConnectedRequest) async throws -> CastIsConnectedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(castIsConnectedRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(castIsConnectedResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 107:   // @peartube/search-videos
+      guard let handler = _handlers["@peartube/search-videos"] as? (SearchVideosRequest) async throws -> SearchVideosResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(searchVideosRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(searchVideosResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 108:   // @peartube/log-watch-event
+      guard let handler = _handlers["@peartube/log-watch-event"] as? (LogWatchEventRequest) async throws -> LogWatchEventResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(logWatchEventRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(logWatchEventResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 109:   // @peartube/index-video-vectors
+      guard let handler = _handlers["@peartube/index-video-vectors"] as? (IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(indexVideoVectorsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(indexVideoVectorsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 110:   // @peartube/get-recommendations
+      guard let handler = _handlers["@peartube/get-recommendations"] as? (GetRecommendationsRequest) async throws -> GetRecommendationsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getRecommendationsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getRecommendationsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 111:   // @peartube/get-video-recommendations
+      guard let handler = _handlers["@peartube/get-video-recommendations"] as? (GetVideoRecommendationsRequest) async throws -> GetVideoRecommendationsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getVideoRecommendationsRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getVideoRecommendationsResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 112:   // @peartube/update-video-metadata
+      guard let handler = _handlers["@peartube/update-video-metadata"] as? (UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(updateVideoMetadataRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(updateVideoMetadataResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 113:   // @peartube/desktop-bootstrap
+      guard let handler = _handlers["@peartube/desktop-bootstrap"] as? (DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(desktopBootstrapRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(desktopBootstrapResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 114:   // @peartube/desktop-shutdown
+      guard let handler = _handlers["@peartube/desktop-shutdown"] as? (DesktopShutdownRequest) async throws -> DesktopShutdownResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(desktopShutdownRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(desktopShutdownResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 115:   // @peartube/desktop-refresh-browse
+      guard let handler = _handlers["@peartube/desktop-refresh-browse"] as? (DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(desktopRefreshBrowseRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(desktopRefreshBrowseResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 116:   // @peartube/ffmpeg-decode-available
+      guard let handler = _handlers["@peartube/ffmpeg-decode-available"] as? (FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(ffmpegDecodeAvailableRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(ffmpegDecodeAvailableResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 117:   // @peartube/update-channel-avatar
+      guard let handler = _handlers["@peartube/update-channel-avatar"] as? (UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(updateChannelAvatarRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(updateChannelAvatarResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 118:   // @peartube/transcode-start
+      guard let handler = _handlers["@peartube/transcode-start"] as? (TranscodeStartRequest) async throws -> TranscodeStartResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(transcodeStartRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(transcodeStartResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 119:   // @peartube/transcode-stop
+      guard let handler = _handlers["@peartube/transcode-stop"] as? (TranscodeStopRequest) async throws -> TranscodeStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(transcodeStopRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(transcodeStopResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 120:   // @peartube/transcode-status
+      guard let handler = _handlers["@peartube/transcode-status"] as? (TranscodeStatusRequest) async throws -> TranscodeStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(transcodeStatusRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(transcodeStatusResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
@@ -3289,7 +3261,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   }
   private func _dispatchEvent(_ event: IncomingEvent) async {
     switch event.command {
-    case 63:   // @peartube/event-ready
+    case 81:   // @peartube/event-ready
       guard let handler = _handlers["@peartube/event-ready"] as? (EventReady) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3298,7 +3270,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 64:   // @peartube/event-error
+    case 82:   // @peartube/event-error
       guard let handler = _handlers["@peartube/event-error"] as? (EventError) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3307,7 +3279,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 65:   // @peartube/event-upload-progress
+    case 83:   // @peartube/event-upload-progress
       guard let handler = _handlers["@peartube/event-upload-progress"] as? (EventUploadProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3316,7 +3288,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 66:   // @peartube/event-download-progress
+    case 84:   // @peartube/event-download-progress
       guard let handler = _handlers["@peartube/event-download-progress"] as? (EventDownloadProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3325,7 +3297,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 67:   // @peartube/event-feed-update
+    case 85:   // @peartube/event-feed-update
       guard let handler = _handlers["@peartube/event-feed-update"] as? (EventFeedUpdate) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3334,7 +3306,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 68:   // @peartube/event-log
+    case 86:   // @peartube/event-log
       guard let handler = _handlers["@peartube/event-log"] as? (EventLog) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3343,7 +3315,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 69:   // @peartube/event-video-stats
+    case 87:   // @peartube/event-video-stats
       guard let handler = _handlers["@peartube/event-video-stats"] as? (EventVideoStats) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3352,7 +3324,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 85:   // @peartube/event-cast-device-found
+    case 103:   // @peartube/event-cast-device-found
       guard let handler = _handlers["@peartube/event-cast-device-found"] as? (EventCastDeviceFound) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3361,7 +3333,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 86:   // @peartube/event-cast-device-lost
+    case 104:   // @peartube/event-cast-device-lost
       guard let handler = _handlers["@peartube/event-cast-device-lost"] as? (EventCastDeviceLost) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3370,7 +3342,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 87:   // @peartube/event-cast-playback-state
+    case 105:   // @peartube/event-cast-playback-state
       guard let handler = _handlers["@peartube/event-cast-playback-state"] as? (EventCastPlaybackState) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3379,7 +3351,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 88:   // @peartube/event-cast-time-update
+    case 106:   // @peartube/event-cast-time-update
       guard let handler = _handlers["@peartube/event-cast-time-update"] as? (EventCastTimeUpdate) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -3388,7 +3360,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 112:   // @peartube/event-transcode-progress
+    case 121:   // @peartube/event-transcode-progress
       guard let handler = _handlers["@peartube/event-transcode-progress"] as? (EventTranscodeProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {

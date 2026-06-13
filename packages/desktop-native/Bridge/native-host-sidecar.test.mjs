@@ -104,7 +104,7 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
 
     const payload = decodePayload(bootstrapResponseCodec, response.data)
     assert.equal(payload.storagePath, storagePath)
-    assert.equal(payload.protocolVersion, 2)
+    assert.equal(payload.protocolVersion, 3)
     assert.ok(Array.isArray(payload.snapshot.sections.home))
 
     const searchFrame = encodeRequestFrame({

@@ -901,19 +901,6 @@ ns.register({
 })
 
 ns.register({
-  name: 'get-personal-encryption-secret-request',
-  fields: []
-})
-
-ns.register({
-  name: 'get-personal-encryption-secret-response',
-  fields: [
-    { name: 'provisioned', type: 'bool', required: true },
-    { name: 'secret', type: 'string', required: false }
-  ]
-})
-
-ns.register({
   name: 'join-channel-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true }
@@ -2894,12 +2881,6 @@ rpcNs.register({
   name: 'provision-personal-encryption',
   request: { name: '@peartube/provision-personal-encryption-request', stream: false },
   response: { name: '@peartube/provision-personal-encryption-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-personal-encryption-secret',
-  request: { name: '@peartube/get-personal-encryption-secret-request', stream: false },
-  response: { name: '@peartube/get-personal-encryption-secret-response', stream: false }
 })
 
 rpcNs.register({

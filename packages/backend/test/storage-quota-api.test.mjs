@@ -5,6 +5,7 @@ import test from 'brittle'
 
 import { createApi } from '../src/api.js'
 import { SeedingManager } from '../src/seeding.js'
+import { isPlaybackActive } from '../src/storage.js'
 
 function createMetaDb(seed = {}) {
   const state = new Map(Object.entries(seed))
@@ -382,6 +383,45 @@ test('prefetchVideo cleans up core listeners when blob is already fully cached',
   t.is(result.cached, true)
   t.is(core.listenerCount('download'), 0)
   t.is(core.listenerCount('upload'), 0)
+})
+
+test('ending playback flushes the quota eviction that was deferred while playing', async (t) => {
+  const store = createStore()
+  const metaDb = createMetaDb()
+  // Mirror production wiring: enforceQuota defers all clears while playback is
+  // active. The only thing that calls enforceQuota during a watch is addSeed,
+  // which runs *while* playback is active — so without a flush on playback-stop
+  // the over-quota cache is never evicted.
+  const seedingManager = new SeedingManager(store, metaDb, {
+    isCacheClearBlocked: () => isPlaybackActive()
+  })
+  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const core = store.get(b4a.from(coreA, 'hex'))
+
+  api.setPlaybackActive({ active: false }) // clean baseline for the shared module flag
+  await seedingManager.setMaxStorageGB(5)
+
+  // Start watching: cache eviction is now gated off.
+  api.setPlaybackActive({ active: true })
+  await seedingManager.addSeed('drive-a', 'videos/big.mp4', 'watched', {
+    byteLength: 6 * GB,
+    blobId: '0:6:0:6144',
+    blobsCoreKey: coreA
+  })
+
+  // Over quota (6GB > 5GB) but deferred: nothing cleared while playing.
+  t.is(seedingManager.getActiveSeeds().length, 1)
+  t.alike(core.clearCalls, [])
+
+  // Stop playback -> the deferred eviction must now run.
+  api.setPlaybackActive({ active: false })
+
+  for (let i = 0; i < 100 && seedingManager.getActiveSeeds().length > 0; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  t.is(seedingManager.getActiveSeeds().length, 0)
+  t.alike(core.clearCalls, [{ start: 0, end: 6 }])
 })
 
 test('addSeed updates existing cache entries with resolved blob bytes', async (t) => {

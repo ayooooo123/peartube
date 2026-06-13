@@ -3931,10 +3931,19 @@ export function createApi({
      * @returns {{success: boolean, active: boolean, updatedAt: number, expiresAt: number}}
      */
     setPlaybackActive(options = {}) {
-      return {
-        success: true,
-        ...storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
+      const state = storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
+      // Flush deferred cache eviction when playback ends. enforceQuota() skips
+      // every clear while playback is active (isCacheClearBlocked), and its only
+      // other trigger — addSeed — fires *during* playback, so the over-quota
+      // evictions get deferred and nothing ever re-runs them. Without this hook
+      // the seed cache grows unbounded past maxStorageGB. Fire-and-forget: the
+      // player does not need to wait on a disk walk + compaction to resume.
+      if (!state.active && seedingManager?.enforceQuota) {
+        Promise.resolve()
+          .then(() => seedingManager.enforceQuota())
+          .catch(err => console.log('[API] Deferred quota enforcement failed:', err?.message))
       }
+      return { success: true, ...state }
     },
 
     /**

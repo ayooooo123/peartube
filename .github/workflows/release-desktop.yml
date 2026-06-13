@@ -126,8 +126,13 @@ jobs:
             VERSION="dev-${GITHUB_SHA::7}"
           fi
 
+          rm -rf build/PearTubeDesktop.app
+          ditto \
+            build/PearTubeDesktop.xcarchive/Products/Applications/PearTubeDesktop.app \
+            build/PearTubeDesktop.app
+
           ditto -c -k --sequesterRsrc --keepParent \
-            build/PearTubeDesktop.xcarchive \
+            build/PearTubeDesktop.app \
             build/PearTube-native-desktop-${VERSION}.zip
 
       - name: Upload native desktop release artifact

@@ -936,6 +936,9 @@ final class HostBridgeService {
     }
 
     startPlaybackStatsPolling(for: video)
+    guard await waitForAVPlayerReadiness(for: video) != nil else {
+      return nil
+    }
     return url
   }
 

@@ -46,11 +46,15 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:ecopy should clear stale workers/node_modules before copying',
   )
 
-  // ecopy must ship the self-contained bundle into the .app...
+  // ecopy must ship the bundle AND its offloaded native-addon tree into the
+  // .app. The addons are offloaded to disk beside the bundle (a `.bare` file
+  // must be a real file for dlopen, see build-desktop-bundle.mjs), so ecopy
+  // copies the whole workers/core/ dir — excluding only the raw index.mjs —
+  // rather than just index.bundle.
   assert.match(
     scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/core\/index\.bundle /,
-    'desktop:ecopy should copy index.bundle into the .app',
+    /rsync -a --exclude=index\.mjs desktop-build\/build\/workers\/core\/ /,
+    'desktop:ecopy should copy the bundle + offloaded addon tree into the .app',
   )
   // ...and must NOT rsync the raw @peartube source trees anymore (the bundle
   // inlines all @peartube JS, so the copied node_modules tree was the stale
@@ -71,10 +75,15 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
   const source = fs.readFileSync(path.join(appRoot, 'scripts', 'build-desktop-bundle.mjs'), 'utf8')
 
   assert.match(source, /'--format', 'bundle'/, 'should emit a runnable bare bundle')
-  // Must NOT pass --linked: a standalone `bare index.bundle` needs the prebuilt
-  // addons embedded, not referenced as external linked: frameworks.
-  assert.doesNotMatch(source, /'--linked'/, 'should embed addons, not link them externally')
-  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons embed')
+  // Must NOT pass --linked: that expects the host to ship addon frameworks
+  // ahead of time (the mobile/native-sidecar model), so a plain bare subprocess
+  // fails with ADDON_NOT_FOUND.
+  assert.doesNotMatch(source, /'--linked'/, 'should not link addons as external frameworks')
+  // Must offload addons to disk beside the bundle: a `.bare` addon must be a
+  // real file for dlopen(); embedding it makes dlopen of index.bundle/<pkg>/…
+  // die with ENOTDIR (the bundle is a file, not a dir).
+  assert.match(source, /'--offload-addons'/, 'should offload native addons to disk beside the bundle')
+  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons offload')
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')
@@ -101,6 +110,13 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
     /ensureNativeAddonSubmodules\(\)/,
     'should preflight native-addon submodules (bare-ffmpeg) before packing',
   )
+  // bare-pack only WRITES offloaded addon files to disk when --out is OUTSIDE
+  // --base, so the builder must pack into a staging dir and keep --base at the
+  // app root (so module keys — and the freshness/link checks — stay unchanged),
+  // then relocate the bundle + offloaded addon tree into the out dir together.
+  assert.match(source, /'--base', projectRoot/, 'should pin --base to the app root so offload writes to disk and keys are unchanged')
+  assert.match(source, /stagingDir/, 'should pack into a staging dir outside --base')
+  assert.match(source, /relocateStagingToOutDir/, 'should relocate the bundle + offloaded addons into the out dir')
 })
 
 test('bundle link check catches a stale universal-core missing an export', async () => {

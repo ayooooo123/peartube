@@ -71,11 +71,13 @@ function getWorker(specifier: string) {
   if (!existsSync(workerPath)) {
     workerPath = workerPath.replace(/\.js$/, '.mjs')
   }
-  // Prefer the self-contained bare bundle when present. `desktop:bundle`
-  // bare-packs the worker (+ @peartube/backend source) into a single
-  // `.bundle` that `bare` loads natively, so we run one frozen artifact
-  // instead of resolving raw source from the copied node_modules tree (which
-  // could be stale — see the "does not provide an export named X" failure).
+  // Prefer the bare bundle when present. `desktop:bundle` bare-packs the
+  // worker (+ @peartube/backend source) into a single `.bundle` that `bare`
+  // loads natively, so we run one frozen JS artifact instead of resolving raw
+  // source from the copied node_modules tree (which could be stale — see the
+  // "does not provide an export named X" failure). Native addons (bare-os,
+  // bare-ffmpeg, …) are offloaded to disk beside the bundle (under
+  // workers/core/), since a `.bare` addon must be a real file for dlopen().
   const bundlePath = workerPath.replace(/\.(js|mjs)$/, '.bundle')
   if (existsSync(bundlePath)) {
     workerPath = bundlePath

@@ -32,8 +32,15 @@ const repoRoot = path.resolve(projectRoot, '..', '..')
 
 const entryFile = path.join(projectRoot, 'desktop-build', 'build', 'workers', 'core', 'index.mjs')
 const bundleFile = path.join(projectRoot, 'desktop-build', 'build', 'workers', 'core', 'index.bundle')
-const bundleDir = path.dirname(bundleFile)
-const offloadedAddonsDir = path.join(bundleDir, 'node_modules')
+const bundleOutDir = path.dirname(bundleFile)
+
+// bare-pack only writes `--offload-addons` files to disk when `--out` lives
+// OUTSIDE `--base` (see runBarePack). We keep `--base` at the app root so the
+// bundle's module keys are unchanged (the freshness/link checks below still
+// match), and pack into this staging dir — under the gitignored root
+// node_modules, outside `--base` — then relocate the bundle + its offloaded
+// addon tree, side by side, into bundleOutDir.
+const stagingDir = path.join(repoRoot, 'node_modules', '.cache', 'peartube-desktop-bundle')
 
 // Source trees whose changes should invalidate the bundle. The worker pulls the
 // shared backend core in transitively, so a change to any of these means the
@@ -329,7 +336,7 @@ function getOffloadedNativeAddonPaths(packed) {
     relativePaths.add(value.slice('/../'.length))
   }
 
-  return [...relativePaths].sort().map((relativePath) => path.join(bundleDir, relativePath))
+  return [...relativePaths].sort().map((relativePath) => path.join(bundleOutDir, relativePath))
 }
 
 function readPackedBundle() {
@@ -440,18 +447,33 @@ function runBarePack() {
     )
   }
 
-  fs.mkdirSync(bundleDir, { recursive: true })
-  fs.rmSync(offloadedAddonsDir, { recursive: true, force: true })
   ensureNativeAddonSubmodules()
   ensureLiveWorkspaceLinks()
 
+  // --offload-addons writes the native prebuilds (bare-os, bare-ffmpeg, …) to
+  // disk *next to the bundle* instead of embedding them. This is required, not
+  // an optimization: a `.bare` addon must be a real file for dlopen(). When
+  // embedded, the addon resolves to `<index.bundle>/node_modules/<pkg>/…`, and
+  // because `index.bundle` is a FILE, dlopen of that path dies with ENOTDIR
+  // (errno 20). With --offload-addons the addon instead resolves to
+  // `<index.bundle>/../<path-relative-to-base>` — a real sibling file the
+  // mounted bundle points at, which dlopen can load.
+  //
+  // bare-pack only rewrites the offloaded files to disk when `--out` is OUTSIDE
+  // `--base`, so we pack into a staging dir outside the app root and keep
+  // `--base` at the app root (unchanged module keys → the freshness/link checks
+  // below still match), then relocate the bundle + its offloaded addon tree,
+  // side by side, into bundleOutDir.
+  //
+  // (--linked is the mobile/native-sidecar model: it emits `linked:` specifiers
+  // expecting the host to ship addon frameworks ahead of time, which a plain
+  // bare subprocess does not — so it would fail with ADDON_NOT_FOUND.)
+  fs.rmSync(stagingDir, { recursive: true, force: true })
+  fs.mkdirSync(stagingDir, { recursive: true })
+  const stagingBundle = path.join(stagingDir, path.basename(bundleFile))
+
   const barePackBin = findBarePackBin()
-  // No --linked: linked addons are the mobile/native-sidecar model. The
-  // Electrobun worker runs in PearRuntime's desktop sidecar, which dlopens
-  // `.bare` prebuilds from the filesystem. `--offload-addons` writes those
-  // prebuilds into workers/core/node_modules and rewrites bundle resolutions to
-  // `index.bundle/../node_modules/...`.
-  const args = ['--offload-addons', '--base', projectRoot, '--out', bundleFile, '--format', 'bundle']
+  const args = ['--base', projectRoot, '--offload-addons', '--out', stagingBundle, '--format', 'bundle']
   for (const host of getBundleHosts()) args.push('--host', host)
   args.push(entryFile)
 
@@ -463,6 +485,68 @@ function runBarePack() {
   })
 
   if (result.status !== 0) process.exit(result.status || 1)
+
+  relocateStagingToOutDir(stagingBundle)
+  verifyOffloadedAddons()
+}
+
+// Count the offloaded native prebuilds that landed next to the bundle. The
+// worker requires bare-os (and bare-ffmpeg), so a packed bundle MUST have at
+// least one `.bare` sibling on disk. Zero means offload silently wrote nothing
+// — e.g. `--out` slipped inside `--base`, or an addon was offloaded above the
+// staging dir and missed by the relocation — which would resurface the
+// dlopen/ENOTDIR crash at runtime. Fail at build time instead.
+function countBareAddons(dirPath) {
+  let count = 0
+  let entries
+  try {
+    entries = fs.readdirSync(dirPath, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name)
+    if (entry.isDirectory()) count += countBareAddons(fullPath)
+    else if (entry.isFile() && entry.name.endsWith('.bare')) count++
+  }
+  return count
+}
+
+function verifyOffloadedAddons() {
+  const count = countBareAddons(bundleOutDir)
+  if (count === 0) {
+    throw new Error(
+      '[desktop:bundle] No offloaded native addons (*.bare) landed next to the bundle.\n' +
+      'bare-pack --offload-addons only writes prebuilds to disk when --out is OUTSIDE --base;\n' +
+      'an embedded addon resolves to `index.bundle/node_modules/<pkg>/…` and crashes the worker\n' +
+      'at startup with dlopen ENOTDIR (the bundle is a file, not a directory).\n' +
+      `Expected prebuilds under ${path.relative(projectRoot, bundleOutDir)}/ — check the bare-pack\n` +
+      'invocation (--base / --offload-addons) and the staging relocation in build-desktop-bundle.mjs.',
+    )
+  }
+  console.log(`[desktop:bundle] Offloaded ${count} native addon prebuild(s) beside the bundle`)
+}
+
+// Move the packed bundle and its offloaded addon tree out of the staging dir
+// into bundleOutDir, side by side. Their relative layout is preserved, so the
+// bundle's `../<addon>` resolutions keep working after the move (and again
+// after desktop:ecopy copies the whole dir into the .app). Everything in the
+// out dir except the SWC-emitted worker entry (index.mjs) is replaced, so a
+// previous build's offloaded prebuilds never linger.
+function relocateStagingToOutDir(stagingBundle) {
+  const stagingOutDir = path.dirname(stagingBundle)
+  fs.mkdirSync(bundleOutDir, { recursive: true })
+  for (const entry of fs.readdirSync(bundleOutDir)) {
+    if (entry === path.basename(entryFile)) continue
+    fs.rmSync(path.join(bundleOutDir, entry), { recursive: true, force: true })
+  }
+  for (const entry of fs.readdirSync(stagingOutDir)) {
+    fs.cpSync(
+      path.join(stagingOutDir, entry),
+      path.join(bundleOutDir, entry),
+      { recursive: true },
+    )
+  }
 }
 
 // Only run the build when executed directly (the test imports checkBundleLinks).

@@ -51,13 +51,8 @@ test('Electrobun desktop start refreshes staged workspace packages before launch
   )
   assert.match(
     scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/core\/index\.bundle /,
-    'desktop:ecopy should copy the packed worker bundle into the staged app',
-  )
-  assert.match(
-    scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/core\/node_modules /,
-    'desktop:ecopy should copy offloaded native addons beside the worker bundle',
+    /rsync -a --exclude=index\.mjs desktop-build\/build\/workers\/core\/ /,
+    'desktop:ecopy should copy the packed worker bundle and offloaded native addons into the staged app',
   )
 })
 

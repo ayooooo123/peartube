@@ -28,6 +28,15 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:build should bundle the worker after compiling it',
   )
 
+  // The packed bundle must be runtime-smoke-tested (native addons must dlopen),
+  // not just built — a build-only check can't catch the embedded-addon ENOTDIR
+  // crash.
+  assert.equal(
+    scripts['desktop:smoke'],
+    'bun ./scripts/smoke-desktop-bundle.mjs',
+    'desktop:smoke should run the bundle smoke test under bun (the launcher runtime)',
+  )
+
   // A bare `desktop:start` must be self-sufficient: recompile the worker,
   // re-bundle, AND rebuild the launcher (electrobun build, via desktop:ebuild)
   // so it can never run a stale compiled bun main that spawns a leftover
@@ -46,18 +55,15 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:ecopy should clear stale workers/node_modules before copying',
   )
 
-  // ecopy must ship the packed JS bundle into the .app...
+  // ecopy must ship the bundle AND its offloaded native-addon tree into the
+  // .app. The addons are offloaded to disk beside the bundle (a `.bare` file
+  // must be a real file for dlopen, see build-desktop-bundle.mjs), so ecopy
+  // copies the whole workers/core/ dir — excluding only the raw index.mjs —
+  // rather than just index.bundle.
   assert.match(
     scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/core\/index\.bundle /,
-    'desktop:ecopy should copy index.bundle into the .app',
-  )
-  // ...and must ship the native addon files that bare-pack offloads beside the
-  // bundle. PearRuntime's sidecar dlopens native addons from the filesystem.
-  assert.match(
-    scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/core\/node_modules /,
-    'desktop:ecopy should copy offloaded native addons beside index.bundle',
+    /rsync -a --exclude=index\.mjs desktop-build\/build\/workers\/core\/ /,
+    'desktop:ecopy should copy the bundle + offloaded addon tree into the .app',
   )
   // ...and must NOT rsync the raw @peartube source trees anymore (the bundle
   // inlines all @peartube JS, so the copied node_modules tree was the stale
@@ -78,16 +84,16 @@ test('desktop bundle builder packs a runnable bare bundle with filesystem native
   const source = fs.readFileSync(path.join(appRoot, 'scripts', 'build-desktop-bundle.mjs'), 'utf8')
 
   assert.match(source, /'--format', 'bundle'/, 'should emit a runnable bare bundle')
-  // Must NOT pass --linked: the Electrobun sidecar dlopens desktop `.bare`
-  // addons from disk, not linked mobile/native-sidecar frameworks.
-  assert.doesNotMatch(source, /'--linked'/, 'should not link mobile/native-sidecar addon frameworks')
-  assert.match(
-    source,
-    /'--offload-addons'/,
-    'should offload native addons to real files beside the bundle',
-  )
+  // Must NOT pass --linked: that expects the host to ship addon frameworks
+  // ahead of time (the mobile/native-sidecar model), so a plain bare subprocess
+  // fails with ADDON_NOT_FOUND.
+  assert.doesNotMatch(source, /'--linked'/, 'should not link addons as external frameworks')
+  // Must offload addons to disk beside the bundle: a `.bare` addon must be a
+  // real file for dlopen(); embedding it makes dlopen of index.bundle/<pkg>/…
+  // die with ENOTDIR (the bundle is a file, not a dir).
+  assert.match(source, /'--offload-addons'/, 'should offload native addons to disk beside the bundle')
+  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons offload')
   assert.match(source, /'--base'/, 'should set the bundle base so offloaded addon paths resolve beside index.bundle')
-  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons are offloaded')
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')
@@ -114,10 +120,22 @@ test('desktop bundle builder packs a runnable bare bundle with filesystem native
     /ensureNativeAddonSubmodules\(\)/,
     'should preflight native-addon submodules (bare-ffmpeg) before packing',
   )
+  // bare-pack only WRITES offloaded addon files to disk when --out is OUTSIDE
+  // --base, so the builder must pack into a staging dir and keep --base at the
+  // app root (so module keys — and the freshness/link checks — stay unchanged),
+  // then relocate the bundle + offloaded addon tree into the out dir together.
+  assert.match(source, /'--base', projectRoot/, 'should pin --base to the app root so offload writes to disk and keys are unchanged')
+  assert.match(source, /stagingDir/, 'should pack into a staging dir outside --base')
+  assert.match(source, /relocateStagingToOutDir/, 'should relocate the bundle + offloaded addons into the out dir')
   assert.match(
     source,
     /verifyOffloadedNativeAddons\(\)/,
     'should verify the native addons needed at runtime were offloaded',
+  )
+  assert.match(
+    source,
+    /verifyOffloadedAddons\(\)/,
+    'should fail if no native addon prebuilds were relocated beside the bundle',
   )
 })
 

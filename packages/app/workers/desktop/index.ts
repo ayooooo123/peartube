@@ -662,22 +662,16 @@ B.clearCache = async () => api.clearCache()
 B.getVideoThumbnail = async (r: any) => {
   if (isShuttingDown) return { url: null, exists: false }
   try {
-    // Fast path: if caller provides blob references (from feed previewVideos),
-    // skip loadChannel/getVideoData and resolve the URL directly.
-    let thumbnailBlobId = r.thumbnailBlobId || null
-    let thumbnailBlobsCoreKey = r.thumbnailBlobsCoreKey || null
-
-    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) {
-      const video = await api.getVideoData(r.channelKey, r.videoId)
-      thumbnailBlobId = video?.thumbnailBlobId
-      thumbnailBlobsCoreKey = video?.thumbnailBlobsCoreKey
-    }
-
-    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) return { url: null, exists: false }
-    const blobsCore = ctx.store.get(b4a.from(thumbnailBlobsCoreKey, 'hex')); await blobsCore.ready()
-    const parts = thumbnailBlobId.split(':').map(Number)
-    const url = ctx.blobServer.getLink(blobsCore.key, { blob: { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }, type: 'image/jpeg', host: ctx.blobServerHost || '127.0.0.1', port: ctx.blobServer?.port || ctx.blobServerPort })
-    return { url, exists: true }
+    // Use the shared api.getVideoThumbnail loader — the same path mobile uses
+    // (see mobile-handlers.js) — so desktop and mobile resolve thumbnails
+    // identically, including the blob-server Content-Type. Feed-preview blob
+    // refs are forwarded for gossip-discovered channels that have no locally
+    // resolvable video record.
+    const res = await api.getVideoThumbnail(r.channelKey, r.videoId, {
+      thumbnailBlobId: r.thumbnailBlobId || null,
+      thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null,
+    })
+    return { url: res.url || null, exists: res.exists || false, dataUrl: null }
   } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, retryable: true, url: null, exists: false } }
 }
 B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(Buffer.from(r.imageData, 'base64')); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }

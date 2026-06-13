@@ -1805,9 +1805,14 @@ export function createApi({
             } catch { /* best effort */ }
           }
 
+          // Thumbnails are always encoded as JPEG (the bare-ffmpeg build has no
+          // libwebp; see thumbnail.js). Defaulting to image/webp mislabeled the
+          // JPEG bytes, which Android's <Image>/Fresco refused to decode while
+          // browsers/iOS sniffed past it. Use the stored type when present, else
+          // image/jpeg to match the actual bytes.
           const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0
             ? meta.thumbnailMimeType
-            : 'image/webp';
+            : 'image/jpeg';
 
           const url = ctx.blobServer.getLink(blobsCore.key, {
             blob,

@@ -80,7 +80,7 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
   )
 })
 
-test('desktop bundle builder packs a runnable, linked bare bundle', () => {
+test('desktop bundle builder packs a runnable bare bundle with filesystem native addons', () => {
   const source = fs.readFileSync(path.join(appRoot, 'scripts', 'build-desktop-bundle.mjs'), 'utf8')
 
   assert.match(source, /'--format', 'bundle'/, 'should emit a runnable bare bundle')
@@ -93,6 +93,7 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
   // die with ENOTDIR (the bundle is a file, not a dir).
   assert.match(source, /'--offload-addons'/, 'should offload native addons to disk beside the bundle')
   assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons offload')
+  assert.match(source, /'--base'/, 'should set the bundle base so offloaded addon paths resolve beside index.bundle')
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')
@@ -126,6 +127,16 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
   assert.match(source, /'--base', projectRoot/, 'should pin --base to the app root so offload writes to disk and keys are unchanged')
   assert.match(source, /stagingDir/, 'should pack into a staging dir outside --base')
   assert.match(source, /relocateStagingToOutDir/, 'should relocate the bundle + offloaded addons into the out dir')
+  assert.match(
+    source,
+    /verifyOffloadedNativeAddons\(\)/,
+    'should verify the native addons needed at runtime were offloaded',
+  )
+  assert.match(
+    source,
+    /verifyOffloadedAddons\(\)/,
+    'should fail if no native addon prebuilds were relocated beside the bundle',
+  )
 })
 
 test('bundle link check catches a stale universal-core missing an export', async () => {
@@ -241,5 +252,30 @@ test('packaged desktop app ships the sibling hypercore reader worker with the ba
     workerSource,
     /const workerBaseDir = runtimeStorage \|\| os\.cwd\(\)/,
     'desktop worker must not derive bundled code paths from mutable storage',
+  )
+})
+
+test('desktop worker boots the universal backend with the real backend context', () => {
+  const workerSource = fs.readFileSync(path.join(appRoot, 'workers', 'desktop', 'index.ts'), 'utf8')
+
+  assert.match(
+    workerSource,
+    /import\s+\{\s*createBackendContext\s*\}\s+from\s+['"]@peartube\/backend\/orchestrator['"]/,
+    'desktop worker should import the real backend context factory',
+  )
+  assert.match(
+    workerSource,
+    /createBackend\(\{[\s\S]*createBackendContext,/,
+    'desktop worker should pass createBackendContext into createBackend',
+  )
+  assert.match(
+    workerSource,
+    /Backend context did not initialize required desktop services/,
+    'desktop worker should fail fast before exposing identity handlers without the real context',
+  )
+  assert.match(
+    workerSource,
+    /typeof identityManager\.getIdentities !== 'function'/,
+    'desktop worker should verify identityManager before getIdentities can be called',
   )
 })

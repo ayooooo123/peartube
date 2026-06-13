@@ -21,16 +21,38 @@ function readPackageJson() {
 
 test('Electrobun desktop start refreshes staged workspace packages before launching', () => {
   const { scripts } = readPackageJson()
+  const rootPackage = JSON.parse(readRepoFile('package.json'))
+
+  assert.equal(
+    rootPackage.scripts.desktop,
+    'npm run desktop:dev --prefix packages/app',
+    'root npm run desktop should run the full app desktop dev pipeline',
+  )
+  assert.match(
+    scripts['desktop:dev'],
+    /npm run schema && npm run desktop:export && npm run desktop:merge && npm run desktop:start/,
+    'desktop:dev should refresh schema and web assets before launching',
+  )
 
   assert.match(
     scripts['desktop:start'],
-    /npm run desktop:ecopy && build\/dev-macos-arm64\/PearTube-dev\.app\/Contents\/MacOS\/launcher/,
-    'desktop:start must not launch a stale packaged backend directly',
+    /npm run desktop:worker && npm run desktop:bundle && npm run desktop:ebuild && build\/dev-macos-arm64\/PearTube-dev\.app\/Contents\/MacOS\/launcher/,
+    'desktop:start must rebuild the worker bundle and staged app before launching',
+  )
+  assert.match(
+    scripts['desktop:ebuild'],
+    /electrobun build && npm run desktop:ecopy/,
+    'desktop:ebuild should refresh copied app resources after rebuilding the launcher',
   )
   assert.match(
     scripts['desktop:ecopy'],
-    /rsync -a --delete \.\.\/\.\.\/packages\/backend\/ build\/dev-macos-arm64\/PearTube-dev\.app\/Contents\/Resources\/app\/node_modules\/@peartube\/backend\//,
-    'desktop:ecopy should delete stale backend files from the staged app before copying',
+    /rm -rf [^&]*\/workers [^&]*\/node_modules/,
+    'desktop:ecopy should delete stale staged workers and legacy node_modules before copying',
+  )
+  assert.match(
+    scripts['desktop:ecopy'],
+    /rsync -a --exclude=index\.mjs desktop-build\/build\/workers\/core\/ /,
+    'desktop:ecopy should copy the packed worker bundle and offloaded native addons into the staged app',
   )
 })
 

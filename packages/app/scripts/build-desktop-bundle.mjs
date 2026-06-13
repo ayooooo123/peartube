@@ -10,11 +10,12 @@
  * partial copy) could run a stale `universal-core.js` and fail to link a newly
  * added export (e.g. `createUniversalHrpcSurface`).
  *
- * This script bare-packs the compiled worker into a single self-contained
- * `.bundle` (the same runnable format the native macOS sidecar uses), traced
- * from the real `packages/app/node_modules` graph. `pear-runtime` runs the
- * worker via `bare <entry>`, and `bare` loads `.bundle` files natively, so the
- * launcher can point at one artifact instead of a copied source tree.
+ * This script bare-packs the compiled worker into a runnable `.bundle`, traced
+ * from the real `packages/app/node_modules` graph. Native `.bare` addons are
+ * offloaded beside the bundle because the PearRuntime sidecar dlopens them
+ * from filesystem paths. `pear-runtime` runs the worker via `bare <entry>`, so
+ * the launcher can point at one JS artifact plus its sibling native addon tree
+ * instead of a copied source tree.
  *
  * The build is mtime-gated so `desktop:start` can call it cheaply on every
  * launch and self-heal a stale bundle after a source change.
@@ -119,8 +120,8 @@ function findBarePackBin() {
 }
 
 // Hosts to pack native addons for. In dev we only need the host the developer
-// is running on; without --linked, bare-pack embeds that host's prebuilt
-// addons into the bundle so it is self-contained.
+// is running on; bare-pack uses this to choose the right prebuilt addons to
+// offload beside the bundle.
 function getBundleHosts() {
   return [`${process.platform}-${process.arch}`]
 }
@@ -316,6 +317,59 @@ function verifyBundleLinks() {
   console.log('[desktop:bundle] Bundle link check passed (all named imports satisfied)')
 }
 
+function collectStrings(value, output) {
+  if (typeof value === 'string') {
+    output.push(value)
+    return
+  }
+  if (!value || typeof value !== 'object') return
+  for (const child of Object.values(value)) collectStrings(child, output)
+}
+
+function getOffloadedNativeAddonPaths(packed) {
+  const values = []
+  for (const resolutions of Object.values(packed.resolutions)) collectStrings(resolutions, values)
+
+  const relativePaths = new Set()
+  for (const value of values) {
+    if (!/^\/\.\.\/node_modules\/.+\.(?:bare|node)$/.test(value)) continue
+    relativePaths.add(value.slice('/../'.length))
+  }
+
+  return [...relativePaths].sort().map((relativePath) => path.join(bundleOutDir, relativePath))
+}
+
+function readPackedBundle() {
+  const require = createRequire(path.join(projectRoot, 'package.json'))
+  const Bundle = require('bare-bundle')
+  return Bundle.from(fs.readFileSync(bundleFile))
+}
+
+function findMissingOffloadedNativeAddons() {
+  if (!fs.existsSync(bundleFile)) return []
+  const packed = readPackedBundle()
+  const addonPaths = getOffloadedNativeAddonPaths(packed)
+  if (addonPaths.length === 0) return ['<no offloaded native addon resolutions in bundle>']
+  return addonPaths.filter((addonPath) => !fs.existsSync(addonPath))
+}
+
+function verifyOffloadedNativeAddons() {
+  const missing = findMissingOffloadedNativeAddons()
+  if (missing.length > 0) {
+    const lines = missing.map((addonPath) => (
+      addonPath.startsWith('<') ? addonPath : path.relative(projectRoot, addonPath)
+    ))
+    throw new Error(
+      `[desktop:bundle] Missing offloaded native addon file(s) needed by ${path.relative(projectRoot, bundleFile)}:\n` +
+      `  ${lines.join('\n  ')}\n` +
+      'PearRuntime dlopens desktop native addons from the filesystem, so the worker bundle must be built with\n' +
+      '`bare-pack --offload-addons` and the generated node_modules directory must be copied beside index.bundle.\n' +
+      'Fix: PEARTUBE_FORCE_DESKTOP_BUNDLE=1 npm run desktop:bundle.',
+    )
+  }
+  console.log('[desktop:bundle] Offloaded native addon check passed')
+}
+
 // Native-addon deps (e.g. bare-ffmpeg, imported by backend/src/thumbnail.js)
 // ship as git submodules under packages/. Two failure modes bare-pack reports
 // only cryptically, caught here up front:
@@ -503,15 +557,18 @@ if (isMain) {
   const bundleMtime = getMtimeMs(bundleFile)
   const missingBundle = bundleMtime === 0
   const staleBundle = !missingBundle && bundleMtime < sourceNewest
+  const missingOffloadedAddons = !missingBundle && findMissingOffloadedNativeAddons().length > 0
 
-  if (forced || missingBundle || staleBundle) {
-    const reason = forced ? 'forced rebuild' : missingBundle ? 'missing bundle' : 'stale bundle'
+  if (forced || missingBundle || staleBundle || missingOffloadedAddons) {
+    const reason = forced ? 'forced rebuild' : missingBundle ? 'missing bundle' : staleBundle ? 'stale bundle' : 'missing offloaded native addons'
     console.log(`[desktop:bundle] Rebuilding desktop worker bundle (${reason})`)
     runBarePack()
     verifyBundleFreshness()
     verifyBundleLinks()
+    verifyOffloadedNativeAddons()
     console.log(`[desktop:bundle] Wrote ${path.relative(projectRoot, bundleFile)}`)
   } else {
+    verifyOffloadedNativeAddons()
     console.log('[desktop:bundle] Desktop worker bundle is up to date')
   }
 }

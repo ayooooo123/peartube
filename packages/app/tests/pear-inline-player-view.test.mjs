@@ -72,16 +72,17 @@ test('PearInlineVideoView disables native Expo source and ref effects while web 
   )
 })
 
-test('PearInlineVideoView adapter controls the shared Expo Video player directly', () => {
+test('PearInlineVideoView adapter controls the shared Expo Video player through the resilient native path', () => {
   const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
 
-  assert.match(source, /play:\s*async \(\)\s*=> \{\s*player\.play\(\)\s*}/)
+  assert.match(source, /play:\s*async \(\)\s*=> \{\s*requestNativePlayback\(\)\s*}/)
   assert.match(source, /pause:\s*async \(\)\s*=> \{\s*player\.pause\(\)\s*}/)
   assert.match(
     source,
     /stop:\s*async \(\)\s*=> \{[\s\S]*player\.pause\(\)[\s\S]*player\.currentTime = 0/,
   )
   assert.match(source, /seek:\s*async \(timeSeconds: number\) => \{[\s\S]*player\.currentTime = Math\.max\(0, timeSeconds\)/)
+  assert.match(source, /resume:\s*async \(playing: boolean\) => \{[\s\S]*requestNativePlayback\(\)/)
   assert.doesNotMatch(source, /controller\./)
 })
 

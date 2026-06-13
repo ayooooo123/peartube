@@ -66,11 +66,11 @@ const PLAYBACK_ERROR_RECOVERY_MAX_ATTEMPTS = 4
 const PLAYBACK_ERROR_RECOVERY_BASE_DELAY_MS = 1000
 const PLAYBACK_ERROR_RECOVERY_PROGRESS_SEC = 2
 // The playingChange/statusChange guards only run when the native player emits
-// an event. On Android, a play() issued while ExoPlayer is mid source-replace
+// an event. A play() issued while the native/html element is mid source-replace
 // can be dropped, leaving the player parked at readyToPlay + paused with no
 // further events — so videos open frozen on the first frame. Verify shortly
-// after each play request that the native player actually started, re-asserting
-// with backoff (0.4s/0.8s/1.6s/3.2s) until the first real play event arrives.
+// after each play request that the player actually started, re-asserting with
+// backoff (0.4s/0.8s/1.6s/3.2s) until the first real play event arrives.
 const AUTOPLAY_VERIFY_BASE_DELAY_MS = 400
 const AUTOPLAY_VERIFY_MAX_ATTEMPTS = 4
 
@@ -243,7 +243,6 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [])
 
   const scheduleAutoplayVerify = useCallback((attempt: number = 0) => {
-    if (Platform.OS === 'web') return
     clearAutoplayVerify()
     if (attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS) return
     autoplayVerifyTimerRef.current = setTimeout(() => {

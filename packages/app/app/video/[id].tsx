@@ -140,6 +140,11 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const videoPeerCount = stats?.peerCount ?? 0
   const downloadSpeedValue = Number(stats?.speedMBps ?? 0)
   const uploadSpeedValue = Number(stats?.uploadSpeedMBps ?? 0)
+  const hasPlayableProgress = Boolean(
+    Number(stats?.downloadedBytes ?? 0) > 0 ||
+    Number(stats?.downloadedBlocks ?? 0) > 0 ||
+    Number(stats?.progress ?? 0) > 0
+  )
   const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
   const uploadSpeedText = Number.isFinite(uploadSpeedValue) ? uploadSpeedValue.toFixed(2) : '0.00'
 
@@ -150,6 +155,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     }
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
+    if (hasPlayableProgress) return { color: '#60a5fa', label: 'Streaming' }
     if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Connecting...' }
     if (stats.status === 'resolving') return { color: '#a78bfa', label: 'Resolving...' }
     if (stats.status === 'error') return { color: '#f87171', label: 'Error' }
@@ -167,7 +173,9 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         ? 'Playback hit a snag'
         : videoPeerCount > 0
           ? `Streaming from ${videoPeerCount} ${videoPeerCount === 1 ? 'peer' : 'peers'}`
-          : 'Reaching out to peers…'
+          : hasPlayableProgress
+            ? 'Streaming'
+            : 'Reaching out to peers…'
 
   return (
     <Pressable

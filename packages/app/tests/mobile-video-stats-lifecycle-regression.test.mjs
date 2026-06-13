@@ -32,6 +32,44 @@ test('mobile watch page keeps live context stats ahead of stale polled stats', (
   )
 })
 
+test('mobile watch page does not keep saying reaching out once playback has byte progress', () => {
+  const source = read('app/video/[id].tsx')
+  const barStart = source.indexOf('function P2PStatsBar')
+  assert.notEqual(barStart, -1, 'expected mobile watch page P2PStatsBar')
+  const barBlock = source.slice(barStart, source.indexOf('// Action Button Component', barStart))
+
+  assert.match(
+    barBlock,
+    /const hasPlayableProgress =/,
+    'stats bar should classify playable byte or block progress separately from peers',
+  )
+  assert.match(
+    barBlock,
+    /hasPlayableProgress[\s\S]*\? 'Streaming'[\s\S]*: 'Reaching out to peers…'/,
+    'playback progress should beat the reaching-out empty state when peers are momentarily zero',
+  )
+})
+
+test('backend preparePlayback initializes stats for direct on-demand blob playback', () => {
+  const source = read('../backend/src/api.js')
+
+  assert.match(
+    source,
+    /async function startOnDemandPlaybackStats/,
+    'direct blob playback should attach lightweight stats tracking without prefetching',
+  )
+  assert.match(
+    source,
+    /core\.on\('download', onDownload\)/,
+    'direct playback stats should advance from blob core download events',
+  )
+  assert.match(
+    source,
+    /const playbackStats = await startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
+    'preparePlayback should initialize stats before returning to mobile',
+  )
+})
+
 test('mobile watch page reattaches stats when returning to an already playing video', () => {
   const source = read('app/video/[id].tsx')
 

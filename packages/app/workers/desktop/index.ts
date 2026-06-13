@@ -20,6 +20,8 @@ import * as castTranscoder from '@peartube/backend/transcode/cast-transcoder'
 import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail'
 // @ts-ignore
 import { createBackend } from '@peartube/backend/src/backend-entry.js'
+// @ts-ignore
+import { createBackendContext } from '@peartube/backend/orchestrator'
 // Bare runtime globals (available when spawned via pear.run())
 declare const Bare: { argv: string[]; IPC: any } | undefined
 // Cast proxy infrastructure
@@ -427,6 +429,7 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   stream: ipcPipe,
   storagePath: storage,
   platform: 'desktop',
+  createBackendContext,
   autoAttachSharedAppHandlers: true,
   onReady: (data: any) => { console.log('[Worker] Backend ready, blob port:', data?.blobServerPort) },
   onError: (err: any) => { console.error('[Worker] Backend error:', err?.message || err) },
@@ -441,6 +444,19 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
 })
 rpc = _rpc
 const { ctx, api, identityManager, uploadManager, videoStats, initializeIdentityFromMnemonic } = backend as any
+const missingDesktopServices = [
+  ctx ? null : 'ctx',
+  api ? null : 'api',
+  identityManager ? null : 'identityManager',
+  identityManager && typeof identityManager.getIdentities !== 'function' ? 'identityManager.getIdentities' : null,
+  uploadManager ? null : 'uploadManager',
+].filter(Boolean)
+if (missingDesktopServices.length > 0) {
+  throw new Error(
+    `[Worker] Backend context did not initialize required desktop services: ${missingDesktopServices.join(', ')}. ` +
+    'Ensure createBackendContext is passed to createBackend.',
+  )
+}
 const getBlobPort = () => (ctx.blobServer as any)?.port || ctx.blobServerPort || 0
 
 console.log('[Worker] Backend initialized, attaching desktop handler methods...')

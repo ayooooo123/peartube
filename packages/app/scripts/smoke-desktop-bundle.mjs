@@ -62,7 +62,7 @@ const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-smoke-'))
 const bareBin = findBareBin()
 
 function cleanup() {
-  try { fs.rmSync(storageDir, { recursive: true, force: true }) } catch {}
+  try { fs.rmSync(storageDir, { recursive: true, force: true }) } catch { /* best effort */ }
 }
 
 console.log(`[smoke] ${bareBin} ${path.relative(projectRoot, bundleFile)} ${storageDir}`)
@@ -73,14 +73,14 @@ const onData = (chunk) => {
   const text = chunk.toString()
   if (!addonError && ADDON_ERROR.test(text)) {
     addonError = text.trim()
-    try { child.kill('SIGKILL') } catch {}
+    try { child.kill('SIGKILL') } catch { /* already gone */ }
   }
 }
 child.stdout.on('data', onData)
 child.stderr.on('data', onData)
 
 const timer = setTimeout(() => {
-  try { child.kill('SIGKILL') } catch {}
+  try { child.kill('SIGKILL') } catch { /* already gone */ }
 }, RUN_MS)
 
 child.on('error', (err) => {

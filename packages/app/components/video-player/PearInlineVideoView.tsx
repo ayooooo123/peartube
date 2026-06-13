@@ -70,9 +70,10 @@ const PLAYBACK_ERROR_RECOVERY_PROGRESS_SEC = 2
 // can be dropped, leaving the player parked at readyToPlay + paused with no
 // further events — so videos open frozen on the first frame. Verify shortly
 // after each play request that the player actually started, re-asserting with
-// backoff (0.4s/0.8s/1.6s/3.2s) until the first real play event arrives.
-const AUTOPLAY_VERIFY_BASE_DELAY_MS = 400
+// backoff (0.1s/0.2s/0.4s/0.8s) until the first real play event arrives.
+const AUTOPLAY_VERIFY_BASE_DELAY_MS = 100
 const AUTOPLAY_VERIFY_MAX_ATTEMPTS = 4
+const WEB_MEDIA_START_EVENTS = ['loadedmetadata', 'loadeddata', 'canplay'] as const
 
 function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   const rawDurationSeconds = Number(data?.duration ?? player?.duration ?? 0)
@@ -146,6 +147,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const wasInPipRef = useRef(isInPipMode)
   const playerRefForCallbacks = useRef<VideoPlayer | null>(null)
   const nativeVideoViewRef = useRef<any>(null)
+  const webVideoEventTargetRef = useRef<HTMLVideoElement | null>(null)
   const previousStatusRef = useRef<string | null>(null)
   const seekPlaybackRecoveryUntilRef = useRef(0)
   const isPlayingRef = useRef(isPlaying)
@@ -158,6 +160,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const errorRecoveryResumePositionRef = useRef(0)
   const errorRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoplayVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const webVideoStartListenersCleanupRef = useRef<(() => void) | null>(null)
   const useMseBackend = Platform.OS === 'web' && webPlaybackBackend === 'mse'
 
   const videoSource = useMemo<VideoSource>(() => ({
@@ -206,8 +209,12 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       clearTimeout(autoplayVerifyTimerRef.current)
       autoplayVerifyTimerRef.current = null
     }
+    if (Platform.OS === 'web') {
+      webVideoStartListenersCleanupRef.current?.()
+      webVideoStartListenersCleanupRef.current = null
+    }
     playerRefForCallbacks.current = player
-  }, [player, videoUrl, playbackSession, currentVideoKey])
+  }, [player, videoUrl, playbackSession, currentVideoKey, webPlaybackBackend])
 
   useEffect(() => () => {
     if (errorRecoveryTimerRef.current) {
@@ -218,6 +225,8 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       clearTimeout(autoplayVerifyTimerRef.current)
       autoplayVerifyTimerRef.current = null
     }
+    webVideoStartListenersCleanupRef.current?.()
+    webVideoStartListenersCleanupRef.current = null
   }, [])
 
   useEffect(() => {
@@ -248,7 +257,52 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return nativeVideoViewRef.current?.nativeRef?.current ?? null
   }
 
+  function attachWebVideoStartListeners() {
+    if (Platform.OS !== 'web' || useMseBackend) return
+    const webVideo = getWebNativeVideoElement()
+    if (!webVideo || webVideoEventTargetRef.current === webVideo) return
+
+    webVideoStartListenersCleanupRef.current?.()
+
+    const handleStartupEvent = () => {
+      if (!isPlayingRef.current || hasReceivedPlayEventRef.current) return
+      requestNativePlayback()
+      scheduleAutoplayVerify()
+    }
+    const handlePlaying = () => {
+      hasReceivedPlayEventRef.current = true
+      if (playbackStartedAtRef.current === null) {
+        playbackStartedAtRef.current = Date.now()
+      }
+      clearAutoplayVerify()
+      onPlaying?.()
+    }
+    const handlePause = () => {
+      if (hasReceivedPlayEventRef.current || !isPlayingRef.current) return
+      requestNativePlayback()
+      scheduleAutoplayVerify()
+    }
+
+    for (const eventName of WEB_MEDIA_START_EVENTS) {
+      webVideo.addEventListener(eventName, handleStartupEvent)
+    }
+    webVideo.addEventListener('playing', handlePlaying)
+    webVideo.addEventListener('pause', handlePause)
+    webVideoEventTargetRef.current = webVideo
+    webVideoStartListenersCleanupRef.current = () => {
+      for (const eventName of WEB_MEDIA_START_EVENTS) {
+        webVideo.removeEventListener(eventName, handleStartupEvent)
+      }
+      webVideo.removeEventListener('playing', handlePlaying)
+      webVideo.removeEventListener('pause', handlePause)
+      if (webVideoEventTargetRef.current === webVideo) {
+        webVideoEventTargetRef.current = null
+      }
+    }
+  }
+
   const requestNativePlayback = useCallback(() => {
+    attachWebVideoStartListeners()
     const webVideo = getWebNativeVideoElement()
     if (webVideo) {
       try {
@@ -271,6 +325,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       const currentPlayer = playerRefForCallbacks.current
       if (!currentPlayer) return
       try {
+        attachWebVideoStartListeners()
         const webVideo = getWebNativeVideoElement()
         if (webVideo) {
           if (webVideo.paused && !webVideo.ended) {
@@ -416,7 +471,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     () => createPlayerPort(
       {
         play: async () => {
-          player.play()
+          requestNativePlayback()
         },
         pause: async () => {
           player.pause()
@@ -442,7 +497,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
         resume: async (playing: boolean) => {
           if (playing) {
-            player.play()
+            requestNativePlayback()
           } else {
             player.pause()
           }
@@ -463,7 +518,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
       },
     ),
-    [player, showNotificationControls],
+    [player, requestNativePlayback, showNotificationControls],
   )
 
   useEffect(() => {

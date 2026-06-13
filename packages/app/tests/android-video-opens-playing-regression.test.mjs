@@ -61,6 +61,26 @@ test('desktop web autoplay verification uses the real HTML video element state',
   assert.match(src, /ref=\{nativeVideoViewRef\}/, 'VideoView should receive the ref used for real web video state')
 })
 
+test('desktop web reasserts playback from real media readiness events', async () => {
+  const src = await source(inlineViewPath)
+
+  assert.match(src, /const WEB_MEDIA_START_EVENTS = \[/, 'desktop web should declare the media readiness events that can unblock startup')
+  assert.match(src, /'loadedmetadata'[\s\S]*'loadeddata'[\s\S]*'canplay'/, 'metadata/data/canplay should trigger immediate startup checks')
+  assert.match(src, /const webVideoEventTargetRef = useRef<HTMLVideoElement \| null>\(null\)/, 'the attached DOM video element should be tracked for listener cleanup')
+  assert.match(src, /function attachWebVideoStartListeners\(\)/, 'desktop web should attach listeners to the real HTML video element')
+  assert.match(src, /webVideo\.addEventListener\(eventName, handleStartupEvent\)/, 'startup events should reassert playback immediately')
+  assert.match(src, /webVideo\.addEventListener\('playing', handlePlaying\)/, 'real DOM playing should clear optimistic Expo retry state')
+  assert.match(src, /webVideo\.addEventListener\('pause', handlePause\)/, 'early real DOM pauses should be resisted while playback is desired')
+  assert.match(src, /webVideoEventTargetRef\.current = null/, 'detached DOM video listeners must clear their target ref')
+})
+
+test('desktop web autoplay verifier starts with a short retry delay', async () => {
+  const src = await source(inlineViewPath)
+
+  assert.match(src, /const AUTOPLAY_VERIFY_BASE_DELAY_MS = 100/, 'desktop startup should not wait 400ms before the first fallback retry')
+  assert.match(src, /AUTOPLAY_VERIFY_BASE_DELAY_MS \* 2 \*\* attempt/, 'retry delay should remain bounded exponential backoff')
+})
+
 test('Android reasserts desired play when source first becomes ready before native playing event', async () => {
   const src = await source(inlineViewPath)
   const handlerStart = src.indexOf("useEventListener(player, 'statusChange'")

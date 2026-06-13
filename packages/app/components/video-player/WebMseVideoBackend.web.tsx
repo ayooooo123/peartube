@@ -1,6 +1,6 @@
 /* eslint-disable no-empty, jsx-a11y/media-has-caption */
 /**
- * MseVideoPlayer — seek-aware streaming MSE player.
+ * WebMseVideoBackend — seek-aware streaming MSE backend for PearInlineVideoView.
  *
  * Two fragment sources feed the same MediaSource/SourceBuffer contract
  * (init segment, then moof/mdat fragments carrying absolute timestamps):
@@ -24,7 +24,7 @@
  * within WebKit's SourceBuffer memory quota.
  */
 
-import { memo, useCallback, useRef } from 'react'
+import { memo, useCallback, useEffect, useRef } from 'react'
 
 import {
   isMasterPlaylist,
@@ -33,8 +33,17 @@ import {
   resolveAgainstPlaylist,
   findSegmentIndexForTime,
   buildCompatMimeCandidates,
-  type ParsedMediaPlaylist,
 } from '@/lib/hls-fragment-source.mjs'
+import { createWebMsePlayerPort, type PlayerPort } from '@/lib/video-player'
+import type { CompatPlaybackResult, WebMseVideoBackendProps } from './WebMseVideoBackend.types'
+
+type ParsedMediaPlaylist = {
+  initUri: string | null
+  segments: Array<{ uri: string; duration: number; start: number }>
+  ended: boolean
+  mediaSequence: number
+  targetDuration: number
+}
 
 const BUFFER_AHEAD_SEC = 60   // Remux/buffer this far ahead of playback
 const BUFFER_BEHIND_SEC = 30  // Keep this much behind playback
@@ -48,34 +57,6 @@ interface Segment {
   data: Uint8Array   // moof+mdat combined
 }
 
-import { createWebMsePlayerPort, type PlayerPort } from '@/lib/video-player'
-
-export type CompatPlaybackResult = {
-  url?: string | null
-  transcoded?: boolean
-  transcodeError?: string | null
-} | null | undefined
-
-type MseVideoPlayerProps = {
-  videoUrl: string
-  style?: any
-  isPlaying: boolean
-  playbackRate?: number
-  onProgress?: (data: { currentTime: number; duration: number }) => void
-  onLoad?: (data?: any) => void
-  onPlaying?: () => void
-  onPaused?: () => void
-  onEnded?: () => void
-  onError?: (error: any) => void
-  playerRef?: React.RefObject<PlayerPort | null>
-  /**
-   * Ask the backend for a compat (bare-ffmpeg) playback URL when this webview
-   * cannot decode the source directly. Returns the webPreparePlayback result;
-   * `transcoded: true` means `url` is a local fMP4-HLS stream to pull from.
-   */
-  requestCompatPlayback?: () => Promise<CompatPlaybackResult>
-}
-
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
   const combined = new Uint8Array(a.length + b.length)
   combined.set(a, 0)
@@ -84,6 +65,55 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+type WebMseBackendController = {
+  play(): Promise<void>
+  pause(): void
+  stop(): void
+  seek(timeSeconds: number): void
+  seekBy(seconds: number): void
+  replace(sourceUrl: string | null): void
+  setPlaybackRate(rate: number): void
+  destroy(): void
+  get currentTime(): number
+  set currentTime(value: number)
+}
+
+function createWebMseBackendController(el: HTMLVideoElement): WebMseBackendController {
+  const setSource = (sourceUrl: string | null) => {
+    el.pause()
+    if (sourceUrl) {
+      el.setAttribute('src', sourceUrl)
+    } else {
+      el.removeAttribute('src')
+    }
+    el.load()
+  }
+
+  return {
+    play: () => el.play(),
+    pause: () => { el.pause() },
+    stop: () => {
+      el.pause()
+      el.currentTime = 0
+    },
+    seek: (timeSeconds: number) => {
+      el.currentTime = Math.max(0, timeSeconds)
+    },
+    seekBy: (seconds: number) => {
+      el.currentTime = Math.max(0, el.currentTime + seconds)
+    },
+    replace: setSource,
+    setPlaybackRate: (rate: number) => { el.playbackRate = rate },
+    destroy: () => { setSource(null) },
+    get currentTime(): number {
+      return el.currentTime
+    },
+    set currentTime(value: number) {
+      el.currentTime = Math.max(0, value)
+    },
+  }
+}
 
 /** Shared SourceBuffer append/remove helpers used by both fragment sources. */
 function createSourceBufferOps(sb: SourceBuffer, el: HTMLVideoElement) {
@@ -97,18 +127,18 @@ function createSourceBufferOps(sb: SourceBuffer, el: HTMLVideoElement) {
   const safeAppend = async (data: Uint8Array): Promise<boolean> => {
     try {
       await waitForUpdate()
-      sb.appendBuffer(data)
+      sb.appendBuffer(data as BufferSource)
       await waitForUpdate()
       return true
     } catch (err: any) {
       if (err.name === 'QuotaExceededError') {
         // Evict everything before current position and retry
-        console.warn('[MsePlayer] QuotaExceeded, evicting')
+        console.warn('[WebMseBackend] QuotaExceeded, evicting')
         try {
           await waitForUpdate()
           sb.remove(0, Math.max(0, el.currentTime - 1))
           await waitForUpdate()
-          sb.appendBuffer(data)
+          sb.appendBuffer(data as BufferSource)
           await waitForUpdate()
           return true
         } catch {
@@ -155,12 +185,19 @@ async function runCompatHlsPipeline(opts: {
   onLoad?: (data?: any) => void
   onError?: (error: any) => void
   setDispose: (fn: () => void) => void
+  shouldAutoPlay?: () => boolean
 }): Promise<void> {
-  const { el, hlsUrl, videoCodecString, durationHint, onLoad, onError, setDispose } = opts
+  const { el, hlsUrl, videoCodecString, durationHint, onLoad, onError, setDispose, shouldAutoPlay } = opts
 
   const ctl = { disposed: false, generation: 0 }
   const stale = (gen: number) => ctl.disposed || gen !== ctl.generation
-  setDispose(() => { ctl.disposed = true; ctl.generation++ })
+  let removeSeekingListener: (() => void) | null = null
+  setDispose(() => {
+    ctl.disposed = true
+    ctl.generation++
+    removeSeekingListener?.()
+    removeSeekingListener = null
+  })
 
   const fetchText = async (url: string): Promise<string | null> => {
     const res = await fetch(url, { cache: 'no-store' })
@@ -186,7 +223,7 @@ async function runCompatHlsPipeline(opts: {
   const refreshPlaylist = async (): Promise<ParsedMediaPlaylist | null> => {
     const text = await fetchText(mediaPlaylistUrl)
     if (text == null) return playlist
-    const parsed = parseMediaPlaylist(text)
+    const parsed = parseMediaPlaylist(text) as ParsedMediaPlaylist
     if (parsed.segments.length > 0 || parsed.ended) playlist = parsed
     return playlist
   }
@@ -194,9 +231,12 @@ async function runCompatHlsPipeline(opts: {
   // Wait for the first segment (transcode startup).
   const readyDeadline = Date.now() + PLAYLIST_READY_TIMEOUT_MS
   while (!ctl.disposed) {
-    await refreshPlaylist()
-    if (playlist && playlist.segments.length > 0) break
-    if (playlist?.ended || Date.now() > readyDeadline) {
+    const nextPlaylist = await refreshPlaylist()
+    if (nextPlaylist && nextPlaylist.segments.length > 0) {
+      playlist = nextPlaylist
+      break
+    }
+    if (nextPlaylist?.ended || Date.now() > readyDeadline) {
       onError?.({ message: 'Compat transcode produced no playable segments' })
       return
     }
@@ -268,7 +308,9 @@ async function runCompatHlsPipeline(opts: {
       if (!(await ops.safeAppend(data))) return
       if (!playbackStarted) {
         playbackStarted = true
-        el.play().catch(() => {})
+        if (shouldAutoPlay?.() ?? true) {
+          el.play().catch(() => {})
+        }
       }
       index++
     }
@@ -276,7 +318,7 @@ async function runCompatHlsPipeline(opts: {
 
   // Seek: jump to the covering segment if produced, else wait for the
   // transcoder to reach it (production is paced near realtime).
-  el.onseeking = () => {
+  const handleSeeking = () => {
     const target = el.currentTime
     if (ops.isBuffered(target)) return
 
@@ -299,22 +341,24 @@ async function runCompatHlsPipeline(opts: {
         if (idx === -1) idx = Math.max(0, playlist!.segments.length - 1)
         await pump(idx, gen)
       } catch (err: any) {
-        console.warn('[MsePlayer] Compat seek error:', err?.message)
+          console.warn('[WebMseBackend] Compat seek error:', err?.message)
       }
     })()
   }
+  el.addEventListener('seeking', handleSeeking)
+  removeSeekingListener = () => el.removeEventListener('seeking', handleSeeking)
 
   try {
     await pump(0, ctl.generation)
   } catch (err: any) {
     if (!ctl.disposed) {
-      console.warn('[MsePlayer] Compat pipeline error:', err?.message)
+      console.warn('[WebMseBackend] Compat pipeline error:', err?.message)
       onError?.({ message: err?.message || 'Compat stream error' })
     }
   }
 }
 
-export const MseVideoPlayer = memo(function MseVideoPlayer({
+export const WebMseVideoBackend = memo(function WebMseVideoBackend({
   videoUrl,
   style,
   isPlaying,
@@ -326,29 +370,72 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
   onError,
   playerRef,
   requestCompatPlayback,
-}: MseVideoPlayerProps) {
+}: WebMseVideoBackendProps) {
   const initStarted = useRef(false)
   const videoElRef = useRef<HTMLVideoElement | null>(null)
   const disposeRef = useRef<(() => void) | null>(null)
+  const mseBackendPortRef = useRef<PlayerPort | null>(null)
+  const mseBackendControllerRef = useRef<WebMseBackendController | null>(null)
+  const callbacksRef = useRef({
+    onLoad,
+    onProgress,
+    onPlaying,
+    onPaused,
+    onEnded,
+    onError,
+    requestCompatPlayback,
+  })
+  const isPlayingRef = useRef(isPlaying)
+  callbacksRef.current = {
+    onLoad,
+    onProgress,
+    onPlaying,
+    onPaused,
+    onEnded,
+    onError,
+    requestCompatPlayback,
+  }
+  isPlayingRef.current = isPlaying
+
+  useEffect(() => {
+    const controller = mseBackendControllerRef.current
+    if (!controller) return
+    if (isPlaying) {
+      controller.play().catch(() => {})
+    } else {
+      controller.pause()
+    }
+  }, [isPlaying])
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
     if (!el) {
       disposeRef.current?.()
       disposeRef.current = null
+      initStarted.current = false
+      videoElRef.current = null
+      mseBackendControllerRef.current = null
+      if (playerRef?.current === mseBackendPortRef.current) {
+        playerRef.current = null
+      }
+      mseBackendPortRef.current = null
       return
     }
     if (initStarted.current) return
     initStarted.current = true
     videoElRef.current = el
+    const controller = createWebMseBackendController(el)
+    mseBackendControllerRef.current = controller
 
     if (playerRef) {
-      playerRef.current = createWebMsePlayerPort(el)
+      const port = createWebMsePlayerPort(controller)
+      mseBackendPortRef.current = port
+      playerRef.current = port
     }
 
     // Progress reporting
     const progressTimer = setInterval(() => {
       if (el.duration && !isNaN(el.duration)) {
-        onProgress?.({
+        callbacksRef.current.onProgress?.({
           currentTime: Math.round(el.currentTime * 1000),
           duration: Math.round(el.duration * 1000),
         })
@@ -375,11 +462,11 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
           maxCacheSize: 256 * 1024 * 1024,
           parallelism: 4,
         })
-        const input = new Input({ source, formats: ALL_FORMATS, prefetchProfile: 'network' })
+        const input = new Input({ source, formats: ALL_FORMATS, prefetchProfile: 'network' } as any)
 
         const videoTrack = await input.getPrimaryVideoTrack()
         if (!videoTrack) {
-          onError?.({ message: 'No video track' })
+          callbacksRef.current.onError?.({ message: 'No video track' })
           return
         }
         const videoCodec = await videoTrack.getCodec()
@@ -416,11 +503,12 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         )
         const needsCompat = !videoPlayable || (audioTrack && !audioPlayable)
 
+        const requestCompatPlayback = callbacksRef.current.requestCompatPlayback
         if (needsCompat && requestCompatPlayback) {
           let compat: CompatPlaybackResult = null
           try { compat = await requestCompatPlayback() } catch {}
           if (compat?.transcoded && compat.url) {
-            console.log('[MsePlayer] Using compat fragment source:', compat.url)
+            console.log('[WebMseBackend] Using compat fragment source:', compat.url)
             try { (input as any).dispose?.() } catch {}
             const compatDisposeRef: { current: (() => void) | null } = { current: null }
             disposeRef.current = () => {
@@ -432,21 +520,23 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
               hlsUrl: compat.url,
               videoCodecString,
               durationHint: duration > 0 ? duration : 0,
-              onLoad,
-              onError,
+              onLoad: (data) => callbacksRef.current.onLoad?.(data),
+              onError: (error) => callbacksRef.current.onError?.(error),
               setDispose: (fn) => { compatDisposeRef.current = fn },
+              shouldAutoPlay: () => isPlayingRef.current,
             })
             return
           }
           if (compat?.transcodeError) {
-            console.warn('[MsePlayer] Compat playback unavailable:', compat.transcodeError)
+            console.warn('[WebMseBackend] Compat playback unavailable:', compat.transcodeError)
           }
         }
 
-        if (!videoUsable) {
-          onError?.({ message: `Unsupported video codec: ${videoCodec || 'unknown'}` })
+        if (!videoUsable || !videoCodec) {
+          callbacksRef.current.onError?.({ message: `Unsupported video codec: ${videoCodec || 'unknown'}` })
           return
         }
+        const videoDecoderConfigForOutput = videoDecoderConfig || undefined
 
         const mimeCandidates: Array<{ mime: string; withAudio: boolean }> = []
         if (videoCodecString) {
@@ -475,7 +565,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
             } catch {}
           }
         }
-        if (!sb) { onError?.({ message: 'No MSE MIME support' }); return }
+        if (!sb) { callbacksRef.current.onError?.({ message: 'No MSE MIME support' }); return }
 
         const { waitForUpdate, safeAppend, removeRange, isBuffered } = createSourceBufferOps(sb, el)
 
@@ -485,7 +575,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         if (duration > 0) {
           await waitForUpdate()
           try { ms.duration = duration } catch {}
-          onLoad?.({ duration, durationMs: Math.round(duration * 1000) })
+          callbacksRef.current.onLoad?.({ duration, durationMs: Math.round(duration * 1000) })
         }
 
         const videoSink = new EncodedPacketSink(videoTrack)
@@ -496,10 +586,13 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         let activeOutput: any = null
         let playbackStarted = false
         let disposed = false
+        let removeSeekingListener: (() => void) | null = null
 
         disposeRef.current = () => {
           disposed = true
           generation++
+          removeSeekingListener?.()
+          removeSeekingListener = null
           clearInterval(progressTimer)
           try { activeOutput?.cancel?.()?.catch?.(() => {}) } catch {}
           activeOutput = null
@@ -570,7 +663,9 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
               if (stale()) return false
               if (!playbackStarted) {
                 playbackStarted = true
-                el.play().catch(() => {})
+                if (isPlayingRef.current) {
+                  el.play().catch(() => {})
+                }
               }
             }
             return true
@@ -629,7 +724,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
 
               // Feed whichever track is furthest behind
               if (audioDone || (!videoDone && nextVideo.value.timestamp <= nextAudio!.value.timestamp)) {
-                await videoOut.add(nextVideo.value, firstVideo ? { decoderConfig: videoDecoderConfig } : undefined)
+                await videoOut.add(nextVideo.value, firstVideo ? { decoderConfig: videoDecoderConfigForOutput } : undefined)
                 firstVideo = false
                 nextVideo = await videoIter.next()
               } else {
@@ -640,8 +735,8 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
             }
           } catch (err: any) {
             if (!stale()) {
-              console.warn('[MsePlayer] Pipeline error:', err?.message)
-              onError?.({ message: err?.message || 'Remux pipeline error' })
+              console.warn('[WebMseBackend] Pipeline error:', err?.message)
+              callbacksRef.current.onError?.({ message: err?.message || 'Remux pipeline error' })
             }
           } finally {
             if (activeOutput === output) activeOutput = null
@@ -654,7 +749,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         }
 
         // --- Seek handler: restart the pipeline from the seek target ---
-        el.onseeking = () => {
+        const handleSeeking = () => {
           const target = el.currentTime
           if (isBuffered(target)) return // Data already present, the element recovers on its own
 
@@ -673,32 +768,33 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
               if (gen !== generation) return
               await runPipeline(Math.max(0, target - 0.5), gen)
             } catch (err: any) {
-              console.warn('[MsePlayer] Seek error:', err?.message)
+              console.warn('[WebMseBackend] Seek error:', err?.message)
             }
           })()
         }
+        el.addEventListener('seeking', handleSeeking)
+        removeSeekingListener = () => el.removeEventListener('seeking', handleSeeking)
 
         await runPipeline(0, generation)
       } catch (err: any) {
-        console.error('[MsePlayer] Error:', err?.message)
-        onError?.({ message: err?.message || 'MSE error' })
+        console.error('[WebMseBackend] Error:', err?.message)
+        callbacksRef.current.onError?.({ message: err?.message || 'MSE error' })
       }
     })()
-  }, [videoUrl, onProgress, onLoad, onError, playerRef, requestCompatPlayback])
+  }, [videoUrl, playerRef])
 
   return (
     <video
       ref={videoRefCallback}
       style={{ width: '100%', height: '100%', objectFit: 'contain', backgroundColor: '#000', ...(style || {}) }}
-      onPlay={() => onPlaying?.()}
-      onPause={() => onPaused?.()}
-      onEnded={() => onEnded?.()}
+      onPlay={() => callbacksRef.current.onPlaying?.()}
+      onPause={() => callbacksRef.current.onPaused?.()}
+      onEnded={() => callbacksRef.current.onEnded?.()}
       onLoadedMetadata={() => {
         const v = videoElRef.current
-        if (v?.duration) onLoad?.({ duration: v.duration, durationMs: Math.round(v.duration * 1000) })
+        if (v?.duration) callbacksRef.current.onLoad?.({ duration: v.duration, durationMs: Math.round(v.duration * 1000) })
       }}
       playsInline
-      autoPlay
     />
   )
 })

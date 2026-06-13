@@ -1,5 +1,5 @@
 /**
- * Validates the on-demand seek-remux approach used by MseVideoPlayer.web.tsx
+ * Validates the on-demand seek-remux approach used by WebMseVideoBackend.web.tsx
  * against the installed mediabunny version:
  *
  * - random access into a media file via EncodedPacketSink.getKeyPacket

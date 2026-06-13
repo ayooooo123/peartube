@@ -30,6 +30,48 @@ test('PearInlineVideoView uses Expo Video as the native inline renderer', () => 
   assert.doesNotMatch(source, /<PearPlayerView/)
 })
 
+test('PearInlineVideoView hosts the web MSE backend behind the existing player surface', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+  const renderStart = source.indexOf('  return (')
+  assert.notEqual(renderStart, -1, 'PearInlineVideoView should render a single player surface')
+  const renderBlock = source.slice(renderStart)
+
+  assert.match(source, /import \{ WebMseVideoBackend \} from '\.\/WebMseVideoBackend'/)
+  assert.match(source, /import type \{ CompatPlaybackResult \} from '\.\/WebMseVideoBackend\.types'/)
+  assert.match(source, /webPlaybackBackend\?: 'native' \| 'mse'/)
+  assert.match(source, /requestCompatPlayback\?: \(\) => Promise<CompatPlaybackResult>/)
+  assert.match(source, /const useMseBackend = Platform\.OS === 'web' && webPlaybackBackend === 'mse'/)
+  assert.match(renderBlock, /useMseBackend \? \(/)
+  assert.match(renderBlock, /<WebMseVideoBackend/)
+  assert.match(renderBlock, /requestCompatPlayback=\{requestCompatPlayback\}/)
+  assert.match(renderBlock, /\) : \(\s*<VideoView/)
+})
+
+test('PearInlineVideoView disables native Expo source and ref effects while web MSE is active', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{[\s\S]*if \(useMseBackend\) return[\s\S]*const applySource = async/,
+    'native source replacement should not run while the MSE backend owns the media element',
+  )
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{[\s\S]*if \(useMseBackend\) return[\s\S]*player\.playbackRate = playbackRate/,
+    'native playback-rate writes should not target the dormant Expo player while MSE is active',
+  )
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{[\s\S]*if \(useMseBackend\) return[\s\S]*if \(isPlaying\)/,
+    'native play-pause writes should not fight the MSE backend',
+  )
+  assert.match(
+    source,
+    /useEffect\(\(\) => \{[\s\S]*if \(!playerRef \|\| useMseBackend\) return[\s\S]*playerRef\.current = adapter/,
+    'the native PlayerPort adapter should not overwrite the MSE backend port',
+  )
+})
+
 test('PearInlineVideoView adapter controls the shared Expo Video player directly', () => {
   const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
 

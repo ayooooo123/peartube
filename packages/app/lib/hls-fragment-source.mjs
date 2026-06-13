@@ -4,7 +4,7 @@
  * The backend compat transcoder (cast-transcoder.mjs startCompatTranscode)
  * serves fMP4 HLS on 127.0.0.1: a master playlist, a media playlist with
  * `#EXT-X-MAP:URI="init.mp4"` + `seg-N.m4s` entries, and the segments
- * themselves. The MSE player fetches these over local HTTP and appends them
+ * themselves. The MSE backend fetches these over local HTTP and appends them
  * to its SourceBuffer — fragments carry absolute timestamps (fMP4 tfdt), so
  * they land at the right place on the timeline without timestampOffset
  * bookkeeping. These parsing helpers are dependency-free so they can be

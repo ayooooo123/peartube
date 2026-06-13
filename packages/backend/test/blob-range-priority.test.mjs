@@ -230,6 +230,16 @@ test('storage wires blob range prioritization before delegating blob-server requ
   t.ok(priorityIndex < delegateIndex, 'range priority runs before blob-server serves the range')
 })
 
+test('storage installs blob request cancellation handling before blob-server listens', (t) => {
+  const importIndex = storageSource.indexOf("import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'")
+  const installIndex = storageSource.indexOf('installExpectedBlobRequestCancellationHandler()')
+  const listenIndex = storageSource.indexOf('const blobServerListenPromise = blobServer.listen()')
+
+  t.ok(importIndex >= 0, 'storage imports the blob cancellation helper')
+  t.ok(installIndex >= 0, 'storage installs the blob cancellation helper')
+  t.ok(installIndex < listenIndex, 'cancellation handling is installed before blob-server listens')
+})
+
 test('storage releases pooled priority ranges during backend shutdown', (t) => {
   const releaseIndex = storageSource.indexOf('releaseAllPrioritizedBlobRanges()')
   const blobServerCloseIndex = storageSource.indexOf("runShutdownStep('blobServer close'")

@@ -27,6 +27,7 @@ import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache } from './known-peers.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
+import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -1359,6 +1360,8 @@ export async function initializeStorage(config) {
 
   try {
     const desiredPort = blobServerPortOverride || 0;
+
+    installExpectedBlobRequestCancellationHandler()
 
     blobServer = new BlobServer(blobStore, {
       port: desiredPort || 0,

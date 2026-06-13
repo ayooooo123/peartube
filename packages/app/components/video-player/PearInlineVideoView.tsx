@@ -3,6 +3,8 @@ import { VideoView, useVideoPlayer, type VideoPlayer, type VideoSource } from 'e
 import { memo, ReactNode, RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 import { AppState, AppStateStatus, Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
 import { createPlayerPort, type PlayerPort } from '@/lib/video-player'
+import { WebMseVideoBackend } from './WebMseVideoBackend'
+import type { CompatPlaybackResult } from './WebMseVideoBackend.types'
 
 type PearInlineVideoViewProps = {
   style?: StyleProp<ViewStyle>
@@ -11,6 +13,8 @@ type PearInlineVideoViewProps = {
   videoUrl: string
   playbackSession: number
   currentVideoKey?: string
+  webPlaybackBackend?: 'native' | 'mse'
+  requestCompatPlayback?: () => Promise<CompatPlaybackResult>
   isPlaying: boolean
   playbackRate: number
   seekPosition?: number
@@ -81,7 +85,7 @@ function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
 /**
  * Format/codec errors are deterministic — reloading the same source can never
  * succeed, and on desktop web the watch page uses the surfaced error (code 4,
- * MEDIA_ERR_SRC_NOT_SUPPORTED) to fall back to the MSE remux player. Those
+ * MEDIA_ERR_SRC_NOT_SUPPORTED) to fall back to the MSE remux backend. Those
  * must bypass the stall-recovery retries and surface immediately.
  */
 function isUnrecoverableSourceError(error: any) {
@@ -108,6 +112,8 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   videoUrl,
   playbackSession,
   currentVideoKey,
+  webPlaybackBackend = 'native',
+  requestCompatPlayback,
   isPlaying,
   playbackRate,
   seekPosition,
@@ -151,6 +157,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const errorRecoveryResumePositionRef = useRef(0)
   const errorRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoplayVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const useMseBackend = Platform.OS === 'web' && webPlaybackBackend === 'mse'
 
   const videoSource = useMemo<VideoSource>(() => ({
     uri: videoUrl,
@@ -255,6 +262,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [clearAutoplayVerify])
 
   useEffect(() => {
+    if (useMseBackend) return
     let cancelled = false
     const generation = sourceReplaceGenerationRef.current + 1
     sourceReplaceGenerationRef.current = generation
@@ -295,7 +303,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return () => {
       cancelled = true
     }
-  }, [player, videoSource])
+  }, [player, scheduleAutoplayVerify, useMseBackend, videoSource])
 
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
@@ -432,15 +440,18 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   )
 
   useEffect(() => {
+    if (useMseBackend) return
     player.playbackRate = playbackRate
-  }, [player, playbackRate])
+  }, [player, playbackRate, useMseBackend])
 
   useEffect(() => {
+    if (useMseBackend) return
     player.showNowPlayingNotification = showNotificationControls
     player.staysActiveInBackground = showNotificationControls
-  }, [player, showNotificationControls])
+  }, [player, showNotificationControls, useMseBackend])
 
   useEffect(() => {
+    if (useMseBackend) return
     isPlayingRef.current = isPlaying
     if (isPlaying) {
       player.play()
@@ -450,11 +461,12 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     } else {
       player.pause()
     }
-  }, [player, isPlaying, scheduleAutoplayVerify])
+  }, [player, isPlaying, scheduleAutoplayVerify, useMseBackend])
 
   useEffect(() => {
+    if (useMseBackend) return
     applyPendingSeek(seekPosition)
-  }, [applyPendingSeek, seekPosition])
+  }, [applyPendingSeek, seekPosition, useMseBackend])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -471,16 +483,17 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [adapter, autoEnterPipOnLeave])
 
   useEffect(() => {
-    if (!playerRef) return
+    if (!playerRef || useMseBackend) return
     playerRef.current = adapter
     return () => {
       if (playerRef.current === adapter) {
         playerRef.current = null
       }
     }
-  }, [adapter, playerRef])
+  }, [adapter, playerRef, useMseBackend])
 
   useEffect(() => {
+    if (useMseBackend) return
     return () => {
       try {
         void adapter.destroy?.()
@@ -492,9 +505,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         playerRef.current = null
       }
     }
-  }, [adapter, playerRef])
+  }, [adapter, playerRef, useMseBackend])
 
   useEventListener(player, 'sourceLoad', (event) => {
+    if (useMseBackend) return
     const durationMs = getExpoEventDurationMs(event, player)
     if (durationMs > 0) {
       durationMsRef.current = durationMs
@@ -521,6 +535,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   })
 
   useEventListener(player, 'videoTrackChange', (event) => {
+    if (useMseBackend) return
     const videoSize = getExpoEventVideoSize(event, player)
     if (!videoSize) return
     hasRenderedFrameRef.current = true
@@ -534,6 +549,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   })
 
   useEventListener(player, 'timeUpdate', (event) => {
+    if (useMseBackend) return
     const durationMs = Math.max(0, Math.round(Number(player.duration || 0) * 1000))
     if (durationMs > 0) durationMsRef.current = durationMs
 
@@ -562,6 +578,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   })
 
   useEventListener(player, 'playingChange', ({ isPlaying: nativePlaying }) => {
+    if (useMseBackend) return
     if (nativePlaying && playbackStartedAtRef.current === null) {
       playbackStartedAtRef.current = Date.now()
     }
@@ -592,6 +609,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   })
 
   useEventListener(player, 'statusChange', ({ status, error }) => {
+    if (useMseBackend) return
     if (status !== previousStatusRef.current) {
       previousStatusRef.current = status
       if (status === 'loading') {
@@ -622,6 +640,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   })
 
   useEventListener(player, 'playToEnd', () => {
+    if (useMseBackend) return
     onEnded?.()
   })
 
@@ -632,27 +651,44 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
   return (
     <View testID={testID} style={[styles.container, style]}>
-      <VideoView
-        player={player}
-        style={StyleSheet.absoluteFill}
-        contentFit="contain"
-        nativeControls={false}
-        surfaceType="surfaceView"
-        allowsPictureInPicture={autoEnterPipOnLeave}
-        startsPictureInPictureAutomatically={autoEnterPipOnLeave}
-        onFirstFrameRender={() => {
-          hasRenderedFrameRef.current = true
-          onBuffering?.({ isBuffering: false })
-        }}
-        onPictureInPictureStart={() => {
-          suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
-          onPictureInPictureChanged?.({ isInPictureInPicture: true, width: 0, height: 0 })
-        }}
-        onPictureInPictureStop={() => {
-          suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
-          onPictureInPictureChanged?.({ isInPictureInPicture: false, width: 0, height: 0 })
-        }}
-      />
+      {useMseBackend ? (
+        <WebMseVideoBackend
+          videoUrl={videoUrl}
+          style={StyleSheet.absoluteFill}
+          playerRef={playerRef}
+          requestCompatPlayback={requestCompatPlayback}
+          isPlaying={isPlaying}
+          playbackRate={playbackRate}
+          onPlaying={onPlaying}
+          onPaused={onPaused}
+          onLoad={onLoad}
+          onProgress={onProgress}
+          onEnded={onEnded}
+          onError={onError}
+        />
+      ) : (
+        <VideoView
+          player={player}
+          style={StyleSheet.absoluteFill}
+          contentFit="contain"
+          nativeControls={false}
+          surfaceType="surfaceView"
+          allowsPictureInPicture={autoEnterPipOnLeave}
+          startsPictureInPictureAutomatically={autoEnterPipOnLeave}
+          onFirstFrameRender={() => {
+            hasRenderedFrameRef.current = true
+            onBuffering?.({ isBuffering: false })
+          }}
+          onPictureInPictureStart={() => {
+            suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+            onPictureInPictureChanged?.({ isInPictureInPicture: true, width: 0, height: 0 })
+          }}
+          onPictureInPictureStop={() => {
+            suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+            onPictureInPictureChanged?.({ isInPictureInPicture: false, width: 0, height: 0 })
+          }}
+        />
+      )}
       {children}
     </View>
   )
@@ -660,7 +696,11 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: '#000',
   },
 })

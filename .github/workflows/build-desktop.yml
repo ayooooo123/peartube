@@ -12,6 +12,16 @@ on:
       - 'packages/bare-*/**'
       - '.github/actions/**'
       - '.github/workflows/build-desktop.yml'
+  pull_request:
+    paths:
+      - 'packages/app/**'
+      - 'packages/desktop-native/**'
+      - 'packages/backend/**'
+      - 'packages/platform/**'
+      - 'packages/spec/**'
+      - 'packages/bare-*/**'
+      - '.github/actions/**'
+      - '.github/workflows/build-desktop.yml'
   workflow_dispatch:
 
 permissions:

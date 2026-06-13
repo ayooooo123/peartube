@@ -46,11 +46,18 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:ecopy should clear stale workers/node_modules before copying',
   )
 
-  // ecopy must ship the self-contained bundle into the .app...
+  // ecopy must ship the packed JS bundle into the .app...
   assert.match(
     scripts['desktop:ecopy'],
     /rsync -a desktop-build\/build\/workers\/core\/index\.bundle /,
     'desktop:ecopy should copy index.bundle into the .app',
+  )
+  // ...and must ship the native addon files that bare-pack offloads beside the
+  // bundle. PearRuntime's sidecar dlopens native addons from the filesystem.
+  assert.match(
+    scripts['desktop:ecopy'],
+    /rsync -a desktop-build\/build\/workers\/core\/node_modules /,
+    'desktop:ecopy should copy offloaded native addons beside index.bundle',
   )
   // ...and must NOT rsync the raw @peartube source trees anymore (the bundle
   // inlines all @peartube JS, so the copied node_modules tree was the stale
@@ -67,14 +74,20 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
   )
 })
 
-test('desktop bundle builder packs a runnable, linked bare bundle', () => {
+test('desktop bundle builder packs a runnable bare bundle with filesystem native addons', () => {
   const source = fs.readFileSync(path.join(appRoot, 'scripts', 'build-desktop-bundle.mjs'), 'utf8')
 
   assert.match(source, /'--format', 'bundle'/, 'should emit a runnable bare bundle')
-  // Must NOT pass --linked: a standalone `bare index.bundle` needs the prebuilt
-  // addons embedded, not referenced as external linked: frameworks.
-  assert.doesNotMatch(source, /'--linked'/, 'should embed addons, not link them externally')
-  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons embed')
+  // Must NOT pass --linked: the Electrobun sidecar dlopens desktop `.bare`
+  // addons from disk, not linked mobile/native-sidecar frameworks.
+  assert.doesNotMatch(source, /'--linked'/, 'should not link mobile/native-sidecar addon frameworks')
+  assert.match(
+    source,
+    /'--offload-addons'/,
+    'should offload native addons to real files beside the bundle',
+  )
+  assert.match(source, /'--base'/, 'should set the bundle base so offloaded addon paths resolve beside index.bundle')
+  assert.match(source, /'--host'/, 'should target the host so the right prebuilt addons are offloaded')
   assert.match(source, /index\.bundle/, 'should write index.bundle')
   // Must be mtime-gated so desktop:start stays cheap when nothing changed.
   assert.match(source, /staleBundle|getSourceNewestMtimeMs/, 'should be mtime-gated')
@@ -100,6 +113,11 @@ test('desktop bundle builder packs a runnable, linked bare bundle', () => {
     source,
     /ensureNativeAddonSubmodules\(\)/,
     'should preflight native-addon submodules (bare-ffmpeg) before packing',
+  )
+  assert.match(
+    source,
+    /verifyOffloadedNativeAddons\(\)/,
+    'should verify the native addons needed at runtime were offloaded',
   )
 })
 
@@ -216,5 +234,30 @@ test('packaged desktop app ships the sibling hypercore reader worker with the ba
     workerSource,
     /const workerBaseDir = runtimeStorage \|\| os\.cwd\(\)/,
     'desktop worker must not derive bundled code paths from mutable storage',
+  )
+})
+
+test('desktop worker boots the universal backend with the real backend context', () => {
+  const workerSource = fs.readFileSync(path.join(appRoot, 'workers', 'desktop', 'index.ts'), 'utf8')
+
+  assert.match(
+    workerSource,
+    /import\s+\{\s*createBackendContext\s*\}\s+from\s+['"]@peartube\/backend\/orchestrator['"]/,
+    'desktop worker should import the real backend context factory',
+  )
+  assert.match(
+    workerSource,
+    /createBackend\(\{[\s\S]*createBackendContext,/,
+    'desktop worker should pass createBackendContext into createBackend',
+  )
+  assert.match(
+    workerSource,
+    /Backend context did not initialize required desktop services/,
+    'desktop worker should fail fast before exposing identity handlers without the real context',
+  )
+  assert.match(
+    workerSource,
+    /typeof identityManager\.getIdentities !== 'function'/,
+    'desktop worker should verify identityManager before getIdentities can be called',
   )
 })

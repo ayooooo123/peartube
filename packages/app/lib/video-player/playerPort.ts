@@ -129,18 +129,25 @@ export function resolvePlayerPort(value: unknown): PlayerPort | null {
   return isPlayerPort(value) ? value : null
 }
 
-export function createWebMsePlayerPort(video: HTMLVideoElement): PlayerPort {
+export function createWebMsePlayerPort(video: HTMLVideoElement): PlayerPort
+export function createWebMsePlayerPort(backend: LegacyPlayerRef): PlayerPort
+export function createWebMsePlayerPort(videoOrBackend: HTMLVideoElement | LegacyPlayerRef): PlayerPort {
+  const isVideoElement = typeof HTMLVideoElement !== 'undefined' && videoOrBackend instanceof HTMLVideoElement
+  const backend = isVideoElement
+    ? {
+        play: () => videoOrBackend.play(),
+        pause: () => videoOrBackend.pause(),
+        stop: () => {
+          videoOrBackend.pause()
+          videoOrBackend.currentTime = 0
+        },
+        seek: (timeSeconds: number) => { videoOrBackend.currentTime = Math.max(0, timeSeconds) },
+        setPlaybackRate: (rate: number) => { videoOrBackend.playbackRate = rate },
+      }
+    : videoOrBackend
+
   return createPlayerPort(
-    {
-      play: () => video.play(),
-      pause: () => video.pause(),
-      stop: () => {
-        video.pause()
-        video.currentTime = 0
-      },
-      seek: (timeSeconds: number) => { video.currentTime = Math.max(0, timeSeconds) },
-      setPlaybackRate: (rate: number) => { video.playbackRate = rate },
-    },
+    backend,
     {
       kind: 'web-mse',
       capabilities: {

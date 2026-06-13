@@ -34,6 +34,8 @@ test('legacy native and web player refs are adapted behind PlayerPort', () => {
   assert.match(source, /pause: \(\) => backend\.pause\?\.\(\) \?\? backend\.resume\?\.\(false\)/)
   assert.match(source, /seek: \(timeSeconds: number\) => backend\.seek\?\.\(Math\.max\(0, timeSeconds\)\)/)
   assert.match(source, /export function createWebMsePlayerPort\(video: HTMLVideoElement\): PlayerPort/)
+  assert.match(source, /export function createWebMsePlayerPort\(backend: LegacyPlayerRef\): PlayerPort/)
+  assert.match(source, /videoOrBackend: HTMLVideoElement \| LegacyPlayerRef/)
   assert.match(source, /kind: 'web-mse'/)
 })
 
@@ -61,10 +63,11 @@ test('native and web player components publish typed PlayerPort adapters', () =>
   assert.match(pearSource, /kind: 'native'/)
   assert.match(pearSource, /pictureInPicture: Platform\.OS === 'android'/)
 
-  const mseSource = readAppFile('components/video-player/MseVideoPlayer.web.tsx')
+  const mseSource = readAppFile('components/video-player/WebMseVideoBackend.web.tsx')
+  const mseTypesSource = readAppFile('components/video-player/WebMseVideoBackend.types.ts')
   assert.match(mseSource, /import \{ createWebMsePlayerPort, type PlayerPort \} from '@\/lib\/video-player'/)
-  assert.match(mseSource, /playerRef\?: React\.RefObject<PlayerPort \| null>/)
-  assert.match(mseSource, /playerRef\.current = createWebMsePlayerPort\(el\)/)
+  assert.match(mseTypesSource, /playerRef\?: React\.RefObject<PlayerPort \| null>/)
+  assert.match(mseSource, /const controller = createWebMseBackendController\(el\)[\s\S]*const port = createWebMsePlayerPort\(controller\)[\s\S]*playerRef\.current = port/)
 
   const verticalShortsSource = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
   assert.match(verticalShortsSource, /playerRef: RefObject<PlayerPort \| null>/)

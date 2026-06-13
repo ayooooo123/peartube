@@ -20,7 +20,6 @@ import { VideoGrid } from '@/components/video/VideoGrid.web'
 import { VideoCardProps } from '@/components/video/VideoCard.web'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/desktop/constants'
 import { PearInlineVideoView } from '@/components/video-player'
-import { MseVideoPlayer } from '@/components/video-player/MseVideoPlayer.web'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
@@ -28,7 +27,7 @@ import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
-import { getWatchPageKey, shouldUseMsePlayerForWatch } from '@/lib/watch-page-player-mode.mjs'
+import { getWatchPageKey, shouldUseMseBackendForWatch } from '@/lib/watch-page-mse-backend-mode.mjs'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -268,8 +267,8 @@ function WatchPageView({
   const watchPageKey = getWatchPageKey(channelKey, videoId)
   const [isActiveWatch, setIsActiveWatch] = useState(true)
   const [isPlaying, setIsPlaying] = useState(true)
-  const [msePlayerWatchKey, setMsePlayerWatchKey] = useState<string | null>(null)
-  const useMsePlayer = shouldUseMsePlayerForWatch(msePlayerWatchKey, watchPageKey)
+  const [mseBackendWatchKey, setMseBackendWatchKey] = useState<string | null>(null)
+  const useMseBackend = shouldUseMseBackendForWatch(mseBackendWatchKey, watchPageKey)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showControls, setShowControls] = useState(false)
@@ -541,7 +540,7 @@ function WatchPageView({
     return Array.from(merged.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
   }, [comments, pendingComments])
 
-  // Compat fallback for the MSE player: when the webview can't decode the
+  // Compat fallback for the MSE backend: when the webview can't decode the
   // source directly, ask the backend for a bare-ffmpeg transcode (local
   // fMP4-HLS) via webPreparePlayback. Returning null keeps today's behavior.
   const requestCompatPlayback = useCallback(async () => {
@@ -972,27 +971,6 @@ function WatchPageView({
                   <span style={watchStyles.castSubtitle}>{video?.title}</span>
                 </div>
               </div>
-            ) : isActiveWatch && videoUrl && useMsePlayer ? (
-              <MseVideoPlayer
-                videoUrl={videoUrl}
-                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
-                playerRef={videoRef}
-                requestCompatPlayback={requestCompatPlayback}
-                isPlaying={isPlaying}
-                onPlaying={() => setIsPlaying(true)}
-                onPaused={() => setIsPlaying(false)}
-                onLoad={(data: any) => {
-                  if (data?.durationMs > 0) setDuration(data.durationMs / 1000)
-                  else if (data?.duration > 0) setDuration(data.duration)
-                  setIsLoading(false)
-                }}
-                onProgress={(data: any) => {
-                  if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
-                  if (data?.duration > 0) setDuration(data.duration / 1000)
-                }}
-                onEnded={() => {}}
-                onError={(err: any) => setError(err?.message || String(err))}
-              />
             ) : isActiveWatch && videoUrl ? (
               <PearInlineVideoView
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -1000,6 +978,8 @@ function WatchPageView({
                 videoUrl={videoUrl || ''}
                 playbackSession={playbackSession}
                 currentVideoKey={`${channelKey}:${video?.id || videoId}`}
+                webPlaybackBackend={useMseBackend ? 'mse' : 'native'}
+                requestCompatPlayback={requestCompatPlayback}
                 isPlaying={isPlaying}
                 playbackRate={1}
                 videoTitle={video?.title}
@@ -1016,9 +996,9 @@ function WatchPageView({
                 }}
                 onError={(err: any) => {
                   const code = err?.error?.code || err?.code
-                  if (code == 4) {
-                    console.log('[WatchPage] Native player failed (code 4), switching to MSE player')
-                    setMsePlayerWatchKey(watchPageKey)
+                  if (!useMseBackend && code == 4) {
+                    console.log('[WatchPage] Native player failed (code 4), switching to MSE backend')
+                    setMseBackendWatchKey(watchPageKey)
                     return
                   }
                   setError(err?.message || err?.error?.errorString || String(err))

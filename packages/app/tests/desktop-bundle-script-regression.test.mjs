@@ -28,6 +28,15 @@ test('desktop:bundle is wired into the desktop build + launch pipeline', () => {
     'desktop:build should bundle the worker after compiling it',
   )
 
+  // The packed bundle must be runtime-smoke-tested (native addons must dlopen),
+  // not just built — a build-only check can't catch the embedded-addon ENOTDIR
+  // crash.
+  assert.equal(
+    scripts['desktop:smoke'],
+    'node ./scripts/smoke-desktop-bundle.mjs',
+    'desktop:smoke should run the bundle smoke test',
+  )
+
   // A bare `desktop:start` must be self-sufficient: recompile the worker,
   // re-bundle, AND rebuild the launcher (electrobun build, via desktop:ebuild)
   // so it can never run a stale compiled bun main that spawns a leftover

@@ -26,6 +26,7 @@
     "desktop:merge": "mkdir -p desktop-build && rm -rf desktop-build/_expo desktop-build/assets && rm -f desktop-build/*.html desktop-build/metadata.json desktop-build/favicon.ico && rsync -av .desktop-export/ desktop-build/ && rm -rf .desktop-export",
     "desktop:worker": "mkdir -p desktop-build/build/workers/core desktop-build/build/workers && npx swc workers/desktop/index.ts -o desktop-build/build/workers/core/index.mjs && cp ../backend/src/transcode/hypercore-reader-worker.mjs desktop-build/build/workers/hypercore-reader-worker.mjs",
     "desktop:bundle": "node ./scripts/build-desktop-bundle.mjs",
+    "desktop:smoke": "node ./scripts/smoke-desktop-bundle.mjs",
     "desktop:build": "npm run desktop:export && npm run desktop:merge && npm run desktop:worker && npm run desktop:bundle",
     "desktop:start": "npm run desktop:worker && npm run desktop:bundle && npm run desktop:ebuild && build/dev-macos-arm64/PearTube-dev.app/Contents/MacOS/launcher",
     "desktop:ebuild": "electrobun build && npm run desktop:ecopy",

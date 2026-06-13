@@ -57,6 +57,10 @@ jobs:
         working-directory: packages/app
         run: npm run desktop:build
 
+      - name: Smoke-test the worker bundle (native addons dlopen)
+        working-directory: packages/app
+        run: npm run desktop:smoke
+
       - name: Build Electrobun desktop app
         working-directory: packages/app
         run: npm run desktop:ebuild

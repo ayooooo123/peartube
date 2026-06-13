@@ -19,13 +19,14 @@ test('Android keeps initial desired play state when expo-video emits a pre-play 
   assert.doesNotMatch(handler, /Platform\.OS === 'web' && !hasReceivedPlayEventRef\.current/, 'the pre-play paused guard must not be web-only')
 })
 
-test('Android verifies each play request against native state until the first play event', async () => {
+test('native inline player verifies each play request against native state until the first play event', async () => {
   const src = await source(inlineViewPath)
 
   const verifyStart = src.indexOf('const scheduleAutoplayVerify')
   assert.notEqual(verifyStart, -1, 'expected a scheduleAutoplayVerify helper — event-driven guards alone miss dropped play() calls that leave ExoPlayer paused without emitting further events')
   const verify = src.slice(verifyStart, src.indexOf('}, [clearAutoplayVerify])', verifyStart))
 
+  assert.doesNotMatch(verify, /Platform\.OS === 'web'\) return/, 'desktop web playback must also retry a dropped initial play() call')
   assert.match(verify, /attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS\) return/, 'verification must be bounded — no standing interval, just a capped retry chain')
   assert.match(verify, /scheduleAutoplayVerify\(attempt \+ 1\)/, 'a failed verification must re-arm itself, since the dropped-play state emits no event to react to')
   assert.match(verify, /hasReceivedPlayEventRef\.current \|\| !isPlayingRef\.current\) return/, 'verification stops once a real play event arrived or playback is no longer desired')

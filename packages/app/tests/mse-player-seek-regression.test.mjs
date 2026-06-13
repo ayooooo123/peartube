@@ -56,7 +56,7 @@ test('MSE backend exposes Expo-style controller controls through PlayerPort', as
   assert.match(src, /set currentTime\(value: number\)/)
   assert.match(src, /function createWebMseBackendController\(el: HTMLVideoElement\): WebMseBackendController/)
   assert.match(src, /const controller = createWebMseBackendController\(el\)[\s\S]*createWebMsePlayerPort\(controller\)/)
-  assert.match(src, /const controller = mseBackendControllerRef\.current[\s\S]*if \(isPlaying\)[\s\S]*controller\.play\(\)\.catch\(\(\) => \{\}\)[\s\S]*else[\s\S]*controller\.pause\(\)/)
+  assert.match(src, /const controller = mseBackendControllerRef\.current[\s\S]*if \(isPlaying\)[\s\S]*requestDesiredPlayback\(\)[\s\S]*else[\s\S]*controller\.pause\(\)/)
 })
 
 test('MSE backend reports the full duration up front so the whole timeline is seekable', async () => {
@@ -109,15 +109,45 @@ test('MSE backend follows the parent playback state instead of forcing playback 
   assert.match(src, /const isPlayingRef = useRef\(isPlaying\)/, 'MSE backend should retain the latest desired playback state')
   assert.match(
     src,
-    /useEffect\(\(\) => \{[\s\S]*const controller = mseBackendControllerRef\.current[\s\S]*if \(isPlaying\)[\s\S]*controller\.play\(\)\.catch\(\(\) => \{\}\)[\s\S]*else[\s\S]*controller\.pause\(\)/,
+    /useEffect\(\(\) => \{[\s\S]*const controller = mseBackendControllerRef\.current[\s\S]*if \(isPlaying\)[\s\S]*requestDesiredPlayback\(\)[\s\S]*else[\s\S]*controller\.pause\(\)/,
     'MSE backend should react to parent play/pause state changes'
   )
   assert.match(
     src,
-    /if \(isPlayingRef\.current\) \{[\s\S]*el\.play\(\)\.catch\(\(\) => \{\}\)[\s\S]*\}/,
+    /if \(isPlayingRef\.current\) \{[\s\S]*requestDesiredPlayback\(\)[\s\S]*\}/,
     'MSE pipeline should only auto-start when the parent still wants playback'
   )
   assert.doesNotMatch(src, /\sautoPlay\s*[\r\n>]/, 'MSE backend video element should not bypass parent playback state with autoPlay')
+})
+
+test('MSE backend retries desired autoplay when the first play call is dropped', async () => {
+  const src = await source(mseBackendPath)
+
+  assert.match(
+    src,
+    /const requestDesiredPlayback = useCallback\(/,
+    'MSE backend should centralize desired playback requests so rejected early play() calls can be retried',
+  )
+  assert.match(
+    src,
+    /mseAutoplayRetryTimerRef/,
+    'MSE backend should keep a retry timer for startup play() calls that race MediaSource readiness',
+  )
+  assert.match(
+    src,
+    /catch\(\(\) => \{[\s\S]*scheduleMseAutoplayRetry/,
+    'a rejected play() promise should schedule a retry while playback is still desired',
+  )
+  assert.match(
+    src,
+    /if \(isPlayingRef\.current\) \{[\s\S]*requestDesiredPlayback\(\)[\s\S]*\}/,
+    'newly appended MSE data should reassert playback intent without requiring a pause/play toggle',
+  )
+  assert.match(
+    src,
+    /requestAutoplay: requestDesiredPlayback/,
+    'compat HLS fallback should use the same retrying autoplay request path',
+  )
 })
 
 test('format errors skip stall recovery so the desktop MSE fallback still triggers promptly', async () => {

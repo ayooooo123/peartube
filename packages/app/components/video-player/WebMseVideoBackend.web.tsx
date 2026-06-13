@@ -51,6 +51,8 @@ const POLL_MS = 250           // Pump idle poll interval
 const MAX_PENDING_SEGMENTS = 64 // Hard cap on segments awaiting append
 const PLAYLIST_POLL_MS = 1000   // Compat path: live playlist refresh interval
 const PLAYLIST_READY_TIMEOUT_MS = 30000 // Compat path: max wait for first segment
+const MSE_AUTOPLAY_RETRY_MAX_ATTEMPTS = 5
+const MSE_AUTOPLAY_RETRY_BASE_DELAY_MS = 150
 
 interface Segment {
   time: number       // Fragment start timestamp in seconds (absolute)
@@ -186,8 +188,9 @@ async function runCompatHlsPipeline(opts: {
   onError?: (error: any) => void
   setDispose: (fn: () => void) => void
   shouldAutoPlay?: () => boolean
+  requestAutoplay?: () => void
 }): Promise<void> {
-  const { el, hlsUrl, videoCodecString, durationHint, onLoad, onError, setDispose, shouldAutoPlay } = opts
+  const { el, hlsUrl, videoCodecString, durationHint, onLoad, onError, setDispose, shouldAutoPlay, requestAutoplay } = opts
 
   const ctl = { disposed: false, generation: 0 }
   const stale = (gen: number) => ctl.disposed || gen !== ctl.generation
@@ -309,7 +312,7 @@ async function runCompatHlsPipeline(opts: {
       if (!playbackStarted) {
         playbackStarted = true
         if (shouldAutoPlay?.() ?? true) {
-          el.play().catch(() => {})
+          requestAutoplay?.()
         }
       }
       index++
@@ -376,6 +379,8 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
   const disposeRef = useRef<(() => void) | null>(null)
   const mseBackendPortRef = useRef<PlayerPort | null>(null)
   const mseBackendControllerRef = useRef<WebMseBackendController | null>(null)
+  const mseAutoplayRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const requestDesiredPlaybackRef = useRef<(attempt?: number) => void>(() => {})
   const callbacksRef = useRef({
     onLoad,
     onProgress,
@@ -397,20 +402,55 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
   }
   isPlayingRef.current = isPlaying
 
+  const clearMseAutoplayRetry = useCallback(() => {
+    if (mseAutoplayRetryTimerRef.current) {
+      clearTimeout(mseAutoplayRetryTimerRef.current)
+      mseAutoplayRetryTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleMseAutoplayRetry = useCallback((attempt: number = 0) => {
+    clearMseAutoplayRetry()
+    if (attempt >= MSE_AUTOPLAY_RETRY_MAX_ATTEMPTS) return
+    mseAutoplayRetryTimerRef.current = setTimeout(() => {
+      mseAutoplayRetryTimerRef.current = null
+      if (!isPlayingRef.current) return
+      requestDesiredPlaybackRef.current(attempt)
+    }, MSE_AUTOPLAY_RETRY_BASE_DELAY_MS * 2 ** attempt)
+  }, [clearMseAutoplayRetry])
+
+  const requestDesiredPlayback = useCallback((attempt: number = 0) => {
+    const controller = mseBackendControllerRef.current
+    if (!controller || !isPlayingRef.current) return
+    controller.play().catch(() => {
+      scheduleMseAutoplayRetry(attempt + 1)
+    })
+  }, [scheduleMseAutoplayRetry])
+
+  useEffect(() => {
+    requestDesiredPlaybackRef.current = requestDesiredPlayback
+  }, [requestDesiredPlayback])
+
   useEffect(() => {
     const controller = mseBackendControllerRef.current
     if (!controller) return
     if (isPlaying) {
-      controller.play().catch(() => {})
+      requestDesiredPlayback()
     } else {
+      clearMseAutoplayRetry()
       controller.pause()
     }
-  }, [isPlaying])
+  }, [clearMseAutoplayRetry, isPlaying, requestDesiredPlayback])
+
+  useEffect(() => () => {
+    clearMseAutoplayRetry()
+  }, [clearMseAutoplayRetry])
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
     if (!el) {
       disposeRef.current?.()
       disposeRef.current = null
+      clearMseAutoplayRetry()
       initStarted.current = false
       videoElRef.current = null
       mseBackendControllerRef.current = null
@@ -524,6 +564,7 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
               onError: (error) => callbacksRef.current.onError?.(error),
               setDispose: (fn) => { compatDisposeRef.current = fn },
               shouldAutoPlay: () => isPlayingRef.current,
+              requestAutoplay: requestDesiredPlayback,
             })
             return
           }
@@ -664,7 +705,7 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
               if (!playbackStarted) {
                 playbackStarted = true
                 if (isPlayingRef.current) {
-                  el.play().catch(() => {})
+                  requestDesiredPlayback()
                 }
               }
             }
@@ -781,7 +822,7 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
         callbacksRef.current.onError?.({ message: err?.message || 'MSE error' })
       }
     })()
-  }, [videoUrl, playerRef])
+  }, [clearMseAutoplayRetry, playerRef, requestDesiredPlayback, videoUrl])
 
   return (
     <video

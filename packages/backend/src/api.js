@@ -300,6 +300,173 @@ export function createApi({
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
   const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
+  const activeOnDemandPlaybackStats = new Map() // key: normalized stats key -> { core, cleanup }
+
+  function cleanupOnDemandPlaybackStats(statsKey) {
+    const active = activeOnDemandPlaybackStats.get(statsKey)
+    if (!active) return
+    try { active.cleanup?.() } catch { /* best effort */ }
+    activeOnDemandPlaybackStats.delete(statsKey)
+  }
+
+  async function countInitialBlobBlocks(core, startBlock, endBlock, totalBlocks) {
+    try {
+      if (await core.has(startBlock, endBlock)) return totalBlocks
+    } catch { /* best effort */ }
+
+    if (totalBlocks <= 512) {
+      let available = 0
+      for (let index = startBlock; index < endBlock; index++) {
+        try {
+          if (await core.has(index)) available++
+        } catch { /* best effort */ }
+      }
+      return available
+    }
+
+    const sampleSize = Math.min(totalBlocks, 20)
+    const step = Math.max(1, Math.floor(totalBlocks / sampleSize))
+    let sampledHits = 0
+    let sampledTotal = 0
+    for (let index = startBlock; index < endBlock; index += step) {
+      try {
+        if (await core.has(index)) sampledHits++
+      } catch { /* best effort */ }
+      sampledTotal++
+    }
+    return sampledTotal > 0 ? Math.round((sampledHits / sampledTotal) * totalBlocks) : 0
+  }
+
+  async function startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef) {
+    if (!videoStats || !ctx?.store || !playbackBlobRef?.blobsCoreKey || !playbackBlobRef?.blobId) return null
+
+    const blobsCoreKey = normalizeBlobsCoreKey(playbackBlobRef.blobsCoreKey)
+    const blob = normalizeBlobRefInput(playbackBlobRef.blobId) || parseBlobRef(playbackBlobRef)?.blob
+    if (!blobsCoreKey || !blob) return null
+
+    const statsKey = getStatsKey(driveKey, videoPath)
+    if (activeRangeRequests.has(encodeIndexKey(driveKey || '', videoPath || ''))) {
+      return typeof videoStats.getStats === 'function' ? videoStats.getStats(driveKey, videoPath) : null
+    }
+
+    try {
+      cleanupOnDemandPlaybackStats(statsKey)
+      try { videoStats.cleanupMonitor(driveKey, videoPath) } catch { /* best effort */ }
+
+      const keyBuf = b4a.from(blobsCoreKey, 'hex')
+      const core = ctx.store.get({ key: keyBuf })
+      await core.ready()
+
+      const startBlock = blob.blockOffset
+      const totalBlocks = blob.blockLength
+      const endBlock = startBlock + totalBlocks
+      const totalBytes = blob.byteLength || playbackBlobRef.byteLength || 0
+      const initialBlocks = await countInitialBlobBlocks(core, startBlock, endBlock, totalBlocks)
+      const wasCached = totalBlocks > 0 && initialBlocks >= totalBlocks
+      const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
+      const peerDetails = describeCorePeerDetails(core)
+
+      let downloadedBlocks = 0
+      let downloadedBytesTotal = 0
+      let downloadSpeed = 0
+      let lastSpeedTime = Date.now()
+      let lastSpeedBytes = 0
+      let uploadedBytesTotal = 0
+      let uploadSpeed = 0
+      let lastUploadTime = Date.now()
+      let lastUploadBytes = 0
+      const downloadedIndices = new Set()
+
+      const onDownload = (index, byteLength) => {
+        if (typeof index !== 'number') return
+        if (index < startBlock || index >= endBlock) return
+        if (!downloadedIndices.has(index)) {
+          downloadedIndices.add(index)
+          downloadedBlocks = downloadedIndices.size
+        }
+
+        const chunkBytes =
+          typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
+            ? byteLength
+            : bytesPerBlock
+        downloadedBytesTotal += chunkBytes
+        const now = Date.now()
+        const elapsed = (now - lastSpeedTime) / 1000
+        if (elapsed >= 0.5) {
+          const deltaBytes = downloadedBytesTotal - lastSpeedBytes
+          downloadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
+          lastSpeedBytes = downloadedBytesTotal
+          lastSpeedTime = now
+        }
+
+        const totalDownloaded = initialBlocks + downloadedBlocks
+        const isComplete = totalBlocks > 0 && totalDownloaded >= totalBlocks
+        videoStats.updateStats(driveKey, videoPath, {
+          status: isComplete ? 'complete' : 'downloading',
+          downloadedBlocks,
+          initialBlocks,
+          peerCount: describeCorePeerDetails(core).peerCount,
+        })
+        videoStats.emitStats(driveKey, videoPath, isComplete)
+      }
+
+      const onUpload = (index, byteLength) => {
+        if (typeof index !== 'number') return
+        if (index < startBlock || index >= endBlock) return
+        const chunkBytes =
+          typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
+            ? byteLength
+            : bytesPerBlock
+        uploadedBytesTotal += chunkBytes
+        const now = Date.now()
+        const elapsed = (now - lastUploadTime) / 1000
+        if (elapsed >= 0.5) {
+          const deltaBytes = uploadedBytesTotal - lastUploadBytes
+          uploadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
+          lastUploadBytes = uploadedBytesTotal
+          lastUploadTime = now
+        }
+
+        videoStats.updateStats(driveKey, videoPath, {
+          peerCount: describeCorePeerDetails(core).peerCount,
+        })
+        videoStats.emitStats(driveKey, videoPath)
+      }
+
+      videoStats.updateStats(driveKey, videoPath, {
+        status: wasCached ? 'complete' : 'downloading',
+        startTime: Date.now(),
+        totalBlocks,
+        totalBytes,
+        initialBlocks,
+        downloadedBlocks: 0,
+        peerCount: peerDetails.peerCount,
+      })
+
+      const monitor = {
+        downloadSpeed: () => (Date.now() - lastSpeedTime > 2000 ? 0 : downloadSpeed),
+        uploadSpeed: () => (Date.now() - lastUploadTime > 2000 ? 0 : uploadSpeed),
+      }
+      core.on('download', onDownload)
+      core.on('upload', onUpload)
+      videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
+        try { core.off('download', onDownload) } catch { /* best effort */ }
+        try { core.off('upload', onUpload) } catch { /* best effort */ }
+        activeOnDemandPlaybackStats.delete(statsKey)
+      })
+      activeOnDemandPlaybackStats.set(statsKey, {
+        core,
+        cleanup: () => videoStats.cleanupMonitor(driveKey, videoPath),
+      })
+      videoStats.emitStats(driveKey, videoPath, true)
+
+      return videoStats.getStats(driveKey, videoPath)
+    } catch (err) {
+      console.log('[API] on-demand playback stats unavailable:', err?.message || err)
+      cleanupOnDemandPlaybackStats(statsKey)
+      return null
+    }
+  }
 
   function getActiveRangeSeedKeys() {
     const keys = new Set()
@@ -367,6 +534,40 @@ export function createApi({
     }
   }
 
+  function getStatsKey(driveKey, videoPath) {
+    return typeof videoStats?.getKey === 'function'
+      ? videoStats.getKey(driveKey, videoPath)
+      : encodeIndexKey(driveKey || '', normalizeVideoId(videoPath) || videoPath || '')
+  }
+
+  function describeCorePeerDetails(core) {
+    const peers = core?.peers
+    const peerList = Array.isArray(peers)
+      ? peers
+      : peers && typeof peers.values === 'function'
+        ? Array.from(peers.values())
+        : []
+    const peerCount = Array.isArray(peers)
+      ? peers.length
+      : typeof peers?.length === 'number'
+        ? peers.length
+        : typeof peers?.size === 'number'
+          ? peers.size
+          : peerList.length
+    const blobPeerIds = peerList.map((peer) => {
+      try {
+        const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey
+        if (!key) return null
+        const hex = typeof key === 'string' ? key : b4a.toString(key, 'hex')
+        return /^[a-f0-9]{64}$/i.test(hex) ? hex : null
+      } catch {
+        return null
+      }
+    }).filter(Boolean)
+    const blobCoreKey = core?.key ? b4a.toString(core.key, 'hex') : null
+    return { peerCount, blobPeerIds, blobCoreKey }
+  }
+
   function getVideoCorePeerDetails(driveKey, videoPath) {
     try {
       const channel = ctx.channels?.get?.(driveKey)
@@ -381,32 +582,11 @@ export function createApi({
       for (const candidate of candidates) {
         const core = channel?.videoCores?.get?.(candidate) || channel?.cores?.get?.(candidate)
         if (!core) continue
-        const peers = core.peers
-        const peerList = Array.isArray(peers)
-          ? peers
-          : peers && typeof peers.values === 'function'
-            ? Array.from(peers.values())
-            : []
-        const peerCount = Array.isArray(peers)
-          ? peers.length
-          : typeof peers?.length === 'number'
-            ? peers.length
-            : typeof peers?.size === 'number'
-              ? peers.size
-              : peerList.length
-        const blobPeerIds = peerList.map((peer) => {
-          try {
-            const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey
-            if (!key) return null
-            const hex = typeof key === 'string' ? key : b4a.toString(key, 'hex')
-            return /^[a-f0-9]{64}$/i.test(hex) ? hex : null
-          } catch {
-            return null
-          }
-        }).filter(Boolean)
-        const blobCoreKey = core.key ? b4a.toString(core.key, 'hex') : null
-        return { peerCount, blobPeerIds, blobCoreKey }
+        return describeCorePeerDetails(core)
       }
+
+      const directPlayback = activeOnDemandPlaybackStats.get(getStatsKey(driveKey, videoPath))
+      if (directPlayback?.core) return describeCorePeerDetails(directPlayback.core)
     } catch { /* best effort */ }
 
     return { peerCount: 0, blobPeerIds: [], blobCoreKey: null }
@@ -1200,6 +1380,7 @@ export function createApi({
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
       const startedAt = Date.now()
+      const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
 
       // Resolve-and-stream: getVideoUrl returns a blob-server URL and joins the
       // blob core to swarm discovery so the server can fetch byte ranges on
@@ -1215,6 +1396,8 @@ export function createApi({
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),
       })
+      const playbackStats = await startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
+      if (playbackStats) prepared.stats = this.getVideoStats(driveKey, videoPath)
 
       trackPlaybackTiming({
         at: startedAt,

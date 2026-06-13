@@ -1,4 +1,5 @@
 import test from 'brittle'
+import { EventEmitter } from 'node:events'
 
 import { createApi } from '../src/api.js'
 
@@ -150,6 +151,78 @@ test('preparePlayback resolves feed preview blob refs when playback request omit
   // so flush the microtask that follows blobsCore.ready().
   await new Promise((resolve) => setTimeout(resolve, 0))
   t.ok(calls.some((call) => call[0] === 'swarm.join'), 'joins selected blob discovery so the blob server can stream on demand')
+})
+
+test('preparePlayback initializes direct on-demand playback stats from blob range downloads', async (t) => {
+  const driveKey = 'channel-key'
+  const videoPath = 'videos/demo.mp4'
+  const blobsCoreKey = '78'.repeat(32)
+  const blobId = '5:4:0:4096'
+  const calls = []
+  const core = new EventEmitter()
+  core.key = Buffer.from(blobsCoreKey, 'hex')
+  core.discoveryKey = Buffer.from('discovery-key')
+  core.peers = [{ remotePublicKey: Buffer.from('a'.repeat(64), 'hex') }]
+  core.ready = async () => { calls.push(['core.ready']) }
+  core.update = () => Promise.resolve()
+  core.has = async (start, end) => {
+    calls.push(['core.has', start, end])
+    return false
+  }
+
+  const api = createApi({
+    ctx: {
+      blobServer: {
+        port: 60023,
+        getLink(_keyBuffer, options) {
+          calls.push(['getLink', options.blob, options.type])
+          return 'http://127.0.0.1:60023/demo.mp4'
+        },
+      },
+      store: {
+        get() {
+          calls.push(['store.get'])
+          return core
+        },
+      },
+      swarm: {
+        connections: new Set([1, 2]),
+        join(discoveryKey) {
+          calls.push(['swarm.join', discoveryKey])
+          return { flushed: () => Promise.resolve() }
+        },
+      },
+      channels: new Map(),
+    },
+    videoStats: new (await import('../src/video-stats.js')).VideoStatsTracker(),
+  })
+
+  const prepared = await api.preparePlayback(
+    driveKey,
+    videoPath,
+    null,
+    blobId,
+    blobsCoreKey,
+    'video/mp4',
+  )
+
+  t.is(prepared.url, 'http://127.0.0.1:60023/demo.mp4')
+  t.is(prepared.stats.status, 'downloading')
+  t.is(prepared.stats.totalBlocks, 4)
+  t.is(prepared.stats.totalBytes, 4096)
+  t.is(prepared.stats.peerCount, 1)
+
+  core.emit('download', 5, 1024)
+  const stats = api.getVideoStats(driveKey, videoPath)
+
+  t.is(stats.status, 'downloading')
+  t.is(stats.downloadedBlocks, 1)
+  t.is(stats.downloadedBytes, 1024)
+  t.is(stats.progress, 25)
+  t.is(stats.peerCount, 1)
+  t.alike(stats.blobPeerIds, ['a'.repeat(64)])
+  t.is(stats.blobCoreKey, blobsCoreKey)
+  t.absent(calls.find((call) => call[0] === 'prefetchVideo'), 'direct playback stats must not start full-file prefetch')
 })
 
 test('prefetchNextVideos lists channel videos with the correct signature', async (t) => {

@@ -15,7 +15,7 @@ test('Android keeps initial desired play state when expo-video emits a pre-play 
   const handler = src.slice(handlerStart, src.indexOf("useEventListener(player, 'statusChange'", handlerStart))
 
   assert.match(handler, /!hasReceivedPlayEventRef\.current && isPlayingRef\.current/, 'pre-play paused events while desired playback is true should be ignored')
-  assert.match(handler, /player\.play\(\)/, 'ignored pre-play paused events should reassert native play')
+  assert.match(handler, /requestNativePlayback\(\)/, 'ignored pre-play paused events should reassert native play')
   assert.doesNotMatch(handler, /Platform\.OS === 'web' && !hasReceivedPlayEventRef\.current/, 'the pre-play paused guard must not be web-only')
 })
 
@@ -35,11 +35,30 @@ test('native inline player verifies each play request against native state until
   const applySourceStart = src.indexOf('const applySource = async () => {')
   assert.notEqual(applySourceStart, -1, 'expected the applySource effect')
   const applySource = src.slice(applySourceStart, src.indexOf('void applySource()', applySourceStart))
-  assert.match(applySource, /player\.play\(\)\s*\n\s*scheduleAutoplayVerify\(\)/, 'applying a source with desired playback must schedule a verification')
+  assert.match(applySource, /requestNativePlayback\(\)\s*\n\s*scheduleAutoplayVerify\(\)/, 'applying a source with desired playback must schedule a verification')
 
   const playingChangeStart = src.indexOf("useEventListener(player, 'playingChange'")
   const playingChange = src.slice(playingChangeStart, src.indexOf("useEventListener(player, 'statusChange'", playingChangeStart))
   assert.match(playingChange, /hasReceivedPlayEventRef\.current = true[\s\S]*clearAutoplayVerify\(\)/, 'the first native play event must cancel pending verification')
+})
+
+test('desktop web autoplay verification uses the real HTML video element state', async () => {
+  const src = await source(inlineViewPath)
+
+  assert.match(src, /const nativeVideoViewRef = useRef<any>\(null\)/, 'desktop web should retain the VideoView ref that exposes the underlying HTML video element')
+  assert.match(src, /function getWebNativeVideoElement\(\)/, 'desktop web should have a helper for reading VideoView.nativeRef.current')
+  assert.match(src, /nativeVideoViewRef\.current\?\.nativeRef\?\.current/, 'the helper should read Expo VideoView nativeRef.current on web')
+  assert.match(
+    src,
+    /const webVideo = getWebNativeVideoElement\(\)[\s\S]*webVideo\.paused[\s\S]*webVideo\.play\(\)/,
+    'verification must use HTMLVideoElement.paused/play() because expo-video web sets player.playing optimistically',
+  )
+  assert.match(
+    src,
+    /onFirstFrameRender=\{\(\) => \{[\s\S]*requestNativePlayback\(\)/,
+    'loaded first-frame events should reassert desired playback on desktop web without waiting for a pause/play toggle',
+  )
+  assert.match(src, /ref=\{nativeVideoViewRef\}/, 'VideoView should receive the ref used for real web video state')
 })
 
 test('Android reasserts desired play when source first becomes ready before native playing event', async () => {
@@ -48,6 +67,6 @@ test('Android reasserts desired play when source first becomes ready before nati
   assert.notEqual(handlerStart, -1, 'expected expo-video statusChange handler')
   const handler = src.slice(handlerStart, src.indexOf("useEventListener(player, 'playToEnd'", handlerStart))
 
-  assert.match(handler, /status === 'readyToPlay'[\s\S]*!hasReceivedPlayEventRef\.current[\s\S]*isPlayingRef\.current[\s\S]*player\.play\(\)/, 'readyToPlay should reassert play when Android has desired playback but has not emitted native playing yet')
+  assert.match(handler, /status === 'readyToPlay'[\s\S]*!hasReceivedPlayEventRef\.current[\s\S]*isPlayingRef\.current[\s\S]*requestNativePlayback\(\)/, 'readyToPlay should reassert play when Android has desired playback but has not emitted native playing yet')
   assert.ok(handler.indexOf("status === 'readyToPlay'") < handler.indexOf('Date.now() <= seekPlaybackRecoveryUntilRef.current'), 'initial ready-to-play reassertion should run before seek-only recovery')
 })

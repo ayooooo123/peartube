@@ -145,6 +145,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const pipExitPlayingRef = useRef(false)
   const wasInPipRef = useRef(isInPipMode)
   const playerRefForCallbacks = useRef<VideoPlayer | null>(null)
+  const nativeVideoViewRef = useRef<any>(null)
   const previousStatusRef = useRef<string | null>(null)
   const seekPlaybackRecoveryUntilRef = useRef(0)
   const isPlayingRef = useRef(isPlaying)
@@ -242,6 +243,25 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     }
   }, [])
 
+  function getWebNativeVideoElement() {
+    if (Platform.OS !== 'web') return null
+    return nativeVideoViewRef.current?.nativeRef?.current ?? null
+  }
+
+  const requestNativePlayback = useCallback(() => {
+    const webVideo = getWebNativeVideoElement()
+    if (webVideo) {
+      try {
+        const playResult = webVideo.play()
+        playResult?.catch?.(() => {})
+      } catch {
+        // A blocked web play can be retried by the bounded verifier.
+      }
+      return
+    }
+    player.play()
+  }, [player])
+
   const scheduleAutoplayVerify = useCallback((attempt: number = 0) => {
     clearAutoplayVerify()
     if (attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS) return
@@ -251,7 +271,15 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       const currentPlayer = playerRefForCallbacks.current
       if (!currentPlayer) return
       try {
-        if (!currentPlayer.playing) currentPlayer.play()
+        const webVideo = getWebNativeVideoElement()
+        if (webVideo) {
+          if (webVideo.paused && !webVideo.ended) {
+            const playResult = webVideo.play()
+            playResult?.catch?.(() => {})
+          }
+        } else if (!currentPlayer.playing) {
+          currentPlayer.play()
+        }
       } catch {
         // The player can be mid source-replace or already released; the next
         // verification retries.
@@ -280,7 +308,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         player.showNowPlayingNotification = notificationControlsRef.current
         player.staysActiveInBackground = notificationControlsRef.current
         if (isPlayingRef.current) {
-          player.play()
+          requestNativePlayback()
           scheduleAutoplayVerify()
         }
       } catch (error) {
@@ -302,7 +330,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return () => {
       cancelled = true
     }
-  }, [player, scheduleAutoplayVerify, useMseBackend, videoSource])
+  }, [player, requestNativePlayback, scheduleAutoplayVerify, useMseBackend, videoSource])
 
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
@@ -363,7 +391,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
             player.currentTime = resumeAt
           }
           if (isPlayingRef.current) {
-            player.play()
+            requestNativePlayback()
           }
         } catch (recoveryError) {
           if (sourceReplaceGenerationRef.current !== generation) return
@@ -377,7 +405,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       })()
     }, PLAYBACK_ERROR_RECOVERY_BASE_DELAY_MS * attempt)
     return true
-  }, [onBuffering, player, videoSource])
+  }, [onBuffering, player, requestNativePlayback, videoSource])
 
   const tryRecoverFromPlaybackErrorRef = useRef(tryRecoverFromPlaybackError)
   useEffect(() => {
@@ -453,14 +481,14 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (useMseBackend) return
     isPlayingRef.current = isPlaying
     if (isPlaying) {
-      player.play()
+      requestNativePlayback()
       if (!hasReceivedPlayEventRef.current) {
         scheduleAutoplayVerify()
       }
     } else {
       player.pause()
     }
-  }, [player, isPlaying, scheduleAutoplayVerify, useMseBackend])
+  }, [player, isPlaying, requestNativePlayback, scheduleAutoplayVerify, useMseBackend])
 
   useEffect(() => {
     if (useMseBackend) return
@@ -592,7 +620,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
     if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
       try {
-        player.play()
+        requestNativePlayback()
       } catch {
         // Best effort: keep JS desired playback state from being cancelled by
         // an expo-video paused event emitted before the first native play event.
@@ -617,13 +645,13 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         onBuffering?.({ isBuffering: false })
         if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
           try {
-            player.play()
+            requestNativePlayback()
           } catch {
             // Best effort: Android can report readyToPlay while remaining
             // paused if play() was requested before the source was ready.
           }
         } else if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
-          player.play()
+          requestNativePlayback()
         }
       }
     }
@@ -667,6 +695,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         />
       ) : (
         <VideoView
+          ref={nativeVideoViewRef}
           player={player}
           style={StyleSheet.absoluteFill}
           contentFit="contain"
@@ -677,6 +706,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
           onFirstFrameRender={() => {
             hasRenderedFrameRef.current = true
             onBuffering?.({ isBuffering: false })
+            if (isPlayingRef.current) requestNativePlayback()
           }}
           onPictureInPictureStart={() => {
             suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000

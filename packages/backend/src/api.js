@@ -22,7 +22,7 @@ import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoTo
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
-import { SeedingAuthorizationError } from './seeding.js'
+import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
 
 /**
@@ -2808,6 +2808,24 @@ export function createApi({
             let fillCancelled = false
             let currentFillRange = null
             const blobCoreKeyHex = String(blobMeta.blobsCoreKey || '').toLowerCase()
+
+            // Admission check for the full background download. Streaming a video
+            // front-to-back fills the whole file to disk (the playback window
+            // cache only trims behind the playhead), so a single watch of a video
+            // that doesn't fit the remaining cache quota would breach the storage
+            // limit. Evaluate once, up front; default to allowing the download on
+            // any uncertainty so playback behaviour is unchanged when the budget
+            // can't be measured. Cheap thanks to the cached on-disk measurement.
+            const fullDownloadBudgetPromise = (async () => {
+              if (!seedingManager?.getQuotaBudget) return true
+              try {
+                const budget = await seedingManager.getQuotaBudget()
+                const remainingBytes = Math.max(0, totalBytes - initialCachedBytes)
+                return fullDownloadFitsQuota(budget.headroomBytes, remainingBytes)
+              } catch {
+                return true
+              }
+            })()
             const rangeEntry = activeRangeRequests.get(prefetchKey)
             if (rangeEntry) {
               rangeEntry.cancel = () => {
@@ -2894,8 +2912,26 @@ export function createApi({
               }).catch(failFullDownload)
             }
 
-            const startFullDownload = () => {
-              if (fullDownloadStarted || fillCancelled) return
+            let fullDownloadDecided = false
+            const startFullDownload = async () => {
+              if (fullDownloadStarted || fillCancelled || fullDownloadDecided) return
+              const fits = await fullDownloadBudgetPromise
+              if (fullDownloadStarted || fillCancelled || fullDownloadDecided) return
+              fullDownloadDecided = true
+              if (!fits) {
+                // Over the cache quota: don't background-cache the whole file.
+                // Playback keeps streaming on demand and the window cache bounds
+                // the on-disk footprint; the partial seed registered at startup
+                // stays evictable so the quota is respected. Release the prefetch
+                // blob protection (playback-active already guards live reads) and
+                // drop the resume intent so we never claim a full cache we won't
+                // complete.
+                console.log('[API] Skipping full background download — would exceed storage quota; streaming with bounded cache')
+                unsubscribePlayhead()
+                await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
+                releaseProtectedPrefetchBlobRef()
+                return
+              }
               fullDownloadStarted = true
               startFillPass(startBlock)
             }

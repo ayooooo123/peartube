@@ -36,6 +36,25 @@ function createNoopRelease() {
   return () => {}
 }
 
+/**
+ * Admission rule for the actively-playing video's full background download.
+ * A single watch otherwise background-caches the entire file to disk (the
+ * playback window cache only trims *behind* the playhead, while the fill races
+ * ahead to EOF), so a large video blows past the storage quota mid-watch.
+ *
+ * Returns true only when the bytes still needed to fully cache the video fit
+ * within the remaining quota headroom. Zero/unknown remaining always fits.
+ * @param {number} headroomBytes
+ * @param {number} remainingBytes
+ * @returns {boolean}
+ */
+export function fullDownloadFitsQuota(headroomBytes, remainingBytes) {
+  const remaining = Math.max(0, Number(remainingBytes) || 0)
+  if (remaining === 0) return true
+  const headroom = Math.max(0, Number(headroomBytes) || 0)
+  return headroom >= remaining
+}
+
 function mergeSeedReason(existingReason, nextReason) {
   const priority = { watched: 1, subscribed: 2, pinned: 3 }
   return (priority[nextReason] || 0) > (priority[existingReason] || 0)
@@ -89,6 +108,10 @@ export class SeedingManager {
     this.pinnedChannels = new Set();
     /** @type {ReturnType<typeof setTimeout> | null} pending throttled seed persist */
     this._seedPersistTimer = null;
+    /** @type {number | null} cached measured on-disk usage (bytes) */
+    this._cachedTotalStorageBytes = null;
+    /** @type {number} timestamp of the cached on-disk measurement */
+    this._cachedTotalStorageAt = 0;
     /** @type {SeedingConfig} */
     this.config = {
       maxStorageGB: 5,            // Default 5GB quota for seeded peer content
@@ -640,6 +663,41 @@ export class SeedingManager {
       console.log('[SeedingManager] Failed to measure total storage:', err?.message);
       return null;
     }
+  }
+
+  /**
+   * Measured on-disk usage with a short TTL cache. Walking the whole storage
+   * tree is expensive on mobile flash, so admission checks (which can fire on
+   * the hot playback path) reuse a recent measurement instead of re-walking.
+   * @param {number} [maxAgeMs]
+   * @returns {Promise<number | null>}
+   */
+  async getTotalStorageBytesCached(maxAgeMs = 5000) {
+    const now = Date.now();
+    if (Number.isFinite(this._cachedTotalStorageBytes) &&
+        (now - this._cachedTotalStorageAt) < Math.max(0, maxAgeMs)) {
+      return this._cachedTotalStorageBytes;
+    }
+    const value = await this.getTotalStorageBytes();
+    this._cachedTotalStorageBytes = Number.isFinite(value) ? value : null;
+    this._cachedTotalStorageAt = Date.now();
+    return this._cachedTotalStorageBytes;
+  }
+
+  /**
+   * Storage budget snapshot for admission control: how much real on-disk room
+   * is left under the configured cache quota. Uses the measured on-disk total
+   * (not the tracked seed sum, which under-counts untracked/partial bytes) so
+   * callers can refuse to cache content that would breach the limit.
+   * @returns {Promise<{ maxBytes: number, usageBytes: number, headroomBytes: number }>}
+   */
+  async getQuotaBudget() {
+    const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    const measured = await this.getTotalStorageBytesCached();
+    const usageBytes = Number.isFinite(measured)
+      ? measured
+      : Math.round(this.calculateStorage());
+    return { maxBytes, usageBytes, headroomBytes: Math.max(0, maxBytes - usageBytes) };
   }
 
   buildStorageStats(totalStorageBytes = null) {

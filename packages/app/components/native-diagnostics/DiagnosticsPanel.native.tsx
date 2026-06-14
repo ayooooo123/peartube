@@ -32,10 +32,16 @@ export default function DiagnosticsPanel({
   loading,
   onRefresh,
 }: DiagnosticsPanelProps) {
+  // Meter the real on-disk footprint (what actually fills storage and what the
+  // quota bounds), not just the tracked seed sum which under-counts untracked
+  // and partially-cached bytes. Fall back to the tracked sum when the backend
+  // couldn't measure the disk.
+  const realUsedBytes = storageStats?.totalStorageBytes ?? storageStats?.usedBytes ?? 0
+  const realUsedGB = storageStats?.totalStorageGB ?? storageStats?.usedGB
   const cacheRatio = useMemo(() => {
     if (!storageStats?.maxBytes) return 0
-    return Math.max(0, Math.min(1, storageStats.usedBytes / storageStats.maxBytes))
-  }, [storageStats])
+    return Math.max(0, Math.min(1, realUsedBytes / storageStats.maxBytes))
+  }, [storageStats, realUsedBytes])
 
   // Over HRPC the doctor/network detail arrives JSON-encoded (the wire
   // schema has no nested object fields), so fall back to parsing it.
@@ -113,7 +119,7 @@ export default function DiagnosticsPanel({
           <View style={[styles.fill, { width: `${Math.round(cacheRatio * 100)}%` }]} />
         </View>
         <Text style={styles.detailText}>
-          {storageStats ? `${storageStats.usedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
+          {storageStats ? `${realUsedGB} GB used of ${storageStats.maxGB} GB` : 'Loading cache stats…'}
         </Text>
         <Text style={styles.detailText}>
           {storageStats ? `${storageStats.seedCount} cached videos • ${storageStats.pinnedCount} pinned channels` : 'Loading cache stats…'}

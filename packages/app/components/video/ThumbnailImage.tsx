@@ -5,7 +5,12 @@
  * Memoized for optimal FlatList performance.
  */
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
-import { View, Image, Text, StyleSheet, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
+// expo-image uses Glide on Android (not Fresco). Glide sniffs the actual image
+// bytes, so it tolerates a wrong/missing Content-Type from the blob server and
+// renders data:/file:/loopback URIs reliably — the Fresco limitations that kept
+// thumbnails blank. See https://docs.expo.dev/versions/latest/sdk/image/
+import { Image } from 'expo-image'
 import { Ionicons } from '@expo/vector-icons'
 import { formatDuration } from '@/lib/formatters'
 import { colors } from '@/lib/colors'
@@ -108,7 +113,8 @@ function ThumbnailImageComponent({
 
   // Memoize callbacks for Image component
   const handleError = useCallback((e: any) => {
-    const reason = e?.nativeEvent?.error
+    // expo-image passes { error }, RN's Image passes { nativeEvent: { error } }.
+    const reason = e?.error ?? e?.nativeEvent?.error
     if (reason) setErrorMsg(String(reason))
     handleRecoverableError()
   }, [handleRecoverableError])
@@ -139,7 +145,7 @@ function ThumbnailImageComponent({
         <Image
           source={imageSource}
           style={styles.image}
-          resizeMode="cover"
+          contentFit="cover"
           onError={handleError}
           onLoad={handleLoad}
           onLoadStart={handleLoadStart}

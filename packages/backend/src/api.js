@@ -1728,7 +1728,7 @@ export function createApi({
      *   these refs mobile thumbnails never resolved at all.
      * @returns {Promise<{url?: string, exists: boolean}>}
      */
-    async getVideoThumbnail(driveKey, videoId, refs = {}) {
+    async getVideoThumbnail(driveKey, videoId, refs = {}, opts = {}) {
       try {
         const normalizeVideoId = (value) => {
           if (!value || typeof value !== 'string') return value
@@ -1872,7 +1872,32 @@ export function createApi({
           host: ctx.blobServerHost || '127.0.0.1',
           port: ctx.blobServer?.port || ctx.blobServerPort
           });
-          return { url, exists: true };
+
+          // Inline the thumbnail bytes as a base64 data URL when requested.
+          // On mobile, the React Native <Image> loader must otherwise fetch the
+          // blob-server URL over the worklet's loopback HTTP listener — a step
+          // that races backend readiness/port assignment and is the one thing
+          // that keeps feed cards on placeholders even after the URL resolves.
+          // Thumbnails are tiny (≤640x360 JPEG), so serving the bytes directly
+          // over the existing RPC channel sidesteps that transport entirely.
+          // Best-effort: any read failure falls back to the blob-server URL.
+          let dataUrl = null;
+          if (opts?.includeDataUrl) {
+            try {
+              const Hyperblobs = (await import('hyperblobs')).default;
+              const blobs = new Hyperblobs(blobsCore);
+              await blobs.ready();
+              const buf = await Promise.race([
+                blobs.get(blob),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail blob read timeout')), 2000))
+              ]);
+              if (buf && buf.length) {
+                dataUrl = `data:${thumbnailMimeType};base64,${b4a.toString(buf, 'base64')}`;
+              }
+            } catch { /* best effort: fall back to the blob-server URL */ }
+          }
+
+          return { url, dataUrl, exists: true };
         }
 
         return { exists: false };

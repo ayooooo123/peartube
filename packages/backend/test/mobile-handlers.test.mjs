@@ -240,8 +240,8 @@ test('getVideoThumbnail forwards feed preview blob refs to the API', async () =>
   const calls = []
   const deps = createDeps({
     api: {
-      async getVideoThumbnail(channelKey, videoId, refs) {
-        calls.push([channelKey, videoId, refs])
+      async getVideoThumbnail(channelKey, videoId, refs, opts) {
+        calls.push([channelKey, videoId, refs, opts])
         return { url: 'http://127.0.0.1:1/thumb', exists: true }
       },
     },
@@ -261,11 +261,38 @@ test('getVideoThumbnail forwards feed preview blob refs to the API', async () =>
   // dropping these refs (as the handler used to) meant mobile thumbnails for
   // feed previews could never resolve at all. The MIME type is forwarded too so
   // the blob server serves the correct Content-Type (Android/Fresco rejects a
-  // JPEG mislabeled as webp).
+  // JPEG mislabeled as webp). includeDataUrl asks the API to inline the bytes as
+  // a base64 data URL so the RN <Image> loader never has to reach the worklet's
+  // loopback blob-server HTTP listener (the step that kept cards on placeholders).
   assert.deepEqual(calls, [[
     'channel-key',
     'video-1',
     { thumbnailBlobId: '0:4:0:1024', thumbnailBlobsCoreKey: 'a'.repeat(64), thumbnailMimeType: 'image/jpeg' },
+    { includeDataUrl: true },
   ]])
   assert.deepEqual(result, { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: null })
+})
+
+test('getVideoThumbnail returns the inlined base64 data URL from the API', async () => {
+  const backend = {}
+  const deps = createDeps({
+    api: {
+      async getVideoThumbnail() {
+        // The API inlines the thumbnail bytes when includeDataUrl is set; the
+        // handler must surface that data URL so mobile renders it directly
+        // instead of fetching the blob-server URL over loopback HTTP.
+        return { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: 'data:image/jpeg;base64,AAAA' }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const result = await backend.getVideoThumbnail({ channelKey: 'channel-key', videoId: 'video-1' })
+
+  assert.deepEqual(result, {
+    url: 'http://127.0.0.1:1/thumb',
+    exists: true,
+    dataUrl: 'data:image/jpeg;base64,AAAA',
+  })
 })

@@ -2263,6 +2263,10 @@ export async function shutdownBackend(ctx) {
       ctx._swarmDiscoveryHandles.clear()
     }
 
+    if (ctx.playbackWindowCache) {
+      try { ctx.playbackWindowCache.stop() } catch { /* best effort */ }
+    }
+
     if (ctx.blobServer) {
       console.log('[Backend] Shutdown: closing blobServer...')
       try {

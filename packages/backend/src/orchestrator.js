@@ -61,19 +61,36 @@ async function appendDebugLine(line) {
   }
 }
 
+// Resolve an async stat/readdir for whichever fs flavour the runtime provides.
+// bare-fs on mobile does not reliably expose `fs.promises`, so the original
+// `fs.promises?.stat` path returned undefined and the whole measurer bailed to
+// null — leaving Android storage stats stuck at zero. Fall back to the sync API
+// (always present on bare-fs and node) wrapped in a promise.
+function resolveAsyncFsOp(fs, name) {
+  const promiseFn = fs.promises?.[name]
+  if (typeof promiseFn === 'function') {
+    return (target) => promiseFn.call(fs.promises, target)
+  }
+  const syncFn = fs[`${name}Sync`]
+  if (typeof syncFn === 'function') {
+    return async (target) => syncFn.call(fs, target)
+  }
+  return null
+}
+
 function createStorageUsageMeasurer(storagePath) {
   return async function getDiskUsageBytes() {
     const fs = resolveBareOrNodeFsModuleSync()
     const path = resolveBareOrNodePathModuleSync()
     if (!fs || !path || !storagePath) return null
-    const stat = fs.promises?.stat
-    const readdir = fs.promises?.readdir
-    if (typeof stat !== 'function' || typeof readdir !== 'function') return null
+    const stat = resolveAsyncFsOp(fs, 'stat')
+    const readdir = resolveAsyncFsOp(fs, 'readdir')
+    if (!stat || !readdir) return null
 
     async function walk(targetPath) {
       let info
       try {
-        info = await stat.call(fs.promises, targetPath)
+        info = await stat(targetPath)
       } catch {
         return 0
       }
@@ -81,7 +98,7 @@ function createStorageUsageMeasurer(storagePath) {
       let total = 0
       let entries = []
       try {
-        entries = await readdir.call(fs.promises, targetPath)
+        entries = await readdir(targetPath)
       } catch {
         return 0
       }

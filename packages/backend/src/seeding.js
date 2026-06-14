@@ -87,6 +87,8 @@ export class SeedingManager {
     this.protectedBlobCores = new Map();
     /** @type {Set<string>} driveKeys that are pinned (always seed) */
     this.pinnedChannels = new Set();
+    /** @type {ReturnType<typeof setTimeout> | null} pending throttled seed persist */
+    this._seedPersistTimer = null;
     /** @type {SeedingConfig} */
     this.config = {
       maxStorageGB: 5,            // Default 5GB quota for seeded peer content
@@ -375,8 +377,39 @@ export class SeedingManager {
     if (nextBytes === (seed.bytes || 0)) return false;
 
     this.activeSeeds.set(key, { ...seed, bytes: nextBytes });
-    if (options.persist === true) await this.persistSeeds();
+    // Persist cached-byte progress so the accounting survives an app relaunch.
+    // Without this, a video that was streamed/partially cached (the common
+    // mobile case — the full background download never finished) reset to its
+    // initial byte count, which is usually 0, on the next launch. That left the
+    // storage card stuck at zero even though blocks were cached on disk.
+    // Per-block download events are frequent, so coalesce writes with a timer
+    // unless the caller asks for an immediate flush.
+    if (options.persist === true) {
+      await this.flushSeedPersist();
+    } else {
+      this.scheduleSeedPersist();
+    }
     return true;
+  }
+
+  scheduleSeedPersist() {
+    if (this._seedPersistTimer) return;
+    this._seedPersistTimer = setTimeout(() => {
+      this._seedPersistTimer = null;
+      this.persistSeeds().catch((err) => {
+        console.log('[SeedingManager] Deferred seed persist failed:', err?.message);
+      });
+    }, 5000);
+    // Best-effort flush — never hold the process open just for this.
+    this._seedPersistTimer?.unref?.();
+  }
+
+  async flushSeedPersist() {
+    if (this._seedPersistTimer) {
+      clearTimeout(this._seedPersistTimer);
+      this._seedPersistTimer = null;
+    }
+    await this.persistSeeds();
   }
 
   /**
@@ -523,6 +556,11 @@ export class SeedingManager {
    * Persist seeds to database
    */
   async persistSeeds() {
+    // Any direct persist supersedes a pending throttled flush.
+    if (this._seedPersistTimer) {
+      clearTimeout(this._seedPersistTimer);
+      this._seedPersistTimer = null;
+    }
     const seedsObj = Object.fromEntries(this.activeSeeds);
     await this.metaDb.put('active-seeds', seedsObj);
   }
@@ -643,6 +681,11 @@ export class SeedingManager {
    */
   async clearCache(options = {}) {
     this.assertAuthorizedMutation(options)
+    // Snapshot real on-disk usage up front. Tracked `seed.bytes` can be stale
+    // (it is updated in-memory during playback and not always re-persisted), so
+    // summing it alone under-reports — and showed "0 GB cleared" on mobile even
+    // when blob ranges were actually freed.
+    const preTotalStorageBytes = await this.getTotalStorageBytes();
     let clearedBytes = 0;
     const toRemove = [];
     let clearedBlob = false;
@@ -684,10 +727,19 @@ export class SeedingManager {
       }).catch(() => {});
     }
 
-    console.log('[SeedingManager] Cleared cache:', clearedBytes, 'bytes from', toRemove.length, 'seeds');
-    const stats = this.buildStorageStats(await this.getTotalStorageBytes());
+    const postTotalStorageBytes = await this.getTotalStorageBytes();
+    // Prefer the measured on-disk delta when it is available and larger than the
+    // tracked sum (which can lag). Note: RocksDB compaction is deferred to the
+    // background, so the delta may under-count until compaction lands — hence we
+    // never report *less* than the tracked bytes we know we cleared.
+    const measuredFreed = Number.isFinite(preTotalStorageBytes) && Number.isFinite(postTotalStorageBytes)
+      ? Math.max(0, preTotalStorageBytes - postTotalStorageBytes)
+      : 0;
+    const reportedClearedBytes = Math.round(Math.max(clearedBytes, measuredFreed));
+    console.log('[SeedingManager] Cleared cache:', reportedClearedBytes, 'bytes from', toRemove.length, 'seeds');
+    const stats = this.buildStorageStats(postTotalStorageBytes);
     return {
-      clearedBytes: Math.round(clearedBytes),
+      clearedBytes: reportedClearedBytes,
       totalStorageBytes: stats.totalStorageBytes,
       totalStorageGB: stats.totalStorageGB,
       untrackedStorageBytes: stats.untrackedStorageBytes,

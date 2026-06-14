@@ -659,6 +659,8 @@ B.getPinnedChannels = async () => { const r = api.getPinnedChannels(); return { 
 B.getStorageStats = async () => api.getStorageStats()
 B.setStorageLimit = async (r: any) => api.setStorageLimit(r.maxGB)
 B.clearCache = async () => api.clearCache()
+B.assessUploadOffload = async (r: any) => api.assessUploadOffload(r.channelKey, r.videoId)
+B.offloadUpload = async (r: any) => api.offloadUpload(r.channelKey, r.videoId)
 B.getVideoThumbnail = async (r: any) => {
   if (isShuttingDown) return { url: null, exists: false }
   try {

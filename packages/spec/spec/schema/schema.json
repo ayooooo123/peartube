@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "empty",
@@ -7256,6 +7256,116 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "assess-upload-offload-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "assess-upload-offload-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "eligible",
+          "required": false,
+          "type": "bool",
+          "version": 3
+        },
+        {
+          "name": "fullCopyPeers",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "relayHasFullCopy",
+          "required": false,
+          "type": "bool",
+          "version": 3
+        },
+        {
+          "name": "ownDeviceHasFullCopy",
+          "required": false,
+          "type": "bool",
+          "version": 3
+        },
+        {
+          "name": "byteLength",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "type": "string",
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "offload-upload-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "offload-upload-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 3
+        },
+        {
+          "name": "freedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "type": "string",
+          "version": 3
         }
       ]
     }

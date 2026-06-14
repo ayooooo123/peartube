@@ -15,6 +15,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let addReactionResponse = AddReactionResponseCodec()
   private let addToPlaylistRequest = AddToPlaylistRequestCodec()
   private let addToPlaylistResponse = AddToPlaylistResponseCodec()
+  private let assessUploadOffloadRequest = AssessUploadOffloadRequestCodec()
+  private let assessUploadOffloadResponse = AssessUploadOffloadResponseCodec()
   private let attestDeviceRequest = AttestDeviceRequestCodec()
   private let attestDeviceResponse = AttestDeviceResponseCodec()
   private let bootstrapDeviceRequest = BootstrapDeviceRequestCodec()
@@ -163,6 +165,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let logWatchEventResponse = LogWatchEventResponseCodec()
   private let logWatchHistoryRequest = LogWatchHistoryRequestCodec()
   private let logWatchHistoryResponse = LogWatchHistoryResponseCodec()
+  private let offloadUploadRequest = OffloadUploadRequestCodec()
+  private let offloadUploadResponse = OffloadUploadResponseCodec()
   private let pairDeviceRequest = PairDeviceRequestCodec()
   private let pairDeviceResponse = PairDeviceResponseCodec()
   private let pickImageFileRequest = PickImageFileRequestCodec()
@@ -1823,6 +1827,32 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
     _handlers["@peartube/event-transcode-progress"] = handler
   }
 
+  // Request/response — client
+  public func assessUploadOffload(_ args: AssessUploadOffloadRequest) async throws -> AssessUploadOffloadResponse {
+    let encoded = try _encode(assessUploadOffloadRequest, args)
+    guard let raw = try await _rpc.request(65, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(assessUploadOffloadResponse, raw)
+  }
+
+  public func onAssessUploadOffload(_ handler: @escaping (AssessUploadOffloadRequest) async throws -> AssessUploadOffloadResponse) {
+    _handlers["@peartube/assess-upload-offload"] = handler
+  }
+
+  // Request/response — client
+  public func offloadUpload(_ args: OffloadUploadRequest) async throws -> OffloadUploadResponse {
+    let encoded = try _encode(offloadUploadRequest, args)
+    guard let raw = try await _rpc.request(66, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(offloadUploadResponse, raw)
+  }
+
+  public func onOffloadUpload(_ handler: @escaping (OffloadUploadRequest) async throws -> OffloadUploadResponse) {
+    _handlers["@peartube/offload-upload"] = handler
+  }
+
   private func _dispatchRequest(_ req: IncomingRequest) async {
     switch req.command {
     case 0:   // @peartube/create-identity
@@ -3252,6 +3282,32 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(transcodeStatusRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(transcodeStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 65:   // @peartube/assess-upload-offload
+      guard let handler = _handlers["@peartube/assess-upload-offload"] as? (AssessUploadOffloadRequest) async throws -> AssessUploadOffloadResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(assessUploadOffloadRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(assessUploadOffloadResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 66:   // @peartube/offload-upload
+      guard let handler = _handlers["@peartube/offload-upload"] as? (OffloadUploadRequest) async throws -> OffloadUploadResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(offloadUploadRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(offloadUploadResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }

@@ -101,7 +101,9 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'set-seeding-config',
     'get-storage-stats',
     'set-storage-limit',
-    'clear-cache'
+    'clear-cache',
+    'assess-upload-offload',
+    'offload-upload'
   ],
   search: [
     'search-videos',

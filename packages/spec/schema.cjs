@@ -1359,6 +1359,44 @@ ns.register({
   ]
 })
 
+// Upload offload: free a local upload's bytes once a full copy is seeded elsewhere
+ns.register({
+  name: 'assess-upload-offload-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'assess-upload-offload-response',
+  fields: [
+    { name: 'eligible', type: 'bool', required: true },
+    { name: 'fullCopyPeers', type: 'uint', required: false },
+    { name: 'relayHasFullCopy', type: 'bool', required: false },
+    { name: 'ownDeviceHasFullCopy', type: 'bool', required: false },
+    { name: 'byteLength', type: 'uint', required: false },
+    { name: 'reason', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'offload-upload-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'offload-upload-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'freedBytes', type: 'uint', required: false },
+    { name: 'reason', type: 'string', required: false }
+  ]
+})
+
 // ============================================
 // Thumbnail/Metadata Types
 // ============================================
@@ -3044,6 +3082,18 @@ rpcNs.register({
   name: 'clear-cache',
   request: { name: '@peartube/clear-cache-request', stream: false },
   response: { name: '@peartube/clear-cache-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'assess-upload-offload',
+  request: { name: '@peartube/assess-upload-offload-request', stream: false },
+  response: { name: '@peartube/assess-upload-offload-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'offload-upload',
+  request: { name: '@peartube/offload-upload-request', stream: false },
+  response: { name: '@peartube/offload-upload-response', stream: false }
 })
 
 // Thumbnail/Metadata commands

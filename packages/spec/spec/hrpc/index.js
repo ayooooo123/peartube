@@ -250,7 +250,11 @@ const methods = new Map([
   ['@peartube/transcode-status', 120],
   [120, '@peartube/transcode-status'],
   ['@peartube/event-transcode-progress', 121],
-  [121, '@peartube/event-transcode-progress']
+  [121, '@peartube/event-transcode-progress'],
+  ['@peartube/assess-upload-offload', 122],
+  [122, '@peartube/assess-upload-offload'],
+  ['@peartube/offload-upload', 123],
+  [123, '@peartube/offload-upload']
 ])
 
 class HRPC {
@@ -379,7 +383,9 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
+      ['@peartube/assess-upload-offload', getEncoding('@peartube/assess-upload-offload-request')],
+      ['@peartube/offload-upload', getEncoding('@peartube/offload-upload-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -491,7 +497,9 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
+      ['@peartube/assess-upload-offload', getEncoding('@peartube/assess-upload-offload-response')],
+      ['@peartube/offload-upload', getEncoding('@peartube/offload-upload-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1078,6 +1086,14 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
+  async assessUploadOffload(args) {
+    return this._call('@peartube/assess-upload-offload', args)
+  }
+
+  async offloadUpload(args) {
+    return this._call('@peartube/offload-upload', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1564,6 +1580,14 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
+  onAssessUploadOffload(responseFn) {
+    this._handlers['@peartube/assess-upload-offload'] = responseFn
+  }
+
+  onOffloadUpload(responseFn) {
+    this._handlers['@peartube/offload-upload'] = responseFn
   }
 
   _requestIsStream(command) {

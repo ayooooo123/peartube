@@ -3,9 +3,23 @@ import EventEmitter from 'node:events'
 import b4a from 'b4a'
 import test from 'brittle'
 
+// Collapse the post-playback eviction debounce so the timing assertions below
+// run fast and deterministically.
+process.env.PEARTUBE_QUOTA_SWEEP_DELAY_MS = '20'
+
 import { createApi } from '../src/api.js'
 import { SeedingManager } from '../src/seeding.js'
 import { isPlaybackActive } from '../src/storage.js'
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Poll until a condition holds (the post-playback sweep is async + debounced),
+// or give up after a bounded wait.
+async function waitUntil(fn) {
+  for (let i = 0; i < 80 && !fn(); i += 1) {
+    await delay(25)
+  }
+}
 
 function createMetaDb(seed = {}) {
   const state = new Map(Object.entries(seed))
@@ -415,13 +429,91 @@ test('ending playback flushes the quota eviction that was deferred while playing
 
   // Stop playback -> the deferred eviction must now run.
   api.setPlaybackActive({ active: false })
-
-  for (let i = 0; i < 100 && seedingManager.getActiveSeeds().length > 0; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  }
+  await waitUntil(() => seedingManager.getActiveSeeds().length === 0)
 
   t.is(seedingManager.getActiveSeeds().length, 0)
   t.alike(core.clearCalls, [{ start: 0, end: 6 }])
+})
+
+test('rapid reopen cancels the post-playback eviction sweep', async (t) => {
+  const store = createStore()
+  const metaDb = createMetaDb()
+  const seedingManager = new SeedingManager(store, metaDb, {
+    isCacheClearBlocked: () => isPlaybackActive()
+  })
+  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const core = store.get(b4a.from(coreA, 'hex'))
+
+  api.setPlaybackActive({ active: false })
+  await seedingManager.setMaxStorageGB(5)
+
+  // Over quota, but added while playing -> eviction deferred to the sweep.
+  api.setPlaybackActive({ active: true })
+  await seedingManager.addSeed('drive-a', 'videos/old.mp4', 'watched', {
+    byteLength: 6 * GB,
+    blobId: '0:6:0:6144',
+    blobsCoreKey: coreA
+  })
+  t.is(seedingManager.getActiveSeeds().length, 1)
+  t.alike(core.clearCalls, [])
+
+  // Close then immediately reopen (a new watch starts) before the debounce fires.
+  api.setPlaybackActive({ active: false })
+  api.setPlaybackActive({ active: true })
+
+  // Give the (cancelled) sweep well past its delay to prove it never ran.
+  await delay(120)
+  t.is(seedingManager.getActiveSeeds().length, 1)
+  t.alike(core.clearCalls, [])
+
+  // Reset shared playback flag and let the now-pending sweep settle.
+  api.setPlaybackActive({ active: false })
+  await waitUntil(() => seedingManager.getActiveSeeds().length === 0)
+})
+
+test('post-playback sweep never evicts the most-recently-played video', async (t) => {
+  const store = createStore()
+  const metaDb = createMetaDb()
+  const seedingManager = new SeedingManager(store, metaDb, {
+    isCacheClearBlocked: () => isPlaybackActive()
+  })
+  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const coreCurrent = store.get(b4a.from(coreA, 'hex'))
+  const coreOld = store.get(b4a.from(coreB, 'hex'))
+
+  api.setPlaybackActive({ active: false })
+  await seedingManager.setMaxStorageGB(5)
+
+  // Watching: both seeds added while playing, so eviction is deferred until stop.
+  api.setPlaybackActive({ active: true })
+  await seedingManager.addSeed('drive-old', 'videos/old.mp4', 'watched', {
+    byteLength: 4 * GB,
+    blobId: '0:4:0:4096',
+    blobsCoreKey: coreB
+  })
+  // preparePlayback records the current video as most-recently-played before it
+  // resolves a blob URL; stub the resolver so the handler returns fast.
+  api.getVideoUrl = async () => { throw new Error('no blob server in test') }
+  await api.preparePlayback('drive-cur', 'videos/current.mp4', null, '0:4:0:4096', coreA, 'video/mp4').catch(() => {})
+  await seedingManager.addSeed('drive-cur', 'videos/current.mp4', 'watched', {
+    byteLength: 4 * GB,
+    blobId: '0:4:0:4096',
+    blobsCoreKey: coreA
+  }, { protectSelf: true })
+
+  // 8GB tracked vs 5GB quota, nothing cleared yet (deferred while playing).
+  t.is(seedingManager.getActiveSeeds().length, 2)
+  t.alike(coreOld.clearCalls, [])
+
+  // Stop -> sweep runs and must evict the old one but keep the just-played one.
+  api.setPlaybackActive({ active: false })
+  await waitUntil(() => seedingManager.getActiveSeeds().length === 1)
+
+  const survivors = seedingManager.getActiveSeeds().map((s) => s.videoPath)
+  t.absent(survivors.includes('videos/old.mp4'), 'old video evicted')
+  t.ok(survivors.includes('videos/current.mp4'), 'just-played video kept')
+  t.alike(coreOld.clearCalls, [{ start: 0, end: 4 }])
+  t.alike(coreCurrent.clearCalls, [])
 })
 
 test('addSeed updates existing cache entries with resolved blob bytes', async (t) => {

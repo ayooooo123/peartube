@@ -380,9 +380,22 @@ export class SeedingManager {
   }
 
   /**
-   * Enforce storage quota by removing old/low-priority seeds
+   * Enforce storage quota by removing old/low-priority seeds.
+   *
+   * Serialized: clearing blob ranges + Corestore compaction is slow, and two
+   * overlapping passes could interleave deletes on activeSeeds or double-clear a
+   * core. Callers (addSeed, setMaxStorageGB, the post-playback sweep) may fire
+   * concurrently, so each pass runs after the previous one settles.
    */
   async enforceQuota(options = {}) {
+    const run = (this._enforceQuotaChain || Promise.resolve())
+      .catch(() => {})
+      .then(() => this._enforceQuotaOnce(options))
+    this._enforceQuotaChain = run
+    return run
+  }
+
+  async _enforceQuotaOnce(options = {}) {
     const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
     let trackedBytes = this.calculateStorage();

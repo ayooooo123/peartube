@@ -19,6 +19,22 @@ interface ThumbnailImageProps {
 
 const MAX_IMAGE_RETRIES = 2
 
+// TEMPORARY on-device diagnostic. Renders a tiny badge on each thumbnail showing
+// which URI scheme the backend handed us (data/http/file/none) and whether the
+// <Image> actually loaded it (OK) or failed (ERR). This is the fastest way to
+// tell, from a screenshot, why thumbnails are blank on Android. Remove once the
+// root cause is confirmed.
+const THUMBNAIL_DEBUG_BADGE = true
+
+function uriScheme(url?: string | null): string {
+  if (!url) return 'none'
+  if (url.startsWith('data:')) return 'data'
+  if (url.startsWith('file:')) return 'file'
+  if (url.startsWith('http:')) return 'http'
+  if (url.startsWith('https:')) return 'https'
+  return 'other'
+}
+
 function ThumbnailImageComponent({
   thumbnailUrl,
   duration,
@@ -27,6 +43,7 @@ function ThumbnailImageComponent({
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
+  const [imageLoaded, setImageLoaded] = useState(false)
   const [retryAttempt, setRetryAttempt] = useState(0)
 
   // Reset error state during render when the URL changes so a stale
@@ -36,6 +53,7 @@ function ThumbnailImageComponent({
     setPrevThumbnailUrl(thumbnailUrl)
     setImageError(false)
     setImageLoading(Boolean(thumbnailUrl))
+    setImageLoaded(false)
     setRetryAttempt(0)
   }
 
@@ -92,6 +110,15 @@ function ThumbnailImageComponent({
   }, [handleRecoverableError])
   const handleLoadStart = useCallback(() => setImageLoading(true), [])
   const handleLoadEnd = useCallback(() => setImageLoading(false), [])
+  const handleLoad = useCallback(() => setImageLoaded(true), [])
+
+  const debugBadge = useMemo(() => {
+    if (!THUMBNAIL_DEBUG_BADGE) return null
+    const scheme = uriScheme(thumbnailUrl)
+    const state = imageError ? 'ERR' : imageLoaded ? 'OK' : thumbnailUrl ? '...' : '—'
+    const len = thumbnailUrl ? thumbnailUrl.length : 0
+    return `${scheme}/${state}${len ? ` ${len}` : ''}`
+  }, [thumbnailUrl, imageError, imageLoaded])
 
   return (
     <View style={containerStyle}>
@@ -109,9 +136,17 @@ function ThumbnailImageComponent({
           style={styles.image}
           resizeMode="cover"
           onError={handleError}
+          onLoad={handleLoad}
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
         />
+      )}
+
+      {/* TEMPORARY diagnostic badge (top-left) */}
+      {debugBadge && (
+        <View style={styles.debugBadge}>
+          <Text style={styles.debugBadgeText}>{debugBadge}</Text>
+        </View>
       )}
 
       {/* Loading indicator */}
@@ -187,6 +222,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 4,
+  },
+  debugBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: 'rgba(255,0,0,0.85)',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  debugBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
   },
   durationText: {
     color: '#ffffff',

@@ -1873,20 +1873,12 @@ export function createApi({
           port: ctx.blobServer?.port || ctx.blobServerPort
           });
 
-          // Inline the thumbnail bytes as a base64 data URL when requested.
-          // React Native's <Image> on Android (Fresco) cannot load images from
-          // the worklet's loopback HTTP blob server — only the native video
-          // player can — so the blob-server URL renders on desktop but never on
-          // mobile. Thumbnails are tiny (≤640x360 JPEG), so we read the bytes and
-          // hand them back inline over the existing RPC channel instead.
-          //
-          // Crucially, when the caller needs the data URL we must NOT fall back
-          // to returning the (unusable-on-Android) URL with exists:true: the
-          // client caches the first truthy result and never refetches, so a
-          // single timed-out read would pin the card to a permanent placeholder.
-          // If we can't inline the bytes yet, report exists:false so the client
-          // keeps retrying (the bounded core update above is already warming the
-          // blocks) until the data URL is available.
+          // Inline the thumbnail bytes as a base64 data URL when the caller asks
+          // (mobile). RN's <Image> can render either a data: URI or the
+          // blob-server URL; lib/thumbnail.ts prefers dataUrl when present and
+          // otherwise falls back to the URL. We always return the URL too so the
+          // card is never left with nothing when the bytes aren't local yet —
+          // the blob server fetches them on demand for the URL path.
           if (opts?.includeDataUrl) {
             let dataUrl = null;
             try {
@@ -1900,10 +1892,7 @@ export function createApi({
               if (buf && buf.length) {
                 dataUrl = `data:${thumbnailMimeType};base64,${b4a.toString(buf, 'base64')}`;
               }
-            } catch { /* bytes not ready yet — fall through to a retryable miss */ }
-            if (!dataUrl) {
-              return { exists: false };
-            }
+            } catch { /* bytes not ready yet — fall back to the blob-server URL */ }
             return { url, dataUrl, exists: true };
           }
 

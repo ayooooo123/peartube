@@ -36,6 +36,7 @@ export function hashPreviewVideos(videos) {
     ? videos.map((video) => ({
         id: video?.id ?? null,
         title: video?.title ?? null,
+        creatorName: video?.creatorName ?? null,
         uploadedAt: Number(video?.uploadedAt || 0) || 0,
         duration: Number(video?.duration || 0) || 0,
         thumbnail: video?.thumbnail ?? null,

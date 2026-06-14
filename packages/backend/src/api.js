@@ -219,6 +219,11 @@ export function createApi({
       const video = await channel.getVideo(normalizedVideoId)
       if (!video) return null
 
+      let channelMeta = null
+      try {
+        channelMeta = typeof channel.getMetadata === 'function' ? await channel.getMetadata() : null
+      } catch { /* best effort */ }
+
       let comments = []
       if (options.includeComments !== false && channel.comments?.listComments) {
         try {
@@ -234,6 +239,8 @@ export function createApi({
         videoId: normalizedVideoId,
         channelKey,
         publicBeeKey: options.publicBeeKey || null,
+        creatorName: options.creatorName || video.creatorName || video.sourceCreatorName || video.originalCreatorName || video.sourceAuthor || video.author || channelMeta?.creatorName || null,
+        channelName: video.channelName || video.channel?.name || channelMeta?.name || null,
         comments,
         subtitles,
       })
@@ -272,7 +279,11 @@ export function createApi({
         const finder = await ensureSemanticFinder(ctx)
         let indexed = 0
         for (const video of videos) {
-          if (!finder.hasVideo(video.id)) {
+          const needsMetadataRefresh =
+            typeof finder.needsMetadataRefresh === 'function'
+              ? finder.needsMetadataRefresh(video)
+              : false
+          if (!finder.hasVideo(video.id) || needsMetadataRefresh) {
             await finder.indexFromMetadata(video, channelKey)
             indexed++
           }
@@ -2155,6 +2166,7 @@ export function createApi({
               return {
                 id,
                 title: video?.title ? String(video.title) : 'Untitled',
+                creatorName: video?.creatorName ? String(video.creatorName) : null,
                 uploadedAt: Number(video?.uploadedAt || 0) || 0,
                 duration: Number(video?.duration || 0) || 0,
                 thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
@@ -3702,8 +3714,12 @@ export function createApi({
         }
 
         const finder = await ensureSemanticFinder(ctx)
+        const needsMetadataRefresh =
+          typeof finder.needsMetadataRefresh === 'function'
+            ? finder.needsMetadataRefresh(envelope)
+            : false
 
-        if (finder.hasVideo(envelope.videoId)) {
+        if (finder.hasVideo(envelope.videoId) && !needsMetadataRefresh) {
           return { success: true, alreadyIndexed: true }
         }
 
@@ -3728,7 +3744,13 @@ export function createApi({
             videoId: envelope.videoId,
             vector: vectorBase64,
             text,
-            metadata: JSON.stringify({ channelKey, title: envelope.title, sources: envelope.sourceFields }),
+            metadata: JSON.stringify({
+              channelKey,
+              title: envelope.title,
+              creatorName: envelope.creatorName || null,
+              channelName: envelope.channelName || null,
+              sources: envelope.sourceFields
+            }),
             indexedAt: Date.now()
           })
         }

@@ -172,6 +172,7 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
     id: firstString(rawVideo.id, rawVideo.videoId, rawVideo.path, rawVideo.slug) || coerceString(rawVideo.id ?? rawVideo.videoId ?? rawVideo.path ?? rawVideo.slug),
     path: firstStringOrNull(rawVideo.path, rawVideo.videoPath, rawVideo.legacyPath),
     title: firstString(rawVideo.title, rawVideo.name, rawVideo.videoTitle, rawVideo.displayName, rawVideo.filename) || coerceString(rawVideo.title ?? rawVideo.name ?? rawVideo.videoTitle ?? rawVideo.displayName ?? rawVideo.filename) || 'Untitled',
+    creatorName: firstStringOrNull(rawVideo.creatorName, rawVideo.sourceCreatorName, rawVideo.originalCreatorName, rawVideo.sourceAuthor, rawVideo.author),
     description: rawVideo.description ?? rawVideo.videoDescription ?? null,
     uploadedAt: toNumber(rawVideo.uploadedAt ?? rawVideo.createdAt ?? rawVideo.addedAt ?? rawVideo.lastSeen ?? 0),
     duration: toNumberOrNull(rawVideo.duration ?? rawVideo.length ?? rawVideo.seconds),

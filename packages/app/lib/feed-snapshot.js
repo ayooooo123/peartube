@@ -6,6 +6,7 @@ const VIDEO_FIELDS = [
   'id',
   'path',
   'title',
+  'creatorName',
   'description',
   'duration',
   'uploadedAt',

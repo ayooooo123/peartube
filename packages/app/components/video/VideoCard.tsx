@@ -27,6 +27,7 @@ export interface VideoData {
   description?: string
   mimeType?: string
   category?: string
+  creatorName?: string | null
   score?: number  // Search relevance score
   channel?: {
     name: string
@@ -56,13 +57,13 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
 
   // Memoize derived values to prevent recalculation on every render
   const channelName = useMemo(
-    () => video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`,
-    [video.channel?.name, channelKey]
+    () => video.creatorName || video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`,
+    [video.creatorName, video.channel?.name, channelKey]
   )
 
   const channelInitial = useMemo(
-    () => getChannelInitial(video.channel?.name, channelKey),
-    [video.channel?.name, channelKey]
+    () => getChannelInitial(channelName, channelKey),
+    [channelName, channelKey]
   )
 
   const timeAgo = useMemo(
@@ -203,6 +204,7 @@ function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): bo
     prev.createdAt === next.createdAt &&
     prev.channelKey === next.channelKey &&
     prev.driveKey === next.driveKey &&
+    prev.creatorName === next.creatorName &&
     prev.channel?.name === next.channel?.name &&
     prevProps.onPress === nextProps.onPress &&
     prevProps.showChannelInfo === nextProps.showChannelInfo &&

@@ -333,6 +333,8 @@ export class SemanticFinder {
       channelKey,
       publicBeeKey: normalized.publicBeeKey || null,
       title: normalized.title,
+      creatorName: normalized.creatorName || null,
+      channelName: normalized.channelName || null,
       description: normalized.description,
       subtitles: normalized.subtitles,
       comments: normalized.comments,
@@ -366,6 +368,8 @@ export class SemanticFinder {
         videoId: envelope.videoId,
         channelKey,
         title: envelope.title,
+        creatorName: envelope.creatorName || null,
+        channelName: envelope.channelName || null,
         description: envelope.description,
         subtitles: envelope.subtitles,
         comments: envelope.comments,
@@ -452,6 +456,33 @@ export class SemanticFinder {
    */
   hasVideo(videoId) {
     return this._indexedVideoIds.has(videoId)
+  }
+
+  /**
+   * Determine whether an already-indexed video should be refreshed because
+   * richer searchable metadata is now available.
+   * @param {Object} video
+   * @returns {boolean}
+   */
+  needsMetadataRefresh(video = {}) {
+    const videoId = video.videoId || video.id
+    if (!videoId || !this._indexedVideoIds.has(videoId)) return false
+
+    const existing = this.globalIndex.vectors.get(videoId)?.metadata || this.index.vectors.get(videoId)?.metadata || {}
+    const nextCreatorName = String(
+      video.creatorName ||
+        video.sourceCreatorName ||
+        video.originalCreatorName ||
+        video.sourceAuthor ||
+        video.author ||
+        ''
+    ).trim()
+    if (nextCreatorName && existing.creatorName !== nextCreatorName) return true
+
+    const nextChannelName = String(video.channelName || video.channel?.name || '').trim()
+    if (nextChannelName && existing.channelName !== nextChannelName) return true
+
+    return false
   }
 
   /**

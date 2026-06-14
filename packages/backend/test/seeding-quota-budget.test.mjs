@@ -14,13 +14,13 @@ function createMetaDb(seed = {}) {
   }
 }
 
+// The user's own uploads live in the same corestore, so raw disk usage is much
+// larger than the tracked cache. The quota must ignore that — uploads never
+// count against the cache limit.
 function createStore({ diskUsageBytes = 0 } = {}) {
-  const state = { diskUsageBytes, measureCalls: 0 }
   return {
-    state,
     async getDiskUsageBytes() {
-      state.measureCalls += 1
-      return state.diskUsageBytes
+      return diskUsageBytes
     },
     get() {
       return { async ready() {}, async clear() {} }
@@ -39,24 +39,10 @@ test('fullDownloadFitsQuota admits only downloads that fit the remaining headroo
   t.ok(fullDownloadFitsQuota(NaN, 0), 'zero remaining fits even with unknown headroom')
 })
 
-test('getQuotaBudget reports real on-disk headroom under the configured quota', async (t) => {
-  const store = createStore({ diskUsageBytes: 4 * GB })
-  const manager = new SeedingManager(store, createMetaDb())
-  await manager.setConfig({ maxStorageGB: 5 })
-
-  const budget = await manager.getQuotaBudget()
-  t.is(budget.maxBytes, 5 * GB)
-  t.is(budget.usageBytes, 4 * GB)
-  t.is(budget.headroomBytes, 1 * GB)
-
-  // A video larger than the 1 GB of headroom must not be admitted for a full
-  // background download — that is what was breaching the quota mid-watch.
-  t.absent(fullDownloadFitsQuota(budget.headroomBytes, 3 * GB), 'oversized video rejected')
-  t.ok(fullDownloadFitsQuota(budget.headroomBytes, 512 * 1024 * 1024), 'small video admitted')
-})
-
-test('getQuotaBudget falls back to the tracked sum when disk cannot be measured', async (t) => {
-  const manager = new SeedingManager({ get() { return {} } }, createMetaDb())
+test('getQuotaBudget measures the tracked cache, excluding the user\'s own uploads', async (t) => {
+  // 40 GB on disk (mostly the user's own uploaded videos) but only 2 GB cached
+  // from the network under a 5 GB quota.
+  const manager = new SeedingManager(createStore({ diskUsageBytes: 40 * GB }), createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 2 * GB,
@@ -64,22 +50,22 @@ test('getQuotaBudget falls back to the tracked sum when disk cannot be measured'
     blobsCoreKey: 'aa'.repeat(32)
   })
 
-  const budget = await manager.getQuotaBudget()
-  t.is(budget.usageBytes, 2 * GB, 'uses tracked sum when no measurer is available')
+  const budget = manager.getQuotaBudget()
+  t.is(budget.maxBytes, 5 * GB)
+  t.is(budget.usageBytes, 2 * GB, 'usage is the tracked cache, not the 40 GB on disk')
   t.is(budget.headroomBytes, 3 * GB)
+
+  // A 4 GB video does not fit the 3 GB of remaining cache headroom...
+  t.absent(fullDownloadFitsQuota(budget.headroomBytes, 4 * GB), 'oversized video rejected')
+  // ...but a 1 GB video does, regardless of the 40 GB of uploads on disk.
+  t.ok(fullDownloadFitsQuota(budget.headroomBytes, 1 * GB), 'small video admitted despite large uploads')
 })
 
-test('getTotalStorageBytesCached coalesces repeated measurements within the TTL', async (t) => {
-  const store = createStore({ diskUsageBytes: 4 * GB })
-  const manager = new SeedingManager(store, createMetaDb())
+test('getQuotaBudget reports full headroom when nothing is cached', async (t) => {
+  const manager = new SeedingManager(createStore({ diskUsageBytes: 12 * GB }), createMetaDb())
+  await manager.setConfig({ maxStorageGB: 5 })
 
-  const first = await manager.getTotalStorageBytesCached(10_000)
-  const second = await manager.getTotalStorageBytesCached(10_000)
-  t.is(first, 4 * GB)
-  t.is(second, 4 * GB)
-  t.is(store.state.measureCalls, 1, 'second call within TTL reuses the cached measurement')
-
-  // A zero-age request bypasses the cache and re-measures.
-  await manager.getTotalStorageBytesCached(0)
-  t.is(store.state.measureCalls, 2, 're-measures when the cache is forced stale')
+  const budget = manager.getQuotaBudget()
+  t.is(budget.usageBytes, 0, 'no seeds means zero cache usage even with uploads on disk')
+  t.is(budget.headroomBytes, 5 * GB)
 })

@@ -5,12 +5,6 @@ export interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
-  /** Measured real on-disk usage. Falls back to usedBytes when unavailable. */
-  totalStorageBytes?: number
-  totalStorageGB?: string
-  /** On-disk bytes not attributed to tracked seeds. */
-  untrackedStorageBytes?: number
-  untrackedStorageGB?: string
 }
 
 export interface SeedingStatus {

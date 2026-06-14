@@ -108,10 +108,6 @@ export class SeedingManager {
     this.pinnedChannels = new Set();
     /** @type {ReturnType<typeof setTimeout> | null} pending throttled seed persist */
     this._seedPersistTimer = null;
-    /** @type {number | null} cached measured on-disk usage (bytes) */
-    this._cachedTotalStorageBytes = null;
-    /** @type {number} timestamp of the cached on-disk measurement */
-    this._cachedTotalStorageAt = 0;
     /** @type {SeedingConfig} */
     this.config = {
       maxStorageGB: 5,            // Default 5GB quota for seeded peer content
@@ -454,17 +450,20 @@ export class SeedingManager {
   async _enforceQuotaOnce(options = {}) {
     const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    // The quota bounds content cached from the network (tracked seeds). The
+    // user's own uploaded/published videos live in the same corestore but are
+    // never registered as seeds, so they are excluded by construction. We must
+    // NOT enforce against raw on-disk usage here: it commingles uploads with
+    // cache, so doing so would evict the user's seeded cache to make room for
+    // their own uploads — i.e. charge uploads against a limit they don't belong
+    // to.
     let trackedBytes = this.calculateStorage();
-    const totalStorageBytes = await this.getTotalStorageBytes();
-    let quotaBytes = Number.isFinite(totalStorageBytes)
-      ? Math.max(trackedBytes, totalStorageBytes)
-      : trackedBytes;
 
-    if (quotaBytes <= maxBytes) {
+    if (trackedBytes <= maxBytes) {
       return; // Under quota
     }
 
-    console.log('[SeedingManager] Over quota, current:', trackedBytes, 'total:', totalStorageBytes ?? 'unavailable', 'max:', maxBytes);
+    console.log('[SeedingManager] Over cache quota, tracked:', trackedBytes, 'max:', maxBytes);
 
     // Get seeds sorted by priority (pinned > subscribed > watched) then by age
     const seeds = Array.from(this.activeSeeds.entries())
@@ -482,7 +481,7 @@ export class SeedingManager {
     // Remove oldest/lowest priority seeds until under quota
     let clearedBlob = false;
     for (const seed of seeds) {
-      if (quotaBytes <= maxBytes) break;
+      if (trackedBytes <= maxBytes) break;
       if (seed.reason === 'pinned') continue; // Never remove pinned
       if (protectedKeys.has(seed.key) || this.shouldSkipSeedClear(seed)) continue;
 
@@ -490,7 +489,6 @@ export class SeedingManager {
       clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
       const seedBytes = Math.max(0, Number(seed.bytes) || 0);
       trackedBytes = Math.max(0, trackedBytes - seedBytes);
-      quotaBytes = Math.max(trackedBytes, quotaBytes - seedBytes);
       console.log('[SeedingManager] Removed seed to meet quota:', seed.key.slice(0, 32));
     }
 
@@ -666,37 +664,19 @@ export class SeedingManager {
   }
 
   /**
-   * Measured on-disk usage with a short TTL cache. Walking the whole storage
-   * tree is expensive on mobile flash, so admission checks (which can fire on
-   * the hot playback path) reuse a recent measurement instead of re-walking.
-   * @param {number} [maxAgeMs]
-   * @returns {Promise<number | null>}
+   * Storage budget snapshot for admission control: how much room is left under
+   * the configured cache quota.
+   *
+   * The quota bounds content cached from the network (tracked seeds). The
+   * user's own uploaded/published videos share the same corestore but are never
+   * registered as seeds, so they are excluded by construction — uploads never
+   * count against the cache limit. (Raw on-disk usage commingles uploads with
+   * cache, so it is deliberately NOT used here.)
+   * @returns {{ maxBytes: number, usageBytes: number, headroomBytes: number }}
    */
-  async getTotalStorageBytesCached(maxAgeMs = 5000) {
-    const now = Date.now();
-    if (Number.isFinite(this._cachedTotalStorageBytes) &&
-        (now - this._cachedTotalStorageAt) < Math.max(0, maxAgeMs)) {
-      return this._cachedTotalStorageBytes;
-    }
-    const value = await this.getTotalStorageBytes();
-    this._cachedTotalStorageBytes = Number.isFinite(value) ? value : null;
-    this._cachedTotalStorageAt = Date.now();
-    return this._cachedTotalStorageBytes;
-  }
-
-  /**
-   * Storage budget snapshot for admission control: how much real on-disk room
-   * is left under the configured cache quota. Uses the measured on-disk total
-   * (not the tracked seed sum, which under-counts untracked/partial bytes) so
-   * callers can refuse to cache content that would breach the limit.
-   * @returns {Promise<{ maxBytes: number, usageBytes: number, headroomBytes: number }>}
-   */
-  async getQuotaBudget() {
+  getQuotaBudget() {
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
-    const measured = await this.getTotalStorageBytesCached();
-    const usageBytes = Number.isFinite(measured)
-      ? measured
-      : Math.round(this.calculateStorage());
+    const usageBytes = Math.round(this.calculateStorage());
     return { maxBytes, usageBytes, headroomBytes: Math.max(0, maxBytes - usageBytes) };
   }
 

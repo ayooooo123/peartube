@@ -33,11 +33,6 @@ interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
-  /** Measured real on-disk usage. Falls back to usedBytes when unavailable. */
-  totalStorageBytes?: number
-  totalStorageGB?: string
-  untrackedStorageBytes?: number
-  untrackedStorageGB?: string
 }
 
 interface TranscodeSettings {
@@ -457,14 +452,11 @@ export default function ProfileScreen() {
     }
   }
 
-  // The budget meter reflects real on-disk usage (what actually fills storage
-  // and what the quota enforces against), not just the tracked seed sum which
-  // under-counts untracked and partially-cached bytes. Fall back to the tracked
-  // sum when the backend couldn't measure the disk.
-  const realUsedBytes = storageStats?.totalStorageBytes ?? storageStats?.usedBytes ?? 0
-  const realUsedGB = storageStats?.totalStorageGB ?? storageStats?.usedGB
+  // The budget tracks cache fetched from the network (seeded content). The
+  // user's own uploads live in the same store but are never charged against
+  // this limit, so we show the tracked cache sum, not raw on-disk usage.
   const usedPct = storageStats && storageStats.maxBytes > 0
-    ? Math.min(100, (realUsedBytes / storageStats.maxBytes) * 100)
+    ? Math.min(100, (storageStats.usedBytes / storageStats.maxBytes) * 100)
     : 0
 
   const header = (
@@ -653,7 +645,7 @@ export default function ProfileScreen() {
           <View style={[styles.fill, { width: `${usedPct}%` }]} />
         </View>
         <Text style={styles.trackLabel}>
-          {storageStats ? `${realUsedGB} GB of ${storageStats.maxGB} GB budget` : ' '}
+          {storageStats ? `${storageStats.usedGB} GB of ${storageStats.maxGB} GB budget` : ' '}
         </Text>
 
         <View style={styles.presetRow}>

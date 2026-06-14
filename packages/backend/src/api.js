@@ -23,6 +23,8 @@ import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, par
 import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
+import { collectCorestoreGarbage } from './corestore-gc.js'
+import { collectFullCopyPeers, assessOffloadEligibility } from './upload-offload.js'
 import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
 
 /**
@@ -617,6 +619,28 @@ export function createApi({
     }).filter(Boolean)
     const blobCoreKey = core?.key ? b4a.toString(core.key, 'hex') : null
     return { peerCount, blobPeerIds, blobCoreKey }
+  }
+
+  // The raw replicator peer objects for a core (each exposes remoteBitfield /
+  // remoteContiguousLength), used to verify who holds a full copy of a blob.
+  function getCorePeerObjects(core) {
+    const peers = core?.peers
+    if (Array.isArray(peers)) return peers
+    if (peers && typeof peers.values === 'function') return Array.from(peers.values())
+    return []
+  }
+
+  // Swarm public keys of durable full-copy anchors, used to upgrade a generic
+  // "live peer has it" into a trusted "the relay / one of your own devices has
+  // it". Empty for now: the client does not yet learn the relay's swarm key or
+  // map paired devices to their connection keys, so v1 relies on the
+  // independent-live-peers redundancy threshold. These are the seams to fill
+  // once those keys are discoverable.
+  function getKnownDurableRelayKeys() {
+    return []
+  }
+  function getOwnDeviceSwarmKeys(_driveKey) {
+    return []
   }
 
   function getVideoCorePeerDetails(driveKey, videoPath) {
@@ -3537,6 +3561,85 @@ export function createApi({
         return { success: true, ...clearResult };
       }
       return { success: false, clearedBytes: 0 };
+    },
+
+    /**
+     * Assess whether a video's local blob can be safely evicted from disk — i.e.
+     * a FULL copy is provably held elsewhere right now. Read-only: never deletes.
+     * Intended for the user's own uploaded videos (where the local copy is the
+     * source), but safe for any video since eligibility requires a remote full
+     * copy regardless.
+     * @returns {Promise<{ eligible: boolean, fullCopyPeers: number, relayHasFullCopy: boolean, ownDeviceHasFullCopy: boolean, byteLength: number, blobsCoreKey: string | null, reason: string | null }>}
+     */
+    async assessUploadOffload(driveKey, videoPath) {
+      const empty = {
+        eligible: false, fullCopyPeers: 0, relayHasFullCopy: false,
+        ownDeviceHasFullCopy: false, byteLength: 0, blobsCoreKey: null, reason: null
+      }
+      try {
+        const v = await this.getVideoData(driveKey, videoPath).catch(() => null)
+        const blobsCoreKey = normalizeBlobsCoreKey(v?.blobsCoreKey)
+        const range = normalizeBlobRefInput(v?.blobId ?? v)
+        if (!blobsCoreKey || !range) return { ...empty, reason: 'missing-blob-metadata' }
+
+        const core = ctx.store.get(b4a.from(blobsCoreKey, 'hex'))
+        try {
+          await core.ready?.()
+          const { fullCopyKeys, fullCopyAnonymous } = collectFullCopyPeers(getCorePeerObjects(core), range)
+          const assessment = assessOffloadEligibility({
+            fullCopyKeys,
+            fullCopyAnonymous,
+            relayKeys: getKnownDurableRelayKeys(),
+            deviceKeys: getOwnDeviceSwarmKeys(driveKey)
+          })
+          return {
+            ...assessment,
+            blobsCoreKey,
+            byteLength: Math.max(0, Number(range.byteLength) || 0),
+            reason: assessment.eligible ? null : 'not-durably-replicated'
+          }
+        } finally {
+          // store.get() opened a fresh session; release it.
+          try { await core.close?.() } catch { /* best effort */ }
+        }
+      } catch (err) {
+        return { ...empty, reason: err?.message || 'assess-failed' }
+      }
+    },
+
+    /**
+     * Free a video's local blob bytes, keeping its metadata so it re-fetches on
+     * demand. Refuses unless assessUploadOffload confirms a durable full copy
+     * lives elsewhere (re-checked here) and no playback is active — clearing the
+     * only copy of an under-replicated upload would lose it permanently.
+     * @returns {Promise<{ success: boolean, freedBytes: number, reason: string | null, assessment: object }>}
+     */
+    async offloadUpload(driveKey, videoPath) {
+      const assessment = await this.assessUploadOffload(driveKey, videoPath)
+      if (!assessment.eligible) {
+        return { success: false, freedBytes: 0, reason: assessment.reason || 'not-durably-replicated', assessment }
+      }
+      // Never evict while anything is being played/served — re-fetching mid-play
+      // would stall, and the playing blob may be this one.
+      if (storageIsPlaybackActive()) {
+        return { success: false, freedBytes: 0, reason: 'playback-active', assessment }
+      }
+      const v = await this.getVideoData(driveKey, videoPath).catch(() => null)
+      const cleared = seedingManager
+        ? await seedingManager.clearSeedBlob({
+            driveKey, videoPath, blobsCoreKey: assessment.blobsCoreKey, blobId: v?.blobId
+          })
+        : false
+      if (cleared) {
+        await collectCorestoreGarbage(ctx.store, { label: 'upload offload', log: console.log }).catch(() => {})
+        console.log('[API] Offloaded upload (full copy seeded elsewhere):', videoPath)
+      }
+      return {
+        success: Boolean(cleared),
+        freedBytes: cleared ? assessment.byteLength : 0,
+        reason: cleared ? null : 'clear-failed',
+        assessment
+      }
     },
 
     // ============================================

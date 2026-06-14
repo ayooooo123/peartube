@@ -123,9 +123,9 @@ async function attemptThumbnailFetch(
 ): Promise<string | null> {
   try {
     const response = await withTimeout(rpc.getVideoThumbnail(request), timeoutMs)
-    // Mobile inlines the thumbnail bytes as a data: URL (the loopback blob-server
-    // URL won't render in Android image clients); rendered via expo-image, whose
-    // Glide backend paints base64 reliably. Desktop returns only the URL.
+    // The blob server serves thumbnails via a buffered, fixed-length response that
+    // image loaders accept, so the URL renders directly via expo-image — no base64.
+    // dataUrl is still honored first for any caller that inlines.
     const url = response?.dataUrl || response?.url
     if (response?.exists && url) return url
   } catch {}

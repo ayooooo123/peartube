@@ -2399,6 +2399,7 @@ export default function HomeScreen() {
             videoId: video.id,
             thumbnailBlobId: (video as any).thumbnailBlobId,
             thumbnailBlobsCoreKey: (video as any).thumbnailBlobsCoreKey,
+            thumbnailMimeType: (video as any).thumbnailMimeType,
           })
           if (result?.url && result.exists) {
             updates.set(video.id, result.url)

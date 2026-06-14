@@ -131,7 +131,12 @@ function createFileReadIOContext(ff, filePath, fileSize) {
 /**
  * Pick an image encoder for the requested mime type.
  * - image/png  -> 'png' encoder (RGB24) when available
- * - everything else (incl. unsupported image/webp) -> 'mjpeg' (YUVJ420P)
+ * - image/webp -> 'libwebp' encoder when the bare-ffmpeg build provides one
+ * - everything else (incl. webp on builds without libwebp) -> 'mjpeg' (YUVJ420P)
+ *
+ * WebP is detected at runtime: the current bare-ffmpeg build ships without
+ * libwebp, so requests fall back to JPEG. If/when libwebp is added to the
+ * build, it is picked up automatically — no code change needed here.
  *
  * @returns {{ encoder, pixelFormat: number, mimeType: string } | null}
  */
@@ -151,7 +156,15 @@ function selectImageEncoder(ff, mimeType) {
     if (png) return { encoder: png, pixelFormat: ff.constants.pixelFormats.RGB24, mimeType: 'image/png' }
     log.debug('PNG encoder unavailable, falling back to JPEG')
   } else if (want === 'image/webp') {
-    log.debug('WebP encoding unsupported by bare-ffmpeg build, using JPEG')
+    const webp = findByName('libwebp') || findByName('libwebp_anim') || findByName('webp')
+    if (webp) {
+      const pf = ff.constants.pixelFormats
+      // libwebp accepts yuv420p natively; fall back to other formats if the
+      // build exposes a different set of constants.
+      const pixelFormat = pf.YUV420P ?? pf.YUVJ420P ?? pf.RGB24
+      return { encoder: webp, pixelFormat, mimeType: 'image/webp' }
+    }
+    log.debug('WebP encoder unavailable in this bare-ffmpeg build, falling back to JPEG')
   }
 
   let mjpeg = findByName('mjpeg')
@@ -326,10 +339,17 @@ export async function generateThumbnail(filePath, options = {}) {
     encoder.pixelFormat = imageSel.pixelFormat
     encoder.timeBase = { numerator: 1, denominator: 25 }
 
-    // Best-effort quality control for MJPEG (qscale 2=best .. 31=worst).
-    const qscale = Math.max(2, Math.min(31, Math.round(31 - (Math.max(1, Math.min(100, config.quality)) / 100) * 29)))
-    try { encoder.setOption('qscale', String(qscale)) } catch {}
-    try { encoder.setOption('q:v', String(qscale)) } catch {}
+    const quality = Math.max(1, Math.min(100, config.quality))
+    if (imageSel.mimeType === 'image/webp') {
+      // libwebp takes a 0..100 quality (higher = better), the inverse of MJPEG's
+      // qscale. Best-effort; ignored by builds/encoders that don't expose it.
+      try { encoder.setOption('quality', String(quality)) } catch {}
+    } else {
+      // Best-effort quality control for MJPEG (qscale 2=best .. 31=worst).
+      const qscale = Math.max(2, Math.min(31, Math.round(31 - (quality / 100) * 29)))
+      try { encoder.setOption('qscale', String(qscale)) } catch {}
+      try { encoder.setOption('q:v', String(qscale)) } catch {}
+    }
 
     encoder.open()
 

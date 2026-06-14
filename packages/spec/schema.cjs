@@ -1369,7 +1369,8 @@ ns.register({
     { name: 'channelKey', type: 'string', required: true },
     { name: 'videoId', type: 'string', required: true },
     { name: 'thumbnailBlobId', type: 'string', required: false },
-    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false }
+    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
+    { name: 'thumbnailMimeType', type: 'string', required: false }
   ]
 })
 

@@ -6,11 +6,16 @@ type ThumbnailRequest = {
   // forwarding these refs their thumbnails never resolve on mobile.
   thumbnailBlobId?: string | null
   thumbnailBlobsCoreKey?: string | null
+  // Stored MIME type from the feed preview. Forwarded so the blob server
+  // serves the correct Content-Type (JPEG today, WebP/PNG if added later)
+  // instead of falling back to a default that may not match the bytes.
+  thumbnailMimeType?: string | null
 }
 
 export type ThumbnailBlobRefs = {
   thumbnailBlobId?: string | null
   thumbnailBlobsCoreKey?: string | null
+  thumbnailMimeType?: string | null
 }
 
 type StatusResponse = {
@@ -139,6 +144,7 @@ export async function fetchThumbnailUrlWithRetry(args: {
     videoId,
     thumbnailBlobId: blobRefs?.thumbnailBlobId || undefined,
     thumbnailBlobsCoreKey: blobRefs?.thumbnailBlobsCoreKey || undefined,
+    thumbnailMimeType: blobRefs?.thumbnailMimeType || undefined,
   }
 
   // Fast path: fetch immediately. Feed previews already carry thumbnail refs

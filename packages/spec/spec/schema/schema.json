@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -3745,6 +3745,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "thumbnailMimeType",
+          "required": false,
+          "type": "string",
+          "version": 2
         }
       ]
     },

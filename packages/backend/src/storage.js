@@ -26,7 +26,8 @@ import {
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache } from './known-peers.js'
-import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges, decodeBlobServerBlobRef } from './blob-range-priority.js'
+import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
+import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
 
 function resolveDebugLogPath() {
@@ -124,48 +125,6 @@ function createNetworkStartupTiming() {
         events: events.slice(-40)
       }
     }
-  }
-}
-
-// Blobs at or below this size are served as a single buffered HTTP response
-// (thumbnails/images) instead of the upstream streaming pipe. Comfortably above
-// any thumbnail, well below any video, so video reads always take the streaming
-// Range path.
-const THUMBNAIL_BUFFERED_MAX_BYTES = 2 * 1024 * 1024
-
-// Serve a small blob as one deterministic, fixed-length HTTP response that image
-// loaders accept. Returns true if it wrote the response, false to fall through to
-// the upstream handler. Bytes are read into a Buffer (small by construction).
-async function serveBufferedBlobResponse(store, swarm, ref, res) {
-  let core = null
-  try {
-    core = store.get(ref.key)
-    await core.ready()
-    if (swarm && core.discoveryKey) {
-      try { swarm.join(core.discoveryKey) } catch { /* best effort */ }
-    }
-    const Hyperblobs = (await import('hyperblobs')).default
-    const blobs = new Hyperblobs(core)
-    await blobs.ready()
-    const buf = await Promise.race([
-      blobs.get(ref.blob),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('buffered blob read timeout')), 5000))
-    ])
-    if (!buf || !buf.length) return false
-    if (res.headersSent || res.writableEnded) return true
-    res.statusCode = 200
-    res.setHeader('Content-Type', ref.type || 'image/jpeg')
-    res.setHeader('Content-Length', String(buf.length))
-    res.setHeader('Accept-Ranges', 'none')
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-    res.setHeader('Connection', 'close')
-    res.end(buf)
-    return true
-  } catch {
-    return false
-  } finally {
-    // Close the per-request core session so repeated thumbnail loads don't leak.
-    try { const closing = core?.close?.(); if (closing?.catch) closing.catch(() => {}) } catch { /* best effort */ }
   }
 }
 
@@ -1419,24 +1378,17 @@ export async function initializeStorage(config) {
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
-      // Small-blob plain GET (thumbnails/images): serve a buffered, fixed-length
-      // response we fully control. hypercore-blob-server pipes a ByteStream for a
-      // plain GET and relies on stream completion to end the response; that does
-      // not end deterministically for Android's image loaders (Fresco errors,
-      // expo-image/Glide hangs then errors) even with a correct Content-Length and
-      // image/jpeg Content-Type. Reading the (small) blob into a Buffer and writing
-      // 200 + Content-Length + Connection: close + res.end(buf) gives image loaders
-      // the boring response they expect. Video is untouched: players send Range, so
-      // they skip this path and keep the streaming/range-priority behavior.
-      if (req.method === 'GET' && !req.headers.range) {
-        let ref = null
-        try { ref = decodeBlobServerBlobRef(blobServer, req) } catch { ref = null }
-        const byteLength = Number(ref?.blob?.byteLength) || 0
-        if (ref && byteLength > 0 && byteLength <= THUMBNAIL_BUFFERED_MAX_BYTES) {
-          let served = false
-          try { served = await serveBufferedBlobResponse(store, swarm, ref, res) } catch { served = false }
-          if (served) return
-        }
+      // Thumbnails tag their blob URL with pt_thumbnail=1 (see api.getVideoThumbnail).
+      // Serve those as a buffered, fixed-length response Android image loaders
+      // accept, instead of hypercore-blob-server's plain-GET streaming pipe (which
+      // never ends deterministically — Fresco errors, expo-image/Glide hangs then
+      // errors). Only tagged requests are intercepted; video Range reads and every
+      // other request fall through to the upstream handler unchanged.
+      try {
+        const handled = await serveThumbnailHttpRequest({ store, swarm, blobServer }, req, res)
+        if (handled) return
+      } catch (err) {
+        console.log('[Storage] Thumbnail serve failed:', err?.message || err)
       }
 
       try {

@@ -214,7 +214,7 @@ function decodeBlobParam(value) {
 // deterministic HTTP response that Android image loaders accept, where the
 // upstream streaming pipe does not end cleanly for a plain GET.
 export function decodeBlobServerBlobRef(blobServer, req) {
-  if (req?.method && req.method !== 'GET') return null
+  if (req?.method && req.method !== 'GET' && req.method !== 'HEAD') return null
 
   let url
   try {

@@ -1894,16 +1894,18 @@ export function createApi({
             ? meta.thumbnailMimeType
             : 'image/jpeg';
 
-          // The blob server serves this URL via its buffered thumbnail path (a
-          // deterministic 200 + Content-Length + Connection: close response that
-          // image loaders accept), so the URL renders directly in <Image> — no
-          // base64. type flows through as the Content-Type.
-          const url = ctx.blobServer.getLink(blobsCore.key, {
+          // Tag the URL with pt_thumbnail=1 so the blob server serves it via its
+          // buffered thumbnail path (a deterministic 200 + Content-Length +
+          // Connection: close response image loaders accept) instead of the
+          // streaming pipe. Renders directly in <Image> — no base64. type flows
+          // through as the Content-Type.
+          const baseUrl = ctx.blobServer.getLink(blobsCore.key, {
             blob,
           type: thumbnailMimeType,
           host: ctx.blobServerHost || '127.0.0.1',
           port: ctx.blobServer?.port || ctx.blobServerPort
           });
+          const url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}pt_thumbnail=1`;
 
           return { url, exists: true };
         }

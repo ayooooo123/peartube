@@ -634,11 +634,21 @@ export function createApi({
   // "live peer has it" into a trusted "the relay / one of your own devices has
   // it".
   //
-  // Relay anchor is still a seam: the client doesn't yet learn the relay's swarm
-  // key (no config/feed plumbing in the Bare backend), so this stays empty and
-  // those deployments lean on the independent-live-peers redundancy threshold.
+  // Relay anchor: swarm/Noise keys of always-on relay/blind peers a deployment
+  // trusts as a durable full-copy holder. A host can populate ctx.trustedRelayKeys
+  // (e.g. from its own config) to enable single-relay offload. Left empty by
+  // default — there's no automatic client-side relay-key discovery yet (that
+  // needs a feed announcement), so default deployments lean on the
+  // independent-live-peers redundancy threshold.
   function getKnownDurableRelayKeys() {
-    return []
+    const raw = ctx?.trustedRelayKeys
+    if (!Array.isArray(raw)) return []
+    const keys = []
+    for (const k of raw) {
+      const hex = typeof k === 'string' ? k.toLowerCase() : null
+      if (hex && /^[a-f0-9]{64}$/.test(hex)) keys.push(hex)
+    }
+    return keys
   }
 
   // Own-device anchor: each device records the swarm key it replicates under in

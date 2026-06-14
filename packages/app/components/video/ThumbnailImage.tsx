@@ -55,7 +55,9 @@ function ThumbnailImageComponent({
   const imageSource = useMemo(
     () => {
       if (!thumbnailUrl) return null
-      if (retryAttempt === 0) return { uri: thumbnailUrl }
+      // Data URLs are self-contained — appending a cache-busting query string
+      // would corrupt the trailing base64, so never rewrite them.
+      if (retryAttempt === 0 || thumbnailUrl.startsWith('data:')) return { uri: thumbnailUrl }
       const separator = thumbnailUrl.includes('?') ? '&' : '?'
       return { uri: `${thumbnailUrl}${separator}attempt=${retryAttempt}` }
     },

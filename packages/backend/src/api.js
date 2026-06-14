@@ -1874,30 +1874,40 @@ export function createApi({
           });
 
           // Inline the thumbnail bytes as a base64 data URL when requested.
-          // On mobile, the React Native <Image> loader must otherwise fetch the
-          // blob-server URL over the worklet's loopback HTTP listener — a step
-          // that races backend readiness/port assignment and is the one thing
-          // that keeps feed cards on placeholders even after the URL resolves.
-          // Thumbnails are tiny (≤640x360 JPEG), so serving the bytes directly
-          // over the existing RPC channel sidesteps that transport entirely.
-          // Best-effort: any read failure falls back to the blob-server URL.
-          let dataUrl = null;
+          // React Native's <Image> on Android (Fresco) cannot load images from
+          // the worklet's loopback HTTP blob server — only the native video
+          // player can — so the blob-server URL renders on desktop but never on
+          // mobile. Thumbnails are tiny (≤640x360 JPEG), so we read the bytes and
+          // hand them back inline over the existing RPC channel instead.
+          //
+          // Crucially, when the caller needs the data URL we must NOT fall back
+          // to returning the (unusable-on-Android) URL with exists:true: the
+          // client caches the first truthy result and never refetches, so a
+          // single timed-out read would pin the card to a permanent placeholder.
+          // If we can't inline the bytes yet, report exists:false so the client
+          // keeps retrying (the bounded core update above is already warming the
+          // blocks) until the data URL is available.
           if (opts?.includeDataUrl) {
+            let dataUrl = null;
             try {
               const Hyperblobs = (await import('hyperblobs')).default;
               const blobs = new Hyperblobs(blobsCore);
               await blobs.ready();
               const buf = await Promise.race([
                 blobs.get(blob),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail blob read timeout')), 2000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail blob read timeout')), 2500))
               ]);
               if (buf && buf.length) {
                 dataUrl = `data:${thumbnailMimeType};base64,${b4a.toString(buf, 'base64')}`;
               }
-            } catch { /* best effort: fall back to the blob-server URL */ }
+            } catch { /* bytes not ready yet — fall through to a retryable miss */ }
+            if (!dataUrl) {
+              return { exists: false };
+            }
+            return { url, dataUrl, exists: true };
           }
 
-          return { url, dataUrl, exists: true };
+          return { url, exists: true };
         }
 
         return { exists: false };

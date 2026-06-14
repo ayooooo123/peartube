@@ -273,39 +273,6 @@ test('getVideoThumbnail forwards feed preview blob refs to the API', async () =>
   assert.deepEqual(result, { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: null })
 })
 
-test('getVideoThumbnail persists inlined bytes to a file:// URL the image loader can paint', async () => {
-  const nodeFs = await import('node:fs')
-  const nodePath = await import('node:path')
-  const os = await import('node:os')
-  const storagePath = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'peartube-thumb-'))
-
-  const backend = {}
-  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-  const deps = createDeps({
-    fs: nodeFs.default ?? nodeFs,
-    path: nodePath.default ?? nodePath,
-    storagePath,
-    api: {
-      async getVideoThumbnail() {
-        return { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: `data:image/png;base64,${pngBytes.toString('base64')}` }
-      },
-    },
-  })
-
-  attachMobileHandlers(backend, deps)
-
-  const result = await backend.getVideoThumbnail({ channelKey: 'chan', videoId: '/videos/clip.mp4' })
-
-  // Android's <Image> can't load the loopback URL and won't paint a large data
-  // URI, so the handler must hand back a file:// URL pointing at the real bytes.
-  assert.equal(result.exists, true)
-  assert.equal(result.dataUrl, null)
-  assert.match(result.url, /^file:\/\//)
-  const filePath = result.url.replace('file://', '')
-  assert.deepEqual(nodeFs.readFileSync(filePath), pngBytes, 'cached file must contain the decoded thumbnail bytes')
-  assert.ok(filePath.startsWith(storagePath), 'thumbnail must live under the app storage path')
-})
-
 test('getVideoThumbnail returns the inlined base64 data URL from the API', async () => {
   const backend = {}
   const deps = createDeps({

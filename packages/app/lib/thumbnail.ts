@@ -1,3 +1,5 @@
+import { resolveRenderableThumbnailUri } from './thumbnail-file-cache'
+
 type ThumbnailRequest = {
   channelKey: string
   videoId: string
@@ -147,13 +149,15 @@ export async function fetchThumbnailUrlWithRetry(args: {
     thumbnailMimeType: blobRefs?.thumbnailMimeType || undefined,
   }
 
+  const cacheKey = `${channelKey}:${videoId}`
+
   // Fast path: fetch immediately. Feed previews already carry thumbnail refs
   // backend-side, so the first attempt usually succeeds without paying for a
   // readiness probe first.
   const firstUrl = await attemptThumbnailFetch(rpc, request, THUMBNAIL_TIMEOUT_MS)
   if (firstUrl) {
     readinessCache.set(rpc as object, { checkedAt: Date.now(), ready: true })
-    return firstUrl
+    return resolveRenderableThumbnailUri(firstUrl, cacheKey)
   }
 
   // Slow path: the immediate fetch failed — gate the remaining retries on
@@ -164,7 +168,7 @@ export async function fetchThumbnailUrlWithRetry(args: {
   for (let attempt = 1; attempt < THUMBNAIL_ATTEMPTS; attempt += 1) {
     await sleep(THUMBNAIL_RETRY_DELAY_MS * attempt)
     const url = await attemptThumbnailFetch(rpc, request, THUMBNAIL_TIMEOUT_MS + attempt * 1000)
-    if (url) return url
+    if (url) return resolveRenderableThumbnailUri(url, cacheKey)
   }
 
   return null

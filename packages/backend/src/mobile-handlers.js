@@ -182,11 +182,10 @@ export function attachMobileHandlers(B, deps) {
   B.prepareLivePlayback = async (r) => api.prepareLivePlayback(r.liveCoreKey)
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
-  // Return the inlined base64 bytes (dataUrl). RN's <Image> on Android can't load
-  // the loopback blob-server URL and won't paint a large data: URI, so the app
-  // side persists these bytes to a file:// in its own cache dir (a path Fresco
-  // can read) — see lib/thumbnail-file-cache.ts.
-  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { includeDataUrl: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null } }
+  // ensureLocal: download the thumbnail blocks before returning the URL so the
+  // blob server serves them immediately instead of stalling the image loader on
+  // P2P replication (the reason the URL renders on desktop but hangs on mobile).
+  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { ensureLocal: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null } }
   B.setVideoThumbnail = async () => ({ success: false, error: 'setVideoThumbnail is disabled. Use setVideoThumbnailFromFile.' })
   B.deleteVideo = async (r) => {
     let ch; try { ch = await identityManager.getActiveChannel?.() } catch (e) { return { success: false, error: e?.message } }

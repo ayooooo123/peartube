@@ -123,11 +123,10 @@ async function attemptThumbnailFetch(
 ): Promise<string | null> {
   try {
     const response = await withTimeout(rpc.getVideoThumbnail(request), timeoutMs)
-    // Prefer the inlined data: URL. Rendered via expo-image (Glide on Android),
-    // base64 paints reliably — unlike RN's Fresco-backed <Image> — and it
-    // sidesteps the loopback blob-server URL entirely (which stalls/loads
-    // forever in the native image clients). Fall back to the URL on desktop,
-    // where it is the only field returned.
+    // The mobile handler downloads the thumbnail blocks before returning the URL
+    // (ensureLocal), so the blob server serves it immediately instead of stalling
+    // the image loader on P2P replication; rendered via expo-image (Glide).
+    // dataUrl is kept as an optional fallback for any caller that still inlines.
     const url = response?.dataUrl || response?.url
     if (response?.exists && url) return url
   } catch {}

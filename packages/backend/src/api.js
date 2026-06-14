@@ -1840,21 +1840,49 @@ export function createApi({
             return { exists: false, error: 'Invalid thumbnail blob ID format' }
           }
 
-          // Serve immediately when the thumbnail bytes are already local;
-          // update({wait: true}) would otherwise block on the network (it
-          // used to stall thumbnail loads for up to 10s). The blob server
-          // fetches missing bytes on demand anyway.
-          let thumbnailLocal = false
-          try {
-            thumbnailLocal = Boolean(await blobsCore.has(blob.blockOffset, blob.blockOffset + Math.max(1, blob.blockLength || 1)))
-          } catch { /* best effort */ }
+          // The blob server pipes the blob via hypercore-byte-stream, which reads
+          // blocks with wait:true — so a plain GET stalls until the blocks
+          // replicate. Image loaders (RN <Image>/Fresco, expo-image/Glide) give up
+          // or hang on that wait where the video player tolerates it; that's why a
+          // thumbnail URL only renders once its bytes are local. URL callers that
+          // can't absorb a stalling response (mobile: opts.ensureLocal) actively
+          // download the thumbnail blocks first, then only return the URL once the
+          // bytes are local — otherwise report a retryable miss.
+          const blobStart = blob.blockOffset
+          const blobEnd = blob.blockOffset + Math.max(1, blob.blockLength || 1)
+          const hasThumbnailBlocks = async () => {
+            try { return Boolean(await blobsCore.has(blobStart, blobEnd)) } catch { return false }
+          }
+
+          let thumbnailLocal = await hasThumbnailBlocks()
           if (!thumbnailLocal) {
-            try {
-              await Promise.race([
-                blobsCore.update({ wait: true }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
-              ]);
-            } catch { /* best effort */ }
+            if (opts?.ensureLocal) {
+              if (ctx.swarm && blobsCore.discoveryKey) {
+                try { ctx.swarm.join(blobsCore.discoveryKey) } catch { /* best effort */ }
+              }
+              let range = null
+              try {
+                range = blobsCore.download({ start: blobStart, end: blobEnd, linear: true })
+                await Promise.race([
+                  typeof range?.done === 'function' ? range.done() : Promise.resolve(),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail download timeout')), 3000))
+                ])
+              } catch { /* best effort */ } finally {
+                try { range?.destroy?.() } catch { /* best effort */ }
+              }
+              thumbnailLocal = await hasThumbnailBlocks()
+              // Don't hand back a URL whose bytes aren't local yet — the blob
+              // server would stall the image loader. Report a retryable miss so
+              // the client refetches once replication catches up.
+              if (!thumbnailLocal) return { exists: false }
+            } else {
+              try {
+                await Promise.race([
+                  blobsCore.update({ wait: true }),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
+                ]);
+              } catch { /* best effort */ }
+            }
           }
 
           // Thumbnails are always encoded as JPEG (the bare-ffmpeg build has no
@@ -1872,29 +1900,6 @@ export function createApi({
           host: ctx.blobServerHost || '127.0.0.1',
           port: ctx.blobServer?.port || ctx.blobServerPort
           });
-
-          // Inline the thumbnail bytes as a base64 data URL when the caller asks
-          // (mobile). RN's <Image> can render either a data: URI or the
-          // blob-server URL; lib/thumbnail.ts prefers dataUrl when present and
-          // otherwise falls back to the URL. We always return the URL too so the
-          // card is never left with nothing when the bytes aren't local yet —
-          // the blob server fetches them on demand for the URL path.
-          if (opts?.includeDataUrl) {
-            let dataUrl = null;
-            try {
-              const Hyperblobs = (await import('hyperblobs')).default;
-              const blobs = new Hyperblobs(blobsCore);
-              await blobs.ready();
-              const buf = await Promise.race([
-                blobs.get(blob),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail blob read timeout')), 2500))
-              ]);
-              if (buf && buf.length) {
-                dataUrl = `data:${thumbnailMimeType};base64,${b4a.toString(buf, 'base64')}`;
-              }
-            } catch { /* bytes not ready yet — fall back to the blob-server URL */ }
-            return { url, dataUrl, exists: true };
-          }
 
           return { url, exists: true };
         }

@@ -39,6 +39,56 @@ function formatEta(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
 }
 
+function normalizeFsModule(mod: any): any {
+  return mod?.default ?? mod
+}
+
+// expo-file-system: prefer the legacy API (stable copyAsync/deleteAsync/cacheDirectory),
+// fall back to the new module if legacy is unavailable.
+async function getFileSystem(): Promise<any | null> {
+  if (Platform.OS === 'web') return null
+  try {
+    return normalizeFsModule(await import('expo-file-system/legacy'))
+  } catch {
+    try {
+      return normalizeFsModule(await import('expo-file-system'))
+    } catch {
+      return null
+    }
+  }
+}
+
+// Copy an Android SAF content:// (or file://) URI into the app cache and return a
+// real file:// path. The P2P backend streams the upload off a filesystem path
+// (bare-fs can't read content:// URIs), so we must materialize a local copy. We do
+// this ourselves — with visible UI feedback — instead of letting the document
+// picker copy inline (copyToCacheDirectory), which blocks with no feedback and is
+// unreliable/slow for large (1GB+) files.
+async function copyPickedVideoToCache(srcUri: string, name?: string): Promise<string> {
+  const fs = await getFileSystem()
+  const cacheDir: string | undefined = fs?.cacheDirectory || fs?.Paths?.cache?.uri
+  if (!fs || typeof fs.copyAsync !== 'function' || !cacheDir) {
+    throw new Error('File system unavailable')
+  }
+  const rawExt = (name?.split('.').pop() || srcUri.split('.').pop() || 'mp4')
+  const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '').slice(0, 5) || 'mp4'
+  const dest = `${cacheDir.replace(/\/?$/, '/')}peartube-upload-${Date.now()}.${ext}`
+  await fs.copyAsync({ from: srcUri, to: dest })
+  return dest
+}
+
+async function deleteCachedFile(uri: string | null | undefined): Promise<void> {
+  if (!uri) return
+  try {
+    const fs = await getFileSystem()
+    if (fs && typeof fs.deleteAsync === 'function') {
+      await fs.deleteAsync(uri, { idempotent: true })
+    }
+  } catch {
+    // best-effort cleanup
+  }
+}
+
 export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -64,9 +114,18 @@ export default function StudioScreen() {
   const thumbnailGenIdRef = useRef(0)
   const [pickingVideo, setPickingVideo] = useState(false)
   const pickingVideoRef = useRef(false)
+  const [preparingVideo, setPreparingVideo] = useState(false) // Android: copying picked file into cache
+  const tempVideoUriRef = useRef<string | null>(null) // app-cache copy we created; deleted after upload/reset
   const [editingVideo, setEditingVideo] = useState<any>(null)
   const tabBarMetrics = useTabBarMetrics()
   const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
+
+  // Delete the temporary cache copy we made of the picked video (Android), if any.
+  const cleanupTempVideo = useCallback(async () => {
+    const uri = tempVideoUriRef.current
+    tempVideoUriRef.current = null
+    await deleteCachedFile(uri)
+  }, [])
 
   const uploadThumbnailForVideo = useCallback(async (videoId: string, thumbPath: string) => {
     if (!rpc || !videoId || !thumbPath) return false
@@ -235,9 +294,13 @@ export default function StudioScreen() {
     try {
       // Android: prefer DocumentPicker to avoid Photo Picker URI permission issues.
       if (Platform.OS === 'android') {
+        // copyToCacheDirectory:false → the picker returns immediately with a
+        // content:// URI instead of blocking (with no UI feedback) while it copies
+        // the whole file. For 1GB+ videos the inline copy is what made the screen
+        // hang/"never load". We copy into cache ourselves below, with feedback.
         const docResult = await DocumentPicker.getDocumentAsync({
           type: 'video/*',
-          copyToCacheDirectory: true,
+          copyToCacheDirectory: false,
           multiple: false,
         })
 
@@ -245,23 +308,37 @@ export default function StudioScreen() {
         const asset = docResult.assets?.[0]
         if (!asset?.uri) return
 
-        setSelectedVideo(asset.uri)
-        const filename = asset.name || asset.uri.split('/').pop() || 'Untitled'
-        setTitle(filename.replace(/\.[^/.]+$/, ''))
-
-        if (typeof asset.size === 'number') setFileSize(asset.size)
-        if (typeof asset.mimeType === 'string') setMimeType(asset.mimeType)
-
-        // Kick off thumbnail generation (non-blocking). This should work reliably
-        // because we copy the video to app cache (file:// URI).
+        // Reset prior selection/preview state and drop any earlier temp copy.
         setThumbnailUri(null)
         setThumbnailFilePath(null)
         setThumbnailError(null)
-        InteractionManager.runAfterInteractions(() => {
-          void generateThumbnail(asset.uri).catch((err) => {
-            console.log('[Studio] Background thumbnail generation failed:', err)
+        void cleanupTempVideo()
+
+        const filename = asset.name || asset.uri.split('/').pop() || 'Untitled'
+        setTitle(filename.replace(/\.[^/.]+$/, ''))
+        if (typeof asset.size === 'number') setFileSize(asset.size)
+        if (typeof asset.mimeType === 'string') setMimeType(asset.mimeType)
+
+        // Materialize a real file:// path the backend can stream from. Show a
+        // "Preparing…" state so the user isn't staring at a frozen/black screen.
+        setPreparingVideo(true)
+        try {
+          const localUri = await copyPickedVideoToCache(asset.uri, asset.name || undefined)
+          tempVideoUriRef.current = localUri
+          setSelectedVideo(localUri)
+
+          // Kick off thumbnail generation (non-blocking) from the cached file:// URI.
+          InteractionManager.runAfterInteractions(() => {
+            void generateThumbnail(localUri).catch((err) => {
+              console.log('[Studio] Background thumbnail generation failed:', err)
+            })
           })
-        })
+        } catch (err: any) {
+          console.error('[Studio] Failed to prepare video:', err)
+          Alert.alert('Could not prepare video', err?.message || 'Failed to read the selected video. Please try again.')
+        } finally {
+          setPreparingVideo(false)
+        }
 
         return
       }
@@ -427,6 +504,7 @@ export default function StudioScreen() {
       setVideoDuration(null)
       setSelectedCategory('Other')
       setThumbnailError(null)
+      void cleanupTempVideo()
       haptics.success()
       Alert.alert('Published!', 'Your video is live on your channel.')
     } catch (err: any) {
@@ -510,7 +588,7 @@ export default function StudioScreen() {
                   Video selected
                 </Text>
                 <Pressable
-                  onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); setThumbnailError(null); }}
+                  onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); setThumbnailError(null); void cleanupTempVideo(); }}
                   className="w-8 h-8 items-center justify-center"
                 >
                   <Feather name="trash-2" color={colors.error} size={18} />
@@ -597,11 +675,17 @@ export default function StudioScreen() {
           ) : (
             <Pressable
               onPress={pickVideo}
-              disabled={pickingVideo}
+              disabled={pickingVideo || preparingVideo}
               className="flex-row items-center justify-center gap-3 bg-pear-bg-card border-2 border-dashed border-pear-border rounded-xl py-8 active:opacity-80"
             >
-              <Feather name="upload" color={colors.textMuted} size={24} />
-              <Text className="text-body text-pear-text-muted">{pickingVideo ? 'Opening picker…' : 'Choose a video to share'}</Text>
+              {preparingVideo ? (
+                <ActivityIndicator color={colors.textMuted} size="small" />
+              ) : (
+                <Feather name="upload" color={colors.textMuted} size={24} />
+              )}
+              <Text className="text-body text-pear-text-muted">
+                {preparingVideo ? 'Preparing video…' : (pickingVideo ? 'Opening picker…' : 'Choose a video to share')}
+              </Text>
             </Pressable>
           )}
         </View>

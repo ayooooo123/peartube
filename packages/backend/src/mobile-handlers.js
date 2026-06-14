@@ -44,7 +44,49 @@ function normalizeSeedingStatus(s) {
 }
 
 export function attachMobileHandlers(B, deps) {
-  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player } = deps
+  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, storagePath, generateAndStoreThumbnail, transcoder, castTranscoder, player } = deps
+
+  // Thumbnail file cache. On Android, RN's <Image> cannot load the worklet's
+  // loopback blob-server URL, and a large base64 data: URI decodes (onLoad
+  // fires) but never paints — the only scheme that renders reliably is file://.
+  // So we persist the inlined thumbnail bytes to a file in the app sandbox and
+  // serve that path. Guarded so the test harness (empty fs/path stubs) is a
+  // no-op and the data-URL passthrough still applies.
+  const thumbnailCacheDir = (fs && typeof path?.join === 'function' && storagePath)
+    ? path.join(storagePath, 'thumbnail-cache')
+    : null
+  let thumbnailCacheReady = false
+  const ensureThumbnailCacheDir = () => {
+    if (thumbnailCacheReady) return true
+    if (!thumbnailCacheDir || typeof fs?.mkdirSync !== 'function') return false
+    try { fs.mkdirSync(thumbnailCacheDir, { recursive: true }); thumbnailCacheReady = true } catch {}
+    return thumbnailCacheReady
+  }
+  const writeThumbnailFile = (dataUrl, channelKey, videoId) => {
+    if (!thumbnailCacheDir || typeof dataUrl !== 'string' || typeof fs?.writeFileSync !== 'function') return null
+    const match = dataUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/s)
+    if (!match || !match[2]) return null
+    const mime = (match[1] || 'image/jpeg').toLowerCase()
+    const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg'
+    let buf
+    try { buf = Buffer.from(match[3], 'base64') } catch { return null }
+    if (!buf || !buf.length) return null
+    if (!ensureThumbnailCacheDir()) return null
+    const safe = `${channelKey || 'c'}_${videoId || 'v'}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)
+    const filePath = path.join(thumbnailCacheDir, `${safe}.${ext}`)
+    try {
+      // Thumbnails are immutable per video — reuse a correctly-sized file.
+      let cached = false
+      try { cached = fs.statSync(filePath).size === buf.length } catch {}
+      if (!cached) {
+        const tmp = `${filePath}.tmp`
+        fs.writeFileSync(tmp, buf)
+        try { fs.renameSync(tmp, filePath) } catch { fs.writeFileSync(filePath, buf) }
+      }
+    } catch { return null }
+    return `file://${filePath}`
+  }
+
   const refreshPublishedChannelFeed = async (driveKey) => {
     if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
     try {
@@ -181,7 +223,15 @@ export function attachMobileHandlers(B, deps) {
   B.prepareLivePlayback = async (r) => api.prepareLivePlayback(r.liveCoreKey)
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
-  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { includeDataUrl: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null } }
+  B.getVideoThumbnail = async (r) => {
+    const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { includeDataUrl: true })
+    // Prefer a file:// URL the Android image loader can actually paint.
+    if (res?.exists && res?.dataUrl) {
+      const fileUrl = writeThumbnailFile(res.dataUrl, r.channelKey, r.videoId)
+      if (fileUrl) return { url: fileUrl, exists: true, dataUrl: null }
+    }
+    return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null }
+  }
   B.setVideoThumbnail = async () => ({ success: false, error: 'setVideoThumbnail is disabled. Use setVideoThumbnailFromFile.' })
   B.deleteVideo = async (r) => {
     let ch; try { ch = await identityManager.getActiveChannel?.() } catch (e) { return { success: false, error: e?.message } }

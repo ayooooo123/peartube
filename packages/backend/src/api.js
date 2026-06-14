@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, setPlaybackActive as storageSetPlaybackActive, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, setPlaybackActive as storageSetPlaybackActive, isPlaybackActive as storageIsPlaybackActive, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { createLiveBroadcastService, createLivePlaybackService } from './live/index.js';
 import { subscribeBlobPlayhead } from './blob-range-priority.js';
@@ -474,6 +474,46 @@ export function createApi({
       if (request?.seedKey) keys.add(request.seedKey)
     }
     return keys
+  }
+
+  // Storage-quota eviction is deferred while playback is active, then flushed
+  // once playback stops. To keep that flush from ever disrupting playback we (a)
+  // debounce it so rapid open/close and pause/resume cancel it before it runs,
+  // and (b) protect the most-recently-played video so seeking/replaying it never
+  // hits an evicted range.
+  const QUOTA_SWEEP_AFTER_PLAYBACK_MS =
+    Number(globalThis?.process?.env?.PEARTUBE_QUOTA_SWEEP_DELAY_MS) || 1500
+  let quotaSweepTimer = null
+  let lastPlayedSeedKey = null
+
+  function markVideoPlayed(driveKey, videoPath) {
+    if (!driveKey || !videoPath) return
+    lastPlayedSeedKey = `${driveKey}:${videoPath}`
+  }
+
+  function cancelScheduledQuotaSweep() {
+    if (!quotaSweepTimer) return
+    clearTimeout(quotaSweepTimer)
+    quotaSweepTimer = null
+  }
+
+  function runQuotaSweep() {
+    quotaSweepTimer = null
+    if (!seedingManager?.enforceQuota) return
+    // A new playback may have started during the debounce window — never evict
+    // while a player or blob-server reader is active.
+    if (storageIsPlaybackActive()) return
+    const protectedKeys = getActiveRangeSeedKeys()
+    if (lastPlayedSeedKey) protectedKeys.add(lastPlayedSeedKey)
+    Promise.resolve()
+      .then(() => seedingManager.enforceQuota({ protectedKeys }))
+      .catch(err => console.log('[API] Deferred quota enforcement failed:', err?.message))
+  }
+
+  function scheduleQuotaSweepAfterPlayback() {
+    if (!seedingManager?.enforceQuota) return
+    cancelScheduledQuotaSweep()
+    quotaSweepTimer = setTimeout(runQuotaSweep, QUOTA_SWEEP_AFTER_PLAYBACK_MS)
   }
 
   /** @type {Map<string, { ts: number, value: any[] }>} */
@@ -1379,6 +1419,7 @@ export function createApi({
      */
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
+      markVideoPlayed(driveKey, videoPath)
       const startedAt = Date.now()
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
 
@@ -2353,6 +2394,7 @@ export function createApi({
      * @returns {Promise<Object>}
      */
     async prefetchVideo(driveKey, videoPath, publicBeeKey = null) {
+      markVideoPlayed(driveKey, videoPath)
       const prefetchKey = encodeIndexKey(driveKey || '', videoPath || '')
       const existing = prefetchInFlight.get(prefetchKey)
       if (existing) return existing
@@ -4119,10 +4161,21 @@ export function createApi({
      * @returns {{success: boolean, active: boolean, updatedAt: number, expiresAt: number}}
      */
     setPlaybackActive(options = {}) {
-      return {
-        success: true,
-        ...storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
+      const state = storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
+      // Flush deferred cache eviction when playback ends. enforceQuota() skips
+      // every clear while playback is active (isCacheClearBlocked), and its only
+      // other trigger — addSeed — fires *during* playback, so the over-quota
+      // evictions get deferred and nothing ever re-runs them. Without this hook
+      // the seed cache grows unbounded past maxStorageGB.
+      //
+      // The sweep is debounced and cancelled the moment playback resumes, so
+      // rapid open/close, seeking, and pause/resume never trigger eviction.
+      if (state.active) {
+        cancelScheduledQuotaSweep()
+      } else {
+        scheduleQuotaSweepAfterPlayback()
       }
+      return { success: true, ...state }
     },
 
     /**

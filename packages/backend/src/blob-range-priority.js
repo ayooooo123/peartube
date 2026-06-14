@@ -405,6 +405,7 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
     coreKeyHex: request.key.toString('hex'),
     blockOffset: request.blob.blockOffset,
     blockLength: request.blob.blockLength,
+    byteLength: request.blob.byteLength,
     windowStart: downloadRange.start,
     windowEnd: downloadRange.end,
   })

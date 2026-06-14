@@ -13,6 +13,7 @@ import { initializeStorage, isPlaybackActive, loadChannel, retainPublicBeeConten
 import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
+import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createPersonalManager } from './personal/personal-manager.js';
@@ -376,6 +377,14 @@ export async function createBackendContext(config) {
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath),
     isCacheClearBlocked: isPlaybackActive
   });
+
+  // Keep a single playing video from filling the disk: trim already-played
+  // blocks behind a bounded seek-back window while it streams. Unlike the
+  // seed-quota sweep this is playhead-aware, so it runs *during* playback.
+  const playbackWindowCache = createPlaybackWindowCache({ store: ctx.store });
+  playbackWindowCache.start();
+  ctx.playbackWindowCache = playbackWindowCache;
+
   const uploadManager = createUploadManager({ ctx });
 
   // Phase 3: Wire up callbacks

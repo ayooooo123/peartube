@@ -41,7 +41,12 @@ ns.register({
     { name: 'addedAt', type: 'uint64' },
     { name: 'updatedAt', type: 'uint64' },
     { name: 'removedAt', type: 'uint64' },
-    { name: 'banned', type: 'bool' }
+    { name: 'banned', type: 'bool' },
+    // Hyperswarm/Noise public key (hex) this device replicates under. Lets other
+    // devices on the channel recognise it as a connected peer holding a full
+    // copy (durable own-device offload anchor). Trailing optional field — keep
+    // last to preserve wire compatibility of existing writer records.
+    { name: 'swarmKeyHex', type: 'string' }
   ]
 })
 

@@ -96,6 +96,7 @@ const encoding1 = {
     if (m.addedAt) c.uint64.preencode(state, m.addedAt)
     if (m.updatedAt) c.uint64.preencode(state, m.updatedAt)
     if (m.removedAt) c.uint64.preencode(state, m.removedAt)
+    if (m.swarmKeyHex) c.string.preencode(state, m.swarmKeyHex)
   },
   encode(state, m) {
     const flags =
@@ -105,7 +106,8 @@ const encoding1 = {
       (m.addedAt ? 8 : 0) |
       (m.updatedAt ? 16 : 0) |
       (m.removedAt ? 32 : 0) |
-      (m.banned ? 64 : 0)
+      (m.banned ? 64 : 0) |
+      (m.swarmKeyHex ? 128 : 0)
 
     c.string.encode(state, m.keyHex)
     c.uint8.encode(state, flags)
@@ -116,6 +118,7 @@ const encoding1 = {
     if (m.addedAt) c.uint64.encode(state, m.addedAt)
     if (m.updatedAt) c.uint64.encode(state, m.updatedAt)
     if (m.removedAt) c.uint64.encode(state, m.removedAt)
+    if (m.swarmKeyHex) c.string.encode(state, m.swarmKeyHex)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -129,7 +132,8 @@ const encoding1 = {
       addedAt: (flags & 8) !== 0 ? c.uint64.decode(state) : 0,
       updatedAt: (flags & 16) !== 0 ? c.uint64.decode(state) : 0,
       removedAt: (flags & 32) !== 0 ? c.uint64.decode(state) : 0,
-      banned: (flags & 64) !== 0
+      banned: (flags & 64) !== 0,
+      swarmKeyHex: (flags & 128) !== 0 ? c.string.decode(state) : null
     }
   }
 }

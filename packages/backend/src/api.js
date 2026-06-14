@@ -632,15 +632,34 @@ export function createApi({
 
   // Swarm public keys of durable full-copy anchors, used to upgrade a generic
   // "live peer has it" into a trusted "the relay / one of your own devices has
-  // it". Empty for now: the client does not yet learn the relay's swarm key or
-  // map paired devices to their connection keys, so v1 relies on the
-  // independent-live-peers redundancy threshold. These are the seams to fill
-  // once those keys are discoverable.
+  // it".
+  //
+  // Relay anchor is still a seam: the client doesn't yet learn the relay's swarm
+  // key (no config/feed plumbing in the Bare backend), so this stays empty and
+  // those deployments lean on the independent-live-peers redundancy threshold.
   function getKnownDurableRelayKeys() {
     return []
   }
-  function getOwnDeviceSwarmKeys(_driveKey) {
-    return []
+
+  // Own-device anchor: each device records the swarm key it replicates under in
+  // its channel writer record (ensureLocalBlobDrive). Reading them back lets the
+  // offload check recognise when a connected blob peer is one of the user's own
+  // devices holding a full copy — the strongest durable anchor.
+  async function getOwnDeviceSwarmKeys(driveKey) {
+    try {
+      const channel = ctx.channels?.get?.(driveKey)
+      if (typeof channel?.listWriters !== 'function') return []
+      const writers = await channel.listWriters()
+      const keys = []
+      for (const w of writers || []) {
+        if (w?.banned || w?.removedAt) continue
+        const k = typeof w?.swarmKeyHex === 'string' ? w.swarmKeyHex.toLowerCase() : null
+        if (k && /^[a-f0-9]{64}$/.test(k)) keys.push(k)
+      }
+      return keys
+    } catch {
+      return []
+    }
   }
 
   function getVideoCorePeerDetails(driveKey, videoPath) {
@@ -3590,7 +3609,7 @@ export function createApi({
             fullCopyKeys,
             fullCopyAnonymous,
             relayKeys: getKnownDurableRelayKeys(),
-            deviceKeys: getOwnDeviceSwarmKeys(driveKey)
+            deviceKeys: await getOwnDeviceSwarmKeys(driveKey)
           })
           return {
             ...assessment,

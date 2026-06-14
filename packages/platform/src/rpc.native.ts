@@ -38,7 +38,7 @@ declare const HRPC: new (stream: any) => {
   preparePlayback(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<any>;
   prefetchVideo(req: { channelKey: string; videoId: string; publicBeeKey?: string }): Promise<any>;
   getVideoStats(req: { channelKey: string; videoId: string }): Promise<any>;
-  getVideoThumbnail(req: { channelKey: string; videoId: string }): Promise<any>;
+  getVideoThumbnail(req: { channelKey: string; videoId: string; thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null; thumbnailMimeType?: string | null }): Promise<any>;
   setVideoThumbnail(req: { videoId: string; imageData: string; mimeType: string }): Promise<any>;
   getChannel(req: { publicKey: string }): Promise<any>;
   subscribeChannel(req: { channelKey: string }): Promise<any>;
@@ -1012,7 +1012,7 @@ export const rpc = {
     return ensureRPC().deleteVideo(req);
   },
 
-  async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+  async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string; thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null; thumbnailMimeType?: string | null }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;

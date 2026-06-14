@@ -298,6 +298,7 @@ export default function HomeScreen() {
         fetchThumbnail(video.channelKey, video.id, {
           thumbnailBlobId: videoAny.thumbnailBlobId || null,
           thumbnailBlobsCoreKey: videoAny.thumbnailBlobsCoreKey || null,
+          thumbnailMimeType: videoAny.thumbnailMimeType || null,
         })
       }
     }

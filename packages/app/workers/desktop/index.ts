@@ -670,6 +670,7 @@ B.getVideoThumbnail = async (r: any) => {
     const res = await api.getVideoThumbnail(r.channelKey, r.videoId, {
       thumbnailBlobId: r.thumbnailBlobId || null,
       thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null,
+      thumbnailMimeType: r.thumbnailMimeType || null,
     })
     return { url: res.url || null, exists: res.exists || false, dataUrl: null }
   } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, retryable: true, url: null, exists: false } }

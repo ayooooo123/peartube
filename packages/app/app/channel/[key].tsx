@@ -215,6 +215,7 @@ export default function ChannelScreen() {
         blobRefs: {
           thumbnailBlobId: (video as any).thumbnailBlobId || null,
           thumbnailBlobsCoreKey: (video as any).thumbnailBlobsCoreKey || null,
+          thumbnailMimeType: (video as any).thumbnailMimeType || null,
         },
       }).then((url) => {
         if (!url) return

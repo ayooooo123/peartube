@@ -254,15 +254,18 @@ test('getVideoThumbnail forwards feed preview blob refs to the API', async () =>
     videoId: 'video-1',
     thumbnailBlobId: '0:4:0:1024',
     thumbnailBlobsCoreKey: 'a'.repeat(64),
+    thumbnailMimeType: 'image/jpeg',
   })
 
   // Gossip-discovered channels have no locally resolvable video record, so
   // dropping these refs (as the handler used to) meant mobile thumbnails for
-  // feed previews could never resolve at all.
+  // feed previews could never resolve at all. The MIME type is forwarded too so
+  // the blob server serves the correct Content-Type (Android/Fresco rejects a
+  // JPEG mislabeled as webp).
   assert.deepEqual(calls, [[
     'channel-key',
     'video-1',
-    { thumbnailBlobId: '0:4:0:1024', thumbnailBlobsCoreKey: 'a'.repeat(64) },
+    { thumbnailBlobId: '0:4:0:1024', thumbnailBlobsCoreKey: 'a'.repeat(64), thumbnailMimeType: 'image/jpeg' },
   ]])
   assert.deepEqual(result, { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: null })
 })

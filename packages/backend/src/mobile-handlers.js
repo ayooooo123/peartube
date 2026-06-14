@@ -181,7 +181,7 @@ export function attachMobileHandlers(B, deps) {
   B.prepareLivePlayback = async (r) => api.prepareLivePlayback(r.liveCoreKey)
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
-  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null }); return { url: res.url || null, exists: res.exists || false, dataUrl: null } }
+  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }); return { url: res.url || null, exists: res.exists || false, dataUrl: null } }
   B.setVideoThumbnail = async () => ({ success: false, error: 'setVideoThumbnail is disabled. Use setVideoThumbnailFromFile.' })
   B.deleteVideo = async (r) => {
     let ch; try { ch = await identityManager.getActiveChannel?.() } catch (e) { return { success: false, error: e?.message } }

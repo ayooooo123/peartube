@@ -403,7 +403,7 @@ export const rpc = {
     return ensureRPC().setVideoThumbnailFromFile(req);
   },
 
-  async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+  async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string; thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null; thumbnailMimeType?: string | null }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;

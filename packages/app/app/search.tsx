@@ -229,6 +229,7 @@ export default function SearchScreen() {
             blobRefs: {
               thumbnailBlobId: (v as any).thumbnailBlobId || null,
               thumbnailBlobsCoreKey: (v as any).thumbnailBlobsCoreKey || null,
+              thumbnailMimeType: (v as any).thumbnailMimeType || null,
             },
           }).then((url) => {
             if (!url) return

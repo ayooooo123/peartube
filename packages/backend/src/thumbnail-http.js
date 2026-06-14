@@ -48,10 +48,13 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
   // compact-encoding until a tagged request actually arrives.
   const { decodeBlobServerBlobRef } = await import('./blob-range-priority.js')
   const ref = decodeBlobServerBlobRef(blobServer, req)
-  if (!ref) return false
+  if (!ref) { console.log('[ThumbnailHTTP] tagged request but could not decode key/blob/token'); return false }
 
   const byteLength = Number(ref.blob?.byteLength) || 0
-  if (byteLength <= 0 || byteLength > MAX_THUMBNAIL_BYTES) return false
+  if (byteLength <= 0 || byteLength > MAX_THUMBNAIL_BYTES) {
+    console.log('[ThumbnailHTTP] skipping: byteLength out of range', byteLength)
+    return false
+  }
 
   let core = null
   try {
@@ -69,18 +72,23 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
       blobs.get(ref.blob),
       new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail read timeout')), THUMBNAIL_READ_TIMEOUT_MS))
     ])
-    if (!buf || !buf.length) return false
+    if (!buf || !buf.length) { console.log('[ThumbnailHTTP] read returned no bytes'); return false }
     if (res.headersSent || res.writableEnded) return true
 
-    res.statusCode = 200
+    // Set headers then writeHead(status) + end — the exact pattern the OPTIONS
+    // branch uses, which bare-http1 is proven to flush correctly. Setting
+    // res.statusCode alone did not reliably emit the response.
     res.setHeader('Content-Type', ref.type || 'image/jpeg')
     res.setHeader('Content-Length', String(buf.length))
     res.setHeader('Connection', 'close')
     res.setHeader('Accept-Ranges', 'none')
     res.setHeader('Cache-Control', 'no-store')
+    res.writeHead(200)
     res.end(req.method === 'HEAD' ? undefined : buf)
+    console.log('[ThumbnailHTTP] served', buf.length, 'bytes', ref.type || 'image/jpeg', req.method)
     return true
-  } catch {
+  } catch (err) {
+    console.log('[ThumbnailHTTP] serve error:', err?.message || err)
     return false
   } finally {
     // Close the per-request core session so repeated thumbnail loads don't leak.

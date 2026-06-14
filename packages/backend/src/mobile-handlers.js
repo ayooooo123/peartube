@@ -182,10 +182,11 @@ export function attachMobileHandlers(B, deps) {
   B.prepareLivePlayback = async (r) => api.prepareLivePlayback(r.liveCoreKey)
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
-  // ensureLocal: download the thumbnail blocks before returning the URL so the
-  // blob server serves them immediately instead of stalling the image loader on
-  // P2P replication (the reason the URL renders on desktop but hangs on mobile).
-  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { ensureLocal: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null } }
+  // includeDataUrl: download the thumbnail blocks (so the bytes are local) and
+  // inline them as a base64 data URL. The loopback blob-server URL won't render
+  // in Android's image clients even with local bytes + correct Content-Type, so
+  // we hand back the bytes and render them via expo-image (Glide paints base64).
+  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { includeDataUrl: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null } }
   B.setVideoThumbnail = async () => ({ success: false, error: 'setVideoThumbnail is disabled. Use setVideoThumbnailFromFile.' })
   B.deleteVideo = async (r) => {
     let ch; try { ch = await identityManager.getActiveChannel?.() } catch (e) { return { success: false, error: e?.message } }

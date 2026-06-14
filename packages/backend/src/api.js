@@ -1856,7 +1856,7 @@ export function createApi({
 
           let thumbnailLocal = await hasThumbnailBlocks()
           if (!thumbnailLocal) {
-            if (opts?.ensureLocal) {
+            if (opts?.ensureLocal || opts?.includeDataUrl) {
               if (ctx.swarm && blobsCore.discoveryKey) {
                 try { ctx.swarm.join(blobsCore.discoveryKey) } catch { /* best effort */ }
               }
@@ -1871,10 +1871,6 @@ export function createApi({
                 try { range?.destroy?.() } catch { /* best effort */ }
               }
               thumbnailLocal = await hasThumbnailBlocks()
-              // Don't hand back a URL whose bytes aren't local yet — the blob
-              // server would stall the image loader. Report a retryable miss so
-              // the client refetches once replication catches up.
-              if (!thumbnailLocal) return { exists: false }
             } else {
               try {
                 await Promise.race([
@@ -1900,6 +1896,29 @@ export function createApi({
           host: ctx.blobServerHost || '127.0.0.1',
           port: ctx.blobServer?.port || ctx.blobServerPort
           });
+
+          // Inline the bytes as a base64 data URL for callers that render base64
+          // (mobile via expo-image/Glide). The loopback blob-server URL itself
+          // won't load in Android's image clients (Fresco errors, Glide hangs/
+          // errors) even with local bytes + a correct image/jpeg Content-Type, so
+          // we hand the bytes back directly. ensureLocal already guaranteed the
+          // blocks are local; if not, report a retryable miss.
+          if (opts?.includeDataUrl) {
+            if (!thumbnailLocal) return { exists: false };
+            try {
+              const Hyperblobs = (await import('hyperblobs')).default;
+              const blobs = new Hyperblobs(blobsCore);
+              await blobs.ready();
+              const buf = await Promise.race([
+                blobs.get(blob),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail blob read timeout')), 3000))
+              ]);
+              if (buf && buf.length) {
+                return { url, dataUrl: `data:${thumbnailMimeType};base64,${b4a.toString(buf, 'base64')}`, exists: true };
+              }
+            } catch { /* fall through to a retryable miss */ }
+            return { exists: false };
+          }
 
           return { url, exists: true };
         }

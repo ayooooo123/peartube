@@ -123,10 +123,9 @@ async function attemptThumbnailFetch(
 ): Promise<string | null> {
   try {
     const response = await withTimeout(rpc.getVideoThumbnail(request), timeoutMs)
-    // The mobile handler downloads the thumbnail blocks before returning the URL
-    // (ensureLocal), so the blob server serves it immediately instead of stalling
-    // the image loader on P2P replication; rendered via expo-image (Glide).
-    // dataUrl is kept as an optional fallback for any caller that still inlines.
+    // Mobile inlines the thumbnail bytes as a data: URL (the loopback blob-server
+    // URL won't render in Android image clients); rendered via expo-image, whose
+    // Glide backend paints base64 reliably. Desktop returns only the URL.
     const url = response?.dataUrl || response?.url
     if (response?.exists && url) return url
   } catch {}

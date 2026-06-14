@@ -118,6 +118,12 @@ export async function ensureThumbnailBackendReady(
   }
 }
 
+// TEMP diagnostic: render the blob-server HTTP URL directly (instead of the
+// inlined data: URL / cached file://) so we can see, via ThumbnailImage's error
+// badge, the exact reason RN's <Image> rejects it on Android. If the URL renders
+// fine here, we can drop the data/file workarounds entirely.
+export const DIAGNOSE_HTTP_URL = true
+
 async function attemptThumbnailFetch(
   rpc: ThumbnailRPC,
   request: ThumbnailRequest,
@@ -125,7 +131,9 @@ async function attemptThumbnailFetch(
 ): Promise<string | null> {
   try {
     const response = await withTimeout(rpc.getVideoThumbnail(request), timeoutMs)
-    const url = response?.dataUrl || response?.url
+    const url = DIAGNOSE_HTTP_URL
+      ? (response?.url || response?.dataUrl)
+      : (response?.dataUrl || response?.url)
     if (response?.exists && url) return url
   } catch {}
   return null
@@ -157,7 +165,7 @@ export async function fetchThumbnailUrlWithRetry(args: {
   const firstUrl = await attemptThumbnailFetch(rpc, request, THUMBNAIL_TIMEOUT_MS)
   if (firstUrl) {
     readinessCache.set(rpc as object, { checkedAt: Date.now(), ready: true })
-    return resolveRenderableThumbnailUri(firstUrl, cacheKey)
+    return DIAGNOSE_HTTP_URL ? firstUrl : resolveRenderableThumbnailUri(firstUrl, cacheKey)
   }
 
   // Slow path: the immediate fetch failed — gate the remaining retries on
@@ -168,7 +176,7 @@ export async function fetchThumbnailUrlWithRetry(args: {
   for (let attempt = 1; attempt < THUMBNAIL_ATTEMPTS; attempt += 1) {
     await sleep(THUMBNAIL_RETRY_DELAY_MS * attempt)
     const url = await attemptThumbnailFetch(rpc, request, THUMBNAIL_TIMEOUT_MS + attempt * 1000)
-    if (url) return resolveRenderableThumbnailUri(url, cacheKey)
+    if (url) return DIAGNOSE_HTTP_URL ? url : resolveRenderableThumbnailUri(url, cacheKey)
   }
 
   return null

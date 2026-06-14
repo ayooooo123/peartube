@@ -44,6 +44,7 @@ function ThumbnailImageComponent({
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
   const [imageLoaded, setImageLoaded] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
   const [retryAttempt, setRetryAttempt] = useState(0)
 
   // Reset error state during render when the URL changes so a stale
@@ -54,6 +55,7 @@ function ThumbnailImageComponent({
     setImageError(false)
     setImageLoading(Boolean(thumbnailUrl))
     setImageLoaded(false)
+    setErrorMsg('')
     setRetryAttempt(0)
   }
 
@@ -105,7 +107,9 @@ function ThumbnailImageComponent({
   }, [thumbnailUrl, imageLoading, imageError, handleRecoverableError])
 
   // Memoize callbacks for Image component
-  const handleError = useCallback(() => {
+  const handleError = useCallback((e: any) => {
+    const reason = e?.nativeEvent?.error
+    if (reason) setErrorMsg(String(reason))
     handleRecoverableError()
   }, [handleRecoverableError])
   const handleLoadStart = useCallback(() => setImageLoading(true), [])
@@ -117,8 +121,9 @@ function ThumbnailImageComponent({
     const scheme = uriScheme(thumbnailUrl)
     const state = imageError ? 'ERR' : imageLoaded ? 'OK' : thumbnailUrl ? '...' : '—'
     const len = thumbnailUrl ? thumbnailUrl.length : 0
-    return `${scheme}/${state}${len ? ` ${len}` : ''}`
-  }, [thumbnailUrl, imageError, imageLoaded])
+    const reason = errorMsg ? ` ${errorMsg.slice(0, 60)}` : ''
+    return `${scheme}/${state}${len ? ` ${len}` : ''}${reason}`
+  }, [thumbnailUrl, imageError, imageLoaded, errorMsg])
 
   return (
     <View style={containerStyle}>
@@ -145,7 +150,7 @@ function ThumbnailImageComponent({
       {/* TEMPORARY diagnostic badge (top-left) */}
       {debugBadge && (
         <View style={styles.debugBadge}>
-          <Text style={styles.debugBadgeText}>{debugBadge}</Text>
+          <Text style={styles.debugBadgeText} numberOfLines={3}>{debugBadge}</Text>
         </View>
       )}
 
@@ -227,6 +232,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 6,
     left: 6,
+    right: 6,
     backgroundColor: 'rgba(255,0,0,0.85)',
     paddingHorizontal: 5,
     paddingVertical: 2,

@@ -98,6 +98,37 @@ test('tagged Android releases build arm64 and x86 APKs', () => {
   )
 })
 
+test('pull requests run desktop tests but skip app build/packaging jobs', () => {
+  const buildDesktop = readFile('.github/workflows/build-desktop.yml')
+
+  // App build/packaging jobs must be gated off on pull requests.
+  assert.match(
+    buildDesktop,
+    /electrobun-desktop-build:\s*\n\s*if:\s*\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/,
+    'electrobun-desktop-build (app build) should not run on pull requests',
+  )
+  assert.match(
+    buildDesktop,
+    /native-desktop-archive:\s*\n\s*if:\s*\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/,
+    'native-desktop-archive (app build) should not run on pull requests',
+  )
+
+  // The test job must still run on pull requests (no pull_request gate).
+  assert.match(
+    buildDesktop,
+    /native-desktop-test:\s*\n\s*runs-on:/,
+    'native-desktop-test should still run on pull requests',
+  )
+
+  // Mobile app builds already never run on pull requests (push/dispatch only).
+  const buildMobile = readFile('.github/workflows/build-mobile.yml')
+  assert.doesNotMatch(
+    buildMobile,
+    /^\s*pull_request:/m,
+    'build-mobile should not be triggered by pull requests',
+  )
+})
+
 test('routine validation workflows use path filters to avoid irrelevant runs', () => {
   const workflows = [
     ['ci-fast', readFile('.github/workflows/ci-fast.yml')],

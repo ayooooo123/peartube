@@ -33,6 +33,7 @@ concurrency:
 
 jobs:
   electrobun-desktop-build:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: macos-14
     timeout-minutes: 60
     steps:

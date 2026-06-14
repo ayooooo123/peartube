@@ -67,6 +67,14 @@ function uniqueTextParts(parts) {
   return out
 }
 
+function firstText(...values) {
+  for (const value of values) {
+    const text = normalizeText(value)
+    if (text) return text
+  }
+  return ''
+}
+
 export function collectEnvelopeTextSources(input = {}) {
   const subtitles = flattenTextSource(input.subtitles ?? input.subtitleText ?? input.transcript ?? input.captions)
   const comments = flattenTextSource(input.comments ?? input.commentTexts ?? input.commentBodies)
@@ -74,6 +82,8 @@ export function collectEnvelopeTextSources(input = {}) {
 
   return {
     title: normalizeText(input.title),
+    creatorName: firstText(input.creatorName, input.sourceCreatorName, input.originalCreatorName, input.sourceAuthor, input.author),
+    channelName: firstText(input.channelName, input.channel?.name),
     description: normalizeText(input.description),
     subtitles: uniqueTextParts(subtitles),
     comments: uniqueTextParts(comments),
@@ -84,6 +94,9 @@ export function collectEnvelopeTextSources(input = {}) {
 export function buildMetadataEnvelope(video = {}, extras = {}) {
   const source = collectEnvelopeTextSources({
     title: extras.title ?? video.title,
+    creatorName: extras.creatorName ?? extras.sourceCreatorName ?? extras.originalCreatorName ?? extras.sourceAuthor ?? video.creatorName ?? video.sourceCreatorName ?? video.originalCreatorName ?? video.sourceAuthor ?? video.author,
+    channelName: extras.channelName ?? video.channelName ?? video.channel?.name,
+    channel: extras.channel ?? video.channel,
     description: extras.description ?? video.description,
     subtitles: extras.subtitles ?? video.subtitles ?? video.subtitleText ?? video.transcript ?? video.captions,
     comments: extras.comments ?? video.comments,
@@ -93,6 +106,8 @@ export function buildMetadataEnvelope(video = {}, extras = {}) {
 
   const searchText = uniqueTextParts([
     source.title,
+    source.creatorName,
+    source.channelName,
     source.description,
     ...source.subtitles,
     ...source.comments,
@@ -110,6 +125,8 @@ export function buildMetadataEnvelope(video = {}, extras = {}) {
     channelKey: channelKey || null,
     publicBeeKey: publicBeeKey || null,
     title: source.title,
+    creatorName: source.creatorName || null,
+    channelName: source.channelName || null,
     description: source.description,
     subtitles: source.subtitles,
     comments: source.comments,
@@ -117,6 +134,8 @@ export function buildMetadataEnvelope(video = {}, extras = {}) {
     searchText,
     sourceFields: {
       title: Boolean(source.title),
+      creatorName: Boolean(source.creatorName),
+      channelName: Boolean(source.channelName),
       description: Boolean(source.description),
       subtitles: source.subtitles.length > 0,
       comments: source.comments.length > 0,
@@ -130,6 +149,8 @@ export function buildMetadataEnvelope(video = {}, extras = {}) {
 export function buildSearchText(envelope = {}) {
   return uniqueTextParts([
     envelope?.title,
+    envelope?.creatorName,
+    envelope?.channelName,
     envelope?.description,
     ...(Array.isArray(envelope?.subtitles) ? envelope.subtitles : []),
     ...(Array.isArray(envelope?.comments) ? envelope.comments : []),

@@ -24,6 +24,7 @@
  * @property {string} id
  * @property {string | null} [path]
  * @property {string} title
+ * @property {string | null} [creatorName]
  * @property {string | null} [description]
  * @property {number} uploadedAt
  * @property {number | null} [duration]
@@ -82,6 +83,7 @@ export const CANONICAL_FEED_VIDEO_FIELDS = Object.freeze([
   'id',
   'path',
   'title',
+  'creatorName',
   'description',
   'uploadedAt',
   'duration',
@@ -153,6 +155,7 @@ export function createCanonicalFeedVideo(video = {}) {
   normalized.id = video.id ? String(video.id) : normalized.id || ''
   normalized.path = video.path ?? normalized.path ?? null
   normalized.title = video.title ? String(video.title) : normalized.title || ''
+  normalized.creatorName = video.creatorName ?? normalized.creatorName ?? null
   normalized.description = video.description ?? normalized.description ?? null
   normalized.uploadedAt = normalizeNumber(video.uploadedAt, normalized.uploadedAt ?? 0) || 0
   normalized.duration = normalizeNumber(video.duration, normalized.duration ?? null)

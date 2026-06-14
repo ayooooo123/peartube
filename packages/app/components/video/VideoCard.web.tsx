@@ -171,6 +171,7 @@ export interface VideoData {
   description?: string
   mimeType?: string
   category?: string
+  creatorName?: string | null
   score?: number
   channel?: {
     name: string
@@ -191,7 +192,7 @@ interface VideoCardWrapperPropsExtended extends VideoCardWrapperProps {
 // Wrapper to match the native VideoCard interface
 export function VideoCard({ video, onPress, showChannelInfo = true, onChannelPress }: VideoCardWrapperPropsExtended) {
   const channelKey = video.channelKey || video.driveKey
-  const channelName = video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`
+  const channelName = video.creatorName || video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`
   const timeAgo = video.uploadedAt || video.createdAt
     ? new Date(video.uploadedAt || video.createdAt!).toISOString()
     : undefined

@@ -28,6 +28,7 @@ function safeFeedEntries(entries: any[] = []) {
       previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos.slice(0, 12).map((video: any) => ({
         id: video.id,
         title: video.title,
+        creatorName: video.creatorName ?? null,
         uploadedAt: video.uploadedAt,
         duration: video.duration,
         thumbnail: video.thumbnail ?? null,
@@ -54,6 +55,7 @@ function safeVideos(videos: VideoData[] = []) {
         path: video.path,
         title: video.title,
         description: video.description,
+        creatorName: videoAny.creatorName || undefined,
         channelKey: video.channelKey || videoAny.driveKey,
         driveKey: videoAny.driveKey || video.channelKey,
         publicBeeKey: videoAny.publicBeeKey || undefined,

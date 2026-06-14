@@ -42,6 +42,7 @@ export interface Video {
   duration?: number;
   thumbnail?: string;
   category?: string;
+  creatorName?: string | null;
 }
 
 /**
@@ -180,6 +181,7 @@ export interface PublicFeedEntry {
   previewVideos?: Array<{
     id: string;
     title?: string;
+    creatorName?: string | null;
     uploadedAt?: number;
     duration?: number;
     thumbnail?: string | null;

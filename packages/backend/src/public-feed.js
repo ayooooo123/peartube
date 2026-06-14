@@ -287,6 +287,7 @@ export class PublicFeed {
         return {
           id: String(video.id),
           title: video?.title ? String(video.title) : 'Untitled',
+          creatorName: video?.creatorName ? String(video.creatorName) : null,
           uploadedAt: Number(video?.uploadedAt || 0) || 0,
           duration: Number(video?.duration || 0) || 0,
           thumbnail: video?.thumbnail ? String(video.thumbnail) : null,

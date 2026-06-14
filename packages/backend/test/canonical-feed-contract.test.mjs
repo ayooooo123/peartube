@@ -33,6 +33,7 @@ test('canonical feed contract exposes the canonical surface fields', (t) => {
     'id',
     'path',
     'title',
+    'creatorName',
     'description',
     'uploadedAt',
     'duration',
@@ -250,6 +251,22 @@ test('normalizeCanonicalFeedVideoFromPublicFeed falls back to feed channel metad
   t.is(video.channel?.videoCount, 2)
   t.is(video.publicBeeKey, '66'.repeat(32))
   t.is(video.blobId, 'preview-blob')
+})
+
+test('normalizeCanonicalFeedVideoFromPublicFeed preserves source creator separate from serving channel', (t) => {
+  const video = normalizeCanonicalFeedVideoFromPublicFeed({
+    id: 'archived-video',
+    title: 'Archived source video',
+    uploadedAt: 123,
+    creatorName: 'Original Creator',
+    channelName: 'Channel',
+  }, {
+    channelKey: 'relay-archive',
+    channel: { name: 'Channel' },
+  })
+
+  t.is(video.creatorName, 'Original Creator')
+  t.is(video.channel?.name, 'Channel')
 })
 
 test('normalizeCanonicalFeedVideoFromPreviewHydration preserves distinct availability and byte availability after restart', (t) => {

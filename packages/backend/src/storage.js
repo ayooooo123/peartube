@@ -27,6 +27,7 @@ import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache } from './known-peers.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
+import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
 
 function resolveDebugLogPath() {
@@ -1376,6 +1377,20 @@ export async function initializeStorage(config) {
       res.setHeader('Access-Control-Allow-Headers', 'Range')
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+
+      // Thumbnails tag their blob URL with pt_thumbnail=1 (see api.getVideoThumbnail).
+      // Serve those as a buffered, fixed-length response Android image loaders
+      // accept, instead of hypercore-blob-server's plain-GET streaming pipe (which
+      // never ends deterministically — Fresco errors, expo-image/Glide hangs then
+      // errors). Only tagged requests are intercepted; video Range reads and every
+      // other request fall through to the upstream handler unchanged.
+      try {
+        const handled = await serveThumbnailHttpRequest({ store, swarm, blobServer }, req, res)
+        if (handled) return
+      } catch (err) {
+        console.log('[Storage] Thumbnail serve failed:', err?.message || err)
+      }
+
       try {
         await prioritizeBlobServerRangeRequest(blobServer, req)
       } catch (err) {

@@ -5,7 +5,7 @@
  * Memoized for optimal FlatList performance.
  */
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
-import { View, Image, Text, StyleSheet, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { formatDuration } from '@/lib/formatters'
 import { colors } from '@/lib/colors'
@@ -27,6 +27,7 @@ function ThumbnailImageComponent({
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
+  const [imageLoaded, setImageLoaded] = useState(false)
   const [retryAttempt, setRetryAttempt] = useState(0)
 
   // Reset error state during render when the URL changes so a stale
@@ -36,6 +37,7 @@ function ThumbnailImageComponent({
     setPrevThumbnailUrl(thumbnailUrl)
     setImageError(false)
     setImageLoading(Boolean(thumbnailUrl))
+    setImageLoaded(false)
     setRetryAttempt(0)
   }
 
@@ -92,23 +94,27 @@ function ThumbnailImageComponent({
   }, [handleRecoverableError])
   const handleLoadStart = useCallback(() => setImageLoading(true), [])
   const handleLoadEnd = useCallback(() => setImageLoading(false), [])
+  const handleLoad = useCallback(() => setImageLoaded(true), [])
 
   return (
     <View style={containerStyle}>
-      {/* Always show placeholder as background, image overlays on top when loaded */}
-      <View style={styles.placeholder}>
-        <View style={styles.playIconContainer}>
-          <Ionicons name="play" color={colors.primary} size={48} />
+      {/* Placeholder only stays visible until the native image reports loaded. */}
+      {!imageLoaded && (
+        <View style={styles.placeholder}>
+          <View style={styles.playIconContainer}>
+            <Ionicons name="play" color={colors.primary} size={48} />
+          </View>
         </View>
-      </View>
+      )}
 
-      {/* Actual thumbnail image - overlays placeholder when loaded */}
+      {/* Actual thumbnail image */}
       {imageSource && !imageError && (
         <Image
           source={imageSource}
           style={styles.image}
           resizeMode="cover"
           onError={handleError}
+          onLoad={handleLoad}
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
         />
@@ -156,20 +162,37 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   image: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: colors.bg,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 1,
+    elevation: 1,
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: colors.bgElevated,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 2,
+    elevation: 2,
   },
   placeholder: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: colors.bgElevated,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 0,
+    elevation: 0,
   },
   playIconContainer: {
     width: 80,
@@ -187,6 +210,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 4,
+    zIndex: 4,
+    elevation: 4,
   },
   durationText: {
     color: '#ffffff',

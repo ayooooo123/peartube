@@ -260,28 +260,27 @@ test('getVideoThumbnail forwards feed preview blob refs to the API', async () =>
   // Gossip-discovered channels have no locally resolvable video record, so
   // dropping these refs (as the handler used to) meant mobile thumbnails for
   // feed previews could never resolve at all. The MIME type is forwarded too so
-  // the blob server serves the correct Content-Type (Android/Fresco rejects a
-  // JPEG mislabeled as webp). includeDataUrl asks the API to inline the bytes as
-  // a base64 data URL so the RN <Image> loader never has to reach the worklet's
-  // loopback blob-server HTTP listener (the step that kept cards on placeholders).
+  // the served Content-Type matches the bytes. ensureLocal tells the API to
+  // download the blocks before returning the URL so the blob server's buffered
+  // thumbnail response serves them immediately to <Image>.
   assert.deepEqual(calls, [[
     'channel-key',
     'video-1',
     { thumbnailBlobId: '0:4:0:1024', thumbnailBlobsCoreKey: 'a'.repeat(64), thumbnailMimeType: 'image/jpeg' },
-    { includeDataUrl: true },
+    { ensureLocal: true },
   ]])
   assert.deepEqual(result, { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: null })
 })
 
-test('getVideoThumbnail returns the inlined base64 data URL from the API', async () => {
+test('getVideoThumbnail surfaces a retryable miss when the API can not localize the blocks', async () => {
   const backend = {}
   const deps = createDeps({
     api: {
       async getVideoThumbnail() {
-        // The API inlines the thumbnail bytes when includeDataUrl is set; the
-        // handler must surface that data URL so mobile renders it directly
-        // instead of fetching the blob-server URL over loopback HTTP.
-        return { url: 'http://127.0.0.1:1/thumb', exists: true, dataUrl: 'data:image/jpeg;base64,AAAA' }
+        // ensureLocal returns { exists: false } when the thumbnail blocks could
+        // not be downloaded in time; the handler must pass that through so the
+        // client retries instead of caching a URL that would stall.
+        return { exists: false }
       },
     },
   })
@@ -290,9 +289,5 @@ test('getVideoThumbnail returns the inlined base64 data URL from the API', async
 
   const result = await backend.getVideoThumbnail({ channelKey: 'channel-key', videoId: 'video-1' })
 
-  assert.deepEqual(result, {
-    url: 'http://127.0.0.1:1/thumb',
-    exists: true,
-    dataUrl: 'data:image/jpeg;base64,AAAA',
-  })
+  assert.deepEqual(result, { url: null, exists: false, dataUrl: null })
 })

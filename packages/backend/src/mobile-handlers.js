@@ -45,6 +45,7 @@ function normalizeSeedingStatus(s) {
 
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player } = deps
+
   const refreshPublishedChannelFeed = async (driveKey) => {
     if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
     try {
@@ -181,7 +182,12 @@ export function attachMobileHandlers(B, deps) {
   B.prepareLivePlayback = async (r) => api.prepareLivePlayback(r.liveCoreKey)
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey, r.blobId, r.blobsCoreKey, r.mimeType)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
-  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { includeDataUrl: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: res.dataUrl || null } }
+  // ensureLocal: download the thumbnail blocks before returning the blob-server
+  // HTTP URL. Android image clients are much less tolerant than ExoPlayer of a
+  // response that stalls while Hypercore fetches blocks, but the product path
+  // should still be the same loopback blob server desktop/video use — not a
+  // data: URL or filesystem cache workaround.
+  B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId, { thumbnailBlobId: r.thumbnailBlobId || null, thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null, thumbnailMimeType: r.thumbnailMimeType || null }, { ensureLocal: true }); return { url: res.url || null, exists: res.exists || false, dataUrl: null } }
   B.setVideoThumbnail = async () => ({ success: false, error: 'setVideoThumbnail is disabled. Use setVideoThumbnailFromFile.' })
   B.deleteVideo = async (r) => {
     let ch; try { ch = await identityManager.getActiveChannel?.() } catch (e) { return { success: false, error: e?.message } }

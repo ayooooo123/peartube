@@ -209,6 +209,41 @@ function decodeBlobParam(value) {
   }
 }
 
+// Decode a blob-server GET request's key + blob + type WITHOUT requiring a Range
+// header. Used to serve small blobs (thumbnails/images) with a buffered,
+// deterministic HTTP response that Android image loaders accept, where the
+// upstream streaming pipe does not end cleanly for a plain GET.
+export function decodeBlobServerBlobRef(blobServer, req) {
+  if (req?.method && req.method !== 'GET' && req.method !== 'HEAD') return null
+
+  let url
+  try {
+    url = new URL(req.url, 'http://127.0.0.1')
+  } catch {
+    return null
+  }
+
+  const token = url.searchParams.get('token') || ''
+  if (blobServer?.token && token !== blobServer.token) return null
+
+  const encodedKey = url.searchParams.get('key')
+  const encodedBlob = url.searchParams.get('blob')
+  if (!encodedKey || !encodedBlob) return null
+
+  let key
+  try {
+    key = HypercoreID.decode(encodedKey)
+  } catch {
+    return null
+  }
+
+  const blob = decodeBlobParam(encodedBlob)
+  if (!key || !blob) return null
+
+  const type = url.searchParams.get('type') || null
+  return { key, blob, type }
+}
+
 function decodeBlobRangeRequest(blobServer, req) {
   if (req?.method && req.method !== 'GET') return null
 

@@ -10,8 +10,6 @@ const VIDEO_FIELDS = [
   'description',
   'duration',
   'uploadedAt',
-  'thumbnail',
-  'thumbnailUrl',
   'thumbnailBlobId',
   'thumbnailBlobsCoreKey',
   'thumbnailMimeType',
@@ -41,6 +39,12 @@ function snapshotKeyForVideo(video) {
   const identifier = video?.id || video?.path || ''
   if (!identifier) return null
   return `${channelKey}:${identifier}`
+}
+
+const LOOPBACK_HTTP_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i
+
+function shouldSnapshotThumbnailValue(value) {
+  return typeof value === 'string' && value.length > 0 && !LOOPBACK_HTTP_RE.test(value)
 }
 
 function hasDirectBlobRef(video) {
@@ -80,6 +84,12 @@ export function createFeedSnapshot({
     safeVideo.channelKey = channelKey || safeVideo.channelKey
     safeVideo.driveKey = video.driveKey || channelKey || safeVideo.driveKey
     safeVideo.availability = localVideo ? 'playable' : playable ? (video.availability || 'playable') : video.availability
+
+    // Loopback blob-server URLs are per-process/per-port. Persist blob refs,
+    // but force mobile to re-resolve the current http://127.0.0.1:<port>/...
+    // thumbnail URL on launch instead of restoring a stale URL.
+    if (shouldSnapshotThumbnailValue(video.thumbnail)) safeVideo.thumbnail = video.thumbnail
+    if (shouldSnapshotThumbnailValue(video.thumbnailUrl)) safeVideo.thumbnailUrl = video.thumbnailUrl
 
     const channelName = video.channel?.name || channelMeta?.[channelKey]?.name || null
     if (channelName) safeVideo.channel = { name: channelName }

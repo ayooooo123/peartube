@@ -17,7 +17,7 @@ import { fonts } from '@/lib/typography'
 import * as watchHistoryStore from '@/lib/watch-history'
 import { resumeWatchEntry } from '@/lib/playback-resume'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl, hasThumbnailBlobRef } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
@@ -53,7 +53,6 @@ import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
 // fetch window: sweeps at ~5s, 10s, 20s, 40s after the feed renders.
 const THUMBNAIL_RESWEEP_MAX_ATTEMPTS = 4
 const THUMBNAIL_RESWEEP_BASE_DELAY_MS = 5000
-
 // Public feed types
 interface FeedEntry {
   driveKey: string
@@ -255,7 +254,7 @@ export default function HomeScreen() {
   const fetchThumbnail = useCallback(async (
     driveKey: string,
     videoId: string,
-    blobRefs?: { thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null },
+    blobRefs?: { thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null; thumbnailMimeType?: string | null },
   ) => {
     if (isPear || !rpc) return // Desktop handles thumbnails differently
     const cacheKey = `${driveKey}:${videoId}`
@@ -420,6 +419,25 @@ export default function HomeScreen() {
     }
   }, [videos, identity?.driveKey, fetchThumbnailsForVideos])
 
+  // Resolve fresh thumbnails for the Continue-watching rail. Each entry carries a
+  // thumbnailUrl persisted in a previous session — a loopback blob-server URL that
+  // is only valid for the port/process that created it — so it must be re-resolved
+  // through the cache (getRenderableThumbnailUrl rejects the stale loopback URL).
+  useEffect(() => {
+    if (!ready || isPear) return
+    for (const entry of continueWatching) {
+      if (entry.channelKey && entry.videoId) {
+        fetchThumbnail(entry.channelKey, entry.videoId)
+      }
+    }
+  }, [ready, continueWatching, fetchThumbnail])
+
+  // Same for the "For you" recommendations rail.
+  useEffect(() => {
+    if (!ready || isPear || recommendedVideos.length === 0) return
+    fetchThumbnailsForVideos(recommendedVideos)
+  }, [ready, recommendedVideos, fetchThumbnailsForVideos])
+
   // Re-sweep feed cards still missing a thumbnail. The initial fetches run
   // while the backend is busiest (P2P bootstrap, feed hydration), so they can
   // exhaust their retries; without a later sweep those cards stayed on
@@ -428,11 +446,12 @@ export default function HomeScreen() {
   const [thumbnailResweepNonce, setThumbnailResweepNonce] = useState(0)
   useEffect(() => {
     if (!ready || isPear) return
-    const missing = feedVideos.filter((v) =>
-      v.channelKey && v.id &&
-      !thumbnailCache[`${v.channelKey}:${v.id}`] &&
-      !v.thumbnailUrl && !(v as any).thumbnail
-    )
+    const missing = feedVideos.filter((v) => {
+      const cacheKey = v.channelKey && v.id ? `${v.channelKey}:${v.id}` : ''
+      return v.channelKey && v.id && !thumbnailCache[cacheKey] && (
+        hasThumbnailBlobRef(v) || (!v.thumbnailUrl && !(v as any).thumbnail)
+      )
+    })
     if (missing.length === 0) {
       thumbnailResweepAttemptsRef.current = 0
       return
@@ -982,7 +1001,7 @@ export default function HomeScreen() {
   // Convert videos to VideoData format with channel info and thumbnails
   const myVideosWithMeta: VideoData[] = videos.map(v => {
     const cacheKey = identity?.driveKey ? `${identity.driveKey}:${v.id}` : ''
-    const thumbnailUrl = thumbnailCache[cacheKey] || v.thumbnail || null
+    const thumbnailUrl = getRenderableThumbnailUrl(v, thumbnailCache[cacheKey])
     return {
       ...v,
       channelKey: identity?.driveKey || '',
@@ -996,7 +1015,7 @@ export default function HomeScreen() {
     const cacheKey = `${v.channelKey}:${v.id}`
     return {
       ...v,
-      thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
+      thumbnailUrl: getRenderableThumbnailUrl(v, thumbnailCache[cacheKey])
     }
   })
 
@@ -1021,7 +1040,7 @@ export default function HomeScreen() {
         channel: {
           name: channelMeta[v.channelKey]?.name || v.channel?.name || 'Unknown'
         },
-        thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
+        thumbnailUrl: getRenderableThumbnailUrl(v, thumbnailCache[cacheKey])
       }
     })
 
@@ -1180,7 +1199,7 @@ export default function HomeScreen() {
               <RailCard
                 title={entry.title}
                 subtitle={entry.channelName}
-                thumbnailUrl={entry.thumbnailUrl}
+                thumbnailUrl={getRenderableThumbnailUrl(entry, thumbnailCache[`${entry.channelKey}:${entry.videoId}`])}
                 duration={entry.durationSec}
                 progress={entry.durationSec > 0 ? entry.positionSec / entry.durationSec : 0}
                 onPress={() => resumeEntry(entry)}
@@ -1205,7 +1224,7 @@ export default function HomeScreen() {
               <RailCard
                 title={video.title}
                 subtitle={video.channel?.name}
-                thumbnailUrl={video.thumbnailUrl || video.thumbnail}
+                thumbnailUrl={getRenderableThumbnailUrl(video, thumbnailCache[`${video.channelKey}:${video.id}`])}
                 duration={video.duration}
                 onPress={() => playVideo(video)}
               />
@@ -1472,6 +1491,7 @@ export default function HomeScreen() {
     startupStatus,
     swarmDetailOpen,
     swarmStatus,
+    thumbnailCache,
   ])
 
   return (

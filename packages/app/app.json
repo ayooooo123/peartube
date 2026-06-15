@@ -71,7 +71,7 @@
           },
           "android": {
             "minSdkVersion": 29,
-            "usesCleartextTraffic": false,
+            "usesCleartextTraffic": true,
             "enableMinifyInReleaseBuilds": true,
             "enableShrinkResourcesInReleaseBuilds": true,
             "extraProguardRules": "-keep class to.holepunch.** { *; }"

@@ -89,14 +89,21 @@ A "mere conduit" defense collapses the moment the operator *curates*. So:
 - The relay should not *choose* channels by content. Discovery-mode relays
   already seed whatever the public feed gossips; that indiscriminate behavior is
   an asset and should be the default, not allowlists hand-picked by content.
-- **The `archive` feature is the opposite of a conduit** and is the single
-  biggest liability footgun in the codebase. `peartube-relay archive --url ...`
-  runs `yt-dlp`, *downloads specific named videos*, and *republishes* them with
-  plaintext source URLs, titles, and descriptions (`packages/cli/src/archive/`,
-  `archive-manager.js`). Any operator who enables archiving is actively
-  acquiring and publishing selected content — there is no non-knowledge defense
-  left for them. This should be loudly documented as a distinct, higher-exposure
-  mode, kept off by default, and never conflated with "just relaying."
+- **The `archive` feature is a deliberate *publisher* role, and that is fine** —
+  it is a critical function, not a footgun. But it is worth being precise about
+  what it means: `peartube-relay archive --url ...` runs `yt-dlp`, downloads
+  specific named videos, and republishes them (`packages/cli/src/archive/`,
+  `archive-manager.js`). For *that* content the operator genuinely is the
+  publisher; there is no "I didn't choose it" defense for the subset an operator
+  archives, and that is an accepted trade-off. The key insight is that the two
+  roles **coexist on the same node**: an operator is a *publisher* for what it
+  archives and a *blind conduit* for what it relays for others. The conduit
+  properties protect the latter regardless of the former. And archived content
+  should still be served blind (encrypted body, operator-derived key) so that
+  *downstream* relays — who did not choose it — keep their non-knowledge
+  posture. So: keep archive, but (a) keep its publisher liability scoped to the
+  archiving operator, and (b) still encrypt archived bodies for the network's
+  benefit.
 
 ### 3. (Optional) fragmented storage — no node holds a whole object
 
@@ -159,9 +166,11 @@ are artifacts an investigator would point to as evidence the operator *knew* and
    plaintext inventory of channel names/owners/video titles. At minimum, gate
    them behind an explicit operator opt-in, and key them by opaque discovery
    keys rather than names/previews.
-3. **Quarantine the archive mode.** Treat `archive` as an explicitly
-   higher-liability, off-by-default capability with its own documentation; never
-   present it as part of "running a relay."
+3. **Separate the publisher role from the conduit role.** Archived content
+   carries publisher liability *for the archiving operator by design* — that is
+   accepted. Keep it, but still encrypt archived bodies so downstream relays
+   stay blind, and avoid letting the archive path widen the plaintext metadata
+   the *relay* role emits about everyone else's content.
 4. **Carry only what replication needs** (public core keys / discovery keys),
    not human-readable metadata, on the relay path.
 
@@ -187,8 +196,8 @@ are artifacts an investigator would point to as evidence the operator *knew* and
 
 1. **Stop manufacturing evidence** (highest value, lowest risk): the
    remediation themes above — kill content-identifying gossip, stop durable
-   plaintext inventories, quarantine archive. This improves the posture even
-   with zero crypto changes.
+   plaintext inventories of relayed content. This improves the posture even
+   with zero crypto changes. (Archive stays; it is a separate publisher role.)
 2. **Blind content** (the real lever): uploader-side encryption of blob cores;
    keys delivered to viewers, never to relays; relay serves ciphertext.
 3. **Fragmentation** (optional, longer horizon): no node holds a whole object.

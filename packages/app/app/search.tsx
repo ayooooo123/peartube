@@ -12,7 +12,7 @@ import type { VideoData as CoreVideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl } from '@/lib/thumbnail'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 
 // Detect Pear desktop vs mobile (must match index.web.tsx detection)
@@ -466,7 +466,11 @@ export default function SearchScreen() {
             } : {}}>
               {results.map((video, index) => {
                 const ck = video.channelKey || video.driveKey
-                const thumbUrl = (ck ? thumbnailCache[`${ck}:${video.id}`] : null) || video.thumbnailUrl || video.thumbnail || undefined
+                const thumbUrl = getRenderableThumbnailUrl(
+                  video,
+                  ck ? thumbnailCache[`${ck}:${video.id}`] : null,
+                  { native: !isPear }
+                ) || undefined
                 const videoWithThumb = thumbUrl ? { ...video, thumbnailUrl: thumbUrl } : video
                 return (
                 <View

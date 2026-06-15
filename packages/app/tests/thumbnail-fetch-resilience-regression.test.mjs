@@ -25,6 +25,8 @@ test('home feed re-sweeps thumbnails that missed their initial fetch window', as
   const sweep = src.slice(sweepStart, sweepStart + 1600)
 
   assert.match(sweep, /fetchThumbnailsForVideos\(missing\)/, 're-sweep must refetch only the videos still missing thumbnails')
+  assert.match(sweep, /getRenderableThumbnailUrl\(v\)/, 're-sweep must retry cards whose current thumbnail field exists but is not renderable on native, such as stale loopback blob-server URLs from a previous session')
+  assert.doesNotMatch(sweep, /!v\.thumbnailUrl && !\(v as any\)\.thumbnail/, 're-sweep must not treat any non-empty thumbnail field as renderable; stale loopback URLs can be present but intentionally suppressed')
   assert.match(sweep, /setThumbnailResweepNonce/, 're-sweep must reschedule itself even when every fetch misses (no state change would otherwise re-run the effect)')
   assert.match(sweep, /clearTimeout\(timer\)/, 're-sweep timer must be cleaned up')
 })

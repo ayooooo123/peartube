@@ -142,6 +142,9 @@ test('selectFeedEntryVideosWithPreviewFallback uses direct feed previews when hy
     availability: 'playable',
     blobId: '0:8:0:1024',
     blobsCoreKey: 'aa'.repeat(32),
+    thumbnailBlobId: '0:1:0:231042',
+    thumbnailBlobsCoreKey: 'bb'.repeat(32),
+    thumbnailMimeType: 'image/jpeg',
     hasHeadBlock: true,
     contiguousBlocks: 1,
     readyForPlayback: true,
@@ -150,6 +153,45 @@ test('selectFeedEntryVideosWithPreviewFallback uses direct feed previews when hy
   assert.equal(selectFeedEntryVideosWithPreviewFallback([], previews), previews)
   assert.deepEqual(selectFeedEntryVideosWithPreviewFallback([{ id: 'hydrated' }], previews), [{ id: 'hydrated' }])
   assert.deepEqual(selectFeedEntryVideosWithPreviewFallback([], []), [])
+})
+
+test('selectFeedEntryVideosWithPreviewFallback preserves preview thumbnail blob refs on hydrated matches', () => {
+  const previews = [{
+    id: 'same-video',
+    title: 'Preview title',
+    uploadedAt: 40,
+    availability: 'playable',
+    blobId: '0:8:0:1024',
+    blobsCoreKey: 'aa'.repeat(32),
+    thumbnailBlobId: '0:1:0:231042',
+    thumbnailBlobsCoreKey: 'bb'.repeat(32),
+    thumbnailMimeType: 'image/jpeg',
+    thumbnailUrl: 'http://127.0.0.1:12345/stale-thumbnail',
+  }]
+  const loaded = [{
+    id: 'same-video',
+    title: 'Hydrated title',
+    uploadedAt: 50,
+    availability: 'playable',
+    byteAvailability: 'playable',
+    blobId: '0:9:0:2048',
+    blobsCoreKey: 'cc'.repeat(32),
+  }]
+
+  assert.deepEqual(selectFeedEntryVideosWithPreviewFallback(loaded, previews), [{
+    ...loaded[0],
+    path: undefined,
+    publicBeeKey: undefined,
+    mimeType: undefined,
+    thumbnailBlobId: previews[0].thumbnailBlobId,
+    thumbnailBlobsCoreKey: previews[0].thumbnailBlobsCoreKey,
+    thumbnailMimeType: previews[0].thumbnailMimeType,
+    thumbnailUrl: previews[0].thumbnailUrl,
+    thumbnail: undefined,
+    hasHeadBlock: undefined,
+    contiguousBlocks: undefined,
+    readyForPlayback: undefined,
+  }])
 })
 
 test('getFeedPreviewVideos only uses local or live-peer manifest previews', () => {

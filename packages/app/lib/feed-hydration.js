@@ -93,11 +93,33 @@ function mergeVideoPlaybackIdentity(previous, incoming) {
     blobId: incoming.blobId || previous.blobId,
     blobsCoreKey: incoming.blobsCoreKey || previous.blobsCoreKey,
     mimeType: incoming.mimeType || previous.mimeType,
+    thumbnailBlobId: incoming.thumbnailBlobId || previous.thumbnailBlobId,
+    thumbnailBlobsCoreKey: incoming.thumbnailBlobsCoreKey || previous.thumbnailBlobsCoreKey,
+    thumbnailMimeType: incoming.thumbnailMimeType || previous.thumbnailMimeType,
+    thumbnailUrl: incoming.thumbnailUrl || previous.thumbnailUrl,
+    thumbnail: incoming.thumbnail || previous.thumbnail,
     byteAvailability: incoming.byteAvailability || previous.byteAvailability,
     hasHeadBlock: incoming.hasHeadBlock ?? previous.hasHeadBlock,
     contiguousBlocks: incoming.contiguousBlocks ?? previous.contiguousBlocks,
     readyForPlayback: incoming.readyForPlayback ?? previous.readyForPlayback,
   }
+}
+
+function mergePreviewThumbnailIdentity(loadedVideos, previewFallback) {
+  const previews = Array.isArray(previewFallback) ? previewFallback : []
+  if (previews.length === 0) return loadedVideos
+
+  const previewById = new Map()
+  for (const preview of previews) {
+    const identifier = preview?.id || preview?.path || ''
+    if (identifier && !previewById.has(identifier)) previewById.set(identifier, preview)
+  }
+
+  return loadedVideos.map((video) => {
+    const identifier = video?.id || video?.path || ''
+    const preview = identifier ? previewById.get(identifier) : null
+    return mergeVideoPlaybackIdentity(preview, video)
+  })
 }
 
 function canUseFeedPreviewVideos(entry, identityDriveKey) {
@@ -181,7 +203,7 @@ export function shouldAutoLoadFeedVideos({ feedEntries, swarmStatus }) {
 
 export function selectFeedEntryVideosWithPreviewFallback(loadedVideos, previewFallback) {
   const loaded = Array.isArray(loadedVideos) ? loadedVideos : []
-  if (loaded.length > 0) return loaded
+  if (loaded.length > 0) return mergePreviewThumbnailIdentity(loaded, previewFallback)
   return Array.isArray(previewFallback) && previewFallback.length > 0 ? previewFallback : loaded
 }
 

@@ -17,7 +17,7 @@ import { fonts } from '@/lib/typography'
 import * as watchHistoryStore from '@/lib/watch-history'
 import { resumeWatchEntry } from '@/lib/playback-resume'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl, hasThumbnailBlobRef } from '@/lib/thumbnail'
+import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
@@ -448,9 +448,8 @@ export default function HomeScreen() {
     if (!ready || isPear) return
     const missing = feedVideos.filter((v) => {
       const cacheKey = v.channelKey && v.id ? `${v.channelKey}:${v.id}` : ''
-      return v.channelKey && v.id && !thumbnailCache[cacheKey] && (
-        hasThumbnailBlobRef(v) || (!v.thumbnailUrl && !(v as any).thumbnail)
-      )
+      if (!v.channelKey || !v.id || thumbnailCache[cacheKey]) return false
+      return !getRenderableThumbnailUrl(v)
     })
     if (missing.length === 0) {
       thumbnailResweepAttemptsRef.current = 0

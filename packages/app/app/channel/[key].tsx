@@ -16,7 +16,7 @@ import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
-import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl } from '@/lib/thumbnail'
 import { NativeButton, NativeTextInput } from '@/components/native-ui'
 import { rpc } from '@peartube/platform/rpc'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -548,7 +548,11 @@ export default function ChannelScreen() {
               </View>
             ) : (
               channelVideos.map((channelVideo) => {
-                const thumbnailUrl = thumbnailCache[`${channelKey}:${channelVideo.id}`] || channelVideo.thumbnailUrl || channelVideo.thumbnail || null
+                const thumbnailUrl = getRenderableThumbnailUrl(
+                  channelVideo,
+                  thumbnailCache[`${channelKey}:${channelVideo.id}`],
+                  { native: true }
+                )
                 return (
                   <ChannelVideoCard
                     key={channelVideo.id}

@@ -5,12 +5,7 @@
  * Memoized for optimal FlatList performance.
  */
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
-// expo-image uses Glide on Android (not Fresco). Glide sniffs the actual image
-// bytes, so it tolerates a wrong/missing Content-Type from the blob server and
-// renders data:/file:/loopback URIs reliably — the Fresco limitations that kept
-// thumbnails blank. See https://docs.expo.dev/versions/latest/sdk/image/
-import { Image } from 'expo-image'
+import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { formatDuration } from '@/lib/formatters'
 import { colors } from '@/lib/colors'
@@ -138,19 +133,21 @@ function ThumbnailImageComponent({
 
   return (
     <View style={containerStyle}>
-      {/* Always show placeholder as background, image overlays on top when loaded */}
-      <View style={styles.placeholder}>
-        <View style={styles.playIconContainer}>
-          <Ionicons name="play" color={colors.primary} size={48} />
+      {/* Placeholder only stays visible until the native image reports loaded. */}
+      {!imageLoaded && (
+        <View style={styles.placeholder}>
+          <View style={styles.playIconContainer}>
+            <Ionicons name="play" color={colors.primary} size={48} />
+          </View>
         </View>
-      </View>
+      )}
 
-      {/* Actual thumbnail image - overlays placeholder when loaded */}
+      {/* Actual thumbnail image */}
       {imageSource && !imageError && (
         <Image
           source={imageSource}
           style={styles.image}
-          contentFit="cover"
+          resizeMode="cover"
           onError={handleError}
           onLoad={handleLoad}
           onLoadStart={handleLoadStart}
@@ -207,20 +204,37 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   image: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: colors.bg,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 1,
+    elevation: 1,
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: colors.bgElevated,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 2,
+    elevation: 2,
   },
   placeholder: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: colors.bgElevated,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 0,
+    elevation: 0,
   },
   playIconContainer: {
     width: 80,
@@ -238,16 +252,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 4,
+    zIndex: 4,
+    elevation: 4,
   },
   debugBadge: {
     position: 'absolute',
-    top: 6,
-    left: 6,
-    right: 6,
-    backgroundColor: 'rgba(255,0,0,0.85)',
-    paddingHorizontal: 5,
+    top: 4,
+    left: 4,
+    maxWidth: '92%',
+    backgroundColor: 'rgba(255, 0, 0, 0.85)',
+    paddingHorizontal: 4,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 3,
+    zIndex: 5,
+    elevation: 5,
   },
   debugBadgeText: {
     color: '#ffffff',

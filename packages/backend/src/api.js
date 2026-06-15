@@ -1901,11 +1901,16 @@ export function createApi({
           // through as the Content-Type.
           const baseUrl = ctx.blobServer.getLink(blobsCore.key, {
             blob,
-          type: thumbnailMimeType,
-          host: ctx.blobServerHost || '127.0.0.1',
-          port: ctx.blobServer?.port || ctx.blobServerPort
+            type: thumbnailMimeType,
+            // Match the blob server bind/default host and the video playback
+            // URLs. Android native image loaders can resolve localhost through
+            // IPv6 first, while Bare's blob server is bound to IPv4 loopback.
+            host: ctx.blobServerHost || '127.0.0.1',
+            port: ctx.blobServer?.port || ctx.blobServerPort
           });
-          const url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}pt_thumbnail=1`;
+          const [blobOrigin, blobQuery = ''] = baseUrl.split('?');
+          const thumbnailPathUrl = `${blobOrigin.replace(/\/$/, '')}/__peartube_thumbnail__.jpg${blobQuery ? `?${blobQuery}` : ''}`;
+          const url = `${thumbnailPathUrl}${thumbnailPathUrl.includes('?') ? '&' : '?'}pt_thumbnail=1`;
 
           return { url, exists: true };
         }

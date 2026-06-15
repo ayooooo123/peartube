@@ -12,7 +12,7 @@ function readAppFile(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 }
 
-test('Android release manifest disables legacy storage, backup, and blanket cleartext traffic', () => {
+test('Android release manifest disables legacy storage and backup while allowing scoped local cleartext', () => {
   const manifest = readAppFile('android/app/src/main/AndroidManifest.xml')
   const appJson = JSON.parse(readAppFile('app.json'))
   const androidPipPlugin = readAppFile('plugins/withAndroidPiP.js')
@@ -20,11 +20,11 @@ test('Android release manifest disables legacy storage, backup, and blanket clea
 
   assert.match(manifest, /android:allowBackup="false"/)
   assert.match(manifest, /android:requestLegacyExternalStorage="false"/)
-  assert.match(manifest, /android:usesCleartextTraffic="false"/)
+  assert.match(manifest, /android:usesCleartextTraffic="true"/)
   assert.match(manifest, /android:networkSecurityConfig="@xml\/network_security_config"/)
   assert.match(manifest, /android:name="android\.permission\.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation"/)
   assert.match(manifest, /android:name="android\.permission\.POST_NOTIFICATIONS"/)
-  assert.equal(buildPropertiesPlugin?.[1]?.android?.usesCleartextTraffic, false)
+  assert.equal(buildPropertiesPlugin?.[1]?.android?.usesCleartextTraffic, true)
   assert.ok(appJson.expo.android.permissions.includes('android.permission.POST_NOTIFICATIONS'))
   assert.match(androidPipPlugin, /android:networkSecurityConfig'\] = '@xml\/network_security_config'/)
   assert.match(androidPipPlugin, /NETWORK_SECURITY_CONFIG/)

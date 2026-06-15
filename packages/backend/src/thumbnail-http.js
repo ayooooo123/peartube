@@ -21,7 +21,9 @@
 // Defensive upper bound: only ever buffer small blobs. Thumbnails are well under
 // this; a mistagged large blob falls through to the streaming path instead.
 const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024
-const THUMBNAIL_READ_TIMEOUT_MS = 5000
+const THUMBNAIL_READ_TIMEOUT_MS = 4000
+// Bounded so download + read stays under the image loader's ~8s give-up window.
+const THUMBNAIL_DOWNLOAD_TIMEOUT_MS = 3500
 
 /**
  * Serve a tagged thumbnail request from the blob server.
@@ -67,6 +69,28 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
     const Hyperblobs = (await import('hyperblobs')).default
     const blobs = new Hyperblobs(core)
     await blobs.ready()
+
+    // The blob's blocks may have been evicted (or never fetched) since the URL was
+    // minted — the API localizes them at resolve time, but storage eviction can
+    // drop them before the image actually requests. Re-pull them on demand so the
+    // read resolves instead of failing; this endpoint is the only server for the
+    // tagged thumbnail path, so a miss here is a permanent blank otherwise.
+    const start = ref.blob.blockOffset
+    const end = ref.blob.blockOffset + Math.max(1, ref.blob.blockLength || 1)
+    let local = false
+    try { local = Boolean(await core.has(start, end)) } catch { local = false }
+    if (!local) {
+      let range = null
+      try {
+        range = core.download({ start, end, linear: true })
+        await Promise.race([
+          typeof range?.done === 'function' ? range.done() : Promise.resolve(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail block download timeout')), THUMBNAIL_DOWNLOAD_TIMEOUT_MS))
+        ])
+      } catch { /* best effort */ } finally {
+        try { range?.destroy?.() } catch { /* best effort */ }
+      }
+    }
 
     const buf = await Promise.race([
       blobs.get(ref.blob),

@@ -19,22 +19,6 @@ interface ThumbnailImageProps {
 
 const MAX_IMAGE_RETRIES = 2
 
-// TEMPORARY on-device diagnostic. Renders a tiny badge on each thumbnail showing
-// which URI scheme the backend handed us (data/http/file/none) and whether the
-// <Image> actually loaded it (OK) or failed (ERR). This is the fastest way to
-// tell, from a screenshot, why thumbnails are blank on Android. Remove once the
-// root cause is confirmed.
-const THUMBNAIL_DEBUG_BADGE = true
-
-function uriScheme(url?: string | null): string {
-  if (!url) return 'none'
-  if (url.startsWith('data:')) return 'data'
-  if (url.startsWith('file:')) return 'file'
-  if (url.startsWith('http:')) return 'http'
-  if (url.startsWith('https:')) return 'https'
-  return 'other'
-}
-
 function ThumbnailImageComponent({
   thumbnailUrl,
   duration,
@@ -44,7 +28,6 @@ function ThumbnailImageComponent({
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
   const [imageLoaded, setImageLoaded] = useState(false)
-  const [errorMsg, setErrorMsg] = useState('')
   const [retryAttempt, setRetryAttempt] = useState(0)
 
   // Reset error state during render when the URL changes so a stale
@@ -55,7 +38,6 @@ function ThumbnailImageComponent({
     setImageError(false)
     setImageLoading(Boolean(thumbnailUrl))
     setImageLoaded(false)
-    setErrorMsg('')
     setRetryAttempt(0)
   }
 
@@ -107,29 +89,12 @@ function ThumbnailImageComponent({
   }, [thumbnailUrl, imageLoading, imageError, handleRecoverableError])
 
   // Memoize callbacks for Image component
-  const handleError = useCallback((e: any) => {
-    // expo-image passes { error }, RN's Image passes { nativeEvent: { error } }.
-    const reason = e?.error ?? e?.nativeEvent?.error
-    console.warn('[ThumbnailImage] load error', {
-      url: thumbnailUrl,
-      urlLength: thumbnailUrl ? thumbnailUrl.length : 0,
-      reason: reason ? String(reason) : null,
-    })
-    if (reason) setErrorMsg(String(reason))
+  const handleError = useCallback(() => {
     handleRecoverableError()
-  }, [handleRecoverableError, thumbnailUrl])
+  }, [handleRecoverableError])
   const handleLoadStart = useCallback(() => setImageLoading(true), [])
   const handleLoadEnd = useCallback(() => setImageLoading(false), [])
   const handleLoad = useCallback(() => setImageLoaded(true), [])
-
-  const debugBadge = useMemo(() => {
-    if (!THUMBNAIL_DEBUG_BADGE) return null
-    const scheme = uriScheme(thumbnailUrl)
-    const state = imageError ? 'ERR' : imageLoaded ? 'OK' : thumbnailUrl ? '...' : '—'
-    const len = thumbnailUrl ? thumbnailUrl.length : 0
-    const reason = errorMsg ? ` ${errorMsg.slice(0, 60)}` : ''
-    return `${scheme}/${state}${len ? ` ${len}` : ''}${reason}`
-  }, [thumbnailUrl, imageError, imageLoaded, errorMsg])
 
   return (
     <View style={containerStyle}>
@@ -153,13 +118,6 @@ function ThumbnailImageComponent({
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
         />
-      )}
-
-      {/* TEMPORARY diagnostic badge (top-left) */}
-      {debugBadge && (
-        <View style={styles.debugBadge}>
-          <Text style={styles.debugBadgeText} numberOfLines={3}>{debugBadge}</Text>
-        </View>
       )}
 
       {/* Loading indicator */}
@@ -254,23 +212,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     zIndex: 4,
     elevation: 4,
-  },
-  debugBadge: {
-    position: 'absolute',
-    top: 4,
-    left: 4,
-    maxWidth: '92%',
-    backgroundColor: 'rgba(255, 0, 0, 0.85)',
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 3,
-    zIndex: 5,
-    elevation: 5,
-  },
-  debugBadgeText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '700',
   },
   durationText: {
     color: '#ffffff',

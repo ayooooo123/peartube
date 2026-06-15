@@ -9,6 +9,7 @@ import {
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
   isConfirmedFeedHydrationResult,
+  getFeedVideoIdentity,
   mergeHydratedFeedVideos,
   mergePreviewFeedVideos,
   selectFeedEntryVideosWithPreviewFallback,
@@ -16,6 +17,12 @@ import {
   isFeedVideoPlaybackReady,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
+
+test('getFeedVideoIdentity normalizes video ids and /videos paths to one key', () => {
+  assert.equal(getFeedVideoIdentity({ id: 'abc123' }), 'abc123')
+  assert.equal(getFeedVideoIdentity({ path: '/videos/abc123.mp4' }), 'abc123')
+  assert.equal(getFeedVideoIdentity({ videoId: '/videos/abc123.mov?x=1' }), 'abc123')
+})
 
 test('getMissingChannelMetaRequests dedupes channels and respects the visible-first limit', () => {
   const requests = getMissingChannelMetaRequests([
@@ -192,6 +199,55 @@ test('selectFeedEntryVideosWithPreviewFallback preserves preview thumbnail blob 
     contiguousBlocks: undefined,
     readyForPlayback: undefined,
   }])
+})
+
+test('selectFeedEntryVideosWithPreviewFallback preserves thumbnail refs when preview id matches hydrated path', () => {
+  const previews = [{
+    id: 'same-video',
+    thumbnailBlobId: '0:1:0:231042',
+    thumbnailBlobsCoreKey: 'bb'.repeat(32),
+    thumbnailMimeType: 'image/jpeg',
+  }]
+  const loaded = [{
+    path: '/videos/same-video.mp4',
+    title: 'Hydrated title',
+    availability: 'playable',
+  }]
+
+  const [merged] = selectFeedEntryVideosWithPreviewFallback(loaded, previews)
+  assert.equal(merged.thumbnailBlobId, previews[0].thumbnailBlobId)
+  assert.equal(merged.thumbnailBlobsCoreKey, previews[0].thumbnailBlobsCoreKey)
+  assert.equal(merged.thumbnailMimeType, previews[0].thumbnailMimeType)
+})
+
+test('mergeHydratedFeedVideos preserves preview thumbnail refs when hydrated id/path forms differ', () => {
+  const previousVideos = [{
+    id: 'same-video',
+    channelKey: 'channel-a',
+    title: 'Preview title',
+    availability: 'playable',
+    thumbnailBlobId: '0:1:0:231042',
+    thumbnailBlobsCoreKey: 'bb'.repeat(32),
+    thumbnailMimeType: 'image/jpeg',
+    __feedSource: 'preview',
+  }]
+  const incomingVideos = [{
+    path: '/videos/same-video.mp4',
+    channelKey: 'channel-a',
+    title: 'Hydrated title',
+    availability: 'playable',
+  }]
+
+  const merged = mergeHydratedFeedVideos({
+    previousVideos,
+    incomingVideos,
+    feedEntries: [{ driveKey: 'channel-a', previewVideos: previousVideos }],
+  })
+
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].title, 'Hydrated title')
+  assert.equal(merged[0].thumbnailBlobId, previousVideos[0].thumbnailBlobId)
+  assert.equal(merged[0].thumbnailBlobsCoreKey, previousVideos[0].thumbnailBlobsCoreKey)
 })
 
 test('getFeedPreviewVideos only uses local or live-peer manifest previews', () => {

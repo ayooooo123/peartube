@@ -25,6 +25,7 @@ import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-v
 import {
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
+  getFeedVideoIdentity,
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
@@ -596,6 +597,15 @@ export default function HomeScreen() {
 
     const mergeVideos = (incoming: VideoData[], refreshedChannelKeys: string[] = []) => {
       if (feedLoadRunIdRef.current !== runId) return
+      const incomingKeys = new Set(incoming.map((video: any) => `${video?.channelKey || video?.driveKey || ''}:${getFeedVideoIdentity(video)}`))
+      const nextForThumbnailFetch = mergeHydratedFeedVideos({
+        previousVideos: feedVideos,
+        incomingVideos: incoming,
+        refreshedChannelKeys,
+        feedEntries,
+        identityDriveKey: identity?.driveKey || undefined,
+        limit: 50,
+      }).filter((video: any) => incomingKeys.has(`${video?.channelKey || video?.driveKey || ''}:${getFeedVideoIdentity(video)}`))
       setFeedVideos((prev) => mergeHydratedFeedVideos({
         previousVideos: prev,
         incomingVideos: incoming,
@@ -604,8 +614,9 @@ export default function HomeScreen() {
         identityDriveKey: identity?.driveKey || undefined,
         limit: 50,
       }))
-      if (incoming.length > 0) {
-        fetchThumbnailsForVideos(incoming)
+      const thumbnailsToFetch = nextForThumbnailFetch.length > 0 ? nextForThumbnailFetch : incoming
+      if (thumbnailsToFetch.length > 0) {
+        fetchThumbnailsForVideos(thumbnailsToFetch)
       }
     }
 

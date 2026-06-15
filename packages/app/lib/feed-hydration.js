@@ -6,6 +6,16 @@ function getFeedEntryPriority(entry) {
   return 4
 }
 
+export function getFeedVideoIdentity(video) {
+  const raw = video?.id || video?.videoId || video?.path || ''
+  if (typeof raw !== 'string' || raw.length === 0) return ''
+
+  const match = raw.match(/\/videos\/([^/?#]+?)(?:\.[^./?#]+)?(?:[?#].*)?$/)
+  if (match?.[1]) return match[1]
+
+  return raw.replace(/^\/videos\//, '').replace(/\.[^./?#]+(?:[?#].*)?$/, '')
+}
+
 export function hasDirectBlobRef(video) {
   return typeof video?.blobId === 'string' && video.blobId.length > 0 &&
     typeof video?.blobsCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(video.blobsCoreKey)
@@ -111,12 +121,12 @@ function mergePreviewThumbnailIdentity(loadedVideos, previewFallback) {
 
   const previewById = new Map()
   for (const preview of previews) {
-    const identifier = preview?.id || preview?.path || ''
+    const identifier = getFeedVideoIdentity(preview)
     if (identifier && !previewById.has(identifier)) previewById.set(identifier, preview)
   }
 
   return loadedVideos.map((video) => {
-    const identifier = video?.id || video?.path || ''
+    const identifier = getFeedVideoIdentity(video)
     const preview = identifier ? previewById.get(identifier) : null
     return mergeVideoPlaybackIdentity(preview, video)
   })
@@ -146,8 +156,9 @@ export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey,
       (identityDriveKey && channelKey === identityDriveKey ? 'Your channel' : 'Unknown')
 
     for (const preview of entry?.previewVideos || []) {
-      const videoKey = `${channelKey}:${preview?.id || preview?.path || ''}`
-      if (!preview?.id || seen.has(videoKey)) continue
+      const identifier = getFeedVideoIdentity(preview)
+      const videoKey = `${channelKey}:${identifier}`
+      if (!identifier || seen.has(videoKey)) continue
       if (!shouldRenderFeedVideo({
         video: { ...preview, channelKey },
         identityDriveKey,
@@ -234,11 +245,11 @@ function isPreviewBackedByFeedEntry(video, feedEntryByChannel) {
   if (!channelKey) return false
   const entry = feedEntryByChannel?.get(channelKey)
   const previewVideos = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
-  const identifier = video?.id || video?.path || ''
+  const identifier = getFeedVideoIdentity(video)
   if (!identifier || previewVideos.length === 0) return false
 
   return previewVideos.some((preview) => {
-    const previewIdentifier = preview?.id || preview?.path || ''
+    const previewIdentifier = getFeedVideoIdentity(preview)
     return previewIdentifier === identifier
   })
 }
@@ -263,7 +274,7 @@ export function mergeHydratedFeedVideos({
     if (!video) continue
     const channelKey = video?.channelKey || video?.driveKey || null
     if (channelKey && refreshed.has(channelKey) && !isPreviewBackedByFeedEntry(video, feedEntryByChannel)) continue
-    const identifier = video?.id || video?.path || ''
+    const identifier = getFeedVideoIdentity(video)
     if (!identifier) continue
     const key = `${channelKey || ''}:${identifier}`
     byKey.set(key, video)
@@ -273,7 +284,7 @@ export function mergeHydratedFeedVideos({
     if (!video) continue
     if (!shouldRenderFeedVideo({ video, identityDriveKey })) continue
     const channelKey = video?.channelKey || video?.driveKey || null
-    const identifier = video?.id || video?.path || ''
+    const identifier = getFeedVideoIdentity(video)
     if (!identifier) continue
     const key = `${channelKey || ''}:${identifier}`
     byKey.set(key, {
@@ -306,7 +317,7 @@ export function mergePreviewFeedVideos({
   for (const video of previousVideos || []) {
     if (!video || video?.__feedSource === 'preview') continue
     const channelKey = video?.channelKey || video?.driveKey || null
-    const identifier = video?.id || video?.path || ''
+    const identifier = getFeedVideoIdentity(video)
     if (!identifier) continue
     const key = `${channelKey || ''}:${identifier}`
     byKey.set(key, video)
@@ -315,7 +326,7 @@ export function mergePreviewFeedVideos({
   for (const video of previewVideos || []) {
     if (!video) continue
     const channelKey = video?.channelKey || video?.driveKey || null
-    const identifier = video?.id || video?.path || ''
+    const identifier = getFeedVideoIdentity(video)
     if (!identifier) continue
     const key = `${channelKey || ''}:${identifier}`
     if (byKey.has(key)) continue

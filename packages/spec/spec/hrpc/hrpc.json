@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -1550,6 +1550,32 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 65,
+      "name": "@peartube/assess-upload-offload",
+      "request": {
+        "name": "@peartube/assess-upload-offload-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/assess-upload-offload-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 66,
+      "name": "@peartube/offload-upload",
+      "request": {
+        "name": "@peartube/offload-upload-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/offload-upload-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

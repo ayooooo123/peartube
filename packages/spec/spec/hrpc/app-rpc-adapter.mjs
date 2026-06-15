@@ -1345,6 +1345,28 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": true,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 65,
+      "command": "assess-upload-offload",
+      "method": "assessUploadOffload",
+      "handler": "AssessUploadOffload",
+      "request": "@peartube/assess-upload-offload-request",
+      "response": "@peartube/assess-upload-offload-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 66,
+      "command": "offload-upload",
+      "method": "offloadUpload",
+      "handler": "OffloadUpload",
+      "request": "@peartube/offload-upload-request",
+      "response": "@peartube/offload-upload-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -2244,6 +2266,28 @@ export const APP_RPC_METADATA = Object.freeze({
         "send": false,
         "requestStream": false,
         "responseStream": false
+      },
+      {
+        "id": 65,
+        "command": "assess-upload-offload",
+        "method": "assessUploadOffload",
+        "handler": "AssessUploadOffload",
+        "request": "@peartube/assess-upload-offload-request",
+        "response": "@peartube/assess-upload-offload-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 66,
+        "command": "offload-upload",
+        "method": "offloadUpload",
+        "handler": "OffloadUpload",
+        "request": "@peartube/offload-upload-request",
+        "response": "@peartube/offload-upload-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
       }
     ],
     "search": [
@@ -2541,6 +2585,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "add-comment",
     "add-reaction",
     "add-to-playlist",
+    "assess-upload-offload",
     "attest-device",
     "bootstrap-device",
     "cast-add-manual-device",
@@ -2606,6 +2651,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "list-videos",
     "log-watch-event",
     "log-watch-history",
+    "offload-upload",
     "pair-device",
     "pick-image-file",
     "pick-video-file",

@@ -452,6 +452,9 @@ export default function ProfileScreen() {
     }
   }
 
+  // The budget tracks cache fetched from the network (seeded content). The
+  // user's own uploads live in the same store but are never charged against
+  // this limit, so we show the tracked cache sum, not raw on-disk usage.
   const usedPct = storageStats && storageStats.maxBytes > 0
     ? Math.min(100, (storageStats.usedBytes / storageStats.maxBytes) * 100)
     : 0

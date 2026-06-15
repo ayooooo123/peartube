@@ -22,7 +22,9 @@ import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoTo
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
-import { SeedingAuthorizationError } from './seeding.js'
+import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
+import { collectCorestoreGarbage } from './corestore-gc.js'
+import { collectFullCopyPeers, assessOffloadEligibility } from './upload-offload.js'
 import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
 
 /**
@@ -617,6 +619,57 @@ export function createApi({
     }).filter(Boolean)
     const blobCoreKey = core?.key ? b4a.toString(core.key, 'hex') : null
     return { peerCount, blobPeerIds, blobCoreKey }
+  }
+
+  // The raw replicator peer objects for a core (each exposes remoteBitfield /
+  // remoteContiguousLength), used to verify who holds a full copy of a blob.
+  function getCorePeerObjects(core) {
+    const peers = core?.peers
+    if (Array.isArray(peers)) return peers
+    if (peers && typeof peers.values === 'function') return Array.from(peers.values())
+    return []
+  }
+
+  // Swarm public keys of durable full-copy anchors, used to upgrade a generic
+  // "live peer has it" into a trusted "the relay / one of your own devices has
+  // it".
+  //
+  // Relay anchor: swarm/Noise keys of always-on relay/blind peers a deployment
+  // trusts as a durable full-copy holder. A host can populate ctx.trustedRelayKeys
+  // (e.g. from its own config) to enable single-relay offload. Left empty by
+  // default — there's no automatic client-side relay-key discovery yet (that
+  // needs a feed announcement), so default deployments lean on the
+  // independent-live-peers redundancy threshold.
+  function getKnownDurableRelayKeys() {
+    const raw = ctx?.trustedRelayKeys
+    if (!Array.isArray(raw)) return []
+    const keys = []
+    for (const k of raw) {
+      const hex = typeof k === 'string' ? k.toLowerCase() : null
+      if (hex && /^[a-f0-9]{64}$/.test(hex)) keys.push(hex)
+    }
+    return keys
+  }
+
+  // Own-device anchor: each device records the swarm key it replicates under in
+  // its channel writer record (ensureLocalBlobDrive). Reading them back lets the
+  // offload check recognise when a connected blob peer is one of the user's own
+  // devices holding a full copy — the strongest durable anchor.
+  async function getOwnDeviceSwarmKeys(driveKey) {
+    try {
+      const channel = ctx.channels?.get?.(driveKey)
+      if (typeof channel?.listWriters !== 'function') return []
+      const writers = await channel.listWriters()
+      const keys = []
+      for (const w of writers || []) {
+        if (w?.banned || w?.removedAt) continue
+        const k = typeof w?.swarmKeyHex === 'string' ? w.swarmKeyHex.toLowerCase() : null
+        if (k && /^[a-f0-9]{64}$/.test(k)) keys.push(k)
+      }
+      return keys
+    } catch {
+      return []
+    }
   }
 
   function getVideoCorePeerDetails(driveKey, videoPath) {
@@ -2808,6 +2861,24 @@ export function createApi({
             let fillCancelled = false
             let currentFillRange = null
             const blobCoreKeyHex = String(blobMeta.blobsCoreKey || '').toLowerCase()
+
+            // Admission check for the full background download. Streaming a video
+            // front-to-back fills the whole file to disk (the playback window
+            // cache only trims behind the playhead), so a single watch of a video
+            // that doesn't fit the remaining cache quota would breach the storage
+            // limit. Evaluate once, up front; default to allowing the download on
+            // any uncertainty so playback behaviour is unchanged when the budget
+            // can't be measured. Cheap thanks to the cached on-disk measurement.
+            const fullDownloadBudgetPromise = (async () => {
+              if (!seedingManager?.getQuotaBudget) return true
+              try {
+                const budget = await seedingManager.getQuotaBudget()
+                const remainingBytes = Math.max(0, totalBytes - initialCachedBytes)
+                return fullDownloadFitsQuota(budget.headroomBytes, remainingBytes)
+              } catch {
+                return true
+              }
+            })()
             const rangeEntry = activeRangeRequests.get(prefetchKey)
             if (rangeEntry) {
               rangeEntry.cancel = () => {
@@ -2894,8 +2965,26 @@ export function createApi({
               }).catch(failFullDownload)
             }
 
-            const startFullDownload = () => {
-              if (fullDownloadStarted || fillCancelled) return
+            let fullDownloadDecided = false
+            const startFullDownload = async () => {
+              if (fullDownloadStarted || fillCancelled || fullDownloadDecided) return
+              const fits = await fullDownloadBudgetPromise
+              if (fullDownloadStarted || fillCancelled || fullDownloadDecided) return
+              fullDownloadDecided = true
+              if (!fits) {
+                // Over the cache quota: don't background-cache the whole file.
+                // Playback keeps streaming on demand and the window cache bounds
+                // the on-disk footprint; the partial seed registered at startup
+                // stays evictable so the quota is respected. Release the prefetch
+                // blob protection (playback-active already guards live reads) and
+                // drop the resume intent so we never claim a full cache we won't
+                // complete.
+                console.log('[API] Skipping full background download — would exceed storage quota; streaming with bounded cache')
+                unsubscribePlayhead()
+                await deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
+                releaseProtectedPrefetchBlobRef()
+                return
+              }
               fullDownloadStarted = true
               startFillPass(startBlock)
             }
@@ -3501,6 +3590,85 @@ export function createApi({
         return { success: true, ...clearResult };
       }
       return { success: false, clearedBytes: 0 };
+    },
+
+    /**
+     * Assess whether a video's local blob can be safely evicted from disk — i.e.
+     * a FULL copy is provably held elsewhere right now. Read-only: never deletes.
+     * Intended for the user's own uploaded videos (where the local copy is the
+     * source), but safe for any video since eligibility requires a remote full
+     * copy regardless.
+     * @returns {Promise<{ eligible: boolean, fullCopyPeers: number, relayHasFullCopy: boolean, ownDeviceHasFullCopy: boolean, byteLength: number, blobsCoreKey: string | null, reason: string | null }>}
+     */
+    async assessUploadOffload(driveKey, videoPath) {
+      const empty = {
+        eligible: false, fullCopyPeers: 0, relayHasFullCopy: false,
+        ownDeviceHasFullCopy: false, byteLength: 0, blobsCoreKey: null, reason: null
+      }
+      try {
+        const v = await this.getVideoData(driveKey, videoPath).catch(() => null)
+        const blobsCoreKey = normalizeBlobsCoreKey(v?.blobsCoreKey)
+        const range = normalizeBlobRefInput(v?.blobId ?? v)
+        if (!blobsCoreKey || !range) return { ...empty, reason: 'missing-blob-metadata' }
+
+        const core = ctx.store.get(b4a.from(blobsCoreKey, 'hex'))
+        try {
+          await core.ready?.()
+          const { fullCopyKeys, fullCopyAnonymous } = collectFullCopyPeers(getCorePeerObjects(core), range)
+          const assessment = assessOffloadEligibility({
+            fullCopyKeys,
+            fullCopyAnonymous,
+            relayKeys: getKnownDurableRelayKeys(),
+            deviceKeys: await getOwnDeviceSwarmKeys(driveKey)
+          })
+          return {
+            ...assessment,
+            blobsCoreKey,
+            byteLength: Math.max(0, Number(range.byteLength) || 0),
+            reason: assessment.eligible ? null : 'not-durably-replicated'
+          }
+        } finally {
+          // store.get() opened a fresh session; release it.
+          try { await core.close?.() } catch { /* best effort */ }
+        }
+      } catch (err) {
+        return { ...empty, reason: err?.message || 'assess-failed' }
+      }
+    },
+
+    /**
+     * Free a video's local blob bytes, keeping its metadata so it re-fetches on
+     * demand. Refuses unless assessUploadOffload confirms a durable full copy
+     * lives elsewhere (re-checked here) and no playback is active — clearing the
+     * only copy of an under-replicated upload would lose it permanently.
+     * @returns {Promise<{ success: boolean, freedBytes: number, reason: string | null, assessment: object }>}
+     */
+    async offloadUpload(driveKey, videoPath) {
+      const assessment = await this.assessUploadOffload(driveKey, videoPath)
+      if (!assessment.eligible) {
+        return { success: false, freedBytes: 0, reason: assessment.reason || 'not-durably-replicated', assessment }
+      }
+      // Never evict while anything is being played/served — re-fetching mid-play
+      // would stall, and the playing blob may be this one.
+      if (storageIsPlaybackActive()) {
+        return { success: false, freedBytes: 0, reason: 'playback-active', assessment }
+      }
+      const v = await this.getVideoData(driveKey, videoPath).catch(() => null)
+      const cleared = seedingManager
+        ? await seedingManager.clearSeedBlob({
+            driveKey, videoPath, blobsCoreKey: assessment.blobsCoreKey, blobId: v?.blobId
+          })
+        : false
+      if (cleared) {
+        await collectCorestoreGarbage(ctx.store, { label: 'upload offload', log: console.log }).catch(() => {})
+        console.log('[API] Offloaded upload (full copy seeded elsewhere):', videoPath)
+      }
+      return {
+        success: Boolean(cleared),
+        freedBytes: cleared ? assessment.byteLength : 0,
+        reason: cleared ? null : 'clear-failed',
+        assessment
+      }
     },
 
     // ============================================

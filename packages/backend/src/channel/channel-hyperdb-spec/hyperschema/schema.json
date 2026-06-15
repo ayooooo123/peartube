@@ -121,6 +121,11 @@
           "name": "banned",
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "swarmKeyHex",
+          "type": "string",
+          "version": 1
         }
       ]
     },

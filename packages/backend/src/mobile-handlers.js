@@ -293,6 +293,8 @@ export function attachMobileHandlers(B, deps) {
   B.getStorageStats = async () => api.getStorageStats()
   B.setStorageLimit = async (r) => api.setStorageLimit(r.maxGB)
   B.clearCache = async () => api.clearCache()
+  B.assessUploadOffload = async (r) => api.assessUploadOffload(r.channelKey, r.videoId)
+  B.offloadUpload = async (r) => api.offloadUpload(r.channelKey, r.videoId)
 
   B.getTranscodeSettings = async () => api.getTranscodeSettings()
   B.setTranscodeSettings = async (r) => api.setTranscodeSettings(r || {})

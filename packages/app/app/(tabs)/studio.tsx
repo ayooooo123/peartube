@@ -1,7 +1,7 @@
 /**
  * Studio Tab - Upload and manage videos
  */
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image, AppState, InteractionManager } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -117,6 +117,10 @@ export default function StudioScreen() {
   const [preparingVideo, setPreparingVideo] = useState(false) // Android: copying picked file into cache
   const tempVideoUriRef = useRef<string | null>(null) // app-cache copy we created; deleted after upload/reset
   const [editingVideo, setEditingVideo] = useState<any>(null)
+  // Per-video "free up local space" state. A video is only offloadable once a
+  // full copy is provably seeded elsewhere (backend assessUploadOffload).
+  const [offloadInfo, setOffloadInfo] = useState<Record<string, { eligible: boolean; byteLength: number; offloaded?: boolean; busy?: boolean }>>({})
+  const assessedOffloadRef = useRef<Set<string>>(new Set())
   const tabBarMetrics = useTabBarMetrics()
   const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
 
@@ -699,6 +703,72 @@ export default function StudioScreen() {
     </View>
   )
 
+  // Quietly assess which of my uploads can be safely offloaded (a full copy is
+  // seeded elsewhere). Best-effort, once per video; the action only appears when
+  // eligible so we never invite deleting an under-replicated source copy.
+  useEffect(() => {
+    const assess = (rpc as any)?.assessUploadOffload
+    if (typeof assess !== 'function' || !identity?.driveKey) return
+    const mine = videos.filter((v: any) => v.channelKey === identity.driveKey)
+    let cancelled = false
+    ;(async () => {
+      for (const v of mine) {
+        if (cancelled) return
+        if (assessedOffloadRef.current.has(v.id)) continue
+        assessedOffloadRef.current.add(v.id)
+        try {
+          const res = await assess({ channelKey: identity.driveKey, videoId: v.id })
+          if (cancelled) return
+          setOffloadInfo((prev) => ({
+            ...prev,
+            [v.id]: { eligible: !!res?.eligible, byteLength: Number(res?.byteLength) || 0 },
+          }))
+        } catch {
+          assessedOffloadRef.current.delete(v.id)
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [videos, identity?.driveKey, rpc])
+
+  const handleOffloadVideo = async (item: any) => {
+    const info = offloadInfo[item.id]
+    const freed = info?.byteLength ? ` (${formatBytes(info.byteLength)})` : ''
+    const confirmed = await new Promise<boolean>((resolve) => {
+      const msg = `Free up local space for "${item.title}"?${freed}\n\nThe video stays published — a full copy is confirmed seeded elsewhere, and it re-downloads from the network if needed.`
+      if (Platform.OS === 'web') {
+        resolve(window.confirm(msg))
+      } else {
+        Alert.alert('Free up space', msg, [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Free up', style: 'destructive', onPress: () => resolve(true) },
+        ])
+      }
+    })
+    if (!confirmed) return
+
+    setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: true } }))
+    try {
+      const res = await (rpc as any)?.offloadUpload({ channelKey: identity?.driveKey, videoId: item.id })
+      if (res?.success) {
+        setOffloadInfo((prev) => ({ ...prev, [item.id]: { eligible: false, byteLength: info?.byteLength || 0, offloaded: true, busy: false } }))
+      } else {
+        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
+        const detail = res?.reason === 'playback-active'
+          ? 'Stop playback and try again.'
+          : 'It may not be fully backed up elsewhere yet.'
+        const m = `Couldn't free up space. ${detail}`
+        if (Platform.OS === 'web') window.alert(m)
+        else Alert.alert('Free up space', m)
+      }
+    } catch (err: any) {
+      setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
+      const m = err?.message || 'Failed to free up space'
+      if (Platform.OS === 'web') window.alert(m)
+      else Alert.alert('Free up space', m)
+    }
+  }
+
   const handleDeleteVideo = async (videoId: string, videoTitle: string) => {
     const confirmDelete = () => {
       return new Promise<boolean>((resolve) => {
@@ -823,6 +893,22 @@ export default function StudioScreen() {
             >
               <Feather name="edit-2" color={colors.text} size={18} />
             </Pressable>
+            {offloadInfo[item.id]?.offloaded ? (
+              <View className="w-12 justify-center items-center">
+                <Feather name="cloud" color={colors.text} size={16} />
+              </View>
+            ) : offloadInfo[item.id]?.eligible ? (
+              <Pressable
+                onPress={() => handleOffloadVideo(item)}
+                disabled={offloadInfo[item.id]?.busy}
+                className="w-12 justify-center items-center active:opacity-60"
+                accessibilityLabel="Free up local space"
+              >
+                {offloadInfo[item.id]?.busy
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Feather name="download-cloud" color={colors.primary} size={18} />}
+              </Pressable>
+            ) : null}
             <Pressable
               onPress={() => handleDeleteVideo(item.id, item.title)}
               className="w-12 justify-center items-center active:opacity-60"

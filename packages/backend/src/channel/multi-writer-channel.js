@@ -362,6 +362,20 @@ export class MultiWriterChannel extends ReadyResource {
     return !writer || writer.role === 'owner' || writer.role === 'moderator'
   }
 
+  // Hex of the Hyperswarm/Noise public key this device replicates under. Other
+  // devices read it from the writer record to recognise this device as a
+  // connected replication peer (durable own-device offload anchor).
+  _localSwarmKeyHex() {
+    try {
+      const pk = this.swarm?.keyPair?.publicKey
+      if (!pk) return ''
+      const hex = b4a.toString(pk, 'hex')
+      return /^[a-f0-9]{64}$/i.test(hex) ? hex.toLowerCase() : ''
+    } catch {
+      return ''
+    }
+  }
+
   async ensureLocalBlobDrive({ deviceName = '' } = {}) {
     if (!this.localWriterKeyHex) throw new Error('Channel not ready')
     if (!this.blobs) throw new Error('Blobs not initialized')
@@ -373,7 +387,8 @@ export class MultiWriterChannel extends ReadyResource {
       deviceName: deviceName || existing?.deviceName || '',
       addedAt: existing?.addedAt || Date.now(),
       updatedAt: Date.now(),
-      blobDriveKey: this.blobsKeyHex || existing?.blobDriveKey || ''
+      blobDriveKey: this.blobsKeyHex || existing?.blobDriveKey || '',
+      swarmKeyHex: this._localSwarmKeyHex() || existing?.swarmKeyHex || ''
     })
     await this._flush()
     return this.blobsKeyHex

@@ -36,6 +36,25 @@ function createNoopRelease() {
   return () => {}
 }
 
+/**
+ * Admission rule for the actively-playing video's full background download.
+ * A single watch otherwise background-caches the entire file to disk (the
+ * playback window cache only trims *behind* the playhead, while the fill races
+ * ahead to EOF), so a large video blows past the storage quota mid-watch.
+ *
+ * Returns true only when the bytes still needed to fully cache the video fit
+ * within the remaining quota headroom. Zero/unknown remaining always fits.
+ * @param {number} headroomBytes
+ * @param {number} remainingBytes
+ * @returns {boolean}
+ */
+export function fullDownloadFitsQuota(headroomBytes, remainingBytes) {
+  const remaining = Math.max(0, Number(remainingBytes) || 0)
+  if (remaining === 0) return true
+  const headroom = Math.max(0, Number(headroomBytes) || 0)
+  return headroom >= remaining
+}
+
 function mergeSeedReason(existingReason, nextReason) {
   const priority = { watched: 1, subscribed: 2, pinned: 3 }
   return (priority[nextReason] || 0) > (priority[existingReason] || 0)
@@ -431,17 +450,20 @@ export class SeedingManager {
   async _enforceQuotaOnce(options = {}) {
     const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    // The quota bounds content cached from the network (tracked seeds). The
+    // user's own uploaded/published videos live in the same corestore but are
+    // never registered as seeds, so they are excluded by construction. We must
+    // NOT enforce against raw on-disk usage here: it commingles uploads with
+    // cache, so doing so would evict the user's seeded cache to make room for
+    // their own uploads — i.e. charge uploads against a limit they don't belong
+    // to.
     let trackedBytes = this.calculateStorage();
-    const totalStorageBytes = await this.getTotalStorageBytes();
-    let quotaBytes = Number.isFinite(totalStorageBytes)
-      ? Math.max(trackedBytes, totalStorageBytes)
-      : trackedBytes;
 
-    if (quotaBytes <= maxBytes) {
+    if (trackedBytes <= maxBytes) {
       return; // Under quota
     }
 
-    console.log('[SeedingManager] Over quota, current:', trackedBytes, 'total:', totalStorageBytes ?? 'unavailable', 'max:', maxBytes);
+    console.log('[SeedingManager] Over cache quota, tracked:', trackedBytes, 'max:', maxBytes);
 
     // Get seeds sorted by priority (pinned > subscribed > watched) then by age
     const seeds = Array.from(this.activeSeeds.entries())
@@ -459,7 +481,7 @@ export class SeedingManager {
     // Remove oldest/lowest priority seeds until under quota
     let clearedBlob = false;
     for (const seed of seeds) {
-      if (quotaBytes <= maxBytes) break;
+      if (trackedBytes <= maxBytes) break;
       if (seed.reason === 'pinned') continue; // Never remove pinned
       if (protectedKeys.has(seed.key) || this.shouldSkipSeedClear(seed)) continue;
 
@@ -467,7 +489,6 @@ export class SeedingManager {
       clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
       const seedBytes = Math.max(0, Number(seed.bytes) || 0);
       trackedBytes = Math.max(0, trackedBytes - seedBytes);
-      quotaBytes = Math.max(trackedBytes, quotaBytes - seedBytes);
       console.log('[SeedingManager] Removed seed to meet quota:', seed.key.slice(0, 32));
     }
 
@@ -640,6 +661,23 @@ export class SeedingManager {
       console.log('[SeedingManager] Failed to measure total storage:', err?.message);
       return null;
     }
+  }
+
+  /**
+   * Storage budget snapshot for admission control: how much room is left under
+   * the configured cache quota.
+   *
+   * The quota bounds content cached from the network (tracked seeds). The
+   * user's own uploaded/published videos share the same corestore but are never
+   * registered as seeds, so they are excluded by construction — uploads never
+   * count against the cache limit. (Raw on-disk usage commingles uploads with
+   * cache, so it is deliberately NOT used here.)
+   * @returns {{ maxBytes: number, usageBytes: number, headroomBytes: number }}
+   */
+  getQuotaBudget() {
+    const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    const usageBytes = Math.round(this.calculateStorage());
+    return { maxBytes, usageBytes, headroomBytes: Math.max(0, maxBytes - usageBytes) };
   }
 
   buildStorageStats(totalStorageBytes = null) {

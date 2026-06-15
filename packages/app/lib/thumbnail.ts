@@ -37,6 +37,35 @@ const READY_TIMEOUT_MS = 1_500
 const READY_RETRY_DELAY_MS = 250
 
 const THUMBNAIL_ATTEMPTS = 3
+const LOOPBACK_THUMBNAIL_URL_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i
+
+export function isLoopbackThumbnailUrl(value: unknown): value is string {
+  return typeof value === 'string' && LOOPBACK_THUMBNAIL_URL_RE.test(value)
+}
+
+export function hasThumbnailBlobRef(video: any): boolean {
+  return Boolean(video?.thumbnailBlobId && video?.thumbnailBlobsCoreKey)
+}
+
+export function getInlineThumbnailUrl(video: any): string | null {
+  const value = video?.thumbnailUrl || video?.thumbnail || null
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+export function getRenderableThumbnailUrl(video: any, cachedUrl?: string | null, opts: { native?: boolean } = { native: true }): string | null {
+  if (cachedUrl) return cachedUrl
+
+  const inlineUrl = getInlineThumbnailUrl(video)
+  if (opts.native === false) return inlineUrl
+
+  // Native loopback blob-server URLs are valid only for the backend process/port
+  // that created them. If blob refs are present, force a fresh HRPC resolve and
+  // render only the current-process URL from the thumbnail cache.
+  if (hasThumbnailBlobRef(video)) return null
+
+  return inlineUrl && !isLoopbackThumbnailUrl(inlineUrl) ? inlineUrl : null
+}
+
 // The backend handler can legitimately spend up to 1.5s on a bounded network
 // wait (plus channel/bee lookups) before answering, and on Android cold start
 // the worklet is saturated by P2P bootstrap. A 1.5s timeout abandoned replies
@@ -123,12 +152,25 @@ async function attemptThumbnailFetch(
 ): Promise<string | null> {
   try {
     const response = await withTimeout(rpc.getVideoThumbnail(request), timeoutMs)
-    // The blob server serves thumbnails via a buffered, fixed-length response that
-    // image loaders accept, so the URL renders directly via expo-image — no base64.
-    // dataUrl is still honored first for any caller that inlines.
-    const url = response?.dataUrl || response?.url
+    // Mobile renders the same loopback blob-server HTTP URL desktop/video use.
+    // The backend localizes thumbnail blocks before responding so image loaders
+    // don't sit on a stalling Hypercore read. Do not fall back to data: URLs.
+    const url = response?.url
+    console.log('[ThumbnailFetch] response', {
+      videoId: request.videoId,
+      exists: response?.exists,
+      url,
+      urlLength: typeof url === 'string' ? url.length : 0,
+      hasBlobRef: Boolean(request.thumbnailBlobId && request.thumbnailBlobsCoreKey),
+    })
     if (response?.exists && url) return url
-  } catch {}
+  } catch (err) {
+    console.warn('[ThumbnailFetch] failed', {
+      videoId: request.videoId,
+      message: err instanceof Error ? err.message : String(err),
+      hasBlobRef: Boolean(request.thumbnailBlobId && request.thumbnailBlobsCoreKey),
+    })
+  }
   return null
 }
 

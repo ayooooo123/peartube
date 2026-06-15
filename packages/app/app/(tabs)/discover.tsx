@@ -25,7 +25,7 @@ import { useApp } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
-import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl, isLoopbackThumbnailUrl } from '@/lib/thumbnail'
 import {
   getVerticalFeedHydrationKey,
   getVerticalFeedPreviewVideos,
@@ -119,8 +119,8 @@ function makeRouteVideoData(video: VideoData) {
     size: video.size,
     duration: video.duration,
     uploadedAt: video.uploadedAt,
-    thumbnail: (video as any).thumbnail,
-    thumbnailUrl: video.thumbnailUrl,
+    thumbnail: isLoopbackThumbnailUrl((video as any).thumbnail) ? undefined : (video as any).thumbnail,
+    thumbnailUrl: isLoopbackThumbnailUrl(video.thumbnailUrl) ? undefined : video.thumbnailUrl,
     blobId: (video as any).blobId || undefined,
     blobsCoreKey: (video as any).blobsCoreKey || undefined,
     mimeType: (video as any).mimeType || undefined,
@@ -532,7 +532,7 @@ export default function VerticalDiscoveryScreen() {
     const cacheKey = `${video.channelKey}:${video.id}`
     return {
       ...video,
-      thumbnailUrl: thumbnailCache[cacheKey] || video.thumbnailUrl || (video as any).thumbnail || null,
+      thumbnailUrl: getRenderableThumbnailUrl(video, thumbnailCache[cacheKey]),
     }
   }), [thumbnailCache, videos])
   const backendPeerSignal = Math.max(

@@ -111,6 +111,30 @@ test('createFeedSnapshot refuses to restore direct blob cards without byte proof
   }])
 })
 
+test('createFeedSnapshot keeps thumbnail blob refs but drops stale loopback thumbnail URLs', () => {
+  const snapshot = createFeedSnapshot({
+    now: 1000,
+    videos: [{
+      id: 'with-thumbnail-ref',
+      title: 'With thumbnail ref',
+      channelKey: 'remote',
+      availability: 'playable',
+      thumbnail: 'http://127.0.0.1:12345/?old=thumbnail',
+      thumbnailUrl: 'http://localhost:23456/?old=thumbnailUrl',
+      thumbnailBlobId: '0:4:0:1024',
+      thumbnailBlobsCoreKey: 'aa'.repeat(32),
+      thumbnailMimeType: 'image/jpeg',
+    }],
+  })
+
+  assert.equal(snapshot.videos.length, 1)
+  assert.equal(snapshot.videos[0].thumbnail, undefined)
+  assert.equal(snapshot.videos[0].thumbnailUrl, undefined)
+  assert.equal(snapshot.videos[0].thumbnailBlobId, '0:4:0:1024')
+  assert.equal(snapshot.videos[0].thumbnailBlobsCoreKey, 'aa'.repeat(32))
+  assert.equal(snapshot.videos[0].thumbnailMimeType, 'image/jpeg')
+})
+
 test('restoreFeedSnapshot rejects stale or unsupported snapshots', () => {
   assert.deepEqual(restoreFeedSnapshot(null), [])
   assert.deepEqual(restoreFeedSnapshot({ version: 999, savedAt: 1000, videos: [] }, { now: 1000 }), [])

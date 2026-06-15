@@ -115,9 +115,14 @@ function ThumbnailImageComponent({
   const handleError = useCallback((e: any) => {
     // expo-image passes { error }, RN's Image passes { nativeEvent: { error } }.
     const reason = e?.error ?? e?.nativeEvent?.error
+    console.warn('[ThumbnailImage] load error', {
+      url: thumbnailUrl,
+      urlLength: thumbnailUrl ? thumbnailUrl.length : 0,
+      reason: reason ? String(reason) : null,
+    })
     if (reason) setErrorMsg(String(reason))
     handleRecoverableError()
-  }, [handleRecoverableError])
+  }, [handleRecoverableError, thumbnailUrl])
   const handleLoadStart = useCallback(() => setImageLoading(true), [])
   const handleLoadEnd = useCallback(() => setImageLoading(false), [])
   const handleLoad = useCallback(() => setImageLoaded(true), [])

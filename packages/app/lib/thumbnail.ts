@@ -156,21 +156,8 @@ async function attemptThumbnailFetch(
     // The backend localizes thumbnail blocks before responding so image loaders
     // don't sit on a stalling Hypercore read. Do not fall back to data: URLs.
     const url = response?.url
-    console.log('[ThumbnailFetch] response', {
-      videoId: request.videoId,
-      exists: response?.exists,
-      url,
-      urlLength: typeof url === 'string' ? url.length : 0,
-      hasBlobRef: Boolean(request.thumbnailBlobId && request.thumbnailBlobsCoreKey),
-    })
     if (response?.exists && url) return url
-  } catch (err) {
-    console.warn('[ThumbnailFetch] failed', {
-      videoId: request.videoId,
-      message: err instanceof Error ? err.message : String(err),
-      hasBlobRef: Boolean(request.thumbnailBlobId && request.thumbnailBlobsCoreKey),
-    })
-  }
+  } catch {}
   return null
 }
 

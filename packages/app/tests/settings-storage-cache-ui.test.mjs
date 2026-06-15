@@ -4,33 +4,33 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const __dirname = path.dirname(new URL(import.meta.url).pathname)
-const settingsSource = fs.readFileSync(path.join(__dirname, '..', 'app', '(tabs)', 'settings.tsx'), 'utf8')
+// The settings tab is now a redirect to the Profile screen, which owns the
+// storage card (renderStorageCard). Assert the storage UI lives there.
+const profileSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'profile.tsx'), 'utf8')
 
-test('settings renders storage controls before account onboarding', () => {
-  const noIdentityStart = settingsSource.indexOf('if (!identity) {')
-  const signedInStart = settingsSource.indexOf('  return (', noIdentityStart + 20)
-  const noIdentityBlock = noIdentityStart >= 0 && signedInStart >= 0
-    ? settingsSource.slice(noIdentityStart, signedInStart)
-    : ''
-  const storageStart = settingsSource.indexOf('const renderStorageSection = () => (')
-  const storageEnd = settingsSource.indexOf('// Onboarding', storageStart + 1)
+test('profile storage card surfaces real disk usage, not only the tracked cache quota', () => {
+  const storageStart = profileSource.indexOf('function renderStorageCard()')
+  // The card body ends where the main component render begins.
+  const storageEnd = profileSource.indexOf('<View style={styles.screen}>', storageStart + 1)
   const storageSection = storageStart >= 0 && storageEnd >= 0
-    ? settingsSource.slice(storageStart, storageEnd)
+    ? profileSource.slice(storageStart, storageEnd)
     : ''
 
-  assert.match(noIdentityBlock, /renderStorageSection\(\)/)
-  assert.match(storageSection, /Storage/)
-  assert.match(storageSection, /PearTube Storage/)
+  assert.ok(storageSection.length > 0, 'expected renderStorageCard in profile.tsx')
+  // Real on-disk total + tracked cache + the untracked remainder must all be shown
+  // so the user can see what is actually consuming space (the reported bug: the
+  // card only ever showed the tracked-seed subset).
   assert.match(storageSection, /GB total/)
   assert.match(storageSection, /GB cached/)
   assert.match(storageSection, /app\/P2P data outside tracked peer cache/)
+  assert.match(storageSection, /totalStorageGB/)
+  assert.match(storageSection, /untrackedStorageGB/)
   assert.match(storageSection, /handleStorageLimitChange/)
   assert.match(storageSection, /handleClearCache/)
 })
 
-test('settings exposes a custom cache limit input rather than only preset buttons', () => {
-  assert.match(settingsSource, /customStorageLimit/)
-  assert.match(settingsSource, /parseStorageLimitGB/)
-  assert.match(settingsSource, /Apply Limit/)
-  assert.match(settingsSource, /keyboardType="numeric"/)
+test('profile exposes a custom cache limit input rather than only preset buttons', () => {
+  assert.match(profileSource, /customStorageLimit/)
+  assert.match(profileSource, /handleCustomStorageLimitApply/)
+  assert.match(profileSource, /keyboardType="numeric"/)
 })

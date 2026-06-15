@@ -530,7 +530,7 @@ export const rpc = {
   },
 
   // Storage management
-  async getStorageStats(): Promise<{ usedBytes: number; maxBytes: number; usedGB: string; maxGB: number; seedCount: number; pinnedCount: number }> {
+  async getStorageStats(): Promise<{ usedBytes: number; maxBytes: number; usedGB: string; maxGB: number; seedCount: number; pinnedCount: number; totalStorageBytes?: number; totalStorageGB?: string; untrackedStorageBytes?: number; untrackedStorageGB?: string }> {
     return ensureRPC().getStorageStats({});
   },
 

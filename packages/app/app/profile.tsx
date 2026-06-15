@@ -33,6 +33,13 @@ interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
+  // Real on-disk usage measured for the whole P2P store (uploads + cache +
+  // metadata), surfaced alongside the tracked-cache quota so the storage card
+  // reflects what is actually consuming space — not just the seeded subset.
+  totalStorageBytes?: number
+  totalStorageGB?: string
+  untrackedStorageBytes?: number
+  untrackedStorageGB?: string
 }
 
 interface TranscodeSettings {
@@ -287,7 +294,7 @@ export default function ProfileScreen() {
           const result = await rpc.clearCache()
           if (result.success) {
             const clearedMB = ((result.clearedBytes || 0) / (1024 * 1024)).toFixed(1)
-            notify('Cache cleared', `Freed ${clearedMB} MB`)
+            notify('Cache cleared', `Freed ${clearedMB} MB of tracked peer cache. Your own videos are kept.`)
             await loadStorageStats()
           }
         } catch (err) {
@@ -647,6 +654,25 @@ export default function ProfileScreen() {
         <Text style={styles.trackLabel}>
           {storageStats ? `${storageStats.usedGB} GB of ${storageStats.maxGB} GB budget` : ' '}
         </Text>
+
+        {storageStats?.totalStorageGB ? (
+          <View style={styles.storageBreakdown}>
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>On this device</Text>
+              <Text style={styles.breakdownValue}>{storageStats.totalStorageGB} GB total</Text>
+            </View>
+            <View style={styles.breakdownRow}>
+              <Text style={styles.breakdownLabel}>Tracked peer cache</Text>
+              <Text style={styles.breakdownValue}>{storageStats.usedGB} GB cached</Text>
+            </View>
+            {storageStats.untrackedStorageGB && Number(storageStats.untrackedStorageBytes) > 0 ? (
+              <View style={styles.breakdownRow}>
+                <Text style={styles.breakdownLabel}>Your videos & app/P2P data outside tracked peer cache</Text>
+                <Text style={styles.breakdownValue}>{storageStats.untrackedStorageGB} GB</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         <View style={styles.presetRow}>
           {SUPPORT_PRESETS.map((preset) => {
@@ -1174,6 +1200,32 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 6,
     marginBottom: 14,
+  },
+  storageBreakdown: {
+    backgroundColor: colors.glass,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 14,
+    gap: 6,
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  breakdownLabel: {
+    flex: 1,
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  breakdownValue: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
   },
   presetRow: {
     flexDirection: 'row',

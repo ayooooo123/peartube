@@ -17,6 +17,7 @@ import {
   RELAY_ALERTS_FILENAME,
   RELAY_CATALOG_FILENAME,
   RELAY_MODERATION_FILENAME,
+  RELAY_REPORTS_FILENAME,
   RELAY_MODE_PRIVATE,
   RELAY_MODE_PUBLIC,
   RELAY_POLICY_ALLOWLIST,
@@ -654,6 +655,7 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
     status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
     moderation: join(runtimeDbPath, RELAY_MODERATION_FILENAME),
     alerts: join(runtimeDbPath, RELAY_ALERTS_FILENAME),
+    reports: join(runtimeDbPath, RELAY_REPORTS_FILENAME),
     corestore: join(config.storage.path, 'corestore'),
     archiveTmpPath: config.archive.tmpPath
   }

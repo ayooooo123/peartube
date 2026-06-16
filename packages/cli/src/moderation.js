@@ -8,9 +8,9 @@ import {
   VALID_MODERATION_MODES
 } from './constants.js'
 
-const VALID_TARGET_TYPES = ['channelKey', 'ownerKey', 'videoId', 'blobsCoreKey', 'source', 'descriptorHash']
+export const VALID_MODERATION_TARGET_TYPES = ['channelKey', 'ownerKey', 'videoId', 'blobsCoreKey', 'source', 'descriptorHash']
 
-function normalizeTargetType(targetType) {
+export function normalizeModerationTargetType(targetType) {
   if (targetType === 'channel') return 'channelKey'
   if (targetType === 'owner') return 'ownerKey'
   if (targetType === 'blobCore') return 'blobsCoreKey'
@@ -19,11 +19,11 @@ function normalizeTargetType(targetType) {
 }
 
 export function normalizeModerationRule(rule) {
-  const targetType = normalizeTargetType(rule?.targetType)
+  const targetType = normalizeModerationTargetType(rule?.targetType)
   const target = typeof rule?.target === 'string' ? rule.target.trim() : ''
   const action = typeof rule?.action === 'string' ? rule.action.trim() : ''
 
-  if (!VALID_TARGET_TYPES.includes(targetType)) {
+  if (!VALID_MODERATION_TARGET_TYPES.includes(targetType)) {
     throw new Error(`Unsupported moderation target type "${targetType}"`)
   }
   if (!target) throw new Error('moderation rules require a target')

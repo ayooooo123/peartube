@@ -5,6 +5,7 @@ import { RelayCatalog } from './catalog.js'
 import { RELAY_ROLE_ARCHIVER, RELAY_ROLE_PUBLIC_INDEX } from './constants.js'
 import { ModerationRuleStore } from './moderation-store.js'
 import { normalizeModerationConfig } from './moderation.js'
+import { ReportStore } from './reports.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
@@ -48,6 +49,13 @@ export async function createRelayService({
     ? await AlertStore.open({
       storagePath: config.storage.path,
       alertsPath: config.paths.alerts,
+      nowFn
+    })
+    : null
+  let reportStore = config.paths?.reports
+    ? await ReportStore.open({
+      storagePath: config.storage.path,
+      reportsPath: config.paths.reports,
       nowFn
     })
     : null
@@ -172,7 +180,8 @@ export async function createRelayService({
       config,
       catalog: relayCatalog,
       runtimeStats: runtime.getNetworkStats?.() || {},
-      alerts: alertStore?.getAlerts({ limit: Infinity }) || []
+      alerts: alertStore?.getAlerts({ limit: Infinity }) || [],
+      reports: reportStore?.getReports({ limit: Infinity }) || []
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
@@ -207,6 +216,17 @@ export async function createRelayService({
       })
       return null
     }
+  }
+
+  async function getReportStore() {
+    if (!reportStore) {
+      reportStore = await ReportStore.open({
+        storagePath: config.storage.path,
+        reportsPath: config.paths?.reports,
+        nowFn
+      })
+    }
+    return reportStore
   }
 
   async function recordPostureAlerts() {
@@ -911,12 +931,27 @@ export async function createRelayService({
       await persistStatus()
       return added
     },
+    async submitModerationReport(report) {
+      const store = await getReportStore()
+      const added = await store.addReport(report)
+      await addOperatorAlert({
+        severity: 'warning',
+        category: 'moderation',
+        targetType: added.targetType,
+        target: added.target,
+        summary: `Local report submitted for ${added.targetType}:${added.target} (${added.reason})`,
+        suggestedActions: ['review', 'watch', 'quarantine', 'block']
+      })
+      await persistStatus()
+      return added
+    },
     getModerationTargetDetail({ targetType, target } = {}) {
       return relayCatalog.getTargetDetail({ targetType, target })
     },
     getModerationAudit() {
       const status = service.getStatus()
       const reviewQueue = Array.isArray(status.reviewQueue) ? status.reviewQueue : []
+      const reports = reportStore?.getReports({ limit: Infinity }) || []
       return {
         schema: 'peartube.relayModerationAudit',
         version: 1,
@@ -925,6 +960,7 @@ export async function createRelayService({
         posture: status.posture || null,
         moderation: status.moderation || null,
         rules: Array.isArray(config.moderation?.rules) ? config.moderation.rules.map((rule) => ({ ...rule })) : [],
+        reports,
         alerts: alertStore?.getAlerts({ includeAcknowledged: true, limit: Infinity }) || [],
         reviewQueue,
         targets: reviewQueue.map((item) => relayCatalog.getTargetDetail({
@@ -938,7 +974,8 @@ export async function createRelayService({
         config,
         catalog: relayCatalog,
         runtimeStats: runtime.getNetworkStats?.() || {},
-        alerts: alertStore?.getAlerts({ limit: Infinity }) || []
+        alerts: alertStore?.getAlerts({ limit: Infinity }) || [],
+        reports: reportStore?.getReports({ limit: Infinity }) || []
       })
     },
     async close() {

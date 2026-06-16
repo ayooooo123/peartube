@@ -12,6 +12,85 @@ function sortEvictionCandidates(channels) {
   })
 }
 
+function reviewKey(item = {}) {
+  return `${item.targetType || ''}\0${item.target || ''}`
+}
+
+function groupReports(reports = []) {
+  const groups = new Map()
+
+  for (const report of reports || []) {
+    if (!report?.targetType || !report?.target) continue
+    const key = reviewKey(report)
+    const existing = groups.get(key) || {
+      targetType: report.targetType,
+      target: report.target,
+      reports: [],
+      latest: null
+    }
+    existing.reports.push(report)
+    if (!existing.latest || (Number(report.createdAt || 0) || 0) >= (Number(existing.latest.createdAt || 0) || 0)) {
+      existing.latest = report
+    }
+    groups.set(key, existing)
+  }
+
+  return groups
+}
+
+function buildReportReviewItem(group, catalog) {
+  const detail = typeof catalog?.getTargetDetail === 'function'
+    ? catalog.getTargetDetail({ targetType: group.targetType, target: group.target })
+    : null
+  const firstChannel = Array.isArray(detail?.channels) ? detail.channels[0] || null : null
+  const latest = group.latest || {}
+  return {
+    id: `report:${group.targetType}:${group.target}`,
+    targetType: group.targetType,
+    target: group.target,
+    state: 'reported',
+    action: 'review',
+    source: 'report',
+    reason: latest.reason || null,
+    comment: latest.comment || null,
+    reporter: latest.reporter || null,
+    reportCount: group.reports.length,
+    latestReportAt: Number(latest.createdAt || 0) || null,
+    channelKey: firstChannel?.channelKey || null,
+    ownerKey: firstChannel?.ownerKey || null,
+    publicBeeKey: firstChannel?.publicBeeKey || null,
+    retentionClass: firstChannel?.retentionClass || null,
+    bytes: Number(detail?.cacheStatus?.bytes || 0) || 0,
+    videoCount: Number(detail?.cacheStatus?.videoCount || 0) || 0
+  }
+}
+
+function buildReviewQueue({ catalogReviewQueue = [], reports = [], catalog }) {
+  const reportGroups = groupReports(reports)
+  if (!reportGroups.size) return catalogReviewQueue
+
+  const reviewQueue = catalogReviewQueue.map((item) => {
+    const group = reportGroups.get(reviewKey(item))
+    if (!group) return item
+    reportGroups.delete(reviewKey(item))
+    const latest = group.latest || {}
+    return {
+      ...item,
+      reportCount: group.reports.length,
+      latestReportAt: Number(latest.createdAt || 0) || null,
+      reportReason: latest.reason || null,
+      reportComment: latest.comment || null,
+      reporter: latest.reporter || null
+    }
+  })
+
+  const reportItems = Array.from(reportGroups.values())
+    .map((group) => buildReportReviewItem(group, catalog))
+    .sort((left, right) => (left.latestReportAt || 0) - (right.latestReportAt || 0))
+
+  return [...reviewQueue, ...reportItems]
+}
+
 export function withRelayAlerts(status, alerts = []) {
   const alertSummary = summarizeAlerts(alerts)
   return {
@@ -23,15 +102,16 @@ export function withRelayAlerts(status, alerts = []) {
   }
 }
 
-export function buildRelayStatus({ config, catalog, runtimeStats = {}, alerts = [] }) {
+export function buildRelayStatus({ config, catalog, runtimeStats = {}, alerts = [], reports = [] }) {
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
   const catalogModeration = typeof catalog.getModerationSummary === 'function'
     ? catalog.getModerationSummary()
     : { quarantinedChannels: 0 }
-  const reviewQueue = typeof catalog.getReviewQueue === 'function'
+  const catalogReviewQueue = typeof catalog.getReviewQueue === 'function'
     ? catalog.getReviewQueue()
     : []
+  const reviewQueue = buildReviewQueue({ catalogReviewQueue, reports, catalog })
   const roles = normalizeRelayRoles(config.roles, {
     archiveEnabled: Boolean(config.archive?.enabled || config.archive?.localMirror?.enabled)
   })

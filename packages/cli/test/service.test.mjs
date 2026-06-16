@@ -578,6 +578,63 @@ test('createRelayService exports moderation audit state', async (t) => {
   }
 })
 
+test('createRelayService submits local reports into review queue and audit', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-reports-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json'),
+          moderation: join(dir, 'relay-moderation.json'),
+          reports: join(dir, 'relay-reports.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 512, videosFound: 1, videosDownloaded: 1 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-report', ownerKey: 'owner-report', publicBeeKey: 'bee-report' })
+
+    const report = await service.submitModerationReport({
+      targetType: 'channel',
+      target: 'chan-report',
+      reason: 'spam',
+      comment: 'unexpected preview',
+      reporter: 'local'
+    })
+    const status = service.getStatus()
+    const reviewItem = status.reviewQueue.find((item) => item.target === 'chan-report')
+    const audit = service.getModerationAudit()
+
+    t.is(report.targetType, 'channelKey')
+    t.is(report.reason, 'spam')
+    t.is(status.alerts.warning, 1)
+    t.is(reviewItem.state, 'reported')
+    t.is(reviewItem.source, 'report')
+    t.is(reviewItem.reportCount, 1)
+    t.is(reviewItem.bytes, 512)
+    t.is(audit.reports.length, 1)
+    t.is(audit.reports[0].comment, 'unexpected preview')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

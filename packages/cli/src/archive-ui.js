@@ -144,6 +144,7 @@ export function renderArchiveWebHome(model = {}) {
         <li>
           <strong><a href="${escapeHtml(targetHref(item))}">${escapeHtml(item.targetType)}:${escapeHtml(item.target)}</a></strong>
           <small>${escapeHtml(item.state)} ${escapeHtml(item.source || 'unknown')} ${escapeHtml(item.retentionClass || 'unknown')} owner=${escapeHtml(item.ownerKey || 'none')} bytes=${escapeHtml(item.bytes || 0)} videos=${escapeHtml(item.videoCount || 0)}</small>
+          ${item.reportCount ? `<small>reports=${escapeHtml(item.reportCount)} latest=${escapeHtml(item.reportReason || item.reason || 'other')} ${escapeHtml(item.reportComment || item.comment || '')}</small>` : ''}
           <form class="review-actions" method="post" action="/moderation/action">
             <input type="hidden" name="targetType" value="${escapeHtml(item.targetType)}">
             <input type="hidden" name="target" value="${escapeHtml(item.target)}">
@@ -208,6 +209,25 @@ export function renderArchiveWebHome(model = {}) {
     <section class="review">
       <h2>Review Queue</h2>
       <p><a href="/moderation/audit.json">Export moderation audit JSON</a></p>
+      <form class="report-form" method="post" action="/moderation/report">
+        <select name="targetType" aria-label="Report target type">
+          <option value="channel">Channel</option>
+          <option value="owner">Owner</option>
+          <option value="videoId">Video</option>
+          <option value="blobCore">Blob core</option>
+          <option value="feedEntry">Feed entry</option>
+        </select>
+        <input name="target" placeholder="target key or id" required>
+        <select name="reason" aria-label="Report reason">
+          <option value="spam">Spam</option>
+          <option value="abuse">Abuse</option>
+          <option value="copyright">Copyright</option>
+          <option value="malware">Malware</option>
+          <option value="other">Other</option>
+        </select>
+        <input name="comment" placeholder="optional comment">
+        <button type="submit">Report</button>
+      </form>
       <ul>${reviewRows}</ul>
     </section>
     <section class="stats">

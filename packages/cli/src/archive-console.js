@@ -24,6 +24,17 @@ function parseModerationActionForm(body) {
   }
 }
 
+function parseModerationReportForm(body) {
+  const params = new URLSearchParams(body)
+  return {
+    targetType: params.get('targetType') || '',
+    target: params.get('target') || '',
+    reason: params.get('reason') || 'other',
+    comment: params.get('comment') || '',
+    reporter: 'local'
+  }
+}
+
 async function collectBody(req) {
   return new Promise((resolve, reject) => {
     let body = ''
@@ -240,6 +251,17 @@ export async function createArchiveConsole({
         }
         const form = parseModerationActionForm(await collectBody(req))
         await service.addModerationRule(form)
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/moderation/report') {
+        if (typeof service.submitModerationReport !== 'function') {
+          throw new Error('relay service does not support moderation reports')
+        }
+        const form = parseModerationReportForm(await collectBody(req))
+        await service.submitModerationReport(form)
         res.writeHead(303, { location: '/' })
         res.end()
         return

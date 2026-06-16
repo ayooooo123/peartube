@@ -328,6 +328,86 @@ test('buildRelayStatus includes moderated channels in the review queue', async (
   }
 })
 
+test('buildRelayStatus includes local reports in the review queue', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-reports-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    await catalog.upsertChannel({
+      channelKey: 'chan-report',
+      ownerKey: 'owner-report',
+      publicBeeKey: 'bee-report',
+      source: 'discovered',
+      retentionClass: 'discovery',
+      bytes: 512,
+      videoCount: 1
+    })
+
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 16_384 }
+      },
+      catalog,
+      runtimeStats: {},
+      reports: [
+        {
+          id: 'report_1',
+          targetType: 'channelKey',
+          target: 'chan-report',
+          reason: 'spam',
+          comment: 'first',
+          reporter: 'local',
+          createdAt: 2000
+        },
+        {
+          id: 'report_2',
+          targetType: 'channelKey',
+          target: 'chan-report',
+          reason: 'abuse',
+          comment: 'second',
+          reporter: 'local',
+          createdAt: 2500
+        }
+      ]
+    })
+
+    t.alike(status.reviewQueue.map((item) => ({
+      id: item.id,
+      targetType: item.targetType,
+      target: item.target,
+      state: item.state,
+      action: item.action,
+      source: item.source,
+      reason: item.reason,
+      comment: item.comment,
+      reportCount: item.reportCount,
+      latestReportAt: item.latestReportAt,
+      bytes: item.bytes,
+      videoCount: item.videoCount
+    })), [
+      {
+        id: 'report:channelKey:chan-report',
+        targetType: 'channelKey',
+        target: 'chan-report',
+        state: 'reported',
+        action: 'review',
+        source: 'report',
+        reason: 'abuse',
+        comment: 'second',
+        reportCount: 2,
+        latestReportAt: 2500,
+        bytes: 512,
+        videoCount: 1
+      }
+    ])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('withRelayAlerts refreshes alert counts on persisted status snapshots', async (t) => {
   const status = withRelayAlerts({
     mode: 'public',

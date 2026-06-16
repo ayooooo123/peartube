@@ -281,6 +281,8 @@ test('archive UI renders moderation review queue controls', async (t) => {
   t.ok(web.includes('channelKey:chan-q'), 'WebUI shows target')
   t.ok(web.includes('/moderation/target?targetType=channelKey&amp;target=chan-q'), 'WebUI links review targets to detail pages')
   t.ok(web.includes('/moderation/audit.json'), 'WebUI links to audit export')
+  t.ok(web.includes('<form class="report-form" method="post" action="/moderation/report">'), 'WebUI exposes local report form')
+  t.ok(web.includes('name="comment"'), 'WebUI accepts report comments')
   t.ok(web.includes('name="action" value="block"'), 'WebUI exposes one-click block')
   t.ok(web.includes('name="action" value="watch"'), 'WebUI exposes one-click watch')
   t.ok(web.includes('name="action" value="quarantine"'), 'WebUI exposes one-click quarantine')
@@ -401,6 +403,74 @@ test('archive console moderation action endpoint persists operator action', asyn
     targetType: 'channelKey',
     target: 'chan-q',
     reason: 'operator-review'
+  }])
+  t.is(response.statusCode, 303)
+  t.is(response.headers.location, '/')
+  await consoleUi.close()
+})
+
+test('archive console moderation report endpoint persists local reports', async (t) => {
+  const reports = []
+  let handler = null
+  const server = {
+    listen(_port, _host, cb) { cb() },
+    close(cb) { cb() }
+  }
+  const service = {
+    runtime: {
+      ctx: {
+        metaDb: {
+          async get() { return null },
+          async put() {}
+        }
+      }
+    },
+    getStatus() {
+      return { runtime: {}, reviewQueue: [] }
+    },
+    async submitModerationReport(report) {
+      reports.push(report)
+      return { id: 'report_1', ...report }
+    }
+  }
+  const consoleUi = await createArchiveConsole({
+    service,
+    downloader: {},
+    publisher: {},
+    serverFactory(fn) {
+      handler = fn
+      return server
+    }
+  })
+
+  const req = new EventEmitter()
+  req.method = 'POST'
+  req.url = '/moderation/report'
+  const response = await new Promise((resolve) => {
+    const res = {
+      statusCode: null,
+      headers: null,
+      body: '',
+      writeHead(statusCode, headers = {}) {
+        this.statusCode = statusCode
+        this.headers = headers
+      },
+      end(body = '') {
+        this.body += String(body)
+        resolve(this)
+      }
+    }
+    handler(req, res)
+    req.emit('data', 'targetType=channel&target=chan-r&reason=spam&comment=unexpected+preview')
+    req.emit('end')
+  })
+
+  t.alike(reports, [{
+    targetType: 'channel',
+    target: 'chan-r',
+    reason: 'spam',
+    comment: 'unexpected preview',
+    reporter: 'local'
   }])
   t.is(response.statusCode, 303)
   t.is(response.headers.location, '/')

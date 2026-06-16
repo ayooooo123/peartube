@@ -42,6 +42,7 @@ export const RELAY_CATALOG_FILENAME = 'relay-catalog.json'
 export const RELAY_STATUS_FILENAME = 'relay-status.json'
 export const RELAY_MODERATION_FILENAME = 'relay-moderation.json'
 export const RELAY_ALERTS_FILENAME = 'relay-alerts.json'
+export const RELAY_REPORTS_FILENAME = 'relay-reports.json'
 
 export const RETENTION_PRIORITY = {
   discovery: 1,

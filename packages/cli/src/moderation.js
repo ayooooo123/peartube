@@ -18,7 +18,7 @@ function normalizeTargetType(targetType) {
   return targetType
 }
 
-function normalizeRule(rule) {
+export function normalizeModerationRule(rule) {
   const targetType = normalizeTargetType(rule?.targetType)
   const target = typeof rule?.target === 'string' ? rule.target.trim() : ''
   const action = typeof rule?.action === 'string' ? rule.action.trim() : ''
@@ -32,6 +32,7 @@ function normalizeRule(rule) {
   }
 
   return {
+    ...(typeof rule.id === 'string' && rule.id.trim() ? { id: rule.id.trim() } : {}),
     targetType,
     target,
     action,
@@ -52,7 +53,7 @@ export function normalizeModerationConfig(raw = {}) {
   }
 
   const rules = Array.isArray(raw.rules)
-    ? raw.rules.map(normalizeRule)
+    ? raw.rules.map(normalizeModerationRule)
     : []
 
   return { mode, rules }

@@ -22,6 +22,7 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8').includes('node:http'), 'archive console uses runtime HTTP shim')
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
   t.ok(compose.includes('PEARTUBE_NODE_ROLES: public-index,relay-cache'), 'root relay compose declares public relay/cache roles')
+  t.ok(compose.includes('PEARTUBE_MODERATION_MODE: report-and-alert'), 'root relay compose declares moderation mode')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH: /usr/local/bin/ffmpeg'), 'compose configures ffmpeg for yt-dlp archive merging')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: "--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=default,-android_vr,mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'compose configures the packaged POT plugin directory and CLI provider for archive retries')

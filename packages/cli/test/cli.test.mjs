@@ -49,11 +49,47 @@ test('parseArgv keeps standalone bare commands instead of defaulting to run', as
   t.is(statusParsed.flags.json, true)
 })
 
+test('parseArgv supports moderation command flags', async (t) => {
+  const addParsed = parseArgv([
+    'moderation',
+    '--add',
+    '--action',
+    'block',
+    '--target-type',
+    'channel',
+    '--target',
+    'chan-1',
+    '--reason',
+    'spam'
+  ])
+
+  t.is(addParsed.command, 'moderation')
+  t.alike(addParsed.flags, {
+    add: true,
+    action: 'block',
+    targetType: 'channel',
+    target: 'chan-1',
+    reason: 'spam'
+  })
+
+  const removeParsed = parseArgv(['moderation', '--remove', 'mod_1', '--json'])
+
+  t.is(removeParsed.command, 'moderation')
+  t.alike(removeParsed.flags, { remove: 'mod_1', json: true })
+})
+
+test('parseArgv supports node role flag', async (t) => {
+  const parsed = parseArgv(['validate', '--roles', 'public-index,relay-cache'])
+
+  t.is(parsed.command, 'validate')
+  t.alike(parsed.flags, { roles: 'public-index,relay-cache' })
+})
+
 test('package.json defines standalone relay build scripts', async (t) => {
   const packageJsonPath = join(__dirname, '..', 'package.json')
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
 
-  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
+  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/moderation.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
   t.is(pkg.imports['#subprocess'].bare, './src/shims/subprocess.bare.js')
   t.is(pkg.imports['#subprocess'].default, './src/shims/subprocess.node.js')
   t.is(pkg.imports['#http'].bare, './src/shims/http.bare.js')
@@ -85,7 +121,9 @@ test('bin.js exposes relay subcommands', async (t) => {
   t.ok(content.includes('validate'), 'validate subcommand is present')
   t.ok(content.includes('status'), 'status subcommand is present')
   t.ok(content.includes('init'), 'init subcommand is present')
+  t.ok(content.includes('moderation'), 'moderation subcommand is present')
   t.ok(content.includes('--roles <roles>'), 'help exposes node role configuration')
+  t.ok(content.includes('--add --action <action> --target-type <type> --target <value>'), 'help exposes moderation add syntax')
   t.ok(content.includes("import process from '#process'"), 'bin.js uses the runtime process shim')
 })
 

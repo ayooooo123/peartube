@@ -15,6 +15,7 @@ import {
   DEFAULT_LOCAL_MIRROR_POLL_SECONDS,
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
+  RELAY_MODERATION_FILENAME,
   RELAY_MODE_PRIVATE,
   RELAY_MODE_PUBLIC,
   RELAY_POLICY_ALLOWLIST,
@@ -650,6 +651,7 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.paths = {
     catalog: join(runtimeDbPath, RELAY_CATALOG_FILENAME),
     status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
+    moderation: join(runtimeDbPath, RELAY_MODERATION_FILENAME),
     corestore: join(config.storage.path, 'corestore'),
     archiveTmpPath: config.archive.tmpPath
   }
@@ -705,6 +707,12 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   } else {
     lines.push('  owners: []')
   }
+
+  lines.push(
+    'moderation:',
+    `  mode: ${config.moderation?.mode || DEFAULT_RELAY_CONFIG.moderation.mode}`,
+    '  rules: []'
+  )
 
   lines.push(
     'discovery:',

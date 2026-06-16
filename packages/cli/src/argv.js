@@ -67,6 +67,11 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--add') {
+      flags.add = true
+      continue
+    }
+
     const next = args[i + 1]
     const consumeValue = () => {
       if (next === undefined) {
@@ -86,8 +91,38 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--roles') {
+      flags.roles = consumeValue()
+      continue
+    }
+
     if (arg === '--policy') {
       flags.policy = consumeValue()
+      continue
+    }
+
+    if (arg === '--action') {
+      flags.action = consumeValue()
+      continue
+    }
+
+    if (arg === '--target-type') {
+      flags.targetType = consumeValue()
+      continue
+    }
+
+    if (arg === '--target') {
+      flags.target = consumeValue()
+      continue
+    }
+
+    if (arg === '--reason') {
+      flags.reason = consumeValue()
+      continue
+    }
+
+    if (arg === '--remove') {
+      flags.remove = consumeValue()
       continue
     }
 

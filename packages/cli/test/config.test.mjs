@@ -19,6 +19,7 @@ test('resolveRelayConfig defaults to public discovery mode', async (t) => {
   t.is(config.paths.corestore, 'peartube-relay/corestore')
   t.is(config.paths.catalog, 'peartube-relay/db/relay-catalog.json')
   t.is(config.paths.status, 'peartube-relay/db/relay-status.json')
+  t.is(config.paths.moderation, 'peartube-relay/db/relay-moderation.json')
 })
 
 
@@ -68,6 +69,7 @@ test('renderExampleConfig shows node roles before legacy mode and policy', async
   const rendered = renderExampleConfig(resolveRelayConfig({}, { env: {} }))
 
   t.ok(rendered.startsWith('roles: public-index,relay-cache\nmode: public\npolicy: discovery'))
+  t.ok(rendered.includes('moderation:\n  mode: report-and-alert\n  rules: []'))
 })
 
 test('resolveRelayConfig forces private mode to allowlist policy', async (t) => {
@@ -143,6 +145,7 @@ test('loadRelayConfig parses yaml-like config files', async (t) => {
     t.is(config.paths.corestore, 'relay-data/corestore')
     t.is(config.paths.catalog, 'relay-data/db/relay-catalog.json')
     t.is(config.paths.status, 'relay-data/db/relay-status.json')
+    t.is(config.paths.moderation, 'relay-data/db/relay-moderation.json')
     t.is(config.storage.maxBytes, 4096)
     t.alike(config.admission.channels, ['chan-1', 'chan-2'])
     t.alike(config.admission.owners, ['owner-1'])

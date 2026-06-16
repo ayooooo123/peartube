@@ -1,6 +1,8 @@
 import { createCliLogger } from './cli-logger.js'
 import { evaluateCandidate } from './admission.js'
 import { RelayCatalog } from './catalog.js'
+import { ModerationRuleStore } from './moderation-store.js'
+import { normalizeModerationConfig } from './moderation.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
@@ -25,6 +27,20 @@ export async function createRelayService({
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
   if (typeof mirrorChannel !== 'function') throw new Error('mirrorChannel is required')
+
+  const persistedModerationRules = config.paths?.moderation
+    ? (await ModerationRuleStore.open({
+        storagePath: config.storage.path,
+        moderationPath: config.paths.moderation
+      }).catch(() => null))?.getRules?.() || []
+    : []
+  config.moderation = normalizeModerationConfig({
+    ...(config.moderation || {}),
+    rules: [
+      ...(Array.isArray(config.moderation?.rules) ? config.moderation.rules : []),
+      ...persistedModerationRules
+    ]
+  })
 
   const relayCatalog = catalog || await RelayCatalog.open({
     storagePath: config.storage.path,

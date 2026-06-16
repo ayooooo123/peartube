@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { resolveRelayConfig } from '../src/config.js'
+import { ModerationRuleStore } from '../src/moderation-store.js'
 import { createRelayService } from '../src/service.js'
 
 function makeTempDir(prefix) {
@@ -228,6 +229,67 @@ test('createRelayService quarantines moderated candidates before mirroring', asy
     t.is(channel.moderation.state, 'quarantined')
     t.is(service.getStatus().moderation.quarantinedChannels, 1)
     t.ok(logger.entries.some((entry) => entry.component === 'admission' && entry.msg === 'Candidate rejected' && entry.data.reason === 'moderation-quarantined'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService applies persisted moderation rules at startup', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-persisted-moderation-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+  const logger = createFakeLogger()
+  const moderationPath = join(dir, 'relay-moderation.json')
+
+  try {
+    const store = await ModerationRuleStore.open({
+      storagePath: dir,
+      moderationPath,
+      nowFn: () => 3000
+    })
+    await store.addRule({
+      targetType: 'owner',
+      target: 'owner-blocked',
+      action: 'block',
+      reason: 'operator block'
+    })
+
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          moderation: moderationPath
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    const result = await service.processCandidate({
+      channelKey: 'chan-blocked',
+      ownerKey: 'owner-blocked',
+      publicBeeKey: 'bee-blocked'
+    })
+
+    t.is(result.accepted, false)
+    t.is(result.reason, 'moderation-blocked')
+    t.alike(mirrored, [])
+    t.is(service.getStatus().moderation.rules.block, 1)
+    t.ok(logger.entries.some((entry) => entry.component === 'admission' && entry.msg === 'Candidate rejected' && entry.data.reason === 'moderation-blocked'))
     await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

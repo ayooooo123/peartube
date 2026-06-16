@@ -18,6 +18,7 @@ services:
       PEARTUBE_NODE_ROLES: public-index,relay-cache
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery
+      PEARTUBE_MODERATION_MODE: report-and-alert
       PEARTUBE_DISCOVERY_ENABLED: "true"
       PEARTUBE_NETWORK_ANNOUNCE: "true"
       PEARTUBE_ARCHIVE_UI_ENABLED: "true"

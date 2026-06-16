@@ -5,6 +5,7 @@ import { normalizeCliArgv, parseArgv } from './src/argv.js'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
+import { ModerationRuleStore } from './src/moderation-store.js'
 import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
 
 function writeLine(message, preferredStream = 'stdout') {
@@ -39,6 +40,7 @@ function printHelp() {
     '  ui       Run the relay archive WebUI',
     '  archive  Queue or run anonymous YouTube archive jobs',
     '  mirror-local  Import local video files into the relay channel',
+    '  moderation  Add, remove, or list local moderation rules',
     '  validate  Validate and print the normalized relay config',
     '  status    Print relay status from the local catalog',
     '  init      Write an example config file',
@@ -48,6 +50,9 @@ function printHelp() {
     '  --roles <roles>',
     '  --mode <private|public>',
     '  --policy <allowlist|discovery>',
+    '  --add --action <action> --target-type <type> --target <value>',
+    '  --remove <rule-id>',
+    '  --reason <text>',
     '  --storage, -s <path>',
     '  --max-bytes <n>',
     '  --max-storage <mb>',
@@ -180,6 +185,52 @@ async function statusCommand(flags) {
   writeLine(formatRelayStatus(status) + '\n')
 }
 
+async function moderationCommand(flags) {
+  const config = await loadRelayConfig(flags)
+  const store = await ModerationRuleStore.open({
+    storagePath: config.storage.path,
+    moderationPath: config.paths.moderation
+  })
+
+  if (flags.add) {
+    const rule = await store.addRule({
+      action: flags.action,
+      targetType: flags.targetType,
+      target: flags.target,
+      reason: flags.reason
+    })
+    if (flags.json) {
+      writeLine(JSON.stringify({ rule }, null, 2) + '\n')
+      return
+    }
+    writeLine(`added ${rule.id} ${rule.action} ${rule.targetType}:${rule.target}\n`)
+    return
+  }
+
+  if (flags.remove) {
+    const removed = await store.removeRule(flags.remove)
+    if (flags.json) {
+      writeLine(JSON.stringify({ removed }, null, 2) + '\n')
+      return
+    }
+    writeLine(removed ? `removed ${removed.id}\n` : `no rule found for ${flags.remove}\n`)
+    return
+  }
+
+  const rules = store.getRules()
+  if (flags.json) {
+    writeLine(JSON.stringify({ rules }, null, 2) + '\n')
+    return
+  }
+
+  if (!rules.length) {
+    writeLine('No local moderation rules.\n')
+    return
+  }
+
+  writeLine(rules.map((rule) => `${rule.id} ${rule.action} ${rule.targetType}:${rule.target}${rule.reason ? ` ${rule.reason}` : ''}`).join('\n') + '\n')
+}
+
 async function initCommand(flags) {
   const target = flags.config || 'peartube-relay.yml'
   if (existsSync(target)) {
@@ -210,6 +261,9 @@ async function main() {
       break
     case 'mirror-local':
       await mirrorLocalCommand(flags)
+      break
+    case 'moderation':
+      await moderationCommand(flags)
       break
     case 'validate':
       await validateCommand(flags)

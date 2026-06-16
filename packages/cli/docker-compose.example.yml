@@ -9,6 +9,7 @@ services:
       PEARTUBE_NODE_ROLES: public-index,relay-cache
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery
+      PEARTUBE_MODERATION_MODE: report-and-alert
       PEARTUBE_STORAGE_PATH: /var/lib/peartube-relay
       PEARTUBE_STORAGE_MAX_BYTES: 107374182400
       PEARTUBE_DISCOVERY_ENABLED: "true"

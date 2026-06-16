@@ -40,6 +40,7 @@ export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 0
 
 export const RELAY_CATALOG_FILENAME = 'relay-catalog.json'
 export const RELAY_STATUS_FILENAME = 'relay-status.json'
+export const RELAY_MODERATION_FILENAME = 'relay-moderation.json'
 
 export const RETENTION_PRIORITY = {
   discovery: 1,

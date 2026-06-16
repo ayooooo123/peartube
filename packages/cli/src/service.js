@@ -4,7 +4,7 @@ import { AlertStore } from './alerts.js'
 import { RelayCatalog } from './catalog.js'
 import { RELAY_ROLE_ARCHIVER, RELAY_ROLE_CACHE, RELAY_ROLE_PUBLIC_INDEX } from './constants.js'
 import { ModerationRuleStore } from './moderation-store.js'
-import { normalizeModerationConfig } from './moderation.js'
+import { buildSourceModerationCandidate, matchModerationRule, normalizeModerationConfig } from './moderation.js'
 import { ReportStore } from './reports.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
@@ -339,6 +339,50 @@ export async function createRelayService({
       summary: `Archive source ${host} has ${ARCHIVE_FAILURE_ALERT_THRESHOLD} or more failed jobs`,
       suggestedActions: ['review-archive-source', 'pause-archive-source', 'check-downloader']
     })
+  }
+
+  async function evaluateArchiveSourceModeration(input = {}) {
+    const candidate = buildSourceModerationCandidate(input)
+    const moderation = matchModerationRule(candidate, config.moderation?.rules)
+    if (!moderation) return { accepted: true, reason: 'no-source-rule', candidate }
+
+    const host = candidate.sourceHost || candidate.sourceDomain || candidate.sourceUrl || candidate.sourceId || 'unknown'
+    if (moderation.action === 'block' || moderation.action === 'quarantine') {
+      await addOperatorAlert({
+        severity: moderation.action === 'quarantine' ? 'critical' : 'warning',
+        category: 'moderation',
+        targetType: 'source',
+        target: moderation.target,
+        summary: `${moderation.action === 'block' ? 'Blocked' : 'Quarantined'} archive source ${host} matched source:${moderation.target}`,
+        suggestedActions: ['review-archive-source', 'allow', 'keep-blocked']
+      })
+      await persistStatus()
+      return {
+        accepted: false,
+        reason: moderation.action === 'block' ? 'moderation-blocked' : 'moderation-quarantined',
+        moderation,
+        candidate
+      }
+    }
+
+    if (moderation.action === 'watch') {
+      await addOperatorAlert({
+        severity: 'warning',
+        category: 'moderation',
+        targetType: 'source',
+        target: moderation.target,
+        summary: `Watched archive source ${host} matched source:${moderation.target}`,
+        suggestedActions: ['review-archive-source', 'quarantine', 'block']
+      })
+      await persistStatus()
+    }
+
+    return {
+      accepted: true,
+      reason: moderation.action === 'allow' ? 'moderation-allow' : 'moderation-watch',
+      moderation,
+      candidate
+    }
   }
 
   function getAcceptedRefreshDecision(existing, candidate, now) {
@@ -1163,7 +1207,19 @@ export async function createRelayService({
     async publishArchiveJobToFeed(job) {
       return publishArchiveJobToFeed(job)
     },
+    async evaluateArchiveSourceModeration(input = {}) {
+      return evaluateArchiveSourceModeration(input)
+    },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
+      const sourceDecision = await evaluateArchiveSourceModeration(input)
+      if (!sourceDecision.accepted) {
+        return {
+          status: 'rejected',
+          reason: sourceDecision.reason,
+          moderation: sourceDecision.moderation,
+          source: sourceDecision.candidate
+        }
+      }
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
       const runtimeFsModule = fsModule || await import('#fs')
       const runtimePathModule = pathModule || await import('#path')

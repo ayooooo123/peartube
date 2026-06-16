@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { buildSourceModerationCandidate, matchModerationRule } from '../src/moderation.js'
 import { ModerationRuleStore } from '../src/moderation-store.js'
 
 function makeTempDir(prefix) {
@@ -86,4 +87,32 @@ test('ModerationRuleStore replaces duplicate local target/action rules', async (
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('source moderation matches archive source URL and domain aliases', async (t) => {
+  const candidate = buildSourceModerationCandidate({
+    url: 'https://www.video.example/watch?v=blocked',
+    sourceId: 'youtube:video:blocked'
+  })
+
+  t.is(matchModerationRule(candidate, [
+    { targetType: 'source', target: 'https://www.video.example/watch?v=blocked', action: 'block' }
+  ])?.action, 'block')
+
+  t.is(matchModerationRule(candidate, [
+    { targetType: 'source', target: 'www.video.example', action: 'quarantine' }
+  ])?.action, 'quarantine')
+
+  t.is(matchModerationRule(candidate, [
+    { targetType: 'source', target: 'video.example', action: 'watch' }
+  ])?.action, 'watch')
+
+  t.is(matchModerationRule(candidate, [
+    { targetType: 'source', target: 'youtube:video:blocked', action: 'allow' }
+  ])?.action, 'allow')
+
+  const subdomainCandidate = buildSourceModerationCandidate({ url: 'https://media.video.example/watch?v=blocked' })
+  t.is(matchModerationRule(subdomainCandidate, [
+    { targetType: 'source', target: 'video.example', action: 'block' }
+  ])?.action, 'block')
 })

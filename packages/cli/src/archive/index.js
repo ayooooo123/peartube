@@ -29,6 +29,7 @@ export function createArchiver({
   uploadManagerFactory = null,
   publisherFactory = null,
   onBudgetPressure = null,
+  onSourceAdmission = null,
   setIntervalFn = setInterval,
   clearIntervalFn = clearInterval,
   setTimeoutFn = setTimeout
@@ -208,6 +209,42 @@ export function createArchiver({
 
   async function pollSource(source) {
     if (stopped) return
+    if (typeof onSourceAdmission === 'function') {
+      let sourceDecision = { accepted: true }
+      try {
+        sourceDecision = await onSourceAdmission(source)
+      } catch (err) {
+        logger.archive.warn('Archive source admission hook failed', {
+          sourceId: source.sourceId,
+          error: err?.message || String(err)
+        })
+      }
+
+      if (sourceDecision && sourceDecision.accepted === false) {
+        const existingSourceRecord = await state.getSource(source.sourceId).catch(() => null)
+        await state.putSource(source.sourceId, {
+          ...(existingSourceRecord || {}),
+          url: source.url,
+          type: source.type,
+          label: source.label || existingSourceRecord?.label || null,
+          lastPolledAt: Date.now(),
+          lastError: sourceDecision.reason || 'moderation-rejected',
+          moderation: sourceDecision.moderation || null,
+          lastSeenVideos: 0,
+          archivedCount: 0,
+          failedCount: 0,
+          skippedCount: 0,
+          bytesAddedThisPoll: 0
+        })
+        logger.archive.warn('Archive source rejected by moderation', {
+          sourceId: source.sourceId,
+          url: source.url,
+          reason: sourceDecision.reason || 'moderation-rejected'
+        })
+        return
+      }
+    }
+
     logger.archive.debug('Polling archive source', { sourceId: source.sourceId, url: source.url })
 
     let listing

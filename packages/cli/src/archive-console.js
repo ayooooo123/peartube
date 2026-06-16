@@ -252,6 +252,14 @@ export async function createArchiveConsole({
 
       if (req.method === 'POST' && requestUrl.pathname === '/archive') {
         const form = parseForm(await collectBody(req))
+        const sourceDecision = typeof service.evaluateArchiveSourceModeration === 'function'
+          ? await service.evaluateArchiveSourceModeration(form)
+          : { accepted: true }
+        if (sourceDecision && sourceDecision.accepted === false) {
+          res.writeHead(303, { location: '/' })
+          res.end()
+          return
+        }
         const job = await manager.enqueue(form)
         await service.recordArchiveJobQueued?.(job, { store, input: form })
         manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))

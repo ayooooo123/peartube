@@ -113,16 +113,20 @@ test('resolveRelayConfig reads moderation rules from env vars', async (t) => {
       PEARTUBE_MODERATION_BLOCK_CHANNELS: 'chan-block',
       PEARTUBE_MODERATION_QUARANTINE_CHANNELS: 'chan-quarantine',
       PEARTUBE_MODERATION_ALLOW_CHANNELS: 'chan-allow',
-      PEARTUBE_MODERATION_WATCH_OWNERS: 'owner-watch'
+      PEARTUBE_MODERATION_WATCH_OWNERS: 'owner-watch',
+      PEARTUBE_MODERATION_BLOCK_SOURCES: 'video.example',
+      PEARTUBE_MODERATION_WATCH_SOURCES: 'https://www.youtube.com/@example'
     }
   })
 
   t.is(config.moderation.mode, 'enforce')
   t.alike(config.moderation.rules, [
     { targetType: 'channelKey', target: 'chan-block', action: 'block', source: 'local' },
+    { targetType: 'source', target: 'video.example', action: 'block', source: 'local' },
     { targetType: 'channelKey', target: 'chan-quarantine', action: 'quarantine', source: 'local' },
     { targetType: 'channelKey', target: 'chan-allow', action: 'allow', source: 'local' },
-    { targetType: 'ownerKey', target: 'owner-watch', action: 'watch', source: 'local' }
+    { targetType: 'ownerKey', target: 'owner-watch', action: 'watch', source: 'local' },
+    { targetType: 'source', target: 'https://www.youtube.com/@example', action: 'watch', source: 'local' }
   ])
 })
 

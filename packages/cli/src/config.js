@@ -258,12 +258,16 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_MODERATION_MODE ||
     env.PEARTUBE_MODERATION_BLOCK_CHANNELS ||
     env.PEARTUBE_MODERATION_BLOCK_OWNERS ||
+    env.PEARTUBE_MODERATION_BLOCK_SOURCES ||
     env.PEARTUBE_MODERATION_QUARANTINE_CHANNELS ||
     env.PEARTUBE_MODERATION_QUARANTINE_OWNERS ||
+    env.PEARTUBE_MODERATION_QUARANTINE_SOURCES ||
     env.PEARTUBE_MODERATION_ALLOW_CHANNELS ||
     env.PEARTUBE_MODERATION_ALLOW_OWNERS ||
+    env.PEARTUBE_MODERATION_ALLOW_SOURCES ||
     env.PEARTUBE_MODERATION_WATCH_CHANNELS ||
-    env.PEARTUBE_MODERATION_WATCH_OWNERS
+    env.PEARTUBE_MODERATION_WATCH_OWNERS ||
+    env.PEARTUBE_MODERATION_WATCH_SOURCES
   ) {
     const rules = []
     const addRules = (value, targetType, action) => {
@@ -276,12 +280,16 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_MODERATION_MODE) config.moderation.mode = env.PEARTUBE_MODERATION_MODE
     addRules(env.PEARTUBE_MODERATION_BLOCK_CHANNELS, 'channelKey', 'block')
     addRules(env.PEARTUBE_MODERATION_BLOCK_OWNERS, 'ownerKey', 'block')
+    addRules(env.PEARTUBE_MODERATION_BLOCK_SOURCES, 'source', 'block')
     addRules(env.PEARTUBE_MODERATION_QUARANTINE_CHANNELS, 'channelKey', 'quarantine')
     addRules(env.PEARTUBE_MODERATION_QUARANTINE_OWNERS, 'ownerKey', 'quarantine')
+    addRules(env.PEARTUBE_MODERATION_QUARANTINE_SOURCES, 'source', 'quarantine')
     addRules(env.PEARTUBE_MODERATION_ALLOW_CHANNELS, 'channelKey', 'allow')
     addRules(env.PEARTUBE_MODERATION_ALLOW_OWNERS, 'ownerKey', 'allow')
+    addRules(env.PEARTUBE_MODERATION_ALLOW_SOURCES, 'source', 'allow')
     addRules(env.PEARTUBE_MODERATION_WATCH_CHANNELS, 'channelKey', 'watch')
     addRules(env.PEARTUBE_MODERATION_WATCH_OWNERS, 'ownerKey', 'watch')
+    addRules(env.PEARTUBE_MODERATION_WATCH_SOURCES, 'source', 'watch')
     if (rules.length) config.moderation.rules = rules
   }
   if (env.PEARTUBE_DISCOVERY_ENABLED || env.PEARTUBE_DISCOVERY_SEED_DISCOVERED || env.PEARTUBE_DISCOVERY_MAX_CHANNELS || env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {

@@ -1558,6 +1558,56 @@ test('createRelayService records archive job and publish alerts', async (t) => {
   }
 })
 
+test('createRelayService rejects archive jobs blocked by source moderation', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-source-block-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          mode: 'report-and-alert',
+          rules: [{ targetType: 'source', target: 'video.example', action: 'block', source: 'local' }]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 },
+        archive: {
+          uiEnabled: false,
+          ytDlpPath: '/usr/local/bin/yt-dlp',
+          tmpPath: join(dir, 'archive-tmp')
+        }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    const result = await service.enqueueArchiveJob({
+      url: 'https://video.example/watch?v=blocked',
+      channelName: 'Blocked Archive'
+    })
+    const audit = service.getModerationAudit()
+
+    t.is(result.status, 'rejected')
+    t.is(result.reason, 'moderation-blocked')
+    t.is(audit.alerts.some((alert) => alert.summary === 'Blocked archive source video.example matched source:video.example'), true)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService alerts when archive jobs compete with relay cache budget', async (t) => {
   const dir = makeTempDir('peartube-relay-service-archive-budget-alerts-')
   const runtime = createFakeRuntime()

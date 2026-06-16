@@ -80,13 +80,69 @@ export function summarizeModerationRules(rules = []) {
   return summary
 }
 
+function sourceHost(value) {
+  if (typeof value !== 'string' || !value.trim()) return ''
+  try {
+    return new URL(value).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function sourceDomain(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized.startsWith('www.') ? normalized.slice(4) : normalized
+}
+
+export function buildSourceModerationCandidate(source = {}) {
+  const raw = typeof source === 'string' ? { url: source } : source
+  const sourceUrl = typeof raw?.url === 'string' ? raw.url.trim() : ''
+  const sourceId = typeof raw?.sourceId === 'string' ? raw.sourceId.trim() : ''
+  const host = sourceHost(sourceUrl)
+  return {
+    source: sourceUrl || sourceId,
+    sourceUrl,
+    sourceHost: host,
+    sourceDomain: sourceDomain(host),
+    sourceId
+  }
+}
+
+function sourceRuleMatches(candidate = {}, target = '') {
+  const rawTarget = String(target || '').trim()
+  if (!rawTarget) return false
+
+  const targetHost = sourceHost(rawTarget)
+  const targetDomain = sourceDomain(targetHost || rawTarget)
+  const values = [
+    candidate.source,
+    candidate.sourceUrl,
+    candidate.sourceHost,
+    candidate.sourceDomain,
+    candidate.sourceId
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+
+  if (values.includes(rawTarget)) return true
+  const lowered = values.map((value) => value.toLowerCase())
+  if (lowered.includes(rawTarget.toLowerCase())) return true
+  if (targetHost && lowered.includes(targetHost)) return true
+  if (targetDomain && lowered.includes(targetDomain)) return true
+  if (targetDomain && candidate.sourceHost) {
+    const host = String(candidate.sourceHost).toLowerCase()
+    if (host === targetDomain || host.endsWith(`.${targetDomain}`)) return true
+  }
+  return false
+}
+
 export function matchModerationRule(candidate = {}, rules = []) {
   for (const rule of rules || []) {
     if (rule.targetType === 'channelKey' && candidate.channelKey === rule.target) return rule
     if (rule.targetType === 'ownerKey' && candidate.ownerKey === rule.target) return rule
     if (rule.targetType === 'videoId' && candidate.videoId === rule.target) return rule
     if (rule.targetType === 'blobsCoreKey' && candidate.blobsCoreKey === rule.target) return rule
-    if (rule.targetType === 'source' && candidate.source === rule.target) return rule
+    if (rule.targetType === 'source' && sourceRuleMatches(candidate, rule.target)) return rule
     if (rule.targetType === 'descriptorHash' && candidate.descriptorHash === rule.target) return rule
   }
   return null

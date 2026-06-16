@@ -684,6 +684,47 @@ test('createArchiver budget exhaustion: stops archiving when within reserve', as
   t.ok(budgetWarn, 'logs budget warning')
 })
 
+test('createArchiver skips sources rejected by moderation hook', async (t) => {
+  const metaDb = makeFakeMetaDb()
+  const config = resolveRelayConfig({
+    storage: { path: '/tmp/peartube-test', maxBytes: 1000 },
+    archive: {
+      enabled: true,
+      budgetReservePercent: 5,
+      tmpPath: '/tmp/peartube-test/archive-tmp',
+      sources: [{ url: 'https://www.youtube.com/@blocked' }]
+    }
+  }, { env: {} })
+  const admissions = []
+
+  const archiver = createArchiver({
+    config,
+    runtime: makeFakeRuntime({ metaDb }),
+    logger: makeFakeLogger(),
+    fs: makeFakeFs(),
+    ytDlp: {
+      async listVideos() { throw new Error('blocked source should not be listed') },
+      async downloadVideo() { throw new Error('blocked source should not download') }
+    },
+    uploadManagerFactory: async () => ({}),
+    onSourceAdmission: (source) => {
+      admissions.push(source.url)
+      return { accepted: false, reason: 'moderation-blocked', moderation: { action: 'block' } }
+    },
+    setIntervalFn: () => null,
+    clearIntervalFn: () => {},
+    setTimeoutFn: (fn) => fn()
+  })
+
+  await archiver.runOnce()
+
+  t.alike(admissions, ['https://www.youtube.com/@blocked'])
+  const state = createArchiveState({ metaDb })
+  const sourceRecord = await state.getSource('youtube:@blocked')
+  t.is(sourceRecord.lastError, 'moderation-blocked')
+  t.is(sourceRecord.skippedCount, 0)
+})
+
 test('createArchiver reports budget pressure through hook when reserve stops polling', async (t) => {
   const metaDb = makeFakeMetaDb()
   const config = resolveRelayConfig({
@@ -727,6 +768,12 @@ test('startRelay wires polling archiver budget pressure into relay service alert
   const source = readFileSync(join(__dirname, '..', 'src', 'index.js'), 'utf8')
 
   t.ok(source.includes('onBudgetPressure: (event) => service.recordArchiveBudgetPressure?.(event)'))
+})
+
+test('startRelay wires polling archiver source admission into relay service moderation', async (t) => {
+  const source = readFileSync(join(__dirname, '..', 'src', 'index.js'), 'utf8')
+
+  t.ok(source.includes('onSourceAdmission: (source) => service.evaluateArchiveSourceModeration?.(source)'))
 })
 
 test('createArchiver stop clears staggered initial poll timers', async (t) => {

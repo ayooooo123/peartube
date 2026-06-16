@@ -54,7 +54,8 @@ export async function startRelay({ config, logger = null } = {}) {
         runtime: service.runtime,
         logger: relayLogger,
         fs,
-        onBudgetPressure: (event) => service.recordArchiveBudgetPressure?.(event)
+        onBudgetPressure: (event) => service.recordArchiveBudgetPressure?.(event),
+        onSourceAdmission: (source) => service.evaluateArchiveSourceModeration?.(source)
       })
       await archiver.start()
     } catch (err) {

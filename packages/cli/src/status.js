@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from '#fs'
 import { retentionClassPriority } from './admission.js'
+import { summarizeModerationRules } from './moderation.js'
+import { buildRelayPosture, describeRelayPosture, normalizeRelayRoles } from './relay-roles.js'
 
 function sortEvictionCandidates(channels) {
   return [...channels].sort((left, right) => {
@@ -12,14 +14,27 @@ function sortEvictionCandidates(channels) {
 export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
+  const catalogModeration = typeof catalog.getModerationSummary === 'function'
+    ? catalog.getModerationSummary()
+    : { quarantinedChannels: 0 }
+  const roles = normalizeRelayRoles(config.roles, {
+    archiveEnabled: Boolean(config.archive?.enabled || config.archive?.localMirror?.enabled)
+  })
+  const posture = buildRelayPosture(roles)
 
   return {
     generatedAt: Date.now(),
+    roles,
+    posture,
     mode: config.mode,
     policy: config.policy,
     storage: {
       path: config.storage.path,
       maxBytes: config.storage.maxBytes
+    },
+    moderation: {
+      rules: summarizeModerationRules(config.moderation?.rules),
+      quarantinedChannels: catalogModeration.quarantinedChannels || 0
     },
     summary: {
       ...summary,
@@ -87,7 +102,12 @@ export function formatRelayStatus(status) {
   const firstDialError = status.runtime.directPeerDial?.peers
     ?.find((peer) => peer?.lastError)
     ?.lastError || null
+  const roles = normalizeRelayRoles(status.roles)
+  const posture = status.posture || buildRelayPosture(roles)
   const lines = [
+    `roles: ${roles.join(',')}`,
+    `posture: ${describeRelayPosture(posture)}`,
+    `moderation: blocked=${status.moderation?.rules?.block || 0} quarantined=${status.moderation?.quarantinedChannels || 0} watched=${status.moderation?.rules?.watch || 0} allowed=${status.moderation?.rules?.allow || 0}`,
     `mode: ${status.mode}`,
     `policy: ${status.policy}`,
     `storage: ${status.summary.usedBytes}/${status.storage.maxBytes} bytes`,

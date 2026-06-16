@@ -15,6 +15,7 @@ services:
     ports:
       - "8174:8174"
     environment:
+      PEARTUBE_NODE_ROLES: public-index,relay-cache
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery
       PEARTUBE_DISCOVERY_ENABLED: "true"

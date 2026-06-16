@@ -1,4 +1,5 @@
 import { RETENTION_PRIORITY } from './constants.js'
+import { matchModerationRule } from './moderation.js'
 
 function hasAllowlistedChannel(candidate, config) {
   return Boolean(candidate.channelKey) && config.admission.channels.includes(candidate.channelKey)
@@ -15,6 +16,22 @@ export function retentionClassPriority(retentionClass) {
 export function evaluateCandidate({ candidate, config, acceptedChannels = new Set(), ownerCounts = new Map() }) {
   if (!candidate?.channelKey) {
     return { accepted: false, reason: 'missing-channel-key', retentionClass: null }
+  }
+
+  const moderation = matchModerationRule(candidate, config.moderation?.rules)
+  if (moderation?.action === 'block') {
+    return { accepted: false, reason: 'moderation-blocked', retentionClass: null, moderation }
+  }
+  if (moderation?.action === 'quarantine') {
+    return { accepted: false, reason: 'moderation-quarantined', retentionClass: null, moderation }
+  }
+  if (moderation?.action === 'allow') {
+    return {
+      accepted: true,
+      reason: 'moderation-allow',
+      retentionClass: config.mode === 'private' ? 'private' : 'allowlist',
+      moderation
+    }
   }
 
   if (acceptedChannels.has(candidate.channelKey)) {

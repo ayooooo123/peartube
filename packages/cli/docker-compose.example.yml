@@ -6,6 +6,7 @@ services:
     # Shell-less runtime image. Inspect with:
     # docker exec <container> /peartube-relay status --json
     environment:
+      PEARTUBE_NODE_ROLES: public-index,relay-cache
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery
       PEARTUBE_STORAGE_PATH: /var/lib/peartube-relay

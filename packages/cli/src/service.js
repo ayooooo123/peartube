@@ -253,6 +253,22 @@ export async function createRelayService({
       })
 
     if (!decision.accepted) {
+      if (decision.reason === 'moderation-quarantined' && resolved.channelKey) {
+        await relayCatalog.upsertChannel({
+          channelKey: resolved.channelKey,
+          ownerKey: resolved.ownerKey || null,
+          publicBeeKey: resolved.publicBeeKey || null,
+          source: resolved.source || 'discovered',
+          retentionClass: resolved.retentionClass || 'discovery',
+          lastDecisionReason: decision.reason,
+          lastSeenAt: now,
+          moderation: {
+            ...decision.moderation,
+            state: 'quarantined',
+            matchedAt: now
+          }
+        })
+      }
       logger.admission.info('Candidate rejected', {
         channelKey: resolved.channelKey,
         ownerKey: resolved.ownerKey || null,

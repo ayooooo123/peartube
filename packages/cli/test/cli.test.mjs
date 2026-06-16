@@ -85,6 +85,7 @@ test('bin.js exposes relay subcommands', async (t) => {
   t.ok(content.includes('validate'), 'validate subcommand is present')
   t.ok(content.includes('status'), 'status subcommand is present')
   t.ok(content.includes('init'), 'init subcommand is present')
+  t.ok(content.includes('--roles <roles>'), 'help exposes node role configuration')
   t.ok(content.includes("import process from '#process'"), 'bin.js uses the runtime process shim')
 })
 

@@ -125,8 +125,10 @@ export async function createArchiveConsole({
   const manager = createArchiveManager({ store, downloader, publisher, logger, onCompleted: (job) => service.publishArchiveJobToFeed?.(job) })
 
   async function model() {
+    const relayStatus = service.getStatus?.() || {}
     return {
-      status: service.getStatus?.().runtime || {},
+      relayStatus,
+      status: relayStatus.runtime || {},
       jobs: await store.listJobs()
     }
   }

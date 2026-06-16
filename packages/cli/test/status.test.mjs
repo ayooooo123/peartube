@@ -103,6 +103,85 @@ test('buildRelayStatus orders eviction candidates by retention class', async (t)
   }
 })
 
+test('buildRelayStatus includes node roles and honest posture', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-posture-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 16_384 }
+      },
+      catalog,
+      runtimeStats: {}
+    })
+
+    t.alike(status.roles, ['public-index', 'relay-cache', 'archiver'])
+    t.alike(status.posture, {
+      storesPublicMetadata: true,
+      storesMediaCache: true,
+      storesArchivePublisherContent: true,
+      storesDecryptionKeys: false,
+      nonKnowledgeRelay: false
+    })
+
+    const formatted = formatRelayStatus(status)
+    t.ok(formatted.startsWith('roles: public-index,relay-cache,archiver\nposture: stores public metadata; stores public media cache; stores archive publisher content; stores no keys'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('buildRelayStatus includes moderation rule and quarantine summary', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-moderation-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    await catalog.upsertChannel({
+      channelKey: 'chan-q',
+      ownerKey: 'owner-q',
+      source: 'discovered',
+      retentionClass: 'discovery',
+      moderation: {
+        action: 'quarantine',
+        state: 'quarantined',
+        targetType: 'channelKey',
+        target: 'chan-q'
+      }
+    })
+
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 16_384 },
+        moderation: {
+          rules: [
+            { targetType: 'channelKey', target: 'chan-block', action: 'block', source: 'local' },
+            { targetType: 'ownerKey', target: 'owner-watch', action: 'watch', source: 'local' }
+          ]
+        }
+      },
+      catalog,
+      runtimeStats: {}
+    })
+
+    t.alike(status.moderation, {
+      rules: { allow: 0, block: 1, quarantine: 0, watch: 1 },
+      quarantinedChannels: 1
+    })
+
+    const formatted = formatRelayStatus(status)
+    t.ok(formatted.includes('moderation: blocked=1 quarantined=1 watched=1 allowed=0'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('readRelayStatus returns persisted runtime stats when present', async (t) => {
   const dir = makeTempDir('peartube-relay-status-file-')
   const statusPath = join(dir, 'relay-status.json')

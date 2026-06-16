@@ -10,6 +10,28 @@ export const RELAY_POLICY_DISCOVERY = 'discovery'
 export const VALID_MODES = [RELAY_MODE_PRIVATE, RELAY_MODE_PUBLIC]
 export const VALID_POLICIES = [RELAY_POLICY_ALLOWLIST, RELAY_POLICY_DISCOVERY]
 
+export const RELAY_ROLE_PUBLIC_INDEX = 'public-index'
+export const RELAY_ROLE_CACHE = 'relay-cache'
+export const RELAY_ROLE_ARCHIVER = 'archiver'
+
+export const DEFAULT_RELAY_ROLES = [RELAY_ROLE_PUBLIC_INDEX, RELAY_ROLE_CACHE]
+export const VALID_RELAY_ROLES = [RELAY_ROLE_PUBLIC_INDEX, RELAY_ROLE_CACHE, RELAY_ROLE_ARCHIVER]
+
+export const MODERATION_MODE_REPORT_AND_ALERT = 'report-and-alert'
+export const MODERATION_MODE_ENFORCE = 'enforce'
+export const VALID_MODERATION_MODES = [MODERATION_MODE_REPORT_AND_ALERT, MODERATION_MODE_ENFORCE]
+
+export const MODERATION_ACTION_ALLOW = 'allow'
+export const MODERATION_ACTION_WATCH = 'watch'
+export const MODERATION_ACTION_QUARANTINE = 'quarantine'
+export const MODERATION_ACTION_BLOCK = 'block'
+export const VALID_MODERATION_ACTIONS = [
+  MODERATION_ACTION_ALLOW,
+  MODERATION_ACTION_WATCH,
+  MODERATION_ACTION_QUARANTINE,
+  MODERATION_ACTION_BLOCK
+]
+
 export const DEFAULT_STORAGE_PATH = './peartube-relay'
 export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
 
@@ -73,6 +95,7 @@ export const DEFAULT_ARCHIVE_CONFIG = {
 export const DEFAULT_RELAY_CONFIG = {
   mode: RELAY_MODE_PUBLIC,
   policy: RELAY_POLICY_DISCOVERY,
+  roles: DEFAULT_RELAY_ROLES,
   storage: {
     path: DEFAULT_STORAGE_PATH,
     maxBytes: DEFAULT_MAX_BYTES
@@ -80,6 +103,10 @@ export const DEFAULT_RELAY_CONFIG = {
   admission: {
     channels: [],
     owners: []
+  },
+  moderation: {
+    mode: MODERATION_MODE_REPORT_AND_ALERT,
+    rules: []
   },
   discovery: {
     enabled: true,

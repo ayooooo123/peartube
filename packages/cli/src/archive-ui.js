@@ -1,3 +1,5 @@
+import { buildRelayPosture, describeRelayPosture, normalizeRelayRoles } from './relay-roles.js'
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -7,13 +9,29 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;')
 }
 
+function getPostureModel(model = {}) {
+  const relayStatus = model.relayStatus || {}
+  const roles = normalizeRelayRoles(relayStatus.roles)
+  const posture = relayStatus.posture || buildRelayPosture(roles)
+
+  return {
+    roles,
+    posture,
+    description: describeRelayPosture(posture)
+  }
+}
+
 export function renderArchiveTui(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
+  const posture = getPostureModel(model)
   const lines = [
     'PearTube Relay Archive Console',
     '================================',
+    `roles: ${posture.roles.join(',')}`,
+    `posture: ${posture.description}`,
+    '',
     `Peers: ${status.peers || 0}  Feed entries: ${status.feedEntries || 0}  Seeded videos: ${seeding.videos || 0}`,
     '',
     'Anonymous channel archival',
@@ -38,6 +56,7 @@ export function renderArchiveWebHome(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
+  const posture = getPostureModel(model)
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
   const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
   const rows = jobs.length
@@ -65,8 +84,11 @@ export function renderArchiveWebHome(model = {}) {
     p { color: #aab3c5; line-height: 1.55; }
     a { color: #9effd0; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 28px 0; }
-    .stat, form, .queue, .catalog { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
+    .stat, form, .queue, .catalog, .posture { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
     .stat b { display: block; font-size: 28px; }
+    .posture { margin: 24px 0; border-color: rgba(158,255,208,0.28); }
+    .posture strong { display: block; margin-bottom: 8px; color: #9effd0; }
+    .posture p { margin: 6px 0 0; }
     form { display: grid; gap: 14px; margin: 24px 0; }
     label { display: grid; gap: 6px; color: #c8d1e4; font-weight: 650; }
     input, textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.14); background: #0c101a; color: #f5f7fb; border-radius: 12px; padding: 12px 13px; font: inherit; }
@@ -85,6 +107,11 @@ export function renderArchiveWebHome(model = {}) {
   <main>
     <h1>PearTube Relay Archive</h1>
     <p>Archive videos into a relay-owned anonymous channel and publish availability to the PearTube network. Source URLs stay in the local container job input store; public job status only exposes imported metadata.</p>
+    <section class="posture">
+      <strong>roles: ${escapeHtml(posture.roles.join(','))}</strong>
+      <p>${escapeHtml(posture.description)}</p>
+      <p>Public index stores public metadata for discovery. Archive is publisher content chosen by this operator.</p>
+    </section>
     <section class="stats">
       <div class="stat"><span>Peers</span><b>${escapeHtml(status.peers || 0)}</b></div>
       <div class="stat"><span>Feed entries</span><b>${escapeHtml(status.feedEntries || 0)}</b></div>

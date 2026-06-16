@@ -101,4 +101,16 @@ export class RelayCatalog {
       usedBytes
     }
   }
+
+  getModerationSummary() {
+    let quarantinedChannels = 0
+
+    for (const channel of Object.values(this.data.channels)) {
+      if (channel?.moderation?.state === 'quarantined') {
+        quarantinedChannels += 1
+      }
+    }
+
+    return { quarantinedChannels }
+  }
 }

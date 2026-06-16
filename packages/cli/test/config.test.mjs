@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { loadRelayConfig, resolveRelayConfig } from '../src/config.js'
+import { loadRelayConfig, renderExampleConfig, resolveRelayConfig } from '../src/config.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -33,6 +33,43 @@ test('resolveRelayConfig defaults public discovery relays to seed every discover
   t.is(config.discovery.maxChannelsPerOwner, 0)
 })
 
+test('resolveRelayConfig defaults relays to public index and relay cache roles', async (t) => {
+  const config = resolveRelayConfig({}, { env: {} })
+
+  t.alike(config.roles, ['public-index', 'relay-cache'])
+})
+
+test('resolveRelayConfig reads node roles from env', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_NODE_ROLES: 'relay-cache, public-index,, relay-cache'
+    }
+  })
+
+  t.alike(config.roles, ['public-index', 'relay-cache'])
+})
+
+test('resolveRelayConfig infers archiver role when archive publishing is enabled', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_ENABLED: 'true',
+      PEARTUBE_ARCHIVE_SOURCES: 'https://youtube.com/@example'
+    }
+  })
+
+  t.alike(config.roles, ['public-index', 'relay-cache', 'archiver'])
+})
+
+test('resolveRelayConfig rejects unsupported node roles', async (t) => {
+  t.exception(() => resolveRelayConfig({ roles: ['public-index', 'blind-relay'] }, { env: {} }))
+})
+
+test('renderExampleConfig shows node roles before legacy mode and policy', async (t) => {
+  const rendered = renderExampleConfig(resolveRelayConfig({}, { env: {} }))
+
+  t.ok(rendered.startsWith('roles: public-index,relay-cache\nmode: public\npolicy: discovery'))
+})
+
 test('resolveRelayConfig forces private mode to allowlist policy', async (t) => {
   const config = resolveRelayConfig({ mode: 'private' }, { env: {} })
 
@@ -54,6 +91,26 @@ test('resolveRelayConfig reads comma-separated admission env vars', async (t) =>
 
   t.alike(config.admission.channels, ['chan-a', 'chan-b', 'chan-c'])
   t.alike(config.admission.owners, ['owner-a', 'owner-b'])
+})
+
+test('resolveRelayConfig reads moderation rules from env vars', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_MODERATION_MODE: 'enforce',
+      PEARTUBE_MODERATION_BLOCK_CHANNELS: 'chan-block',
+      PEARTUBE_MODERATION_QUARANTINE_CHANNELS: 'chan-quarantine',
+      PEARTUBE_MODERATION_ALLOW_CHANNELS: 'chan-allow',
+      PEARTUBE_MODERATION_WATCH_OWNERS: 'owner-watch'
+    }
+  })
+
+  t.is(config.moderation.mode, 'enforce')
+  t.alike(config.moderation.rules, [
+    { targetType: 'channelKey', target: 'chan-block', action: 'block', source: 'local' },
+    { targetType: 'channelKey', target: 'chan-quarantine', action: 'quarantine', source: 'local' },
+    { targetType: 'channelKey', target: 'chan-allow', action: 'allow', source: 'local' },
+    { targetType: 'ownerKey', target: 'owner-watch', action: 'watch', source: 'local' }
+  ])
 })
 
 test('loadRelayConfig parses yaml-like config files', async (t) => {

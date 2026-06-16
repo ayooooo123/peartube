@@ -24,6 +24,8 @@ import {
   VALID_POLICIES
 } from './constants.js'
 import { buildSourceId, classifySourceUrl } from './archive/source-id.js'
+import { normalizeRelayRoles } from './relay-roles.js'
+import { normalizeModerationConfig } from './moderation.js'
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -236,6 +238,7 @@ function readConfigFile(configPath) {
 function configFromEnv(env = {}) {
   const config = {}
 
+  if (env.PEARTUBE_NODE_ROLES) config.roles = splitCommaList(env.PEARTUBE_NODE_ROLES)
   if (env.PEARTUBE_MODE) config.mode = env.PEARTUBE_MODE
   if (env.PEARTUBE_POLICY) config.policy = env.PEARTUBE_POLICY
   if (env.PEARTUBE_STORAGE_PATH || env.PEARTUBE_STORAGE_MAX_BYTES) {
@@ -247,6 +250,36 @@ function configFromEnv(env = {}) {
     config.admission = {}
     if (env.PEARTUBE_ADMISSION_CHANNELS) config.admission.channels = splitCommaList(env.PEARTUBE_ADMISSION_CHANNELS)
     if (env.PEARTUBE_ADMISSION_OWNERS) config.admission.owners = splitCommaList(env.PEARTUBE_ADMISSION_OWNERS)
+  }
+  if (
+    env.PEARTUBE_MODERATION_MODE ||
+    env.PEARTUBE_MODERATION_BLOCK_CHANNELS ||
+    env.PEARTUBE_MODERATION_BLOCK_OWNERS ||
+    env.PEARTUBE_MODERATION_QUARANTINE_CHANNELS ||
+    env.PEARTUBE_MODERATION_QUARANTINE_OWNERS ||
+    env.PEARTUBE_MODERATION_ALLOW_CHANNELS ||
+    env.PEARTUBE_MODERATION_ALLOW_OWNERS ||
+    env.PEARTUBE_MODERATION_WATCH_CHANNELS ||
+    env.PEARTUBE_MODERATION_WATCH_OWNERS
+  ) {
+    const rules = []
+    const addRules = (value, targetType, action) => {
+      for (const target of splitCommaList(value)) {
+        rules.push({ targetType, target, action, source: 'local' })
+      }
+    }
+
+    config.moderation = {}
+    if (env.PEARTUBE_MODERATION_MODE) config.moderation.mode = env.PEARTUBE_MODERATION_MODE
+    addRules(env.PEARTUBE_MODERATION_BLOCK_CHANNELS, 'channelKey', 'block')
+    addRules(env.PEARTUBE_MODERATION_BLOCK_OWNERS, 'ownerKey', 'block')
+    addRules(env.PEARTUBE_MODERATION_QUARANTINE_CHANNELS, 'channelKey', 'quarantine')
+    addRules(env.PEARTUBE_MODERATION_QUARANTINE_OWNERS, 'ownerKey', 'quarantine')
+    addRules(env.PEARTUBE_MODERATION_ALLOW_CHANNELS, 'channelKey', 'allow')
+    addRules(env.PEARTUBE_MODERATION_ALLOW_OWNERS, 'ownerKey', 'allow')
+    addRules(env.PEARTUBE_MODERATION_WATCH_CHANNELS, 'channelKey', 'watch')
+    addRules(env.PEARTUBE_MODERATION_WATCH_OWNERS, 'ownerKey', 'watch')
+    if (rules.length) config.moderation.rules = rules
   }
   if (env.PEARTUBE_DISCOVERY_ENABLED || env.PEARTUBE_DISCOVERY_SEED_DISCOVERED || env.PEARTUBE_DISCOVERY_MAX_CHANNELS || env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
     config.discovery = {}
@@ -351,6 +384,7 @@ function configFromCli(cli = {}) {
   const config = {}
 
   if (cli.archive) config.archive = { ...cli.archive }
+  if (cli.roles) config.roles = splitCommaList(cli.roles)
   if (cli.mode) config.mode = cli.mode
   if (cli.policy) config.policy = cli.policy
 
@@ -585,6 +619,7 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.admission = deepMerge(DEFAULT_RELAY_CONFIG.admission, config.admission || {})
   config.admission.channels = splitCommaList(config.admission.channels)
   config.admission.owners = splitCommaList(config.admission.owners)
+  config.moderation = normalizeModerationConfig(deepMerge(DEFAULT_RELAY_CONFIG.moderation, config.moderation || {}))
 
   config.discovery = deepMerge(DEFAULT_RELAY_CONFIG.discovery, config.discovery || {})
   config.discovery.enabled = config.mode === RELAY_MODE_PUBLIC && config.policy === RELAY_POLICY_DISCOVERY
@@ -607,6 +642,9 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
 
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
+  config.roles = normalizeRelayRoles(config.roles, {
+    archiveEnabled: Boolean(config.archive.enabled || config.archive.localMirror?.enabled)
+  })
 
   const runtimeDbPath = join(config.storage.path, 'db')
   config.paths = {
@@ -641,6 +679,7 @@ export async function loadRelayConfig(cli = {}, { env = process.env || {} } = {}
 
 export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   const lines = [
+    `roles: ${normalizeRelayRoles(config.roles).join(',')}`,
     `mode: ${config.mode}`,
     `policy: ${config.policy}`,
     'storage:',

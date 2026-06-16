@@ -20,6 +20,71 @@ test('private mode accepts configured channels', async (t) => {
   t.is(decision.reason, 'channel-allowlist')
 })
 
+test('moderation block rule rejects before allowlist admission', async (t) => {
+  const decision = evaluateCandidate({
+    candidate: { channelKey: 'chan-1', ownerKey: null, source: 'config' },
+    config: {
+      mode: 'private',
+      policy: 'allowlist',
+      admission: { channels: ['chan-1'], owners: [] },
+      moderation: {
+        rules: [{ targetType: 'channelKey', target: 'chan-1', action: 'block', source: 'local' }]
+      },
+      discovery: { enabled: false, maxChannels: 0, maxChannelsPerOwner: 0 }
+    },
+    acceptedChannels: new Set(),
+    ownerCounts: new Map()
+  })
+
+  t.is(decision.accepted, false)
+  t.is(decision.retentionClass, null)
+  t.is(decision.reason, 'moderation-blocked')
+  t.alike(decision.moderation, { targetType: 'channelKey', target: 'chan-1', action: 'block', source: 'local' })
+})
+
+test('moderation quarantine rule rejects with quarantine reason', async (t) => {
+  const decision = evaluateCandidate({
+    candidate: { channelKey: 'chan-q', ownerKey: 'owner-q', source: 'discovered' },
+    config: {
+      mode: 'public',
+      policy: 'discovery',
+      admission: { channels: [], owners: [] },
+      moderation: {
+        rules: [{ targetType: 'ownerKey', target: 'owner-q', action: 'quarantine', source: 'local' }]
+      },
+      discovery: { enabled: true, maxChannels: 0, maxChannelsPerOwner: 0 }
+    },
+    acceptedChannels: new Set(),
+    ownerCounts: new Map()
+  })
+
+  t.is(decision.accepted, false)
+  t.is(decision.reason, 'moderation-quarantined')
+  t.is(decision.moderation.targetType, 'ownerKey')
+  t.is(decision.moderation.target, 'owner-q')
+})
+
+test('moderation allow rule accepts curated public candidates', async (t) => {
+  const decision = evaluateCandidate({
+    candidate: { channelKey: 'chan-allow', ownerKey: 'owner-allow', source: 'discovered' },
+    config: {
+      mode: 'public',
+      policy: 'allowlist',
+      admission: { channels: [], owners: [] },
+      moderation: {
+        rules: [{ targetType: 'channelKey', target: 'chan-allow', action: 'allow', source: 'local' }]
+      },
+      discovery: { enabled: false, maxChannels: 0, maxChannelsPerOwner: 0 }
+    },
+    acceptedChannels: new Set(),
+    ownerCounts: new Map()
+  })
+
+  t.is(decision.accepted, true)
+  t.is(decision.retentionClass, 'allowlist')
+  t.is(decision.reason, 'moderation-allow')
+})
+
 test('private mode rejects discovered channels without matching rules', async (t) => {
   const decision = evaluateCandidate({
     candidate: { channelKey: 'chan-2', ownerKey: 'owner-2', source: 'discovered' },

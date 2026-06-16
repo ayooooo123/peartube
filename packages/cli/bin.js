@@ -45,6 +45,7 @@ function printHelp() {
     '',
     'Options:',
     '  --config, -c <path>',
+    '  --roles <roles>',
     '  --mode <private|public>',
     '  --policy <allowlist|discovery>',
     '  --storage, -s <path>',

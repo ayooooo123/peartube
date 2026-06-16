@@ -182,6 +182,58 @@ test('createRelayService accepts discovered channels in public discovery mode', 
   }
 })
 
+test('createRelayService quarantines moderated candidates before mirroring', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-moderation-quarantine-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+  const logger = createFakeLogger()
+
+  runtime.cacheManager = { async addChannel() { throw new Error('cache should not run') } }
+  runtime.seeder = { async seedChannel() { throw new Error('seed should not run') } }
+  runtime.publishRelayCatalogEntry = async () => { throw new Error('publish should not run') }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          rules: [{ targetType: 'channelKey', target: 'chan-q', action: 'quarantine', source: 'local' }]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    const result = await service.processCandidate({ channelKey: 'chan-q', ownerKey: 'owner-q', publicBeeKey: 'bee-q' })
+    const channel = service.catalog.getChannel('chan-q')
+
+    t.is(result.accepted, false)
+    t.is(result.reason, 'moderation-quarantined')
+    t.alike(mirrored, [])
+    t.ok(channel)
+    t.is(channel.moderation.state, 'quarantined')
+    t.is(service.getStatus().moderation.quarantinedChannels, 1)
+    t.ok(logger.entries.some((entry) => entry.component === 'admission' && entry.msg === 'Candidate rejected' && entry.data.reason === 'moderation-quarantined'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

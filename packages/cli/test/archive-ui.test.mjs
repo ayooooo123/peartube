@@ -21,6 +21,7 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-manager.js'), 'utf8').includes('node:crypto'), 'archive manager uses Bare-compatible crypto')
   t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8').includes('node:http'), 'archive console uses runtime HTTP shim')
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
+  t.ok(compose.includes('PEARTUBE_NODE_ROLES: public-index,relay-cache'), 'root relay compose declares public relay/cache roles')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH: /usr/local/bin/ffmpeg'), 'compose configures ffmpeg for yt-dlp archive merging')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: "--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=default,-android_vr,mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'compose configures the packaged POT plugin directory and CLI provider for archive retries')
@@ -190,6 +191,27 @@ test('archive TUI and WebUI render queue, archive form, and publish actions', as
   t.ok(web.includes('name="url"'), 'WebUI accepts video or channel URL')
   t.ok(web.includes('name="channelName"'), 'WebUI accepts anonymous channel name')
   t.ok(web.includes('Queued video'), 'WebUI renders archive queue')
+})
+
+test('archive WebUI renders relay posture banner', async (t) => {
+  const web = renderArchiveWebHome({
+    relayStatus: {
+      roles: ['public-index', 'relay-cache', 'archiver'],
+      posture: {
+        storesPublicMetadata: true,
+        storesMediaCache: true,
+        storesArchivePublisherContent: true,
+        storesDecryptionKeys: false,
+        nonKnowledgeRelay: false
+      }
+    },
+    status: { peers: 3, feedEntries: 7, seeding: { videos: 11 } },
+    jobs: []
+  })
+
+  t.ok(web.includes('roles: public-index,relay-cache,archiver'), 'WebUI shows configured roles')
+  t.ok(web.includes('stores public metadata; stores public media cache; stores archive publisher content; stores no keys'), 'WebUI shows honest posture')
+  t.ok(web.includes('Public index stores public metadata'), 'WebUI does not imply public index is non-knowledge')
 })
 
 

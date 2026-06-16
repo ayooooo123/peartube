@@ -1,9 +1,11 @@
 import test from 'brittle'
+import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parseArgv } from '../src/argv.js'
 import { createArchiveJobStore, enqueueArchiveJob, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from '../src/archive-manager.js'
+import { buildCatalogChannels, createArchiveConsole } from '../src/archive-console.js'
 import { renderArchiveTui, renderArchiveWebHome } from '../src/archive-ui.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -244,6 +246,145 @@ test('archive UI renders active operator alerts', async (t) => {
   t.ok(web.includes('<section class="alerts">'), 'WebUI has an alert section')
   t.ok(web.includes('Quarantine applied to channelKey:chan-q'), 'WebUI shows alert summary')
   t.ok(web.includes('review, block'), 'WebUI shows suggested actions')
+})
+
+test('archive UI renders moderation review queue controls', async (t) => {
+  const model = {
+    relayStatus: {
+      reviewQueue: [
+        {
+          id: 'channel:chan-q',
+          targetType: 'channelKey',
+          target: 'chan-q',
+          state: 'quarantined',
+          action: 'quarantine',
+          channelKey: 'chan-q',
+          ownerKey: 'owner-q',
+          publicBeeKey: 'bee-q',
+          source: 'discovered',
+          retentionClass: 'discovery',
+          bytes: 2048,
+          videoCount: 2
+        }
+      ]
+    },
+    status: { peers: 3, feedEntries: 7, seeding: { videos: 11 } },
+    jobs: []
+  }
+
+  const tui = renderArchiveTui(model)
+  const web = renderArchiveWebHome(model)
+
+  t.ok(tui.includes('Review Queue:'), 'TUI has review queue section')
+  t.ok(tui.includes('quarantined channelKey:chan-q owner=owner-q bytes=2048 videos=2'), 'TUI shows target cache context')
+  t.ok(web.includes('<section class="review">'), 'WebUI has review queue section')
+  t.ok(web.includes('channelKey:chan-q'), 'WebUI shows target')
+  t.ok(web.includes('name="action" value="block"'), 'WebUI exposes one-click block')
+  t.ok(web.includes('name="action" value="watch"'), 'WebUI exposes one-click watch')
+  t.ok(web.includes('name="action" value="quarantine"'), 'WebUI exposes one-click quarantine')
+})
+
+test('archive console moderation action endpoint persists operator action', async (t) => {
+  const actions = []
+  let handler = null
+  const server = {
+    listen(_port, _host, cb) { cb() },
+    close(cb) { cb() }
+  }
+  const service = {
+    runtime: {
+      ctx: {
+        metaDb: {
+          async get() { return null },
+          async put() {}
+        }
+      }
+    },
+    getStatus() {
+      return { runtime: {}, reviewQueue: [] }
+    },
+    async addModerationRule(rule) {
+      actions.push(rule)
+      return { id: 'mod_1', ...rule }
+    }
+  }
+  const consoleUi = await createArchiveConsole({
+    service,
+    downloader: {},
+    publisher: {},
+    serverFactory(fn) {
+      handler = fn
+      return server
+    }
+  })
+
+  const req = new EventEmitter()
+  req.method = 'POST'
+  req.url = '/moderation/action'
+  const response = await new Promise((resolve) => {
+    const res = {
+      statusCode: null,
+      headers: null,
+      body: '',
+      writeHead(statusCode, headers = {}) {
+        this.statusCode = statusCode
+        this.headers = headers
+      },
+      end(body = '') {
+        this.body += String(body)
+        resolve(this)
+      }
+    }
+    handler(req, res)
+    req.emit('data', 'action=block&targetType=channelKey&target=chan-q&reason=operator-review')
+    req.emit('end')
+  })
+
+  t.alike(actions, [{
+    action: 'block',
+    targetType: 'channelKey',
+    target: 'chan-q',
+    reason: 'operator-review'
+  }])
+  t.is(response.statusCode, 303)
+  t.is(response.headers.location, '/')
+  await consoleUi.close()
+})
+
+test('simple relay catalog omits blocked or quarantined review targets from feed snapshots', async (t) => {
+  const channelKey = 'c'.repeat(64)
+  const publicBeeKey = 'b'.repeat(64)
+  const previewVideos = [{
+    id: 'video-1',
+    blobId: '0:1:0:99',
+    blobsCoreKey: 'a'.repeat(64),
+    availability: 'playable',
+    byteAvailability: 'playable',
+    mimeType: 'video/mp4'
+  }]
+
+  const projected = await buildCatalogChannels({
+    channels: [{
+      channelKey,
+      publicBeeKey,
+      source: 'discovered',
+      moderation: { state: 'blocked' },
+      previewVideos
+    }],
+    store: { async getCompletedVideoPreviewsByChannel() { return new Map() } },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey: channelKey,
+          publicBeeKey,
+          source: 'peer',
+          previewVideos
+        }]
+      }
+    }
+  })
+
+  t.alike(projected, [])
 })
 
 

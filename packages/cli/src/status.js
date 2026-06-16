@@ -29,6 +29,9 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {}, alerts = 
   const catalogModeration = typeof catalog.getModerationSummary === 'function'
     ? catalog.getModerationSummary()
     : { quarantinedChannels: 0 }
+  const reviewQueue = typeof catalog.getReviewQueue === 'function'
+    ? catalog.getReviewQueue()
+    : []
   const roles = normalizeRelayRoles(config.roles, {
     archiveEnabled: Boolean(config.archive?.enabled || config.archive?.localMirror?.enabled)
   })
@@ -47,6 +50,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {}, alerts = 
       rules: summarizeModerationRules(config.moderation?.rules),
       quarantinedChannels: catalogModeration.quarantinedChannels || 0
     },
+    reviewQueue,
     summary: {
       ...summary,
       evictableChannels: channels.length - summary.protectedChannels

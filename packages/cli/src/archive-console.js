@@ -14,6 +14,16 @@ function parseForm(body) {
   }
 }
 
+function parseModerationActionForm(body) {
+  const params = new URLSearchParams(body)
+  return {
+    action: params.get('action') || '',
+    targetType: params.get('targetType') || '',
+    target: params.get('target') || '',
+    reason: params.get('reason') || 'operator-review'
+  }
+}
+
 async function collectBody(req) {
   return new Promise((resolve, reject) => {
     let body = ''
@@ -49,6 +59,7 @@ function playableCatalogPreviews(channel, previewVideos = []) {
 }
 
 function normalizeCatalogChannel(channel, previewVideos = []) {
+  if (channel?.moderation?.state === 'quarantined' || channel?.moderation?.state === 'blocked') return null
   const channelKey = channel.channelKey || channel.driveKey
   const publicBeeKey = channel.publicBeeKey || null
   const normalizedPreviewVideos = playableCatalogPreviews(channel, previewVideos)
@@ -75,10 +86,15 @@ async function readPublishedChannels(metaDb) {
 export async function buildCatalogChannels({ channels = [], store = null, publicFeed = null, metaDb = null } = {}) {
   const previewsByChannel = await store?.getCompletedVideoPreviewsByChannel?.()
   const byKey = new Map()
+  const hiddenChannelKeys = new Set()
 
   for (const channel of channels || []) {
     const channelKey = channel.channelKey || channel.driveKey
     if (!channelKey) continue
+    if (channel?.moderation?.state === 'quarantined' || channel?.moderation?.state === 'blocked') {
+      hiddenChannelKeys.add(channelKey)
+      continue
+    }
     const previewVideos = Array.isArray(channel.previewVideos) && channel.previewVideos.length > 0
       ? channel.previewVideos
       : (previewsByChannel?.get?.(channelKey) || [])
@@ -92,7 +108,7 @@ export async function buildCatalogChannels({ channels = [], store = null, public
 
   for (const entry of feedEntries || []) {
     const channelKey = entry.channelKey || entry.driveKey
-    if (!channelKey || byKey.has(channelKey)) continue
+    if (!channelKey || byKey.has(channelKey) || hiddenChannelKeys.has(channelKey)) continue
     const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
     if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
     const normalized = normalizeCatalogChannel(entry, previewVideos)
@@ -101,7 +117,7 @@ export async function buildCatalogChannels({ channels = [], store = null, public
 
   for (const entry of await readPublishedChannels(metaDb)) {
     const channelKey = entry.channelKey || entry.driveKey
-    if (!channelKey) continue
+    if (!channelKey || hiddenChannelKeys.has(channelKey)) continue
     const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
     if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
     const normalized = normalizeCatalogChannel({ source: 'local', relayRole: 'publisher', ...entry }, previewVideos)
@@ -129,6 +145,7 @@ export async function createArchiveConsole({
     return {
       relayStatus,
       status: relayStatus.runtime || {},
+      reviewQueue: relayStatus.reviewQueue || [],
       jobs: await store.listJobs()
     }
   }
@@ -185,6 +202,17 @@ export async function createArchiveConsole({
         const form = parseForm(await collectBody(req))
         await manager.enqueue(form)
         manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/moderation/action') {
+        if (typeof service.addModerationRule !== 'function') {
+          throw new Error('relay service does not support moderation actions')
+        }
+        const form = parseModerationActionForm(await collectBody(req))
+        await service.addModerationRule(form)
         res.writeHead(303, { location: '/' })
         res.end()
         return

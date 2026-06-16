@@ -409,6 +409,57 @@ test('createRelayService alerts watched targets without blocking mirroring', asy
   }
 })
 
+test('createRelayService applies operator moderation actions immediately', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-moderation-action-')
+  const runtime = createFakeRuntime()
+  const moderationPath = join(dir, 'relay-moderation.json')
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          moderation: moderationPath
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-review', ownerKey: 'owner-review', publicBeeKey: 'bee-review' })
+    const rule = await service.addModerationRule({
+      action: 'block',
+      targetType: 'channelKey',
+      target: 'chan-review',
+      reason: 'operator-review'
+    })
+
+    const storedRules = (await ModerationRuleStore.open({ storagePath: dir, moderationPath })).getRules()
+    const channel = service.catalog.getChannel('chan-review')
+
+    t.is(rule.action, 'block')
+    t.is(storedRules.length, 1)
+    t.is(storedRules[0].target, 'chan-review')
+    t.is(service.config.moderation.rules.length, 1)
+    t.is(channel.moderation.state, 'blocked')
+    t.is(channel.lastDecisionReason, 'operator-block')
+    t.alike(service.getStatus().reviewQueue, [])
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

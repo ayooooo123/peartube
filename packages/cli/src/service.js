@@ -276,6 +276,45 @@ export async function createRelayService({
     }
   }
 
+  function moderationStateForAction(action) {
+    if (action === 'block') return 'blocked'
+    if (action === 'quarantine') return 'quarantined'
+    if (action === 'watch') return 'watched'
+    if (action === 'allow') return 'allowed'
+    return action || 'review'
+  }
+
+  function mergeRuntimeModerationRule(rule) {
+    const existingRules = Array.isArray(config.moderation?.rules) ? config.moderation.rules : []
+    const rules = existingRules.filter((entry) => entry.id !== rule.id)
+    rules.push(rule)
+    config.moderation = normalizeModerationConfig({
+      ...(config.moderation || {}),
+      rules
+    })
+  }
+
+  async function applyCatalogModerationRule(rule) {
+    if (rule.targetType !== 'channelKey') return null
+    const existing = relayCatalog.getChannel(rule.target)
+    if (!existing) return null
+
+    const now = Number(nowFn()) || Date.now()
+    const state = moderationStateForAction(rule.action)
+    return relayCatalog.upsertChannel({
+      channelKey: rule.target,
+      moderation: {
+        ...existing.moderation,
+        ...rule,
+        state,
+        matchedAt: now
+      },
+      relayServing: rule.action === 'block' || rule.action === 'quarantine' ? false : existing.relayServing,
+      lastDecisionReason: `operator-${rule.action}`,
+      lastSeenAt: now
+    })
+  }
+
   const basePublishRelayCatalogEntry = typeof runtime.publishRelayCatalogEntry === 'function'
     ? runtime.publishRelayCatalogEntry.bind(runtime)
     : null
@@ -409,6 +448,15 @@ export async function createRelayService({
     const acceptedSource = existingChannel?.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
       ? existingChannel.source
       : (resolved.source || 'discovered')
+    const moderationRecord = decision.moderation?.action === 'watch'
+      ? {
+          moderation: {
+            ...decision.moderation,
+            state: 'watched',
+            matchedAt: now
+          }
+        }
+      : {}
     const baseRecord = {
       channelKey: resolved.channelKey,
       ownerKey: resolved.ownerKey || null,
@@ -416,7 +464,8 @@ export async function createRelayService({
       source: acceptedSource,
       retentionClass: decision.retentionClass,
       lastDecisionReason: decision.reason,
-      lastSeenAt: now
+      lastSeenAt: now,
+      ...moderationRecord
     }
     const incomingPreviewSignature = refreshDecision.incomingSignature || getPreviewBlobSignature(resolved.previewVideos)
     const mirrorAttemptRecord = incomingPreviewSignature
@@ -850,6 +899,17 @@ export async function createRelayService({
         recursive: input.recursive !== false,
         maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity
       })
+    },
+    async addModerationRule(rule) {
+      const store = await ModerationRuleStore.open({
+        storagePath: config.storage.path,
+        moderationPath: config.paths?.moderation
+      })
+      const added = await store.addRule(rule)
+      mergeRuntimeModerationRule(added)
+      await applyCatalogModerationRule(added)
+      await persistStatus()
+      return added
     },
     getStatus() {
       return currentStatus || buildRelayStatus({

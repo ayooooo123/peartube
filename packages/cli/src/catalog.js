@@ -27,6 +27,32 @@ function readCatalog(path) {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 
+function buildReviewItem(channel) {
+  const moderation = channel?.moderation || {}
+  const channelKey = channel.channelKey || channel.driveKey
+  const targetType = moderation.targetType || 'channelKey'
+  const target = moderation.target || channelKey
+
+  return {
+    id: `channel:${channelKey}`,
+    targetType,
+    target,
+    channelKey,
+    ownerKey: channel.ownerKey || null,
+    publicBeeKey: channel.publicBeeKey || null,
+    state: moderation.state || moderation.action || 'review',
+    action: moderation.action || null,
+    reason: moderation.reason || null,
+    source: channel.source || null,
+    retentionClass: channel.retentionClass || null,
+    bytes: Number(channel.bytes || 0) || 0,
+    videoCount: Number(channel.videoCount || channel.videosDownloaded || channel.videosFound || 0) || 0,
+    matchedAt: Number(moderation.matchedAt || 0) || null,
+    lastSeenAt: Number(channel.lastSeenAt || 0) || null,
+    lastDecisionReason: channel.lastDecisionReason || null
+  }
+}
+
 export class RelayCatalog {
   constructor({ storagePath, catalogPath, data }) {
     this.storagePath = storagePath
@@ -112,5 +138,14 @@ export class RelayCatalog {
     }
 
     return { quarantinedChannels }
+  }
+
+  getReviewQueue() {
+    const reviewStates = new Set(['quarantined', 'watched'])
+    return Object.values(this.data.channels)
+      .filter((channel) => reviewStates.has(channel?.moderation?.state))
+      .map(buildReviewItem)
+      .sort((left, right) => (left.matchedAt || left.lastSeenAt || 0) - (right.matchedAt || right.lastSeenAt || 0))
+      .map((item) => clone(item))
   }
 }

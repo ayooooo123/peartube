@@ -245,6 +245,89 @@ test('buildRelayStatus includes active alert summary and latest alerts', async (
   }
 })
 
+test('buildRelayStatus includes moderated channels in the review queue', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-review-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    await catalog.upsertChannel({
+      channelKey: 'chan-q',
+      ownerKey: 'owner-q',
+      publicBeeKey: 'bee-q',
+      source: 'discovered',
+      retentionClass: 'discovery',
+      bytes: 2048,
+      videoCount: 2,
+      lastSeenAt: 2000,
+      moderation: {
+        action: 'quarantine',
+        state: 'quarantined',
+        targetType: 'channelKey',
+        target: 'chan-q',
+        matchedAt: 2100
+      }
+    })
+    await catalog.upsertChannel({
+      channelKey: 'chan-watch',
+      ownerKey: 'owner-watch',
+      publicBeeKey: 'bee-watch',
+      source: 'discovered',
+      retentionClass: 'discovery',
+      bytes: 1024,
+      videoCount: 1,
+      moderation: {
+        action: 'watch',
+        state: 'watched',
+        targetType: 'channelKey',
+        target: 'chan-watch',
+        matchedAt: 2200
+      }
+    })
+
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 16_384 }
+      },
+      catalog,
+      runtimeStats: {}
+    })
+
+    t.alike(status.reviewQueue.map((item) => ({
+      id: item.id,
+      targetType: item.targetType,
+      target: item.target,
+      state: item.state,
+      action: item.action,
+      bytes: item.bytes,
+      videoCount: item.videoCount
+    })), [
+      {
+        id: 'channel:chan-q',
+        targetType: 'channelKey',
+        target: 'chan-q',
+        state: 'quarantined',
+        action: 'quarantine',
+        bytes: 2048,
+        videoCount: 2
+      },
+      {
+        id: 'channel:chan-watch',
+        targetType: 'channelKey',
+        target: 'chan-watch',
+        state: 'watched',
+        action: 'watch',
+        bytes: 1024,
+        videoCount: 1
+      }
+    ])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('withRelayAlerts refreshes alert counts on persisted status snapshots', async (t) => {
   const status = withRelayAlerts({
     mode: 'public',

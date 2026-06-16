@@ -29,12 +29,21 @@ function getAlertModel(model = {}) {
   return alerts
 }
 
+function getReviewModel(model = {}) {
+  const relayStatus = model.relayStatus || {}
+  const reviewQueue = Array.isArray(model.reviewQueue)
+    ? model.reviewQueue
+    : (Array.isArray(relayStatus.reviewQueue) ? relayStatus.reviewQueue : [])
+  return reviewQueue
+}
+
 export function renderArchiveTui(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const posture = getPostureModel(model)
   const alerts = getAlertModel(model)
+  const reviewQueue = getReviewModel(model)
   const lines = [
     'PearTube Relay Archive Console',
     '================================',
@@ -54,6 +63,19 @@ export function renderArchiveTui(model = {}) {
   } else {
     for (const alert of alerts) {
       lines.push(`  ${alert.severity} ${alert.category} ${alert.targetType}:${alert.target} ${alert.summary}`)
+    }
+  }
+
+  lines.push(
+    '',
+    'Review Queue:'
+  )
+
+  if (!reviewQueue.length) {
+    lines.push('  No items waiting for review.')
+  } else {
+    for (const item of reviewQueue) {
+      lines.push(`  ${item.state} ${item.targetType}:${item.target} owner=${item.ownerKey || 'none'} bytes=${item.bytes || 0} videos=${item.videoCount || 0}`)
     }
   }
 
@@ -80,6 +102,7 @@ export function renderArchiveWebHome(model = {}) {
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const posture = getPostureModel(model)
   const alerts = getAlertModel(model)
+  const reviewQueue = getReviewModel(model)
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
   const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
   const rows = jobs.length
@@ -101,6 +124,21 @@ export function renderArchiveWebHome(model = {}) {
           ${Array.isArray(alert.suggestedActions) && alert.suggestedActions.length ? `<small>${escapeHtml(alert.suggestedActions.join(', '))}</small>` : ''}
         </li>`).join('')
     : '<li class="empty">No active alerts.</li>'
+  const reviewRows = reviewQueue.length
+    ? reviewQueue.map((item) => `
+        <li>
+          <strong>${escapeHtml(item.targetType)}:${escapeHtml(item.target)}</strong>
+          <small>${escapeHtml(item.state)} ${escapeHtml(item.source || 'unknown')} ${escapeHtml(item.retentionClass || 'unknown')} owner=${escapeHtml(item.ownerKey || 'none')} bytes=${escapeHtml(item.bytes || 0)} videos=${escapeHtml(item.videoCount || 0)}</small>
+          <form class="review-actions" method="post" action="/moderation/action">
+            <input type="hidden" name="targetType" value="${escapeHtml(item.targetType)}">
+            <input type="hidden" name="target" value="${escapeHtml(item.target)}">
+            <input type="hidden" name="reason" value="operator-review">
+            <button type="submit" name="action" value="watch">Watch</button>
+            <button type="submit" name="action" value="quarantine">Quarantine</button>
+            <button type="submit" name="action" value="block">Block</button>
+          </form>
+        </li>`).join('')
+    : '<li class="empty">No items waiting for review.</li>'
 
   return `<!doctype html>
 <html lang="en">
@@ -116,12 +154,13 @@ export function renderArchiveWebHome(model = {}) {
     p { color: #aab3c5; line-height: 1.55; }
     a { color: #9effd0; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 28px 0; }
-    .stat, form, .queue, .catalog, .posture, .alerts { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
+    .stat, form, .queue, .catalog, .posture, .alerts, .review { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
     .stat b { display: block; font-size: 28px; }
     .posture { margin: 24px 0; border-color: rgba(158,255,208,0.28); }
     .posture strong { display: block; margin-bottom: 8px; color: #9effd0; }
     .posture p { margin: 6px 0 0; }
     form { display: grid; gap: 14px; margin: 24px 0; }
+    .review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
     label { display: grid; gap: 6px; color: #c8d1e4; font-weight: 650; }
     input, textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.14); background: #0c101a; color: #f5f7fb; border-radius: 12px; padding: 12px 13px; font: inherit; }
     button { justify-self: start; border: 0; border-radius: 999px; padding: 12px 18px; color: #071016; background: #9effd0; font-weight: 800; cursor: pointer; }
@@ -150,6 +189,10 @@ export function renderArchiveWebHome(model = {}) {
     <section class="alerts">
       <h2>Alerts</h2>
       <ul>${alertRows}</ul>
+    </section>
+    <section class="review">
+      <h2>Review Queue</h2>
+      <ul>${reviewRows}</ul>
     </section>
     <section class="stats">
       <div class="stat"><span>Peers</span><b>${escapeHtml(status.peers || 0)}</b></div>

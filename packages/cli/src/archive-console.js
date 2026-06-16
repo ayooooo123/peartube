@@ -1,6 +1,6 @@
 import { createServer } from '#http'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
-import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
+import { renderArchiveTui, renderArchiveWebHome, renderModerationTargetDetail } from './archive-ui.js'
 
 function parseForm(body) {
   const params = new URLSearchParams(body)
@@ -152,31 +152,33 @@ export async function createArchiveConsole({
 
   const server = await serverFactory(async (req, res) => {
     try {
-      if (req.method === 'GET' && req.url === '/health') {
+      const requestUrl = new URL(req.url || '/', 'http://relay.local')
+
+      if (req.method === 'GET' && requestUrl.pathname === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
         return
       }
 
-      if (req.method === 'GET' && (req.url === '/' || req.url === '/ui')) {
+      if (req.method === 'GET' && (requestUrl.pathname === '/' || requestUrl.pathname === '/ui')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
         res.end(renderArchiveWebHome(await model()))
         return
       }
 
-      if (req.method === 'GET' && req.url === '/tui') {
+      if (req.method === 'GET' && requestUrl.pathname === '/tui') {
         res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
         res.end(renderArchiveTui(await model()))
         return
       }
 
-      if (req.method === 'GET' && req.url === '/jobs') {
+      if (req.method === 'GET' && requestUrl.pathname === '/jobs') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ jobs: await store.listJobs() }, null, 2))
         return
       }
 
-      if (req.method === 'GET' && req.url === '/catalog.json') {
+      if (req.method === 'GET' && requestUrl.pathname === '/catalog.json') {
         const channels = service.catalog?.getChannels?.() || []
         const catalogChannels = await buildCatalogChannels({
           channels,
@@ -198,7 +200,32 @@ export async function createArchiveConsole({
         return
       }
 
-      if (req.method === 'POST' && req.url === '/archive') {
+      if (req.method === 'GET' && requestUrl.pathname === '/moderation/target') {
+        if (typeof service.getModerationTargetDetail !== 'function') {
+          throw new Error('relay service does not support moderation target details')
+        }
+        const detail = service.getModerationTargetDetail({
+          targetType: requestUrl.searchParams.get('targetType') || '',
+          target: requestUrl.searchParams.get('target') || ''
+        })
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        res.end(renderModerationTargetDetail({ detail }))
+        return
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/moderation/audit.json') {
+        if (typeof service.getModerationAudit !== 'function') {
+          throw new Error('relay service does not support moderation audit export')
+        }
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify(service.getModerationAudit(), null, 2))
+        return
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/archive') {
         const form = parseForm(await collectBody(req))
         await manager.enqueue(form)
         manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
@@ -207,7 +234,7 @@ export async function createArchiveConsole({
         return
       }
 
-      if (req.method === 'POST' && req.url === '/moderation/action') {
+      if (req.method === 'POST' && requestUrl.pathname === '/moderation/action') {
         if (typeof service.addModerationRule !== 'function') {
           throw new Error('relay service does not support moderation actions')
         }

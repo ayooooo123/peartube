@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { parseArgv } from '../src/argv.js'
 import { createArchiveJobStore, enqueueArchiveJob, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from '../src/archive-manager.js'
 import { buildCatalogChannels, createArchiveConsole } from '../src/archive-console.js'
-import { renderArchiveTui, renderArchiveWebHome } from '../src/archive-ui.js'
+import { renderArchiveTui, renderArchiveWebHome, renderModerationTargetDetail } from '../src/archive-ui.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -279,9 +279,65 @@ test('archive UI renders moderation review queue controls', async (t) => {
   t.ok(tui.includes('quarantined channelKey:chan-q owner=owner-q bytes=2048 videos=2'), 'TUI shows target cache context')
   t.ok(web.includes('<section class="review">'), 'WebUI has review queue section')
   t.ok(web.includes('channelKey:chan-q'), 'WebUI shows target')
+  t.ok(web.includes('/moderation/target?targetType=channelKey&amp;target=chan-q'), 'WebUI links review targets to detail pages')
+  t.ok(web.includes('/moderation/audit.json'), 'WebUI links to audit export')
   t.ok(web.includes('name="action" value="block"'), 'WebUI exposes one-click block')
   t.ok(web.includes('name="action" value="watch"'), 'WebUI exposes one-click watch')
   t.ok(web.includes('name="action" value="quarantine"'), 'WebUI exposes one-click quarantine')
+})
+
+test('archive UI renders moderation target detail with cache and blob refs', async (t) => {
+  const html = renderModerationTargetDetail({
+    detail: {
+      targetType: 'channelKey',
+      target: 'chan-q',
+      matchedChannels: 1,
+      cacheStatus: {
+        bytes: 2048,
+        videoCount: 1,
+        retentionClasses: ['discovery'],
+        sources: ['discovered']
+      },
+      channels: [
+        {
+          channelKey: 'chan-q',
+          publicBeeKey: 'bee-q',
+          ownerKey: 'owner-q',
+          source: 'discovered',
+          retentionClass: 'discovery',
+          bytes: 2048,
+          videoCount: 1,
+          moderation: { state: 'quarantined', action: 'quarantine' },
+          previewVideos: [
+            {
+              id: 'video-1',
+              title: 'Preview Video',
+              blobId: '0:4:0:2048',
+              blobsCoreKey: 'aa'.repeat(32),
+              thumbnailBlobId: '4:1:2048:512',
+              thumbnailBlobsCoreKey: 'bb'.repeat(32)
+            }
+          ],
+          unavailableVideos: [
+            {
+              id: 'video-2',
+              blobId: '0:2:0:1024',
+              blobsCoreKey: 'cc'.repeat(32),
+              reason: 'timeout'
+            }
+          ]
+        }
+      ]
+    }
+  })
+
+  t.ok(html.includes('<h1>channelKey:chan-q</h1>'), 'detail page names target')
+  t.ok(html.includes('bytes=2048 videos=1'), 'detail page shows cache status')
+  t.ok(html.includes('publicBeeKey'), 'detail page includes channel refs')
+  t.ok(html.includes('Preview Video'), 'detail page includes preview video metadata')
+  t.ok(html.includes('aa'.repeat(32)), 'detail page includes video blob core')
+  t.ok(html.includes('4:1:2048:512'), 'detail page includes thumbnail blob ref')
+  t.ok(html.includes('timeout'), 'detail page includes unavailable refs')
 })
 
 test('archive console moderation action endpoint persists operator action', async (t) => {
@@ -348,6 +404,93 @@ test('archive console moderation action endpoint persists operator action', asyn
   }])
   t.is(response.statusCode, 303)
   t.is(response.headers.location, '/')
+  await consoleUi.close()
+})
+
+test('archive console exposes moderation target detail and audit export', async (t) => {
+  let handler = null
+  const server = {
+    listen(_port, _host, cb) { cb() },
+    close(cb) { cb() }
+  }
+  const service = {
+    runtime: {
+      ctx: {
+        metaDb: {
+          async get() { return null },
+          async put() {}
+        }
+      }
+    },
+    getStatus() {
+      return { runtime: {}, reviewQueue: [] }
+    },
+    getModerationTargetDetail({ targetType, target }) {
+      return {
+        targetType,
+        target,
+        matchedChannels: 1,
+        cacheStatus: { bytes: 12, videoCount: 1, retentionClasses: ['discovery'], sources: ['discovered'] },
+        channels: [{
+          channelKey: target,
+          publicBeeKey: 'bee-q',
+          ownerKey: 'owner-q',
+          previewVideos: [{ id: 'video-1', blobId: '0:1:0:12', blobsCoreKey: 'aa'.repeat(32) }],
+          unavailableVideos: []
+        }]
+      }
+    },
+    getModerationAudit() {
+      return {
+        schema: 'peartube.relayModerationAudit',
+        version: 1,
+        rules: [{ id: 'mod_1', action: 'block', targetType: 'channelKey', target: 'chan-q' }],
+        alerts: [{ id: 'alert_1', category: 'moderation', target: 'chan-q' }],
+        reviewQueue: [{ id: 'channel:chan-q', target: 'chan-q' }]
+      }
+    }
+  }
+  const consoleUi = await createArchiveConsole({
+    service,
+    downloader: {},
+    publisher: {},
+    serverFactory(fn) {
+      handler = fn
+      return server
+    }
+  })
+
+  async function request(method, url) {
+    const req = new EventEmitter()
+    req.method = method
+    req.url = url
+    return new Promise((resolve) => {
+      const res = {
+        statusCode: null,
+        headers: null,
+        body: '',
+        writeHead(statusCode, headers = {}) {
+          this.statusCode = statusCode
+          this.headers = headers
+        },
+        end(body = '') {
+          this.body += String(body)
+          resolve(this)
+        }
+      }
+      handler(req, res)
+      req.emit('end')
+    })
+  }
+
+  const detail = await request('GET', '/moderation/target?targetType=channelKey&target=chan-q')
+  const audit = await request('GET', '/moderation/audit.json')
+
+  t.is(detail.statusCode, 200)
+  t.ok(detail.body.includes('<h1>channelKey:chan-q</h1>'))
+  t.is(audit.statusCode, 200)
+  t.is(audit.headers['content-type'], 'application/json; charset=utf-8')
+  t.alike(JSON.parse(audit.body).rules[0], { id: 'mod_1', action: 'block', targetType: 'channelKey', target: 'chan-q' })
   await consoleUi.close()
 })
 

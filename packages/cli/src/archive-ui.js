@@ -37,6 +37,21 @@ function getReviewModel(model = {}) {
   return reviewQueue
 }
 
+function targetHref(item = {}) {
+  return `/moderation/target?targetType=${encodeURIComponent(item.targetType || '')}&target=${encodeURIComponent(item.target || '')}`
+}
+
+function renderVideoRefs(videos = []) {
+  if (!videos.length) return '<li class="empty">No video refs recorded.</li>'
+  return videos.map((video) => `
+    <li>
+      <strong>${escapeHtml(video.title || video.id || 'Untitled video')}</strong>
+      <small>id=${escapeHtml(video.id || 'none')} blobId=${escapeHtml(video.blobId || 'none')} blobsCoreKey=${escapeHtml(video.blobsCoreKey || 'none')}</small>
+      ${video.thumbnailBlobId || video.thumbnailBlobsCoreKey ? `<small>thumbnailBlobId=${escapeHtml(video.thumbnailBlobId || 'none')} thumbnailBlobsCoreKey=${escapeHtml(video.thumbnailBlobsCoreKey || 'none')}</small>` : ''}
+      ${video.reason ? `<small>reason=${escapeHtml(video.reason)}</small>` : ''}
+    </li>`).join('')
+}
+
 export function renderArchiveTui(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
@@ -127,7 +142,7 @@ export function renderArchiveWebHome(model = {}) {
   const reviewRows = reviewQueue.length
     ? reviewQueue.map((item) => `
         <li>
-          <strong>${escapeHtml(item.targetType)}:${escapeHtml(item.target)}</strong>
+          <strong><a href="${escapeHtml(targetHref(item))}">${escapeHtml(item.targetType)}:${escapeHtml(item.target)}</a></strong>
           <small>${escapeHtml(item.state)} ${escapeHtml(item.source || 'unknown')} ${escapeHtml(item.retentionClass || 'unknown')} owner=${escapeHtml(item.ownerKey || 'none')} bytes=${escapeHtml(item.bytes || 0)} videos=${escapeHtml(item.videoCount || 0)}</small>
           <form class="review-actions" method="post" action="/moderation/action">
             <input type="hidden" name="targetType" value="${escapeHtml(item.targetType)}">
@@ -192,6 +207,7 @@ export function renderArchiveWebHome(model = {}) {
     </section>
     <section class="review">
       <h2>Review Queue</h2>
+      <p><a href="/moderation/audit.json">Export moderation audit JSON</a></p>
       <ul>${reviewRows}</ul>
     </section>
     <section class="stats">
@@ -218,6 +234,60 @@ export function renderArchiveWebHome(model = {}) {
       <h2>Queue</h2>
       <ul>${rows}</ul>
     </section>
+  </main>
+</body>
+</html>`
+}
+
+export function renderModerationTargetDetail(model = {}) {
+  const detail = model.detail || {}
+  const channels = Array.isArray(detail.channels) ? detail.channels : []
+  const cacheStatus = detail.cacheStatus || {}
+  const channelRows = channels.length
+    ? channels.map((channel) => `
+      <section class="target-channel">
+        <h2>${escapeHtml(channel.channelKey || 'unknown channel')}</h2>
+        <p>source=${escapeHtml(channel.source || 'unknown')} retention=${escapeHtml(channel.retentionClass || 'unknown')} bytes=${escapeHtml(channel.bytes || 0)} videos=${escapeHtml(channel.videoCount || 0)} relayServing=${escapeHtml(channel.relayServing !== false)}</p>
+        <dl>
+          <dt>publicBeeKey</dt><dd><code>${escapeHtml(channel.publicBeeKey || 'none')}</code></dd>
+          <dt>ownerKey</dt><dd><code>${escapeHtml(channel.ownerKey || 'none')}</code></dd>
+          <dt>lastDecision</dt><dd>${escapeHtml(channel.lastDecisionReason || 'none')}</dd>
+          <dt>moderation</dt><dd>${escapeHtml(channel.moderation?.state || 'none')} ${escapeHtml(channel.moderation?.action || '')}</dd>
+        </dl>
+        <h3>Preview Refs</h3>
+        <ul>${renderVideoRefs(channel.previewVideos || [])}</ul>
+        <h3>Unavailable Refs</h3>
+        <ul>${renderVideoRefs(channel.unavailableVideos || [])}</ul>
+      </section>`).join('')
+    : '<p>No local cache or catalog records match this target.</p>'
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PearTube Moderation Target</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; background: #07080c; color: #f5f7fb; }
+    body { margin: 0; min-height: 100vh; background: #07080c; }
+    main { max-width: 980px; margin: 0 auto; padding: 42px 20px 80px; }
+    a { color: #9effd0; }
+    h1 { margin: 0 0 12px; font-size: clamp(28px, 4vw, 42px); }
+    section { border-top: 1px solid rgba(255,255,255,0.12); padding: 18px 0; }
+    p, small, dd { color: #aab3c5; }
+    code { color: #dce5f8; overflow-wrap: anywhere; }
+    dl { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 14px; }
+    ul { padding: 0; list-style: none; display: grid; gap: 10px; }
+    li { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.08); }
+  </style>
+</head>
+<body>
+  <main>
+    <p><a href="/">Back to dashboard</a></p>
+    <h1>${escapeHtml(detail.targetType || 'target')}:${escapeHtml(detail.target || '')}</h1>
+    <p>matchedChannels=${escapeHtml(detail.matchedChannels || 0)} bytes=${escapeHtml(cacheStatus.bytes || 0)} videos=${escapeHtml(cacheStatus.videoCount || 0)}</p>
+    <p>retention=${escapeHtml((cacheStatus.retentionClasses || []).join(',') || 'none')} source=${escapeHtml((cacheStatus.sources || []).join(',') || 'none')}</p>
+    ${channelRows}
   </main>
 </body>
 </html>`

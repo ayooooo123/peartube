@@ -460,6 +460,124 @@ test('createRelayService applies operator moderation actions immediately', async
   }
 })
 
+test('createRelayService exposes moderation target detail with cache refs', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-target-detail-')
+  const runtime = createFakeRuntime()
+  const previewVideos = [{
+    id: 'video-1',
+    title: 'Preview Detail',
+    blobId: '0:4:0:2048',
+    blobsCoreKey: 'aa'.repeat(32),
+    thumbnailBlobId: '4:1:2048:512',
+    thumbnailBlobsCoreKey: 'bb'.repeat(32)
+  }]
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({
+        bytesDownloaded: 2048,
+        videosFound: 1,
+        videosDownloaded: 1,
+        previewVideos,
+        unavailableVideos: [{
+          id: 'video-2',
+          blobId: '0:2:0:1024',
+          blobsCoreKey: 'cc'.repeat(32),
+          reason: 'timeout'
+        }],
+        videoCount: 2
+      }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-detail', ownerKey: 'owner-detail', publicBeeKey: 'bee-detail' })
+    await service.addModerationRule({
+      action: 'quarantine',
+      targetType: 'channelKey',
+      target: 'chan-detail',
+      reason: 'operator-review'
+    })
+
+    const detail = service.getModerationTargetDetail({ targetType: 'channelKey', target: 'chan-detail' })
+
+    t.is(detail.targetType, 'channelKey')
+    t.is(detail.target, 'chan-detail')
+    t.is(detail.cacheStatus.bytes, 2048)
+    t.is(detail.cacheStatus.videoCount, 2)
+    t.alike(detail.cacheStatus.retentionClasses, ['discovery'])
+    t.is(detail.channels[0].publicBeeKey, 'bee-detail')
+    t.is(detail.channels[0].previewVideos[0].blobsCoreKey, 'aa'.repeat(32))
+    t.is(detail.channels[0].unavailableVideos[0].reason, 'timeout')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService exports moderation audit state', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-audit-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json'),
+          moderation: join(dir, 'relay-moderation.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          mode: 'report-and-alert',
+          rules: [{ targetType: 'channelKey', target: 'chan-watch', action: 'watch', source: 'local' }]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 1024, videosFound: 1, videosDownloaded: 1 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-watch', ownerKey: 'owner-watch', publicBeeKey: 'bee-watch' })
+
+    const audit = service.getModerationAudit()
+
+    t.is(audit.schema, 'peartube.relayModerationAudit')
+    t.is(audit.version, 1)
+    t.ok(audit.generatedAt)
+    t.is(audit.roles[0], 'public-index')
+    t.is(audit.rules.length, 1)
+    t.is(audit.alerts.length, 2, 'posture and watch alerts are included')
+    t.is(audit.reviewQueue.length, 1)
+    t.is(audit.reviewQueue[0].target, 'chan-watch')
+    t.is(audit.targets[0].target, 'chan-watch')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

@@ -911,6 +911,28 @@ export async function createRelayService({
       await persistStatus()
       return added
     },
+    getModerationTargetDetail({ targetType, target } = {}) {
+      return relayCatalog.getTargetDetail({ targetType, target })
+    },
+    getModerationAudit() {
+      const status = service.getStatus()
+      const reviewQueue = Array.isArray(status.reviewQueue) ? status.reviewQueue : []
+      return {
+        schema: 'peartube.relayModerationAudit',
+        version: 1,
+        generatedAt: Number(nowFn()) || Date.now(),
+        roles: status.roles || [],
+        posture: status.posture || null,
+        moderation: status.moderation || null,
+        rules: Array.isArray(config.moderation?.rules) ? config.moderation.rules.map((rule) => ({ ...rule })) : [],
+        alerts: alertStore?.getAlerts({ includeAcknowledged: true, limit: Infinity }) || [],
+        reviewQueue,
+        targets: reviewQueue.map((item) => relayCatalog.getTargetDetail({
+          targetType: item.targetType,
+          target: item.target
+        }))
+      }
+    },
     getStatus() {
       return currentStatus || buildRelayStatus({
         config,

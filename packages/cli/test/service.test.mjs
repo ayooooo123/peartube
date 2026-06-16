@@ -1383,6 +1383,54 @@ test('createRelayService records archive job and publish alerts', async (t) => {
   }
 })
 
+test('createRelayService alerts when an archive source queues many jobs', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-volume-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 },
+        archive: {
+          uiEnabled: false,
+          ytDlpPath: '/usr/local/bin/yt-dlp',
+          tmpPath: join(dir, 'archive-tmp')
+        }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    for (let index = 1; index <= 5; index += 1) {
+      await service.enqueueArchiveJob({
+        url: `https://video.example/watch?v=bulk-${index}`,
+        channelName: 'Archive Bulk'
+      })
+    }
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Archive source video.example queued 5 or more jobs'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService alerts when an archive source repeatedly fails', async (t) => {
   const dir = makeTempDir('peartube-relay-service-archive-failure-alerts-')
   const runtime = createFakeRuntime()

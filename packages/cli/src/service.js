@@ -16,6 +16,7 @@ const STORAGE_CONCENTRATION_THRESHOLD = 0.5
 const STORAGE_PRESSURE_THRESHOLD = 0.85
 const ARCHIVE_FAILURE_ALERT_THRESHOLD = 3
 const BLOCKED_REAPPEARANCE_ALERT_THRESHOLD = 3
+const ARCHIVE_SOURCE_VOLUME_ALERT_THRESHOLD = 5
 
 export async function createRelayService({
   config,
@@ -215,6 +216,33 @@ export async function createRelayService({
       target: host,
       summary: `Archive job queued from public source ${host}`,
       suggestedActions: ['review-archive-job', 'confirm-publisher-role']
+    })
+  }
+
+  async function recordArchiveSourceVolumeAlert(job = {}, { store, input } = {}) {
+    if (!job?.id) return null
+    const archiveStore = store || (runtime.ctx?.metaDb ? createArchiveJobStore({ metaDb: runtime.ctx.metaDb }) : null)
+    if (!archiveStore) return null
+
+    const privateInput = input?.url ? input : await archiveStore.getPrivateInput(job.id).catch(() => null)
+    if (!privateInput?.url) return null
+    const host = getArchiveSourceHost(privateInput.url)
+    const jobs = await archiveStore.listJobs().catch(() => [])
+    let sourceCount = 0
+
+    for (const archiveJob of jobs) {
+      const archiveInput = await archiveStore.getPrivateInput(archiveJob.id).catch(() => null)
+      if (archiveInput?.url && getArchiveSourceHost(archiveInput.url) === host) sourceCount += 1
+    }
+
+    if (sourceCount < ARCHIVE_SOURCE_VOLUME_ALERT_THRESHOLD) return null
+    return ensureOperatorAlert({
+      severity: 'warning',
+      category: 'archive',
+      targetType: 'source',
+      target: host,
+      summary: `Archive source ${host} queued ${ARCHIVE_SOURCE_VOLUME_ALERT_THRESHOLD} or more jobs`,
+      suggestedActions: ['review-archive-source', 'pause-archive-source', 'confirm-publisher-role']
     })
   }
 
@@ -1101,10 +1129,18 @@ export async function createRelayService({
         onFailed: (job) => service.recordArchiveJobFailure(job, { store })
       })
       const job = await manager.enqueue(input)
-      await recordArchiveJobAlert(input)
-      await persistStatus()
+      await service.recordArchiveJobQueued(job, { store, input })
       if (runNow) return manager.runJob(job.id)
       return job
+    },
+    async recordArchiveJobQueued(job, { store, input } = {}) {
+      const privateInput = input?.url
+        ? input
+        : (job?.id && store ? await store.getPrivateInput(job.id).catch(() => null) : null)
+      await recordArchiveJobAlert(privateInput || input)
+      const result = await recordArchiveSourceVolumeAlert(job, { store, input: privateInput || input })
+      await persistStatus()
+      return result
     },
     async recordArchiveJobFailure(job, { store } = {}) {
       const result = await recordArchiveFailureAlert(job, { store })

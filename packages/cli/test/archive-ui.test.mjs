@@ -261,6 +261,30 @@ test('archive UI renders active operator alerts', async (t) => {
   t.ok(web.includes('name="id" value="alert-q"'), 'WebUI posts the alert id for acknowledgement')
 })
 
+test('archive WebUI renders cache storage pressure', async (t) => {
+  const web = renderArchiveWebHome({
+    relayStatus: {
+      summary: {
+        usedBytes: 750,
+        totalChannels: 3,
+        evictableChannels: 2
+      },
+      storage: {
+        maxBytes: 1000
+      }
+    },
+    status: { peers: 3, feedEntries: 7, seeding: { videos: 11 } },
+    jobs: []
+  })
+
+  t.ok(web.includes('<section class="storage-pressure">'), 'WebUI has storage pressure section')
+  t.ok(web.includes('Cache pressure'), 'WebUI labels relay-cache pressure')
+  t.ok(web.includes('750 / 1000 bytes'), 'WebUI shows used and max bytes')
+  t.ok(web.includes('style="width: 75%"'), 'WebUI renders proportional pressure bar')
+  t.ok(web.includes('3 channels'), 'WebUI shows channel count')
+  t.ok(web.includes('2 evictable'), 'WebUI shows eviction context')
+})
+
 test('archive UI renders moderation review queue controls', async (t) => {
   const model = {
     relayStatus: {

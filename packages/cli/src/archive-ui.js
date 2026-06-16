@@ -37,6 +37,26 @@ function getReviewModel(model = {}) {
   return reviewQueue
 }
 
+function getStoragePressureModel(model = {}) {
+  const relayStatus = model.relayStatus || {}
+  const summary = relayStatus.summary || {}
+  const storage = relayStatus.storage || {}
+  const usedBytes = Math.max(0, Number(summary.usedBytes || 0) || 0)
+  const maxBytes = Math.max(0, Number(storage.maxBytes || 0) || 0)
+  const percent = maxBytes > 0
+    ? Math.max(0, Math.min(100, Math.round((usedBytes / maxBytes) * 100)))
+    : 0
+
+  return {
+    usedBytes,
+    maxBytes,
+    percent,
+    totalChannels: Math.max(0, Number(summary.totalChannels || 0) || 0),
+    evictableChannels: Math.max(0, Number(summary.evictableChannels || 0) || 0),
+    protectedChannels: Math.max(0, Number(summary.protectedChannels || 0) || 0)
+  }
+}
+
 function targetHref(item = {}) {
   return `/moderation/target?targetType=${encodeURIComponent(item.targetType || '')}&target=${encodeURIComponent(item.target || '')}`
 }
@@ -59,6 +79,7 @@ export function renderArchiveTui(model = {}) {
   const posture = getPostureModel(model)
   const alerts = getAlertModel(model)
   const reviewQueue = getReviewModel(model)
+  const storagePressure = getStoragePressureModel(model)
   const lines = [
     'PearTube Relay Archive Console',
     '================================',
@@ -66,6 +87,7 @@ export function renderArchiveTui(model = {}) {
     `posture: ${posture.description}`,
     '',
     `Peers: ${status.peers || 0}  Feed entries: ${status.feedEntries || 0}  Seeded videos: ${seeding.videos || 0}`,
+    `Cache pressure: ${storagePressure.usedBytes} / ${storagePressure.maxBytes} bytes (${storagePressure.percent}%)`,
     '',
     'Anonymous channel archival',
     'Paste a YouTube video URL or channel URL, import into a local relay-owned channel, then Publish to network.',
@@ -118,6 +140,7 @@ export function renderArchiveWebHome(model = {}) {
   const posture = getPostureModel(model)
   const alerts = getAlertModel(model)
   const reviewQueue = getReviewModel(model)
+  const storagePressure = getStoragePressureModel(model)
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
   const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
   const rows = jobs.length
@@ -174,11 +197,15 @@ export function renderArchiveWebHome(model = {}) {
     p { color: #aab3c5; line-height: 1.55; }
     a { color: #9effd0; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 28px 0; }
-    .stat, form, .queue, .catalog, .posture, .alerts, .review { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
+    .stat, form, .queue, .catalog, .posture, .alerts, .review, .storage-pressure { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
     .stat b { display: block; font-size: 28px; }
     .posture { margin: 24px 0; border-color: rgba(158,255,208,0.28); }
     .posture strong { display: block; margin-bottom: 8px; color: #9effd0; }
     .posture p { margin: 6px 0 0; }
+    .storage-pressure { margin: 0 0 24px; }
+    .pressure-track { height: 12px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,0.1); }
+    .pressure-fill { height: 100%; background: #9effd0; }
+    .pressure-meta { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 0; color: #aab3c5; }
     form { display: grid; gap: 14px; margin: 24px 0; }
     .review-actions, .alert-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
     label { display: grid; gap: 6px; color: #c8d1e4; font-weight: 650; }
@@ -238,6 +265,18 @@ export function renderArchiveWebHome(model = {}) {
       <div class="stat"><span>Peers</span><b>${escapeHtml(status.peers || 0)}</b></div>
       <div class="stat"><span>Feed entries</span><b>${escapeHtml(status.feedEntries || 0)}</b></div>
       <div class="stat"><span>Seeded videos</span><b>${escapeHtml(seeding.videos || 0)}</b></div>
+    </section>
+    <section class="storage-pressure">
+      <h2>Cache pressure</h2>
+      <div class="pressure-track" aria-label="Relay cache storage pressure">
+        <div class="pressure-fill" style="width: ${escapeHtml(storagePressure.percent)}%"></div>
+      </div>
+      <div class="pressure-meta">
+        <span>${escapeHtml(storagePressure.usedBytes)} / ${escapeHtml(storagePressure.maxBytes)} bytes</span>
+        <span>${escapeHtml(storagePressure.percent)}%</span>
+        <span>${escapeHtml(storagePressure.totalChannels)} channels</span>
+        <span>${escapeHtml(storagePressure.evictableChannels)} evictable</span>
+      </div>
     </section>
     <section class="catalog">
       <h2>Simple relay catalog</h2>

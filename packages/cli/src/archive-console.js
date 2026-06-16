@@ -35,6 +35,13 @@ function parseModerationReportForm(body) {
   }
 }
 
+function parseAlertAcknowledgeForm(body) {
+  const params = new URLSearchParams(body)
+  return {
+    id: params.get('id') || ''
+  }
+}
+
 async function collectBody(req) {
   return new Promise((resolve, reject) => {
     let body = ''
@@ -270,6 +277,17 @@ export async function createArchiveConsole({
         }
         const form = parseModerationReportForm(await collectBody(req))
         await service.submitModerationReport(form)
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/alerts/acknowledge') {
+        if (typeof service.acknowledgeAlert !== 'function') {
+          throw new Error('relay service does not support alert acknowledgement')
+        }
+        const form = parseAlertAcknowledgeForm(await collectBody(req))
+        await service.acknowledgeAlert(form.id)
         res.writeHead(303, { location: '/' })
         res.end()
         return

@@ -137,6 +137,10 @@ export function renderArchiveWebHome(model = {}) {
           <strong>${escapeHtml(alert.summary)}</strong>
           <small>${escapeHtml(alert.category)} ${escapeHtml(alert.targetType)}:${escapeHtml(alert.target)}</small>
           ${Array.isArray(alert.suggestedActions) && alert.suggestedActions.length ? `<small>${escapeHtml(alert.suggestedActions.join(', '))}</small>` : ''}
+          <form class="alert-actions" method="post" action="/alerts/acknowledge">
+            <input type="hidden" name="id" value="${escapeHtml(alert.id || '')}">
+            <button type="submit">Acknowledge</button>
+          </form>
         </li>`).join('')
     : '<li class="empty">No active alerts.</li>'
   const reviewRows = reviewQueue.length
@@ -176,7 +180,7 @@ export function renderArchiveWebHome(model = {}) {
     .posture strong { display: block; margin-bottom: 8px; color: #9effd0; }
     .posture p { margin: 6px 0 0; }
     form { display: grid; gap: 14px; margin: 24px 0; }
-    .review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+    .review-actions, .alert-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
     label { display: grid; gap: 6px; color: #c8d1e4; font-weight: 650; }
     input, textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.14); background: #0c101a; color: #f5f7fb; border-radius: 12px; padding: 12px 13px; font: inherit; }
     button { justify-self: start; border: 0; border-radius: 999px; padding: 12px 18px; color: #071016; background: #9effd0; font-weight: 800; cursor: pointer; }

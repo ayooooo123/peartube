@@ -1265,6 +1265,12 @@ export async function createRelayService({
       await persistStatus()
       return added
     },
+    async acknowledgeAlert(id) {
+      if (!alertStore) return null
+      const acknowledged = await alertStore.acknowledgeAlert(id)
+      await persistStatus()
+      return acknowledged
+    },
     getModerationTargetDetail({ targetType, target } = {}) {
       return relayCatalog.getTargetDetail({ targetType, target })
     },

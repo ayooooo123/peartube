@@ -246,6 +246,8 @@ test('archive UI renders active operator alerts', async (t) => {
   t.ok(web.includes('<section class="alerts">'), 'WebUI has an alert section')
   t.ok(web.includes('Quarantine applied to channelKey:chan-q'), 'WebUI shows alert summary')
   t.ok(web.includes('review, block'), 'WebUI shows suggested actions')
+  t.ok(web.includes('<form class="alert-actions" method="post" action="/alerts/acknowledge">'), 'WebUI exposes alert acknowledge action')
+  t.ok(web.includes('name="id" value="alert-q"'), 'WebUI posts the alert id for acknowledgement')
 })
 
 test('archive UI renders moderation review queue controls', async (t) => {
@@ -472,6 +474,68 @@ test('archive console moderation report endpoint persists local reports', async 
     comment: 'unexpected preview',
     reporter: 'local'
   }])
+  t.is(response.statusCode, 303)
+  t.is(response.headers.location, '/')
+  await consoleUi.close()
+})
+
+test('archive console alert acknowledge endpoint clears active alerts', async (t) => {
+  const acknowledged = []
+  let handler = null
+  const server = {
+    listen(_port, _host, cb) { cb() },
+    close(cb) { cb() }
+  }
+  const service = {
+    runtime: {
+      ctx: {
+        metaDb: {
+          async get() { return null },
+          async put() {}
+        }
+      }
+    },
+    getStatus() {
+      return { runtime: {}, reviewQueue: [] }
+    },
+    async acknowledgeAlert(id) {
+      acknowledged.push(id)
+      return { id, acknowledgedAt: 1234 }
+    }
+  }
+  const consoleUi = await createArchiveConsole({
+    service,
+    downloader: {},
+    publisher: {},
+    serverFactory(fn) {
+      handler = fn
+      return server
+    }
+  })
+
+  const req = new EventEmitter()
+  req.method = 'POST'
+  req.url = '/alerts/acknowledge'
+  const response = await new Promise((resolve) => {
+    const res = {
+      statusCode: null,
+      headers: null,
+      body: '',
+      writeHead(statusCode, headers = {}) {
+        this.statusCode = statusCode
+        this.headers = headers
+      },
+      end(body = '') {
+        this.body += String(body)
+        resolve(this)
+      }
+    }
+    handler(req, res)
+    req.emit('data', 'id=alert-q')
+    req.emit('end')
+  })
+
+  t.alike(acknowledged, ['alert-q'])
   t.is(response.statusCode, 303)
   t.is(response.headers.location, '/')
   await consoleUi.close()

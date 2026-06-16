@@ -782,6 +782,55 @@ test('createRelayService raises report threshold alerts', async (t) => {
   }
 })
 
+test('createRelayService acknowledges active operator alerts', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-ack-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: [],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json'),
+          reports: join(dir, 'relay-reports.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [], reportThreshold: 3 },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await service.submitModerationReport({
+      targetType: 'channel',
+      target: 'chan-alert',
+      reason: 'spam',
+      comment: '',
+      reporter: 'local'
+    })
+
+    const alertId = service.getStatus().alerts.latest[0]?.id
+    const acknowledged = await service.acknowledgeAlert(alertId)
+
+    t.is(acknowledged.id, alertId)
+    t.ok(acknowledged.acknowledgedAt)
+    t.is(service.getStatus().alerts.warning, 0)
+    t.is(service.getModerationAudit().alerts.find((alert) => alert.id === alertId)?.acknowledgedAt, acknowledged.acknowledgedAt)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService records storage concentration alerts', async (t) => {
   const dir = makeTempDir('peartube-relay-service-storage-alerts-')
   const runtime = createFakeRuntime()

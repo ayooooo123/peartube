@@ -1,6 +1,7 @@
 # Relay Non-Knowledge Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Sequencing note (2026-06-16):** This plan is now parked as the v2/v3 non-knowledge track. For v1 product work, follow `docs/superpowers/specs/2026-06-16-relay-moderation-product-design.md`: keep the public feed, make node posture explicit, and add moderation/alerts before blind-relay/key-gossip work.
 
 **Goal:** Make PearTube relays credible non-knowledge conduits by removing relay-authored plaintext evidence first, then forwarding owner-signed metadata, then adding opaque relay admission and source-side encryption/key distribution.
 

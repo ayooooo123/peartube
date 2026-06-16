@@ -157,6 +157,39 @@ export async function createRelayService({
     }
   }
 
+  function getArchiveSourceHost(url) {
+    try {
+      return new URL(url).hostname || 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  async function recordArchiveJobAlert(input = {}) {
+    if (!input?.url) return null
+    const host = getArchiveSourceHost(input.url)
+    return addOperatorAlert({
+      severity: 'warning',
+      category: 'archive',
+      targetType: 'source',
+      target: host,
+      summary: `Archive job queued from public source ${host}`,
+      suggestedActions: ['review-archive-job', 'confirm-publisher-role']
+    })
+  }
+
+  async function recordArchivePublishAlert(job = {}) {
+    if (!job?.channelKey || !job?.previewVideo?.id) return null
+    return addOperatorAlert({
+      severity: 'warning',
+      category: 'archive',
+      targetType: 'channelKey',
+      target: job.channelKey,
+      summary: `Archive published video ${job.previewVideo.id} into channelKey:${job.channelKey}`,
+      suggestedActions: ['review-archive-channel', 'confirm-publisher-role']
+    })
+  }
+
   function getAcceptedRefreshDecision(existing, candidate, now) {
     const unavailable = {
       refresh: false,
@@ -745,6 +778,7 @@ export async function createRelayService({
       source: 'archive-job',
       retentionClass: 'private'
     }).catch(() => {})
+    await recordArchivePublishAlert(job)
     await persistStatus()
     return { published: true, previewVideos: previewVideos.length }
   }
@@ -966,6 +1000,8 @@ export async function createRelayService({
         onCompleted: (job) => service.publishArchiveJobToFeed(job)
       })
       const job = await manager.enqueue(input)
+      await recordArchiveJobAlert(input)
+      await persistStatus()
       if (runNow) return manager.runJob(job.id)
       return job
     },

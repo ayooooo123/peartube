@@ -1218,6 +1218,74 @@ test('archive job uses configured yt-dlp binary when started from the WebUI rela
   }
 })
 
+test('createRelayService records archive job and publish alerts', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-alerts-')
+  const runtime = createFakeRuntime()
+  const published = []
+  runtime.publishRelayCatalogEntry = async (entry) => {
+    published.push(entry)
+    return entry
+  }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 },
+        archive: {
+          uiEnabled: false,
+          ytDlpPath: '/usr/local/bin/yt-dlp',
+          tmpPath: join(dir, 'archive-tmp')
+        }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {},
+      nowFn: () => 2222
+    })
+
+    await service.start()
+    await service.enqueueArchiveJob({
+      url: 'https://video.example/watch?v=archive-alert',
+      channelName: 'Archive Alerts'
+    })
+    await service.publishArchiveJobToFeed({
+      status: 'completed',
+      channelKey: 'archive-alert-channel',
+      publicBeeKey: 'archive-alert-public-bee',
+      completedAt: 3333,
+      previewVideo: {
+        id: 'archive-alert-video',
+        title: 'Archive Alert Video',
+        blobId: '0:1:0:10',
+        blobsCoreKey: 'aa'.repeat(32),
+        mimeType: 'video/mp4',
+        availability: 'playable'
+      }
+    })
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Archive job queued from public source video.example'))
+    t.ok(summaries.includes('Archive published video archive-alert-video into channelKey:archive-alert-channel'))
+    t.is(published[0].source, 'archive-job')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService watches configured local mirror directory', async (t) => {
   const dir = makeTempDir('peartube-relay-service-local-mirror-')

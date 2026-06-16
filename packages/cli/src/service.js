@@ -277,6 +277,29 @@ export async function createRelayService({
     })
   }
 
+  async function recordArchiveBudgetCrowdingAlert(input = {}) {
+    if (!alertStore) return null
+    const maxBytes = Number(config.storage?.maxBytes || 0)
+    const reservePercent = Number(config.archive?.budgetReservePercent || 0)
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) return null
+    if (!Number.isFinite(reservePercent) || reservePercent < 0 || reservePercent > 100) return null
+
+    const summary = relayCatalog.getSummary()
+    const usedBytes = Number(summary.usedBytes || 0) || 0
+    const ceiling = maxBytes * (1 - reservePercent / 100)
+    if (usedBytes < ceiling) return null
+
+    const host = input?.url ? getArchiveSourceHost(input.url) : 'unknown'
+    return ensureOperatorAlert({
+      severity: 'warning',
+      category: 'storage',
+      targetType: 'source',
+      target: host,
+      summary: `Archive job from ${host} would run with relay cache already at ${budgetPercent(usedBytes, maxBytes)}% of budget`,
+      suggestedActions: ['review-cache', 'evict', 'increase-budget', 'separate-node-roles']
+    })
+  }
+
   async function recordArchivePublishAlert(job = {}) {
     if (!job?.channelKey || !job?.previewVideo?.id) return null
     return addOperatorAlert({
@@ -1170,6 +1193,7 @@ export async function createRelayService({
         ? input
         : (job?.id && store ? await store.getPrivateInput(job.id).catch(() => null) : null)
       await recordArchiveJobAlert(privateInput || input)
+      await recordArchiveBudgetCrowdingAlert(privateInput || input)
       const result = await recordArchiveSourceVolumeAlert(job, { store, input: privateInput || input })
       await persistStatus()
       return result

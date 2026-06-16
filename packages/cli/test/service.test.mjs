@@ -1459,6 +1459,60 @@ test('createRelayService records archive job and publish alerts', async (t) => {
   }
 })
 
+test('createRelayService alerts when archive jobs compete with relay cache budget', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-budget-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 },
+        archive: {
+          uiEnabled: false,
+          ytDlpPath: '/usr/local/bin/yt-dlp',
+          tmpPath: join(dir, 'archive-tmp'),
+          budgetReservePercent: 5
+        }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await service.catalog.upsertChannel({
+      channelKey: 'busy-cache-channel',
+      ownerKey: 'busy-owner',
+      bytes: 9_600,
+      retentionClass: 'discovery',
+      source: 'relay-cache'
+    })
+    await service.enqueueArchiveJob({
+      url: 'https://video.example/watch?v=archive-budget',
+      channelName: 'Archive Budget'
+    })
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Archive job from video.example would run with relay cache already at 96% of budget'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService alerts when an archive source queues many jobs', async (t) => {
   const dir = makeTempDir('peartube-relay-service-archive-volume-alerts-')
   const runtime = createFakeRuntime()

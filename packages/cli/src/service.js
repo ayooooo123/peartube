@@ -934,6 +934,11 @@ export async function createRelayService({
     async submitModerationReport(report) {
       const store = await getReportStore()
       const added = await store.addReport(report)
+      const reportsForTarget = store.getReports({
+        targetType: added.targetType,
+        target: added.target,
+        limit: Infinity
+      })
       await addOperatorAlert({
         severity: 'warning',
         category: 'moderation',
@@ -942,6 +947,17 @@ export async function createRelayService({
         summary: `Local report submitted for ${added.targetType}:${added.target} (${added.reason})`,
         suggestedActions: ['review', 'watch', 'quarantine', 'block']
       })
+      const reportThreshold = Number(config.moderation?.reportThreshold || 0)
+      if (reportThreshold > 0 && reportsForTarget.length >= reportThreshold) {
+        await ensureOperatorAlert({
+          severity: 'critical',
+          category: 'moderation',
+          targetType: added.targetType,
+          target: added.target,
+          summary: `Report threshold exceeded for ${added.targetType}:${added.target}`,
+          suggestedActions: ['review', 'quarantine', 'block']
+        })
+      }
       await persistStatus()
       return added
     },

@@ -31,6 +31,7 @@ export const VALID_MODERATION_ACTIONS = [
   MODERATION_ACTION_QUARANTINE,
   MODERATION_ACTION_BLOCK
 ]
+export const DEFAULT_REPORT_ALERT_THRESHOLD = 3
 
 export const DEFAULT_STORAGE_PATH = './peartube-relay'
 export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
@@ -109,7 +110,8 @@ export const DEFAULT_RELAY_CONFIG = {
   },
   moderation: {
     mode: MODERATION_MODE_REPORT_AND_ALERT,
-    rules: []
+    rules: [],
+    reportThreshold: DEFAULT_REPORT_ALERT_THRESHOLD
   },
   discovery: {
     enabled: true,

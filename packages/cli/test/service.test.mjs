@@ -635,6 +635,51 @@ test('createRelayService submits local reports into review queue and audit', asy
   }
 })
 
+test('createRelayService raises report threshold alerts', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-report-threshold-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json'),
+          reports: join(dir, 'relay-reports.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [], reportThreshold: 3 },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await service.submitModerationReport({ targetType: 'owner', target: 'owner-r', reason: 'spam' })
+    await service.submitModerationReport({ targetType: 'owner', target: 'owner-r', reason: 'spam' })
+    await service.submitModerationReport({ targetType: 'owner', target: 'owner-r', reason: 'spam' })
+
+    const status = service.getStatus()
+    const reviewItem = status.reviewQueue.find((item) => item.target === 'owner-r')
+    const summaries = status.alerts.latest.map((alert) => alert.summary)
+
+    t.is(reviewItem.reportCount, 3)
+    t.is(status.alerts.critical, 1)
+    t.ok(summaries.includes('Report threshold exceeded for ownerKey:owner-r'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

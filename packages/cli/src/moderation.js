@@ -1,4 +1,5 @@
 import {
+  DEFAULT_REPORT_ALERT_THRESHOLD,
   MODERATION_ACTION_ALLOW,
   MODERATION_ACTION_BLOCK,
   MODERATION_ACTION_QUARANTINE,
@@ -55,8 +56,13 @@ export function normalizeModerationConfig(raw = {}) {
   const rules = Array.isArray(raw.rules)
     ? raw.rules.map(normalizeModerationRule)
     : []
+  const reportThreshold = Number(raw.reportThreshold ?? DEFAULT_REPORT_ALERT_THRESHOLD)
 
-  return { mode, rules }
+  if (!Number.isFinite(reportThreshold) || reportThreshold < 0) {
+    throw new Error('moderation.reportThreshold must be a non-negative number')
+  }
+
+  return { mode, rules, reportThreshold }
 }
 
 export function summarizeModerationRules(rules = []) {

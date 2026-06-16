@@ -22,6 +22,7 @@ test('resolveRelayConfig defaults to public discovery mode', async (t) => {
   t.is(config.paths.moderation, 'peartube-relay/db/relay-moderation.json')
   t.is(config.paths.alerts, 'peartube-relay/db/relay-alerts.json')
   t.is(config.paths.reports, 'peartube-relay/db/relay-reports.json')
+  t.is(config.moderation.reportThreshold, 3)
 })
 
 

@@ -1,5 +1,5 @@
 import test from 'brittle'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -70,6 +70,14 @@ test('resolveRelayConfig rejects unsupported node roles', async (t) => {
 
 test('renderExampleConfig shows node roles before legacy mode and policy', async (t) => {
   const rendered = renderExampleConfig(resolveRelayConfig({}, { env: {} }))
+
+  t.ok(rendered.startsWith('roles: public-index,relay-cache\nmode: public\npolicy: discovery'))
+  t.ok(rendered.includes('moderation:\n  mode: report-and-alert\n  rules: []'))
+})
+
+test('checked-in config example is posture-first and includes moderation defaults', async (t) => {
+  const examplePath = join(import.meta.dirname, '..', 'config.example.yml')
+  const rendered = readFileSync(examplePath, 'utf8')
 
   t.ok(rendered.startsWith('roles: public-index,relay-cache\nmode: public\npolicy: discovery'))
   t.ok(rendered.includes('moderation:\n  mode: report-and-alert\n  rules: []'))

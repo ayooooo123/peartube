@@ -1,5 +1,9 @@
+roles: public-index,relay-cache
 mode: public
 policy: discovery
+
+# Default posture: public discovery metadata plus bounded relay cache.
+# This is not a non-knowledge/blind relay mode.
 
 storage:
   path: /var/lib/peartube-relay
@@ -9,15 +13,24 @@ admission:
   channels: []
   owners: []
 
+moderation:
+  mode: report-and-alert
+  rules: []
+  reportThreshold: 3
+
 discovery:
   enabled: true
-  maxChannels: 500
-  maxChannelsPerOwner: 20
+  seedDiscovered: true
+  maxChannels: 0
+  maxChannelsPerOwner: 0
 
 # Optional: archive YouTube channels into PearTube channels owned by this relay.
 # Each source URL maps to one PearTube channel (deterministic per relay identity).
 # yt-dlp must be available in PATH (the relay Docker image bundles it).
 archive:
+  uiEnabled: false
+  uiHost: 127.0.0.1
+  uiPort: 8174
   enabled: false
   poll: 3600              # seconds between polls per source
   maxItems: 50            # videos to consider per poll, newest first

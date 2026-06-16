@@ -771,6 +771,44 @@ test('createRelayService records storage concentration alerts', async (t) => {
   }
 })
 
+test('createRelayService records eviction pressure alerts when cache is nearly full', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-eviction-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 1_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 900, videosFound: 1, videosDownloaded: 1 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-pressure', ownerKey: 'owner-pressure', publicBeeKey: 'bee-pressure' })
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Relay cache eviction pressure is high at 90% of budget with 1 evictable channel'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService alerts when accepted public feed content has an unknown owner', async (t) => {
   const dir = makeTempDir('peartube-relay-service-unknown-owner-alerts-')
   const runtime = createFakeRuntime()

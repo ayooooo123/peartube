@@ -127,6 +127,18 @@ export async function createRelayService({
         summary: `Relay cache storage is using ${budgetPercent(summary.usedBytes, maxBytes)}% of configured budget`,
         suggestedActions: ['review-cache', 'evict', 'increase-budget']
       })
+
+      const evictableChannels = Math.max(0, channels.length - Number(summary.protectedChannels || 0))
+      if (evictableChannels > 0) {
+        await ensureOperatorAlert({
+          severity: 'warning',
+          category: 'storage',
+          targetType: 'storage',
+          target: 'eviction-pressure',
+          summary: `Relay cache eviction pressure is high at ${budgetPercent(summary.usedBytes, maxBytes)}% of budget with ${evictableChannels} evictable ${evictableChannels === 1 ? 'channel' : 'channels'}`,
+          suggestedActions: ['review-eviction-candidates', 'increase-budget', 'quarantine']
+        })
+      }
     }
 
     for (const channel of channels) {

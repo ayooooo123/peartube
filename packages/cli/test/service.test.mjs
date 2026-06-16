@@ -409,6 +409,56 @@ test('createRelayService alerts watched targets without blocking mirroring', asy
   }
 })
 
+test('createRelayService alerts when watched targets trend in public feed gossip', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-watch-trending-alerts-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          mode: 'report-and-alert',
+          rules: [
+            { targetType: 'channelKey', target: 'chan-watch-trend', action: 'watch', source: 'local' }
+          ]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 1024, videosFound: 2, videosDownloaded: 2 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await service.processCandidate({ channelKey: 'chan-watch-trend', ownerKey: 'owner-watch', publicBeeKey: 'bee-watch' })
+    await service.processCandidate({ channelKey: 'chan-watch-trend', ownerKey: 'owner-watch', publicBeeKey: 'bee-watch' })
+    await service.processCandidate({ channelKey: 'chan-watch-trend', ownerKey: 'owner-watch', publicBeeKey: 'bee-watch' })
+
+    const status = service.getStatus()
+    const summaries = status.alerts.latest.map((alert) => alert.summary)
+
+    t.alike(mirrored, ['chan-watch-trend'])
+    t.ok(summaries.includes('Watched channelKey:chan-watch-trend is trending in public feed gossip'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService escalates repeated blocked target reappearance', async (t) => {
   const dir = makeTempDir('peartube-relay-service-blocked-repeat-alerts-')
   const runtime = createFakeRuntime()
@@ -1504,7 +1554,7 @@ test('createRelayService alerts when archive jobs compete with relay cache budge
       channelName: 'Archive Budget'
     })
 
-    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+    const summaries = service.getModerationAudit().alerts.map((alert) => alert.summary)
 
     t.ok(summaries.includes('Archive job from video.example would run with relay cache already at 96% of budget'))
     await service.close()

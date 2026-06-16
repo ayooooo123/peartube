@@ -17,6 +17,7 @@ const STORAGE_PRESSURE_THRESHOLD = 0.85
 const STORAGE_SPIKE_THRESHOLD = 0.25
 const ARCHIVE_FAILURE_ALERT_THRESHOLD = 3
 const BLOCKED_REAPPEARANCE_ALERT_THRESHOLD = 3
+const WATCHED_TRENDING_ALERT_THRESHOLD = 3
 const ARCHIVE_SOURCE_VOLUME_ALERT_THRESHOLD = 5
 
 export async function createRelayService({
@@ -539,7 +540,7 @@ export async function createRelayService({
     }
 
     if (moderation.action === 'watch') {
-      await addOperatorAlert({
+      const alert = await addOperatorAlert({
         severity: 'warning',
         category: 'moderation',
         targetType,
@@ -547,6 +548,16 @@ export async function createRelayService({
         summary: `Watched ${targetType}:${target} appeared in public feed gossip`,
         suggestedActions: ['review', 'quarantine', 'block']
       })
+      if (Number(alert?.occurrences || 0) >= WATCHED_TRENDING_ALERT_THRESHOLD) {
+        await ensureOperatorAlert({
+          severity: 'warning',
+          category: 'moderation',
+          targetType,
+          target,
+          summary: `Watched ${targetType}:${target} is trending in public feed gossip`,
+          suggestedActions: ['review-trend', 'quarantine', 'block']
+        })
+      }
     }
   }
 

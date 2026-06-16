@@ -2,7 +2,7 @@ import { createCliLogger } from './cli-logger.js'
 import { evaluateCandidate } from './admission.js'
 import { AlertStore } from './alerts.js'
 import { RelayCatalog } from './catalog.js'
-import { RELAY_ROLE_ARCHIVER, RELAY_ROLE_PUBLIC_INDEX } from './constants.js'
+import { RELAY_ROLE_ARCHIVER, RELAY_ROLE_CACHE, RELAY_ROLE_PUBLIC_INDEX } from './constants.js'
 import { ModerationRuleStore } from './moderation-store.js'
 import { normalizeModerationConfig } from './moderation.js'
 import { ReportStore } from './reports.js'
@@ -157,6 +157,44 @@ export async function createRelayService({
     }
   }
 
+  async function recordNetworkAlerts(runtimeStats = {}) {
+    if (!alertStore) return
+    if (!config.discovery?.enabled) return
+
+    const summary = relayCatalog.getSummary()
+    const acceptedChannels = Number(summary.totalChannels || 0) || 0
+    const feedPeerCount = Number(runtimeStats.feedPeers ?? runtimeStats.feedChannelCandidates ?? 0) || 0
+    const feedConnections = Number(runtimeStats.feedConnections || 0) || 0
+    const feedEntries = Number(runtimeStats.feedEntries || 0) || 0
+    const publicFeedObserved = feedPeerCount > 0 || feedConnections > 0 || feedEntries > 0 || Boolean(runtimeStats.publicFeedDiscoveryJoined)
+
+    if ((feedPeerCount > 0 || feedConnections > 0) && acceptedChannels === 0) {
+      await ensureOperatorAlert({
+        severity: 'warning',
+        category: 'network',
+        targetType: 'public-feed',
+        target: 'accepted-entries',
+        summary: 'Public feed has peers but no accepted entries',
+        suggestedActions: ['review-admission', 'review-moderation', 'check-feed']
+      })
+    }
+
+    const roles = Array.isArray(config.roles) ? config.roles : []
+    const relayCacheRole = roles.includes(RELAY_ROLE_CACHE)
+    const seededChannels = Number(runtimeStats.seeding?.channels || 0) || 0
+    const seededVideos = Number(runtimeStats.seeding?.videos || 0) || 0
+    if (relayCacheRole && publicFeedObserved && acceptedChannels === 0 && seededChannels === 0 && seededVideos === 0) {
+      await ensureOperatorAlert({
+        severity: 'warning',
+        category: 'network',
+        targetType: 'relay-cache',
+        target: 'empty',
+        summary: 'Relay cache is serving no content while discovery is enabled',
+        suggestedActions: ['review-discovery', 'review-admission', 'check-seeding']
+      })
+    }
+  }
+
   function getArchiveSourceHost(url) {
     try {
       return new URL(url).hostname || 'unknown'
@@ -267,11 +305,13 @@ export async function createRelayService({
   }
 
   async function persistStatus() {
+    const runtimeStats = runtime.getNetworkStats?.() || {}
     await recordStorageAlerts()
+    await recordNetworkAlerts(runtimeStats)
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
-      runtimeStats: runtime.getNetworkStats?.() || {},
+      runtimeStats,
       alerts: alertStore?.getAlerts({ limit: Infinity }) || [],
       reports: reportStore?.getReports({ limit: Infinity }) || []
     })

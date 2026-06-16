@@ -1286,6 +1286,56 @@ test('createRelayService records archive job and publish alerts', async (t) => {
   }
 })
 
+test('createRelayService records network empty-state alerts', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-network-alerts-')
+  const runtime = createFakeRuntime()
+  runtime.getNetworkStats = () => ({
+    peers: 2,
+    connections: 1,
+    feedPeers: 2,
+    feedConnections: 1,
+    feedEntries: 0,
+    publicFeedDiscoveryJoined: true,
+    seeding: {
+      channels: 0,
+      videos: 0
+    }
+  })
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Public feed has peers but no accepted entries'))
+    t.ok(summaries.includes('Relay cache is serving no content while discovery is enabled'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService watches configured local mirror directory', async (t) => {
   const dir = makeTempDir('peartube-relay-service-local-mirror-')

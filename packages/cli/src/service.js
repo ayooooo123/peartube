@@ -12,6 +12,8 @@ import { createArchiveJobStore, createArchiveManager, createArchivePublisher, cr
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
+const STORAGE_CONCENTRATION_THRESHOLD = 0.5
+const STORAGE_PRESSURE_THRESHOLD = 0.85
 
 export async function createRelayService({
   config,
@@ -99,6 +101,62 @@ export async function createRelayService({
       .join('|')
   }
 
+  function budgetPercent(bytes, maxBytes) {
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) return 0
+    return Math.round((Number(bytes || 0) / maxBytes) * 100)
+  }
+
+  async function recordStorageAlerts() {
+    if (!alertStore) return
+    const maxBytes = Number(config.storage?.maxBytes || 0)
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) return
+
+    const channels = relayCatalog.getChannels()
+    const ownerBytes = new Map()
+    const summary = relayCatalog.getSummary()
+
+    if ((Number(summary.usedBytes || 0) / maxBytes) >= STORAGE_PRESSURE_THRESHOLD) {
+      await ensureOperatorAlert({
+        severity: 'warning',
+        category: 'storage',
+        targetType: 'storage',
+        target: 'relay-cache',
+        summary: `Relay cache storage is using ${budgetPercent(summary.usedBytes, maxBytes)}% of configured budget`,
+        suggestedActions: ['review-cache', 'evict', 'increase-budget']
+      })
+    }
+
+    for (const channel of channels) {
+      const channelKey = channel.channelKey || channel.driveKey
+      const bytes = Number(channel.bytes || 0) || 0
+      if (channel.ownerKey) ownerBytes.set(channel.ownerKey, (ownerBytes.get(channel.ownerKey) || 0) + bytes)
+      if (!channelKey || bytes <= 0) continue
+      if ((bytes / maxBytes) >= STORAGE_CONCENTRATION_THRESHOLD) {
+        await ensureOperatorAlert({
+          severity: 'warning',
+          category: 'storage',
+          targetType: 'channelKey',
+          target: channelKey,
+          summary: `Channel channelKey:${channelKey} is using ${budgetPercent(bytes, maxBytes)}% of relay cache budget`,
+          suggestedActions: ['review', 'quarantine', 'evict']
+        })
+      }
+    }
+
+    for (const [ownerKey, bytes] of ownerBytes) {
+      if ((bytes / maxBytes) >= STORAGE_CONCENTRATION_THRESHOLD) {
+        await ensureOperatorAlert({
+          severity: 'warning',
+          category: 'storage',
+          targetType: 'ownerKey',
+          target: ownerKey,
+          summary: `Owner ownerKey:${ownerKey} is using ${budgetPercent(bytes, maxBytes)}% of relay cache budget`,
+          suggestedActions: ['review', 'watch', 'quarantine']
+        })
+      }
+    }
+  }
+
   function getAcceptedRefreshDecision(existing, candidate, now) {
     const unavailable = {
       refresh: false,
@@ -176,6 +234,7 @@ export async function createRelayService({
   }
 
   async function persistStatus() {
+    await recordStorageAlerts()
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,

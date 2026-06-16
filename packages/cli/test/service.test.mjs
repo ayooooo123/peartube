@@ -680,6 +680,45 @@ test('createRelayService raises report threshold alerts', async (t) => {
   }
 })
 
+test('createRelayService records storage concentration alerts', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-storage-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 1_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 600, videosFound: 1, videosDownloaded: 1 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-large', ownerKey: 'owner-large', publicBeeKey: 'bee-large' })
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Channel channelKey:chan-large is using 60% of relay cache budget'))
+    t.ok(summaries.includes('Owner ownerKey:owner-large is using 60% of relay cache budget'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

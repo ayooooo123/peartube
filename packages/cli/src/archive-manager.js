@@ -451,7 +451,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
   }
 }
 
-export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null }) {
+export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, onFailed = null }) {
   if (!store) throw new Error('store is required')
   if (!downloader) throw new Error('downloader is required')
   if (!publisher) throw new Error('publisher is required')
@@ -529,6 +529,13 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
       } catch (err) {
         logger?.archive?.error?.('Archive job failed', { id, error: err?.message || String(err) })
         const failed = await store.updateJob(id, { status: 'failed', error: err?.message || String(err) })
+        if (typeof onFailed === 'function') {
+          try {
+            await onFailed(failed, err)
+          } catch (hookErr) {
+            logger?.archive?.warn?.('Archive failure hook failed', { id, error: hookErr?.message || String(hookErr) })
+          }
+        }
         return failed
       } finally {
         try {

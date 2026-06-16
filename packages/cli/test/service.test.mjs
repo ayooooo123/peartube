@@ -1331,6 +1331,68 @@ test('createRelayService records archive job and publish alerts', async (t) => {
   }
 })
 
+test('createRelayService alerts when an archive source repeatedly fails', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-failure-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 },
+        archive: {
+          uiEnabled: false,
+          ytDlpPath: '/usr/local/bin/yt-dlp',
+          tmpPath: join(dir, 'archive-tmp')
+        }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {},
+      fsModule: {
+        mkdirSync() {},
+        rmSync() {},
+        existsSync() { return false }
+      },
+      pathModule: {
+        join(...parts) { return join(...parts) }
+      },
+      spawnFn() {
+        return {
+          stdout: { on() {} },
+          stderr: { on(event, cb) { if (event === 'data') cb('extractor failed') } },
+          on(event, cb) { if (event === 'close') cb(1) }
+        }
+      }
+    })
+
+    await service.start()
+    await service.enqueueArchiveJob({ url: 'https://video.example/watch?v=fail-1', channelName: 'Archive Alerts' }, { runNow: true })
+    await service.enqueueArchiveJob({ url: 'https://video.example/watch?v=fail-2', channelName: 'Archive Alerts' }, { runNow: true })
+    await service.enqueueArchiveJob({ url: 'https://video.example/watch?v=fail-3', channelName: 'Archive Alerts' }, { runNow: true })
+
+    const status = service.getStatus()
+    const summaries = status.alerts.latest.map((alert) => alert.summary)
+
+    t.is(status.alerts.critical, 1)
+    t.ok(summaries.includes('Archive source video.example has 3 or more failed jobs'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService records network empty-state alerts', async (t) => {
   const dir = makeTempDir('peartube-relay-service-network-alerts-')
   const runtime = createFakeRuntime()

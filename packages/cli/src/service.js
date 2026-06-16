@@ -14,6 +14,7 @@ import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './l
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
 const STORAGE_CONCENTRATION_THRESHOLD = 0.5
 const STORAGE_PRESSURE_THRESHOLD = 0.85
+const ARCHIVE_FAILURE_ALERT_THRESHOLD = 3
 
 export async function createRelayService({
   config,
@@ -225,6 +226,34 @@ export async function createRelayService({
       target: job.channelKey,
       summary: `Archive published video ${job.previewVideo.id} into channelKey:${job.channelKey}`,
       suggestedActions: ['review-archive-channel', 'confirm-publisher-role']
+    })
+  }
+
+  async function recordArchiveFailureAlert(job = {}, { store } = {}) {
+    if (!job?.id || job.status !== 'failed') return null
+    const archiveStore = store || (runtime.ctx?.metaDb ? createArchiveJobStore({ metaDb: runtime.ctx.metaDb }) : null)
+    if (!archiveStore) return null
+
+    const privateInput = await archiveStore.getPrivateInput(job.id).catch(() => null)
+    if (!privateInput?.url) return null
+    const host = getArchiveSourceHost(privateInput.url)
+    const jobs = await archiveStore.listJobs().catch(() => [])
+    let failedCount = 0
+
+    for (const archiveJob of jobs) {
+      if (archiveJob?.status !== 'failed') continue
+      const input = await archiveStore.getPrivateInput(archiveJob.id).catch(() => null)
+      if (input?.url && getArchiveSourceHost(input.url) === host) failedCount += 1
+    }
+
+    if (failedCount < ARCHIVE_FAILURE_ALERT_THRESHOLD) return null
+    return ensureOperatorAlert({
+      severity: 'critical',
+      category: 'archive',
+      targetType: 'source',
+      target: host,
+      summary: `Archive source ${host} has ${ARCHIVE_FAILURE_ALERT_THRESHOLD} or more failed jobs`,
+      suggestedActions: ['review-archive-source', 'pause-archive-source', 'check-downloader']
     })
   }
 
@@ -1057,13 +1086,19 @@ export async function createRelayService({
           runtime,
           fs: runtimeFsModule
         }),
-        onCompleted: (job) => service.publishArchiveJobToFeed(job)
+        onCompleted: (job) => service.publishArchiveJobToFeed(job),
+        onFailed: (job) => service.recordArchiveJobFailure(job, { store })
       })
       const job = await manager.enqueue(input)
       await recordArchiveJobAlert(input)
       await persistStatus()
       if (runNow) return manager.runJob(job.id)
       return job
+    },
+    async recordArchiveJobFailure(job, { store } = {}) {
+      const result = await recordArchiveFailureAlert(job, { store })
+      await persistStatus()
+      return result
     },
     async mirrorLocalDrive(input = {}) {
       return runLocalMirrorOnce({

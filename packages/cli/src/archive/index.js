@@ -28,6 +28,7 @@ export function createArchiver({
   ytDlp = null,
   uploadManagerFactory = null,
   publisherFactory = null,
+  onBudgetPressure = null,
   setIntervalFn = setInterval,
   clearIntervalFn = clearInterval,
   setTimeoutFn = setTimeout
@@ -127,12 +128,28 @@ export function createArchiver({
       maxBytes: config.storage?.maxBytes,
       reservePercent: archiveConfig.budgetReservePercent
     })) {
+      const usedBytes = typeof runtime.cacheManager?.getTotalBytes === 'function'
+        ? Number(runtime.cacheManager.getTotalBytes()) || 0
+        : 0
       logger.archive.warn('Storage budget reached; skipping new archives', {
         sourceId: source.sourceId,
         videoId: ytEntry.id,
         maxBytes: config.storage?.maxBytes,
-        used: runtime.cacheManager?.getTotalBytes?.() || 0
+        used: usedBytes
       })
+      if (typeof onBudgetPressure === 'function') {
+        try {
+          await onBudgetPressure({
+            source,
+            videoId: ytEntry.id,
+            usedBytes,
+            maxBytes: Number(config.storage?.maxBytes || 0) || 0,
+            reservePercent: Number(archiveConfig.budgetReservePercent || 0) || 0
+          })
+        } catch (err) {
+          logger.archive.warn('Archive budget pressure hook failed', { error: err?.message || String(err) })
+        }
+      }
       return { skipped: true, status: 'budget' }
     }
 

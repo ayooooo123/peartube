@@ -1209,6 +1209,14 @@ export async function createRelayService({
       await persistStatus()
       return result
     },
+    async recordArchiveBudgetPressure(event = {}) {
+      const input = event?.source?.url
+        ? { url: event.source.url }
+        : (event?.url ? { url: event.url } : {})
+      const result = await recordArchiveBudgetCrowdingAlert(input)
+      await persistStatus()
+      return result
+    },
     async recordArchiveJobFailure(job, { store } = {}) {
       const result = await recordArchiveFailureAlert(job, { store })
       await persistStatus()

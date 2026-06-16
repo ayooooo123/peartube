@@ -1,10 +1,15 @@
 import test from 'brittle'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { resolveRelayConfig } from '../src/config.js'
 import { buildSourceId, buildWriterKeyName, classifySourceUrl } from '../src/archive/source-id.js'
 import { ARCHIVE_STATUS, createArchiveState } from '../src/archive/state.js'
 import { createArchiver } from '../src/archive/index.js'
 import { announceArchiveChannel, createArchivePublisher } from '../src/archive/publisher.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 function makeFakeMetaDb() {
   const map = new Map()
@@ -677,6 +682,51 @@ test('createArchiver budget exhaustion: stops archiving when within reserve', as
 
   const budgetWarn = logger.events.find((e) => e.msg === 'Storage budget reached; skipping new archives')
   t.ok(budgetWarn, 'logs budget warning')
+})
+
+test('createArchiver reports budget pressure through hook when reserve stops polling', async (t) => {
+  const metaDb = makeFakeMetaDb()
+  const config = resolveRelayConfig({
+    storage: { path: '/tmp/peartube-test', maxBytes: 1000 },
+    archive: {
+      enabled: true,
+      budgetReservePercent: 5,
+      tmpPath: '/tmp/peartube-test/archive-tmp',
+      sources: [{ url: 'https://www.youtube.com/@chan' }]
+    }
+  }, { env: {} })
+  const budgetEvents = []
+
+  const archiver = createArchiver({
+    config,
+    runtime: makeFakeRuntime({ metaDb, totalBytes: 999 }),
+    logger: makeFakeLogger(),
+    fs: makeFakeFs(),
+    ytDlp: {
+      async listVideos() { return [{ id: 'a', title: 'A' }] },
+      async downloadVideo() { throw new Error('should never be called when budget exhausted') }
+    },
+    uploadManagerFactory: async () => ({}),
+    onBudgetPressure: (event) => { budgetEvents.push(event) },
+    setIntervalFn: () => null,
+    clearIntervalFn: () => {},
+    setTimeoutFn: (fn) => fn()
+  })
+
+  await archiver.runOnce()
+
+  t.is(budgetEvents.length, 1)
+  t.is(budgetEvents[0].source.url, 'https://www.youtube.com/@chan')
+  t.is(budgetEvents[0].videoId, 'a')
+  t.is(budgetEvents[0].usedBytes, 999)
+  t.is(budgetEvents[0].maxBytes, 1000)
+  t.is(budgetEvents[0].reservePercent, 5)
+})
+
+test('startRelay wires polling archiver budget pressure into relay service alerts', async (t) => {
+  const source = readFileSync(join(__dirname, '..', 'src', 'index.js'), 'utf8')
+
+  t.ok(source.includes('onBudgetPressure: (event) => service.recordArchiveBudgetPressure?.(event)'))
 })
 
 test('createArchiver stop clears staggered initial poll timers', async (t) => {

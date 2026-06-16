@@ -53,7 +53,8 @@ export async function startRelay({ config, logger = null } = {}) {
         config,
         runtime: service.runtime,
         logger: relayLogger,
-        fs
+        fs,
+        onBudgetPressure: (event) => service.recordArchiveBudgetPressure?.(event)
       })
       await archiver.start()
     } catch (err) {

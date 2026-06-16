@@ -90,3 +90,31 @@ test('PublicChannelBee applies HyperDB batched video changes', async () => {
     assert.equal(await publicDb.getVideo('deleted-video'), null)
   })
 })
+
+test('PublicChannelBee preserves relay archive source metadata as video sidecar data', async () => {
+  await withPublicDb(async (publicDb) => {
+    await publicDb.putVideo('relay-archive', {
+      title: 'Relay Archive',
+      uploadedAt: 100,
+      sourcePlatform: 'youtube',
+      sourcePlatformLabel: 'YouTube',
+      sourceUrl: 'https://www.youtube.com/watch?v=relay-archive',
+      sourceCreatorHandle: '@archive-source',
+      sourcePublishedAt: 90,
+      sourceViewCount: 1234,
+      sourceArchivedAt: 110,
+      sourceRelayId: 'relay-a',
+    })
+
+    const byId = await publicDb.getVideo('relay-archive')
+    assert.equal(byId.sourcePlatform, 'youtube')
+    assert.equal(byId.sourcePlatformLabel, 'YouTube')
+    assert.equal(byId.sourceCreatorHandle, '@archive-source')
+    assert.equal(byId.sourceViewCount, 1234)
+    assert.equal(byId.sourceRelayId, 'relay-a')
+
+    const [listed] = await publicDb.listVideos()
+    assert.equal(listed.sourceUrl, 'https://www.youtube.com/watch?v=relay-archive')
+    assert.equal(listed.sourceArchivedAt, 110)
+  })
+})

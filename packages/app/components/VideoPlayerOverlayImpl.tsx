@@ -29,6 +29,7 @@ import { colors } from '@/lib/colors'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { useCast } from '@/lib/cast'
+import { getSourceMetadataDisplay } from '@/lib/source-metadata'
 import { DevicePickerModal } from '@/components/cast'
 import {
   computeMiniSize,
@@ -2054,6 +2055,7 @@ export function VideoPlayerOverlay() {
     currentVideo.channel?.name ||
     `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
+  const sourceDisplay = getSourceMetadataDisplay(currentVideo as any)
 
   // Calculate mini player position based on corner
   const getMiniPlayerPosition = () => {
@@ -2533,6 +2535,36 @@ export function VideoPlayerOverlay() {
                 <span style={desktopStyles.dot}>•</span>
                 <span>{formatSize(currentVideo.size)}</span>
               </div>
+
+              {sourceDisplay.hasSource && (
+                <div style={desktopStyles.sourcePanel}>
+                  <div style={desktopStyles.sourceHeader}>
+                    <span style={desktopStyles.sourceBadge}>{sourceDisplay.platformLabel}</span>
+                    {sourceDisplay.compactLine ? (
+                      <span style={desktopStyles.sourceCompact}>{sourceDisplay.compactLine}</span>
+                    ) : null}
+                  </div>
+                  {sourceDisplay.detailCounts ? (
+                    <span style={desktopStyles.sourceDetail}>{sourceDisplay.detailCounts}</span>
+                  ) : null}
+                  {sourceDisplay.archiveLine ? (
+                    <span style={desktopStyles.sourceDetail}>{sourceDisplay.archiveLine}</span>
+                  ) : null}
+                  {sourceDisplay.sourceUrl ? (
+                    <button
+                      type="button"
+                      style={desktopStyles.sourceLink}
+                      onClick={() => {
+                        if (sourceDisplay.sourceUrl && typeof window !== 'undefined') {
+                          window.open(sourceDisplay.sourceUrl, '_blank', 'noopener,noreferrer')
+                        }
+                      }}
+                    >
+                      {sourceDisplay.sourceUrl}
+                    </button>
+                  ) : null}
+                </div>
+              )}
 
               {/* Channel info */}
               <div style={desktopStyles.channelRow}>

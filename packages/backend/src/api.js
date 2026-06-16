@@ -2130,6 +2130,23 @@ export function createApi({
         return ts
       }
 
+      const copySourceMetadata = (video) => ({
+        sourcePlatform: video?.sourcePlatform ?? null,
+        sourcePlatformLabel: video?.sourcePlatformLabel ?? null,
+        sourceUrl: video?.sourceUrl ?? null,
+        sourceId: video?.sourceId ?? null,
+        sourceCreatorName: video?.sourceCreatorName ?? null,
+        sourceCreatorHandle: video?.sourceCreatorHandle ?? null,
+        sourceCreatorUrl: video?.sourceCreatorUrl ?? null,
+        sourcePublishedAt: video?.sourcePublishedAt ?? null,
+        sourceViewCount: video?.sourceViewCount ?? null,
+        sourceLikeCount: video?.sourceLikeCount ?? null,
+        sourceCommentCount: video?.sourceCommentCount ?? null,
+        sourceArchivedAt: video?.sourceArchivedAt ?? null,
+        sourceRelayId: video?.sourceRelayId ?? null,
+        sourceMetadataJson: video?.sourceMetadataJson ?? null,
+      })
+
       const snapshots = await Promise.all(entries.map(async (entry) => {
         const driveKey = entry?.driveKey
         const publicBeeKey = entry?.publicBeeKey || null
@@ -2166,6 +2183,7 @@ export function createApi({
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+                ...copySourceMetadata(video),
               }
             })
             .filter(Boolean)

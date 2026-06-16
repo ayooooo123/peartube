@@ -150,3 +150,53 @@ test('getSnapshotChannelKeys returns unique channel keys for restored cards', ()
     { id: 'd' },
   ]), ['remote-a', 'remote-b'])
 })
+
+test('createFeedSnapshot stores relay archive source metadata fields', () => {
+  const snapshot = createFeedSnapshot({
+    now: 1000,
+    videos: [{
+      id: 'archived',
+      title: 'Archived video',
+      channelKey: 'relay-channel',
+      uploadedAt: 20,
+      availability: 'playable',
+      byteAvailability: 'playable',
+      blobId: '0:1:0:32',
+      blobsCoreKey: 'aa'.repeat(32),
+      hasHeadBlock: true,
+      contiguousBlocks: 1,
+      readyForPlayback: true,
+      sourcePlatform: 'youtube',
+      sourcePlatformLabel: 'YouTube',
+      sourceUrl: 'https://www.youtube.com/watch?v=archived',
+      sourceId: 'archived',
+      sourceCreatorName: 'Emergency Awesome',
+      sourceCreatorHandle: '@emergencyawesome',
+      sourceCreatorUrl: 'https://www.youtube.com/@emergencyawesome',
+      sourcePublishedAt: 900,
+      sourceViewCount: 75080,
+      sourceLikeCount: 2200,
+      sourceCommentCount: 341,
+      sourceArchivedAt: 950,
+      sourceRelayId: 'relay-a',
+      sourceMetadataJson: '{"platform":"youtube"}',
+      sourcePrivateToken: 'do-not-store',
+    }],
+  })
+
+  assert.deepEqual(snapshot.videos.map((video) => ({
+    id: video.id,
+    sourcePlatform: video.sourcePlatform,
+    sourceCreatorHandle: video.sourceCreatorHandle,
+    sourceViewCount: video.sourceViewCount,
+    sourceMetadataJson: video.sourceMetadataJson,
+    hasPrivateToken: Object.hasOwn(video, 'sourcePrivateToken'),
+  })), [{
+    id: 'archived',
+    sourcePlatform: 'youtube',
+    sourceCreatorHandle: '@emergencyawesome',
+    sourceViewCount: 75080,
+    sourceMetadataJson: '{"platform":"youtube"}',
+    hasPrivateToken: false,
+  }])
+})

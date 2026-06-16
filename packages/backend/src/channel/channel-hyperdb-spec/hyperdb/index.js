@@ -4,7 +4,7 @@
 import { IndexEncoder, c, b4a } from 'hyperdb/runtime'
 import { version, getEncoding, setVersion } from './messages.js'
 
-const versions = { schema: version, db: 1 }
+const versions = { schema: version, db: 2 }
 
 // '@peartubeChannel/metadata' collection key
 const collection0_key = new IndexEncoder([
@@ -838,6 +838,73 @@ const index12 = {
 }
 collection6.indexes.push(index12)
 
+// '@peartubeChannel/videoSourceMetadata' collection key
+const collection13_key = new IndexEncoder([
+  IndexEncoder.STRING
+], { prefix: 13 })
+
+function collection13_indexify (record) {
+  const a = record.videoId
+  return a === undefined ? [] : [a]
+}
+
+// '@peartubeChannel/videoSourceMetadata' value encoding
+const collection13_enc = getEncoding('@peartubeChannel/videoSourceMetadata/hyperdb#13')
+
+// '@peartubeChannel/videoSourceMetadata' reconstruction function
+function collection13_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection13_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection13.decodedVersion = c.uint.decode(state)
+  const record = collection13_enc.decode(state)
+  record.videoId = key[0]
+  return record
+}
+// '@peartubeChannel/videoSourceMetadata' key reconstruction function
+function collection13_reconstruct_key (keyBuf) {
+  const key = collection13_key.decode(keyBuf)
+  return {
+    videoId: key[0]
+  }
+}
+
+// '@peartubeChannel/videoSourceMetadata'
+const collection13 = {
+  name: '@peartubeChannel/videoSourceMetadata',
+  id: 13,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.videoId]
+    return collection13_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection13_key.encodeRange({
+      gt: gt ? collection13_indexify(gt) : null,
+      lt: lt ? collection13_indexify(lt) : null,
+      gte: gte ? collection13_indexify(gte) : null,
+      lte: lte ? collection13_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection13_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection13_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection13_reconstruct,
+  reconstructKey: collection13_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
 const collections = [
   collection0,
   collection1,
@@ -846,7 +913,8 @@ const collections = [
   collection4,
   collection5,
   collection6,
-  collection7
+  collection7,
+  collection13
 ]
 
 const indexes = [
@@ -869,6 +937,7 @@ function resolveCollection (name) {
     case '@peartubeChannel/invites': return collection5
     case '@peartubeChannel/watchEvents': return collection6
     case '@peartubeChannel/vectorIndexes': return collection7
+    case '@peartubeChannel/videoSourceMetadata': return collection13
     default: return null
   }
 }

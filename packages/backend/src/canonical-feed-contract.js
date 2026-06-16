@@ -43,6 +43,20 @@
  * @property {string} channelKey
  * @property {string | null} [driveKey]
  * @property {string | null} [publicBeeKey]
+ * @property {string | null} [sourcePlatform]
+ * @property {string | null} [sourcePlatformLabel]
+ * @property {string | null} [sourceUrl]
+ * @property {string | null} [sourceId]
+ * @property {string | null} [sourceCreatorName]
+ * @property {string | null} [sourceCreatorHandle]
+ * @property {string | null} [sourceCreatorUrl]
+ * @property {number | null} [sourcePublishedAt]
+ * @property {number | null} [sourceViewCount]
+ * @property {number | null} [sourceLikeCount]
+ * @property {number | null} [sourceCommentCount]
+ * @property {number | null} [sourceArchivedAt]
+ * @property {string | null} [sourceRelayId]
+ * @property {string | null} [sourceMetadataJson]
  * @property {CanonicalFeedChannel} [channel]
  */
 
@@ -101,6 +115,20 @@ export const CANONICAL_FEED_VIDEO_FIELDS = Object.freeze([
   'channelKey',
   'driveKey',
   'publicBeeKey',
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+  'sourceRelayId',
+  'sourceMetadataJson',
   'channel',
 ])
 
@@ -172,6 +200,20 @@ export function createCanonicalFeedVideo(video = {}) {
   normalized.channelKey = video.channelKey || video.driveKey || normalized.channelKey || ''
   normalized.driveKey = video.driveKey || video.channelKey || normalized.driveKey || normalized.channelKey || ''
   normalized.publicBeeKey = video.publicBeeKey ?? normalized.publicBeeKey ?? null
+  normalized.sourcePlatform = video.sourcePlatform ?? normalized.sourcePlatform ?? null
+  normalized.sourcePlatformLabel = video.sourcePlatformLabel ?? normalized.sourcePlatformLabel ?? null
+  normalized.sourceUrl = video.sourceUrl ?? normalized.sourceUrl ?? null
+  normalized.sourceId = video.sourceId ?? normalized.sourceId ?? null
+  normalized.sourceCreatorName = video.sourceCreatorName ?? normalized.sourceCreatorName ?? null
+  normalized.sourceCreatorHandle = video.sourceCreatorHandle ?? normalized.sourceCreatorHandle ?? null
+  normalized.sourceCreatorUrl = video.sourceCreatorUrl ?? normalized.sourceCreatorUrl ?? null
+  normalized.sourcePublishedAt = normalizeNumber(video.sourcePublishedAt, normalized.sourcePublishedAt ?? null)
+  normalized.sourceViewCount = normalizeNumber(video.sourceViewCount, normalized.sourceViewCount ?? null)
+  normalized.sourceLikeCount = normalizeNumber(video.sourceLikeCount, normalized.sourceLikeCount ?? null)
+  normalized.sourceCommentCount = normalizeNumber(video.sourceCommentCount, normalized.sourceCommentCount ?? null)
+  normalized.sourceArchivedAt = normalizeNumber(video.sourceArchivedAt, normalized.sourceArchivedAt ?? null)
+  normalized.sourceRelayId = video.sourceRelayId ?? normalized.sourceRelayId ?? null
+  normalized.sourceMetadataJson = video.sourceMetadataJson ?? normalized.sourceMetadataJson ?? null
   normalized.channel = video.channel ? createCanonicalFeedChannel(video.channel) : normalized.channel ? createCanonicalFeedChannel(normalized.channel) : undefined
   return normalized
 }

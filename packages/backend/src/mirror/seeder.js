@@ -109,6 +109,7 @@ function buildSeedRecord(descriptor, options = {}, extras = {}) {
     core: extras.core || null,
     topic: extras.topic || toFixed32(descriptor.swarmTopic || ZERO_32),
     sourceUrl,
+    sourceMetadata: extras.sourceMetadata || options.sourceMetadata || descriptor?.sourceMetadata || null,
     refreshPolicy,
     refreshManager: createMirrorRefreshManager(options.refreshPolicy || options),
     refreshCount: 0,
@@ -123,6 +124,7 @@ function buildSeedRecord(descriptor, options = {}, extras = {}) {
       joined: Boolean(extras.joined),
       lastRefreshAt: now,
       lastAvailabilityEpoch: availabilityEpoch,
+      sourcePlatform: extras.sourceMetadata?.sourcePlatform || options.sourceMetadata?.sourcePlatform || null,
     },
     close: extras.close || (async () => {}),
   }
@@ -152,6 +154,7 @@ export async function refreshMirroredVideo(autobase, swarm, record, options = {}
     })
     updatedDescriptor = fetched.descriptor
     next.latestFetch = fetched
+    next.sourceMetadata = fetched.sourceMetadata || next.sourceMetadata || null
     next.lastRefetchedAt = now
     next.lastRefetchAt = now
     reFetched = true
@@ -245,9 +248,16 @@ export async function seedMirroredVideo(autobase, swarm, descriptor, options = {
 export async function seedDiscoveredVideo(autobase, swarm, sourceUrl, options = {}) {
   const extracted = await fetchMirrorDescriptor(sourceUrl, options)
   const descriptor = extracted.descriptor
+  const sourceMetadata = extracted.sourceMetadata
+    ? {
+        ...extracted.sourceMetadata,
+        sourceRelayId: options.sourceRelayId || options.relayId || extracted.sourceMetadata.sourceRelayId || '',
+      }
+    : null
   const seeded = await seedMirroredVideo(autobase, swarm, descriptor, {
     ...options,
     sourceUrl: extracted.finalUrl || sourceUrl,
+    sourceMetadata,
     reason: options.reason ?? 1,
     initialState: options.initialState ?? DescriptorState.DISCOVERED,
   })

@@ -263,6 +263,23 @@ ns.register({
 // Video Types
 // ============================================
 
+const SOURCE_METADATA_SCHEMA_FIELDS = [
+  { name: 'sourcePlatform', type: 'string', required: false },
+  { name: 'sourcePlatformLabel', type: 'string', required: false },
+  { name: 'sourceUrl', type: 'string', required: false },
+  { name: 'sourceId', type: 'string', required: false },
+  { name: 'sourceCreatorName', type: 'string', required: false },
+  { name: 'sourceCreatorHandle', type: 'string', required: false },
+  { name: 'sourceCreatorUrl', type: 'string', required: false },
+  { name: 'sourcePublishedAt', type: 'uint', required: false },
+  { name: 'sourceViewCount', type: 'uint', required: false },
+  { name: 'sourceLikeCount', type: 'uint', required: false },
+  { name: 'sourceCommentCount', type: 'uint', required: false },
+  { name: 'sourceArchivedAt', type: 'uint', required: false },
+  { name: 'sourceRelayId', type: 'string', required: false },
+  { name: 'sourceMetadataJson', type: 'string', required: false }
+]
+
 ns.register({
   name: 'video',
   fields: [
@@ -289,6 +306,7 @@ ns.register({
     { name: 'hasHeadBlock', type: 'bool', required: false },
     { name: 'contiguousBlocks', type: 'uint', required: false },
     { name: 'readyForPlayback', type: 'bool', required: false },
+    ...SOURCE_METADATA_SCHEMA_FIELDS,
   ]
 })
 
@@ -945,6 +963,7 @@ ns.register({
     { name: 'hasHeadBlock', type: 'bool', required: false },
     { name: 'contiguousBlocks', type: 'uint', required: false },
     { name: 'readyForPlayback', type: 'bool', required: false },
+    ...SOURCE_METADATA_SCHEMA_FIELDS,
   ]
 })
 
@@ -1454,7 +1473,8 @@ ns.register({
     { name: 'blobsCoreKey', type: 'string', required: false },
     { name: 'mimeType', type: 'string', required: false },
     { name: 'width', type: 'uint', required: false },
-    { name: 'height', type: 'uint', required: false }
+    { name: 'height', type: 'uint', required: false },
+    ...SOURCE_METADATA_SCHEMA_FIELDS
   ]
 })
 
@@ -1923,7 +1943,8 @@ ns.register({
     { name: 'uploadedAt', type: 'uint', required: false },
     { name: 'uploadedBy', type: 'string', required: false },
     { name: 'category', type: 'string', required: false },
-    { name: 'views', type: 'uint', required: false }
+    { name: 'views', type: 'uint', required: false },
+    ...SOURCE_METADATA_SCHEMA_FIELDS
   ]
 })
 
@@ -1938,7 +1959,8 @@ ns.register({
     { name: 'thumbnail', type: 'string', required: false },
     { name: 'category', type: 'string', required: false },
     { name: 'updatedAt', type: 'uint', required: false },
-    { name: 'updatedBy', type: 'string', required: false }
+    { name: 'updatedBy', type: 'string', required: false },
+    ...SOURCE_METADATA_SCHEMA_FIELDS
   ]
 })
 

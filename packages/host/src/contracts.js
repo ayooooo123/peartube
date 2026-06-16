@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 3
+export const PROTOCOL_VERSION = 4
 
 export const HOST_ERROR_CODES = Object.freeze({
   HOST_START_FAILED: 'HOST_START_FAILED',

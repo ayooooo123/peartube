@@ -677,6 +677,20 @@ function toSchemaVideo(v) {
     mimeType: v.mimeType || '',
     width: v.width || 0,
     height: v.height || 0,
+    sourcePlatform: v.sourcePlatform || '',
+    sourcePlatformLabel: v.sourcePlatformLabel || '',
+    sourceUrl: v.sourceUrl || '',
+    sourceId: v.sourceId || '',
+    sourceCreatorName: v.sourceCreatorName || '',
+    sourceCreatorHandle: v.sourceCreatorHandle || '',
+    sourceCreatorUrl: v.sourceCreatorUrl || '',
+    sourcePublishedAt: Number.isFinite(v.sourcePublishedAt) ? v.sourcePublishedAt : undefined,
+    sourceViewCount: Number.isFinite(v.sourceViewCount) ? v.sourceViewCount : undefined,
+    sourceLikeCount: Number.isFinite(v.sourceLikeCount) ? v.sourceLikeCount : undefined,
+    sourceCommentCount: Number.isFinite(v.sourceCommentCount) ? v.sourceCommentCount : undefined,
+    sourceArchivedAt: Number.isFinite(v.sourceArchivedAt) ? v.sourceArchivedAt : undefined,
+    sourceRelayId: v.sourceRelayId || '',
+    sourceMetadataJson: v.sourceMetadataJson || '',
   }
 }
 

@@ -63,7 +63,21 @@ extension NativeVideo {
       blobsCoreKey: v.blobsCoreKey?.isEmpty == false ? v.blobsCoreKey : nil,
       mimeType: v.mimeType?.isEmpty == false ? v.mimeType : nil,
       width: v.width.flatMap { $0 > 0 ? Int($0) : nil },
-      height: v.height.flatMap { $0 > 0 ? Int($0) : nil }
+      height: v.height.flatMap { $0 > 0 ? Int($0) : nil },
+      sourcePlatform: v.sourcePlatform?.isEmpty == false ? v.sourcePlatform : nil,
+      sourcePlatformLabel: v.sourcePlatformLabel?.isEmpty == false ? v.sourcePlatformLabel : nil,
+      sourceURL: v.sourceUrl.flatMap { $0.isEmpty ? nil : URL(string: $0) },
+      sourceID: v.sourceId?.isEmpty == false ? v.sourceId : nil,
+      sourceCreatorName: v.sourceCreatorName?.isEmpty == false ? v.sourceCreatorName : nil,
+      sourceCreatorHandle: v.sourceCreatorHandle?.isEmpty == false ? v.sourceCreatorHandle : nil,
+      sourceCreatorURL: v.sourceCreatorUrl.flatMap { $0.isEmpty ? nil : URL(string: $0) },
+      sourcePublishedAt: v.sourcePublishedAt.flatMap { $0 > 0 ? Int($0) : nil },
+      sourceViewCount: v.sourceViewCount.map { Int($0) },
+      sourceLikeCount: v.sourceLikeCount.map { Int($0) },
+      sourceCommentCount: v.sourceCommentCount.map { Int($0) },
+      sourceArchivedAt: v.sourceArchivedAt.flatMap { $0 > 0 ? Int($0) : nil },
+      sourceRelayID: v.sourceRelayId?.isEmpty == false ? v.sourceRelayId : nil,
+      sourceMetadataJSON: v.sourceMetadataJson?.isEmpty == false ? v.sourceMetadataJson : nil
     )
   }
 }
@@ -89,7 +103,21 @@ extension NativeVideo {
       blobsCoreKey: v.blobsCoreKey?.isEmpty == false ? v.blobsCoreKey : nil,
       mimeType: v.mimeType?.isEmpty == false ? v.mimeType : nil,
       width: nil,
-      height: nil
+      height: nil,
+      sourcePlatform: v.sourcePlatform?.isEmpty == false ? v.sourcePlatform : nil,
+      sourcePlatformLabel: v.sourcePlatformLabel?.isEmpty == false ? v.sourcePlatformLabel : nil,
+      sourceURL: v.sourceUrl.flatMap { $0.isEmpty ? nil : URL(string: $0) },
+      sourceID: v.sourceId?.isEmpty == false ? v.sourceId : nil,
+      sourceCreatorName: v.sourceCreatorName?.isEmpty == false ? v.sourceCreatorName : nil,
+      sourceCreatorHandle: v.sourceCreatorHandle?.isEmpty == false ? v.sourceCreatorHandle : nil,
+      sourceCreatorURL: v.sourceCreatorUrl.flatMap { $0.isEmpty ? nil : URL(string: $0) },
+      sourcePublishedAt: v.sourcePublishedAt.flatMap { $0 > 0 ? Int($0) : nil },
+      sourceViewCount: v.sourceViewCount.map { Int($0) },
+      sourceLikeCount: v.sourceLikeCount.map { Int($0) },
+      sourceCommentCount: v.sourceCommentCount.map { Int($0) },
+      sourceArchivedAt: v.sourceArchivedAt.flatMap { $0 > 0 ? Int($0) : nil },
+      sourceRelayID: v.sourceRelayId?.isEmpty == false ? v.sourceRelayId : nil,
+      sourceMetadataJSON: v.sourceMetadataJson?.isEmpty == false ? v.sourceMetadataJson : nil
     )
   }
 }

@@ -752,7 +752,21 @@ const encoding27 = {
       (m.byteAvailability ? 131072 : 0) |
       (m.hasHeadBlock ? 262144 : 0) |
       (m.contiguousBlocks ? 524288 : 0) |
-      (m.readyForPlayback ? 1048576 : 0)
+      (m.readyForPlayback ? 1048576 : 0) |
+      (m.sourcePlatform ? 2097152 : 0) |
+      (m.sourcePlatformLabel ? 4194304 : 0) |
+      (m.sourceUrl ? 8388608 : 0) |
+      (m.sourceId ? 16777216 : 0) |
+      (m.sourceCreatorName ? 33554432 : 0) |
+      (m.sourceCreatorHandle ? 67108864 : 0) |
+      (m.sourceCreatorUrl ? 134217728 : 0) |
+      (m.sourcePublishedAt ? 268435456 : 0) |
+      (m.sourceViewCount ? 536870912 : 0) |
+      (m.sourceLikeCount ? 1073741824 : 0) |
+      (m.sourceCommentCount ? 2147483648 : 0) |
+      (m.sourceArchivedAt ? 4294967296 : 0) |
+      (m.sourceRelayId ? 8589934592 : 0) |
+      (m.sourceMetadataJson ? 17179869184 : 0)
 
     c.string.preencode(state, m.id)
     c.string.preencode(state, m.title)
@@ -777,6 +791,20 @@ const encoding27 = {
     if (m.publicBeeKey) c.string.preencode(state, m.publicBeeKey)
     if (m.byteAvailability) c.string.preencode(state, m.byteAvailability)
     if (m.contiguousBlocks) c.uint.preencode(state, m.contiguousBlocks)
+    if (m.sourcePlatform) c.string.preencode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.preencode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.preencode(state, m.sourceUrl)
+    if (m.sourceId) c.string.preencode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.preencode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.preencode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.preencode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.preencode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.preencode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.preencode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.preencode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.preencode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.preencode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.preencode(state, m.sourceMetadataJson)
   },
   encode(state, m) {
     const flags =
@@ -800,7 +828,21 @@ const encoding27 = {
       (m.byteAvailability ? 131072 : 0) |
       (m.hasHeadBlock ? 262144 : 0) |
       (m.contiguousBlocks ? 524288 : 0) |
-      (m.readyForPlayback ? 1048576 : 0)
+      (m.readyForPlayback ? 1048576 : 0) |
+      (m.sourcePlatform ? 2097152 : 0) |
+      (m.sourcePlatformLabel ? 4194304 : 0) |
+      (m.sourceUrl ? 8388608 : 0) |
+      (m.sourceId ? 16777216 : 0) |
+      (m.sourceCreatorName ? 33554432 : 0) |
+      (m.sourceCreatorHandle ? 67108864 : 0) |
+      (m.sourceCreatorUrl ? 134217728 : 0) |
+      (m.sourcePublishedAt ? 268435456 : 0) |
+      (m.sourceViewCount ? 536870912 : 0) |
+      (m.sourceLikeCount ? 1073741824 : 0) |
+      (m.sourceCommentCount ? 2147483648 : 0) |
+      (m.sourceArchivedAt ? 4294967296 : 0) |
+      (m.sourceRelayId ? 8589934592 : 0) |
+      (m.sourceMetadataJson ? 17179869184 : 0)
 
     c.string.encode(state, m.id)
     c.string.encode(state, m.title)
@@ -825,6 +867,20 @@ const encoding27 = {
     if (m.publicBeeKey) c.string.encode(state, m.publicBeeKey)
     if (m.byteAvailability) c.string.encode(state, m.byteAvailability)
     if (m.contiguousBlocks) c.uint.encode(state, m.contiguousBlocks)
+    if (m.sourcePlatform) c.string.encode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.encode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.encode(state, m.sourceUrl)
+    if (m.sourceId) c.string.encode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.encode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.encode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.encode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.encode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.encode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.encode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.encode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.encode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.encode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.encode(state, m.sourceMetadataJson)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -854,7 +910,21 @@ const encoding27 = {
       byteAvailability: (flags & 131072) !== 0 ? c.string.decode(state) : null,
       hasHeadBlock: (flags & 262144) !== 0,
       contiguousBlocks: (flags & 524288) !== 0 ? c.uint.decode(state) : 0,
-      readyForPlayback: (flags & 1048576) !== 0
+      readyForPlayback: (flags & 1048576) !== 0,
+      sourcePlatform: (flags & 2097152) !== 0 ? c.string.decode(state) : null,
+      sourcePlatformLabel: (flags & 4194304) !== 0 ? c.string.decode(state) : null,
+      sourceUrl: (flags & 8388608) !== 0 ? c.string.decode(state) : null,
+      sourceId: (flags & 16777216) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorName: (flags & 33554432) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorHandle: (flags & 67108864) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorUrl: (flags & 134217728) !== 0 ? c.string.decode(state) : null,
+      sourcePublishedAt: (flags & 268435456) !== 0 ? c.uint.decode(state) : 0,
+      sourceViewCount: (flags & 536870912) !== 0 ? c.uint.decode(state) : 0,
+      sourceLikeCount: (flags & 1073741824) !== 0 ? c.uint.decode(state) : 0,
+      sourceCommentCount: (flags & 2147483648) !== 0 ? c.uint.decode(state) : 0,
+      sourceArchivedAt: (flags & 4294967296) !== 0 ? c.uint.decode(state) : 0,
+      sourceRelayId: (flags & 8589934592) !== 0 ? c.string.decode(state) : null,
+      sourceMetadataJson: (flags & 17179869184) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -2565,7 +2635,21 @@ const encoding98 = {
       (m.publicBeeKey ? 524288 : 0) |
       (m.hasHeadBlock ? 1048576 : 0) |
       (m.contiguousBlocks ? 2097152 : 0) |
-      (m.readyForPlayback ? 4194304 : 0)
+      (m.readyForPlayback ? 4194304 : 0) |
+      (m.sourcePlatform ? 8388608 : 0) |
+      (m.sourcePlatformLabel ? 16777216 : 0) |
+      (m.sourceUrl ? 33554432 : 0) |
+      (m.sourceId ? 67108864 : 0) |
+      (m.sourceCreatorName ? 134217728 : 0) |
+      (m.sourceCreatorHandle ? 268435456 : 0) |
+      (m.sourceCreatorUrl ? 536870912 : 0) |
+      (m.sourcePublishedAt ? 1073741824 : 0) |
+      (m.sourceViewCount ? 2147483648 : 0) |
+      (m.sourceLikeCount ? 4294967296 : 0) |
+      (m.sourceCommentCount ? 8589934592 : 0) |
+      (m.sourceArchivedAt ? 17179869184 : 0) |
+      (m.sourceRelayId ? 34359738368 : 0) |
+      (m.sourceMetadataJson ? 68719476736 : 0)
 
     c.string.preencode(state, m.id)
     c.uint.preencode(state, flags)
@@ -2591,6 +2675,20 @@ const encoding98 = {
     if (m.driveKey) c.string.preencode(state, m.driveKey)
     if (m.publicBeeKey) c.string.preencode(state, m.publicBeeKey)
     if (m.contiguousBlocks) c.uint.preencode(state, m.contiguousBlocks)
+    if (m.sourcePlatform) c.string.preencode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.preencode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.preencode(state, m.sourceUrl)
+    if (m.sourceId) c.string.preencode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.preencode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.preencode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.preencode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.preencode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.preencode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.preencode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.preencode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.preencode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.preencode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.preencode(state, m.sourceMetadataJson)
   },
   encode(state, m) {
     const flags =
@@ -2616,7 +2714,21 @@ const encoding98 = {
       (m.publicBeeKey ? 524288 : 0) |
       (m.hasHeadBlock ? 1048576 : 0) |
       (m.contiguousBlocks ? 2097152 : 0) |
-      (m.readyForPlayback ? 4194304 : 0)
+      (m.readyForPlayback ? 4194304 : 0) |
+      (m.sourcePlatform ? 8388608 : 0) |
+      (m.sourcePlatformLabel ? 16777216 : 0) |
+      (m.sourceUrl ? 33554432 : 0) |
+      (m.sourceId ? 67108864 : 0) |
+      (m.sourceCreatorName ? 134217728 : 0) |
+      (m.sourceCreatorHandle ? 268435456 : 0) |
+      (m.sourceCreatorUrl ? 536870912 : 0) |
+      (m.sourcePublishedAt ? 1073741824 : 0) |
+      (m.sourceViewCount ? 2147483648 : 0) |
+      (m.sourceLikeCount ? 4294967296 : 0) |
+      (m.sourceCommentCount ? 8589934592 : 0) |
+      (m.sourceArchivedAt ? 17179869184 : 0) |
+      (m.sourceRelayId ? 34359738368 : 0) |
+      (m.sourceMetadataJson ? 68719476736 : 0)
 
     c.string.encode(state, m.id)
     c.uint.encode(state, flags)
@@ -2642,6 +2754,20 @@ const encoding98 = {
     if (m.driveKey) c.string.encode(state, m.driveKey)
     if (m.publicBeeKey) c.string.encode(state, m.publicBeeKey)
     if (m.contiguousBlocks) c.uint.encode(state, m.contiguousBlocks)
+    if (m.sourcePlatform) c.string.encode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.encode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.encode(state, m.sourceUrl)
+    if (m.sourceId) c.string.encode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.encode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.encode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.encode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.encode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.encode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.encode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.encode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.encode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.encode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.encode(state, m.sourceMetadataJson)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -2671,7 +2797,21 @@ const encoding98 = {
       publicBeeKey: (flags & 524288) !== 0 ? c.string.decode(state) : null,
       hasHeadBlock: (flags & 1048576) !== 0,
       contiguousBlocks: (flags & 2097152) !== 0 ? c.uint.decode(state) : 0,
-      readyForPlayback: (flags & 4194304) !== 0
+      readyForPlayback: (flags & 4194304) !== 0,
+      sourcePlatform: (flags & 8388608) !== 0 ? c.string.decode(state) : null,
+      sourcePlatformLabel: (flags & 16777216) !== 0 ? c.string.decode(state) : null,
+      sourceUrl: (flags & 33554432) !== 0 ? c.string.decode(state) : null,
+      sourceId: (flags & 67108864) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorName: (flags & 134217728) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorHandle: (flags & 268435456) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorUrl: (flags & 536870912) !== 0 ? c.string.decode(state) : null,
+      sourcePublishedAt: (flags & 1073741824) !== 0 ? c.uint.decode(state) : 0,
+      sourceViewCount: (flags & 2147483648) !== 0 ? c.uint.decode(state) : 0,
+      sourceLikeCount: (flags & 4294967296) !== 0 ? c.uint.decode(state) : 0,
+      sourceCommentCount: (flags & 8589934592) !== 0 ? c.uint.decode(state) : 0,
+      sourceArchivedAt: (flags & 17179869184) !== 0 ? c.uint.decode(state) : 0,
+      sourceRelayId: (flags & 34359738368) !== 0 ? c.string.decode(state) : null,
+      sourceMetadataJson: (flags & 68719476736) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -3764,7 +3904,21 @@ const encoding155 = {
       (m.blobsCoreKey ? 512 : 0) |
       (m.mimeType ? 1024 : 0) |
       (m.width ? 2048 : 0) |
-      (m.height ? 4096 : 0)
+      (m.height ? 4096 : 0) |
+      (m.sourcePlatform ? 8192 : 0) |
+      (m.sourcePlatformLabel ? 16384 : 0) |
+      (m.sourceUrl ? 32768 : 0) |
+      (m.sourceId ? 65536 : 0) |
+      (m.sourceCreatorName ? 131072 : 0) |
+      (m.sourceCreatorHandle ? 262144 : 0) |
+      (m.sourceCreatorUrl ? 524288 : 0) |
+      (m.sourcePublishedAt ? 1048576 : 0) |
+      (m.sourceViewCount ? 2097152 : 0) |
+      (m.sourceLikeCount ? 4194304 : 0) |
+      (m.sourceCommentCount ? 8388608 : 0) |
+      (m.sourceArchivedAt ? 16777216 : 0) |
+      (m.sourceRelayId ? 33554432 : 0) |
+      (m.sourceMetadataJson ? 67108864 : 0)
 
     c.string.preencode(state, m.id)
     c.string.preencode(state, m.backendVideoId)
@@ -3786,6 +3940,20 @@ const encoding155 = {
     if (m.mimeType) c.string.preencode(state, m.mimeType)
     if (m.width) c.uint.preencode(state, m.width)
     if (m.height) c.uint.preencode(state, m.height)
+    if (m.sourcePlatform) c.string.preencode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.preencode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.preencode(state, m.sourceUrl)
+    if (m.sourceId) c.string.preencode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.preencode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.preencode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.preencode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.preencode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.preencode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.preencode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.preencode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.preencode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.preencode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.preencode(state, m.sourceMetadataJson)
   },
   encode(state, m) {
     const flags =
@@ -3801,7 +3969,21 @@ const encoding155 = {
       (m.blobsCoreKey ? 512 : 0) |
       (m.mimeType ? 1024 : 0) |
       (m.width ? 2048 : 0) |
-      (m.height ? 4096 : 0)
+      (m.height ? 4096 : 0) |
+      (m.sourcePlatform ? 8192 : 0) |
+      (m.sourcePlatformLabel ? 16384 : 0) |
+      (m.sourceUrl ? 32768 : 0) |
+      (m.sourceId ? 65536 : 0) |
+      (m.sourceCreatorName ? 131072 : 0) |
+      (m.sourceCreatorHandle ? 262144 : 0) |
+      (m.sourceCreatorUrl ? 524288 : 0) |
+      (m.sourcePublishedAt ? 1048576 : 0) |
+      (m.sourceViewCount ? 2097152 : 0) |
+      (m.sourceLikeCount ? 4194304 : 0) |
+      (m.sourceCommentCount ? 8388608 : 0) |
+      (m.sourceArchivedAt ? 16777216 : 0) |
+      (m.sourceRelayId ? 33554432 : 0) |
+      (m.sourceMetadataJson ? 67108864 : 0)
 
     c.string.encode(state, m.id)
     c.string.encode(state, m.backendVideoId)
@@ -3823,6 +4005,20 @@ const encoding155 = {
     if (m.mimeType) c.string.encode(state, m.mimeType)
     if (m.width) c.uint.encode(state, m.width)
     if (m.height) c.uint.encode(state, m.height)
+    if (m.sourcePlatform) c.string.encode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.encode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.encode(state, m.sourceUrl)
+    if (m.sourceId) c.string.encode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.encode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.encode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.encode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.encode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.encode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.encode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.encode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.encode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.encode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.encode(state, m.sourceMetadataJson)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -3848,7 +4044,21 @@ const encoding155 = {
       blobsCoreKey: (flags & 512) !== 0 ? c.string.decode(state) : null,
       mimeType: (flags & 1024) !== 0 ? c.string.decode(state) : null,
       width: (flags & 2048) !== 0 ? c.uint.decode(state) : 0,
-      height: (flags & 4096) !== 0 ? c.uint.decode(state) : 0
+      height: (flags & 4096) !== 0 ? c.uint.decode(state) : 0,
+      sourcePlatform: (flags & 8192) !== 0 ? c.string.decode(state) : null,
+      sourcePlatformLabel: (flags & 16384) !== 0 ? c.string.decode(state) : null,
+      sourceUrl: (flags & 32768) !== 0 ? c.string.decode(state) : null,
+      sourceId: (flags & 65536) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorName: (flags & 131072) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorHandle: (flags & 262144) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorUrl: (flags & 524288) !== 0 ? c.string.decode(state) : null,
+      sourcePublishedAt: (flags & 1048576) !== 0 ? c.uint.decode(state) : 0,
+      sourceViewCount: (flags & 2097152) !== 0 ? c.uint.decode(state) : 0,
+      sourceLikeCount: (flags & 4194304) !== 0 ? c.uint.decode(state) : 0,
+      sourceCommentCount: (flags & 8388608) !== 0 ? c.uint.decode(state) : 0,
+      sourceArchivedAt: (flags & 16777216) !== 0 ? c.uint.decode(state) : 0,
+      sourceRelayId: (flags & 33554432) !== 0 ? c.string.decode(state) : null,
+      sourceMetadataJson: (flags & 67108864) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -5020,7 +5230,21 @@ const encoding207 = {
       (m.uploadedAt ? 256 : 0) |
       (m.uploadedBy ? 512 : 0) |
       (m.category ? 1024 : 0) |
-      (m.views ? 2048 : 0)
+      (m.views ? 2048 : 0) |
+      (m.sourcePlatform ? 4096 : 0) |
+      (m.sourcePlatformLabel ? 8192 : 0) |
+      (m.sourceUrl ? 16384 : 0) |
+      (m.sourceId ? 32768 : 0) |
+      (m.sourceCreatorName ? 65536 : 0) |
+      (m.sourceCreatorHandle ? 131072 : 0) |
+      (m.sourceCreatorUrl ? 262144 : 0) |
+      (m.sourcePublishedAt ? 524288 : 0) |
+      (m.sourceViewCount ? 1048576 : 0) |
+      (m.sourceLikeCount ? 2097152 : 0) |
+      (m.sourceCommentCount ? 4194304 : 0) |
+      (m.sourceArchivedAt ? 8388608 : 0) |
+      (m.sourceRelayId ? 16777216 : 0) |
+      (m.sourceMetadataJson ? 33554432 : 0)
 
     c.string.preencode(state, m.type)
     c.uint.preencode(state, flags)
@@ -5039,6 +5263,20 @@ const encoding207 = {
     if (m.uploadedBy) c.string.preencode(state, m.uploadedBy)
     if (m.category) c.string.preencode(state, m.category)
     if (m.views) c.uint.preencode(state, m.views)
+    if (m.sourcePlatform) c.string.preencode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.preencode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.preencode(state, m.sourceUrl)
+    if (m.sourceId) c.string.preencode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.preencode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.preencode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.preencode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.preencode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.preencode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.preencode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.preencode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.preencode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.preencode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.preencode(state, m.sourceMetadataJson)
   },
   encode(state, m) {
     const flags =
@@ -5053,7 +5291,21 @@ const encoding207 = {
       (m.uploadedAt ? 256 : 0) |
       (m.uploadedBy ? 512 : 0) |
       (m.category ? 1024 : 0) |
-      (m.views ? 2048 : 0)
+      (m.views ? 2048 : 0) |
+      (m.sourcePlatform ? 4096 : 0) |
+      (m.sourcePlatformLabel ? 8192 : 0) |
+      (m.sourceUrl ? 16384 : 0) |
+      (m.sourceId ? 32768 : 0) |
+      (m.sourceCreatorName ? 65536 : 0) |
+      (m.sourceCreatorHandle ? 131072 : 0) |
+      (m.sourceCreatorUrl ? 262144 : 0) |
+      (m.sourcePublishedAt ? 524288 : 0) |
+      (m.sourceViewCount ? 1048576 : 0) |
+      (m.sourceLikeCount ? 2097152 : 0) |
+      (m.sourceCommentCount ? 4194304 : 0) |
+      (m.sourceArchivedAt ? 8388608 : 0) |
+      (m.sourceRelayId ? 16777216 : 0) |
+      (m.sourceMetadataJson ? 33554432 : 0)
 
     c.string.encode(state, m.type)
     c.uint.encode(state, flags)
@@ -5072,6 +5324,20 @@ const encoding207 = {
     if (m.uploadedBy) c.string.encode(state, m.uploadedBy)
     if (m.category) c.string.encode(state, m.category)
     if (m.views) c.uint.encode(state, m.views)
+    if (m.sourcePlatform) c.string.encode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.encode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.encode(state, m.sourceUrl)
+    if (m.sourceId) c.string.encode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.encode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.encode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.encode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.encode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.encode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.encode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.encode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.encode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.encode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.encode(state, m.sourceMetadataJson)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -5092,7 +5358,21 @@ const encoding207 = {
       uploadedAt: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
       uploadedBy: (flags & 512) !== 0 ? c.string.decode(state) : null,
       category: (flags & 1024) !== 0 ? c.string.decode(state) : null,
-      views: (flags & 2048) !== 0 ? c.uint.decode(state) : 0
+      views: (flags & 2048) !== 0 ? c.uint.decode(state) : 0,
+      sourcePlatform: (flags & 4096) !== 0 ? c.string.decode(state) : null,
+      sourcePlatformLabel: (flags & 8192) !== 0 ? c.string.decode(state) : null,
+      sourceUrl: (flags & 16384) !== 0 ? c.string.decode(state) : null,
+      sourceId: (flags & 32768) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorName: (flags & 65536) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorHandle: (flags & 131072) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorUrl: (flags & 262144) !== 0 ? c.string.decode(state) : null,
+      sourcePublishedAt: (flags & 524288) !== 0 ? c.uint.decode(state) : 0,
+      sourceViewCount: (flags & 1048576) !== 0 ? c.uint.decode(state) : 0,
+      sourceLikeCount: (flags & 2097152) !== 0 ? c.uint.decode(state) : 0,
+      sourceCommentCount: (flags & 4194304) !== 0 ? c.uint.decode(state) : 0,
+      sourceArchivedAt: (flags & 8388608) !== 0 ? c.uint.decode(state) : 0,
+      sourceRelayId: (flags & 16777216) !== 0 ? c.string.decode(state) : null,
+      sourceMetadataJson: (flags & 33554432) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -5100,8 +5380,31 @@ const encoding207 = {
 // @peartube/channel-op-update-video
 const encoding208 = {
   preencode(state, m) {
+    const flags =
+      (m.schemaVersion ? 1 : 0) |
+      (m.title ? 2 : 0) |
+      (m.description ? 4 : 0) |
+      (m.thumbnail ? 8 : 0) |
+      (m.category ? 16 : 0) |
+      (m.updatedAt ? 32 : 0) |
+      (m.updatedBy ? 64 : 0) |
+      (m.sourcePlatform ? 128 : 0) |
+      (m.sourcePlatformLabel ? 256 : 0) |
+      (m.sourceUrl ? 512 : 0) |
+      (m.sourceId ? 1024 : 0) |
+      (m.sourceCreatorName ? 2048 : 0) |
+      (m.sourceCreatorHandle ? 4096 : 0) |
+      (m.sourceCreatorUrl ? 8192 : 0) |
+      (m.sourcePublishedAt ? 16384 : 0) |
+      (m.sourceViewCount ? 32768 : 0) |
+      (m.sourceLikeCount ? 65536 : 0) |
+      (m.sourceCommentCount ? 131072 : 0) |
+      (m.sourceArchivedAt ? 262144 : 0) |
+      (m.sourceRelayId ? 524288 : 0) |
+      (m.sourceMetadataJson ? 1048576 : 0)
+
     c.string.preencode(state, m.type)
-    state.end++ // max flag is 64 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.schemaVersion) c.uint.preencode(state, m.schemaVersion)
     c.string.preencode(state, m.id)
@@ -5111,6 +5414,20 @@ const encoding208 = {
     if (m.category) c.string.preencode(state, m.category)
     if (m.updatedAt) c.uint.preencode(state, m.updatedAt)
     if (m.updatedBy) c.string.preencode(state, m.updatedBy)
+    if (m.sourcePlatform) c.string.preencode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.preencode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.preencode(state, m.sourceUrl)
+    if (m.sourceId) c.string.preencode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.preencode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.preencode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.preencode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.preencode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.preencode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.preencode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.preencode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.preencode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.preencode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.preencode(state, m.sourceMetadataJson)
   },
   encode(state, m) {
     const flags =
@@ -5120,7 +5437,21 @@ const encoding208 = {
       (m.thumbnail ? 8 : 0) |
       (m.category ? 16 : 0) |
       (m.updatedAt ? 32 : 0) |
-      (m.updatedBy ? 64 : 0)
+      (m.updatedBy ? 64 : 0) |
+      (m.sourcePlatform ? 128 : 0) |
+      (m.sourcePlatformLabel ? 256 : 0) |
+      (m.sourceUrl ? 512 : 0) |
+      (m.sourceId ? 1024 : 0) |
+      (m.sourceCreatorName ? 2048 : 0) |
+      (m.sourceCreatorHandle ? 4096 : 0) |
+      (m.sourceCreatorUrl ? 8192 : 0) |
+      (m.sourcePublishedAt ? 16384 : 0) |
+      (m.sourceViewCount ? 32768 : 0) |
+      (m.sourceLikeCount ? 65536 : 0) |
+      (m.sourceCommentCount ? 131072 : 0) |
+      (m.sourceArchivedAt ? 262144 : 0) |
+      (m.sourceRelayId ? 524288 : 0) |
+      (m.sourceMetadataJson ? 1048576 : 0)
 
     c.string.encode(state, m.type)
     c.uint.encode(state, flags)
@@ -5133,6 +5464,20 @@ const encoding208 = {
     if (m.category) c.string.encode(state, m.category)
     if (m.updatedAt) c.uint.encode(state, m.updatedAt)
     if (m.updatedBy) c.string.encode(state, m.updatedBy)
+    if (m.sourcePlatform) c.string.encode(state, m.sourcePlatform)
+    if (m.sourcePlatformLabel) c.string.encode(state, m.sourcePlatformLabel)
+    if (m.sourceUrl) c.string.encode(state, m.sourceUrl)
+    if (m.sourceId) c.string.encode(state, m.sourceId)
+    if (m.sourceCreatorName) c.string.encode(state, m.sourceCreatorName)
+    if (m.sourceCreatorHandle) c.string.encode(state, m.sourceCreatorHandle)
+    if (m.sourceCreatorUrl) c.string.encode(state, m.sourceCreatorUrl)
+    if (m.sourcePublishedAt) c.uint.encode(state, m.sourcePublishedAt)
+    if (m.sourceViewCount) c.uint.encode(state, m.sourceViewCount)
+    if (m.sourceLikeCount) c.uint.encode(state, m.sourceLikeCount)
+    if (m.sourceCommentCount) c.uint.encode(state, m.sourceCommentCount)
+    if (m.sourceArchivedAt) c.uint.encode(state, m.sourceArchivedAt)
+    if (m.sourceRelayId) c.string.encode(state, m.sourceRelayId)
+    if (m.sourceMetadataJson) c.string.encode(state, m.sourceMetadataJson)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -5147,7 +5492,21 @@ const encoding208 = {
       thumbnail: (flags & 8) !== 0 ? c.string.decode(state) : null,
       category: (flags & 16) !== 0 ? c.string.decode(state) : null,
       updatedAt: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
-      updatedBy: (flags & 64) !== 0 ? c.string.decode(state) : null
+      updatedBy: (flags & 64) !== 0 ? c.string.decode(state) : null,
+      sourcePlatform: (flags & 128) !== 0 ? c.string.decode(state) : null,
+      sourcePlatformLabel: (flags & 256) !== 0 ? c.string.decode(state) : null,
+      sourceUrl: (flags & 512) !== 0 ? c.string.decode(state) : null,
+      sourceId: (flags & 1024) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorName: (flags & 2048) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorHandle: (flags & 4096) !== 0 ? c.string.decode(state) : null,
+      sourceCreatorUrl: (flags & 8192) !== 0 ? c.string.decode(state) : null,
+      sourcePublishedAt: (flags & 16384) !== 0 ? c.uint.decode(state) : 0,
+      sourceViewCount: (flags & 32768) !== 0 ? c.uint.decode(state) : 0,
+      sourceLikeCount: (flags & 65536) !== 0 ? c.uint.decode(state) : 0,
+      sourceCommentCount: (flags & 131072) !== 0 ? c.uint.decode(state) : 0,
+      sourceArchivedAt: (flags & 262144) !== 0 ? c.uint.decode(state) : 0,
+      sourceRelayId: (flags & 524288) !== 0 ? c.string.decode(state) : null,
+      sourceMetadataJson: (flags & 1048576) !== 0 ? c.string.decode(state) : null
     }
   }
 }

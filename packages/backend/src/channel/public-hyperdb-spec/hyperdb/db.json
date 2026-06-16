@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "offset": 0,
   "schema": [
     {
@@ -46,6 +46,21 @@
       "key": [
         "uploadedAt"
       ]
+    },
+    {
+      "name": "videoSourceMetadata",
+      "namespace": "peartubePublic",
+      "id": 3,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubePublic/videoSourceMetadata",
+      "derived": false,
+      "key": [
+        "videoId"
+      ],
+      "trigger": null
     }
   ]
 }

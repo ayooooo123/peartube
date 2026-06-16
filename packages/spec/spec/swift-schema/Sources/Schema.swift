@@ -1393,8 +1393,22 @@ public struct Video {
   public var hasHeadBlock: Bool
   public var contiguousBlocks: UInt?
   public var readyForPlayback: Bool
+  public var sourcePlatform: String?
+  public var sourcePlatformLabel: String?
+  public var sourceUrl: String?
+  public var sourceId: String?
+  public var sourceCreatorName: String?
+  public var sourceCreatorHandle: String?
+  public var sourceCreatorUrl: String?
+  public var sourcePublishedAt: UInt?
+  public var sourceViewCount: UInt?
+  public var sourceLikeCount: UInt?
+  public var sourceCommentCount: UInt?
+  public var sourceArchivedAt: UInt?
+  public var sourceRelayId: String?
+  public var sourceMetadataJson: String?
 
-  public init(id: String, title: String, description: String? = nil, path: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, channelKey: String? = nil, channelName: String? = nil, createdAt: UInt? = nil, views: UInt? = nil, category: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, availability: String? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, publicBeeKey: String? = nil, byteAvailability: String? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false) {
+  public init(id: String, title: String, description: String? = nil, path: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, channelKey: String? = nil, channelName: String? = nil, createdAt: UInt? = nil, views: UInt? = nil, category: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, availability: String? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, publicBeeKey: String? = nil, byteAvailability: String? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false, sourcePlatform: String? = nil, sourcePlatformLabel: String? = nil, sourceUrl: String? = nil, sourceId: String? = nil, sourceCreatorName: String? = nil, sourceCreatorHandle: String? = nil, sourceCreatorUrl: String? = nil, sourcePublishedAt: UInt? = nil, sourceViewCount: UInt? = nil, sourceLikeCount: UInt? = nil, sourceCommentCount: UInt? = nil, sourceArchivedAt: UInt? = nil, sourceRelayId: String? = nil, sourceMetadataJson: String? = nil) {
     self.id = id
     self.title = title
     self.description = description
@@ -1418,6 +1432,20 @@ public struct Video {
     self.hasHeadBlock = hasHeadBlock
     self.contiguousBlocks = contiguousBlocks
     self.readyForPlayback = readyForPlayback
+    self.sourcePlatform = sourcePlatform
+    self.sourcePlatformLabel = sourcePlatformLabel
+    self.sourceUrl = sourceUrl
+    self.sourceId = sourceId
+    self.sourceCreatorName = sourceCreatorName
+    self.sourceCreatorHandle = sourceCreatorHandle
+    self.sourceCreatorUrl = sourceCreatorUrl
+    self.sourcePublishedAt = sourcePublishedAt
+    self.sourceViewCount = sourceViewCount
+    self.sourceLikeCount = sourceLikeCount
+    self.sourceCommentCount = sourceCommentCount
+    self.sourceArchivedAt = sourceArchivedAt
+    self.sourceRelayId = sourceRelayId
+    self.sourceMetadataJson = sourceMetadataJson
   }
 }
 
@@ -1439,6 +1467,20 @@ public struct VideoCodec: Codec {
   let _mimeTypeCodec = Primitive.UTF8()
   let _pathCodec = Primitive.UTF8()
   let _publicBeeKeyCodec = Primitive.UTF8()
+  let _sourceArchivedAtCodec = Primitive.UInt()
+  let _sourceCommentCountCodec = Primitive.UInt()
+  let _sourceCreatorHandleCodec = Primitive.UTF8()
+  let _sourceCreatorNameCodec = Primitive.UTF8()
+  let _sourceCreatorUrlCodec = Primitive.UTF8()
+  let _sourceIdCodec = Primitive.UTF8()
+  let _sourceLikeCountCodec = Primitive.UInt()
+  let _sourceMetadataJsonCodec = Primitive.UTF8()
+  let _sourcePlatformCodec = Primitive.UTF8()
+  let _sourcePlatformLabelCodec = Primitive.UTF8()
+  let _sourcePublishedAtCodec = Primitive.UInt()
+  let _sourceRelayIdCodec = Primitive.UTF8()
+  let _sourceUrlCodec = Primitive.UTF8()
+  let _sourceViewCountCodec = Primitive.UInt()
   let _thumbnailBlobIdCodec = Primitive.UTF8()
   let _thumbnailBlobsCoreKeyCodec = Primitive.UTF8()
   let _thumbnailCodec = Primitive.UTF8()
@@ -1449,33 +1491,9 @@ public struct VideoCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: Video) {
-    // Compute flags for varint sizing
-    var flags: UInt = 0
-    if value.description != nil { flags |= 1 }
-    if value.path != nil { flags |= 2 }
-    if value.duration != nil { flags |= 4 }
-    if value.thumbnail != nil { flags |= 8 }
-    if value.channelKey != nil { flags |= 16 }
-    if value.channelName != nil { flags |= 32 }
-    if value.createdAt != nil { flags |= 64 }
-    if value.views != nil { flags |= 128 }
-    if value.category != nil { flags |= 256 }
-    if value.blobId != nil { flags |= 512 }
-    if value.blobsCoreKey != nil { flags |= 1024 }
-    if value.mimeType != nil { flags |= 2048 }
-    if value.availability != nil { flags |= 4096 }
-    if value.thumbnailBlobId != nil { flags |= 8192 }
-    if value.thumbnailBlobsCoreKey != nil { flags |= 16384 }
-    if value.thumbnailMimeType != nil { flags |= 32768 }
-    if value.publicBeeKey != nil { flags |= 65536 }
-    if value.byteAvailability != nil { flags |= 131072 }
-    if value.hasHeadBlock { flags |= 262144 }
-    if value.contiguousBlocks != nil { flags |= 524288 }
-    if value.readyForPlayback { flags |= 1048576 }
-
     _idCodec.preencode(&state, value.id)
     _titleCodec.preencode(&state, value.title)
-    Primitive.UInt().preencode(&state, flags)
+    state.end += 1 // flags
     if let v = value.description { _descriptionCodec.preencode(&state, v) }
     if let v = value.path { _pathCodec.preencode(&state, v) }
     if let v = value.duration { _durationCodec.preencode(&state, v) }
@@ -1495,6 +1513,20 @@ public struct VideoCodec: Codec {
     if let v = value.publicBeeKey { _publicBeeKeyCodec.preencode(&state, v) }
     if let v = value.byteAvailability { _byteAvailabilityCodec.preencode(&state, v) }
     if let v = value.contiguousBlocks { _contiguousBlocksCodec.preencode(&state, v) }
+    if let v = value.sourcePlatform { _sourcePlatformCodec.preencode(&state, v) }
+    if let v = value.sourcePlatformLabel { _sourcePlatformLabelCodec.preencode(&state, v) }
+    if let v = value.sourceUrl { _sourceUrlCodec.preencode(&state, v) }
+    if let v = value.sourceId { _sourceIdCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorName { _sourceCreatorNameCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorHandle { _sourceCreatorHandleCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorUrl { _sourceCreatorUrlCodec.preencode(&state, v) }
+    if let v = value.sourcePublishedAt { _sourcePublishedAtCodec.preencode(&state, v) }
+    if let v = value.sourceViewCount { _sourceViewCountCodec.preencode(&state, v) }
+    if let v = value.sourceLikeCount { _sourceLikeCountCodec.preencode(&state, v) }
+    if let v = value.sourceCommentCount { _sourceCommentCountCodec.preencode(&state, v) }
+    if let v = value.sourceArchivedAt { _sourceArchivedAtCodec.preencode(&state, v) }
+    if let v = value.sourceRelayId { _sourceRelayIdCodec.preencode(&state, v) }
+    if let v = value.sourceMetadataJson { _sourceMetadataJsonCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: Video) throws {
@@ -1520,6 +1552,20 @@ public struct VideoCodec: Codec {
     if value.hasHeadBlock { flags |= 262144 }
     if value.contiguousBlocks != nil { flags |= 524288 }
     if value.readyForPlayback { flags |= 1048576 }
+    if value.sourcePlatform != nil { flags |= 2097152 }
+    if value.sourcePlatformLabel != nil { flags |= 4194304 }
+    if value.sourceUrl != nil { flags |= 8388608 }
+    if value.sourceId != nil { flags |= 16777216 }
+    if value.sourceCreatorName != nil { flags |= 33554432 }
+    if value.sourceCreatorHandle != nil { flags |= 67108864 }
+    if value.sourceCreatorUrl != nil { flags |= 134217728 }
+    if value.sourcePublishedAt != nil { flags |= 268435456 }
+    if value.sourceViewCount != nil { flags |= 536870912 }
+    if value.sourceLikeCount != nil { flags |= 1073741824 }
+    if value.sourceCommentCount != nil { flags |= -2147483648 }
+    if value.sourceArchivedAt != nil { flags |= 0 }
+    if value.sourceRelayId != nil { flags |= 0 }
+    if value.sourceMetadataJson != nil { flags |= 0 }
 
     try _idCodec.encode(&state, value.id)
     try _titleCodec.encode(&state, value.title)
@@ -1543,6 +1589,20 @@ public struct VideoCodec: Codec {
     if let v = value.publicBeeKey { try _publicBeeKeyCodec.encode(&state, v) }
     if let v = value.byteAvailability { try _byteAvailabilityCodec.encode(&state, v) }
     if let v = value.contiguousBlocks { try _contiguousBlocksCodec.encode(&state, v) }
+    if let v = value.sourcePlatform { try _sourcePlatformCodec.encode(&state, v) }
+    if let v = value.sourcePlatformLabel { try _sourcePlatformLabelCodec.encode(&state, v) }
+    if let v = value.sourceUrl { try _sourceUrlCodec.encode(&state, v) }
+    if let v = value.sourceId { try _sourceIdCodec.encode(&state, v) }
+    if let v = value.sourceCreatorName { try _sourceCreatorNameCodec.encode(&state, v) }
+    if let v = value.sourceCreatorHandle { try _sourceCreatorHandleCodec.encode(&state, v) }
+    if let v = value.sourceCreatorUrl { try _sourceCreatorUrlCodec.encode(&state, v) }
+    if let v = value.sourcePublishedAt { try _sourcePublishedAtCodec.encode(&state, v) }
+    if let v = value.sourceViewCount { try _sourceViewCountCodec.encode(&state, v) }
+    if let v = value.sourceLikeCount { try _sourceLikeCountCodec.encode(&state, v) }
+    if let v = value.sourceCommentCount { try _sourceCommentCountCodec.encode(&state, v) }
+    if let v = value.sourceArchivedAt { try _sourceArchivedAtCodec.encode(&state, v) }
+    if let v = value.sourceRelayId { try _sourceRelayIdCodec.encode(&state, v) }
+    if let v = value.sourceMetadataJson { try _sourceMetadataJsonCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> Video {
@@ -1568,6 +1628,20 @@ public struct VideoCodec: Codec {
     let _r18: String? = (flags & 65536) != 0 ? try _publicBeeKeyCodec.decode(&state) : nil
     let _r19: String? = (flags & 131072) != 0 ? try _byteAvailabilityCodec.decode(&state) : nil
     let _r20: UInt? = (flags & 524288) != 0 ? try _contiguousBlocksCodec.decode(&state) : nil
+    let _r21: String? = (flags & 2097152) != 0 ? try _sourcePlatformCodec.decode(&state) : nil
+    let _r22: String? = (flags & 4194304) != 0 ? try _sourcePlatformLabelCodec.decode(&state) : nil
+    let _r23: String? = (flags & 8388608) != 0 ? try _sourceUrlCodec.decode(&state) : nil
+    let _r24: String? = (flags & 16777216) != 0 ? try _sourceIdCodec.decode(&state) : nil
+    let _r25: String? = (flags & 33554432) != 0 ? try _sourceCreatorNameCodec.decode(&state) : nil
+    let _r26: String? = (flags & 67108864) != 0 ? try _sourceCreatorHandleCodec.decode(&state) : nil
+    let _r27: String? = (flags & 134217728) != 0 ? try _sourceCreatorUrlCodec.decode(&state) : nil
+    let _r28: UInt? = (flags & 268435456) != 0 ? try _sourcePublishedAtCodec.decode(&state) : nil
+    let _r29: UInt? = (flags & 536870912) != 0 ? try _sourceViewCountCodec.decode(&state) : nil
+    let _r30: UInt? = (flags & 1073741824) != 0 ? try _sourceLikeCountCodec.decode(&state) : nil
+    let _r31: UInt? = (flags & -2147483648) != 0 ? try _sourceCommentCountCodec.decode(&state) : nil
+    let _r32: UInt? = (flags & 0) != 0 ? try _sourceArchivedAtCodec.decode(&state) : nil
+    let _r33: String? = (flags & 0) != 0 ? try _sourceRelayIdCodec.decode(&state) : nil
+    let _r34: String? = (flags & 0) != 0 ? try _sourceMetadataJsonCodec.decode(&state) : nil
     return Video(
       id: _r0,
       title: _r1,
@@ -1591,7 +1665,21 @@ public struct VideoCodec: Codec {
       byteAvailability: _r19,
       hasHeadBlock: (flags & 262144) != 0,
       contiguousBlocks: _r20,
-      readyForPlayback: (flags & 1048576) != 0
+      readyForPlayback: (flags & 1048576) != 0,
+      sourcePlatform: _r21,
+      sourcePlatformLabel: _r22,
+      sourceUrl: _r23,
+      sourceId: _r24,
+      sourceCreatorName: _r25,
+      sourceCreatorHandle: _r26,
+      sourceCreatorUrl: _r27,
+      sourcePublishedAt: _r28,
+      sourceViewCount: _r29,
+      sourceLikeCount: _r30,
+      sourceCommentCount: _r31,
+      sourceArchivedAt: _r32,
+      sourceRelayId: _r33,
+      sourceMetadataJson: _r34
     )
   }
 }
@@ -5160,8 +5248,22 @@ public struct FeedEntryPreviewVideo {
   public var hasHeadBlock: Bool
   public var contiguousBlocks: UInt?
   public var readyForPlayback: Bool
+  public var sourcePlatform: String?
+  public var sourcePlatformLabel: String?
+  public var sourceUrl: String?
+  public var sourceId: String?
+  public var sourceCreatorName: String?
+  public var sourceCreatorHandle: String?
+  public var sourceCreatorUrl: String?
+  public var sourcePublishedAt: UInt?
+  public var sourceViewCount: UInt?
+  public var sourceLikeCount: UInt?
+  public var sourceCommentCount: UInt?
+  public var sourceArchivedAt: UInt?
+  public var sourceRelayId: String?
+  public var sourceMetadataJson: String?
 
-  public init(id: String, title: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, path: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, uploadedAt: UInt? = nil, width: UInt? = nil, height: UInt? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, availability: String? = nil, description: String? = nil, thumbnailUrl: String? = nil, byteAvailability: String? = nil, channelKey: String? = nil, driveKey: String? = nil, publicBeeKey: String? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false) {
+  public init(id: String, title: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, path: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, uploadedAt: UInt? = nil, width: UInt? = nil, height: UInt? = nil, thumbnailBlobId: String? = nil, thumbnailBlobsCoreKey: String? = nil, thumbnailMimeType: String? = nil, availability: String? = nil, description: String? = nil, thumbnailUrl: String? = nil, byteAvailability: String? = nil, channelKey: String? = nil, driveKey: String? = nil, publicBeeKey: String? = nil, hasHeadBlock: Bool = false, contiguousBlocks: UInt? = nil, readyForPlayback: Bool = false, sourcePlatform: String? = nil, sourcePlatformLabel: String? = nil, sourceUrl: String? = nil, sourceId: String? = nil, sourceCreatorName: String? = nil, sourceCreatorHandle: String? = nil, sourceCreatorUrl: String? = nil, sourcePublishedAt: UInt? = nil, sourceViewCount: UInt? = nil, sourceLikeCount: UInt? = nil, sourceCommentCount: UInt? = nil, sourceArchivedAt: UInt? = nil, sourceRelayId: String? = nil, sourceMetadataJson: String? = nil) {
     self.id = id
     self.title = title
     self.duration = duration
@@ -5186,6 +5288,20 @@ public struct FeedEntryPreviewVideo {
     self.hasHeadBlock = hasHeadBlock
     self.contiguousBlocks = contiguousBlocks
     self.readyForPlayback = readyForPlayback
+    self.sourcePlatform = sourcePlatform
+    self.sourcePlatformLabel = sourcePlatformLabel
+    self.sourceUrl = sourceUrl
+    self.sourceId = sourceId
+    self.sourceCreatorName = sourceCreatorName
+    self.sourceCreatorHandle = sourceCreatorHandle
+    self.sourceCreatorUrl = sourceCreatorUrl
+    self.sourcePublishedAt = sourcePublishedAt
+    self.sourceViewCount = sourceViewCount
+    self.sourceLikeCount = sourceLikeCount
+    self.sourceCommentCount = sourceCommentCount
+    self.sourceArchivedAt = sourceArchivedAt
+    self.sourceRelayId = sourceRelayId
+    self.sourceMetadataJson = sourceMetadataJson
   }
 }
 
@@ -5206,6 +5322,20 @@ public struct FeedEntryPreviewVideoCodec: Codec {
   let _mimeTypeCodec = Primitive.UTF8()
   let _pathCodec = Primitive.UTF8()
   let _publicBeeKeyCodec = Primitive.UTF8()
+  let _sourceArchivedAtCodec = Primitive.UInt()
+  let _sourceCommentCountCodec = Primitive.UInt()
+  let _sourceCreatorHandleCodec = Primitive.UTF8()
+  let _sourceCreatorNameCodec = Primitive.UTF8()
+  let _sourceCreatorUrlCodec = Primitive.UTF8()
+  let _sourceIdCodec = Primitive.UTF8()
+  let _sourceLikeCountCodec = Primitive.UInt()
+  let _sourceMetadataJsonCodec = Primitive.UTF8()
+  let _sourcePlatformCodec = Primitive.UTF8()
+  let _sourcePlatformLabelCodec = Primitive.UTF8()
+  let _sourcePublishedAtCodec = Primitive.UInt()
+  let _sourceRelayIdCodec = Primitive.UTF8()
+  let _sourceUrlCodec = Primitive.UTF8()
+  let _sourceViewCountCodec = Primitive.UInt()
   let _thumbnailBlobIdCodec = Primitive.UTF8()
   let _thumbnailBlobsCoreKeyCodec = Primitive.UTF8()
   let _thumbnailCodec = Primitive.UTF8()
@@ -5218,34 +5348,8 @@ public struct FeedEntryPreviewVideoCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: FeedEntryPreviewVideo) {
-    // Compute flags for varint sizing
-    var flags: UInt = 0
-    if value.title != nil { flags |= 1 }
-    if value.duration != nil { flags |= 2 }
-    if value.thumbnail != nil { flags |= 4 }
-    if value.path != nil { flags |= 8 }
-    if value.blobId != nil { flags |= 16 }
-    if value.blobsCoreKey != nil { flags |= 32 }
-    if value.mimeType != nil { flags |= 64 }
-    if value.uploadedAt != nil { flags |= 128 }
-    if value.width != nil { flags |= 256 }
-    if value.height != nil { flags |= 512 }
-    if value.thumbnailBlobId != nil { flags |= 1024 }
-    if value.thumbnailBlobsCoreKey != nil { flags |= 2048 }
-    if value.thumbnailMimeType != nil { flags |= 4096 }
-    if value.availability != nil { flags |= 8192 }
-    if value.description != nil { flags |= 16384 }
-    if value.thumbnailUrl != nil { flags |= 32768 }
-    if value.byteAvailability != nil { flags |= 65536 }
-    if value.channelKey != nil { flags |= 131072 }
-    if value.driveKey != nil { flags |= 262144 }
-    if value.publicBeeKey != nil { flags |= 524288 }
-    if value.hasHeadBlock { flags |= 1048576 }
-    if value.contiguousBlocks != nil { flags |= 2097152 }
-    if value.readyForPlayback { flags |= 4194304 }
-
     _idCodec.preencode(&state, value.id)
-    Primitive.UInt().preencode(&state, flags)
+    state.end += 1 // flags
     if let v = value.title { _titleCodec.preencode(&state, v) }
     if let v = value.duration { _durationCodec.preencode(&state, v) }
     if let v = value.thumbnail { _thumbnailCodec.preencode(&state, v) }
@@ -5267,6 +5371,20 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if let v = value.driveKey { _driveKeyCodec.preencode(&state, v) }
     if let v = value.publicBeeKey { _publicBeeKeyCodec.preencode(&state, v) }
     if let v = value.contiguousBlocks { _contiguousBlocksCodec.preencode(&state, v) }
+    if let v = value.sourcePlatform { _sourcePlatformCodec.preencode(&state, v) }
+    if let v = value.sourcePlatformLabel { _sourcePlatformLabelCodec.preencode(&state, v) }
+    if let v = value.sourceUrl { _sourceUrlCodec.preencode(&state, v) }
+    if let v = value.sourceId { _sourceIdCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorName { _sourceCreatorNameCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorHandle { _sourceCreatorHandleCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorUrl { _sourceCreatorUrlCodec.preencode(&state, v) }
+    if let v = value.sourcePublishedAt { _sourcePublishedAtCodec.preencode(&state, v) }
+    if let v = value.sourceViewCount { _sourceViewCountCodec.preencode(&state, v) }
+    if let v = value.sourceLikeCount { _sourceLikeCountCodec.preencode(&state, v) }
+    if let v = value.sourceCommentCount { _sourceCommentCountCodec.preencode(&state, v) }
+    if let v = value.sourceArchivedAt { _sourceArchivedAtCodec.preencode(&state, v) }
+    if let v = value.sourceRelayId { _sourceRelayIdCodec.preencode(&state, v) }
+    if let v = value.sourceMetadataJson { _sourceMetadataJsonCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: FeedEntryPreviewVideo) throws {
@@ -5294,6 +5412,20 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if value.hasHeadBlock { flags |= 1048576 }
     if value.contiguousBlocks != nil { flags |= 2097152 }
     if value.readyForPlayback { flags |= 4194304 }
+    if value.sourcePlatform != nil { flags |= 8388608 }
+    if value.sourcePlatformLabel != nil { flags |= 16777216 }
+    if value.sourceUrl != nil { flags |= 33554432 }
+    if value.sourceId != nil { flags |= 67108864 }
+    if value.sourceCreatorName != nil { flags |= 134217728 }
+    if value.sourceCreatorHandle != nil { flags |= 268435456 }
+    if value.sourceCreatorUrl != nil { flags |= 536870912 }
+    if value.sourcePublishedAt != nil { flags |= 1073741824 }
+    if value.sourceViewCount != nil { flags |= -2147483648 }
+    if value.sourceLikeCount != nil { flags |= 0 }
+    if value.sourceCommentCount != nil { flags |= 0 }
+    if value.sourceArchivedAt != nil { flags |= 0 }
+    if value.sourceRelayId != nil { flags |= 0 }
+    if value.sourceMetadataJson != nil { flags |= 0 }
 
     try _idCodec.encode(&state, value.id)
     try Primitive.UInt().encode(&state, flags)
@@ -5318,6 +5450,20 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     if let v = value.driveKey { try _driveKeyCodec.encode(&state, v) }
     if let v = value.publicBeeKey { try _publicBeeKeyCodec.encode(&state, v) }
     if let v = value.contiguousBlocks { try _contiguousBlocksCodec.encode(&state, v) }
+    if let v = value.sourcePlatform { try _sourcePlatformCodec.encode(&state, v) }
+    if let v = value.sourcePlatformLabel { try _sourcePlatformLabelCodec.encode(&state, v) }
+    if let v = value.sourceUrl { try _sourceUrlCodec.encode(&state, v) }
+    if let v = value.sourceId { try _sourceIdCodec.encode(&state, v) }
+    if let v = value.sourceCreatorName { try _sourceCreatorNameCodec.encode(&state, v) }
+    if let v = value.sourceCreatorHandle { try _sourceCreatorHandleCodec.encode(&state, v) }
+    if let v = value.sourceCreatorUrl { try _sourceCreatorUrlCodec.encode(&state, v) }
+    if let v = value.sourcePublishedAt { try _sourcePublishedAtCodec.encode(&state, v) }
+    if let v = value.sourceViewCount { try _sourceViewCountCodec.encode(&state, v) }
+    if let v = value.sourceLikeCount { try _sourceLikeCountCodec.encode(&state, v) }
+    if let v = value.sourceCommentCount { try _sourceCommentCountCodec.encode(&state, v) }
+    if let v = value.sourceArchivedAt { try _sourceArchivedAtCodec.encode(&state, v) }
+    if let v = value.sourceRelayId { try _sourceRelayIdCodec.encode(&state, v) }
+    if let v = value.sourceMetadataJson { try _sourceMetadataJsonCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> FeedEntryPreviewVideo {
@@ -5344,6 +5490,20 @@ public struct FeedEntryPreviewVideoCodec: Codec {
     let _r19: String? = (flags & 262144) != 0 ? try _driveKeyCodec.decode(&state) : nil
     let _r20: String? = (flags & 524288) != 0 ? try _publicBeeKeyCodec.decode(&state) : nil
     let _r21: UInt? = (flags & 2097152) != 0 ? try _contiguousBlocksCodec.decode(&state) : nil
+    let _r22: String? = (flags & 8388608) != 0 ? try _sourcePlatformCodec.decode(&state) : nil
+    let _r23: String? = (flags & 16777216) != 0 ? try _sourcePlatformLabelCodec.decode(&state) : nil
+    let _r24: String? = (flags & 33554432) != 0 ? try _sourceUrlCodec.decode(&state) : nil
+    let _r25: String? = (flags & 67108864) != 0 ? try _sourceIdCodec.decode(&state) : nil
+    let _r26: String? = (flags & 134217728) != 0 ? try _sourceCreatorNameCodec.decode(&state) : nil
+    let _r27: String? = (flags & 268435456) != 0 ? try _sourceCreatorHandleCodec.decode(&state) : nil
+    let _r28: String? = (flags & 536870912) != 0 ? try _sourceCreatorUrlCodec.decode(&state) : nil
+    let _r29: UInt? = (flags & 1073741824) != 0 ? try _sourcePublishedAtCodec.decode(&state) : nil
+    let _r30: UInt? = (flags & -2147483648) != 0 ? try _sourceViewCountCodec.decode(&state) : nil
+    let _r31: UInt? = (flags & 0) != 0 ? try _sourceLikeCountCodec.decode(&state) : nil
+    let _r32: UInt? = (flags & 0) != 0 ? try _sourceCommentCountCodec.decode(&state) : nil
+    let _r33: UInt? = (flags & 0) != 0 ? try _sourceArchivedAtCodec.decode(&state) : nil
+    let _r34: String? = (flags & 0) != 0 ? try _sourceRelayIdCodec.decode(&state) : nil
+    let _r35: String? = (flags & 0) != 0 ? try _sourceMetadataJsonCodec.decode(&state) : nil
     return FeedEntryPreviewVideo(
       id: _r0,
       title: _r1,
@@ -5368,7 +5528,21 @@ public struct FeedEntryPreviewVideoCodec: Codec {
       publicBeeKey: _r20,
       hasHeadBlock: (flags & 1048576) != 0,
       contiguousBlocks: _r21,
-      readyForPlayback: (flags & 4194304) != 0
+      readyForPlayback: (flags & 4194304) != 0,
+      sourcePlatform: _r22,
+      sourcePlatformLabel: _r23,
+      sourceUrl: _r24,
+      sourceId: _r25,
+      sourceCreatorName: _r26,
+      sourceCreatorHandle: _r27,
+      sourceCreatorUrl: _r28,
+      sourcePublishedAt: _r29,
+      sourceViewCount: _r30,
+      sourceLikeCount: _r31,
+      sourceCommentCount: _r32,
+      sourceArchivedAt: _r33,
+      sourceRelayId: _r34,
+      sourceMetadataJson: _r35
     )
   }
 }
@@ -8007,8 +8181,22 @@ public struct DesktopBrowseVideo {
   public var mimeType: String?
   public var width: UInt?
   public var height: UInt?
+  public var sourcePlatform: String?
+  public var sourcePlatformLabel: String?
+  public var sourceUrl: String?
+  public var sourceId: String?
+  public var sourceCreatorName: String?
+  public var sourceCreatorHandle: String?
+  public var sourceCreatorUrl: String?
+  public var sourcePublishedAt: UInt?
+  public var sourceViewCount: UInt?
+  public var sourceLikeCount: UInt?
+  public var sourceCommentCount: UInt?
+  public var sourceArchivedAt: UInt?
+  public var sourceRelayId: String?
+  public var sourceMetadataJson: String?
 
-  public init(id: String, backendVideoId: String, channelKey: String, publicBeeKey: String? = nil, title: String, channelName: String, durationText: String? = nil, summary: String? = nil, tags: [String]? = nil, accentHex: String? = nil, sections: [String]? = nil, thumbnailUrl: String? = nil, path: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, width: UInt? = nil, height: UInt? = nil) {
+  public init(id: String, backendVideoId: String, channelKey: String, publicBeeKey: String? = nil, title: String, channelName: String, durationText: String? = nil, summary: String? = nil, tags: [String]? = nil, accentHex: String? = nil, sections: [String]? = nil, thumbnailUrl: String? = nil, path: String? = nil, blobId: String? = nil, blobsCoreKey: String? = nil, mimeType: String? = nil, width: UInt? = nil, height: UInt? = nil, sourcePlatform: String? = nil, sourcePlatformLabel: String? = nil, sourceUrl: String? = nil, sourceId: String? = nil, sourceCreatorName: String? = nil, sourceCreatorHandle: String? = nil, sourceCreatorUrl: String? = nil, sourcePublishedAt: UInt? = nil, sourceViewCount: UInt? = nil, sourceLikeCount: UInt? = nil, sourceCommentCount: UInt? = nil, sourceArchivedAt: UInt? = nil, sourceRelayId: String? = nil, sourceMetadataJson: String? = nil) {
     self.id = id
     self.backendVideoId = backendVideoId
     self.channelKey = channelKey
@@ -8027,6 +8215,20 @@ public struct DesktopBrowseVideo {
     self.mimeType = mimeType
     self.width = width
     self.height = height
+    self.sourcePlatform = sourcePlatform
+    self.sourcePlatformLabel = sourcePlatformLabel
+    self.sourceUrl = sourceUrl
+    self.sourceId = sourceId
+    self.sourceCreatorName = sourceCreatorName
+    self.sourceCreatorHandle = sourceCreatorHandle
+    self.sourceCreatorUrl = sourceCreatorUrl
+    self.sourcePublishedAt = sourcePublishedAt
+    self.sourceViewCount = sourceViewCount
+    self.sourceLikeCount = sourceLikeCount
+    self.sourceCommentCount = sourceCommentCount
+    self.sourceArchivedAt = sourceArchivedAt
+    self.sourceRelayId = sourceRelayId
+    self.sourceMetadataJson = sourceMetadataJson
   }
 }
 
@@ -8046,6 +8248,20 @@ public struct DesktopBrowseVideoCodec: Codec {
   let _pathCodec = Primitive.UTF8()
   let _publicBeeKeyCodec = Primitive.UTF8()
   let _sectionsArrayCodec = Primitive.Array(Primitive.UTF8())
+  let _sourceArchivedAtCodec = Primitive.UInt()
+  let _sourceCommentCountCodec = Primitive.UInt()
+  let _sourceCreatorHandleCodec = Primitive.UTF8()
+  let _sourceCreatorNameCodec = Primitive.UTF8()
+  let _sourceCreatorUrlCodec = Primitive.UTF8()
+  let _sourceIdCodec = Primitive.UTF8()
+  let _sourceLikeCountCodec = Primitive.UInt()
+  let _sourceMetadataJsonCodec = Primitive.UTF8()
+  let _sourcePlatformCodec = Primitive.UTF8()
+  let _sourcePlatformLabelCodec = Primitive.UTF8()
+  let _sourcePublishedAtCodec = Primitive.UInt()
+  let _sourceRelayIdCodec = Primitive.UTF8()
+  let _sourceUrlCodec = Primitive.UTF8()
+  let _sourceViewCountCodec = Primitive.UInt()
   let _summaryCodec = Primitive.UTF8()
   let _tagsArrayCodec = Primitive.Array(Primitive.UTF8())
   let _thumbnailUrlCodec = Primitive.UTF8()
@@ -8070,6 +8286,20 @@ public struct DesktopBrowseVideoCodec: Codec {
     if value.mimeType != nil { flags |= 1024 }
     if value.width != nil { flags |= 2048 }
     if value.height != nil { flags |= 4096 }
+    if value.sourcePlatform != nil { flags |= 8192 }
+    if value.sourcePlatformLabel != nil { flags |= 16384 }
+    if value.sourceUrl != nil { flags |= 32768 }
+    if value.sourceId != nil { flags |= 65536 }
+    if value.sourceCreatorName != nil { flags |= 131072 }
+    if value.sourceCreatorHandle != nil { flags |= 262144 }
+    if value.sourceCreatorUrl != nil { flags |= 524288 }
+    if value.sourcePublishedAt != nil { flags |= 1048576 }
+    if value.sourceViewCount != nil { flags |= 2097152 }
+    if value.sourceLikeCount != nil { flags |= 4194304 }
+    if value.sourceCommentCount != nil { flags |= 8388608 }
+    if value.sourceArchivedAt != nil { flags |= 16777216 }
+    if value.sourceRelayId != nil { flags |= 33554432 }
+    if value.sourceMetadataJson != nil { flags |= 67108864 }
 
     _idCodec.preencode(&state, value.id)
     _backendVideoIdCodec.preencode(&state, value.backendVideoId)
@@ -8090,6 +8320,20 @@ public struct DesktopBrowseVideoCodec: Codec {
     if let v = value.mimeType { _mimeTypeCodec.preencode(&state, v) }
     if let v = value.width { _widthCodec.preencode(&state, v) }
     if let v = value.height { _heightCodec.preencode(&state, v) }
+    if let v = value.sourcePlatform { _sourcePlatformCodec.preencode(&state, v) }
+    if let v = value.sourcePlatformLabel { _sourcePlatformLabelCodec.preencode(&state, v) }
+    if let v = value.sourceUrl { _sourceUrlCodec.preencode(&state, v) }
+    if let v = value.sourceId { _sourceIdCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorName { _sourceCreatorNameCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorHandle { _sourceCreatorHandleCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorUrl { _sourceCreatorUrlCodec.preencode(&state, v) }
+    if let v = value.sourcePublishedAt { _sourcePublishedAtCodec.preencode(&state, v) }
+    if let v = value.sourceViewCount { _sourceViewCountCodec.preencode(&state, v) }
+    if let v = value.sourceLikeCount { _sourceLikeCountCodec.preencode(&state, v) }
+    if let v = value.sourceCommentCount { _sourceCommentCountCodec.preencode(&state, v) }
+    if let v = value.sourceArchivedAt { _sourceArchivedAtCodec.preencode(&state, v) }
+    if let v = value.sourceRelayId { _sourceRelayIdCodec.preencode(&state, v) }
+    if let v = value.sourceMetadataJson { _sourceMetadataJsonCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: DesktopBrowseVideo) throws {
@@ -8107,6 +8351,20 @@ public struct DesktopBrowseVideoCodec: Codec {
     if value.mimeType != nil { flags |= 1024 }
     if value.width != nil { flags |= 2048 }
     if value.height != nil { flags |= 4096 }
+    if value.sourcePlatform != nil { flags |= 8192 }
+    if value.sourcePlatformLabel != nil { flags |= 16384 }
+    if value.sourceUrl != nil { flags |= 32768 }
+    if value.sourceId != nil { flags |= 65536 }
+    if value.sourceCreatorName != nil { flags |= 131072 }
+    if value.sourceCreatorHandle != nil { flags |= 262144 }
+    if value.sourceCreatorUrl != nil { flags |= 524288 }
+    if value.sourcePublishedAt != nil { flags |= 1048576 }
+    if value.sourceViewCount != nil { flags |= 2097152 }
+    if value.sourceLikeCount != nil { flags |= 4194304 }
+    if value.sourceCommentCount != nil { flags |= 8388608 }
+    if value.sourceArchivedAt != nil { flags |= 16777216 }
+    if value.sourceRelayId != nil { flags |= 33554432 }
+    if value.sourceMetadataJson != nil { flags |= 67108864 }
 
     try _idCodec.encode(&state, value.id)
     try _backendVideoIdCodec.encode(&state, value.backendVideoId)
@@ -8127,6 +8385,20 @@ public struct DesktopBrowseVideoCodec: Codec {
     if let v = value.mimeType { try _mimeTypeCodec.encode(&state, v) }
     if let v = value.width { try _widthCodec.encode(&state, v) }
     if let v = value.height { try _heightCodec.encode(&state, v) }
+    if let v = value.sourcePlatform { try _sourcePlatformCodec.encode(&state, v) }
+    if let v = value.sourcePlatformLabel { try _sourcePlatformLabelCodec.encode(&state, v) }
+    if let v = value.sourceUrl { try _sourceUrlCodec.encode(&state, v) }
+    if let v = value.sourceId { try _sourceIdCodec.encode(&state, v) }
+    if let v = value.sourceCreatorName { try _sourceCreatorNameCodec.encode(&state, v) }
+    if let v = value.sourceCreatorHandle { try _sourceCreatorHandleCodec.encode(&state, v) }
+    if let v = value.sourceCreatorUrl { try _sourceCreatorUrlCodec.encode(&state, v) }
+    if let v = value.sourcePublishedAt { try _sourcePublishedAtCodec.encode(&state, v) }
+    if let v = value.sourceViewCount { try _sourceViewCountCodec.encode(&state, v) }
+    if let v = value.sourceLikeCount { try _sourceLikeCountCodec.encode(&state, v) }
+    if let v = value.sourceCommentCount { try _sourceCommentCountCodec.encode(&state, v) }
+    if let v = value.sourceArchivedAt { try _sourceArchivedAtCodec.encode(&state, v) }
+    if let v = value.sourceRelayId { try _sourceRelayIdCodec.encode(&state, v) }
+    if let v = value.sourceMetadataJson { try _sourceMetadataJsonCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> DesktopBrowseVideo {
@@ -8149,6 +8421,20 @@ public struct DesktopBrowseVideoCodec: Codec {
     let _r15: String? = (flags & 1024) != 0 ? try _mimeTypeCodec.decode(&state) : nil
     let _r16: UInt? = (flags & 2048) != 0 ? try _widthCodec.decode(&state) : nil
     let _r17: UInt? = (flags & 4096) != 0 ? try _heightCodec.decode(&state) : nil
+    let _r18: String? = (flags & 8192) != 0 ? try _sourcePlatformCodec.decode(&state) : nil
+    let _r19: String? = (flags & 16384) != 0 ? try _sourcePlatformLabelCodec.decode(&state) : nil
+    let _r20: String? = (flags & 32768) != 0 ? try _sourceUrlCodec.decode(&state) : nil
+    let _r21: String? = (flags & 65536) != 0 ? try _sourceIdCodec.decode(&state) : nil
+    let _r22: String? = (flags & 131072) != 0 ? try _sourceCreatorNameCodec.decode(&state) : nil
+    let _r23: String? = (flags & 262144) != 0 ? try _sourceCreatorHandleCodec.decode(&state) : nil
+    let _r24: String? = (flags & 524288) != 0 ? try _sourceCreatorUrlCodec.decode(&state) : nil
+    let _r25: UInt? = (flags & 1048576) != 0 ? try _sourcePublishedAtCodec.decode(&state) : nil
+    let _r26: UInt? = (flags & 2097152) != 0 ? try _sourceViewCountCodec.decode(&state) : nil
+    let _r27: UInt? = (flags & 4194304) != 0 ? try _sourceLikeCountCodec.decode(&state) : nil
+    let _r28: UInt? = (flags & 8388608) != 0 ? try _sourceCommentCountCodec.decode(&state) : nil
+    let _r29: UInt? = (flags & 16777216) != 0 ? try _sourceArchivedAtCodec.decode(&state) : nil
+    let _r30: String? = (flags & 33554432) != 0 ? try _sourceRelayIdCodec.decode(&state) : nil
+    let _r31: String? = (flags & 67108864) != 0 ? try _sourceMetadataJsonCodec.decode(&state) : nil
     return DesktopBrowseVideo(
       id: _r0,
       backendVideoId: _r1,
@@ -8167,7 +8453,21 @@ public struct DesktopBrowseVideoCodec: Codec {
       blobsCoreKey: _r14,
       mimeType: _r15,
       width: _r16,
-      height: _r17
+      height: _r17,
+      sourcePlatform: _r18,
+      sourcePlatformLabel: _r19,
+      sourceUrl: _r20,
+      sourceId: _r21,
+      sourceCreatorName: _r22,
+      sourceCreatorHandle: _r23,
+      sourceCreatorUrl: _r24,
+      sourcePublishedAt: _r25,
+      sourceViewCount: _r26,
+      sourceLikeCount: _r27,
+      sourceCommentCount: _r28,
+      sourceArchivedAt: _r29,
+      sourceRelayId: _r30,
+      sourceMetadataJson: _r31
     )
   }
 }
@@ -10598,8 +10898,22 @@ public struct ChannelOpAddVideo {
   public var uploadedBy: String?
   public var category: String?
   public var views: UInt?
+  public var sourcePlatform: String?
+  public var sourcePlatformLabel: String?
+  public var sourceUrl: String?
+  public var sourceId: String?
+  public var sourceCreatorName: String?
+  public var sourceCreatorHandle: String?
+  public var sourceCreatorUrl: String?
+  public var sourcePublishedAt: UInt?
+  public var sourceViewCount: UInt?
+  public var sourceLikeCount: UInt?
+  public var sourceCommentCount: UInt?
+  public var sourceArchivedAt: UInt?
+  public var sourceRelayId: String?
+  public var sourceMetadataJson: String?
 
-  public init(type: String, schemaVersion: UInt? = nil, id: String, title: String, description: String? = nil, path: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, blobDriveKey: String? = nil, mimeType: String? = nil, size: UInt? = nil, uploadedAt: UInt? = nil, uploadedBy: String? = nil, category: String? = nil, views: UInt? = nil) {
+  public init(type: String, schemaVersion: UInt? = nil, id: String, title: String, description: String? = nil, path: String? = nil, duration: UInt? = nil, thumbnail: String? = nil, blobDriveKey: String? = nil, mimeType: String? = nil, size: UInt? = nil, uploadedAt: UInt? = nil, uploadedBy: String? = nil, category: String? = nil, views: UInt? = nil, sourcePlatform: String? = nil, sourcePlatformLabel: String? = nil, sourceUrl: String? = nil, sourceId: String? = nil, sourceCreatorName: String? = nil, sourceCreatorHandle: String? = nil, sourceCreatorUrl: String? = nil, sourcePublishedAt: UInt? = nil, sourceViewCount: UInt? = nil, sourceLikeCount: UInt? = nil, sourceCommentCount: UInt? = nil, sourceArchivedAt: UInt? = nil, sourceRelayId: String? = nil, sourceMetadataJson: String? = nil) {
     self.type = type
     self.schemaVersion = schemaVersion
     self.id = id
@@ -10615,6 +10929,20 @@ public struct ChannelOpAddVideo {
     self.uploadedBy = uploadedBy
     self.category = category
     self.views = views
+    self.sourcePlatform = sourcePlatform
+    self.sourcePlatformLabel = sourcePlatformLabel
+    self.sourceUrl = sourceUrl
+    self.sourceId = sourceId
+    self.sourceCreatorName = sourceCreatorName
+    self.sourceCreatorHandle = sourceCreatorHandle
+    self.sourceCreatorUrl = sourceCreatorUrl
+    self.sourcePublishedAt = sourcePublishedAt
+    self.sourceViewCount = sourceViewCount
+    self.sourceLikeCount = sourceLikeCount
+    self.sourceCommentCount = sourceCommentCount
+    self.sourceArchivedAt = sourceArchivedAt
+    self.sourceRelayId = sourceRelayId
+    self.sourceMetadataJson = sourceMetadataJson
   }
 }
 
@@ -10630,6 +10958,20 @@ public struct ChannelOpAddVideoCodec: Codec {
   let _pathCodec = Primitive.UTF8()
   let _schemaVersionCodec = Primitive.UInt()
   let _sizeCodec = Primitive.UInt()
+  let _sourceArchivedAtCodec = Primitive.UInt()
+  let _sourceCommentCountCodec = Primitive.UInt()
+  let _sourceCreatorHandleCodec = Primitive.UTF8()
+  let _sourceCreatorNameCodec = Primitive.UTF8()
+  let _sourceCreatorUrlCodec = Primitive.UTF8()
+  let _sourceIdCodec = Primitive.UTF8()
+  let _sourceLikeCountCodec = Primitive.UInt()
+  let _sourceMetadataJsonCodec = Primitive.UTF8()
+  let _sourcePlatformCodec = Primitive.UTF8()
+  let _sourcePlatformLabelCodec = Primitive.UTF8()
+  let _sourcePublishedAtCodec = Primitive.UInt()
+  let _sourceRelayIdCodec = Primitive.UTF8()
+  let _sourceUrlCodec = Primitive.UTF8()
+  let _sourceViewCountCodec = Primitive.UInt()
   let _thumbnailCodec = Primitive.UTF8()
   let _titleCodec = Primitive.UTF8()
   let _typeCodec = Primitive.UTF8()
@@ -10654,6 +10996,20 @@ public struct ChannelOpAddVideoCodec: Codec {
     if value.uploadedBy != nil { flags |= 512 }
     if value.category != nil { flags |= 1024 }
     if value.views != nil { flags |= 2048 }
+    if value.sourcePlatform != nil { flags |= 4096 }
+    if value.sourcePlatformLabel != nil { flags |= 8192 }
+    if value.sourceUrl != nil { flags |= 16384 }
+    if value.sourceId != nil { flags |= 32768 }
+    if value.sourceCreatorName != nil { flags |= 65536 }
+    if value.sourceCreatorHandle != nil { flags |= 131072 }
+    if value.sourceCreatorUrl != nil { flags |= 262144 }
+    if value.sourcePublishedAt != nil { flags |= 524288 }
+    if value.sourceViewCount != nil { flags |= 1048576 }
+    if value.sourceLikeCount != nil { flags |= 2097152 }
+    if value.sourceCommentCount != nil { flags |= 4194304 }
+    if value.sourceArchivedAt != nil { flags |= 8388608 }
+    if value.sourceRelayId != nil { flags |= 16777216 }
+    if value.sourceMetadataJson != nil { flags |= 33554432 }
 
     _typeCodec.preencode(&state, value.type)
     Primitive.UInt().preencode(&state, flags)
@@ -10671,6 +11027,20 @@ public struct ChannelOpAddVideoCodec: Codec {
     if let v = value.uploadedBy { _uploadedByCodec.preencode(&state, v) }
     if let v = value.category { _categoryCodec.preencode(&state, v) }
     if let v = value.views { _viewsCodec.preencode(&state, v) }
+    if let v = value.sourcePlatform { _sourcePlatformCodec.preencode(&state, v) }
+    if let v = value.sourcePlatformLabel { _sourcePlatformLabelCodec.preencode(&state, v) }
+    if let v = value.sourceUrl { _sourceUrlCodec.preencode(&state, v) }
+    if let v = value.sourceId { _sourceIdCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorName { _sourceCreatorNameCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorHandle { _sourceCreatorHandleCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorUrl { _sourceCreatorUrlCodec.preencode(&state, v) }
+    if let v = value.sourcePublishedAt { _sourcePublishedAtCodec.preencode(&state, v) }
+    if let v = value.sourceViewCount { _sourceViewCountCodec.preencode(&state, v) }
+    if let v = value.sourceLikeCount { _sourceLikeCountCodec.preencode(&state, v) }
+    if let v = value.sourceCommentCount { _sourceCommentCountCodec.preencode(&state, v) }
+    if let v = value.sourceArchivedAt { _sourceArchivedAtCodec.preencode(&state, v) }
+    if let v = value.sourceRelayId { _sourceRelayIdCodec.preencode(&state, v) }
+    if let v = value.sourceMetadataJson { _sourceMetadataJsonCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: ChannelOpAddVideo) throws {
@@ -10687,6 +11057,20 @@ public struct ChannelOpAddVideoCodec: Codec {
     if value.uploadedBy != nil { flags |= 512 }
     if value.category != nil { flags |= 1024 }
     if value.views != nil { flags |= 2048 }
+    if value.sourcePlatform != nil { flags |= 4096 }
+    if value.sourcePlatformLabel != nil { flags |= 8192 }
+    if value.sourceUrl != nil { flags |= 16384 }
+    if value.sourceId != nil { flags |= 32768 }
+    if value.sourceCreatorName != nil { flags |= 65536 }
+    if value.sourceCreatorHandle != nil { flags |= 131072 }
+    if value.sourceCreatorUrl != nil { flags |= 262144 }
+    if value.sourcePublishedAt != nil { flags |= 524288 }
+    if value.sourceViewCount != nil { flags |= 1048576 }
+    if value.sourceLikeCount != nil { flags |= 2097152 }
+    if value.sourceCommentCount != nil { flags |= 4194304 }
+    if value.sourceArchivedAt != nil { flags |= 8388608 }
+    if value.sourceRelayId != nil { flags |= 16777216 }
+    if value.sourceMetadataJson != nil { flags |= 33554432 }
 
     try _typeCodec.encode(&state, value.type)
     try Primitive.UInt().encode(&state, flags)
@@ -10704,6 +11088,20 @@ public struct ChannelOpAddVideoCodec: Codec {
     if let v = value.uploadedBy { try _uploadedByCodec.encode(&state, v) }
     if let v = value.category { try _categoryCodec.encode(&state, v) }
     if let v = value.views { try _viewsCodec.encode(&state, v) }
+    if let v = value.sourcePlatform { try _sourcePlatformCodec.encode(&state, v) }
+    if let v = value.sourcePlatformLabel { try _sourcePlatformLabelCodec.encode(&state, v) }
+    if let v = value.sourceUrl { try _sourceUrlCodec.encode(&state, v) }
+    if let v = value.sourceId { try _sourceIdCodec.encode(&state, v) }
+    if let v = value.sourceCreatorName { try _sourceCreatorNameCodec.encode(&state, v) }
+    if let v = value.sourceCreatorHandle { try _sourceCreatorHandleCodec.encode(&state, v) }
+    if let v = value.sourceCreatorUrl { try _sourceCreatorUrlCodec.encode(&state, v) }
+    if let v = value.sourcePublishedAt { try _sourcePublishedAtCodec.encode(&state, v) }
+    if let v = value.sourceViewCount { try _sourceViewCountCodec.encode(&state, v) }
+    if let v = value.sourceLikeCount { try _sourceLikeCountCodec.encode(&state, v) }
+    if let v = value.sourceCommentCount { try _sourceCommentCountCodec.encode(&state, v) }
+    if let v = value.sourceArchivedAt { try _sourceArchivedAtCodec.encode(&state, v) }
+    if let v = value.sourceRelayId { try _sourceRelayIdCodec.encode(&state, v) }
+    if let v = value.sourceMetadataJson { try _sourceMetadataJsonCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> ChannelOpAddVideo {
@@ -10723,6 +11121,20 @@ public struct ChannelOpAddVideoCodec: Codec {
     let _r12: String? = (flags & 512) != 0 ? try _uploadedByCodec.decode(&state) : nil
     let _r13: String? = (flags & 1024) != 0 ? try _categoryCodec.decode(&state) : nil
     let _r14: UInt? = (flags & 2048) != 0 ? try _viewsCodec.decode(&state) : nil
+    let _r15: String? = (flags & 4096) != 0 ? try _sourcePlatformCodec.decode(&state) : nil
+    let _r16: String? = (flags & 8192) != 0 ? try _sourcePlatformLabelCodec.decode(&state) : nil
+    let _r17: String? = (flags & 16384) != 0 ? try _sourceUrlCodec.decode(&state) : nil
+    let _r18: String? = (flags & 32768) != 0 ? try _sourceIdCodec.decode(&state) : nil
+    let _r19: String? = (flags & 65536) != 0 ? try _sourceCreatorNameCodec.decode(&state) : nil
+    let _r20: String? = (flags & 131072) != 0 ? try _sourceCreatorHandleCodec.decode(&state) : nil
+    let _r21: String? = (flags & 262144) != 0 ? try _sourceCreatorUrlCodec.decode(&state) : nil
+    let _r22: UInt? = (flags & 524288) != 0 ? try _sourcePublishedAtCodec.decode(&state) : nil
+    let _r23: UInt? = (flags & 1048576) != 0 ? try _sourceViewCountCodec.decode(&state) : nil
+    let _r24: UInt? = (flags & 2097152) != 0 ? try _sourceLikeCountCodec.decode(&state) : nil
+    let _r25: UInt? = (flags & 4194304) != 0 ? try _sourceCommentCountCodec.decode(&state) : nil
+    let _r26: UInt? = (flags & 8388608) != 0 ? try _sourceArchivedAtCodec.decode(&state) : nil
+    let _r27: String? = (flags & 16777216) != 0 ? try _sourceRelayIdCodec.decode(&state) : nil
+    let _r28: String? = (flags & 33554432) != 0 ? try _sourceMetadataJsonCodec.decode(&state) : nil
     return ChannelOpAddVideo(
       type: _r0,
       schemaVersion: _r1,
@@ -10738,7 +11150,21 @@ public struct ChannelOpAddVideoCodec: Codec {
       uploadedAt: _r11,
       uploadedBy: _r12,
       category: _r13,
-      views: _r14
+      views: _r14,
+      sourcePlatform: _r15,
+      sourcePlatformLabel: _r16,
+      sourceUrl: _r17,
+      sourceId: _r18,
+      sourceCreatorName: _r19,
+      sourceCreatorHandle: _r20,
+      sourceCreatorUrl: _r21,
+      sourcePublishedAt: _r22,
+      sourceViewCount: _r23,
+      sourceLikeCount: _r24,
+      sourceCommentCount: _r25,
+      sourceArchivedAt: _r26,
+      sourceRelayId: _r27,
+      sourceMetadataJson: _r28
     )
   }
 }
@@ -10756,8 +11182,22 @@ public struct ChannelOpUpdateVideo {
   public var category: String?
   public var updatedAt: UInt?
   public var updatedBy: String?
+  public var sourcePlatform: String?
+  public var sourcePlatformLabel: String?
+  public var sourceUrl: String?
+  public var sourceId: String?
+  public var sourceCreatorName: String?
+  public var sourceCreatorHandle: String?
+  public var sourceCreatorUrl: String?
+  public var sourcePublishedAt: UInt?
+  public var sourceViewCount: UInt?
+  public var sourceLikeCount: UInt?
+  public var sourceCommentCount: UInt?
+  public var sourceArchivedAt: UInt?
+  public var sourceRelayId: String?
+  public var sourceMetadataJson: String?
 
-  public init(type: String, schemaVersion: UInt? = nil, id: String, title: String? = nil, description: String? = nil, thumbnail: String? = nil, category: String? = nil, updatedAt: UInt? = nil, updatedBy: String? = nil) {
+  public init(type: String, schemaVersion: UInt? = nil, id: String, title: String? = nil, description: String? = nil, thumbnail: String? = nil, category: String? = nil, updatedAt: UInt? = nil, updatedBy: String? = nil, sourcePlatform: String? = nil, sourcePlatformLabel: String? = nil, sourceUrl: String? = nil, sourceId: String? = nil, sourceCreatorName: String? = nil, sourceCreatorHandle: String? = nil, sourceCreatorUrl: String? = nil, sourcePublishedAt: UInt? = nil, sourceViewCount: UInt? = nil, sourceLikeCount: UInt? = nil, sourceCommentCount: UInt? = nil, sourceArchivedAt: UInt? = nil, sourceRelayId: String? = nil, sourceMetadataJson: String? = nil) {
     self.type = type
     self.schemaVersion = schemaVersion
     self.id = id
@@ -10767,6 +11207,20 @@ public struct ChannelOpUpdateVideo {
     self.category = category
     self.updatedAt = updatedAt
     self.updatedBy = updatedBy
+    self.sourcePlatform = sourcePlatform
+    self.sourcePlatformLabel = sourcePlatformLabel
+    self.sourceUrl = sourceUrl
+    self.sourceId = sourceId
+    self.sourceCreatorName = sourceCreatorName
+    self.sourceCreatorHandle = sourceCreatorHandle
+    self.sourceCreatorUrl = sourceCreatorUrl
+    self.sourcePublishedAt = sourcePublishedAt
+    self.sourceViewCount = sourceViewCount
+    self.sourceLikeCount = sourceLikeCount
+    self.sourceCommentCount = sourceCommentCount
+    self.sourceArchivedAt = sourceArchivedAt
+    self.sourceRelayId = sourceRelayId
+    self.sourceMetadataJson = sourceMetadataJson
   }
 }
 
@@ -10777,6 +11231,20 @@ public struct ChannelOpUpdateVideoCodec: Codec {
   let _descriptionCodec = Primitive.UTF8()
   let _idCodec = Primitive.UTF8()
   let _schemaVersionCodec = Primitive.UInt()
+  let _sourceArchivedAtCodec = Primitive.UInt()
+  let _sourceCommentCountCodec = Primitive.UInt()
+  let _sourceCreatorHandleCodec = Primitive.UTF8()
+  let _sourceCreatorNameCodec = Primitive.UTF8()
+  let _sourceCreatorUrlCodec = Primitive.UTF8()
+  let _sourceIdCodec = Primitive.UTF8()
+  let _sourceLikeCountCodec = Primitive.UInt()
+  let _sourceMetadataJsonCodec = Primitive.UTF8()
+  let _sourcePlatformCodec = Primitive.UTF8()
+  let _sourcePlatformLabelCodec = Primitive.UTF8()
+  let _sourcePublishedAtCodec = Primitive.UInt()
+  let _sourceRelayIdCodec = Primitive.UTF8()
+  let _sourceUrlCodec = Primitive.UTF8()
+  let _sourceViewCountCodec = Primitive.UInt()
   let _thumbnailCodec = Primitive.UTF8()
   let _titleCodec = Primitive.UTF8()
   let _typeCodec = Primitive.UTF8()
@@ -10786,8 +11254,32 @@ public struct ChannelOpUpdateVideoCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: ChannelOpUpdateVideo) {
+    // Compute flags for varint sizing
+    var flags: UInt = 0
+    if value.schemaVersion != nil { flags |= 1 }
+    if value.title != nil { flags |= 2 }
+    if value.description != nil { flags |= 4 }
+    if value.thumbnail != nil { flags |= 8 }
+    if value.category != nil { flags |= 16 }
+    if value.updatedAt != nil { flags |= 32 }
+    if value.updatedBy != nil { flags |= 64 }
+    if value.sourcePlatform != nil { flags |= 128 }
+    if value.sourcePlatformLabel != nil { flags |= 256 }
+    if value.sourceUrl != nil { flags |= 512 }
+    if value.sourceId != nil { flags |= 1024 }
+    if value.sourceCreatorName != nil { flags |= 2048 }
+    if value.sourceCreatorHandle != nil { flags |= 4096 }
+    if value.sourceCreatorUrl != nil { flags |= 8192 }
+    if value.sourcePublishedAt != nil { flags |= 16384 }
+    if value.sourceViewCount != nil { flags |= 32768 }
+    if value.sourceLikeCount != nil { flags |= 65536 }
+    if value.sourceCommentCount != nil { flags |= 131072 }
+    if value.sourceArchivedAt != nil { flags |= 262144 }
+    if value.sourceRelayId != nil { flags |= 524288 }
+    if value.sourceMetadataJson != nil { flags |= 1048576 }
+
     _typeCodec.preencode(&state, value.type)
-    state.end += 1 // flags
+    Primitive.UInt().preencode(&state, flags)
     if let v = value.schemaVersion { _schemaVersionCodec.preencode(&state, v) }
     _idCodec.preencode(&state, value.id)
     if let v = value.title { _titleCodec.preencode(&state, v) }
@@ -10796,6 +11288,20 @@ public struct ChannelOpUpdateVideoCodec: Codec {
     if let v = value.category { _categoryCodec.preencode(&state, v) }
     if let v = value.updatedAt { _updatedAtCodec.preencode(&state, v) }
     if let v = value.updatedBy { _updatedByCodec.preencode(&state, v) }
+    if let v = value.sourcePlatform { _sourcePlatformCodec.preencode(&state, v) }
+    if let v = value.sourcePlatformLabel { _sourcePlatformLabelCodec.preencode(&state, v) }
+    if let v = value.sourceUrl { _sourceUrlCodec.preencode(&state, v) }
+    if let v = value.sourceId { _sourceIdCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorName { _sourceCreatorNameCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorHandle { _sourceCreatorHandleCodec.preencode(&state, v) }
+    if let v = value.sourceCreatorUrl { _sourceCreatorUrlCodec.preencode(&state, v) }
+    if let v = value.sourcePublishedAt { _sourcePublishedAtCodec.preencode(&state, v) }
+    if let v = value.sourceViewCount { _sourceViewCountCodec.preencode(&state, v) }
+    if let v = value.sourceLikeCount { _sourceLikeCountCodec.preencode(&state, v) }
+    if let v = value.sourceCommentCount { _sourceCommentCountCodec.preencode(&state, v) }
+    if let v = value.sourceArchivedAt { _sourceArchivedAtCodec.preencode(&state, v) }
+    if let v = value.sourceRelayId { _sourceRelayIdCodec.preencode(&state, v) }
+    if let v = value.sourceMetadataJson { _sourceMetadataJsonCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: ChannelOpUpdateVideo) throws {
@@ -10807,6 +11313,20 @@ public struct ChannelOpUpdateVideoCodec: Codec {
     if value.category != nil { flags |= 16 }
     if value.updatedAt != nil { flags |= 32 }
     if value.updatedBy != nil { flags |= 64 }
+    if value.sourcePlatform != nil { flags |= 128 }
+    if value.sourcePlatformLabel != nil { flags |= 256 }
+    if value.sourceUrl != nil { flags |= 512 }
+    if value.sourceId != nil { flags |= 1024 }
+    if value.sourceCreatorName != nil { flags |= 2048 }
+    if value.sourceCreatorHandle != nil { flags |= 4096 }
+    if value.sourceCreatorUrl != nil { flags |= 8192 }
+    if value.sourcePublishedAt != nil { flags |= 16384 }
+    if value.sourceViewCount != nil { flags |= 32768 }
+    if value.sourceLikeCount != nil { flags |= 65536 }
+    if value.sourceCommentCount != nil { flags |= 131072 }
+    if value.sourceArchivedAt != nil { flags |= 262144 }
+    if value.sourceRelayId != nil { flags |= 524288 }
+    if value.sourceMetadataJson != nil { flags |= 1048576 }
 
     try _typeCodec.encode(&state, value.type)
     try Primitive.UInt().encode(&state, flags)
@@ -10818,6 +11338,20 @@ public struct ChannelOpUpdateVideoCodec: Codec {
     if let v = value.category { try _categoryCodec.encode(&state, v) }
     if let v = value.updatedAt { try _updatedAtCodec.encode(&state, v) }
     if let v = value.updatedBy { try _updatedByCodec.encode(&state, v) }
+    if let v = value.sourcePlatform { try _sourcePlatformCodec.encode(&state, v) }
+    if let v = value.sourcePlatformLabel { try _sourcePlatformLabelCodec.encode(&state, v) }
+    if let v = value.sourceUrl { try _sourceUrlCodec.encode(&state, v) }
+    if let v = value.sourceId { try _sourceIdCodec.encode(&state, v) }
+    if let v = value.sourceCreatorName { try _sourceCreatorNameCodec.encode(&state, v) }
+    if let v = value.sourceCreatorHandle { try _sourceCreatorHandleCodec.encode(&state, v) }
+    if let v = value.sourceCreatorUrl { try _sourceCreatorUrlCodec.encode(&state, v) }
+    if let v = value.sourcePublishedAt { try _sourcePublishedAtCodec.encode(&state, v) }
+    if let v = value.sourceViewCount { try _sourceViewCountCodec.encode(&state, v) }
+    if let v = value.sourceLikeCount { try _sourceLikeCountCodec.encode(&state, v) }
+    if let v = value.sourceCommentCount { try _sourceCommentCountCodec.encode(&state, v) }
+    if let v = value.sourceArchivedAt { try _sourceArchivedAtCodec.encode(&state, v) }
+    if let v = value.sourceRelayId { try _sourceRelayIdCodec.encode(&state, v) }
+    if let v = value.sourceMetadataJson { try _sourceMetadataJsonCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> ChannelOpUpdateVideo {
@@ -10831,6 +11365,20 @@ public struct ChannelOpUpdateVideoCodec: Codec {
     let _r6: String? = (flags & 16) != 0 ? try _categoryCodec.decode(&state) : nil
     let _r7: UInt? = (flags & 32) != 0 ? try _updatedAtCodec.decode(&state) : nil
     let _r8: String? = (flags & 64) != 0 ? try _updatedByCodec.decode(&state) : nil
+    let _r9: String? = (flags & 128) != 0 ? try _sourcePlatformCodec.decode(&state) : nil
+    let _r10: String? = (flags & 256) != 0 ? try _sourcePlatformLabelCodec.decode(&state) : nil
+    let _r11: String? = (flags & 512) != 0 ? try _sourceUrlCodec.decode(&state) : nil
+    let _r12: String? = (flags & 1024) != 0 ? try _sourceIdCodec.decode(&state) : nil
+    let _r13: String? = (flags & 2048) != 0 ? try _sourceCreatorNameCodec.decode(&state) : nil
+    let _r14: String? = (flags & 4096) != 0 ? try _sourceCreatorHandleCodec.decode(&state) : nil
+    let _r15: String? = (flags & 8192) != 0 ? try _sourceCreatorUrlCodec.decode(&state) : nil
+    let _r16: UInt? = (flags & 16384) != 0 ? try _sourcePublishedAtCodec.decode(&state) : nil
+    let _r17: UInt? = (flags & 32768) != 0 ? try _sourceViewCountCodec.decode(&state) : nil
+    let _r18: UInt? = (flags & 65536) != 0 ? try _sourceLikeCountCodec.decode(&state) : nil
+    let _r19: UInt? = (flags & 131072) != 0 ? try _sourceCommentCountCodec.decode(&state) : nil
+    let _r20: UInt? = (flags & 262144) != 0 ? try _sourceArchivedAtCodec.decode(&state) : nil
+    let _r21: String? = (flags & 524288) != 0 ? try _sourceRelayIdCodec.decode(&state) : nil
+    let _r22: String? = (flags & 1048576) != 0 ? try _sourceMetadataJsonCodec.decode(&state) : nil
     return ChannelOpUpdateVideo(
       type: _r0,
       schemaVersion: _r1,
@@ -10840,7 +11388,21 @@ public struct ChannelOpUpdateVideoCodec: Codec {
       thumbnail: _r5,
       category: _r6,
       updatedAt: _r7,
-      updatedBy: _r8
+      updatedBy: _r8,
+      sourcePlatform: _r9,
+      sourcePlatformLabel: _r10,
+      sourceUrl: _r11,
+      sourceId: _r12,
+      sourceCreatorName: _r13,
+      sourceCreatorHandle: _r14,
+      sourceCreatorUrl: _r15,
+      sourcePublishedAt: _r16,
+      sourceViewCount: _r17,
+      sourceLikeCount: _r18,
+      sourceCommentCount: _r19,
+      sourceArchivedAt: _r20,
+      sourceRelayId: _r21,
+      sourceMetadataJson: _r22
     )
   }
 }

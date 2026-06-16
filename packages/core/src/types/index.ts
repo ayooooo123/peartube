@@ -69,6 +69,20 @@ export interface VideoData extends Video {
   hasHeadBlock?: boolean;
   contiguousBlocks?: number;
   readyForPlayback?: boolean;
+  sourcePlatform?: string | null;
+  sourcePlatformLabel?: string | null;
+  sourceUrl?: string | null;
+  sourceId?: string | null;
+  sourceCreatorName?: string | null;
+  sourceCreatorHandle?: string | null;
+  sourceCreatorUrl?: string | null;
+  sourcePublishedAt?: number | null;
+  sourceViewCount?: number | null;
+  sourceLikeCount?: number | null;
+  sourceCommentCount?: number | null;
+  sourceArchivedAt?: number | null;
+  sourceRelayId?: string | null;
+  sourceMetadataJson?: string | null;
 }
 
 export interface UploadVideoResult {
@@ -190,6 +204,20 @@ export interface PublicFeedEntry {
     thumbnailBlobId?: string | null;
     thumbnailBlobsCoreKey?: string | null;
     thumbnailMimeType?: string | null;
+    sourcePlatform?: string | null;
+    sourcePlatformLabel?: string | null;
+    sourceUrl?: string | null;
+    sourceId?: string | null;
+    sourceCreatorName?: string | null;
+    sourceCreatorHandle?: string | null;
+    sourceCreatorUrl?: string | null;
+    sourcePublishedAt?: number | null;
+    sourceViewCount?: number | null;
+    sourceLikeCount?: number | null;
+    sourceCommentCount?: number | null;
+    sourceArchivedAt?: number | null;
+    sourceRelayId?: string | null;
+    sourceMetadataJson?: string | null;
   }>;
 }
 

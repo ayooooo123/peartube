@@ -17,6 +17,22 @@ import channelDbDefinition from './channel-hyperdb-spec/hyperdb/index.js'
 const CURRENT_SCHEMA_VERSION = 1
 const VALID_WRITER_ROLES = new Set(['device', 'moderator', 'owner'])
 const MAX_SAFE_RANGE = Number.MAX_SAFE_INTEGER
+const SOURCE_METADATA_FIELDS = [
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+  'sourceRelayId',
+  'sourceMetadataJson',
+]
 
 function toBuffer(value) {
   if (!value) return null
@@ -37,6 +53,17 @@ function stripUndefined(obj) {
     if (value !== undefined) out[key] = value
   }
   return out
+}
+
+function extractSourceMetadata(value, videoId) {
+  const out = { videoId }
+  let hasMetadata = false
+  for (const field of SOURCE_METADATA_FIELDS) {
+    if (value?.[field] === undefined || value?.[field] === null) continue
+    out[field] = value[field]
+    hasMetadata = true
+  }
+  return hasMetadata ? out : null
 }
 
 function makeCoreName(keyHex) {
@@ -425,13 +452,38 @@ export class MultiWriterChannel extends ReadyResource {
 
   async listVideos() {
     await this._update()
-    return this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray()
+    const videos = await this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray()
+    return this._withSourceMetadataList(videos)
   }
 
   async getVideo(id) {
     if (!id) return null
     await this._update()
-    return this.db.get('@peartubeChannel/videos', { id })
+    const video = await this.db.get('@peartubeChannel/videos', { id })
+    return this._withSourceMetadata(video)
+  }
+
+  async _getSourceMetadata(videoId) {
+    if (!videoId) return null
+    return this.db.get('@peartubeChannel/videoSourceMetadata', { videoId }).catch(() => null)
+  }
+
+  async _withSourceMetadata(video) {
+    if (!video?.id) return video || null
+    const metadata = await this._getSourceMetadata(video.id)
+    if (!metadata) return video
+    const { videoId, ...sourceMetadata } = metadata
+    return { ...video, ...sourceMetadata }
+  }
+
+  async _withSourceMetadataList(videos) {
+    return Promise.all((videos || []).map((video) => this._withSourceMetadata(video)))
+  }
+
+  async _putSourceMetadata(videoId, value) {
+    const sourceMetadata = extractSourceMetadata(value, videoId)
+    if (!sourceMetadata) return
+    await this.db.insert('@peartubeChannel/videoSourceMetadata', sourceMetadata)
   }
 
   async addVideo(meta) {
@@ -449,6 +501,7 @@ export class MultiWriterChannel extends ReadyResource {
       logicalClock: nextClock
     })
     await this.db.insert('@peartubeChannel/videos', videoMeta)
+    await this._putSourceMetadata(id, videoMeta)
     await this._flush()
     await this._syncPublicBeeFromFeedChannel()
   }
@@ -468,6 +521,7 @@ export class MultiWriterChannel extends ReadyResource {
       logicalClock: nextClock
     })
     await this.db.insert('@peartubeChannel/videos', videoMeta)
+    await this._putSourceMetadata(id, videoMeta)
     await this._flush()
     await this._syncPublicBeeFromFeedChannel()
   }
@@ -475,6 +529,7 @@ export class MultiWriterChannel extends ReadyResource {
   async deleteVideo(id) {
     if (!this.writable) throw new Error('Channel is not writable')
     await this.db.delete('@peartubeChannel/videos', { id })
+    await this.db.delete('@peartubeChannel/videoSourceMetadata', { videoId: id }).catch(() => {})
     await this._flush()
     await this._syncPublicBeeFromFeedChannel()
   }

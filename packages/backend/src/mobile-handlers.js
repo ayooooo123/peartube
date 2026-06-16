@@ -22,6 +22,31 @@ function safeJson(value) {
   }
 }
 
+const SOURCE_METADATA_FIELDS = [
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+  'sourceRelayId',
+  'sourceMetadataJson',
+]
+
+function copySourceMetadata(video) {
+  const out = {}
+  for (const field of SOURCE_METADATA_FIELDS) {
+    if (video?.[field] !== undefined) out[field] = video[field]
+  }
+  return out
+}
+
 function normalizeSeedingStatus(s) {
   const maxStorageGB = Number.isFinite(Number(s?.maxStorageGB))
     ? Number(s.maxStorageGB)
@@ -132,6 +157,7 @@ export function attachMobileHandlers(B, deps) {
         thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
         thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,
         publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : (r?.publicBeeKey ? String(r.publicBeeKey) : null),
+        ...copySourceMetadata(v),
       }
     }).filter(Boolean) }
   }

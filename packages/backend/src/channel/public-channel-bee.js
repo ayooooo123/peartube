@@ -24,10 +24,37 @@ const PUBLIC_METADATA_INTERNAL_FIELDS = new Set(['key'])
 
 const DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS = 1500
 const DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS = 1200
+const SOURCE_METADATA_FIELDS = [
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+  'sourceRelayId',
+  'sourceMetadataJson',
+]
 
 function normalizeTimeoutMs(value, fallback) {
   const timeout = Number(value)
   return Number.isFinite(timeout) && timeout >= 0 ? timeout : fallback
+}
+
+function extractSourceMetadata(value, videoId) {
+  const out = { videoId }
+  let hasMetadata = false
+  for (const field of SOURCE_METADATA_FIELDS) {
+    if (value?.[field] === undefined || value?.[field] === null) continue
+    out[field] = value[field]
+    hasMetadata = true
+  }
+  return hasMetadata ? out : null
 }
 
 export class PublicChannelBee extends ReadyResource {
@@ -143,6 +170,24 @@ export class PublicChannelBee extends ReadyResource {
     return out
   }
 
+  async _getSourceMetadata(videoId) {
+    if (!this.db || !videoId) return null
+    return this.db.get('@peartubePublic/videoSourceMetadata', { videoId }).catch(() => null)
+  }
+
+  async _withSourceMetadata(video) {
+    if (!video?.id) return video || null
+    const metadata = await this._getSourceMetadata(video.id)
+    if (!metadata) return video
+    const { videoId, ...sourceMetadata } = metadata
+    return { ...video, ...sourceMetadata }
+  }
+
+  async _withSourceMetadataList(videos) {
+    if (!this.db) return videos || []
+    return Promise.all((videos || []).map((video) => this._withSourceMetadata(video)))
+  }
+
   async getMetadata() {
     await this.waitForSync(1500)
     if (!this.db) {
@@ -249,16 +294,16 @@ export class PublicChannelBee extends ReadyResource {
       if (timeout) clearTimeout(timeout)
     }
 
-    // Sort by upload time, newest first
-    videos.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
-    return videos
+    const joined = await this._withSourceMetadataList(videos)
+    joined.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+    return joined
   }
 
   async getVideo(videoId) {
     const node = this.db
       ? await this.db.get('@peartubePublic/videos', { id: videoId })
       : null
-    return this._sanitizePublicVideo(node) || null
+    return this._withSourceMetadata(this._sanitizePublicVideo(node) || null)
   }
 
   async putVideo(videoId, metadata) {
@@ -269,6 +314,10 @@ export class PublicChannelBee extends ReadyResource {
       id: videoId,
       syncedAt: Date.now()
     }))
+    const sourceMetadata = extractSourceMetadata(metadata, videoId)
+    if (sourceMetadata) {
+      await this.db.insert('@peartubePublic/videoSourceMetadata', sourceMetadata)
+    }
     await this.db.flush()
     console.log('[PublicBee] Video added/updated:', videoId)
   }
@@ -277,6 +326,7 @@ export class PublicChannelBee extends ReadyResource {
     if (!this.writable) throw new Error('Not writable')
     if (!this.db) throw new Error('Public HyperDB not ready')
     await this.db.delete('@peartubePublic/videos', { id: videoId })
+    await this.db.delete('@peartubePublic/videoSourceMetadata', { videoId }).catch(() => {})
     await this.db.flush()
     console.log('[PublicBee] Video deleted:', videoId)
   }
@@ -301,12 +351,15 @@ export class PublicChannelBee extends ReadyResource {
       if (!c || typeof c.id !== 'string' || c.id.length === 0) continue
       if (c.type === 'del') {
         batch.push(['@peartubePublic/videos', { id: c.id }, { type: 'delete' }])
+        batch.push(['@peartubePublic/videoSourceMetadata', { videoId: c.id }, { type: 'delete' }])
       } else if (c.type === 'put') {
         batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
           ...(c.value || {}),
           id: c.id,
           syncedAt: now
         })])
+        const sourceMetadata = extractSourceMetadata(c.value, c.id)
+        if (sourceMetadata) batch.push(['@peartubePublic/videoSourceMetadata', sourceMetadata])
       }
     }
 
@@ -353,6 +406,8 @@ export class PublicChannelBee extends ReadyResource {
         ...video,
         syncedAt: now
       })])
+      const sourceMetadata = extractSourceMetadata(video, video.id)
+      if (sourceMetadata) batch.push(['@peartubePublic/videoSourceMetadata', sourceMetadata])
     }
 
     // Delete videos that no longer exist in source only for explicitly complete
@@ -361,6 +416,7 @@ export class PublicChannelBee extends ReadyResource {
       for (const id of existing) {
         if (!sourceIds.has(id)) {
           batch.push(['@peartubePublic/videos', { id }, { type: 'delete' }])
+          batch.push(['@peartubePublic/videoSourceMetadata', { videoId: id }, { type: 'delete' }])
         }
       }
     }

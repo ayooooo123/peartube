@@ -10,6 +10,23 @@ const DB_DIR = path.join(ROOT, 'hyperdb')
 const schema = Hyperschema.from(SCHEMA_DIR)
 const publicSchema = schema.namespace('peartubePublic')
 
+const SOURCE_METADATA_FIELDS = [
+  { name: 'sourcePlatform', type: 'string' },
+  { name: 'sourcePlatformLabel', type: 'string' },
+  { name: 'sourceUrl', type: 'string' },
+  { name: 'sourceId', type: 'string' },
+  { name: 'sourceCreatorName', type: 'string' },
+  { name: 'sourceCreatorHandle', type: 'string' },
+  { name: 'sourceCreatorUrl', type: 'string' },
+  { name: 'sourcePublishedAt', type: 'uint64' },
+  { name: 'sourceViewCount', type: 'uint64' },
+  { name: 'sourceLikeCount', type: 'uint64' },
+  { name: 'sourceCommentCount', type: 'uint64' },
+  { name: 'sourceArchivedAt', type: 'uint64' },
+  { name: 'sourceRelayId', type: 'string' },
+  { name: 'sourceMetadataJson', type: 'string' },
+]
+
 publicSchema.register({
   name: 'metadata',
   compact: true,
@@ -54,6 +71,15 @@ publicSchema.register({
   ],
 })
 
+publicSchema.register({
+  name: 'videoSourceMetadata',
+  compact: true,
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    ...SOURCE_METADATA_FIELDS
+  ],
+})
+
 Hyperschema.toDisk(schema)
 
 const db = HyperDB.from(SCHEMA_DIR, DB_DIR)
@@ -69,6 +95,12 @@ publicDb.collections.register({
   name: 'videos',
   schema: '@peartubePublic/video',
   key: ['id'],
+})
+
+publicDb.collections.register({
+  name: 'videoSourceMetadata',
+  schema: '@peartubePublic/videoSourceMetadata',
+  key: ['videoId'],
 })
 
 publicDb.indexes.register({

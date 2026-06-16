@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "metadata",
@@ -458,6 +458,90 @@
           "name": "indexedAt",
           "type": "uint64",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "videoSourceMetadata",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourcePlatform",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourcePlatformLabel",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceCreatorName",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceCreatorHandle",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourcePublishedAt",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "sourceViewCount",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "sourceLikeCount",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "sourceCommentCount",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "sourceArchivedAt",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "sourceRelayId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceMetadataJson",
+          "type": "string",
+          "version": 2
         }
       ]
     }

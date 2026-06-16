@@ -439,6 +439,63 @@ function sourceTypeToCode(sourceType) {
   return 3
 }
 
+function sourcePlatformLabel(provider) {
+  if (provider === 'youtube') return 'YouTube'
+  if (provider === 'tiktok') return 'TikTok'
+  if (provider === 'direct') return 'Direct'
+  return String(provider || 'Source')
+}
+
+function extractSourceId(finalUrl, provider) {
+  try {
+    const url = new URL(finalUrl)
+    if (provider === 'youtube') return url.searchParams.get('v') || ''
+    if (provider === 'tiktok') {
+      const parts = url.pathname.split('/').filter(Boolean)
+      const index = parts.findIndex((part) => part === 'video')
+      if (index >= 0 && parts[index + 1]) return parts[index + 1]
+    }
+    return url.pathname.split('/').filter(Boolean).pop() || url.hostname
+  } catch {
+    return ''
+  }
+}
+
+function buildSourceMetadataSnapshot({
+  normalized,
+  finalUrl,
+  title,
+  description,
+  providerSpecific,
+  oembed,
+  now = Date.now(),
+}) {
+  const sourceMetadata = {
+    sourcePlatform: normalized.provider,
+    sourcePlatformLabel: sourcePlatformLabel(normalized.provider),
+    sourceUrl: finalUrl,
+    sourceId: extractSourceId(finalUrl, normalized.provider),
+    sourceCreatorName: providerSpecific.channelName || oembed?.author_name || '',
+    sourceCreatorHandle: providerSpecific.channelName || '',
+    sourceCreatorUrl: oembed?.author_url || '',
+    sourceArchivedAt: now,
+    sourceRelayId: '',
+  }
+
+  sourceMetadata.sourceMetadataJson = JSON.stringify({
+    platform: normalized.provider,
+    sourceType: normalized.sourceType,
+    normalizedUrl: normalized.normalizedUrl,
+    finalUrl,
+    title,
+    description,
+    oembed: oembed || null,
+    providerSpecific: providerSpecific || null,
+  })
+
+  return sourceMetadata
+}
+
 function buildFlags(metadata, published = false, seeded = false, quarantined = false) {
   let flags = 0
   if (published) flags |= 1 << 0
@@ -473,6 +530,15 @@ export async function extractMirrorMetadata(inputUrl, options = {}) {
   const durationMs = providerSpecific.durationMs || extractDurationMsFromHtml(html)
   const contentBytes = responseContentBytes ?? DEFAULT_CONTENT_BYTES_ESTIMATE
   const languageTag = inferLanguageTag(html)
+  const sourceMetadata = buildSourceMetadataSnapshot({
+    normalized,
+    finalUrl,
+    title,
+    description,
+    providerSpecific,
+    oembed,
+    now: options.now ? Number(options.now) : Date.now(),
+  })
 
   return {
     inputUrl,
@@ -490,6 +556,8 @@ export async function extractMirrorMetadata(inputUrl, options = {}) {
     oembed,
     error: error || null,
     channelName: providerSpecific.channelName || oembed?.author_name || '',
+    sourceMetadata,
+    ...sourceMetadata,
   }
 }
 

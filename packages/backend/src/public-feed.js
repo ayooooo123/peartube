@@ -36,6 +36,41 @@ const PUBLIC_FEED_HIDDEN_CHANNELS_KEY = 'hidden-channels-v1'
 const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
 const NETWORK_TOPIC_HEX = b4a.toString(NETWORK_TOPIC, 'hex')
 
+const SOURCE_METADATA_STRING_FIELDS = [
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourceRelayId',
+  'sourceMetadataJson',
+]
+
+const SOURCE_METADATA_NUMBER_FIELDS = [
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+]
+
+function sanitizeSourceMetadata(video = {}) {
+  const out = {}
+  for (const field of SOURCE_METADATA_STRING_FIELDS) {
+    if (typeof video?.[field] === 'string' && video[field].length > 0) {
+      out[field] = String(video[field])
+    }
+  }
+  for (const field of SOURCE_METADATA_NUMBER_FIELDS) {
+    if (video?.[field] === null || video?.[field] === undefined || video?.[field] === '') continue
+    const value = Number(video[field])
+    if (Number.isFinite(value)) out[field] = value
+  }
+  return out
+}
+
 /**
  * @typedef {import('./types.js').PublicFeedEntry} PublicFeedEntry
  */
@@ -307,6 +342,7 @@ export class PublicFeed {
           discoveryOnly: Boolean(video?.discoveryOnly),
           restoredFromCache: Boolean(video?.restoredFromCache),
           requiresAvailabilityProbe: Boolean(video?.requiresAvailabilityProbe),
+          ...sanitizeSourceMetadata(video),
         }
       })
   }

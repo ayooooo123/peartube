@@ -25,6 +25,20 @@ struct NativeVideo: Identifiable, Hashable, Codable {
   let mimeType: String?
   let width: Int?
   let height: Int?
+  let sourcePlatform: String?
+  let sourcePlatformLabel: String?
+  let sourceURL: URL?
+  let sourceID: String?
+  let sourceCreatorName: String?
+  let sourceCreatorHandle: String?
+  let sourceCreatorURL: URL?
+  let sourcePublishedAt: Int?
+  let sourceViewCount: Int?
+  let sourceLikeCount: Int?
+  let sourceCommentCount: Int?
+  let sourceArchivedAt: Int?
+  let sourceRelayID: String?
+  let sourceMetadataJSON: String?
 
   init(
     id: String,
@@ -44,7 +58,21 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     blobsCoreKey: String? = nil,
     mimeType: String? = nil,
     width: Int? = nil,
-    height: Int? = nil
+    height: Int? = nil,
+    sourcePlatform: String? = nil,
+    sourcePlatformLabel: String? = nil,
+    sourceURL: URL? = nil,
+    sourceID: String? = nil,
+    sourceCreatorName: String? = nil,
+    sourceCreatorHandle: String? = nil,
+    sourceCreatorURL: URL? = nil,
+    sourcePublishedAt: Int? = nil,
+    sourceViewCount: Int? = nil,
+    sourceLikeCount: Int? = nil,
+    sourceCommentCount: Int? = nil,
+    sourceArchivedAt: Int? = nil,
+    sourceRelayID: String? = nil,
+    sourceMetadataJSON: String? = nil
   ) {
     self.id = id
     self.backendVideoID = backendVideoID
@@ -64,6 +92,20 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     self.mimeType = mimeType
     self.width = width
     self.height = height
+    self.sourcePlatform = sourcePlatform
+    self.sourcePlatformLabel = sourcePlatformLabel
+    self.sourceURL = sourceURL
+    self.sourceID = sourceID
+    self.sourceCreatorName = sourceCreatorName
+    self.sourceCreatorHandle = sourceCreatorHandle
+    self.sourceCreatorURL = sourceCreatorURL
+    self.sourcePublishedAt = sourcePublishedAt
+    self.sourceViewCount = sourceViewCount
+    self.sourceLikeCount = sourceLikeCount
+    self.sourceCommentCount = sourceCommentCount
+    self.sourceArchivedAt = sourceArchivedAt
+    self.sourceRelayID = sourceRelayID
+    self.sourceMetadataJSON = sourceMetadataJSON
   }
 
   var playbackReference: String {
@@ -158,7 +200,21 @@ extension NativeVideo {
       blobsCoreKey: blobsCoreKey,
       mimeType: mimeType,
       width: width,
-      height: height
+      height: height,
+      sourcePlatform: sourcePlatform,
+      sourcePlatformLabel: sourcePlatformLabel,
+      sourceURL: sourceURL,
+      sourceID: sourceID,
+      sourceCreatorName: sourceCreatorName,
+      sourceCreatorHandle: sourceCreatorHandle,
+      sourceCreatorURL: sourceCreatorURL,
+      sourcePublishedAt: sourcePublishedAt,
+      sourceViewCount: sourceViewCount,
+      sourceLikeCount: sourceLikeCount,
+      sourceCommentCount: sourceCommentCount,
+      sourceArchivedAt: sourceArchivedAt,
+      sourceRelayID: sourceRelayID,
+      sourceMetadataJSON: sourceMetadataJSON
     )
   }
 

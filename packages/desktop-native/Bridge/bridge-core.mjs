@@ -248,6 +248,20 @@ function videoToRecord(source, meta, video, section) {
     mimeType: video.mimeType || null,
     width: Number.isFinite(video.width) && video.width > 0 ? video.width : null,
     height: Number.isFinite(video.height) && video.height > 0 ? video.height : null,
+    sourcePlatform: video.sourcePlatform || null,
+    sourcePlatformLabel: video.sourcePlatformLabel || null,
+    sourceUrl: video.sourceUrl || null,
+    sourceId: video.sourceId || null,
+    sourceCreatorName: video.sourceCreatorName || null,
+    sourceCreatorHandle: video.sourceCreatorHandle || null,
+    sourceCreatorUrl: video.sourceCreatorUrl || null,
+    sourcePublishedAt: Number.isFinite(video.sourcePublishedAt) ? video.sourcePublishedAt : null,
+    sourceViewCount: Number.isFinite(video.sourceViewCount) ? video.sourceViewCount : null,
+    sourceLikeCount: Number.isFinite(video.sourceLikeCount) ? video.sourceLikeCount : null,
+    sourceCommentCount: Number.isFinite(video.sourceCommentCount) ? video.sourceCommentCount : null,
+    sourceArchivedAt: Number.isFinite(video.sourceArchivedAt) ? video.sourceArchivedAt : null,
+    sourceRelayId: video.sourceRelayId || null,
+    sourceMetadataJson: video.sourceMetadataJson || null,
   }
 }
 

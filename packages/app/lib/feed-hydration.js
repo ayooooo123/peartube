@@ -97,6 +97,20 @@ function mergeVideoPlaybackIdentity(previous, incoming) {
     hasHeadBlock: incoming.hasHeadBlock ?? previous.hasHeadBlock,
     contiguousBlocks: incoming.contiguousBlocks ?? previous.contiguousBlocks,
     readyForPlayback: incoming.readyForPlayback ?? previous.readyForPlayback,
+    sourcePlatform: incoming.sourcePlatform ?? previous.sourcePlatform,
+    sourcePlatformLabel: incoming.sourcePlatformLabel ?? previous.sourcePlatformLabel,
+    sourceUrl: incoming.sourceUrl ?? previous.sourceUrl,
+    sourceId: incoming.sourceId ?? previous.sourceId,
+    sourceCreatorName: incoming.sourceCreatorName ?? previous.sourceCreatorName,
+    sourceCreatorHandle: incoming.sourceCreatorHandle ?? previous.sourceCreatorHandle,
+    sourceCreatorUrl: incoming.sourceCreatorUrl ?? previous.sourceCreatorUrl,
+    sourcePublishedAt: incoming.sourcePublishedAt ?? previous.sourcePublishedAt,
+    sourceViewCount: incoming.sourceViewCount ?? previous.sourceViewCount,
+    sourceLikeCount: incoming.sourceLikeCount ?? previous.sourceLikeCount,
+    sourceCommentCount: incoming.sourceCommentCount ?? previous.sourceCommentCount,
+    sourceArchivedAt: incoming.sourceArchivedAt ?? previous.sourceArchivedAt,
+    sourceRelayId: incoming.sourceRelayId ?? previous.sourceRelayId,
+    sourceMetadataJson: incoming.sourceMetadataJson ?? previous.sourceMetadataJson,
   }
 }
 
@@ -107,6 +121,10 @@ function canUseFeedPreviewVideos(entry, identityDriveKey) {
   if (entry?.source === 'local') return true
   if ((entry?.peerCount ?? 0) > 0) return true
   return Boolean(entry?.publicBeeKey && Array.isArray(entry?.previewVideos) && entry.previewVideos.some(hasDirectBlobRef))
+}
+
+function feedSortTimestamp(video) {
+  return Number(video?.sourcePublishedAt || video?.uploadedAt || video?.createdAt || 0) || 0
 }
 
 export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey, limit = 15) {
@@ -144,7 +162,7 @@ export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey,
   }
 
   return videos
-    .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+    .sort((a, b) => feedSortTimestamp(b) - feedSortTimestamp(a))
     .slice(0, limit)
 }
 
@@ -262,7 +280,7 @@ export function mergeHydratedFeedVideos({
 
   return Array.from(byKey.values())
     .filter(Boolean)
-    .sort((a, b) => (b?.uploadedAt || 0) - (a?.uploadedAt || 0))
+    .sort((a, b) => feedSortTimestamp(b) - feedSortTimestamp(a))
     .slice(0, limit)
 }
 
@@ -305,6 +323,6 @@ export function mergePreviewFeedVideos({
 
   return Array.from(byKey.values())
     .filter(Boolean)
-    .sort((a, b) => (b?.uploadedAt || 0) - (a?.uploadedAt || 0))
+    .sort((a, b) => feedSortTimestamp(b) - feedSortTimestamp(a))
     .slice(0, limit)
 }

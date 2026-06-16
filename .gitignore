@@ -92,6 +92,7 @@ logfile
 .codex
 .codex/
 .sisyphus/
+.superpowers/
 .tmp-device-crashes/
 .evidence/
 .trash-peartube-cleanup/

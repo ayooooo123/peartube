@@ -10,6 +10,23 @@ const DB_DIR = path.join(ROOT, 'hyperdb')
 const schema = Hyperschema.from(SCHEMA_DIR)
 const ns = schema.namespace('peartubeChannel')
 
+const SOURCE_METADATA_FIELDS = [
+  { name: 'sourcePlatform', type: 'string' },
+  { name: 'sourcePlatformLabel', type: 'string' },
+  { name: 'sourceUrl', type: 'string' },
+  { name: 'sourceId', type: 'string' },
+  { name: 'sourceCreatorName', type: 'string' },
+  { name: 'sourceCreatorHandle', type: 'string' },
+  { name: 'sourceCreatorUrl', type: 'string' },
+  { name: 'sourcePublishedAt', type: 'uint64' },
+  { name: 'sourceViewCount', type: 'uint64' },
+  { name: 'sourceLikeCount', type: 'uint64' },
+  { name: 'sourceCommentCount', type: 'uint64' },
+  { name: 'sourceArchivedAt', type: 'uint64' },
+  { name: 'sourceRelayId', type: 'string' },
+  { name: 'sourceMetadataJson', type: 'string' },
+]
+
 ns.register({
   name: 'metadata',
   compact: true,
@@ -71,6 +88,15 @@ ns.register({
     { name: 'updatedBy', type: 'string' },
     { name: 'schemaVersion', type: 'uint64' },
     { name: 'logicalClock', type: 'uint64' }
+  ]
+})
+
+ns.register({
+  name: 'videoSourceMetadata',
+  compact: true,
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    ...SOURCE_METADATA_FIELDS
   ]
 })
 
@@ -151,6 +177,7 @@ const ch = db.namespace('peartubeChannel')
 ch.collections.register({ name: 'metadata', schema: '@peartubeChannel/metadata', key: ['key'] })
 ch.collections.register({ name: 'writers', schema: '@peartubeChannel/writer', key: ['keyHex'] })
 ch.collections.register({ name: 'videos', schema: '@peartubeChannel/video', key: ['id'] })
+ch.collections.register({ name: 'videoSourceMetadata', schema: '@peartubeChannel/videoSourceMetadata', key: ['videoId'] })
 ch.collections.register({ name: 'comments', schema: '@peartubeChannel/comment', key: ['videoId', 'commentId'] })
 ch.collections.register({ name: 'reactions', schema: '@peartubeChannel/reaction', key: ['videoId', 'authorKeyHex'] })
 ch.collections.register({ name: 'invites', schema: '@peartubeChannel/invite', key: ['idHex'] })

@@ -90,6 +90,35 @@ test('MultiWriterChannel video CRUD uses HyperDB collections and uploadedAt inde
   })
 })
 
+test('MultiWriterChannel preserves relay archive source metadata as video sidecar data', async () => {
+  await withChannel(async (channel) => {
+    await channel.addVideo({
+      id: 'relay-archive',
+      title: 'Relay Archive',
+      uploadedAt: 100,
+      sourcePlatform: 'youtube',
+      sourcePlatformLabel: 'YouTube',
+      sourceUrl: 'https://www.youtube.com/watch?v=relay-archive',
+      sourceCreatorHandle: '@archive-source',
+      sourcePublishedAt: 90,
+      sourceViewCount: 1234,
+      sourceArchivedAt: 110,
+      sourceRelayId: 'relay-a',
+    })
+
+    const byId = await channel.getVideo('relay-archive')
+    assert.equal(byId.sourcePlatform, 'youtube')
+    assert.equal(byId.sourcePlatformLabel, 'YouTube')
+    assert.equal(byId.sourceCreatorHandle, '@archive-source')
+    assert.equal(byId.sourceViewCount, 1234)
+    assert.equal(byId.sourceRelayId, 'relay-a')
+
+    const [listed] = await channel.listVideos()
+    assert.equal(listed.sourceUrl, 'https://www.youtube.com/watch?v=relay-archive')
+    assert.equal(listed.sourceArchivedAt, 110)
+  })
+})
+
 test('MultiWriterChannel comments and reactions live in the same HyperDB channel database', async () => {
   await withChannel(async (channel) => {
     assert.equal('commentsAutobase' in channel, false, 'separate comments Autobase is removed')

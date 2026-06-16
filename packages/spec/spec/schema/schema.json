@@ -765,6 +765,90 @@
           "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "sourcePlatform",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePlatformLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorHandle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePublishedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceViewCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceLikeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceCommentCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceArchivedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceRelayId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceMetadataJson",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -2637,6 +2721,90 @@
           "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "sourcePlatform",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePlatformLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorHandle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePublishedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceViewCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceLikeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceCommentCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceArchivedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceRelayId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceMetadataJson",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -3995,6 +4163,90 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "sourcePlatform",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePlatformLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorHandle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePublishedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceViewCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceLikeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceCommentCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceArchivedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceRelayId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceMetadataJson",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -5246,6 +5498,90 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "sourcePlatform",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePlatformLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorHandle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePublishedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceViewCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceLikeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceCommentCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceArchivedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceRelayId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceMetadataJson",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -5305,6 +5641,90 @@
         },
         {
           "name": "updatedBy",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePlatform",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePlatformLabel",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorHandle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePublishedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceViewCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceLikeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceCommentCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceArchivedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceRelayId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceMetadataJson",
           "required": false,
           "type": "string",
           "version": 1

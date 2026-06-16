@@ -50,7 +50,7 @@ test('startMobileBackend delegates startup through the shared host contract', as
 
   const ready = await session.waitUntilReady()
   t.is(ready.blobServerPort, 6123)
-  t.is(ready.protocolVersion, 3)
+  t.is(ready.protocolVersion, 4)
   t.is(attachedBackend?.mobileHandlersAttached, true)
   t.is(attachedBackend?.castHandlersAttached, true)
   t.alike(capturedBackendOptions.args, ['backend.bundle.js'])
@@ -87,7 +87,7 @@ test('startMobileBackend preserves serialized launch options for runtime backend
 
   const ready = await session.waitUntilReady()
   t.is(ready.blobServerPort, 6123)
-  t.is(ready.protocolVersion, 3)
+  t.is(ready.protocolVersion, 4)
   t.alike(capturedBackendOptions.args, [JSON.stringify(launchOptions), 'downloader-worker.bundle.js'])
 
   await session.terminate()

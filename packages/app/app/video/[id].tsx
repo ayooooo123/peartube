@@ -5,7 +5,7 @@
  * Uses SHARED player from VideoPlayerContext for continuous playback
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, Alert } from 'react-native'
+import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, Alert, Linking } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
@@ -19,6 +19,7 @@ import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { getSourceMetadataDisplay } from '@/lib/source-metadata'
 
 // HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
@@ -608,6 +609,7 @@ function MobileVideoPlayerScreen() {
 
   const channelName = channelMeta?.name || videoData?.channel?.name || `Channel ${videoData?.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
+  const sourceDisplay = getSourceMetadataDisplay(videoData)
 
   // Show loading while fetching video metadata
   if (loadingMeta) {
@@ -712,6 +714,29 @@ function MobileVideoPlayerScreen() {
           <Text style={styles.videoMeta}>
             {formatTimeAgo(videoData?.uploadedAt || Date.now())} · {formatSize(videoData?.size || 0)}
           </Text>
+          {sourceDisplay.hasSource && (
+            <View style={styles.sourcePanel}>
+              <View style={styles.sourceHeader}>
+                <Text style={styles.sourceBadge}>{sourceDisplay.platformLabel}</Text>
+                {sourceDisplay.compactLine ? (
+                  <Text style={styles.sourceCompact} numberOfLines={1}>{sourceDisplay.compactLine}</Text>
+                ) : null}
+              </View>
+              {sourceDisplay.detailCounts ? (
+                <Text style={styles.sourceDetail}>{sourceDisplay.detailCounts}</Text>
+              ) : null}
+              {sourceDisplay.archiveLine ? (
+                <Text style={styles.sourceDetail}>{sourceDisplay.archiveLine}</Text>
+              ) : null}
+              {sourceDisplay.sourceUrl ? (
+                <Pressable onPress={() => {
+                  if (sourceDisplay.sourceUrl) void Linking.openURL(sourceDisplay.sourceUrl)
+                }}>
+                  <Text style={styles.sourceLink} numberOfLines={1}>{sourceDisplay.sourceUrl}</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          )}
         </View>
 
         {/* Action Buttons */}
@@ -936,6 +961,47 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     marginTop: 6,
+  },
+  sourcePanel: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: colors.bgSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 6,
+  },
+  sourceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sourceBadge: {
+    color: colors.text,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 5,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  sourceCompact: {
+    flex: 1,
+    color: colors.textSecondary,
+    fontSize: 13,
+  },
+  sourceDetail: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  sourceLink: {
+    color: colors.primary,
+    fontSize: 12,
+    textDecorationLine: 'underline' as const,
   },
   castBanner: {
     flexDirection: 'row',

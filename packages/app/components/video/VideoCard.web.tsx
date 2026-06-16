@@ -11,6 +11,7 @@
 import React, { useState } from 'react'
 import { colors } from '@/lib/colors'
 import { formatDuration, formatViews, formatTimeAgo } from '@/lib/formatters'
+import { getSourceMetadataDisplay } from '@/lib/source-metadata'
 
 export interface VideoCardProps {
   id: string
@@ -21,6 +22,7 @@ export interface VideoCardProps {
   views?: number
   uploadedAt?: string
   duration?: number
+  sourceDisplay?: ReturnType<typeof getSourceMetadataDisplay>
   onPress?: () => void
   onChannelPress?: () => void
 }
@@ -34,6 +36,7 @@ export function VideoCardDesktop({
   views,
   uploadedAt,
   duration,
+  sourceDisplay,
   onPress,
   onChannelPress,
 }: VideoCardProps) {
@@ -148,6 +151,14 @@ export function VideoCardDesktop({
             {views !== undefined && uploadedAt && ' • '}
             {uploadedAt && formatTimeAgo(uploadedAt)}
           </p>
+          {sourceDisplay?.hasSource && (
+            <div style={styles.sourceRow}>
+              <span style={styles.sourceBadge}>{sourceDisplay.platformLabel}</span>
+              {sourceDisplay.compactLine ? (
+                <span style={styles.sourceText}>{sourceDisplay.compactLine}</span>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
     </article>
@@ -172,6 +183,20 @@ export interface VideoData {
   mimeType?: string
   category?: string
   score?: number
+  sourcePlatform?: string | null
+  sourcePlatformLabel?: string | null
+  sourceUrl?: string | null
+  sourceId?: string | null
+  sourceCreatorName?: string | null
+  sourceCreatorHandle?: string | null
+  sourceCreatorUrl?: string | null
+  sourcePublishedAt?: number | null
+  sourceViewCount?: number | null
+  sourceLikeCount?: number | null
+  sourceCommentCount?: number | null
+  sourceArchivedAt?: number | null
+  sourceRelayId?: string | null
+  sourceMetadataJson?: string | null
   channel?: {
     name: string
     avatarUrl?: string
@@ -195,6 +220,7 @@ export function VideoCard({ video, onPress, showChannelInfo = true, onChannelPre
   const timeAgo = video.uploadedAt || video.createdAt
     ? new Date(video.uploadedAt || video.createdAt!).toISOString()
     : undefined
+  const sourceDisplay = getSourceMetadataDisplay(video)
 
   return (
     <VideoCardDesktop
@@ -205,6 +231,7 @@ export function VideoCard({ video, onPress, showChannelInfo = true, onChannelPre
       channelAvatarUrl={video.channel?.avatarUrl}
       uploadedAt={timeAgo}
       duration={video.duration}
+      sourceDisplay={sourceDisplay}
       onPress={onPress}
       onChannelPress={onChannelPress}
     />
@@ -304,6 +331,33 @@ const styles: Record<string, React.CSSProperties> = {
     margin: '2px 0 0',
     fontSize: 13,
     color: colors.textMuted,
+  },
+  sourceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    minWidth: 0,
+  },
+  sourceBadge: {
+    flexShrink: 0,
+    padding: '2px 6px',
+    borderRadius: 4,
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+  },
+  sourceText: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: colors.textMuted,
+    fontSize: 12,
   },
 }
 

@@ -108,6 +108,31 @@ function normalizeThumbnailRefs(raw = {}) {
   }
 }
 
+function normalizeSourceMetadata(raw = {}) {
+  const sourceMetadataJson = typeof raw.sourceMetadataJson === 'string'
+    ? raw.sourceMetadataJson
+    : raw.sourceMetadata && typeof raw.sourceMetadata === 'object'
+      ? JSON.stringify(raw.sourceMetadata)
+      : null
+
+  return {
+    sourcePlatform: firstStringOrNull(raw.sourcePlatform, raw.platform, raw.provider),
+    sourcePlatformLabel: firstStringOrNull(raw.sourcePlatformLabel, raw.platformLabel, raw.providerLabel),
+    sourceUrl: firstStringOrNull(raw.sourceUrl, raw.originalUrl, raw.externalUrl),
+    sourceId: firstStringOrNull(raw.sourceId, raw.originalId, raw.externalId),
+    sourceCreatorName: firstStringOrNull(raw.sourceCreatorName, raw.sourceAuthorName, raw.creatorName, raw.authorName),
+    sourceCreatorHandle: firstStringOrNull(raw.sourceCreatorHandle, raw.sourceAuthorHandle, raw.creatorHandle, raw.authorHandle),
+    sourceCreatorUrl: firstStringOrNull(raw.sourceCreatorUrl, raw.creatorUrl, raw.authorUrl),
+    sourcePublishedAt: toNumberOrNull(raw.sourcePublishedAt ?? raw.originalPublishedAt ?? raw.publishedAt),
+    sourceViewCount: toNumberOrNull(raw.sourceViewCount ?? raw.originalViewCount ?? raw.viewCount ?? raw.views),
+    sourceLikeCount: toNumberOrNull(raw.sourceLikeCount ?? raw.originalLikeCount ?? raw.likeCount ?? raw.likes),
+    sourceCommentCount: toNumberOrNull(raw.sourceCommentCount ?? raw.originalCommentCount ?? raw.commentCount ?? raw.comments),
+    sourceArchivedAt: toNumberOrNull(raw.sourceArchivedAt ?? raw.archivedAt),
+    sourceRelayId: firstStringOrNull(raw.sourceRelayId, raw.relayId),
+    sourceMetadataJson,
+  }
+}
+
 /**
  * Normalize a raw video record into the canonical feed video shape.
  *
@@ -162,6 +187,7 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
   ) || channelKey
   const directRefs = normalizeDirectPlaybackRefs(rawVideo)
   const thumbnailRefs = normalizeThumbnailRefs(rawVideo)
+  const sourceMetadata = normalizeSourceMetadata(rawVideo)
   const { availability, byteAvailability } = reconcileAvailability(
     rawVideo.availability,
     rawVideo.byteAvailability,
@@ -177,6 +203,7 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
     duration: toNumberOrNull(rawVideo.duration ?? rawVideo.length ?? rawVideo.seconds),
     ...thumbnailRefs,
     ...directRefs,
+    ...sourceMetadata,
     availability,
     byteAvailability,
     channelKey,

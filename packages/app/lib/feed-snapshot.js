@@ -25,6 +25,20 @@ const VIDEO_FIELDS = [
   'channelKey',
   'driveKey',
   'publicBeeKey',
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+  'sourceRelayId',
+  'sourceMetadataJson',
 ]
 
 function copyDefinedFields(source, fields) {

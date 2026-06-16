@@ -9,8 +9,32 @@ export interface DiscoverFeedCacheSnapshot {
 const MAX_CACHE_AGE_MS = 30 * 60 * 1000
 const MAX_FEED_ENTRIES = 80
 const MAX_VIDEOS = 80
+const SOURCE_METADATA_FIELDS = [
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+  'sourceRelayId',
+  'sourceMetadataJson',
+] as const
 
 let cachedDiscoverFeed: DiscoverFeedCacheSnapshot | null = null
+
+function copySourceMetadata(source: any) {
+  const out: Record<string, any> = {}
+  for (const field of SOURCE_METADATA_FIELDS) {
+    if (source?.[field] !== undefined) out[field] = source[field]
+  }
+  return out
+}
 
 function safeFeedEntries(entries: any[] = []) {
   return entries
@@ -38,6 +62,7 @@ function safeFeedEntries(entries: any[] = []) {
         thumbnailBlobId: video.thumbnailBlobId ?? null,
         thumbnailBlobsCoreKey: video.thumbnailBlobsCoreKey ?? null,
         thumbnailMimeType: video.thumbnailMimeType ?? null,
+        ...copySourceMetadata(video),
       })) : undefined,
     }))
 }
@@ -69,6 +94,7 @@ function safeVideos(videos: VideoData[] = []) {
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: videoAny.mimeType || undefined,
         availability: videoAny.availability,
+        ...copySourceMetadata(videoAny),
         channel: channelName ? { name: channelName } : video.channel,
       } as VideoData
     })

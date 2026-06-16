@@ -49,6 +49,20 @@ function mergeVideoPlaybackIdentity(previous, incoming) {
     hasHeadBlock: incoming.hasHeadBlock ?? previous.hasHeadBlock,
     contiguousBlocks: incoming.contiguousBlocks ?? previous.contiguousBlocks,
     readyForPlayback: incoming.readyForPlayback ?? previous.readyForPlayback,
+    sourcePlatform: incoming.sourcePlatform ?? previous.sourcePlatform,
+    sourcePlatformLabel: incoming.sourcePlatformLabel ?? previous.sourcePlatformLabel,
+    sourceUrl: incoming.sourceUrl ?? previous.sourceUrl,
+    sourceId: incoming.sourceId ?? previous.sourceId,
+    sourceCreatorName: incoming.sourceCreatorName ?? previous.sourceCreatorName,
+    sourceCreatorHandle: incoming.sourceCreatorHandle ?? previous.sourceCreatorHandle,
+    sourceCreatorUrl: incoming.sourceCreatorUrl ?? previous.sourceCreatorUrl,
+    sourcePublishedAt: incoming.sourcePublishedAt ?? previous.sourcePublishedAt,
+    sourceViewCount: incoming.sourceViewCount ?? previous.sourceViewCount,
+    sourceLikeCount: incoming.sourceLikeCount ?? previous.sourceLikeCount,
+    sourceCommentCount: incoming.sourceCommentCount ?? previous.sourceCommentCount,
+    sourceArchivedAt: incoming.sourceArchivedAt ?? previous.sourceArchivedAt,
+    sourceRelayId: incoming.sourceRelayId ?? previous.sourceRelayId,
+    sourceMetadataJson: incoming.sourceMetadataJson ?? previous.sourceMetadataJson,
   }
 }
 

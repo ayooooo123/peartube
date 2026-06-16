@@ -46,6 +46,20 @@ export function hashPreviewVideos(videos) {
         thumbnailBlobId: video?.thumbnailBlobId ?? null,
         thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ?? null,
         thumbnailMimeType: video?.thumbnailMimeType ?? null,
+        sourcePlatform: video?.sourcePlatform ?? null,
+        sourcePlatformLabel: video?.sourcePlatformLabel ?? null,
+        sourceUrl: video?.sourceUrl ?? null,
+        sourceId: video?.sourceId ?? null,
+        sourceCreatorName: video?.sourceCreatorName ?? null,
+        sourceCreatorHandle: video?.sourceCreatorHandle ?? null,
+        sourceCreatorUrl: video?.sourceCreatorUrl ?? null,
+        sourcePublishedAt: Number(video?.sourcePublishedAt || 0) || 0,
+        sourceViewCount: Number(video?.sourceViewCount || 0) || 0,
+        sourceLikeCount: Number(video?.sourceLikeCount || 0) || 0,
+        sourceCommentCount: Number(video?.sourceCommentCount || 0) || 0,
+        sourceArchivedAt: Number(video?.sourceArchivedAt || 0) || 0,
+        sourceRelayId: video?.sourceRelayId ?? null,
+        sourceMetadataJson: video?.sourceMetadataJson ?? null,
       }))
     : []
 

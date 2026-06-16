@@ -520,3 +520,73 @@ test('mergePreviewFeedVideos does not overwrite hydrated cards with preview copi
     { id: 'preview-only', channelKey: 'remote-b', title: 'Preview only', source: 'preview' },
   ])
 })
+
+test('getFeedPreviewVideos preserves relay archive source metadata', () => {
+  const previews = getFeedPreviewVideos([
+    {
+      driveKey: 'relay-archive',
+      source: 'relay-cache',
+      relayServing: true,
+      publicBeeKey: 'bee-relay',
+      previewVideos: [{
+        id: 'source-video',
+        title: 'Source video',
+        uploadedAt: 40,
+        availability: 'playable',
+        byteAvailability: 'playable',
+        blobId: '0:8:0:1024',
+        blobsCoreKey: 'aa'.repeat(32),
+        hasHeadBlock: true,
+        contiguousBlocks: 1,
+        readyForPlayback: true,
+        sourcePlatform: 'youtube',
+        sourcePlatformLabel: 'YouTube',
+        sourceCreatorHandle: '@emergencyawesome',
+        sourceViewCount: 75080,
+        sourcePublishedAt: 30,
+      }],
+    },
+  ], {}, 'local', 5)
+
+  assert.equal(previews[0].sourcePlatform, 'youtube')
+  assert.equal(previews[0].sourceCreatorHandle, '@emergencyawesome')
+  assert.equal(previews[0].sourceViewCount, 75080)
+  assert.equal(previews[0].sourcePublishedAt, 30)
+})
+
+test('mergeHydratedFeedVideos preserves preview source metadata when hydration omits it', () => {
+  const merged = mergeHydratedFeedVideos({
+    previousVideos: [{
+      id: 'source-video',
+      channelKey: 'relay-archive',
+      title: 'Preview title',
+      uploadedAt: 40,
+      availability: 'playable',
+      blobId: '0:8:0:1024',
+      blobsCoreKey: 'aa'.repeat(32),
+      sourcePlatform: 'youtube',
+      sourceCreatorHandle: '@emergencyawesome',
+      sourceViewCount: 75080,
+      __feedSource: 'preview',
+    }],
+    incomingVideos: [{
+      id: 'source-video',
+      channelKey: 'relay-archive',
+      title: 'Hydrated title',
+      uploadedAt: 40,
+      availability: 'playable',
+      blobId: '0:8:0:1024',
+      blobsCoreKey: 'aa'.repeat(32),
+    }],
+    refreshedChannelKeys: ['relay-archive'],
+    feedEntries: [{
+      driveKey: 'relay-archive',
+      previewVideos: [{ id: 'source-video' }],
+    }],
+  })
+
+  assert.equal(merged[0].title, 'Hydrated title')
+  assert.equal(merged[0].sourcePlatform, 'youtube')
+  assert.equal(merged[0].sourceCreatorHandle, '@emergencyawesome')
+  assert.equal(merged[0].sourceViewCount, 75080)
+})

@@ -6,6 +6,38 @@
  */
 
 const CURRENT_SCHEMA_VERSION = 1
+const SOURCE_METADATA_STRING_FIELDS = [
+  'sourcePlatform',
+  'sourcePlatformLabel',
+  'sourceUrl',
+  'sourceId',
+  'sourceCreatorName',
+  'sourceCreatorHandle',
+  'sourceCreatorUrl',
+  'sourceRelayId',
+  'sourceMetadataJson',
+]
+const SOURCE_METADATA_NUMBER_FIELDS = [
+  'sourcePublishedAt',
+  'sourceViewCount',
+  'sourceLikeCount',
+  'sourceCommentCount',
+  'sourceArchivedAt',
+]
+
+function validateSourceMetadataFields(op, opName) {
+  for (const field of SOURCE_METADATA_STRING_FIELDS) {
+    if (op[field] !== undefined && typeof op[field] !== 'string') {
+      return { valid: false, error: `${opName}.${field} must be a string` }
+    }
+  }
+  for (const field of SOURCE_METADATA_NUMBER_FIELDS) {
+    if (op[field] !== undefined && typeof op[field] !== 'number') {
+      return { valid: false, error: `${opName}.${field} must be a number` }
+    }
+  }
+  return { valid: true }
+}
 
 /**
  * Validate a channel operation against its schema
@@ -135,7 +167,7 @@ function validateAddVideo(op) {
   if (op.views !== undefined && typeof op.views !== 'number') {
     return { valid: false, error: 'add-video.views must be a number' }
   }
-  return { valid: true }
+  return validateSourceMetadataFields(op, 'add-video')
 }
 
 function validateUpdateVideo(op) {
@@ -175,7 +207,7 @@ function validateUpdateVideo(op) {
   if (op.updatedBy !== undefined && typeof op.updatedBy !== 'string') {
     return { valid: false, error: 'update-video.updatedBy must be a string' }
   }
-  return { valid: true }
+  return validateSourceMetadataFields(op, 'update-video')
 }
 
 function validateDeleteVideo(op) {

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "offset": 0,
   "schema": [
     {
@@ -202,6 +202,21 @@
         "videoId",
         "timestamp"
       ]
+    },
+    {
+      "name": "videoSourceMetadata",
+      "namespace": "peartubeChannel",
+      "id": 13,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/videoSourceMetadata",
+      "derived": false,
+      "key": [
+        "videoId"
+      ],
+      "trigger": null
     }
   ]
 }

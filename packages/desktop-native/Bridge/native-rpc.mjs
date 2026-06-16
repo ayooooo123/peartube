@@ -1,6 +1,6 @@
 import c from 'compact-encoding'
 
-export const NATIVE_BRIDGE_PROTOCOL_VERSION = 3
+export const NATIVE_BRIDGE_PROTOCOL_VERSION = 4
 
 export const BRIDGE_COMMANDS = Object.freeze({
   bootstrap: 1,

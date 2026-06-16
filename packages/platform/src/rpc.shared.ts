@@ -7,7 +7,7 @@ type BlobServerStatus = {
 }
 
 export type HostReadyData = BlobServerStatus & {
-  protocolVersion: 3
+  protocolVersion: 4
 }
 
 export type HostErrorData = {
@@ -47,10 +47,10 @@ type PlatformRunner = {
     args?: string[]
   }): Promise<{
     stream: any
-    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 3 }>
+    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 4 }>
     terminate(): Promise<void>
     onLifecycle(cb: (event:
-      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 3 } }
+      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 4 } }
       | { type: 'host.error', code: string, message: string, retryable: boolean }
       | { type: 'transport.closed', reason?: string }
     ) => void): () => void

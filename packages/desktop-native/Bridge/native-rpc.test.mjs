@@ -78,14 +78,14 @@ test('bootstrap payload roundtrips through compact encoding', () => {
 
   const encoded = encodePayload(bootstrapResponseCodec, {
     blobServerPort: 64369,
-    protocolVersion: 3,
+    protocolVersion: 4,
     storagePath: '/tmp/native',
     snapshot,
   })
 
   const decoded = decodePayload(bootstrapResponseCodec, encoded)
   assert.equal(decoded.blobServerPort, 64369)
-  assert.equal(decoded.protocolVersion, 3)
+  assert.equal(decoded.protocolVersion, 4)
   assert.equal(decoded.storagePath, '/tmp/native')
   assert.deepEqual(decoded.snapshot.sections.home, snapshot.sections.home)
   assert.deepEqual(decoded.snapshot.stats, snapshot.stats)
@@ -111,7 +111,7 @@ test('bootstrap response defaults to the current native bridge protocol version'
 
   const decoded = decodePayload(bootstrapResponseCodec, encoded)
 
-  assert.equal(NATIVE_BRIDGE_PROTOCOL_VERSION, 3)
+  assert.equal(NATIVE_BRIDGE_PROTOCOL_VERSION, 4)
   assert.equal(decoded.protocolVersion, NATIVE_BRIDGE_PROTOCOL_VERSION)
 })
 

@@ -10,6 +10,7 @@ import { colors } from '@/lib/colors'
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated'
 import { ThumbnailImage } from './ThumbnailImage'
 import { formatTimeAgo } from '@/lib/formatters'
+import { getSourceMetadataDisplay } from '@/lib/source-metadata'
 
 export interface VideoData {
   id: string
@@ -28,6 +29,20 @@ export interface VideoData {
   mimeType?: string
   category?: string
   score?: number  // Search relevance score
+  sourcePlatform?: string | null
+  sourcePlatformLabel?: string | null
+  sourceUrl?: string | null
+  sourceId?: string | null
+  sourceCreatorName?: string | null
+  sourceCreatorHandle?: string | null
+  sourceCreatorUrl?: string | null
+  sourcePublishedAt?: number | null
+  sourceViewCount?: number | null
+  sourceLikeCount?: number | null
+  sourceCommentCount?: number | null
+  sourceArchivedAt?: number | null
+  sourceRelayId?: string | null
+  sourceMetadataJson?: string | null
   channel?: {
     name: string
     avatarUrl?: string
@@ -68,6 +83,10 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
   const timeAgo = useMemo(
     () => formatTimeAgo(video.uploadedAt || video.createdAt),
     [video.uploadedAt, video.createdAt]
+  )
+  const sourceDisplay = useMemo(
+    () => getSourceMetadataDisplay(video),
+    [video]
   )
 
   // Memoize press handler to maintain referential equality
@@ -172,6 +191,18 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
               ) : null}
               <Text style={styles.timeAgo}>{timeAgo}</Text>
             </View>
+            {sourceDisplay.hasSource && (
+              <View style={styles.sourceRow}>
+                <Text style={styles.sourceBadge} numberOfLines={1}>
+                  {sourceDisplay.platformLabel}
+                </Text>
+                {sourceDisplay.compactLine ? (
+                  <Text style={styles.sourceText} numberOfLines={1}>
+                    {sourceDisplay.compactLine}
+                  </Text>
+                ) : null}
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -203,6 +234,12 @@ function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): bo
     prev.createdAt === next.createdAt &&
     prev.channelKey === next.channelKey &&
     prev.driveKey === next.driveKey &&
+    prev.sourcePlatform === next.sourcePlatform &&
+    prev.sourcePlatformLabel === next.sourcePlatformLabel &&
+    prev.sourceCreatorName === next.sourceCreatorName &&
+    prev.sourceCreatorHandle === next.sourceCreatorHandle &&
+    prev.sourcePublishedAt === next.sourcePublishedAt &&
+    prev.sourceViewCount === next.sourceViewCount &&
     prev.channel?.name === next.channel?.name &&
     prevProps.onPress === nextProps.onPress &&
     prevProps.showChannelInfo === nextProps.showChannelInfo &&
@@ -293,6 +330,30 @@ const styles = StyleSheet.create({
   timeAgo: {
     color: colors.textMuted,
     fontSize: 12,
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 7,
+    minHeight: 18,
+  },
+  sourceBadge: {
+    overflow: 'hidden',
+    maxWidth: 92,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: '#ef4444',
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    marginRight: 7,
+  },
+  sourceText: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textMuted,
+    fontSize: 11,
   },
 })
 

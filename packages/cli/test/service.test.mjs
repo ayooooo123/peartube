@@ -213,7 +213,7 @@ test('createRelayService quarantines moderated candidates before mirroring', asy
       runtimeFactory: async () => runtime,
       mirrorChannel: async (candidate) => {
         mirrored.push(candidate.channelKey)
-        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+        return { bytesDownloaded: 1024, videosFound: 2, videosDownloaded: 2 }
       },
       writeStatusFile: async () => {}
     })
@@ -273,7 +273,7 @@ test('createRelayService applies persisted moderation rules at startup', async (
       runtimeFactory: async () => runtime,
       mirrorChannel: async (candidate) => {
         mirrored.push(candidate.channelKey)
-        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+        return { bytesDownloaded: 1024, videosFound: 2, videosDownloaded: 2 }
       },
       writeStatusFile: async () => {}
     })
@@ -332,7 +332,7 @@ test('createRelayService records posture and moderation alerts in relay status',
       runtimeFactory: async () => runtime,
       mirrorChannel: async (candidate) => {
         mirrored.push(candidate.channelKey)
-        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+        return { bytesDownloaded: 1024, videosFound: 2, videosDownloaded: 2 }
       },
       writeStatusFile: async () => {},
       nowFn: () => now
@@ -391,7 +391,7 @@ test('createRelayService alerts watched targets without blocking mirroring', asy
       runtimeFactory: async () => runtime,
       mirrorChannel: async (candidate) => {
         mirrored.push(candidate.channelKey)
-        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+        return { bytesDownloaded: 1024, videosFound: 2, videosDownloaded: 2 }
       },
       writeStatusFile: async () => {}
     })
@@ -803,6 +803,44 @@ test('createRelayService records eviction pressure alerts when cache is nearly f
     const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
 
     t.ok(summaries.includes('Relay cache eviction pressure is high at 90% of budget with 1 evictable channel'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService records storage spike alerts after large mirror growth', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-storage-spike-alerts-')
+  const runtime = createFakeRuntime()
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 1_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 300, videosFound: 1, videosDownloaded: 1 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-spike', ownerKey: 'owner-spike', publicBeeKey: 'bee-spike' })
+
+    const summaries = service.getStatus().alerts.latest.map((alert) => alert.summary)
+
+    t.ok(summaries.includes('Relay cache grew by 30% of budget while mirroring channelKey:chan-spike'))
     await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

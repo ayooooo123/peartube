@@ -14,6 +14,7 @@ import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './l
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
 const STORAGE_CONCENTRATION_THRESHOLD = 0.5
 const STORAGE_PRESSURE_THRESHOLD = 0.85
+const STORAGE_SPIKE_THRESHOLD = 0.25
 const ARCHIVE_FAILURE_ALERT_THRESHOLD = 3
 const BLOCKED_REAPPEARANCE_ALERT_THRESHOLD = 3
 const ARCHIVE_SOURCE_VOLUME_ALERT_THRESHOLD = 5
@@ -170,6 +171,24 @@ export async function createRelayService({
         })
       }
     }
+  }
+
+  async function recordStorageSpikeAlert(channelKey, bytesDownloaded, { source = 'discovered' } = {}) {
+    if (!alertStore) return null
+    if (!channelKey || source === 'archive-job' || source === 'local') return null
+    const maxBytes = Number(config.storage?.maxBytes || 0)
+    const bytes = Number(bytesDownloaded || 0) || 0
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0 || bytes <= 0) return null
+    if ((bytes / maxBytes) < STORAGE_SPIKE_THRESHOLD) return null
+
+    return ensureOperatorAlert({
+      severity: 'warning',
+      category: 'storage',
+      targetType: 'channelKey',
+      target: channelKey,
+      summary: `Relay cache grew by ${budgetPercent(bytes, maxBytes)}% of budget while mirroring channelKey:${channelKey}`,
+      suggestedActions: ['review-cache', 'watch', 'quarantine']
+    })
   }
 
   async function recordNetworkAlerts(runtimeStats = {}) {
@@ -825,6 +844,7 @@ export async function createRelayService({
         videosFound: mirrorStats?.videosFound || 0,
         videosDownloaded: mirrorStats?.videosDownloaded || 0
       })
+      await recordStorageSpikeAlert(resolved.channelKey, mirrorStats?.bytesDownloaded || 0, { source: acceptedSource })
     } catch (err) {
       await relayCatalog.upsertChannel({
         ...baseRecord,

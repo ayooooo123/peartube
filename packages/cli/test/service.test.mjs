@@ -296,6 +296,119 @@ test('createRelayService applies persisted moderation rules at startup', async (
   }
 })
 
+test('createRelayService records posture and moderation alerts in relay status', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-alerts-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+  let now = 10_000
+
+  runtime.cacheManager = { async addChannel() { throw new Error('cache should not run for rejected candidates') } }
+  runtime.seeder = { async seedChannel() { throw new Error('seed should not run for rejected candidates') } }
+  runtime.publishRelayCatalogEntry = async () => { throw new Error('publish should not run for rejected candidates') }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache', 'archiver'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          mode: 'report-and-alert',
+          rules: [
+            { targetType: 'channelKey', target: 'chan-block', action: 'block', source: 'local' },
+            { targetType: 'channelKey', target: 'chan-q', action: 'quarantine', source: 'local' }
+          ]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+      },
+      writeStatusFile: async () => {},
+      nowFn: () => now
+    })
+
+    await service.start()
+    now = 11_000
+    await service.processCandidate({ channelKey: 'chan-block', ownerKey: 'owner-block', publicBeeKey: 'bee-block' })
+    now = 12_000
+    await service.processCandidate({ channelKey: 'chan-q', ownerKey: 'owner-q', publicBeeKey: 'bee-q' })
+
+    const status = service.getStatus()
+    const summaries = status.alerts.latest.map((alert) => alert.summary)
+
+    t.alike(mirrored, [])
+    t.is(status.alerts.info, 1)
+    t.is(status.alerts.warning, 2)
+    t.is(status.alerts.critical, 1)
+    t.is(status.alerts.unacknowledged, 4)
+    t.ok(summaries.includes('Public index stores public channel and video metadata for discovery'), 'public-index posture is explicit')
+    t.ok(summaries.includes('Archive role publishes operator-selected content'), 'archiver posture is explicit')
+    t.ok(summaries.includes('Blocklisted channelKey:chan-block appeared in public feed gossip'), 'blocked gossip produces an alert')
+    t.ok(summaries.includes('Quarantine applied to channelKey:chan-q'), 'quarantine produces an alert')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService alerts watched targets without blocking mirroring', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-watch-alerts-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          mode: 'report-and-alert',
+          rules: [
+            { targetType: 'channelKey', target: 'chan-watch', action: 'watch', source: 'local' }
+          ]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    const result = await service.processCandidate({ channelKey: 'chan-watch', ownerKey: 'owner-watch', publicBeeKey: 'bee-watch' })
+
+    t.is(result.accepted, true)
+    t.alike(mirrored, ['chan-watch'])
+    t.is(service.getStatus().alerts.warning, 1)
+    t.ok(service.getStatus().alerts.latest.some((alert) => alert.summary === 'Watched channelKey:chan-watch appeared in public feed gossip'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

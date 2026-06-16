@@ -78,6 +78,13 @@ test('parseArgv supports moderation command flags', async (t) => {
   t.alike(removeParsed.flags, { remove: 'mod_1', json: true })
 })
 
+test('parseArgv supports alert acknowledgement flags', async (t) => {
+  const parsed = parseArgv(['alerts', '--ack', 'alert_1', '--json'])
+
+  t.is(parsed.command, 'alerts')
+  t.alike(parsed.flags, { ack: 'alert_1', json: true })
+})
+
 test('parseArgv supports node role flag', async (t) => {
   const parsed = parseArgv(['validate', '--roles', 'public-index,relay-cache'])
 
@@ -89,7 +96,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   const packageJsonPath = join(__dirname, '..', 'package.json')
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
 
-  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/moderation.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
+  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/alerts.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/moderation.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
   t.is(pkg.imports['#subprocess'].bare, './src/shims/subprocess.bare.js')
   t.is(pkg.imports['#subprocess'].default, './src/shims/subprocess.node.js')
   t.is(pkg.imports['#http'].bare, './src/shims/http.bare.js')
@@ -122,8 +129,10 @@ test('bin.js exposes relay subcommands', async (t) => {
   t.ok(content.includes('status'), 'status subcommand is present')
   t.ok(content.includes('init'), 'init subcommand is present')
   t.ok(content.includes('moderation'), 'moderation subcommand is present')
+  t.ok(content.includes('alerts'), 'alerts subcommand is present')
   t.ok(content.includes('--roles <roles>'), 'help exposes node role configuration')
   t.ok(content.includes('--add --action <action> --target-type <type> --target <value>'), 'help exposes moderation add syntax')
+  t.ok(content.includes('--ack <alert-id>'), 'help exposes alert acknowledgement syntax')
   t.ok(content.includes("import process from '#process'"), 'bin.js uses the runtime process shim')
 })
 

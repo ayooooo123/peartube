@@ -1,6 +1,8 @@
 import { createCliLogger } from './cli-logger.js'
 import { evaluateCandidate } from './admission.js'
+import { AlertStore } from './alerts.js'
 import { RelayCatalog } from './catalog.js'
+import { RELAY_ROLE_ARCHIVER, RELAY_ROLE_PUBLIC_INDEX } from './constants.js'
 import { ModerationRuleStore } from './moderation-store.js'
 import { normalizeModerationConfig } from './moderation.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
@@ -41,6 +43,14 @@ export async function createRelayService({
       ...persistedModerationRules
     ]
   })
+
+  const alertStore = config.paths?.alerts
+    ? await AlertStore.open({
+      storagePath: config.storage.path,
+      alertsPath: config.paths.alerts,
+      nowFn
+    })
+    : null
 
   const relayCatalog = catalog || await RelayCatalog.open({
     storagePath: config.storage.path,
@@ -161,11 +171,109 @@ export async function createRelayService({
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
-      runtimeStats: runtime.getNetworkStats?.() || {}
+      runtimeStats: runtime.getNetworkStats?.() || {},
+      alerts: alertStore?.getAlerts({ limit: Infinity }) || []
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
     return currentStatus
+  }
+
+  async function addOperatorAlert(alert) {
+    if (!alertStore) return null
+    try {
+      return await alertStore.addAlert(alert)
+    } catch (err) {
+      logger.status.warn('Relay alert write failed', {
+        category: alert?.category || null,
+        targetType: alert?.targetType || null,
+        target: alert?.target || null,
+        error: err?.message || String(err)
+      })
+      return null
+    }
+  }
+
+  async function ensureOperatorAlert(alert) {
+    if (!alertStore) return null
+    try {
+      return await alertStore.ensureAlert(alert)
+    } catch (err) {
+      logger.status.warn('Relay alert write failed', {
+        category: alert?.category || null,
+        targetType: alert?.targetType || null,
+        target: alert?.target || null,
+        error: err?.message || String(err)
+      })
+      return null
+    }
+  }
+
+  async function recordPostureAlerts() {
+    const roles = Array.isArray(config.roles) ? config.roles : []
+
+    if (roles.includes(RELAY_ROLE_PUBLIC_INDEX)) {
+      await ensureOperatorAlert({
+        severity: 'info',
+        category: 'posture',
+        targetType: 'role',
+        target: RELAY_ROLE_PUBLIC_INDEX,
+        summary: 'Public index stores public channel and video metadata for discovery',
+        suggestedActions: ['review-posture', 'configure-roles']
+      })
+    }
+
+    if (roles.includes(RELAY_ROLE_ARCHIVER)) {
+      await ensureOperatorAlert({
+        severity: 'warning',
+        category: 'posture',
+        targetType: 'role',
+        target: RELAY_ROLE_ARCHIVER,
+        summary: 'Archive role publishes operator-selected content',
+        suggestedActions: ['review-archive-sources', 'separate-node-roles']
+      })
+    }
+  }
+
+  async function recordModerationAlert(decision = {}, candidate = {}) {
+    const moderation = decision.moderation || {}
+    const targetType = moderation.targetType || (candidate.channelKey ? 'channelKey' : 'ownerKey')
+    const target = moderation.target || candidate.channelKey || candidate.ownerKey || 'unknown'
+
+    if (decision.reason === 'moderation-blocked') {
+      await addOperatorAlert({
+        severity: 'warning',
+        category: 'moderation',
+        targetType,
+        target,
+        summary: `Blocklisted ${targetType}:${target} appeared in public feed gossip`,
+        suggestedActions: ['review', 'keep-blocked']
+      })
+      return
+    }
+
+    if (decision.reason === 'moderation-quarantined') {
+      await addOperatorAlert({
+        severity: 'critical',
+        category: 'moderation',
+        targetType,
+        target,
+        summary: `Quarantine applied to ${targetType}:${target}`,
+        suggestedActions: ['review', 'block', 'allow']
+      })
+      return
+    }
+
+    if (moderation.action === 'watch') {
+      await addOperatorAlert({
+        severity: 'warning',
+        category: 'moderation',
+        targetType,
+        target,
+        summary: `Watched ${targetType}:${target} appeared in public feed gossip`,
+        suggestedActions: ['review', 'quarantine', 'block']
+      })
+    }
   }
 
   const basePublishRelayCatalogEntry = typeof runtime.publishRelayCatalogEntry === 'function'
@@ -269,6 +377,7 @@ export async function createRelayService({
       })
 
     if (!decision.accepted) {
+      await recordModerationAlert(decision, resolved)
       if (decision.reason === 'moderation-quarantined' && resolved.channelKey) {
         await relayCatalog.upsertChannel({
           channelKey: resolved.channelKey,
@@ -294,6 +403,8 @@ export async function createRelayService({
       await persistStatus()
       return decision
     }
+
+    await recordModerationAlert(decision, resolved)
 
     const acceptedSource = existingChannel?.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
       ? existingChannel.source
@@ -537,6 +648,8 @@ export async function createRelayService({
 
       await runtime.start?.()
 
+      await recordPostureAlerts()
+
       for (const channelKey of config.admission.channels || []) {
         await scheduleCandidate({
           channelKey,
@@ -742,7 +855,8 @@ export async function createRelayService({
       return currentStatus || buildRelayStatus({
         config,
         catalog: relayCatalog,
-        runtimeStats: runtime.getNetworkStats?.() || {}
+        runtimeStats: runtime.getNetworkStats?.() || {},
+        alerts: alertStore?.getAlerts({ limit: Infinity }) || []
       })
     },
     async close() {

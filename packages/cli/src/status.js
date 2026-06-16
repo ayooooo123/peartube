@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from '#fs'
 import { retentionClassPriority } from './admission.js'
+import { latestAlerts, summarizeAlerts } from './alerts.js'
 import { summarizeModerationRules } from './moderation.js'
 import { buildRelayPosture, describeRelayPosture, normalizeRelayRoles } from './relay-roles.js'
 
@@ -11,7 +12,18 @@ function sortEvictionCandidates(channels) {
   })
 }
 
-export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
+export function withRelayAlerts(status, alerts = []) {
+  const alertSummary = summarizeAlerts(alerts)
+  return {
+    ...status,
+    alerts: {
+      ...alertSummary,
+      latest: latestAlerts(alerts, { limit: 5 })
+    }
+  }
+}
+
+export function buildRelayStatus({ config, catalog, runtimeStats = {}, alerts = [] }) {
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
   const catalogModeration = typeof catalog.getModerationSummary === 'function'
@@ -21,8 +33,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
     archiveEnabled: Boolean(config.archive?.enabled || config.archive?.localMirror?.enabled)
   })
   const posture = buildRelayPosture(roles)
-
-  return {
+  return withRelayAlerts({
     generatedAt: Date.now(),
     roles,
     posture,
@@ -82,7 +93,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
       mirroredAt: channel.mirroredAt || null
     })),
     channels
-  }
+  }, alerts)
 }
 
 export function writeRelayStatus(statusPath, status) {
@@ -108,6 +119,7 @@ export function formatRelayStatus(status) {
     `roles: ${roles.join(',')}`,
     `posture: ${describeRelayPosture(posture)}`,
     `moderation: blocked=${status.moderation?.rules?.block || 0} quarantined=${status.moderation?.quarantinedChannels || 0} watched=${status.moderation?.rules?.watch || 0} allowed=${status.moderation?.rules?.allow || 0}`,
+    `alerts: critical=${status.alerts?.critical || 0} warning=${status.alerts?.warning || 0} info=${status.alerts?.info || 0}`,
     `mode: ${status.mode}`,
     `policy: ${status.policy}`,
     `storage: ${status.summary.usedBytes}/${status.storage.maxBytes} bytes`,

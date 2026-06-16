@@ -21,11 +21,20 @@ function getPostureModel(model = {}) {
   }
 }
 
+function getAlertModel(model = {}) {
+  const relayStatus = model.relayStatus || {}
+  const alerts = Array.isArray(model.alerts)
+    ? model.alerts
+    : (Array.isArray(relayStatus.alerts?.latest) ? relayStatus.alerts.latest : [])
+  return alerts
+}
+
 export function renderArchiveTui(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const posture = getPostureModel(model)
+  const alerts = getAlertModel(model)
   const lines = [
     'PearTube Relay Archive Console',
     '================================',
@@ -37,8 +46,21 @@ export function renderArchiveTui(model = {}) {
     'Anonymous channel archival',
     'Paste a YouTube video URL or channel URL, import into a local relay-owned channel, then Publish to network.',
     '',
-    'Queue:'
+    'Alerts:'
   ]
+
+  if (!alerts.length) {
+    lines.push('  No active alerts.')
+  } else {
+    for (const alert of alerts) {
+      lines.push(`  ${alert.severity} ${alert.category} ${alert.targetType}:${alert.target} ${alert.summary}`)
+    }
+  }
+
+  lines.push(
+    '',
+    'Queue:'
+  )
 
   if (!jobs.length) {
     lines.push('  No archive jobs yet.')
@@ -57,6 +79,7 @@ export function renderArchiveWebHome(model = {}) {
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const posture = getPostureModel(model)
+  const alerts = getAlertModel(model)
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
   const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
   const rows = jobs.length
@@ -69,6 +92,15 @@ export function renderArchiveWebHome(model = {}) {
           ${job.error ? `<code>${escapeHtml(job.error)}</code>` : ''}
         </li>`).join('')
     : '<li class="empty">No archive jobs yet.</li>'
+  const alertRows = alerts.length
+    ? alerts.map((alert) => `
+        <li>
+          <span class="pill ${escapeHtml(alert.severity)}">${escapeHtml(alert.severity)}</span>
+          <strong>${escapeHtml(alert.summary)}</strong>
+          <small>${escapeHtml(alert.category)} ${escapeHtml(alert.targetType)}:${escapeHtml(alert.target)}</small>
+          ${Array.isArray(alert.suggestedActions) && alert.suggestedActions.length ? `<small>${escapeHtml(alert.suggestedActions.join(', '))}</small>` : ''}
+        </li>`).join('')
+    : '<li class="empty">No active alerts.</li>'
 
   return `<!doctype html>
 <html lang="en">
@@ -84,7 +116,7 @@ export function renderArchiveWebHome(model = {}) {
     p { color: #aab3c5; line-height: 1.55; }
     a { color: #9effd0; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 28px 0; }
-    .stat, form, .queue, .catalog, .posture { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
+    .stat, form, .queue, .catalog, .posture, .alerts { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
     .stat b { display: block; font-size: 28px; }
     .posture { margin: 24px 0; border-color: rgba(158,255,208,0.28); }
     .posture strong { display: block; margin-bottom: 8px; color: #9effd0; }
@@ -100,6 +132,9 @@ export function renderArchiveWebHome(model = {}) {
     .completed { background: rgba(80, 255, 174, 0.18); color: #9effd0; }
     .failed { background: rgba(255, 91, 91, 0.18); color: #ffabab; }
     .running { background: rgba(91, 176, 255, 0.18); color: #b9ddff; }
+    .critical { background: rgba(255, 91, 91, 0.18); color: #ffabab; }
+    .warning { background: rgba(255, 202, 91, 0.18); color: #ffe1a1; }
+    .info { background: rgba(91, 176, 255, 0.18); color: #b9ddff; }
     @media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -111,6 +146,10 @@ export function renderArchiveWebHome(model = {}) {
       <strong>roles: ${escapeHtml(posture.roles.join(','))}</strong>
       <p>${escapeHtml(posture.description)}</p>
       <p>Public index stores public metadata for discovery. Archive is publisher content chosen by this operator.</p>
+    </section>
+    <section class="alerts">
+      <h2>Alerts</h2>
+      <ul>${alertRows}</ul>
     </section>
     <section class="stats">
       <div class="stat"><span>Peers</span><b>${escapeHtml(status.peers || 0)}</b></div>

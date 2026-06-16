@@ -10,7 +10,7 @@
     "peartube-peer-bare": "bare-bin.js"
   },
   "scripts": {
-    "test": "brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/moderation.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs",
+    "test": "brittle test/admission.test.mjs test/alerts.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/moderation.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs",
     "build:standalone": "node ./scripts/build-standalone.mjs",
     "build:standalone:linux-x64": "RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs",
     "build:standalone:linux-arm64": "RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs",

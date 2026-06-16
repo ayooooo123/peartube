@@ -14,6 +14,7 @@ import {
   DEFAULT_ARCHIVE_YT_DLP_PATH,
   DEFAULT_LOCAL_MIRROR_POLL_SECONDS,
   DEFAULT_RELAY_CONFIG,
+  RELAY_ALERTS_FILENAME,
   RELAY_CATALOG_FILENAME,
   RELAY_MODERATION_FILENAME,
   RELAY_MODE_PRIVATE,
@@ -652,6 +653,7 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
     catalog: join(runtimeDbPath, RELAY_CATALOG_FILENAME),
     status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
     moderation: join(runtimeDbPath, RELAY_MODERATION_FILENAME),
+    alerts: join(runtimeDbPath, RELAY_ALERTS_FILENAME),
     corestore: join(config.storage.path, 'corestore'),
     archiveTmpPath: config.archive.tmpPath
   }

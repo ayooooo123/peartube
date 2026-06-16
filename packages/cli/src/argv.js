@@ -126,6 +126,11 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--ack') {
+      flags.ack = consumeValue()
+      continue
+    }
+
     if (arg === '--storage' || arg === '-s') {
       flags.storage = consumeValue()
       continue

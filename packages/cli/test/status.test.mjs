@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { RelayCatalog } from '../src/catalog.js'
-import { buildRelayStatus, formatRelayStatus, readRelayStatus, writeRelayStatus } from '../src/status.js'
+import { buildRelayStatus, formatRelayStatus, readRelayStatus, withRelayAlerts, writeRelayStatus } from '../src/status.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -180,6 +180,121 @@ test('buildRelayStatus includes moderation rule and quarantine summary', async (
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('buildRelayStatus includes active alert summary and latest alerts', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-alerts-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 16_384 }
+      },
+      catalog,
+      alerts: [
+        {
+          id: 'alert-critical',
+          severity: 'critical',
+          category: 'moderation',
+          targetType: 'channelKey',
+          target: 'chan-q',
+          summary: 'Quarantine applied to channelKey:chan-q',
+          createdAt: 2000,
+          suggestedActions: ['review', 'block']
+        },
+        {
+          id: 'alert-info-acked',
+          severity: 'info',
+          category: 'posture',
+          targetType: 'role',
+          target: 'public-index',
+          summary: 'Public index stores public metadata for discovery',
+          createdAt: 1000,
+          acknowledgedAt: 1500
+        }
+      ]
+    })
+
+    t.alike(status.alerts, {
+      info: 0,
+      warning: 0,
+      critical: 1,
+      unacknowledged: 1,
+      latest: [
+        {
+          id: 'alert-critical',
+          severity: 'critical',
+          category: 'moderation',
+          targetType: 'channelKey',
+          target: 'chan-q',
+          summary: 'Quarantine applied to channelKey:chan-q',
+          createdAt: 2000,
+          suggestedActions: ['review', 'block']
+        }
+      ]
+    })
+
+    const formatted = formatRelayStatus(status)
+    t.ok(formatted.includes('alerts: critical=1 warning=0 info=0'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('withRelayAlerts refreshes alert counts on persisted status snapshots', async (t) => {
+  const status = withRelayAlerts({
+    mode: 'public',
+    alerts: {
+      info: 1,
+      warning: 0,
+      critical: 0,
+      unacknowledged: 1,
+      latest: [{ id: 'stale' }]
+    }
+  }, [
+    {
+      id: 'active-warning',
+      severity: 'warning',
+      category: 'moderation',
+      targetType: 'channelKey',
+      target: 'chan-watch',
+      summary: 'Watched channelKey:chan-watch appeared in public feed gossip',
+      createdAt: 2000
+    },
+    {
+      id: 'acked-info',
+      severity: 'info',
+      category: 'posture',
+      targetType: 'role',
+      target: 'public-index',
+      summary: 'Public index stores public metadata for discovery',
+      createdAt: 1000,
+      acknowledgedAt: 1500
+    }
+  ])
+
+  t.is(status.mode, 'public')
+  t.alike(status.alerts, {
+    info: 0,
+    warning: 1,
+    critical: 0,
+    unacknowledged: 1,
+    latest: [
+      {
+        id: 'active-warning',
+        severity: 'warning',
+        category: 'moderation',
+        targetType: 'channelKey',
+        target: 'chan-watch',
+        summary: 'Watched channelKey:chan-watch appeared in public feed gossip',
+        createdAt: 2000
+      }
+    ]
+  })
 })
 
 test('readRelayStatus returns persisted runtime stats when present', async (t) => {

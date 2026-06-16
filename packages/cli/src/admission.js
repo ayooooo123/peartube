@@ -33,16 +33,19 @@ export function evaluateCandidate({ candidate, config, acceptedChannels = new Se
       moderation
     }
   }
+  const watchedModeration = moderation?.action === 'watch' ? moderation : null
+  const watchedDecision = watchedModeration ? { moderation: watchedModeration } : {}
 
   if (acceptedChannels.has(candidate.channelKey)) {
-    return { accepted: false, reason: 'already-accepted', retentionClass: null }
+    return { accepted: false, reason: 'already-accepted', retentionClass: null, ...watchedDecision }
   }
 
   if (hasAllowlistedChannel(candidate, config)) {
     return {
       accepted: true,
       reason: 'channel-allowlist',
-      retentionClass: config.mode === 'private' ? 'private' : 'allowlist'
+      retentionClass: config.mode === 'private' ? 'private' : 'allowlist',
+      ...watchedDecision
     }
   }
 
@@ -50,28 +53,29 @@ export function evaluateCandidate({ candidate, config, acceptedChannels = new Se
     return {
       accepted: true,
       reason: 'owner-allowlist',
-      retentionClass: config.mode === 'private' ? 'private' : 'allowlist'
+      retentionClass: config.mode === 'private' ? 'private' : 'allowlist',
+      ...watchedDecision
     }
   }
 
   if (config.mode === 'private' || config.policy === 'allowlist') {
-    return { accepted: false, reason: 'not-allowlisted', retentionClass: null }
+    return { accepted: false, reason: 'not-allowlisted', retentionClass: null, ...watchedDecision }
   }
 
   if (!config.discovery?.enabled) {
-    return { accepted: false, reason: 'discovery-disabled', retentionClass: null }
+    return { accepted: false, reason: 'discovery-disabled', retentionClass: null, ...watchedDecision }
   }
 
   if (Number(config.discovery.maxChannels || 0) > 0 && acceptedChannels.size >= config.discovery.maxChannels) {
-    return { accepted: false, reason: 'channel-limit', retentionClass: null }
+    return { accepted: false, reason: 'channel-limit', retentionClass: null, ...watchedDecision }
   }
 
   if (candidate.ownerKey) {
     const ownerChannelCount = ownerCounts.get(candidate.ownerKey) || 0
     if (Number(config.discovery.maxChannelsPerOwner || 0) > 0 && ownerChannelCount >= config.discovery.maxChannelsPerOwner) {
-      return { accepted: false, reason: 'owner-limit', retentionClass: null }
+      return { accepted: false, reason: 'owner-limit', retentionClass: null, ...watchedDecision }
     }
   }
 
-  return { accepted: true, reason: 'discovery', retentionClass: 'discovery' }
+  return { accepted: true, reason: 'discovery', retentionClass: 'discovery', ...watchedDecision }
 }

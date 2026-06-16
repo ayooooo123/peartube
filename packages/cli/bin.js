@@ -4,9 +4,10 @@ import process from '#process'
 import { normalizeCliArgv, parseArgv } from './src/argv.js'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
+import { AlertStore } from './src/alerts.js'
 import { RelayCatalog } from './src/catalog.js'
 import { ModerationRuleStore } from './src/moderation-store.js'
-import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
+import { buildRelayStatus, formatRelayStatus, readRelayStatus, withRelayAlerts } from './src/status.js'
 
 function writeLine(message, preferredStream = 'stdout') {
   const text = typeof message === 'string' ? message : String(message)
@@ -41,6 +42,7 @@ function printHelp() {
     '  archive  Queue or run anonymous YouTube archive jobs',
     '  mirror-local  Import local video files into the relay channel',
     '  moderation  Add, remove, or list local moderation rules',
+    '  alerts    List or acknowledge operator alerts',
     '  validate  Validate and print the normalized relay config',
     '  status    Print relay status from the local catalog',
     '  init      Write an example config file',
@@ -52,6 +54,7 @@ function printHelp() {
     '  --policy <allowlist|discovery>',
     '  --add --action <action> --target-type <type> --target <value>',
     '  --remove <rule-id>',
+    '  --ack <alert-id>',
     '  --reason <text>',
     '  --storage, -s <path>',
     '  --max-bytes <n>',
@@ -172,9 +175,13 @@ async function validateCommand(flags) {
 
 async function statusCommand(flags) {
   const config = await loadRelayConfig(flags)
-  const status = readRelayStatus(config.paths.status) || buildRelayStatus({
+  const alertStore = await AlertStore.open({ storagePath: config.storage.path, alertsPath: config.paths.alerts })
+  const alerts = alertStore.getAlerts({ limit: Infinity })
+  const persistedStatus = readRelayStatus(config.paths.status)
+  const status = persistedStatus ? withRelayAlerts(persistedStatus, alerts) : buildRelayStatus({
     config,
-    catalog: await RelayCatalog.open({ storagePath: config.storage.path, catalogPath: config.paths.catalog })
+    catalog: await RelayCatalog.open({ storagePath: config.storage.path, catalogPath: config.paths.catalog }),
+    alerts
   })
 
   if (flags.json) {
@@ -183,6 +190,37 @@ async function statusCommand(flags) {
   }
 
   writeLine(formatRelayStatus(status) + '\n')
+}
+
+async function alertsCommand(flags) {
+  const config = await loadRelayConfig(flags)
+  const store = await AlertStore.open({
+    storagePath: config.storage.path,
+    alertsPath: config.paths.alerts
+  })
+
+  if (flags.ack) {
+    const acknowledged = await store.acknowledgeAlert(flags.ack)
+    if (flags.json) {
+      writeLine(JSON.stringify({ acknowledged }, null, 2) + '\n')
+      return
+    }
+    writeLine(acknowledged ? `acknowledged ${acknowledged.id}\n` : `no alert found for ${flags.ack}\n`)
+    return
+  }
+
+  const alerts = store.getAlerts()
+  if (flags.json) {
+    writeLine(JSON.stringify({ alerts, summary: store.getSummary() }, null, 2) + '\n')
+    return
+  }
+
+  if (!alerts.length) {
+    writeLine('No active alerts.\n')
+    return
+  }
+
+  writeLine(alerts.map((alert) => `${alert.id} ${alert.severity} ${alert.category} ${alert.targetType}:${alert.target} ${alert.summary}`).join('\n') + '\n')
 }
 
 async function moderationCommand(flags) {
@@ -264,6 +302,9 @@ async function main() {
       break
     case 'moderation':
       await moderationCommand(flags)
+      break
+    case 'alerts':
+      await alertsCommand(flags)
       break
     case 'validate':
       await validateCommand(flags)

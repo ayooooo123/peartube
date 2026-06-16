@@ -215,6 +215,37 @@ test('archive WebUI renders relay posture banner', async (t) => {
   t.ok(web.includes('Public index stores public metadata'), 'WebUI does not imply public index is non-knowledge')
 })
 
+test('archive UI renders active operator alerts', async (t) => {
+  const model = {
+    relayStatus: {
+      alerts: {
+        latest: [
+          {
+            id: 'alert-q',
+            severity: 'critical',
+            category: 'moderation',
+            targetType: 'channelKey',
+            target: 'chan-q',
+            summary: 'Quarantine applied to channelKey:chan-q',
+            suggestedActions: ['review', 'block']
+          }
+        ]
+      }
+    },
+    status: { peers: 3, feedEntries: 7, seeding: { videos: 11 } },
+    jobs: []
+  }
+
+  const tui = renderArchiveTui(model)
+  const web = renderArchiveWebHome(model)
+
+  t.ok(tui.includes('Alerts:'), 'TUI has an alert section')
+  t.ok(tui.includes('critical moderation channelKey:chan-q Quarantine applied to channelKey:chan-q'), 'TUI shows alert severity and target')
+  t.ok(web.includes('<section class="alerts">'), 'WebUI has an alert section')
+  t.ok(web.includes('Quarantine applied to channelKey:chan-q'), 'WebUI shows alert summary')
+  t.ok(web.includes('review, block'), 'WebUI shows suggested actions')
+})
+
 
 test('yt-dlp downloader extracts the actual after_move filepath and verifies it exists', async (t) => {
   const calls = []

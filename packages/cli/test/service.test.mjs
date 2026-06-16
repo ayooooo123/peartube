@@ -719,6 +719,51 @@ test('createRelayService records storage concentration alerts', async (t) => {
   }
 })
 
+test('createRelayService alerts when accepted public feed content has an unknown owner', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-unknown-owner-alerts-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: { mode: 'report-and-alert', rules: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 128, videosFound: 1, videosDownloaded: 1 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-unknown', ownerKey: null, publicBeeKey: 'bee-unknown' })
+
+    const status = service.getStatus()
+    const summaries = status.alerts.latest.map((alert) => alert.summary)
+
+    t.alike(mirrored, ['chan-unknown'])
+    t.is(status.alerts.warning, 1)
+    t.ok(summaries.includes('Accepted channelKey:chan-unknown has no verified owner key'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
   const dir = makeTempDir('peartube-relay-service-catalog-feed-')

@@ -428,6 +428,21 @@ export async function createRelayService({
     }
   }
 
+  async function recordUnknownOwnerAlert(candidate = {}, { source = 'discovered' } = {}) {
+    const channelKey = candidate.channelKey || candidate.driveKey
+    if (!channelKey || candidate.ownerKey) return
+    if (source === 'archive-job' || source === 'local') return
+
+    await ensureOperatorAlert({
+      severity: 'warning',
+      category: 'moderation',
+      targetType: 'channelKey',
+      target: channelKey,
+      summary: `Accepted channelKey:${channelKey} has no verified owner key`,
+      suggestedActions: ['review', 'watch', 'quarantine']
+    })
+  }
+
   function moderationStateForAction(action) {
     if (action === 'block') return 'blocked'
     if (action === 'quarantine') return 'quarantined'
@@ -550,6 +565,10 @@ export async function createRelayService({
         ownerKey: resolved.ownerKey || existingChannel.ownerKey || null,
         retryAfterMs: Math.ceil(refreshDecision.retryAfterMs)
       })
+      await recordUnknownOwnerAlert({
+        ...resolved,
+        ownerKey: resolved.ownerKey || existingChannel.ownerKey || null
+      }, { source })
       await persistStatus()
       return { accepted: true, retentionClass, reason: refreshDecision.reason }
     }
@@ -600,6 +619,7 @@ export async function createRelayService({
     const acceptedSource = existingChannel?.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
       ? existingChannel.source
       : (resolved.source || 'discovered')
+    await recordUnknownOwnerAlert(resolved, { source: acceptedSource })
     const moderationRecord = decision.moderation?.action === 'watch'
       ? {
           moderation: {

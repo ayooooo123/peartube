@@ -113,15 +113,20 @@ Run the packaged relay container from the root compose file:
 
 ```bash
 docker compose -f docker-compose.relay.yml up -d
-docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
+docker compose -f docker-compose.relay.yml exec peartube-public-relay /peartube-relay status --json
 ```
 
-The compose uses `ghcr.io/ayooooo123/peartube-relay:latest`, persists relay storage in `peartube-relay-data`, and exposes the archive WebUI at `http://127.0.0.1:8174`.
+The compose uses `ghcr.io/ayooooo123/peartube-relay:latest`, persists default public relay storage in `peartube-relay-data`, and exposes the archive WebUI at `http://127.0.0.1:8174`. It also includes opt-in profiles for a curated relay and an archive publisher:
+
+```bash
+docker compose -f docker-compose.relay.yml --profile curated up -d
+docker compose -f docker-compose.relay.yml --profile archive-publisher up -d
+```
 
 Archive a video from the container without opening the browser:
 
 ```bash
-docker compose -f docker-compose.relay.yml exec relay \
+docker compose -f docker-compose.relay.yml exec peartube-public-relay \
   /peartube-relay archive --url https://youtu.be/... --channel-name "Anonymous Archive" --run-now
 ```
 

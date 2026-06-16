@@ -492,7 +492,7 @@ export async function createRelayService({
       source,
       retentionClass,
       relayRole: entry.relayRole || 'cache',
-      relayServing: entry.relayServing !== false,
+      relayServing: entry.relayServing === true,
       lastSeenAt: Number(entry.lastSeenAt || manifestUpdatedAt) || manifestUpdatedAt,
       mirroredAt: Number(entry.mirroredAt || manifestUpdatedAt) || manifestUpdatedAt,
       previewVideos,
@@ -704,15 +704,15 @@ export async function createRelayService({
             publicBeeKey: resolved.publicBeeKey,
             source: 'relay-cache',
             relayRole: 'cache',
-            relayServing: true,
+            relayServing: false,
             previewVideos: persistedPreviewVideos,
             unavailableVideos: mirrorUnavailableVideos,
             videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
             manifestUpdatedAt: now
           }),
           ...(baseRecord.source === 'archive-job'
-              ? { source: 'archive-job', retentionClass: 'private' }
-              : {})
+              ? { source: 'archive-job', retentionClass: 'private', relayServing: true }
+              : { relayServing: false })
         }
         await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
       }

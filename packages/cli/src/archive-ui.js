@@ -267,7 +267,7 @@ export function renderModerationTargetDetail(model = {}) {
     ? channels.map((channel) => `
       <section class="target-channel">
         <h2>${escapeHtml(channel.channelKey || 'unknown channel')}</h2>
-        <p>source=${escapeHtml(channel.source || 'unknown')} retention=${escapeHtml(channel.retentionClass || 'unknown')} bytes=${escapeHtml(channel.bytes || 0)} videos=${escapeHtml(channel.videoCount || 0)} relayServing=${escapeHtml(channel.relayServing !== false)}</p>
+        <p>source=${escapeHtml(channel.source || 'unknown')} retention=${escapeHtml(channel.retentionClass || 'unknown')} bytes=${escapeHtml(channel.bytes || 0)} videos=${escapeHtml(channel.videoCount || 0)} relayServing=${escapeHtml(channel.relayServing === true)}</p>
         <dl>
           <dt>publicBeeKey</dt><dd><code>${escapeHtml(channel.publicBeeKey || 'none')}</code></dd>
           <dt>ownerKey</dt><dd><code>${escapeHtml(channel.ownerKey || 'none')}</code></dd>

@@ -198,7 +198,7 @@ export async function createRelayRuntime({ config, logger } = {}) {
         catalogVersion: 1,
         source: 'relay-cache',
         relayRole: 'cache',
-        relayServing: true,
+        relayServing: false,
         ...entry,
         driveKey: entry.driveKey,
         publicBeeKey: entry.publicBeeKey,

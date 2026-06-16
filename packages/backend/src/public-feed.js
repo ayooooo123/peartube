@@ -476,7 +476,7 @@ export class PublicFeed {
       driveKey: entry.driveKey,
       publicBeeKey,
       relayRole: entry.relayRole || (entry.source === 'relay-cache' ? 'cache' : 'publisher'),
-      relayServing: Boolean(entry.relayServing || entry.source === 'relay-cache' || entry.source === 'local' || this._entryHasPlayablePreview(entry)),
+      relayServing: Boolean(entry.relayServing || entry.source === 'local'),
       discoveryOnly: Boolean(entry.discoveryOnly),
       restoredFromCache: Boolean(entry.restoredFromCache),
       restoredFrom: entry.restoredFrom || null,
@@ -1551,7 +1551,7 @@ export class PublicFeed {
           schema: 'peartube.relayCatalog',
           catalogVersion: PUBLIC_FEED_CATALOG_VERSION,
           relayRole: e.relayRole || 'cache',
-          relayServing: Boolean(e.relayServing || e.source === 'relay-cache' || e.relayRole === 'cache'),
+          relayServing: Boolean(e.relayServing),
           lastSeenAt: e.lastSeenAt || Date.now(),
         }))
       await this.metaDb.put(PUBLIC_FEED_RELAY_CATALOG_KEY, {
@@ -2045,7 +2045,7 @@ export class PublicFeed {
       schema: snapshot?.schema || 'peartube.relayCatalog',
       catalogVersion: Number(snapshot?.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
       relayRole: snapshot?.relayRole || (source === 'relay-cache' ? 'cache' : source === 'local' ? 'publisher' : null),
-      relayServing: Boolean(snapshot?.relayServing || source === 'relay-cache' || source === 'local'),
+      relayServing: Boolean(snapshot?.relayServing || source === 'local'),
       discoveryOnly: Boolean(snapshot?.discoveryOnly),
       restoredFromCache: Boolean(snapshot?.restoredFromCache),
       restoredFrom: typeof snapshot?.restoredFrom === 'string' ? snapshot.restoredFrom : null,
@@ -2212,9 +2212,9 @@ export class PublicFeed {
       ...entry,
       schema: 'peartube.relayCatalog',
       catalogVersion: PUBLIC_FEED_CATALOG_VERSION,
-      source: 'relay-cache',
-      relayRole: entry.relayRole || 'cache',
-      relayServing: true,
+      source: entry.source || 'relay-cache',
+      relayRole: entry.relayRole || (entry.source === 'local' ? 'publisher' : 'cache'),
+      relayServing: entry.relayServing === true,
       lastSeenAt: Date.now(),
       previewVideos: this._sanitizePreviewVideos(entry.previewVideos),
     }
@@ -2226,7 +2226,7 @@ export class PublicFeed {
       } catch { /* best effort; HAVE_FEED enrichment retries later */ }
     }
 
-    const added = this.addEntry(driveKey, 'relay-cache', publicBeeKey, snapshot)
+    const added = this.addEntry(driveKey, snapshot.source, publicBeeKey, snapshot)
     const updated = !added && this._applyEntrySnapshot(driveKey, snapshot)
     if (added || updated) {
       console.log('[PublicFeed] Submitted relay catalog entry:', driveKey.slice(0, 16), 'videos=', snapshot.previewVideos.length)

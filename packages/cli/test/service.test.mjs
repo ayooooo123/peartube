@@ -794,7 +794,7 @@ test('createRelayService publishes discovered relay inventory as relay catalog f
     t.is(relayCatalogCalls.length, 1, 'relay-cache candidate should be published through relay catalog feed path')
     t.is(relayCatalogCalls[0].source, 'relay-cache')
     t.is(relayCatalogCalls[0].relayRole, 'cache')
-    t.is(relayCatalogCalls[0].relayServing, true)
+    t.is(relayCatalogCalls[0].relayServing, false, 'cache discovery should not self-assert byte serving')
     t.alike(relayCatalogCalls[0].previewVideos, previewVideos)
     await service.close()
   } finally {
@@ -1868,6 +1868,7 @@ test('createRelayService preserves archive-job catalog source after completed ar
     t.is(published.length, 1)
     t.is(published[0].source, 'archive-job')
     t.is(published[0].retentionClass, 'private')
+    t.is(published[0].relayServing, true, 'archive publication remains an explicit publisher serving claim')
     const channel = service.catalog.getChannel('archive-channel')
     t.is(channel.publicBeeKey, 'archive-public-bee')
     t.is(channel.source, 'archive-job')

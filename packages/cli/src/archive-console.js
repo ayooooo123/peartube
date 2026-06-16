@@ -82,7 +82,7 @@ function normalizeCatalogChannel(channel, previewVideos = []) {
     publicBeeKey,
     source: channel.source || 'relay-cache',
     relayRole: channel.relayRole || 'cache',
-    relayServing: channel.relayServing !== false,
+    relayServing: channel.relayServing === true,
     videoCount: Number(channel.videoCount || normalizedPreviewVideos.length || channel.videosDownloaded || channel.videosFound || 0) || 0,
     manifestUpdatedAt: Number(channel.manifestUpdatedAt || channel.mirroredAt || channel.lastSeenAt || Date.now()) || Date.now(),
     previewVideos: normalizedPreviewVideos

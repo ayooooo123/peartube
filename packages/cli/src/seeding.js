@@ -303,7 +303,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
         publicBeeKey,
         source: 'relay-cache',
         relayRole: 'cache',
-        relayServing: true,
+        relayServing: false,
         channelName: meta?.name || channel?.channelName || null,
         videoCount: stats.videos,
         manifestUpdatedAt: Number(meta?.updatedAt || meta?.createdAt || 0) || Date.now(),

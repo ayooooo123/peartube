@@ -1527,7 +1527,7 @@ test('relay catalog entries stay visible and do not become published channels', 
   assert.equal(entries.length, 1)
   assert.equal(entries[0].source, 'relay-cache')
   assert.equal(entries[0].relayRole, 'cache')
-  assert.equal(entries[0].relayServing, true)
+  assert.equal(entries[0].relayServing, false)
   assert.equal(entries[0].peerCount, 0)
   assert.equal(entries[0].previewVideos[0].thumbnailUrl, 'https://cdn.example/thumb.jpg')
 })

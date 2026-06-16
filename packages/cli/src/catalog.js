@@ -92,7 +92,7 @@ function buildTargetChannelDetail(channel) {
     source: channel.source || null,
     retentionClass: channel.retentionClass || null,
     relayRole: channel.relayRole || null,
-    relayServing: channel.relayServing !== false,
+    relayServing: channel.relayServing === true,
     bytes: Number(channel.bytes || 0) || 0,
     videoCount: Number(channel.videoCount || channel.videosDownloaded || channel.videosFound || getVideoRefs(channel).length || 0) || 0,
     lastDecisionReason: channel.lastDecisionReason || null,

@@ -15,6 +15,7 @@ const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
 const STORAGE_CONCENTRATION_THRESHOLD = 0.5
 const STORAGE_PRESSURE_THRESHOLD = 0.85
 const ARCHIVE_FAILURE_ALERT_THRESHOLD = 3
+const BLOCKED_REAPPEARANCE_ALERT_THRESHOLD = 3
 
 export async function createRelayService({
   config,
@@ -422,7 +423,7 @@ export async function createRelayService({
     const target = moderation.target || candidate.channelKey || candidate.ownerKey || 'unknown'
 
     if (decision.reason === 'moderation-blocked') {
-      await addOperatorAlert({
+      const alert = await addOperatorAlert({
         severity: 'warning',
         category: 'moderation',
         targetType,
@@ -430,6 +431,16 @@ export async function createRelayService({
         summary: `Blocklisted ${targetType}:${target} appeared in public feed gossip`,
         suggestedActions: ['review', 'keep-blocked']
       })
+      if (Number(alert?.occurrences || 0) >= BLOCKED_REAPPEARANCE_ALERT_THRESHOLD) {
+        await ensureOperatorAlert({
+          severity: 'critical',
+          category: 'network',
+          targetType,
+          target,
+          summary: `Blocked ${targetType}:${target} repeatedly reappeared in public feed gossip`,
+          suggestedActions: ['review-gossip', 'keep-blocked', 'check-peers']
+        })
+      }
       return
     }
 

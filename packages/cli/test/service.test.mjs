@@ -409,6 +409,58 @@ test('createRelayService alerts watched targets without blocking mirroring', asy
   }
 })
 
+test('createRelayService escalates repeated blocked target reappearance', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-blocked-repeat-alerts-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        roles: ['public-index', 'relay-cache'],
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json'),
+          alerts: join(dir, 'relay-alerts.json')
+        },
+        admission: { channels: [], owners: [] },
+        moderation: {
+          mode: 'report-and-alert',
+          rules: [
+            { targetType: 'channelKey', target: 'chan-block-repeat', action: 'block', source: 'local' }
+          ]
+        },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 4096, videosFound: 1, videosDownloaded: 1 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-block-repeat', publicBeeKey: 'bee-repeat' })
+    await runtime.emit({ channelKey: 'chan-block-repeat', publicBeeKey: 'bee-repeat' })
+    await runtime.emit({ channelKey: 'chan-block-repeat', publicBeeKey: 'bee-repeat' })
+
+    const status = service.getStatus()
+    const summaries = status.alerts.latest.map((alert) => alert.summary)
+
+    t.alike(mirrored, [])
+    t.is(status.alerts.critical, 1)
+    t.ok(summaries.includes('Blocked channelKey:chan-block-repeat repeatedly reappeared in public feed gossip'))
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService applies operator moderation actions immediately', async (t) => {
   const dir = makeTempDir('peartube-relay-service-moderation-action-')
   const runtime = createFakeRuntime()

@@ -33,7 +33,9 @@ permissions:
   contents: read
 
 env:
-  ENGINE: ${{ github.event.inputs.engine || 'libqjs' }}
+  # Engine: workflow_dispatch input wins; otherwise a marker like
+  # "[engine-ab] engine=libmqjs" selects it; default libqjs.
+  ENGINE: ${{ github.event.inputs.engine || (contains(github.event.head_commit.message, 'engine=libmqjs') && 'libmqjs') || (contains(github.event.head_commit.message, 'engine=libjsc') && 'libjsc') || (contains(github.event.head_commit.message, 'engine=libjerry') && 'libjerry') || 'libqjs' }}
   ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
   BARE_KIT_REF: ${{ github.event.inputs.bare_kit_ref || 'v2.2.0' }}
 

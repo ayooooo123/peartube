@@ -1,0 +1,6 @@
+# Engine override binaries are large and reproducible — never commit them.
+# Produce them with .github/workflows/build-bare-kit-engine.yml and drop the
+# downloaded artifact here as <engine>/<abi>/libbare-kit.so.
+*/
+!.gitignore
+!README.md

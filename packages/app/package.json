@@ -37,6 +37,8 @@
     "build:android": "npm run prepare:mobile-backend && npm run android:prebuild && expo run:android",
     "build:android:apk": "npm run prepare:mobile-backend && npm run android:prebuild && cd android && ./gradlew assembleRelease",
     "build:android:apk:arm64": "npm run prepare:mobile-backend && npm run android:prebuild && cd android && ./gradlew assembleRelease -PtargetAbis=arm64-v8a -PreactNativeArchitectures=arm64-v8a",
+    "engine:apply": "node scripts/apply-bare-kit-engine.mjs",
+    "build:android:apk:arm64:engine": "npm run prepare:mobile-backend && npm run android:prebuild && npm run engine:apply && cd android && ./gradlew assembleRelease -PtargetAbis=arm64-v8a -PreactNativeArchitectures=arm64-v8a",
     "build:android:apk:armv7": "npm run prepare:mobile-backend && npm run android:prebuild && cd android && ./gradlew assembleRelease -PtargetAbis=armeabi-v7a -PreactNativeArchitectures=armeabi-v7a",
     "build:android:apk:x86_64": "npm run prepare:mobile-backend && npm run android:prebuild && cd android && ./gradlew assembleRelease -PtargetAbis=x86_64 -PreactNativeArchitectures=x86_64",
     "build:android:aab": "npm run prepare:mobile-backend && npm run android:prebuild && cd android && ./gradlew bundleRelease",

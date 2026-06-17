@@ -20,12 +20,12 @@ on:
       bare_kit_ref:
         description: bare-kit ref to build the engine from (match react-native-bare-kit)
         required: true
-        default: v2.1.3
+        default: v2.2.0
         type: string
   # workflow_dispatch only appears once this file is on the default branch. Until
   # then, trigger from this branch by pushing a commit whose message contains the
   # marker [engine-ab]; it builds with the env defaults below (libqjs / arm64-v8a
-  # / v2.1.3). Pushes without the marker are ignored by the job `if:` guard.
+  # / v2.2.0). Pushes without the marker are ignored by the job `if:` guard.
   push:
     branches: [claude/codex-apk-size-reduction-ihpcuz]
 
@@ -35,7 +35,7 @@ permissions:
 env:
   ENGINE: ${{ github.event.inputs.engine || 'libqjs' }}
   ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
-  BARE_KIT_REF: ${{ github.event.inputs.bare_kit_ref || 'v2.1.3' }}
+  BARE_KIT_REF: ${{ github.event.inputs.bare_kit_ref || 'v2.2.0' }}
 
 jobs:
   engine:

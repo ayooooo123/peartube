@@ -11,6 +11,7 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  Share,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -101,7 +102,39 @@ function getFeedEntrySignature(entry: FeedEntry) {
   ].join('|')
 }
 
-const SHOW_DISCOVER_HEADER_CHROME = false
+function formatShortsActionCount(value: unknown) {
+  const count = Number(value || 0)
+  if (!Number.isFinite(count) || count <= 0) return '0'
+  if (count < 1000) return String(Math.floor(count))
+  if (count < 1_000_000) return `${(count / 1000).toFixed(count >= 10_000 ? 0 : 1)}K`
+  return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1)}M`
+}
+
+function getShortsChannelName(video: VideoData) {
+  return video.channel?.name || 'Channel'
+}
+
+function getShortsHandle(video: VideoData) {
+  const raw = video.channel?.name || video.channelKey || 'peartube'
+  const handle = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '')
+    .slice(0, 18)
+  return `@${handle || 'peartube'}`
+}
+
+function getShortsAvatarLetter(video: VideoData) {
+  return getShortsChannelName(video).trim().charAt(0).toUpperCase() || 'P'
+}
+
+function getShortsActionMetrics(video: VideoData) {
+  const videoAny = video as any
+  const views = videoAny.views ?? videoAny.viewCount ?? videoAny.stats?.views ?? videoAny.playbackCount ?? 0
+  const comments = videoAny.commentCount ?? videoAny.commentsCount ?? videoAny.stats?.comments ?? 0
+  const reposts = videoAny.repostCount ?? videoAny.shareCount ?? videoAny.stats?.reposts ?? 0
+  const likes = videoAny.likeCount ?? videoAny.reactionCounts?.like ?? videoAny.reactions?.like ?? 0
+  return { comments, reposts, likes, views }
+}
 
 function getVideoRef(video: VideoData) {
   return video.path && typeof video.path === 'string' && video.path.startsWith('/')
@@ -135,9 +168,9 @@ export default function VerticalDiscoveryScreen() {
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents, androidDiscoveryPermissionStatus } = useApp()
   const tabBarMetrics = useTabBarMetrics()
-  const bottomChromePadding = Math.max(tabBarMetrics.height + 18, insets.bottom + 110, 126)
+  const bottomChromePadding = Math.max(tabBarMetrics.height + 14, insets.bottom + 86, 112)
   const metaBottomPadding = bottomChromePadding
-  const progressBottomOffset = metaBottomPadding + 104
+  const progressBottomOffset = metaBottomPadding + 208
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
@@ -513,6 +546,19 @@ export default function VerticalDiscoveryScreen() {
     setCommentsSheetVisible(true)
   }, [])
 
+  const shareVideo = useCallback(async (video: VideoData) => {
+    const channelName = getShortsChannelName(video)
+    const title = video.title || 'Untitled'
+    try {
+      await Share.share({
+        title,
+        message: `${title}\n${channelName}`,
+      })
+    } catch (err) {
+      console.log('[VerticalDiscovery] Share failed:', (err as any)?.message || err)
+    }
+  }, [])
+
   const verticalVideos = useMemo(() => videos.map((video) => {
     const cacheKey = `${video.channelKey}:${video.id}`
     return {
@@ -586,16 +632,21 @@ export default function VerticalDiscoveryScreen() {
 
   return (
     <View style={styles.container}>
-      {SHOW_DISCOVER_HEADER_CHROME && shortsChromeVisible ? (
-        <View style={[styles.topChrome, { paddingTop: Math.max(insets.top + 8, 18) }]}>
-          <View style={styles.titleBlock}>
-            <Text style={styles.eyebrow}>PearTube</Text>
-            <Text style={styles.title}>Discover</Text>
-          </View>
-          <View style={styles.topActions}>
+      {verticalVideos.length > 0 && shortsChromeVisible ? (
+        <View pointerEvents="box-none" style={[styles.shortsTopChrome, { paddingTop: Math.max(insets.top + 10, 18) }]}>
+          <Pressable
+            onPress={() => router.back()}
+            style={styles.roundButton}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Feather name="arrow-left" size={22} color="#fff" />
+          </Pressable>
+
+          <View style={styles.shortsTopStatus}>
             {feedEntries.length > 0 ? (
               <View style={styles.feedPill}>
-                <Feather name="radio" color={colors.primary} size={12} />
+                <Feather name="radio" color="#fff" size={12} />
                 <Text style={styles.feedPillText}>{feedEntries.length} feeds</Text>
               </View>
             ) : null}
@@ -605,21 +656,22 @@ export default function VerticalDiscoveryScreen() {
                 <Text style={styles.feedPillText}>Cached</Text>
               </View>
             ) : null}
-            <Pressable
-              onPress={onRefresh}
-              style={styles.roundButton}
-              disabled={refreshing || feedLoading}
-              accessibilityRole="button"
-              accessibilityLabel="Refresh feed"
-            >
-              <Feather name="refresh-cw" size={14} color={colors.text} />
-            </Pressable>
           </View>
+
+          <Pressable
+            onPress={onRefresh}
+            style={styles.roundButton}
+            disabled={refreshing || feedLoading}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh Shorts feed"
+          >
+            <Feather name="refresh-cw" size={18} color="#fff" />
+          </Pressable>
         </View>
       ) : null}
 
-      {SHOW_DISCOVER_HEADER_CHROME && shortsChromeVisible ? (
-        <View pointerEvents="none" style={[styles.topChromeFade, { height: Math.max(insets.top + 112, 136) }]} />
+      {verticalVideos.length > 0 && shortsChromeVisible ? (
+        <View pointerEvents="none" style={[styles.topChromeFade, { height: Math.max(insets.top + 98, 124) }]} />
       ) : null}
 
       {verticalVideos.length === 0 ? (
@@ -645,65 +697,108 @@ export default function VerticalDiscoveryScreen() {
           viewabilityConfig={viewabilityConfig}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           getItemLayout={(_, index) => ({ length: pageHeight, offset: pageHeight * index, index })}
-          renderItem={({ item: video, index }) => (
-            <View style={[styles.page, { height: pageHeight, width: screenWidth }]} testID={index === 0 ? 'vertical-discovery-first-video' : undefined}>
-              <ImageBackground
-                source={video.thumbnailUrl ? { uri: video.thumbnailUrl } : undefined}
-                style={styles.backdrop}
-                imageStyle={styles.backdropImage}
-              >
-                <View style={styles.scrim} />
-                <View style={styles.videoStage}>
-                  <VerticalShortsPlayer
-                    testID="vertical-discovery-inline-player"
-                    playerRef={shortsPlayerRef}
-                    videoUrl={activeVideoKey === `${video.channelKey}:${video.id}` ? shortsVideoUrl : null}
-                    video={video}
-                    playbackSession={shortsPlaybackSession}
-                    isActive={activeVideoKey === `${video.channelKey}:${video.id}`}
-                    isLoading={shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}`}
-                    thumbnailUrl={video.thumbnailUrl || null}
-                    controlsVisible={shortsChromeVisible}
-                    progressBottomOffset={progressBottomOffset}
-                    onControlsVisibleChange={setShortsChromeVisible}
-                    onReplay={() => playVideo(video)}
-                  />
-                  {shortsPlaybackMessage && shortsPlaybackMessage.key === `${video.channelKey}:${video.id}` ? (
-                    <View pointerEvents="none" style={[styles.playbackMessageBadge, shortsPlaybackMessage.isError ? styles.playbackMessageError : null]}>
-                      <Text style={styles.playbackMessageText} numberOfLines={2}>{shortsPlaybackMessage.text}</Text>
-                    </View>
-                  ) : null}
-                </View>
-                {shortsChromeVisible ? (
-                  <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
-                    <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
-                      <Text style={styles.videoTitle} numberOfLines={1} ellipsizeMode="tail">{video.title || 'Untitled'}</Text>
+          renderItem={({ item: video, index }) => {
+            const cardKey = `${video.channelKey}:${video.id}`
+            const isActiveShort = activeVideoKey === cardKey
+            const actionMetrics = getShortsActionMetrics(video)
+            const statusText = shortsPlaybackMessage && shortsPlaybackMessage.key === cardKey
+              ? shortsPlaybackMessage.text
+              : isActiveShort && degradedCopy
+                ? degradedCopy
+                : null
+            const statusIsError = Boolean(shortsPlaybackMessage?.isError && shortsPlaybackMessage.key === cardKey)
+            const xStyleChrome = shortsChromeVisible ? (
+              <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
+                <View style={styles.shortsAuthorRow}>
+                  <Pressable onPress={() => openChannel(video)} style={styles.shortsAuthorAvatar} accessibilityLabel="Open channel">
+                    <Text style={styles.shortsAuthorAvatarText}>{getShortsAvatarLetter(video)}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
+                    <View style={styles.shortsAuthorLine}>
+                      <Text style={styles.videoTitle} numberOfLines={1} ellipsizeMode="tail">{getShortsChannelName(video)}</Text>
+                      <View style={styles.shortsVerifiedBadge}>
+                        <Feather name="check" color="#061018" size={9} />
+                      </View>
                       <Text style={styles.videoMeta} numberOfLines={1}>
-                        {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
+                        {getShortsHandle(video)} · {formatTimeAgo(video.uploadedAt || Date.now())}
                       </Text>
-                      {video.description && !/^\s*source\s*:/i.test(video.description) ? (
-                        <Text style={styles.videoDescription} numberOfLines={1}>{video.description}</Text>
-                      ) : null}
-                    </Pressable>
-                    <View style={styles.bottomActionRail}>
-                      <Pressable onPress={() => openChannel(video)} style={styles.bottomActionButton}>
-                        <Feather name="user" color="#fff" size={18} />
-                        <Text style={styles.bottomActionLabel} numberOfLines={1}>Channel</Text>
-                      </Pressable>
-                      <Pressable onPress={() => openComments(video)} style={styles.bottomActionButton}>
-                        <Feather name="message-circle" color="#fff" size={18} />
-                        <Text style={styles.bottomActionLabel} numberOfLines={1}>Chat</Text>
-                      </Pressable>
-                      <Pressable onPress={() => playVideo(video)} style={styles.bottomActionButton}>
-                        <Feather name="rotate-cw" color="#fff" size={18} />
-                        <Text style={styles.bottomActionLabel} numberOfLines={1}>Replay</Text>
-                      </Pressable>
                     </View>
+                    {video.title ? (
+                      <Text style={styles.shortsPostText} numberOfLines={2} ellipsizeMode="tail">{video.title}</Text>
+                    ) : null}
+                    {video.description && !/^\s*source\s*:/i.test(video.description) ? (
+                      <Text style={styles.videoDescription} numberOfLines={2}>{video.description}</Text>
+                    ) : null}
+                  </Pressable>
+                  <Pressable onPress={() => openChannel(video)} style={styles.shortsFollowButton} accessibilityRole="button" accessibilityLabel="Open channel">
+                    <Text style={styles.shortsFollowText}>Follow</Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsOverflowButton} accessibilityRole="button" accessibilityLabel="Open video options">
+                    <Feather name="more-horizontal" color="#fff" size={21} />
+                  </Pressable>
+                </View>
+
+                <View style={styles.shortsActionRow}>
+                  <Pressable onPress={() => openComments(video)} style={styles.shortsActionCluster} accessibilityLabel="Open Shorts comments">
+                    <Feather name="message-circle" color="#f4f7fb" size={20} />
+                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.comments)}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open video details">
+                    <Feather name="repeat" color="#f4f7fb" size={20} />
+                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.reposts)}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open reactions">
+                    <Feather name="heart" color="#f4f7fb" size={20} />
+                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.likes)}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open video analytics">
+                    <Feather name="bar-chart-2" color="#f4f7fb" size={20} />
+                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.views)}</Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsIconAction} accessibilityLabel="Bookmark video">
+                    <Feather name="bookmark" color="#f4f7fb" size={21} />
+                  </Pressable>
+                  <Pressable onPress={() => shareVideo(video)} style={styles.shortsIconAction} accessibilityLabel="Share video">
+                    <Feather name="share-2" color="#f4f7fb" size={21} />
+                  </Pressable>
+                </View>
+              </View>
+            ) : null
+
+            return (
+              <View style={[styles.page, { height: pageHeight, width: screenWidth }]} testID={index === 0 ? 'vertical-discovery-first-video' : undefined}>
+                <ImageBackground
+                  source={video.thumbnailUrl ? { uri: video.thumbnailUrl } : undefined}
+                  style={styles.backdrop}
+                  imageStyle={styles.backdropImage}
+                >
+                  <View style={styles.scrim} />
+                  <View style={styles.videoStage}>
+                    <VerticalShortsPlayer
+                      testID="vertical-discovery-inline-player"
+                      playerRef={shortsPlayerRef}
+                      videoUrl={isActiveShort ? shortsVideoUrl : null}
+                      video={video}
+                      playbackSession={shortsPlaybackSession}
+                      isActive={activeVideoKey === `${video.channelKey}:${video.id}` && !commentsSheetVisible}
+                      isLoading={shortsLoading && isActiveShort && !commentsSheetVisible}
+                      thumbnailUrl={video.thumbnailUrl || null}
+                      controlsVisible={shortsChromeVisible}
+                      progressBottomOffset={progressBottomOffset}
+                      onControlsVisibleChange={setShortsChromeVisible}
+                      onReplay={() => playVideo(video)}
+                    />
+                    {statusText ? (
+                      <View pointerEvents="none" style={[styles.shortsStatusBadge, statusIsError ? styles.playbackMessageError : null]}>
+                        <Text style={styles.playbackMessageText} numberOfLines={2}>{statusText}</Text>
+                      </View>
+                    ) : null}
                   </View>
-                ) : null}
-              </ImageBackground>
-            </View>
-          )}
+                  {xStyleChrome}
+                </ImageBackground>
+              </View>
+            )
+          }}
         />
       )}
       <ShortsCommentsSheet video={activeVideo || null} visible={commentsSheetVisible} onClose={() => setCommentsSheetVisible(false)} />
@@ -716,56 +811,40 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#050607',
   },
-  topChrome: {
+  shortsTopChrome: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 10,
-    paddingHorizontal: 16,
-    paddingBottom: 14,
+    zIndex: 12,
+    paddingHorizontal: 18,
+    paddingBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  titleBlock: {
+  shortsTopStatus: {
     flex: 1,
     minWidth: 0,
-    paddingRight: 12,
-  },
-  eyebrow: {
-    color: colors.primary,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.8,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: '#fff',
-    fontSize: 26,
-    fontFamily: fonts.heading,
-    letterSpacing: -0.8,
-  },
-  topActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     gap: 8,
-    flexShrink: 0,
+    paddingHorizontal: 10,
   },
   feedPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 9,
-    paddingVertical: 7,
+    paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(0,0,0,0.42)',
+    backgroundColor: 'rgba(0,0,0,0.46)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.16)',
   },
   feedPillIcon: {
-    color: colors.primary,
+    color: '#fff',
     fontSize: 13,
     lineHeight: 13,
     fontWeight: '900',
@@ -776,20 +855,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   roundButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.42)',
+    backgroundColor: 'rgba(5,8,12,0.62)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-  },
-  roundButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '900',
+    borderColor: 'rgba(255,255,255,0.16)',
   },
   page: {
     backgroundColor: '#050607',
@@ -799,8 +872,8 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 9,
-    backgroundColor: 'rgba(0,0,0,0.52)',
+    zIndex: 11,
+    backgroundColor: 'rgba(0,0,0,0.38)',
   },
   backdrop: {
     flex: 1,
@@ -811,25 +884,25 @@ const styles = StyleSheet.create({
     resizeMode: 'cover',
   },
   scrim: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.38)',
   },
   videoStage: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#000',
   },
-  playbackMessageBadge: {
+  shortsStatusBadge: {
     position: 'absolute',
-    left: 24,
-    right: 24,
-    top: 80,
+    left: 74,
+    right: 74,
+    top: 82,
     zIndex: 4,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: 'rgba(15,23,42,0.86)',
+    backgroundColor: 'rgba(5,8,12,0.76)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.16)',
   },
   playbackMessageError: {
     backgroundColor: 'rgba(127,29,29,0.92)',
@@ -843,23 +916,62 @@ const styles = StyleSheet.create({
   },
   bottomMeta: {
     position: 'absolute',
-    left: 20,
-    right: 20,
+    left: 22,
+    right: 18,
     bottom: 0,
-    gap: 6,
-    maxHeight: 136,
+    gap: 12,
+    maxHeight: 238,
     overflow: 'hidden',
   },
+  shortsAuthorRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    minWidth: 0,
+  },
+  shortsAuthorAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.26)',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  shortsAuthorAvatarText: {
+    color: '#fff',
+    fontSize: 17,
+    lineHeight: 21,
+    fontFamily: fonts.headingMedium,
+  },
   metaTextBlock: {
+    flex: 1,
     minWidth: 0,
     flexShrink: 1,
   },
+  shortsAuthorLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    minWidth: 0,
+  },
+  shortsVerifiedBadge: {
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f6f9fb',
+    flexShrink: 0,
+  },
   videoTitle: {
     color: '#fff',
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 18,
-    fontWeight: '800',
-    letterSpacing: -0.4,
+    fontFamily: fonts.headingMedium,
     flexShrink: 1,
     textShadowColor: 'rgba(0,0,0,0.45)',
     textShadowOffset: { width: 0, height: 1 },
@@ -867,38 +979,83 @@ const styles = StyleSheet.create({
   },
   videoMeta: {
     color: 'rgba(255,255,255,0.78)',
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 17,
     fontWeight: '600',
-    marginTop: 4,
+    flexShrink: 1,
+  },
+  shortsPostText: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '500',
+    marginTop: 5,
+    textShadowColor: 'rgba(0,0,0,0.38)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
   videoDescription: {
-    color: 'rgba(255,255,255,0.68)',
-    fontSize: 12,
-    lineHeight: 16,
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 14,
+    lineHeight: 19,
     marginTop: 4,
+    textShadowColor: 'rgba(0,0,0,0.38)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
-  bottomActionRail: {
+  shortsFollowButton: {
+    minWidth: 64,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    backgroundColor: '#f6f9fb',
+    flexShrink: 0,
+  },
+  shortsFollowText: {
+    color: '#061018',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '800',
+  },
+  shortsOverflowButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    flexShrink: 0,
+  },
+  shortsActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 8,
     flexShrink: 0,
   },
-  bottomActionButton: {
-    flex: 1,
+  shortsActionCluster: {
     minHeight: 34,
-    borderRadius: 12,
+    minWidth: 44,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    gap: 5,
   },
-  bottomActionLabel: {
-    color: 'rgba(255,255,255,0.82)',
-    fontSize: 10,
-    lineHeight: 12,
+  shortsActionText: {
+    color: 'rgba(255,255,255,0.86)',
+    fontSize: 12,
+    lineHeight: 15,
     fontWeight: '700',
-    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  shortsIconAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   centerState: {
     flex: 1,

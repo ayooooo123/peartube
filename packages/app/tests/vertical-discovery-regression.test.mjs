@@ -69,7 +69,37 @@ test('vertical discovery keeps channel navigation and detail escape hatches', ()
   assert.match(source, /router\.push\(\{\s*pathname:\s*'\/channel\/\[key\]'/, 'vertical cards should open channel pages')
   assert.match(source, /router\.push\(\{\s*pathname:\s*'\/video\/\[id\]'/, 'vertical cards should expose full watch/details route')
   assert.match(source, /Feather name="message-circle"/, 'vertical player should include a comments/details affordance')
-  assert.match(source, /Feather name="user"/, 'vertical player should include a channel affordance')
+  assert.match(source, /styles\.shortsAuthorAvatar/, 'vertical player should include a channel avatar affordance')
+  assert.match(source, /styles\.shortsFollowButton/, 'vertical player should include a channel follow/open affordance')
+})
+
+test('vertical discovery uses X-style content chrome without browser chrome', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /xStyleChrome/, 'shorts cards should render through a named X-style content chrome wrapper')
+  assert.match(source, /styles\.shortsAuthorAvatar/, 'X-style shorts metadata should include an author avatar')
+  assert.match(source, /styles\.shortsVerifiedBadge/, 'X-style shorts metadata should include a compact verified-style badge')
+  assert.match(source, /styles\.shortsFollowButton/, 'X-style shorts metadata should include a follow affordance')
+  assert.match(source, /styles\.shortsOverflowButton/, 'X-style shorts metadata should include an overflow affordance like an X status')
+  assert.match(source, /styles\.shortsActionRow/, 'X-style shorts metadata should use an inline status action row')
+  assert.match(source, /styles\.shortsActionCluster/, 'X-style shorts actions should be icon-first clusters, not large pill buttons')
+  assert.match(source, /Feather name="bar-chart-2"/, 'X-style shorts actions should include a view-count style analytics glyph')
+  assert.match(source, /Feather name="bookmark"/, 'X-style shorts actions should include a bookmark affordance')
+  assert.match(source, /Feather name="share-2"/, 'X-style shorts actions should include a share affordance')
+  assert.match(source, /formatShortsActionCount/, 'shorts action counts should be compacted for status chrome')
+  assert.doesNotMatch(source, /x\.com|addressBar|browserChrome|mobile browser/i, 'PearTube should not copy the browser/address-bar chrome from the reference screenshot')
+  assert.doesNotMatch(source, /bottomActionRail/, 'large pre-redesign action rail should be removed')
+  assert.doesNotMatch(source, /bottomActionButton/, 'large pre-redesign action buttons should be removed')
+})
+
+test('vertical discovery exposes X-style top and playback status affordances', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /styles\.shortsTopChrome/, 'shorts should have minimal top chrome for back and refresh')
+  assert.match(source, /router\.back\(\)/, 'top chrome should expose a native back affordance')
+  assert.match(source, /accessibilityLabel="Refresh Shorts feed"/, 'top chrome should expose refresh without browser chrome')
+  assert.match(source, /styles\.shortsStatusBadge/, 'playback and degraded feed status should use a compact overlay badge')
+  assert.match(source, /isActive=\{activeVideoKey === `\$\{video\.channelKey\}:\$\{video\.id\}` && !commentsSheetVisible\}/, 'comments sheet should pause active shorts playback instead of playing behind the sheet')
 })
 
 test('vertical discovery preserves a last-known-good cache across remounts and feed timeouts', () => {
@@ -157,8 +187,8 @@ test('vertical discovery hides all card chrome, including progress, when tapped'
   assert.match(source, /const \[shortsChromeVisible, setShortsChromeVisible\] = useState\(true\)/, 'Discover should track whether Shorts chrome/buttons are visible')
   assert.match(source, /controlsVisible=\{shortsChromeVisible\}/, 'Discover should pass shared chrome visibility to the Shorts player')
   assert.match(source, /onControlsVisibleChange=\{setShortsChromeVisible\}/, 'Shorts player taps should update route chrome visibility')
-  assert.match(source, /\{shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'channel/details/replay buttons should hide when Shorts controls are hidden')
-  assert.match(source, /\{SHOW_DISCOVER_HEADER_CHROME && shortsChromeVisible \? \([\s\S]*styles\.topChrome/, 'header/feed chrome should stay hidden on Shorts so tapping leaves only video')
+  assert.match(source, /const xStyleChrome = shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'X-style card chrome should hide when Shorts controls are hidden')
+  assert.match(source, /verticalVideos\.length > 0 && shortsChromeVisible \? \([\s\S]*styles\.shortsTopChrome/, 'top feed chrome should hide with Shorts controls')
   assert.match(playerSource, /toggleControlsVisibility/, 'Shorts player should toggle controls on tap')
   assert.match(playerSource, /onControlsVisibleChange\?\.\(!controlsVisible\)/, 'Shorts player should notify the parent when controls are toggled')
   assert.match(playerSource, /pointerEvents="box-none"/, 'overlay chrome must not swallow card taps outside actual controls')
@@ -266,32 +296,32 @@ test('vertical discovery preserves raw titles while constraining long-title layo
   const source = readAppFile('app/(tabs)/discover.tsx')
 
   assert.doesNotMatch(source, /cleanDiscoverFilenameTitle|getDiscoverDisplayTitle/, 'Discover should not rewrite or clean user/video titles')
-  assert.match(source, /numberOfLines=\{1\} ellipsizeMode="tail">\{video\.title \|\| 'Untitled'\}/, 'card title should render the raw title and rely on UI truncation')
-  assert.match(source, /bottomMeta:\s*\{[\s\S]*maxHeight: 1(?:36|52)[\s\S]*overflow: 'hidden'/, 'metadata/action block should have a hard visual bound')
+  assert.match(source, /<Text style=\{styles\.shortsPostText\} numberOfLines=\{2\} ellipsizeMode="tail">\{video\.title\}<\/Text>/, 'card post text should render the raw title and rely on UI truncation')
+  assert.match(source, /bottomMeta:\s*\{[\s\S]*maxHeight: 238[\s\S]*overflow: 'hidden'/, 'metadata/action block should have a hard visual bound')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*flexShrink: 1/, 'long title text should shrink instead of pushing controls')
   assert.match(source, /videoTitle:\s*\{[\s\S]*flexShrink: 1/, 'raw title text should be layout-constrained, not mutated')
-  assert.match(source, /bottomActionRail:\s*\{[\s\S]*flexShrink: 0/, 'action buttons should remain visible even when titles are long')
+  assert.match(source, /shortsActionRow:\s*\{[\s\S]*flexShrink: 0/, 'status action row should remain visible even when titles are long')
 })
 
 test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
   assert.match(source, /useTabBarMetrics\(\)/, 'Discover should read the measured bottom tab bar height')
-  assert.match(source, /const bottomChromePadding = Math\.max\(tabBarMetrics\.height \+ 18, insets\.bottom \+ 110, 126\)/, 'Discover controls should clear the floating bottom tab bar and safe area')
+  assert.match(source, /const bottomChromePadding = Math\.max\(tabBarMetrics\.height \+ 14, insets\.bottom \+ 86, 112\)/, 'Discover controls should clear the floating bottom tab bar and safe area')
   assert.match(source, /const metaBottomPadding = bottomChromePadding/, 'metadata should use the measured tab-safe offset directly')
-  assert.match(source, /const progressBottomOffset = metaBottomPadding \+ 104/, 'progress should sit above the video metadata/action block')
+  assert.match(source, /const progressBottomOffset = metaBottomPadding \+ 208/, 'progress should sit above the richer status metadata/action block')
   assert.match(source, /progressBottomOffset=\{progressBottomOffset\}/, 'Shorts progress should use the separated progress offset')
   assert.match(source, /paddingBottom: metaBottomPadding/, 'metadata should reserve its own larger bottom offset')
   assert.match(source, /!\/\^\\s\*source\\s\*:\/i\.test\(video\.description\)/, 'Discover should hide raw source URL descriptions from primary card chrome')
-  assert.match(source, /numberOfLines=\{1\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
+  assert.match(source, /numberOfLines=\{2\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
   assert.match(source, /\{feedEntries\.length\} feeds/, 'feed count pill should label what the number means')
   assert.match(source, /styles\.topChromeFade/, 'header should have a subtle backing fade over active video')
-  assert.match(source, /bottomActionRail:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: (?:8|10)/, 'action buttons should move from the side rail into a tighter bottom row')
-  assert.match(source, /<Text style=\{styles\.bottomActionLabel\} numberOfLines=\{1\}>Chat<\/Text>/, 'comments action should use a short single-line label')
-  assert.match(source, /bottomActionLabel:\s*\{[\s\S]*textAlign: 'center'/, 'bottom action labels should stay centered instead of wrapping')
+  assert.match(source, /shortsActionRow:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: 8/, 'action buttons should use a tighter X-style bottom row')
+  assert.match(source, /accessibilityLabel="Open Shorts comments"/, 'comments action should stay compact and icon-first')
+  assert.match(source, /shortsActionText:\s*\{[\s\S]*fontVariant: \['tabular-nums'\]/, 'bottom action counts should stay compact and stable')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*minWidth: 0/, 'metadata text should shrink instead of pushing into action controls')
-  assert.match(source, /bottomActionButton:\s*\{[\s\S]*minHeight: (?:34|40)[\s\S]*backgroundColor: 'rgba\((?:0,0,0,0\.18|8,10,14,0\.38)\)'/, 'bottom action buttons should stay compact instead of heavy pill blocks')
-  assert.match(source, /<Feather name="user" color="#fff" size=\{18\}/, 'action icons should be smaller than the previous oversized buttons')
+  assert.match(source, /shortsActionCluster:\s*\{[\s\S]*minHeight: 34/, 'bottom action clusters should stay compact instead of heavy pill blocks')
+  assert.match(source, /<Feather name="message-circle" color="#f4f7fb" size=\{20\}/, 'action icons should be smaller than oversized controls')
   assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
 })
 
@@ -338,12 +368,13 @@ test('bottom tab screens pad scrollable content by the measured pill tab bar hei
   const downloadsSource = readAppFile('app/(tabs)/downloads.tsx')
   const settingsSource = readAppFile('app/(tabs)/settings.tsx')
 
+  assert.match(subscriptionsSource, /<Redirect href="\/library\?tab=channels" \/>/, 'subscriptions is a redirect-only tab and should delegate padding to Library')
+  assert.match(downloadsSource, /<Redirect href="\/library\?tab=downloads" \/>/, 'downloads is a redirect-only tab and should delegate padding to Library')
+  assert.match(settingsSource, /<Redirect href="\/profile" \/>/, 'settings is a redirect-only tab and should delegate padding to Profile')
+
   for (const [label, source] of [
     ['home', indexSource],
-    ['subscriptions', subscriptionsSource],
     ['studio', studioSource],
-    ['downloads', downloadsSource],
-    ['settings', settingsSource],
   ]) {
     assert.match(source, /useTabBarMetrics\(/, `${label} should read measured tab bar metrics`)
     assert.match(source, /const bottomPadding = Math\.max\(tabBarMetrics\.height \+ 16, insets\.bottom \+ 16\)/, `${label} should reserve enough space for the floating pill nav`)

@@ -1,6 +1,7 @@
 import { PROTOCOL_VERSION } from '@peartube/host'
 
 import { buildSharedSystemHandlers, attachSharedAppHandlers } from './runtime.js'
+import { createBackendContext } from './orchestrator.js'
 import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'
 import { registerSharedHandlers } from './hrpc-handlers.js'
 
@@ -75,6 +76,7 @@ export async function createBackend(opts = {}) {
       platform,
       runtime: { stream },
       hrpc: null,
+      createBackendContext,
       onStatsUpdate: onVideoStats,
       ...lifecycleOptions
     })

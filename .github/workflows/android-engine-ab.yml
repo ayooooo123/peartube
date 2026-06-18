@@ -130,17 +130,32 @@ jobs:
         working-directory: packages/app/android
         run: ./gradlew assembleRelease -PtargetAbis=${{ env.ABI }} -PreactNativeArchitectures=${{ env.ABI }} --no-daemon --max-workers 2
 
-      - name: Locate + rename APK
+      - name: Locate + verify + rename APK
         id: apk
         run: |
           set -euo pipefail
-          APK=$(find packages/app/android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          DIR=packages/app/android/app/build/outputs/apk/release
+          echo "All APKs produced by this build:"
+          find "$DIR" -name '*.apk' -printf '  %f\n' || true
+          # Prefer the ABI-specific split APK; fall back to a universal APK.
+          APK=$(find "$DIR" -name "*${{ env.ABI }}*.apk" | head -1)
+          [ -n "$APK" ] || APK=$(find "$DIR" -name '*.apk' | head -1)
+          echo "Selected APK: $APK"
+          # Prove the packaged native libs are the target ABI ONLY — this is the
+          # real arm64 check; the filename alone is not trustworthy.
+          ARCHS=$(unzip -l "$APK" | grep -oE 'lib/[^/]+/' | sed 's#lib/##; s#/##' | sort -u || true)
+          COUNT=$(printf '%s\n' "$ARCHS" | grep -c . || true)
+          echo "Native lib ABIs inside selected APK: ${ARCHS:-<none>} (count=$COUNT)"
+          if [ -n "$ARCHS" ] && { [ "$COUNT" -ne 1 ] || [ "$ARCHS" != "${{ env.ABI }}" ]; }; then
+            echo "::error::Selected APK packages ABIs [$ARCHS] but expected only ${{ env.ABI }}"
+            exit 1
+          fi
           SIZE=$(stat -c%s "$APK")
           OUT="peartube-${{ env.ABI }}-${{ matrix.variant }}.apk"
           cp "$APK" "$OUT"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
           echo "name=$OUT" >> "$GITHUB_OUTPUT"
-          echo "${{ matrix.variant }} APK: $OUT ($((SIZE/1048576)) MB)" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.variant }} APK: \`$(basename "$APK")\` → ABIs=[${ARCHS:-none}] ($((SIZE/1048576)) MB)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:

@@ -19,6 +19,10 @@ import * as b4aModule from 'b4a'
 import { attachMobileHandlers } from '@peartube/backend/mobile-handlers'
 import { registerSharedHandlers } from '@peartube/backend/hrpc-handlers'
 import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'
+import { attachCastHandlers } from './mobile-cast.mjs'
+import * as mobileTranscoderModule from './transcoder.mjs'
+import * as mobileCastTranscoderModule from '@peartube/backend/transcode/cast-transcoder'
+import * as http1Module from 'bare-http1'
 
 let HRPC = null
 let createBackendContext = null
@@ -56,6 +60,9 @@ async function loadBackendModules() {
   path = pathModule?.default ?? pathModule
   fs = fsModule?.default ?? fsModule
   b4a = b4aModule?.default ?? b4aModule
+  transcoder = mobileTranscoderModule
+  castTranscoder = mobileCastTranscoderModule
+  http1 = http1Module?.default ?? http1Module
 
   const checks = {
     HRPC,
@@ -639,12 +646,10 @@ function removeStaleLocks(storageDir) {
     if (!castHandlersReadyPromise) {
       castHandlersReadyPromise = (async () => {
         const [
-          { attachCastHandlers },
           transcoderModule,
           castTranscoderModule,
           httpModule,
         ] = await Promise.all([
-          import('./mobile-cast.mjs'),
           ensureTranscoderModule(),
           ensureCastTranscoderModule(),
           ensureHttpModule(),

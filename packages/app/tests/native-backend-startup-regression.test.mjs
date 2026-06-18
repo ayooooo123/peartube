@@ -64,6 +64,8 @@ test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of
   assert.doesNotMatch(source, /await import\('@peartube\/backend\/mobile-handlers'\)/, 'mobile handlers are startup-critical and must be statically imported')
   assert.doesNotMatch(source, /await import\('@peartube\/backend\/hrpc-handlers'\)/, 'shared HRPC handlers are startup-critical and must be statically imported')
   assert.match(source, /attachLazyCastHandlers/)
+  assert.match(source, /attachCastHandlers/)
+  assert.doesNotMatch(source, /import\('\.\/mobile-cast\.mjs'\)/, 'libqjs does not support dynamically importing mobile cast handlers')
   assert.match(source, /ensureBackendThumbnailModule/)
   assert.match(source, /ensureHttpModule/)
   assert.match(source, /ensureFsNativeExtensionsModule/)

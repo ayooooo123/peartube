@@ -5,6 +5,10 @@
  * Provides cast handler implementations that are attached to the backend object.
  */
 
+import * as castModule from '@peartube/backend/cast'
+import * as dgramModule from 'bare-dgram'
+import * as udxModule from 'udx-native'
+
 let CastContext = null
 let castLoadError = null
 let castLoadPromise = null
@@ -150,8 +154,7 @@ async function getLocalIPv4ForTarget(targetHost) {
   if (!targetHost) return null
 
   try {
-    const mod = await import('bare-dgram')
-    const dgram = mod?.default || mod
+    const dgram = dgramModule?.default || dgramModule
     const socket = (() => {
       try {
         return dgram.createSocket('udp4')
@@ -180,8 +183,7 @@ async function getLocalIPv4ForTarget(targetHost) {
   }
 
   try {
-    const mod = await import('udx-native')
-    const UDX = mod?.default || mod
+    const UDX = udxModule?.default || udxModule
     const udx = new UDX()
     let fallback = null
 
@@ -259,29 +261,17 @@ export function attachCastHandlers(B, deps) {
 async function loadCastContext() {
     if (CastContext || castLoadError) return
     if (castLoadPromise) return castLoadPromise
-    castLoadPromise = (async () => {
-      let lastError
-      if (typeof require === 'function') {
-        try {
-          const mod = require('@peartube/backend/cast')
-          CastContext = mod?.CastContext ?? mod?.default ?? mod
-          console.log('[Backend] cast context loaded')
-          return
-        } catch (err) {
-          lastError = err
-        }
-      }
-      try {
-        const mod = await import('@peartube/backend/cast')
-        CastContext = mod?.CastContext ?? mod?.default ?? mod
+    castLoadPromise = Promise.resolve()
+      .then(() => {
+        CastContext = castModule?.CastContext ?? castModule?.default ?? castModule
+        if (!CastContext) throw new Error('cast context export not available')
         console.log('[Backend] cast context loaded')
-        return
-      } catch (err) {
-        lastError = err
-      }
-      castLoadError = lastError?.message || 'Unknown error'
-      console.warn('[Backend] cast context not available:', castLoadError)
-    })()
+      })
+      .catch((err) => {
+        castLoadPromise = null
+        castLoadError = err?.message || 'Unknown error'
+        console.warn('[Backend] cast context not available:', castLoadError)
+      })
     return castLoadPromise
   }
 

@@ -10,6 +10,14 @@
 import { startHost } from '@peartube/host/start-host'
 import { PROTOCOL_VERSION } from '@peartube/host'
 import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
+import * as specModule from '@peartube/spec'
+import * as orchestratorModule from '@peartube/backend/orchestrator'
+import * as storageModule from '@peartube/backend/storage'
+import * as pathModule from 'bare-path'
+import * as fsModule from 'bare-fs'
+import * as b4aModule from 'b4a'
+import { attachMobileHandlers } from '@peartube/backend/mobile-handlers'
+import { registerSharedHandlers } from '@peartube/backend/hrpc-handlers'
 import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'
 
 let HRPC = null
@@ -35,32 +43,19 @@ let httpModulePromise = null
 let fsNativeExtensionsPromise = null
 
 async function loadBackendModules() {
-  const [
-    specMod,
-    orchestratorMod,
-    storageMod,
-    pathMod,
-    fsMod,
-    b4aMod
-  ] = await Promise.all([
-    import('@peartube/spec'),
-    import('@peartube/backend/orchestrator'),
-    import('@peartube/backend/storage'),
-    import('bare-path'),
-    import('bare-fs'),
-    import('b4a')
-  ])
-
-  HRPC = specMod?.default ?? specMod
-  createBackendContext = orchestratorMod?.createBackendContext
-  setIsShuttingDown = orchestratorMod?.setIsShuttingDown
-  shutdownBackend = storageMod?.shutdownBackend
-  setCastActive = storageMod?.setCastActive
-  isCastActive = storageMod?.isCastActive
-  prefetchVideoForCast = storageMod?.prefetchVideoForCast
-  path = pathMod?.default ?? pathMod
-  fs = fsMod?.default ?? fsMod
-  b4a = b4aMod?.default ?? b4aMod
+  // libqjs/Bare worklets do not support runtime dynamic module loading, so every module that
+  // is required for startup must be statically imported at bundle evaluation
+  // time. Optional feature modules remain lazy below.
+  HRPC = specModule?.default ?? specModule
+  createBackendContext = orchestratorModule?.createBackendContext
+  setIsShuttingDown = orchestratorModule?.setIsShuttingDown
+  shutdownBackend = storageModule?.shutdownBackend
+  setCastActive = storageModule?.setCastActive
+  isCastActive = storageModule?.isCastActive
+  prefetchVideoForCast = storageModule?.prefetchVideoForCast
+  path = pathModule?.default ?? pathModule
+  fs = fsModule?.default ?? fsModule
+  b4a = b4aModule?.default ?? b4aModule
 
   const checks = {
     HRPC,
@@ -620,7 +615,6 @@ function removeStaleLocks(storageDir) {
     }
   }
 
-  const { attachMobileHandlers } = await import('@peartube/backend/mobile-handlers')
   attachMobileHandlers(backend, {
     api,
     identityManager,
@@ -683,7 +677,6 @@ function removeStaleLocks(storageDir) {
 
   attachLazyCastHandlers(backend, ensureCastHandlersAttached)
 
-  const { registerSharedHandlers } = await import('@peartube/backend/hrpc-handlers')
   registerSharedHandlers(rpc, backend)
   handlersRegistered = true
   attachMobileOnlyRpcHandlers(rpc, api)

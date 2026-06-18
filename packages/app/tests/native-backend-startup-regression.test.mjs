@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const appRoot = path.resolve(__dirname, '..')
@@ -15,6 +16,16 @@ function readAppFile(relativePath) {
 function readWorkspaceFile(relativePath) {
   return fs.readFileSync(path.resolve(appRoot, '..', relativePath), 'utf8')
 }
+
+function loadParseMobileLaunchArgsForTest() {
+  const source = readAppFile('backend/index.mjs')
+  const pattern = new RegExp('export function parseMobileLaunchArgsForTest\\(args = \\[\\]\\) \\{([\\s\\S]*?)\\n\\}')
+  const match = source.match(pattern)
+  assert.ok(match, 'parseMobileLaunchArgsForTest should exist')
+  return Function(`return function parseMobileLaunchArgsForTest(args = []) {${match[1]}
+}`)()
+}
+
 
 test('native root layout passes versioned bundle loaders into initPlatformRPC instead of eagerly reading source at the call site', () => {
   const source = readAppFile('app/_layout.tsx')
@@ -44,11 +55,14 @@ test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of
     source.match(/async function loadBackendModules\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
 
   assert.ok(loadBackendModulesBody, 'loadBackendModules should exist')
+  assert.doesNotMatch(loadBackendModulesBody, /import\(/, 'loadBackendModules should not use dynamic import in libqjs worklets')
   assert.doesNotMatch(loadBackendModulesBody, /import\('\.\/transcoder\.mjs'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('@peartube\/backend\/transcode\/cast-transcoder'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('@peartube\/backend\/thumbnail'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('bare-http1'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('fs-native-extensions'\)/)
+  assert.doesNotMatch(source, /await import\('@peartube\/backend\/mobile-handlers'\)/, 'mobile handlers are startup-critical and must be statically imported')
+  assert.doesNotMatch(source, /await import\('@peartube\/backend\/hrpc-handlers'\)/, 'shared HRPC handlers are startup-critical and must be statically imported')
   assert.match(source, /attachLazyCastHandlers/)
   assert.match(source, /ensureBackendThumbnailModule/)
   assert.match(source, /ensureHttpModule/)
@@ -64,9 +78,9 @@ test('mobile backend startup lock cleanup removes db LOCK files before orchestra
   assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
 })
 
-test('mobile backend consumes launch options before downloader worker args', async () => {
+test('mobile backend consumes launch options before downloader worker args', () => {
   const source = readAppFile('backend/index.mjs')
-  const { parseMobileLaunchArgsForTest } = await import('../backend/index.mjs')
+  const parseMobileLaunchArgsForTest = loadParseMobileLaunchArgsForTest()
   const launchOptions = { __peartubeLaunchOptions: true, network: { relayPeers: ['relay-a'] }, swarmOptions: { knownPeers: ['relay-a'] } }
 
   assert.deepEqual(
@@ -96,8 +110,8 @@ test('mobile backend consumes launch options before downloader worker args', asy
   )
 })
 
-test('mobile backend parses launch options after entrypoint and preserves downloader worker path', async () => {
-  const { parseMobileLaunchArgsForTest } = await import('../backend/index.mjs')
+test('mobile backend parses launch options after entrypoint and preserves downloader worker path', () => {
+  const parseMobileLaunchArgsForTest = loadParseMobileLaunchArgsForTest()
   const launchOptions = {
     __peartubeLaunchOptions: true,
     network: { relayPeers: ['relay-a'] },

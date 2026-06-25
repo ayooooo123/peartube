@@ -130,7 +130,7 @@ jobs:
           PATCH
       - run: npm install --global cmake-runtime ninja-runtime
       - run: npm install
-      - run: gradle aR --no-daemon
+      - run: ./gradlew aR --no-daemon
       - name: Extract ${{ env.ABI }} libbare-kit.so
         run: |
           set -euo pipefail

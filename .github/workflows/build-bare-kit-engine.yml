@@ -123,7 +123,7 @@ jobs:
       - run: npm install
 
       - name: Build release AAR (gradle aR)
-        run: gradle aR --no-daemon
+        run: ./gradlew aR --no-daemon
 
       - name: Extract per-ABI libbare-kit.so from the AAR
         run: |

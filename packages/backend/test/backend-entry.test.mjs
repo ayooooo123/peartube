@@ -1,6 +1,40 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'brittle'
 
 import * as backendEntry from '../src/backend-entry.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const packageRoot = path.resolve(__dirname, '..')
+
+function readBackendFile(relativePath) {
+  return fs.readFileSync(path.join(packageRoot, relativePath), 'utf8')
+}
+
+test('backend package stays below host and does not import host', (t) => {
+  const pkg = JSON.parse(readBackendFile('package.json'))
+
+  assert.equal(pkg.dependencies?.['@peartube/host'], undefined)
+  for (const relativePath of ['src/backend-entry.js', 'src/runtime.js']) {
+    assert.doesNotMatch(
+      readBackendFile(relativePath),
+      /(?:from\s+['"]@peartube\/host|import\(\s*['"]@peartube\/host)/
+    )
+  }
+
+  t.pass('backend has no direct host dependency')
+})
+
+test('shared system handlers use the host-provided protocol version', async (t) => {
+  const { buildSharedSystemHandlers } = await import('../src/runtime.js')
+  const handlers = buildSharedSystemHandlers({}, { protocolVersion: 42 })
+  const bootstrap = await handlers.DesktopBootstrap({ storagePath: '/tmp/peartube-test' })
+
+  t.is(bootstrap.protocolVersion, 42)
+})
 
 test('backend API module imports in relay runtime', async (t) => {
   const apiModule = await import('../src/api.js')
@@ -103,6 +137,7 @@ test('createBackend exposes universal core as the entry runtime composition root
     storagePath: '/tmp/peartube-entry-universal-core-test',
     stream,
     platform: 'desktop',
+    protocolVersion: 42,
     onReady(payload) { readyPayload = payload },
     createBackendContext: async () => ({
       ctx: { metaDb },
@@ -136,7 +171,8 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(session.runtime, session.core)
   t.is(session.backend.universalCore, session.core)
   t.is(session.core.state, 'started')
-  t.is(readyPayload.protocolVersion, 3)
+  t.is(readyPayload.protocolVersion, 42)
+  t.is(session.rpc.ready.protocolVersion, 42)
   t.ok(responses.has('GetUniversalCoreStatus'))
   t.alike(await responses.get('GetUniversalCoreStatus')(), session.core.getStatus())
   t.ok(lifecycle.includes('hc:init'))

@@ -45,8 +45,13 @@ test('mobile watch page does not keep saying reaching out once playback has byte
   )
   assert.match(
     barBlock,
-    /hasPlayableProgress[\s\S]*\? 'Streaming'[\s\S]*: 'Reaching out to peers…'/,
-    'playback progress should beat the reaching-out empty state when peers are momentarily zero',
+    /sessionDownloadedBytes > 0[\s\S]*sessionDownloadedBlocks > 0[\s\S]*downloadSpeedValue > 0/,
+    'streaming state should depend on bytes from the active playback session, not sampled aggregate progress',
+  )
+  assert.doesNotMatch(
+    barBlock,
+    /Number\(stats\?\.progress \?\? 0\) > 0/,
+    'sampled aggregate progress should not clear the reaching-out/preparing state by itself',
   )
 })
 
@@ -108,12 +113,15 @@ test('useP2PVideo gates async completions by request generation', () => {
   assert.match(source, /requestGenerationRef\.current !== requestId \|\| Date\.now\(\) - startTimeRef\.current > opts\.pollTimeout/, 'polling ticks should ignore stale generations')
 })
 
-test('cached playback refreshes active URL only for the current session', () => {
+test('watch page playback prepares the backend before opening a URL', () => {
   const source = read('app/video/[id].tsx')
-  const cachedStart = source.indexOf('if (cachedUrl) {')
-  const cachedBlock = source.slice(cachedStart, source.indexOf('const result = await rpc.preparePlayback(playbackRequest)', cachedStart))
-  assert.notEqual(cachedBlock.length, 0, 'expected cached playback block before the resolve-and-stream call')
+  const prepareStart = source.indexOf('const result = await rpc.preparePlayback(playbackRequest)')
+  assert.notEqual(prepareStart, -1, 'expected preparePlayback before URL handoff')
+  const handoffStart = source.indexOf('loadAndPlayVideo(videoData, result.url)', prepareStart)
+  assert.notEqual(handoffStart, -1, 'expected prepared URL handoff after preparePlayback')
 
-  assert.match(cachedBlock, /loadGenerationRef\.current !== generation/, 'background preparePlayback should be generation-gated')
-  assert.match(cachedBlock, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'background re-resolve should refresh the cached URL only in the active generation')
+  const prepareBlock = source.slice(prepareStart, handoffStart)
+  assert.match(prepareBlock, /loadGenerationRef\.current !== generation/, 'preparePlayback completion should be generation-gated')
+  assert.match(source, /if \(cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'prepared URL should refresh the cache only after backend preparation')
+  assert.doesNotMatch(source, /loadAndPlayVideo\(videoData, cachedUrl\)/, 'watch page must not hand cached URLs to the player before backend preparation')
 })

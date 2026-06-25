@@ -20,5 +20,14 @@ allprojects {
   }
 }
 
+// PearTube: use patched expo-video project for Android playback.
+subprojects {
+  configurations.configureEach {
+    resolutionStrategy.dependencySubstitution {
+      substitute module("host.exp.exponent:expo.modules.video") using project(":expo-video") because "PearTube patches expo-video's Android media data source for local P2P playback"
+    }
+  }
+}
+
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"

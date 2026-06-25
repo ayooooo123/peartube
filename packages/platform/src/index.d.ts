@@ -13,6 +13,9 @@ export interface VideoStats {
   downloadedBlocks: number;
   totalBytes: number;
   downloadedBytes: number;
+  initialBlocks?: number;
+  sessionDownloadedBlocks?: number;
+  sessionDownloadedBytes?: number;
   peerCount: number;
   speedMBps: string;
   uploadSpeedMBps?: string;

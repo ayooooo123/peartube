@@ -20,7 +20,7 @@ export type ProtocolNetworkStatus = {
   recommendedBoundary: string | null
 }
 
-export const PROTOCOL_VERSION: 2
+export const PROTOCOL_VERSION: 3
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'

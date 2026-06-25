@@ -28,8 +28,9 @@ so default V8 builds are untouched.
 
 1. Run **`.github/workflows/build-bare-kit-engine.yml`** (Actions → Run workflow),
    pick `engine: libqjs`. It checks out `holepunchto/bare-kit` at the pinned tag,
-   builds the Android AAR with `-DBARE_ENGINE=github:holepunchto/libqjs`, and
-   uploads the four per-ABI `libbare-kit.so` as an artifact.
+   applies the QJS worklet bootstrap handoff patch, builds the Android AAR with
+   `-DBARE_ENGINE=github:holepunchto/libqjs`, and uploads the four per-ABI
+   `libbare-kit.so` as an artifact.
 2. Download the artifact and place it here as `libqjs/<abi>/libbare-kit.so`.
 
 These `.so` are **git-ignored on purpose** — they are reproducible build outputs,

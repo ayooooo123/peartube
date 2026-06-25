@@ -1271,11 +1271,12 @@ async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVi
  * @param {boolean} [options.force=false] - the requesting player reported it
  *   cannot play the source even if the policy table says it can (e.g. a webview
  *   without Opus MSE support). When the policy decision is 'direct', force the
- *   least-cost fallback (video stream-copy + audio→AAC) instead of refusing.
+ *   requested fallback mode or the least-cost fallback instead of refusing.
+ * @param {'remux'|'audio-only'|'full'} [options.forceMode]
  * @returns {Promise<{success:boolean, sessionId:string, mode?:string, reused?:boolean, reason?:string, error?:string}>}
  */
 async function startCompatTranscode(sourceUrl, options = {}) {
-  const { player = 'webkit', sourceKey = null, onProgress, isVideoComplete = true, force = false } = options
+  const { player = 'webkit', sourceKey = null, onProgress, isVideoComplete = true, force = false, forceMode = null } = options
 
   if (sourceKey) {
     const existing = findSessionBySourceKey(sourceKey)
@@ -1308,7 +1309,13 @@ async function startCompatTranscode(sourceUrl, options = {}) {
       return { success: false, sessionId: session.id, reason: 'no-transcode-needed' }
     }
     if (decision.mode === 'direct') {
-      decision.mode = 'audio-only'
+      const requestedForceMode = forceMode === 'remux' || forceMode === 'audio-only' || forceMode === 'full'
+        ? forceMode
+        : 'audio-only'
+      decision.mode = requestedForceMode
+      decision.needsRemux = requestedForceMode === 'remux'
+      decision.needsAudioTranscode = requestedForceMode === 'audio-only' || requestedForceMode === 'full'
+      decision.needsVideoTranscode = requestedForceMode === 'full'
       decision.reason = `forced by ${player}: player reported source unplayable`
     }
 

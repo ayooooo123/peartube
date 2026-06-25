@@ -1,0 +1,49 @@
+package __PACKAGE__
+
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.WritableMap
+
+class PeartubeNetworkDiscoveryModule(
+  private val reactContext: ReactApplicationContext
+) : ReactContextBaseJavaModule(reactContext) {
+  private val discovery = PeartubeNetworkDiscovery(reactContext.applicationContext)
+
+  override fun getName(): String = "PeartubeNetworkDiscovery"
+
+  @ReactMethod
+  fun acquireMulticastLock(promise: Promise) {
+    try {
+      promise.resolve(statusToMap(discovery.acquireMulticastLock()))
+    } catch (err: Throwable) {
+      promise.reject("ERR_MULTICAST_LOCK", err.message ?: err.toString(), err)
+    }
+  }
+
+  @ReactMethod
+  fun releaseMulticastLock(promise: Promise) {
+    try {
+      promise.resolve(statusToMap(discovery.releaseMulticastLock()))
+    } catch (err: Throwable) {
+      promise.reject("ERR_MULTICAST_UNLOCK", err.message ?: err.toString(), err)
+    }
+  }
+
+  @ReactMethod
+  fun getDiscoveryNetworkStatus(promise: Promise) {
+    promise.resolve(statusToMap(discovery.getDiscoveryNetworkStatus()))
+  }
+
+  private fun statusToMap(status: DiscoveryNetworkStatus): WritableMap {
+    return Arguments.createMap().apply {
+      putBoolean("multicastLockHeld", status.multicastLockHeld)
+      putBoolean("wifiEnabled", status.wifiEnabled)
+      putInt("sdkVersion", status.sdkVersion)
+      putBoolean("nearbyWifiPermissionGranted", status.nearbyWifiPermissionGranted)
+      putString("lastError", status.lastError)
+    }
+  }
+}

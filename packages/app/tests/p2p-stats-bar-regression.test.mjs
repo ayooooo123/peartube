@@ -13,6 +13,9 @@ test('P2P stats bar does not claim preparing when bytes are actively transferrin
 
 test('P2P stats bar treats an actively loaded video as ready even when transfer speeds are momentarily idle', () => {
   assert.match(source, /const hasPlayableProgress =/, 'stats bar should classify playable byte or block progress separately from transfer speed')
+  assert.match(source, /sessionDownloadedBytes > 0/, 'streaming state should use bytes downloaded during the active playback session')
+  assert.match(source, /sessionDownloadedBlocks > 0/, 'streaming state should use blocks downloaded during the active playback session')
+  assert.doesNotMatch(source, /Number\(stats\?\.progress \?\? 0\) > 0/, 'sampled aggregate progress must not be treated as live streaming')
   assert.match(source, /if \(hasPlayableProgress\) return \{ color: '#60a5fa', label: 'Streaming' \}/, 'loaded playable progress should stay in streaming state instead of falling through to preparing')
 })
 

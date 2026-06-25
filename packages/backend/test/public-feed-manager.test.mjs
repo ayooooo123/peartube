@@ -540,6 +540,28 @@ test('PublicFeedManager promotes pending Hyperswarm peer candidates without join
   }
 })
 
+test('PublicFeedManager direct-dials explicit availability hint peers when requested', () => {
+  const publicKey = b4a.alloc(32, 24)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    const promoted = manager.promoteAvailabilityHintPeers([keyHex], NETWORK_TOPIC, {
+      direct: true,
+      reason: 'availability-hint',
+    })
+
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(b4a.equals(swarm.joinPeerCalls[0], publicKey), true)
+    assert.equal(promoted.length, 1)
+    assert.equal(promoted[0].direct, true)
+    assert.equal(manager.getStats().directPeerDial.lastReason, 'availability-hint')
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager has no app-level foreground peer recovery loop', () => {
   const publicKey = b4a.alloc(32, 22)
   const swarm = createSwarm()

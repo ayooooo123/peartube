@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "schema": [
     {
       "id": 0,
@@ -848,711 +848,6 @@
     },
     {
       "id": 65,
-      "name": "@peartube/get-video-thumbnail",
-      "request": {
-        "name": "@peartube/get-video-thumbnail-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-video-thumbnail-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 66,
-      "name": "@peartube/get-video-metadata",
-      "request": {
-        "name": "@peartube/get-video-metadata-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-video-metadata-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 67,
-      "name": "@peartube/set-video-thumbnail",
-      "request": {
-        "name": "@peartube/set-video-thumbnail-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/set-video-thumbnail-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 68,
-      "name": "@peartube/set-video-thumbnail-from-file",
-      "request": {
-        "name": "@peartube/set-video-thumbnail-from-file-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/set-video-thumbnail-from-file-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 69,
-      "name": "@peartube/get-status",
-      "request": {
-        "name": "@peartube/get-status-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-status-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 70,
-      "name": "@peartube/pick-video-file",
-      "request": {
-        "name": "@peartube/pick-video-file-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/pick-video-file-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 71,
-      "name": "@peartube/pick-image-file",
-      "request": {
-        "name": "@peartube/pick-image-file-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/pick-image-file-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 72,
-      "name": "@peartube/get-blob-server-port",
-      "request": {
-        "name": "@peartube/get-blob-server-port-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-blob-server-port-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 73,
-      "name": "@peartube/global-search-videos",
-      "request": {
-        "name": "@peartube/global-search-videos-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/global-search-videos-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 74,
-      "name": "@peartube/add-comment",
-      "request": {
-        "name": "@peartube/add-comment-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/add-comment-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 75,
-      "name": "@peartube/list-comments",
-      "request": {
-        "name": "@peartube/list-comments-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/list-comments-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 76,
-      "name": "@peartube/hide-comment",
-      "request": {
-        "name": "@peartube/hide-comment-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/hide-comment-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 77,
-      "name": "@peartube/remove-comment",
-      "request": {
-        "name": "@peartube/remove-comment-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/remove-comment-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 78,
-      "name": "@peartube/add-reaction",
-      "request": {
-        "name": "@peartube/add-reaction-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/add-reaction-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 79,
-      "name": "@peartube/remove-reaction",
-      "request": {
-        "name": "@peartube/remove-reaction-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/remove-reaction-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 80,
-      "name": "@peartube/get-reactions",
-      "request": {
-        "name": "@peartube/get-reactions-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-reactions-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 81,
-      "name": "@peartube/event-ready",
-      "request": {
-        "name": "@peartube/event-ready",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 82,
-      "name": "@peartube/event-error",
-      "request": {
-        "name": "@peartube/event-error",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 83,
-      "name": "@peartube/event-upload-progress",
-      "request": {
-        "name": "@peartube/event-upload-progress",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 84,
-      "name": "@peartube/event-download-progress",
-      "request": {
-        "name": "@peartube/event-download-progress",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 85,
-      "name": "@peartube/event-feed-update",
-      "request": {
-        "name": "@peartube/event-feed-update",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 86,
-      "name": "@peartube/event-log",
-      "request": {
-        "name": "@peartube/event-log",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 87,
-      "name": "@peartube/event-video-stats",
-      "request": {
-        "name": "@peartube/event-video-stats",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 88,
-      "name": "@peartube/cast-available",
-      "request": {
-        "name": "@peartube/cast-available-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-available-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 89,
-      "name": "@peartube/cast-start-discovery",
-      "request": {
-        "name": "@peartube/cast-start-discovery-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-start-discovery-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 90,
-      "name": "@peartube/cast-stop-discovery",
-      "request": {
-        "name": "@peartube/cast-stop-discovery-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-stop-discovery-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 91,
-      "name": "@peartube/cast-get-devices",
-      "request": {
-        "name": "@peartube/cast-get-devices-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-get-devices-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 92,
-      "name": "@peartube/cast-add-manual-device",
-      "request": {
-        "name": "@peartube/cast-add-manual-device-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-add-manual-device-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 93,
-      "name": "@peartube/cast-connect",
-      "request": {
-        "name": "@peartube/cast-connect-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-connect-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 94,
-      "name": "@peartube/cast-disconnect",
-      "request": {
-        "name": "@peartube/cast-disconnect-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-disconnect-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 95,
-      "name": "@peartube/cast-play",
-      "request": {
-        "name": "@peartube/cast-play-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-play-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 96,
-      "name": "@peartube/cast-pause",
-      "request": {
-        "name": "@peartube/cast-pause-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-pause-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 97,
-      "name": "@peartube/cast-resume",
-      "request": {
-        "name": "@peartube/cast-resume-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-resume-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 98,
-      "name": "@peartube/cast-stop",
-      "request": {
-        "name": "@peartube/cast-stop-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-stop-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 99,
-      "name": "@peartube/cast-seek",
-      "request": {
-        "name": "@peartube/cast-seek-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-seek-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 100,
-      "name": "@peartube/cast-set-volume",
-      "request": {
-        "name": "@peartube/cast-set-volume-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-set-volume-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 101,
-      "name": "@peartube/cast-get-state",
-      "request": {
-        "name": "@peartube/cast-get-state-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-get-state-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 102,
-      "name": "@peartube/cast-is-connected",
-      "request": {
-        "name": "@peartube/cast-is-connected-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/cast-is-connected-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 103,
-      "name": "@peartube/event-cast-device-found",
-      "request": {
-        "name": "@peartube/event-cast-device-found",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 104,
-      "name": "@peartube/event-cast-device-lost",
-      "request": {
-        "name": "@peartube/event-cast-device-lost",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 105,
-      "name": "@peartube/event-cast-playback-state",
-      "request": {
-        "name": "@peartube/event-cast-playback-state",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 106,
-      "name": "@peartube/event-cast-time-update",
-      "request": {
-        "name": "@peartube/event-cast-time-update",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 107,
-      "name": "@peartube/search-videos",
-      "request": {
-        "name": "@peartube/search-videos-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/search-videos-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 108,
-      "name": "@peartube/log-watch-event",
-      "request": {
-        "name": "@peartube/log-watch-event-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/log-watch-event-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 109,
-      "name": "@peartube/index-video-vectors",
-      "request": {
-        "name": "@peartube/index-video-vectors-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/index-video-vectors-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 110,
-      "name": "@peartube/get-recommendations",
-      "request": {
-        "name": "@peartube/get-recommendations-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-recommendations-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 111,
-      "name": "@peartube/get-video-recommendations",
-      "request": {
-        "name": "@peartube/get-video-recommendations-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-video-recommendations-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 112,
-      "name": "@peartube/update-video-metadata",
-      "request": {
-        "name": "@peartube/update-video-metadata-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/update-video-metadata-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 113,
-      "name": "@peartube/desktop-bootstrap",
-      "request": {
-        "name": "@peartube/desktop-bootstrap-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/desktop-bootstrap-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 114,
-      "name": "@peartube/desktop-shutdown",
-      "request": {
-        "name": "@peartube/desktop-shutdown-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/desktop-shutdown-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 115,
-      "name": "@peartube/desktop-refresh-browse",
-      "request": {
-        "name": "@peartube/desktop-refresh-browse-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/desktop-refresh-browse-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 116,
-      "name": "@peartube/ffmpeg-decode-available",
-      "request": {
-        "name": "@peartube/ffmpeg-decode-available-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/ffmpeg-decode-available-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 117,
-      "name": "@peartube/update-channel-avatar",
-      "request": {
-        "name": "@peartube/update-channel-avatar-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/update-channel-avatar-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 118,
-      "name": "@peartube/transcode-start",
-      "request": {
-        "name": "@peartube/transcode-start-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/transcode-start-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 119,
-      "name": "@peartube/transcode-stop",
-      "request": {
-        "name": "@peartube/transcode-stop-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/transcode-stop-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 120,
-      "name": "@peartube/transcode-status",
-      "request": {
-        "name": "@peartube/transcode-status-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/transcode-status-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 121,
-      "name": "@peartube/event-transcode-progress",
-      "request": {
-        "name": "@peartube/event-transcode-progress",
-        "stream": false,
-        "send": true
-      },
-      "version": 1
-    },
-    {
-      "id": 65,
       "name": "@peartube/assess-upload-offload",
       "request": {
         "name": "@peartube/assess-upload-offload-request",
@@ -1562,7 +857,7 @@
         "name": "@peartube/assess-upload-offload-response",
         "stream": false
       },
-      "version": 2
+      "version": 1
     },
     {
       "id": 66,
@@ -1575,7 +870,712 @@
         "name": "@peartube/offload-upload-response",
         "stream": false
       },
-      "version": 2
+      "version": 1
+    },
+    {
+      "id": 67,
+      "name": "@peartube/get-video-thumbnail",
+      "request": {
+        "name": "@peartube/get-video-thumbnail-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-video-thumbnail-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 68,
+      "name": "@peartube/get-video-metadata",
+      "request": {
+        "name": "@peartube/get-video-metadata-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-video-metadata-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 69,
+      "name": "@peartube/set-video-thumbnail",
+      "request": {
+        "name": "@peartube/set-video-thumbnail-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-video-thumbnail-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 70,
+      "name": "@peartube/set-video-thumbnail-from-file",
+      "request": {
+        "name": "@peartube/set-video-thumbnail-from-file-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-video-thumbnail-from-file-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 71,
+      "name": "@peartube/get-status",
+      "request": {
+        "name": "@peartube/get-status-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-status-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 72,
+      "name": "@peartube/pick-video-file",
+      "request": {
+        "name": "@peartube/pick-video-file-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/pick-video-file-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 73,
+      "name": "@peartube/pick-image-file",
+      "request": {
+        "name": "@peartube/pick-image-file-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/pick-image-file-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 74,
+      "name": "@peartube/get-blob-server-port",
+      "request": {
+        "name": "@peartube/get-blob-server-port-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-blob-server-port-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 75,
+      "name": "@peartube/global-search-videos",
+      "request": {
+        "name": "@peartube/global-search-videos-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/global-search-videos-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 76,
+      "name": "@peartube/add-comment",
+      "request": {
+        "name": "@peartube/add-comment-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/add-comment-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 77,
+      "name": "@peartube/list-comments",
+      "request": {
+        "name": "@peartube/list-comments-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/list-comments-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 78,
+      "name": "@peartube/hide-comment",
+      "request": {
+        "name": "@peartube/hide-comment-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/hide-comment-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 79,
+      "name": "@peartube/remove-comment",
+      "request": {
+        "name": "@peartube/remove-comment-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/remove-comment-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 80,
+      "name": "@peartube/add-reaction",
+      "request": {
+        "name": "@peartube/add-reaction-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/add-reaction-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 81,
+      "name": "@peartube/remove-reaction",
+      "request": {
+        "name": "@peartube/remove-reaction-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/remove-reaction-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 82,
+      "name": "@peartube/get-reactions",
+      "request": {
+        "name": "@peartube/get-reactions-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-reactions-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 83,
+      "name": "@peartube/event-ready",
+      "request": {
+        "name": "@peartube/event-ready",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 84,
+      "name": "@peartube/event-error",
+      "request": {
+        "name": "@peartube/event-error",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 85,
+      "name": "@peartube/event-upload-progress",
+      "request": {
+        "name": "@peartube/event-upload-progress",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 86,
+      "name": "@peartube/event-download-progress",
+      "request": {
+        "name": "@peartube/event-download-progress",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 87,
+      "name": "@peartube/event-feed-update",
+      "request": {
+        "name": "@peartube/event-feed-update",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 88,
+      "name": "@peartube/event-log",
+      "request": {
+        "name": "@peartube/event-log",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 89,
+      "name": "@peartube/event-video-stats",
+      "request": {
+        "name": "@peartube/event-video-stats",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 90,
+      "name": "@peartube/cast-available",
+      "request": {
+        "name": "@peartube/cast-available-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-available-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 91,
+      "name": "@peartube/cast-start-discovery",
+      "request": {
+        "name": "@peartube/cast-start-discovery-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-start-discovery-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 92,
+      "name": "@peartube/cast-stop-discovery",
+      "request": {
+        "name": "@peartube/cast-stop-discovery-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-stop-discovery-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 93,
+      "name": "@peartube/cast-get-devices",
+      "request": {
+        "name": "@peartube/cast-get-devices-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-get-devices-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 94,
+      "name": "@peartube/cast-add-manual-device",
+      "request": {
+        "name": "@peartube/cast-add-manual-device-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-add-manual-device-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 95,
+      "name": "@peartube/cast-connect",
+      "request": {
+        "name": "@peartube/cast-connect-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-connect-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 96,
+      "name": "@peartube/cast-disconnect",
+      "request": {
+        "name": "@peartube/cast-disconnect-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-disconnect-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 97,
+      "name": "@peartube/cast-play",
+      "request": {
+        "name": "@peartube/cast-play-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-play-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 98,
+      "name": "@peartube/cast-pause",
+      "request": {
+        "name": "@peartube/cast-pause-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-pause-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 99,
+      "name": "@peartube/cast-resume",
+      "request": {
+        "name": "@peartube/cast-resume-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-resume-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 100,
+      "name": "@peartube/cast-stop",
+      "request": {
+        "name": "@peartube/cast-stop-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-stop-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 101,
+      "name": "@peartube/cast-seek",
+      "request": {
+        "name": "@peartube/cast-seek-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-seek-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 102,
+      "name": "@peartube/cast-set-volume",
+      "request": {
+        "name": "@peartube/cast-set-volume-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-set-volume-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 103,
+      "name": "@peartube/cast-get-state",
+      "request": {
+        "name": "@peartube/cast-get-state-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-get-state-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 104,
+      "name": "@peartube/cast-is-connected",
+      "request": {
+        "name": "@peartube/cast-is-connected-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/cast-is-connected-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 105,
+      "name": "@peartube/event-cast-device-found",
+      "request": {
+        "name": "@peartube/event-cast-device-found",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 106,
+      "name": "@peartube/event-cast-device-lost",
+      "request": {
+        "name": "@peartube/event-cast-device-lost",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 107,
+      "name": "@peartube/event-cast-playback-state",
+      "request": {
+        "name": "@peartube/event-cast-playback-state",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 108,
+      "name": "@peartube/event-cast-time-update",
+      "request": {
+        "name": "@peartube/event-cast-time-update",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
+    },
+    {
+      "id": 109,
+      "name": "@peartube/search-videos",
+      "request": {
+        "name": "@peartube/search-videos-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/search-videos-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 110,
+      "name": "@peartube/log-watch-event",
+      "request": {
+        "name": "@peartube/log-watch-event-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/log-watch-event-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 111,
+      "name": "@peartube/index-video-vectors",
+      "request": {
+        "name": "@peartube/index-video-vectors-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/index-video-vectors-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 112,
+      "name": "@peartube/get-recommendations",
+      "request": {
+        "name": "@peartube/get-recommendations-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-recommendations-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 113,
+      "name": "@peartube/get-video-recommendations",
+      "request": {
+        "name": "@peartube/get-video-recommendations-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-video-recommendations-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 114,
+      "name": "@peartube/update-video-metadata",
+      "request": {
+        "name": "@peartube/update-video-metadata-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/update-video-metadata-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 115,
+      "name": "@peartube/desktop-bootstrap",
+      "request": {
+        "name": "@peartube/desktop-bootstrap-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/desktop-bootstrap-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 116,
+      "name": "@peartube/desktop-shutdown",
+      "request": {
+        "name": "@peartube/desktop-shutdown-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/desktop-shutdown-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 117,
+      "name": "@peartube/desktop-refresh-browse",
+      "request": {
+        "name": "@peartube/desktop-refresh-browse-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/desktop-refresh-browse-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 118,
+      "name": "@peartube/ffmpeg-decode-available",
+      "request": {
+        "name": "@peartube/ffmpeg-decode-available-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/ffmpeg-decode-available-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 119,
+      "name": "@peartube/update-channel-avatar",
+      "request": {
+        "name": "@peartube/update-channel-avatar-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/update-channel-avatar-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 120,
+      "name": "@peartube/transcode-start",
+      "request": {
+        "name": "@peartube/transcode-start-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/transcode-start-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 121,
+      "name": "@peartube/transcode-stop",
+      "request": {
+        "name": "@peartube/transcode-stop-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/transcode-stop-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 122,
+      "name": "@peartube/transcode-status",
+      "request": {
+        "name": "@peartube/transcode-status-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/transcode-status-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 123,
+      "name": "@peartube/event-transcode-progress",
+      "request": {
+        "name": "@peartube/event-transcode-progress",
+        "stream": false,
+        "send": true
+      },
+      "version": 1
     }
   ]
 }

@@ -1,4 +1,4 @@
-package com.peartube.app
+package __PACKAGE__
 
 import com.facebook.react.BaseReactPackage
 import com.facebook.react.bridge.NativeModule

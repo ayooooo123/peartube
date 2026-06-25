@@ -186,10 +186,7 @@ export function selectFeedEntryVideosWithPreviewFallback(loadedVideos, previewFa
 }
 
 export function shouldRenderFeedVideo({ video, identityDriveKey }) {
-  const channelKey = video?.channelKey || video?.driveKey || null
-  if (identityDriveKey && channelKey === identityDriveKey) return true
-  if (hasDirectBlobRef(video)) return true
-  return (video?.byteAvailability || video?.availability) === 'playable'
+  return isFeedVideoPlaybackReady(video, identityDriveKey)
 }
 
 export function isConfirmedFeedHydrationResult({ entry, resolved, videos = [] }) {

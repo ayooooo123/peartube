@@ -151,6 +151,7 @@ export async function startHost(options = {}) {
       stream,
       entrypoint,
       args,
+      protocolVersion: PROTOCOL_VERSION,
       network,
       swarmOptions,
       onFeedUpdate,

@@ -49,12 +49,51 @@ test('native root layout arms the backend startup timeout before awaiting initPl
   assert.ok(initIndex < fallbackIndex, 'fallback ready mark should happen after initPlatformRPC resolves')
 })
 
-test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of the mandatory startup import batch', () => {
+test('native platform RPC probes the blob server before reusing an initialized bridge', () => {
+  const source = readWorkspaceFile('platform/src/rpc.native.ts')
+  const probeIndex = source.indexOf('async function probeBlobServerHealth')
+  const resetIndex = source.indexOf('async function resetStaleMainBridge')
+  const reuseIndex = source.indexOf('async function canReuseMainBridge')
+  const initIndex = source.indexOf('export async function initPlatformRPC')
+  const oldFastPath = source.indexOf("console.log('[Platform RPC] Already initialized')")
+
+  assert.notEqual(probeIndex, -1, 'native RPC should define a blob-server health probe')
+  assert.notEqual(resetIndex, -1, 'native RPC should be able to reset stale bridge state')
+  assert.notEqual(reuseIndex, -1, 'native RPC should centralize bridge reuse checks')
+  assert.ok(probeIndex < reuseIndex, 'reuse checks should call the health probe')
+  assert.ok(resetIndex < reuseIndex, 'reuse checks should be able to reset stale bridge state')
+  assert.ok(reuseIndex < initIndex, 'reuse guard should be available before initPlatformRPC')
+  assert.match(source, /\/\?pt_health=1/)
+  assert.match(source, /await mainBridge\.terminate\(\)/)
+  assert.match(source, /if \(_isInitialized && await canReuseMainBridge\('already initialized'\)\)/)
+  assert.match(source, /if \(await canReuseMainBridge\('shared bridge initialized'\)\)/)
+  assert.equal(oldFastPath, -1, 'initPlatformRPC must not trust initialized flags without probing the blob server')
+})
+
+test('native root layout verifies the backend on Android foreground even when bridge state is ready', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const foregroundBlock = source.match(/const handleAppStateChange = useCallback\(\(nextState: AppStateStatus\) => \{([\s\S]*?)\n\s*\}, \[/)?.[1] ?? ''
+
+  assert.ok(foregroundBlock, 'foreground handler should exist')
+  assert.match(foregroundBlock, /startupState === 'ready'/)
+  assert.match(foregroundBlock, /console\.log\('\[App\] Verifying native backend after foreground\.\.\.'\)/)
+  assert.match(foregroundBlock, /initNativeBackend\(\)/)
+})
+
+test('mobile backend entry avoids runtime imports for startup-critical QJS modules', () => {
   const source = readAppFile('backend/index.mjs')
+  const runtimeModulesSource = readWorkspaceFile('backend/src/runtime-modules.js')
+  const backendPackage = JSON.parse(readWorkspaceFile('backend/package.json'))
   const loadBackendModulesBody =
     source.match(/async function loadBackendModules\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
 
   assert.ok(loadBackendModulesBody, 'loadBackendModules should exist')
+  assert.match(source, /import HyperswarmModule from 'hyperswarm'/, 'mobile backend should statically import Hyperswarm for QJS')
+  assert.equal(backendPackage.exports['./runtime-modules'], './src/runtime-modules.js')
+  assert.equal(backendPackage.exports['./blob-request-cancellation'], './src/blob-request-cancellation.js')
+  assert.match(source, /setHyperswarmModuleForRuntime\(HyperswarmModule\)/, 'mobile backend should preload Hyperswarm before storage startup')
+  assert.match(runtimeModulesSource, /export function setHyperswarmModuleForRuntime\(mod\)/)
+  assert.match(runtimeModulesSource, /if \(preloadedHyperswarmModule\) return preloadedHyperswarmModule/)
   assert.doesNotMatch(loadBackendModulesBody, /import\(/, 'loadBackendModules should not use dynamic import in libqjs worklets')
   assert.doesNotMatch(loadBackendModulesBody, /import\('\.\/transcoder\.mjs'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('@peartube\/backend\/transcode\/cast-transcoder'\)/)
@@ -65,6 +104,10 @@ test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of
   assert.doesNotMatch(source, /await import\('@peartube\/backend\/hrpc-handlers'\)/, 'shared HRPC handlers are startup-critical and must be statically imported')
   assert.match(source, /attachLazyCastHandlers/)
   assert.match(source, /attachCastHandlers/)
+  assert.match(source, /import \{ attachCastHandlers as importedAttachCastHandlers \} from '\.\/mobile-cast\.mjs'/, 'mobile cast handlers should be statically bundled for QJS')
+  assert.match(source, /import \{ isExpectedBlobRequestCancellation \} from '@peartube\/backend\/blob-request-cancellation'/)
+  assert.match(source, /if \(consumeExpectedCancellation\(reason\)\) return true/, 'BareKit should consume expected Hypercore range cancellations')
+  assert.doesNotMatch(source, /require\('\.\/mobile-cast\.mjs'\)/, 'libqjs ESM worklets do not expose CommonJS require')
   assert.doesNotMatch(source, /import\('\.\/mobile-cast\.mjs'\)/, 'libqjs does not support dynamically importing mobile cast handlers')
   assert.match(source, /ensureBackendThumbnailModule/)
   assert.match(source, /ensureHttpModule/)
@@ -110,6 +153,21 @@ test('mobile backend consumes launch options before downloader worker args', () 
     /const workerBundlePath = workerArgs\[0\] \|\| ''/,
     'downloader worker path should be read after launchOptions are removed',
   )
+})
+
+test('native player compat is enabled from launch player with an opt-out env flag', () => {
+  const source = readAppFile('backend/index.mjs')
+  const handlersSource = readWorkspaceFile('backend/src/mobile-handlers.js')
+  const runtimeSource = readWorkspaceFile('backend/src/transcode/playback-compat-runtime.mjs')
+
+  assert.match(source, /PEARTUBE_NATIVE_PLAYER_COMPAT === '0'/)
+  assert.match(source, /PEARTUBE_AVPLAYER_COMPAT === '0'/)
+  assert.doesNotMatch(source, /PEARTUBE_AVPLAYER_COMPAT\) === '1'/)
+  assert.match(source, /!nativePlayerCompatDisabled && launchOptions\?\.player/)
+  assert.match(runtimeSource, /new Set\(\['avplayer', 'exoplayer'\]\)/)
+  assert.doesNotMatch(handlersSource, /player === 'exoplayer' && isLocalBlobServerUrl\(prepared\.url\)/)
+  assert.doesNotMatch(handlersSource, /forceMode: force \? 'remux' : null/)
+  assert.doesNotMatch(handlersSource, /forceMode:\s*'remux'/)
 })
 
 test('mobile backend parses launch options after entrypoint and preserves downloader worker path', () => {

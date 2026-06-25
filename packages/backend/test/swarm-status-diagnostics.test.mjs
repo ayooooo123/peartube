@@ -37,7 +37,10 @@ const FULL_SWARM_STATUS = {
 }
 
 test('shared runtime GetSwarmStatus forwards full transport diagnostics', async () => {
-  const handlers = buildSharedSystemHandlers({ api: { getSwarmStatus: () => FULL_SWARM_STATUS } })
+  const handlers = buildSharedSystemHandlers(
+    { api: { getSwarmStatus: () => FULL_SWARM_STATUS } },
+    { protocolVersion: 3 }
+  )
   const result = await handlers.GetSwarmStatus()
 
   assert.equal(result.recommendedBoundary, 'transport-socket')

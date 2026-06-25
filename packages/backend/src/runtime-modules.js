@@ -2,6 +2,12 @@ function unwrapModule(mod) {
   return mod?.default || mod
 }
 
+let preloadedHyperswarmModule = null
+
+export function setHyperswarmModuleForRuntime(mod) {
+  preloadedHyperswarmModule = unwrapModule(mod)
+}
+
 function tryRequire(specifier) {
   if (typeof require !== 'function') return null
 
@@ -67,6 +73,8 @@ export async function loadBareOrNodePathModule() {
 }
 
 export async function loadHyperswarmModule() {
+  if (preloadedHyperswarmModule) return preloadedHyperswarmModule
+
   const required = tryRequire('hyperswarm')
   if (required) return required
 

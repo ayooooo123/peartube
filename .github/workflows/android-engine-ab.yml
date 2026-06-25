@@ -64,6 +64,70 @@ jobs:
             's/("-DANDROID_STL=c\+\+_shared")/$1, "-DBARE_ENGINE=github:holepunchto\/${{ env.ENGINE }}"/g' \
             android/build.gradle
           grep -n "BARE_ENGINE" android/build.gradle
+      - name: Patch QJS worklet bootstrap handoff
+        run: |
+          set -euo pipefail
+          git apply <<'PATCH'
+          diff --git a/shared/worklet.c b/shared/worklet.c
+          index 41dd19c..c60e25f 100644
+          --- a/shared/worklet.c
+          +++ b/shared/worklet.c
+          @@ -437,10 +437,28 @@ bare_worklet__on_thread(void *opaque) {
+             err = bare_load(bare, "bare:/worklet.bundle", &source, &module);
+             assert(err == 0);
+
+          +  js_value_t *global;
+          +  err = js_get_global(env, &global);
+          +  assert(err == 0);
+          +
+             js_value_t *exports;
+          -  err = js_get_named_property(env, module, "exports", &exports);
+          +  err = js_get_named_property(env, global, "__BareKitWorkletBootstrap", &exports);
+          +  assert(err == 0);
+          +
+          +  bool exports_is_undefined;
+          +  err = js_is_undefined(env, exports, &exports_is_undefined);
+             assert(err == 0);
+
+          +  if (exports_is_undefined) {
+          +    err = js_get_named_property(env, module, "exports", &exports);
+          +    assert(err == 0);
+          +
+          +    err = js_is_undefined(env, exports, &exports_is_undefined);
+          +    assert(err == 0);
+          +
+          +    if (exports_is_undefined) exports = module;
+          +  }
+          +
+             js_value_t *port;
+             err = js_get_named_property(env, exports, "port", &port);
+             assert(err == 0);
+          diff --git a/shared/worklet.js b/shared/worklet.js
+          index 44e5909..5f8f298 100644
+          --- a/shared/worklet.js
+          +++ b/shared/worklet.js
+          @@ -13,7 +13,6 @@ const IPC = require('bare-ipc')
+           const unpack = require('bare-unpack')
+
+           global.console = new Console(new SystemLog())
+          -
+           const ports = IPC.open()
+
+           const ipc = new IPC(ports[0])
+          @@ -123,4 +122,12 @@ exports.start = async function start(filename, source, assets) {
+             return Module.load(url, source)
+           }
+
+          +// QJS does not reliably expose this CommonJS module as the bare_load() return value.
+          +Object.defineProperty(global, '__BareKitWorkletBootstrap', {
+          +  value: exports,
+          +  enumerable: false,
+          +  writable: false,
+          +  configurable: true
+          +})
+          +
+           function noop() {}
+          PATCH
       - run: npm install --global cmake-runtime ninja-runtime
       - run: npm install
       - run: gradle aR --no-daemon

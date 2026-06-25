@@ -36,7 +36,7 @@ import {
   pruneHydratedFeedChannels,
   withFeedTimeout,
 } from '@/lib/discover-feed-controller'
-import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
 import { formatTimeAgo } from '@/lib/formatters'
@@ -428,25 +428,10 @@ export default function VerticalDiscoveryScreen() {
     const isStalePlaybackRequest = () => pendingPlayKeyRef.current !== playKey || playbackRequestSeqRef.current !== requestSeq
 
     try {
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
-      if (cachedUrl) {
-        // Instant replay from the in-memory URL cache. Re-resolve in the
-        // background to refresh the entry and keep the blob core joined to
-        // swarm discovery so the player can keep streaming on demand.
-        void rpc.preparePlayback(playbackRequest).then((result: any) => {
-          if (isStalePlaybackRequest()) return
-          if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        }).catch(() => undefined)
-        if (isStalePlaybackRequest()) return
-        setShortsVideoUrl(cachedUrl)
-        setShortsPlaybackSession((prev) => prev + 1)
-        setShortsLoading(false)
-        return
-      }
       setShortsLoading(true)
       setShortsPlaybackMessage({ key: playKey, text: 'Fetching video from peers…' })
       // Resolve-and-stream: hand the blob-server URL to the player and let it
-      // fetch byte ranges on demand. No prewarming.
+      // fetch byte ranges on demand while backend warmup runs in the background.
       const result = await rpc.preparePlayback(playbackRequest)
       if (isStalePlaybackRequest() || !result) return
       if (result?.url) {

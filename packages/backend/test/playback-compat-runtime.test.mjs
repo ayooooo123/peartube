@@ -4,6 +4,7 @@ import test from 'node:test'
 import { resolveCompatPlaybackUrl } from '../src/transcode/playback-compat-runtime.mjs'
 
 const DIRECT = 'http://127.0.0.1:9000/blobs/abc/0?byteOffset=0&byteLength=10'
+const LOCAL_BLOB_DIRECT = 'http://127.0.0.1:9000/?key=abc&blob=def&type=video%2Fmp4&token=redacted'
 
 function mockTranscoder(overrides = {}) {
   const calls = { start: [], hls: [], status: [] }
@@ -25,14 +26,35 @@ function mockTranscoder(overrides = {}) {
   }
 }
 
-test('non-compat player passes through with no transcoder calls', async () => {
-  for (const player of ['webkit', 'exoplayer', undefined]) {
+test('non-HLS compat player passes through with no transcoder calls', async () => {
+  for (const player of ['webkit', undefined]) {
     const t = mockTranscoder()
     const r = await resolveCompatPlaybackUrl({ player, directUrl: DIRECT, castTranscoder: t })
     assert.equal(r.transcoded, false)
     assert.equal(r.url, DIRECT)
     assert.equal(t.calls.start.length, 0)
   }
+})
+
+test('exoplayer + compatible source can still pass through after policy check', async () => {
+  const t = mockTranscoder({ startResult: { success: false, reason: 'no-transcode-needed', sessionId: 's' } })
+  const r = await resolveCompatPlaybackUrl({ player: 'exoplayer', directUrl: DIRECT, castTranscoder: t })
+  assert.equal(r.transcoded, false)
+  assert.equal(r.url, DIRECT)
+  assert.equal(t.calls.start.length, 1)
+  assert.equal(t.calls.start[0].opts.player, 'exoplayer')
+  assert.equal(t.calls.start[0].opts.force, false)
+})
+
+test('exoplayer + PearTube loopback blob URL stays direct when codecs are supported', async () => {
+  const t = mockTranscoder({ startResult: { success: false, reason: 'no-transcode-needed', sessionId: 's' } })
+  const r = await resolveCompatPlaybackUrl({ player: 'exoplayer', directUrl: LOCAL_BLOB_DIRECT, castTranscoder: t })
+  assert.equal(r.transcoded, false)
+  assert.equal(r.url, LOCAL_BLOB_DIRECT)
+  assert.equal(t.calls.start.length, 1)
+  assert.equal(t.calls.start[0].opts.player, 'exoplayer')
+  assert.equal(t.calls.start[0].opts.force, false)
+  assert.equal(t.calls.start[0].opts.forceMode, null)
 })
 
 test('avplayer without a transcoder passes through', async () => {

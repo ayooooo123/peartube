@@ -1,4 +1,5 @@
 import test from 'brittle'
+import c from 'compact-encoding'
 
 import {
   APP_RPC_COMMANDS,
@@ -97,4 +98,22 @@ test('package exports resolve generated HRPC and schema entry points', async (t)
   t.ok(hrpc.default || hrpc.HRPC, 'root export resolves generated HRPC client')
   t.ok(Object.keys(messages).length > 0, 'messages export resolves generated message codecs')
   t.ok(Object.keys(schema).length > 0, 'schema export resolves generated schema codecs')
+})
+
+test('preparePlayback response can encode a readiness miss without a URL', async (t) => {
+  const schema = await import('@peartube/spec/schema')
+  const encoding = schema.getEncoding('@peartube/prepare-playback-response')
+  const encoded = c.encode(encoding, {
+    url: null,
+    warmupStarted: true,
+    selectedBlobWarmup: {
+      readyForPlayback: false,
+      error: 'waiting-for-playable-head'
+    }
+  })
+  const decoded = c.decode(encoding, encoded)
+
+  t.is(decoded.url, null)
+  t.is(decoded.warmupStarted, true)
+  t.is(decoded.selectedBlobWarmup?.error, 'waiting-for-playable-head')
 })

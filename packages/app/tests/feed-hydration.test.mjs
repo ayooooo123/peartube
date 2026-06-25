@@ -271,7 +271,7 @@ test('shouldKeepFeedVideoForVisibleEntries keeps restored snapshot cards until t
   }), false)
 })
 
-test('feed readiness separates visible direct-blob cards from playable direct-blob cards', () => {
+test('feed rendering hides remote direct-blob cards while byte readiness is pending', () => {
   const directWithoutBytes = {
     channelKey: 'remote',
     availability: 'playable',
@@ -283,7 +283,7 @@ test('feed readiness separates visible direct-blob cards from playable direct-bl
   assert.equal(shouldRenderFeedVideo({
     video: directWithoutBytes,
     identityDriveKey: 'local',
-  }), true)
+  }), false)
   assert.equal(hasDirectBlobReadinessProof(directWithoutBytes), false)
   assert.equal(isFeedVideoPlaybackReady(directWithoutBytes, 'local'), false)
 
@@ -294,6 +294,10 @@ test('feed readiness separates visible direct-blob cards from playable direct-bl
   }
   assert.equal(hasDirectBlobReadinessProof(directWithBytes), true)
   assert.equal(isFeedVideoPlaybackReady(directWithBytes, 'local'), true)
+  assert.equal(shouldRenderFeedVideo({
+    video: directWithBytes,
+    identityDriveKey: 'local',
+  }), true)
 
   assert.equal(shouldRenderFeedVideo({
     video: { channelKey: 'remote', availability: 'unknown', playbackSupport: 'unverified-container' },

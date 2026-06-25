@@ -22,6 +22,8 @@ import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail'
 import { createBackend } from '@peartube/backend/src/backend-entry.js'
 // @ts-ignore
 import { createBackendContext } from '@peartube/backend/orchestrator'
+// @ts-ignore
+import { PROTOCOL_VERSION } from '@peartube/host'
 // Bare runtime globals (available when spawned via pear.run())
 declare const Bare: { argv: string[]; IPC: any } | undefined
 // Cast proxy infrastructure
@@ -429,6 +431,7 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   stream: ipcPipe,
   storagePath: storage,
   platform: 'desktop',
+  protocolVersion: PROTOCOL_VERSION,
   createBackendContext,
   autoAttachSharedAppHandlers: true,
   onReady: (data: any) => { console.log('[Worker] Backend ready, blob port:', data?.blobServerPort) },

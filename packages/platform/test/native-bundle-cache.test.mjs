@@ -87,6 +87,22 @@ test('fingerprintBundleSource produces stable identifiers per source content', (
   assert.equal(fingerprintBundleSource(null), fingerprintBundleSource(undefined))
 })
 
+test('fingerprintBundleSource changes for middle-only bundle edits', () => {
+  const head = 'H'.repeat(4096)
+  const tail = 'T'.repeat(4096)
+  const a = `${head}${'A'.repeat(2048)}${tail}`
+  const b = `${head}${'B'.repeat(2048)}${tail}`
+
+  assert.equal(a.length, b.length)
+  assert.equal(a.slice(0, 4096), b.slice(0, 4096))
+  assert.equal(a.slice(-4096), b.slice(-4096))
+  assert.notEqual(
+    fingerprintBundleSource(a),
+    fingerprintBundleSource(b),
+    'middle-only backend bundle edits must invalidate the persisted native worklet cache',
+  )
+})
+
 test('buildBundleVersionKey changes when only the embedded backend bundle changes', () => {
   const baseKey = 'peartube-native-backend:1.0.0:1'
   const a = buildBundleVersionKey({ baseKey, backendSource: 'console.log("v1")' })

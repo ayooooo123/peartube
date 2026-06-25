@@ -48,6 +48,9 @@
  * @property {number} downloadedBlocks - Downloaded blocks
  * @property {number} totalBytes - Total bytes
  * @property {number} downloadedBytes - Downloaded bytes
+ * @property {number} [initialBlocks] - Blocks already local when monitoring started
+ * @property {number} [sessionDownloadedBlocks] - Blocks downloaded during this playback session
+ * @property {number} [sessionDownloadedBytes] - Bytes downloaded during this playback session
  * @property {number} peerCount - Peer count
  * @property {string} speedMBps - Download speed in MB/s
  * @property {string} [uploadSpeedMBps] - Upload speed in MB/s

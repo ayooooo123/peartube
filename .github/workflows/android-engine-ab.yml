@@ -22,6 +22,12 @@ on:
         required: true
         default: v2.2.0
         type: string
+      bootstrap:
+        description: QJS worklet-bootstrap fix to compile in
+        required: true
+        default: worklet
+        type: choice
+        options: [worklet, barefix]
   # workflow_dispatch only appears once this file is on the default branch. Until
   # then, trigger from this branch by pushing a commit whose message contains the
   # marker [engine-ab]; it builds with the env defaults below (libqjs / arm64-v8a
@@ -38,6 +44,10 @@ env:
   ENGINE: ${{ github.event.inputs.engine || (contains(github.event.head_commit.message, 'engine=libmqjs') && 'libmqjs') || (contains(github.event.head_commit.message, 'engine=libjsc') && 'libjsc') || (contains(github.event.head_commit.message, 'engine=libjerry') && 'libjerry') || 'libqjs' }}
   ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
   BARE_KIT_REF: ${{ github.event.inputs.bare_kit_ref || 'v2.2.0' }}
+  # Which QJS worklet-bootstrap fix to compile in. "worklet" = patch bare-kit's
+  # worklet.c/.js (current, proven). "barefix" = patch bare's bare_runtime_load
+  # handle-scope escape instead (the real root cause). Marker: bootstrap=barefix.
+  BOOTSTRAP: ${{ github.event.inputs.bootstrap || (contains(github.event.head_commit.message, 'bootstrap=barefix') && 'barefix') || 'worklet' }}
 
 jobs:
   engine:
@@ -65,6 +75,7 @@ jobs:
             android/build.gradle
           grep -n "BARE_ENGINE" android/build.gradle
       - name: Patch QJS worklet bootstrap handoff
+        if: ${{ env.BOOTSTRAP != 'barefix' }}
         run: |
           set -euo pipefail
           git apply <<'PATCH'
@@ -128,6 +139,28 @@ jobs:
           +
            function noop() {}
           PATCH
+      # Alternative bootstrap fix (BOOTSTRAP=barefix): instead of patching
+      # bare-kit's worklet, patch the REAL root cause one level down — bare's
+      # bare_runtime_load() returns load()'s result without escaping it past the
+      # handle-scope close, so QJS frees it and module.exports is unusable. We
+      # apply that fix to the fetched `bare` via cmake-fetch's own PATCHES
+      # mechanism (idempotent git apply) and skip the worklet patch entirely.
+      - name: (barefix) bring in the bare escape-handle patch
+        if: ${{ env.BOOTSTRAP == 'barefix' }}
+        uses: actions/checkout@v6
+        with:
+          path: _peartube
+          sparse-checkout: packages/app/bare-kit-engine/patches
+          sparse-checkout-cone-mode: false
+      - name: (barefix) wire bare patch into cmake-fetch
+        if: ${{ env.BOOTSTRAP == 'barefix' }}
+        run: |
+          set -euo pipefail
+          mkdir -p patches
+          cp _peartube/packages/app/bare-kit-engine/patches/bare-escape-handle.patch patches/
+          perl -0pi -e 's{(fetch_package\("github:holepunchto/bare\@[0-9.]+")\)}{$1 PATCHES patches/bare-escape-handle.patch)}' CMakeLists.txt
+          echo "----- bare fetch_package line -----"
+          grep -n "fetch_package.*holepunchto/bare@" CMakeLists.txt
       - run: npm install --global cmake-runtime ninja-runtime
       - run: npm install
       - run: ./gradlew aR --no-daemon

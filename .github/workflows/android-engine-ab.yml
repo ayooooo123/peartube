@@ -90,6 +90,23 @@ jobs:
           echo "Repointing bare -> github:$REF"
           REF="$REF" perl -0pi -e 's{fetch_package\("github:holepunchto/bare\@[0-9.]+"\)}{qq[fetch_package("github:$ENV{REF}")]}ge' CMakeLists.txt
           grep -n "fetch_package.*bare" CMakeLists.txt
+      # Single-test path (no fork): compile the bare handle-scope fix from the
+      # tracked patch via cmake-fetch's PATCHES hook. Trigger: [engine-ab] barepatch
+      - name: (test) bring in local bare patch
+        if: ${{ contains(github.event.head_commit.message, 'barepatch') }}
+        uses: actions/checkout@v6
+        with:
+          path: _peartube
+          sparse-checkout: packages/app/bare-kit-engine/patches
+          sparse-checkout-cone-mode: false
+      - name: (test) wire local bare patch into cmake-fetch
+        if: ${{ contains(github.event.head_commit.message, 'barepatch') }}
+        run: |
+          set -euo pipefail
+          mkdir -p patches
+          cp _peartube/packages/app/bare-kit-engine/patches/bare-escape-handle.patch patches/
+          perl -0pi -e 's{(fetch_package\("github:holepunchto/bare\@[0-9.]+")\)}{$1 PATCHES patches/bare-escape-handle.patch)}' CMakeLists.txt
+          grep -n "fetch_package.*bare@" CMakeLists.txt
       - run: npm install --global cmake-runtime ninja-runtime
       - run: npm install
       - run: ./gradlew aR --no-daemon

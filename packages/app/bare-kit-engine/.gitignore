@@ -4,6 +4,3 @@
 */
 !.gitignore
 !README.md
-# Tracked engine-build patches (source, not build output) are kept.
-!patches/
-!patches/*.patch

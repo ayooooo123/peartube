@@ -22,6 +22,11 @@ on:
         required: true
         default: v2.2.0
         type: string
+      bare_ref:
+        description: Optional fork/ref to build `bare` from (e.g. owner/repo#branch). Empty = bare-kit's pinned bare.
+        required: false
+        default: ''
+        type: string
   # workflow_dispatch only appears once this file is on the default branch. Until
   # then, trigger from this branch by pushing a commit whose message contains the
   # marker [engine-ab]; it builds with the env defaults below (libqjs / arm64-v8a
@@ -64,6 +69,27 @@ jobs:
             's/("-DANDROID_STL=c\+\+_shared")/$1, "-DBARE_ENGINE=github:holepunchto\/${{ env.ENGINE }}"/g' \
             android/build.gradle
           grep -n "BARE_ENGINE" android/build.gradle
+      # Optionally swap bare-kit's pinned `bare` for a fixed fork/ref so the
+      # engine compiles the fix straight from source — no patch file. Set via
+      # the bare_ref dispatch input or a "bare=owner/repo#ref" commit marker,
+      # e.g. [engine-ab] bare=ayooooo123/bare#fix/runtime-load-escape-handle
+      - name: Repoint bare to a fixed fork (optional)
+        env:
+          BARE_REF_INPUT: ${{ github.event.inputs.bare_ref || '' }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          REF="$BARE_REF_INPUT"
+          if [ -z "$REF" ]; then
+            REF=$(printf '%s' "$MSG" | grep -oE 'bare=[^[:space:]]+' | head -1 | cut -d= -f2- || true)
+          fi
+          if [ -z "$REF" ]; then
+            echo "No bare override — using bare-kit's pinned bare."
+            exit 0
+          fi
+          echo "Repointing bare -> github:$REF"
+          REF="$REF" perl -0pi -e 's{fetch_package\("github:holepunchto/bare\@[0-9.]+"\)}{qq[fetch_package("github:$ENV{REF}")]}ge' CMakeLists.txt
+          grep -n "fetch_package.*bare" CMakeLists.txt
       - run: npm install --global cmake-runtime ninja-runtime
       - run: npm install
       - run: ./gradlew aR --no-daemon

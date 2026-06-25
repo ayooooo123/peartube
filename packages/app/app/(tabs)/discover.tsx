@@ -195,6 +195,7 @@ export default function VerticalDiscoveryScreen() {
   const [shortsPlaybackMessage, setShortsPlaybackMessage] = useState<{ key: string; text: string; isError?: boolean } | null>(null)
   const [shortsChromeVisible, setShortsChromeVisible] = useState(true)
   const [commentsSheetVisible, setCommentsSheetVisible] = useState(false)
+  const [followedChannels, setFollowedChannels] = useState<Set<string>>(() => new Set())
   const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
   const playbackRequestSeqRef = useRef(0)
@@ -529,6 +530,46 @@ export default function VerticalDiscoveryScreen() {
     })
   }, [router])
 
+  // Hydrate the set of subscribed channels so the Shorts "Follow" button reflects real state.
+  useEffect(() => {
+    if (!rpc) return
+    let active = true
+    ;(async () => {
+      try {
+        const subs = await (rpc as any).getSubscriptions?.({})
+        if (active && Array.isArray(subs?.subscriptions)) {
+          setFollowedChannels(new Set(subs.subscriptions.map((s: any) => s.channelKey).filter(Boolean)))
+        }
+      } catch {}
+    })()
+    return () => { active = false }
+  }, [rpc])
+
+  const toggleFollow = useCallback(async (video: VideoData) => {
+    const channelKey = video.channelKey
+    if (!channelKey || !rpc) return
+    const wasFollowing = followedChannels.has(channelKey)
+    setFollowedChannels((prev) => {
+      const next = new Set(prev)
+      if (wasFollowing) next.delete(channelKey)
+      else next.add(channelKey)
+      return next
+    })
+    try {
+      if (wasFollowing) await (rpc as any).unsubscribeChannel({ channelKey })
+      else await (rpc as any).subscribeChannel({ channelKey })
+    } catch (err) {
+      console.log('[VerticalDiscovery] Follow toggle failed:', (err as any)?.message || err)
+      // Revert optimistic update on failure.
+      setFollowedChannels((prev) => {
+        const next = new Set(prev)
+        if (wasFollowing) next.add(channelKey)
+        else next.delete(channelKey)
+        return next
+      })
+    }
+  }, [rpc, followedChannels])
+
   const openDetails = useCallback((video: VideoData) => {
     router.push({
       pathname: '/video/[id]',
@@ -700,6 +741,7 @@ export default function VerticalDiscoveryScreen() {
           renderItem={({ item: video, index }) => {
             const cardKey = `${video.channelKey}:${video.id}`
             const isActiveShort = activeVideoKey === cardKey
+            const isFollowing = video.channelKey ? followedChannels.has(video.channelKey) : false
             const actionMetrics = getShortsActionMetrics(video)
             const statusText = shortsPlaybackMessage && shortsPlaybackMessage.key === cardKey
               ? shortsPlaybackMessage.text
@@ -730,8 +772,16 @@ export default function VerticalDiscoveryScreen() {
                       <Text style={styles.videoDescription} numberOfLines={2}>{video.description}</Text>
                     ) : null}
                   </Pressable>
-                  <Pressable onPress={() => openChannel(video)} style={styles.shortsFollowButton} accessibilityRole="button" accessibilityLabel="Open channel">
-                    <Text style={styles.shortsFollowText}>Follow</Text>
+                  <Pressable
+                    onPress={() => toggleFollow(video)}
+                    disabled={!video.channelKey}
+                    style={[styles.shortsFollowButton, isFollowing && styles.shortsFollowButtonActive]}
+                    accessibilityRole="button"
+                    accessibilityLabel={isFollowing ? 'Unfollow channel' : 'Follow channel'}
+                  >
+                    <Text style={[styles.shortsFollowText, isFollowing && styles.shortsFollowTextActive]}>
+                      {isFollowing ? 'Following' : 'Follow'}
+                    </Text>
                   </Pressable>
                   <Pressable onPress={() => openDetails(video)} style={styles.shortsOverflowButton} accessibilityRole="button" accessibilityLabel="Open video options">
                     <Feather name="more-horizontal" color="#fff" size={21} />
@@ -741,19 +791,27 @@ export default function VerticalDiscoveryScreen() {
                 <View style={styles.shortsActionRow}>
                   <Pressable onPress={() => openComments(video)} style={styles.shortsActionCluster} accessibilityLabel="Open Shorts comments">
                     <Feather name="message-circle" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.comments)}</Text>
+                    {actionMetrics.comments > 0 ? (
+                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.comments)}</Text>
+                    ) : null}
                   </Pressable>
                   <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open video details">
                     <Feather name="repeat" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.reposts)}</Text>
+                    {actionMetrics.reposts > 0 ? (
+                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.reposts)}</Text>
+                    ) : null}
                   </Pressable>
                   <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open reactions">
                     <Feather name="heart" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.likes)}</Text>
+                    {actionMetrics.likes > 0 ? (
+                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.likes)}</Text>
+                    ) : null}
                   </Pressable>
                   <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open video analytics">
                     <Feather name="bar-chart-2" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.views)}</Text>
+                    {actionMetrics.views > 0 ? (
+                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.views)}</Text>
+                    ) : null}
                   </Pressable>
                   <Pressable onPress={() => openDetails(video)} style={styles.shortsIconAction} accessibilityLabel="Bookmark video">
                     <Feather name="bookmark" color="#f4f7fb" size={21} />
@@ -1013,11 +1071,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#f6f9fb',
     flexShrink: 0,
   },
+  shortsFollowButtonActive: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.42)',
+  },
   shortsFollowText: {
     color: '#061018',
     fontSize: 13,
     lineHeight: 16,
     fontWeight: '800',
+  },
+  shortsFollowTextActive: {
+    color: '#f6f9fb',
   },
   shortsOverflowButton: {
     width: 32,

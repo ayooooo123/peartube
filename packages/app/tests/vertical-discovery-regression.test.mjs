@@ -92,6 +92,27 @@ test('vertical discovery uses X-style content chrome without browser chrome', ()
   assert.doesNotMatch(source, /bottomActionButton/, 'large pre-redesign action buttons should be removed')
 })
 
+test('vertical discovery wires the Follow button to real subscription state', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /const toggleFollow = useCallback/, 'shorts should expose a real follow toggle, not a channel-open shim')
+  assert.match(source, /onPress=\{\(\) => toggleFollow\(video\)\}/, 'the follow button should call the follow toggle')
+  assert.match(source, /\.subscribeChannel\(\{ channelKey \}\)/, 'following should subscribe to the channel over RPC')
+  assert.match(source, /\.unsubscribeChannel\(\{ channelKey \}\)/, 'unfollowing should unsubscribe from the channel over RPC')
+  assert.match(source, /getSubscriptions/, 'follow state should hydrate from existing subscriptions')
+  assert.match(source, /isFollowing \? 'Following' : 'Follow'/, 'the follow button label should reflect subscription state')
+  assert.doesNotMatch(source, /style=\{styles\.shortsFollowButton\} accessibilityRole="button" accessibilityLabel="Open channel"/, 'the follow button should no longer be a mislabeled channel-open shim')
+})
+
+test('vertical discovery hides empty action counts instead of showing literal zeros', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /actionMetrics\.comments > 0 \? \(/, 'comment count should only render when present')
+  assert.match(source, /actionMetrics\.likes > 0 \? \(/, 'like count should only render when present')
+  assert.match(source, /actionMetrics\.reposts > 0 \? \(/, 'repost count should only render when present')
+  assert.match(source, /actionMetrics\.views > 0 \? \(/, 'view count should only render when present')
+})
+
 test('vertical discovery exposes X-style top and playback status affordances', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 

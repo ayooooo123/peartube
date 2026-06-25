@@ -212,6 +212,51 @@ test('preparePlayback forwards direct blob playback fields to the backend api', 
   ]])
 })
 
+test('preparePlayback skips Android compat probing for direct PearTube blob URLs', async () => {
+  const backend = {}
+  const deps = createDeps({
+    player: 'exoplayer',
+    castTranscoder: {
+      async startCompatTranscode() {
+        throw new Error('Android direct blob playback must not run the compat probe')
+      },
+      getCastHlsUrl() {
+        throw new Error('Android direct blob playback must not request HLS')
+      },
+    },
+    api: {
+      async preparePlayback() {
+        return {
+          url: 'http://127.0.0.1:60023/?key=abc&blob=def&type=video%2Fmp4&token=redacted',
+          stats: {
+            status: 'connecting',
+            progress: 0,
+          },
+        }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const result = await backend.preparePlayback({
+    channelKey: 'channel-key',
+    videoId: 'videos/demo.mp4',
+    publicBeeKey: 'public-bee-key',
+    blobId: 'blob-id',
+    blobsCoreKey: 'blobs-core-key',
+    mimeType: 'video/mp4',
+  })
+
+  assert.deepEqual(result, {
+    url: 'http://127.0.0.1:60023/?key=abc&blob=def&type=video%2Fmp4&token=redacted',
+    stats: {
+      status: 'connecting',
+      progress: 0,
+    },
+  })
+})
+
 test('feed handlers use getPublicFeed for both public and canonical RPC names', async () => {
   const backend = {}
   const calls = []

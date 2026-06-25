@@ -18,7 +18,7 @@ import { useVideoPlayerActions, useVideoPlayerSession, VideoStats } from '@/lib/
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
-import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 
 // HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
@@ -140,10 +140,12 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const videoPeerCount = stats?.peerCount ?? 0
   const downloadSpeedValue = Number(stats?.speedMBps ?? 0)
   const uploadSpeedValue = Number(stats?.uploadSpeedMBps ?? 0)
+  const sessionDownloadedBytes = Number(stats?.downloadedBytes ?? 0)
+  const sessionDownloadedBlocks = Number(stats?.downloadedBlocks ?? 0)
   const hasPlayableProgress = Boolean(
-    Number(stats?.downloadedBytes ?? 0) > 0 ||
-    Number(stats?.downloadedBlocks ?? 0) > 0 ||
-    Number(stats?.progress ?? 0) > 0
+    sessionDownloadedBytes > 0 ||
+    sessionDownloadedBlocks > 0 ||
+    downloadSpeedValue > 0
   )
   const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
   const uploadSpeedText = Number.isFinite(uploadSpeedValue) ? uploadSpeedValue.toFixed(2) : '0.00'
@@ -508,30 +510,6 @@ function MobileVideoPlayerScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
-      if (cachedUrl) {
-        if (!mountedRef.current || loadGenerationRef.current !== generation) return
-        loadAndPlayVideo(videoData, cachedUrl)
-        if (Platform.OS !== 'web' || isPear) {
-          // Re-resolve in the background to refresh the cache entry / swarm
-          // join and pull fresh stats.
-          void rpc.preparePlayback(playbackRequest).then((result: any) => {
-            if (!mountedRef.current || loadGenerationRef.current !== generation) return
-            if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
-            if (result?.stats) {
-              setLocalStats(result.stats as VideoStats)
-            }
-            if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
-              scheduleStatsPolling(0)
-            }
-          }).catch((err: any) => {
-            console.error('[VideoPlayer] preparePlayback failed:', err)
-            if (!mountedRef.current || loadGenerationRef.current !== generation) return
-            scheduleStatsPolling(0)
-          })
-        }
-        return
-      }
       // Resolve-and-stream: get the blob-server URL and hand it to the player,
       // which fetches byte ranges on demand. No prewarming.
       const result = await rpc.preparePlayback(playbackRequest)

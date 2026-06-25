@@ -792,8 +792,9 @@ export default function HomeScreen() {
     })
   }, [feedEntries, videos, identity?.driveKey])
 
-  // Seed Discover immediately from live manifest previews so the first render
-  // can show provably playable remote cards before per-channel hydration finishes.
+  // Seed Discover immediately from live manifest previews. Direct blob refs are
+  // enough to open playback; the player path will prefetch/buffer the first
+  // bytes instead of hiding discovered videos until local byte proof exists.
   useEffect(() => {
     const previewVideos = getFeedPreviewVideos(
       feedEntries,
@@ -1395,7 +1396,7 @@ export default function HomeScreen() {
           : state === 'cached-fallback'
             ? 'Showing what we saw last time'
             : state === 'hydrating'
-              ? 'Almost there…'
+              ? 'Loading video previews'
               : 'Listening for the swarm'
       const detail = state === 'permission-degraded'
         ? 'Allow Nearby devices in system settings, then refresh.'
@@ -1404,7 +1405,7 @@ export default function HomeScreen() {
           : state === 'cached-fallback'
             ? 'No peers are reachable right now — cached videos stay available.'
             : state === 'hydrating'
-              ? 'Found channels nearby; fetching their videos now.'
+              ? 'Feed entries detected; resolving video preview metadata.'
               : 'No channels have appeared yet. Keep the app open or tap refresh — someone will show up.'
 
       return (

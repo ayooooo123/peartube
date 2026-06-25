@@ -142,8 +142,8 @@ test('Home Discover separates feed counts from peers and does not call hydrating
   assert.match(source, /Feed: \{displayFeedEntries\}/, 'Home should show feed entries as Feed, not overload Channels or Peers')
   assert.match(source, /Channels: \{displayChannels\}/, 'Home should still show visible/discovered channel count separately')
   assert.doesNotMatch(source, /5 feed\/channel signals detected; waiting for playable previews/, 'Home should not show stale feed-channel signal copy from older builds')
-  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading playable previews'/, 'hydrating feed entries should not be labeled as looking for peers')
-  assert.match(source, /feed entries detected; resolving playable video previews\./, 'hydrating detail should mention feed entries being resolved')
+  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading video previews'/, 'hydrating feed entries should not be labeled as looking for peers')
+  assert.match(source, /Feed entries detected; resolving video preview metadata\./, 'hydrating detail should mention feed entries being resolved')
 })
 
 test('Android registers network discovery as a legacy BaseReactPackage so release new-architecture builds expose NativeModules.PeartubeNetworkDiscovery', () => {

@@ -115,11 +115,13 @@ function containerNeedsRemux(policy, container) {
  * @param {string|null} [input.container]
  * @param {string|null} [input.videoProfile]
  * @param {number} [input.videoLevel]
+ * @param {boolean} [input.needsRemux]
+ * @param {string} [input.remuxReason]
  * @returns {{ mode: 'direct'|'remux'|'audio-only'|'full',
  *            needsVideoTranscode: boolean, needsAudioTranscode: boolean,
  *            needsRemux: boolean, reason: string, player: string }}
  */
-export function decidePlayback({ player, videoCodec, audioCodec, container, videoProfile, videoLevel } = {}) {
+export function decidePlayback({ player, videoCodec, audioCodec, container, videoProfile, videoLevel, needsRemux: probeNeedsRemux = false, remuxReason = '' } = {}) {
   const policy = PLAYER_POLICIES[player]
   // Unknown player → don't second-guess; play directly.
   if (!policy) {
@@ -164,7 +166,10 @@ export function decidePlayback({ player, videoCodec, audioCodec, container, vide
   // Container remux only matters when we're otherwise stream-copying — a video
   // or audio transcode already rewrites into the output (HLS/fMP4) container.
   let needsRemux = false
-  if (!needsVideoTranscode && !needsAudioTranscode && containerNeedsRemux(policy, container)) {
+  if (!needsVideoTranscode && !needsAudioTranscode && probeNeedsRemux) {
+    needsRemux = true
+    reasons.push(remuxReason || `source needs remux for ${player}`)
+  } else if (!needsVideoTranscode && !needsAudioTranscode && containerNeedsRemux(policy, container)) {
     needsRemux = true
     reasons.push(`container '${container}' needs remux for ${player}`)
   }

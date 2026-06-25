@@ -97,6 +97,28 @@ test('startCompatTranscode throwing falls back to direct url', async () => {
   assert.equal(r.url, DIRECT)
 })
 
+test('startCompatTranscode timeout falls back to direct url', async () => {
+  const t = mockTranscoder()
+  let startCalled = false
+  t.startCompatTranscode = () => {
+    startCalled = true
+    return new Promise(() => {})
+  }
+
+  const startedAt = Date.now()
+  const r = await resolveCompatPlaybackUrl({
+    player: 'exoplayer',
+    directUrl: DIRECT,
+    castTranscoder: t,
+    startTimeoutMs: 25,
+  })
+
+  assert.equal(startCalled, true)
+  assert.equal(r.transcoded, false)
+  assert.equal(r.url, DIRECT)
+  assert.ok(Date.now() - startedAt < 500)
+})
+
 test('transcode error status still yields the HLS url (best-effort)', async () => {
   const t = mockTranscoder({ status: { status: 'error' } })
   const r = await resolveCompatPlaybackUrl({ player: 'avplayer', directUrl: DIRECT, castTranscoder: t, readyTimeoutMs: 500 })

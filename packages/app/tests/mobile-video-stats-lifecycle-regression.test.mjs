@@ -55,13 +55,14 @@ test('mobile watch page does not keep saying reaching out once playback has byte
   )
 })
 
-test('backend preparePlayback initializes stats for direct on-demand blob playback', () => {
+test('backend preparePlayback waits for bounded playback prefetch before URL handoff', () => {
   const source = read('../backend/src/api.js')
+  const transcoderSource = read('../backend/src/transcode/transcoder.mjs')
 
   assert.match(
     source,
     /async function startOnDemandPlaybackStats/,
-    'direct blob playback should attach lightweight stats tracking without prefetching',
+    'direct blob playback should keep a lightweight stats fallback when startup prefetch is unavailable',
   )
   assert.match(
     source,
@@ -70,8 +71,18 @@ test('backend preparePlayback initializes stats for direct on-demand blob playba
   )
   assert.match(
     source,
-    /const playbackStats = await startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
-    'preparePlayback should initialize stats before returning to mobile',
+    /await withTimeout\(\s*prefetchPromise,\s*PLAYBACK_HANDOFF_PREFETCH_TIMEOUT_MS,/,
+    'preparePlayback should wait briefly for the playback prefetch startup gate before handing off the URL',
+  )
+  assert.match(
+    source,
+    /const onDemandStats = await startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
+    'preparePlayback should keep direct playback stats while startup prefetch runs',
+  )
+  assert.match(
+    transcoderSource,
+    /HTTP_CONTENT_LENGTH_TIMEOUT_MS/,
+    'compat content-length probing should be bounded so it cannot block mobile playback',
   )
 })
 

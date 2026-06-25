@@ -1,7 +1,7 @@
 /* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import http from 'bare-http1'
 
-import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'
+import { probeMedia, loadBareFfmpeg, getBareFfmpeg } from './transcoder.mjs'
 import { decidePlayback } from './playback-compat.mjs'
 import { safeDestroy, safeUnref, copyCodecParameters } from './ffmpeg-utils.mjs'
 import { TempFileReader } from './temp-file-reader.mjs'
@@ -115,6 +115,9 @@ function ensureFfmpegLoaded() {
     if (!ok) {
       throw new Error('bare-ffmpeg not available')
     }
+    ffmpeg = getBareFfmpeg()
+    if (ffmpeg) return ffmpeg
+
     let mod = null
     if (typeof require === 'function') {
       try {
@@ -1302,6 +1305,8 @@ async function startCompatTranscode(sourceUrl, options = {}) {
       container: probeResult.container,
       videoProfile: probeResult.videoProfile,
       videoLevel: probeResult.videoLevel,
+      needsRemux: probeResult.needsRemux,
+      remuxReason: probeResult.reason,
     })
 
     if (decision.mode === 'direct' && !force) {

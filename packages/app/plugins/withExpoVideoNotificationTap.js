@@ -35,6 +35,7 @@ const RELATIVE_DATA_SOURCE_PATH = path.join(
 
 const MARKER = 'PearTube: open the app when the media notification is tapped'
 const DATA_SOURCE_MARKER = 'PearTube: local blob-server streams use Media3 no-timeout HTTP'
+const DATA_SOURCE_RANGE_MARKER = 'PearTube: local blob-server applying Range'
 const EXPO_VIDEO_SOURCE_MARKER = 'PearTube: compile patched expo-video Android sources'
 const EXPO_VIDEO_SUBSTITUTION_MARKER = 'PearTube: use patched expo-video project for Android playback'
 
@@ -186,12 +187,13 @@ private class PearTubeLoggingDataSource(
   }
 
   override fun open(dataSpec: DataSpec): Long {
+    val requestSpec = withPearTubeBlobRangeHeader(dataSpec)
     Log.i(
       "PearTubeVideo",
-      "PearTube: local blob-server open: uri=\${redactPearTubeUriForLog(dataSpec.uri)} position=\${dataSpec.position} length=\${dataSpec.length}"
+      "PearTube: local blob-server open: uri=\${redactPearTubeUriForLog(dataSpec.uri)} position=\${dataSpec.position} length=\${dataSpec.length} range=\${requestSpec.httpRequestHeaders["Range"] ?: "none"}"
     )
     return try {
-      val result = upstream.open(dataSpec)
+      val result = upstream.open(requestSpec)
       opened = true
       Log.i(
         "PearTubeVideo",
@@ -240,6 +242,17 @@ private class PearTubeLoggingDataSource(
   }
 }
 
+private fun withPearTubeBlobRangeHeader(dataSpec: DataSpec): DataSpec {
+  if (dataSpec.httpMethod != DataSpec.HTTP_METHOD_GET) return dataSpec
+  if (dataSpec.httpRequestHeaders.containsKey("Range")) return dataSpec
+
+  val rangeStart = dataSpec.position.coerceAtLeast(0L)
+  val rangeEnd = if (dataSpec.length > 0) rangeStart + dataSpec.length - 1 else -1L
+  val rangeValue = if (rangeEnd >= rangeStart) "bytes=$rangeStart-$rangeEnd" else "bytes=$rangeStart-"
+  Log.i("PearTubeVideo", "${DATA_SOURCE_RANGE_MARKER}: $rangeValue")
+  return dataSpec.withAdditionalHeaders(mapOf("Range" to rangeValue))
+}
+
 private fun redactPearTubeUriForLog(uri: Uri?): String {
   if (uri == null) return "null"
   val builder = uri.buildUpon().clearQuery()
@@ -262,6 +275,44 @@ private fun redactPearTubeUriForLog(uri: Uri?): String {
         return { changed: false, source, missing: true }
       }
       next = next.replace(okHttpFactoryAnchor, `${factory}$&`)
+    }
+  }
+
+  if (next.includes('private class PearTubeLoggingDataSource(') && !next.includes('withPearTubeBlobRangeHeader(dataSpec)')) {
+    next = next
+      .replace(
+        '  override fun open(dataSpec: DataSpec): Long {\n    Log.i(',
+        '  override fun open(dataSpec: DataSpec): Long {\n    val requestSpec = withPearTubeBlobRangeHeader(dataSpec)\n    Log.i(',
+      )
+      .replace(
+        '"PearTube: local blob-server open: uri=${redactPearTubeUriForLog(dataSpec.uri)} position=${dataSpec.position} length=${dataSpec.length}"',
+        '"PearTube: local blob-server open: uri=${redactPearTubeUriForLog(dataSpec.uri)} position=${dataSpec.position} length=${dataSpec.length} range=${requestSpec.httpRequestHeaders["Range"] ?: "none"}"',
+      )
+      .replace(
+        'val result = upstream.open(dataSpec)',
+        'val result = upstream.open(requestSpec)',
+      )
+  }
+
+  const rangeHelper = `
+private fun withPearTubeBlobRangeHeader(dataSpec: DataSpec): DataSpec {
+  if (dataSpec.httpMethod != DataSpec.HTTP_METHOD_GET) return dataSpec
+  if (dataSpec.httpRequestHeaders.containsKey("Range")) return dataSpec
+
+  val rangeStart = dataSpec.position.coerceAtLeast(0L)
+  val rangeEnd = if (dataSpec.length > 0) rangeStart + dataSpec.length - 1 else -1L
+  val rangeValue = if (rangeEnd >= rangeStart) "bytes=$rangeStart-$rangeEnd" else "bytes=$rangeStart-"
+  Log.i("PearTubeVideo", "${DATA_SOURCE_RANGE_MARKER}: $rangeValue")
+  return dataSpec.withAdditionalHeaders(mapOf("Range" to rangeValue))
+}
+`
+
+  if (next.includes('private class PearTubeLoggingDataSource(') && !next.includes('fun withPearTubeBlobRangeHeader(')) {
+    const rangeAnchor = '\nprivate fun redactPearTubeUriForLog(uri: Uri?): String {'
+    if (next.includes(rangeAnchor)) {
+      next = next.replace(rangeAnchor, `${rangeHelper}${rangeAnchor}`)
+    } else {
+      next = `${next.trimEnd()}\n${rangeHelper}`
     }
   }
 

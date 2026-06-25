@@ -24,11 +24,18 @@ export function isFeedVideoPlaybackReady(video, identityDriveKey) {
   return (video?.byteAvailability || video?.availability) === 'playable'
 }
 
+export function isFeedVideoStreamAddressable(video, identityDriveKey) {
+  const channelKey = video?.channelKey || video?.driveKey || null
+  if (identityDriveKey && channelKey === identityDriveKey) return true
+  if (hasDirectBlobRef(video)) return true
+  return (video?.byteAvailability || video?.availability) === 'playable'
+}
+
 function hasRenderableDirectFeedPreview(entry) {
   return Boolean(
     entry?.publicBeeKey &&
     Array.isArray(entry?.previewVideos) &&
-    entry.previewVideos.some((video) => hasDirectBlobRef(video) && isFeedVideoPlaybackReady({
+    entry.previewVideos.some((video) => hasDirectBlobRef(video) && isFeedVideoStreamAddressable({
       ...video,
       channelKey: entry?.channelKey || entry?.driveKey,
     }))
@@ -186,7 +193,7 @@ export function selectFeedEntryVideosWithPreviewFallback(loadedVideos, previewFa
 }
 
 export function shouldRenderFeedVideo({ video, identityDriveKey }) {
-  return isFeedVideoPlaybackReady(video, identityDriveKey)
+  return isFeedVideoStreamAddressable(video, identityDriveKey)
 }
 
 export function isConfirmedFeedHydrationResult({ entry, resolved, videos = [] }) {

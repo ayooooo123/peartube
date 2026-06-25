@@ -53,6 +53,29 @@ test('blob server startup does not await listen before storage init can finish',
   assert.match(blobServerBody, /blobServerListenPromise\s*\.then\(/)
 })
 
+test('blob server video streams use no-timeout core sessions', () => {
+  assert.match(
+    storageSource,
+    /function wrapStoreForBlobServerStreaming\(store\)/,
+    'storage should define a BlobServer-specific store facade',
+  )
+  assert.match(
+    storageSource,
+    /wrapStoreWithTimeout\(store, defaultTimeout\);[\s\S]*?const blobStore = wrapStoreForBlobServerStreaming\(store\);/,
+    'shared backend store should keep finite timeouts while BlobServer gets its own facade',
+  )
+  assert.match(
+    storageSource,
+    /blobServer = new BlobServer\(blobStore,/,
+    'BlobServer should use the no-timeout facade',
+  )
+  assert.match(
+    storageSource,
+    /timeout: 0/,
+    'BlobServer core sessions should disable Hypercore request timeouts',
+  )
+})
+
 test('storage joins the PearTube network topic immediately without DHT bootstrap gates', () => {
   assert.doesNotMatch(storageSource, /function isSwarmDiscoveryReady/)
   assert.doesNotMatch(storageSource, /waitForSwarmDiscoveryReady\(swarm\)/)

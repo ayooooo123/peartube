@@ -1124,15 +1124,29 @@ export class PublicFeed {
     return Array.from(ids)
   }
 
-  promoteAvailabilityHintPeers(peerIds = [], topic = null) {
+  _swarmPeerInfo(keyHex, publicKey = null) {
+    const peers = this.swarm?.peers
+    let peerInfo = peers && typeof peers.get === 'function' ? peers.get(keyHex) : null
+    if (!peerInfo && peers && typeof peers.get === 'function' && publicKey) {
+      try { peerInfo = peers.get(publicKey) } catch { peerInfo = null }
+    }
+    return peerInfo || null
+  }
+
+  promoteAvailabilityHintPeers(peerIds = [], topic = null, options = {}) {
     const ids = Array.isArray(peerIds) ? peerIds : [peerIds]
     const promoted = []
+    const direct = options?.direct === true
+    const reason = typeof options?.reason === 'string' && options.reason
+      ? options.reason
+      : 'promoted-availability-hint-peer'
     for (const id of ids) {
       const keyHex = typeof id === 'string' && /^[a-f0-9]{64}$/i.test(id) ? id.toLowerCase() : null
       if (!keyHex) continue
       const publicKey = this._discoveredPeers.get(keyHex) || b4a.from(keyHex, 'hex')
       const hint = this._discoveredPeerHints.get(keyHex)
       const peer = hint?.peer || { publicKey, relayAddresses: hint?.relayAddresses || [] }
+      const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses : []
       let peerInfo = null
       try {
         peerInfo = swarmRememberPeer(this.swarm, peer, topic)
@@ -1150,17 +1164,39 @@ export class PublicFeed {
           if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
         }
       }
+      if (direct && this.swarm && typeof this.swarm.joinPeer === 'function') {
+        try {
+          const restoreRelayAddresses = relayAddresses.length > 0
+            ? relayAddresses
+            : Array.isArray(peerInfo?.relayAddresses) && peerInfo.relayAddresses.length > 0
+              ? peerInfo.relayAddresses
+              : []
+          this.swarm.joinPeer(publicKey)
+          peerInfo = this._swarmPeerInfo(keyHex, publicKey) || peerInfo
+          if (
+            restoreRelayAddresses.length > 0 &&
+            peerInfo &&
+            (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)
+          ) {
+            peerInfo.relayAddresses = restoreRelayAddresses
+          }
+        } catch (err) {
+          this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+          if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+        }
+      }
       this._directPeerDialStats.attempted++
       this._directPeerDialStats.lastDialedAt = this._now()
       this._directPeerDialStats.lastReason = this._hasActivePeerConnection(keyHex, publicKey)
         ? 'already-connected-peer'
-        : 'promoted-availability-hint-peer'
+        : reason
       promoted.push({
         key: keyHex,
         connected: this._hasActivePeerConnection(keyHex, publicKey),
-        relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0,
+        relayAddresses: relayAddresses.length,
         explicit: Boolean(peerInfo?.explicit),
         synthetic: Boolean(peerInfo?.synthetic),
+        direct,
       })
     }
     return promoted

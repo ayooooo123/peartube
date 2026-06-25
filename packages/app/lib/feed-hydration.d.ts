@@ -1,6 +1,7 @@
 export function hasDirectBlobRef(video?: any): boolean
 export function hasDirectBlobReadinessProof(video?: any): boolean
 export function isFeedVideoPlaybackReady(video?: any, identityDriveKey?: string | null): boolean
+export function isFeedVideoStreamAddressable(video?: any, identityDriveKey?: string | null): boolean
 export function getMissingChannelMetaRequests(feedEntries: any[], channelMeta: Record<string, any>, limit?: number): any[]
 export function getVisibleSeededFeedEntries(feedEntries: any[], limit?: number): any[]
 export function getFeedVideoLoadEntries(feedEntries: any[], limit?: number): any[]

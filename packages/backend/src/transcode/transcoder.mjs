@@ -15,6 +15,7 @@ import fs from 'bare-fs'
 import path from 'bare-path'
 import os from 'bare-os'
 import http from 'bare-http1'
+import * as bareFfmpegStaticModule from 'bare-ffmpeg'
 
 import {
   safeDestroy,
@@ -32,6 +33,7 @@ console.log('[Transcoder] Module loaded')
 // HLS segment duration in seconds (low latency)
 const HLS_SEGMENT_DURATION = 2
 const HLS_MAX_SEGMENTS = 12
+const HTTP_CONTENT_LENGTH_TIMEOUT_MS = 3000
 
 // Chromecast supported codecs
 const CHROMECAST_VIDEO_CODECS = ['h264', 'avc1', 'vp8', 'vp9', 'av1']
@@ -63,6 +65,10 @@ let ffmpeg = null
 let ffmpegLoadError = null
 let ffmpegLoadPromise = null
 
+function unwrapBareFfmpegModule(mod) {
+  return mod?.default ?? mod
+}
+
 /**
  * Load bare-ffmpeg module
  */
@@ -74,11 +80,23 @@ export async function loadBareFfmpeg() {
 
   ffmpegLoadPromise = (async () => {
     let lastError
+    try {
+      ffmpeg = unwrapBareFfmpegModule(bareFfmpegStaticModule)
+      if (ffmpeg) {
+        console.log('[Transcoder] bare-ffmpeg loaded from static import')
+        console.log('[Transcoder] ffmpeg exports:', Object.keys(ffmpeg || {}))
+        return true
+      }
+    } catch (err) {
+      console.warn('[Transcoder] static import binding failed:', err?.message)
+      lastError = err
+    }
+
     console.log('[Transcoder] Attempting to load bare-ffmpeg via require...')
     if (typeof require === 'function') {
       try {
         const mod = require('bare-ffmpeg')
-        ffmpeg = mod?.default ?? mod
+        ffmpeg = unwrapBareFfmpegModule(mod)
         console.log('[Transcoder] bare-ffmpeg loaded successfully')
         console.log('[Transcoder] ffmpeg exports:', Object.keys(ffmpeg || {}))
         return true
@@ -93,7 +111,7 @@ export async function loadBareFfmpeg() {
     console.log('[Transcoder] Attempting to load bare-ffmpeg via dynamic import...')
     try {
       const mod = await import('bare-ffmpeg')
-      ffmpeg = mod?.default ?? mod
+      ffmpeg = unwrapBareFfmpegModule(mod)
       console.log('[Transcoder] bare-ffmpeg loaded via dynamic import')
       console.log('[Transcoder] ffmpeg exports:', Object.keys(ffmpeg || {}))
       return true
@@ -114,6 +132,10 @@ export async function loadBareFfmpeg() {
  */
 export function isAvailable() {
   return ffmpeg !== null
+}
+
+export function getBareFfmpeg() {
+  return ffmpeg
 }
 
 // copyCodecParameters imported from ffmpeg-utils.mjs
@@ -349,7 +371,47 @@ async function getHttpContentLength(url) {
     httpClient = mod?.default || mod
   }
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    let settled = false
+    let timeout = null
+    let req = null
+    let headReq = null
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      resolve(value)
+    }
+    const abortProbe = (reason) => {
+      if (settled) return
+      console.warn('[Transcoder] Content length probe timed out:', reason)
+      finish(0)
+      safeDestroy(req)
+      safeDestroy(headReq)
+    }
+    const startHeadRequest = () => {
+      if (settled) return
+      console.log('[Transcoder] Range request failed, trying HEAD...')
+      const headOptions = {
+        method: 'HEAD',
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+      }
+
+      headReq = httpClient.request(headOptions, (headRes) => {
+        const headLength = parseInt(headRes.headers['content-length'], 10) || 0
+        console.log('[Transcoder] Got content length from HEAD:', headLength)
+        finish(headLength)
+      })
+      headReq.on('error', () => finish(0))
+      headReq.end()
+    }
+
+    timeout = setTimeout(() => {
+      abortProbe(`${HTTP_CONTENT_LENGTH_TIMEOUT_MS}ms`)
+    }, HTTP_CONTENT_LENGTH_TIMEOUT_MS)
+
     // First try GET with Range header - more reliable than HEAD
     const options = {
       method: 'GET',
@@ -363,7 +425,7 @@ async function getHttpContentLength(url) {
 
     console.log('[Transcoder] Getting content length via Range request...')
 
-    const req = httpClient.request(options, (res) => {
+    req = httpClient.request(options, (res) => {
       // Check Content-Range header for total size (e.g., "bytes 0-0/1234567")
       const contentRange = res.headers['content-range']
       let resolved = false
@@ -376,8 +438,9 @@ async function getHttpContentLength(url) {
           resolved = true
           // Consume the response body before resolving (important to free the connection)
           res.on('data', () => {})
-          res.on('end', () => resolve(size))
-          res.on('error', () => resolve(size))
+          res.on('end', () => {})
+          res.on('error', () => {})
+          finish(size)
           return
         }
       }
@@ -387,35 +450,21 @@ async function getHttpContentLength(url) {
       if (contentLength > 0 && !resolved) {
         console.log('[Transcoder] Got content length from Content-Length:', contentLength)
         res.on('data', () => {})
-        res.on('end', () => resolve(contentLength))
-        res.on('error', () => resolve(contentLength))
+        res.on('end', () => {})
+        res.on('error', () => {})
+        finish(contentLength)
         return
       }
 
       // Consume body then try HEAD request as last resort
       res.on('data', () => {})
-      res.on('end', () => {
-        console.log('[Transcoder] Range request failed, trying HEAD...')
-        const headOptions = {
-          method: 'HEAD',
-          hostname: parsedUrl.hostname,
-          port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-          path: parsedUrl.pathname + parsedUrl.search,
-        }
-
-        const headReq = httpClient.request(headOptions, (headRes) => {
-          const headLength = parseInt(headRes.headers['content-length'], 10) || 0
-          console.log('[Transcoder] Got content length from HEAD:', headLength)
-          resolve(headLength)
-        })
-        headReq.on('error', () => resolve(0))
-        headReq.end()
-      })
+      res.on('end', startHeadRequest)
+      res.on('error', () => finish(0))
     })
 
     req.on('error', (err) => {
       console.error('[Transcoder] Content length request failed:', err.message)
-      reject(err)
+      finish(0)
     })
     req.end()
   })

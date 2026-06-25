@@ -165,7 +165,7 @@ test('native player compat is enabled from launch player with an opt-out env fla
   assert.doesNotMatch(source, /PEARTUBE_AVPLAYER_COMPAT\) === '1'/)
   assert.match(source, /!nativePlayerCompatDisabled && launchOptions\?\.player/)
   assert.match(runtimeSource, /new Set\(\['avplayer', 'exoplayer'\]\)/)
-  assert.doesNotMatch(handlersSource, /player === 'exoplayer' && isLocalBlobServerUrl\(prepared\.url\)/)
+  assert.match(handlersSource, /player === 'exoplayer' && isPearTubeLoopbackBlobUrl\(url\)/)
   assert.doesNotMatch(handlersSource, /forceMode: force \? 'remux' : null/)
   assert.doesNotMatch(handlersSource, /forceMode:\s*'remux'/)
 })

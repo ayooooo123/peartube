@@ -40,9 +40,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const storageSource = readFileSync(resolve(__dirname, '../src/storage.js'), 'utf8')
 
 test('parseHttpByteRange normalizes closed and open HTTP byte ranges', (t) => {
-  t.alike(parseHttpByteRange('bytes=65536-131071', 1048576), { start: 65536, end: 131071 })
-  t.alike(parseHttpByteRange('bytes=983040-', 1048576), { start: 983040, end: 1048575 })
-  t.alike(parseHttpByteRange('bytes=-65536', 1048576), { start: 983040, end: 1048575 })
+  t.alike(parseHttpByteRange('bytes=65536-131071', 1048576), { start: 65536, end: 131071, openEnded: false })
+  t.alike(parseHttpByteRange('bytes=983040-', 1048576), { start: 983040, end: 1048575, openEnded: true })
+  t.alike(parseHttpByteRange('bytes=-65536', 1048576), { start: 983040, end: 1048575, openEnded: false })
   t.is(parseHttpByteRange('bytes=131071-65536', 1048576), null)
   t.is(parseHttpByteRange('items=0-10', 1048576), null)
 })
@@ -66,6 +66,33 @@ test('getPrioritizedBlobDownloadRange maps a seek byte range to the matching blo
   )
 })
 
+test('getPrioritizedBlobDownloadRange keeps open-ended playback ranges bounded', (t) => {
+  const blob = {
+    blockOffset: 10,
+    blockLength: 100,
+    byteOffset: 4096,
+    byteLength: 100 * 65536,
+  }
+
+  t.alike(
+    getPrioritizedBlobDownloadRange(
+      blob,
+      { start: 0, end: blob.byteLength - 1, openEnded: true },
+      { readAheadBytes: 4 * 65536 },
+    ),
+    { start: 10, end: 15, blocks: 5 },
+  )
+
+  t.alike(
+    getPrioritizedBlobDownloadRange(
+      blob,
+      { start: 90 * 65536, end: blob.byteLength - 1, openEnded: true },
+      { readAheadBytes: 4 * 65536 },
+    ),
+    { start: 100, end: 105, blocks: 5 },
+  )
+})
+
 function createRangeRequest({ method = 'GET', token = 'test-token', rangeStart = 4 * 65536, rangeEnd = (5 * 65536) - 1 } = {}) {
   const key = Buffer.from('b'.repeat(64), 'hex')
   const blob = {
@@ -79,7 +106,7 @@ function createRangeRequest({ method = 'GET', token = 'test-token', rangeStart =
     method,
     url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=${token}`,
     headers: {
-      range: `bytes=${rangeStart}-${rangeEnd}`,
+      range: `bytes=${rangeStart}-${rangeEnd == null ? '' : rangeEnd}`,
     },
   }
   return { key, blob, req }
@@ -124,6 +151,20 @@ test('prioritizeBlobServerRangeRequest starts a linear core download for the req
   // in the registry so the next range request reuses it instead of opening a
   // fresh session per request.
   t.absent(calls.some((call) => call[0] === 'close'), 'pooled core session is not closed on default cleanup')
+})
+
+test('prioritizeBlobServerRangeRequest bounds open-ended HTTP GET ranges to the read-ahead window', async (t) => {
+  releaseAllPrioritizedBlobRanges()
+  const calls = []
+  const { req } = createRangeRequest({ rangeStart: 4 * 65536, rangeEnd: null })
+  const blobServer = createMockBlobServer(calls)
+
+  const result = await prioritizeBlobServerRangeRequest(blobServer, req, { readAheadBytes: 4 * 65536 })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  t.alike(result, { start: 14, end: 19, blocks: 5 })
+  t.alike(calls.find((call) => call[0] === 'download'), ['download', { start: 14, end: 19, linear: true }])
 })
 
 test('a seek outside the active window drops the stale prioritized range and reuses the core session', async (t) => {

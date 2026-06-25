@@ -137,6 +137,7 @@ let _startupState: 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'err
 let _isTerminating = false;
 const BACKEND_WORKLET_ID = '/peartube-backend-core.bundle'
 const SHUTDOWN_TIMEOUT_MS = 4000
+const BLOB_SERVER_HEALTH_TIMEOUT_MS = 1500
 
 type BareWorkletCtor = new (name?: string) => {
   start(name: string, source: string, args?: string[]): void;
@@ -497,6 +498,74 @@ export async function isHeadlessCastActive(): Promise<boolean> {
  */
 export const events = mainBridge.events;
 
+async function probeBlobServerHealth(port?: number | null): Promise<boolean> {
+  const healthPort = Number(port || mainBridge.getBlobServerPort() || _blobServerPort || 0) || 0;
+  if (healthPort <= 0) return false;
+
+  const fetchImpl = (globalThis as any).fetch;
+  if (typeof fetchImpl !== 'function') return false;
+
+  const AbortControllerCtor = (globalThis as any).AbortController;
+  const controller = typeof AbortControllerCtor === 'function'
+    ? new AbortControllerCtor()
+    : null;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeout = setTimeout(() => {
+        try { controller?.abort?.(); } catch {}
+        resolve(null);
+      }, BLOB_SERVER_HEALTH_TIMEOUT_MS);
+    });
+
+    const response = await Promise.race([
+      fetchImpl(`http://127.0.0.1:${healthPort}/?pt_health=1`, {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: controller?.signal,
+      }),
+      timeoutPromise,
+    ]);
+
+    if (!response) return false;
+    const status = Number(response.status || 0) || 0;
+    return status >= 200 && status < 500;
+  } catch {
+    return false;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function resetStaleMainBridge(reason: string): Promise<void> {
+  console.warn('[Platform RPC] Resetting stale native bridge:', reason);
+  try {
+    await mainBridge.terminate();
+  } catch (err) {
+    console.warn('[Platform RPC] Failed to terminate stale bridge:', (err as any)?.message || err);
+  }
+  _isInitialized = false;
+  _startupState = 'idle';
+  _blobServerPort = null;
+}
+
+async function canReuseMainBridge(reason: string): Promise<boolean> {
+  if (!mainBridge.isInitialized()) return false;
+
+  const port = mainBridge.getBlobServerPort();
+  if (await probeBlobServerHealth(port)) {
+    _isInitialized = true;
+    _startupState = 'ready';
+    _blobServerPort = typeof port === 'number' ? port : _blobServerPort;
+    console.log('[Platform RPC] Reusing healthy initialized bridge:', reason);
+    return true;
+  }
+
+  await resetStaleMainBridge(reason);
+  return false;
+}
+
 /**
  * Initialize platform RPC for mobile
  *
@@ -517,17 +586,11 @@ export async function initPlatformRPC(config: {
     player?: string;
   };
 } = {}): Promise<void> {
-  if (_isInitialized && mainBridge.isInitialized()) {
-    _startupState = 'ready';
-    console.log('[Platform RPC] Already initialized');
+  if (_isInitialized && await canReuseMainBridge('already initialized')) {
     return;
   }
 
-  if (mainBridge.isInitialized()) {
-    _isInitialized = true;
-    _startupState = 'ready';
-    _blobServerPort = mainBridge.getBlobServerPort();
-    console.log('[Platform RPC] Reusing existing initialized shared bridge');
+  if (await canReuseMainBridge('shared bridge initialized')) {
     return;
   }
 

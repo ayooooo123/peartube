@@ -14,6 +14,7 @@ import {
   selectFeedEntryVideosWithPreviewFallback,
   shouldKeepFeedVideoForVisibleEntries,
   isFeedVideoPlaybackReady,
+  isFeedVideoStreamAddressable,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
 
@@ -271,7 +272,7 @@ test('shouldKeepFeedVideoForVisibleEntries keeps restored snapshot cards until t
   }), false)
 })
 
-test('feed rendering hides remote direct-blob cards while byte readiness is pending', () => {
+test('feed rendering keeps remote direct-blob cards visible while byte readiness is pending', () => {
   const directWithoutBytes = {
     channelKey: 'remote',
     availability: 'playable',
@@ -283,7 +284,8 @@ test('feed rendering hides remote direct-blob cards while byte readiness is pend
   assert.equal(shouldRenderFeedVideo({
     video: directWithoutBytes,
     identityDriveKey: 'local',
-  }), false)
+  }), true)
+  assert.equal(isFeedVideoStreamAddressable(directWithoutBytes, 'local'), true)
   assert.equal(hasDirectBlobReadinessProof(directWithoutBytes), false)
   assert.equal(isFeedVideoPlaybackReady(directWithoutBytes, 'local'), false)
 
@@ -313,6 +315,26 @@ test('feed rendering hides remote direct-blob cards while byte readiness is pend
     video: { channelKey: 'local', availability: 'unknown' },
     identityDriveKey: 'local',
   }), true)
+})
+
+test('feed preview videos render direct blob refs before local byte proof exists', () => {
+  const videos = getFeedPreviewVideos([{
+    driveKey: 'remote-a',
+    publicBeeKey: 'bb'.repeat(32),
+    previewVideos: [{
+      id: 'cold-preview',
+      title: 'Cold Preview',
+      uploadedAt: 10,
+      availability: 'unknown',
+      blobId: '0:1:0:32',
+      blobsCoreKey: 'cc'.repeat(32),
+      readyForPlayback: false,
+    }],
+  }], {}, undefined, 5)
+
+  assert.equal(videos.length, 1)
+  assert.equal(videos[0].id, 'cold-preview')
+  assert.equal(isFeedVideoPlaybackReady(videos[0], 'local'), false)
 })
 
 

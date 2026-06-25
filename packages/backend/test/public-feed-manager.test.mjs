@@ -562,6 +562,36 @@ test('PublicFeedManager direct-dials explicit availability hint peers when reque
   }
 })
 
+test('PublicFeedManager preserves relay hints when direct availability promotion uses joinPeer', () => {
+  const publicKey = b4a.alloc(32, 25)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const relayAddresses = [{ host: 'relay.test', port: 49737 }]
+  const swarm = createSwarm()
+  swarm.joinPeer = function joinPeer(publicKeyArg) {
+    this.joinPeerCalls.push(publicKeyArg)
+    this.fallbackJoinPeerCalls.push(publicKeyArg)
+    const peerInfo = this._upsertPeer(publicKeyArg, null)
+    peerInfo.explicit = true
+    peerInfo.relayAddresses = null
+  }
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
+    assert.equal(swarm.peers.has(keyHex), false)
+
+    const promoted = manager.promoteAvailabilityHintPeers([keyHex], NETWORK_TOPIC, { direct: true })
+    const peerInfo = swarm.peers.get(keyHex)
+
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(promoted.length, 1)
+    assert.equal(promoted[0].direct, true)
+    assert.deepEqual(peerInfo.relayAddresses, relayAddresses)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager has no app-level foreground peer recovery loop', () => {
   const publicKey = b4a.alloc(32, 22)
   const swarm = createSwarm()

@@ -39,7 +39,7 @@ function isSeedingAuthorizationError(err) {
 }
 
 const PLAYBACK_STARTUP_PREFETCH_TIMEOUT_MS = 10000
-const PLAYBACK_HANDOFF_PREFETCH_TIMEOUT_MS = PLAYBACK_STARTUP_PREFETCH_TIMEOUT_MS + 1000
+const PLAYBACK_STATS_HANDOFF_TIMEOUT_MS = 250
 const BLOB_PREFETCH_DISCOVERY_FLUSH_TIMEOUT_MS = 1500
 const BLOB_PREFETCH_CORE_UPDATE_TIMEOUT_MS = 2500
 const BLOB_PREFETCH_PEER_SYNC_TIMEOUT_MS = 2500
@@ -1779,11 +1779,23 @@ export function createApi({
         resolveUrl: (...args) => this.getVideoUrl(...args),
       })
       let playbackStats = null
+      const onDemandStatsPromise = startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
+        .catch((err) => {
+          console.log('[API] direct playback stats failed:', err?.message || err)
+          return null
+        })
+      let statsHandoffTimer = null
       try {
-        const onDemandStats = await startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
+        const statsHandoffTimeout = new Promise((resolve) => {
+          statsHandoffTimer = setTimeout(() => resolve(null), PLAYBACK_STATS_HANDOFF_TIMEOUT_MS)
+        })
+        const onDemandStats = await Promise.race([
+          onDemandStatsPromise,
+          statsHandoffTimeout
+        ])
         if (onDemandStats) playbackStats = this.getVideoStats(driveKey, videoPath)
-      } catch (err) {
-        console.log('[API] direct playback stats failed:', err?.message || err)
+      } catch { /* best effort */ } finally {
+        if (statsHandoffTimer) clearTimeout(statsHandoffTimer)
       }
 
       const prefetchPromise = this.prefetchVideo(driveKey, videoPath, publicBeeKey).then((prefetch) => {
@@ -1795,15 +1807,7 @@ export function createApi({
         console.log('[API] playback prefetch failed:', err?.message || err)
         return null
       })
-      try {
-        await withTimeout(
-          prefetchPromise,
-          PLAYBACK_HANDOFF_PREFETCH_TIMEOUT_MS,
-          `preparePlayback prefetch ${String(videoPath || '').slice(0, 32)}`
-        )
-      } catch (err) {
-        console.log('[API] playback prefetch handoff timed out:', err?.message || err)
-      }
+      void prefetchPromise
 
       if (!playbackStats) {
         try { playbackStats = this.getVideoStats(driveKey, videoPath) } catch { /* best effort */ }

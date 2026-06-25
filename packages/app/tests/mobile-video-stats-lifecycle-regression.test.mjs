@@ -55,7 +55,7 @@ test('mobile watch page does not keep saying reaching out once playback has byte
   )
 })
 
-test('backend preparePlayback waits for bounded playback prefetch before URL handoff', () => {
+test('backend preparePlayback keeps stats bounded and prefetch off the URL handoff path', () => {
   const source = read('../backend/src/api.js')
   const transcoderSource = read('../backend/src/transcode/transcoder.mjs')
 
@@ -71,13 +71,23 @@ test('backend preparePlayback waits for bounded playback prefetch before URL han
   )
   assert.match(
     source,
-    /await withTimeout\(\s*prefetchPromise,\s*PLAYBACK_HANDOFF_PREFETCH_TIMEOUT_MS,/,
-    'preparePlayback should wait briefly for the playback prefetch startup gate before handing off the URL',
+    /PLAYBACK_STATS_HANDOFF_TIMEOUT_MS = 250/,
+    'preparePlayback may wait only briefly for direct stats before handing off the URL',
   )
   assert.match(
     source,
-    /const onDemandStats = await startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
-    'preparePlayback should keep direct playback stats while startup prefetch runs',
+    /void prefetchPromise/,
+    'preparePlayback should start playback prefetch in the background without awaiting it',
+  )
+  assert.doesNotMatch(
+    source,
+    /await withTimeout\(\s*prefetchPromise,/,
+    'preparePlayback should not wait for the playback prefetch startup gate before handing off the URL',
+  )
+  assert.match(
+    source,
+    /startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
+    'preparePlayback should keep direct playback stats while background prefetch runs',
   )
   assert.match(
     transcoderSource,

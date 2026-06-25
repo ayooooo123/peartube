@@ -11,6 +11,7 @@
 
 import {
   decodeBlobServerBlobRef,
+  getPrioritizedBlobDownloadRange,
   parseHttpByteRange,
   prioritizeBlobServerRangeRequest,
 } from './blob-range-priority.js'
@@ -210,7 +211,8 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
       return true
     }
 
-    await syncVideoRangeRemoteLength(core, ref.blob.blockOffset)
+    const syncRange = getPrioritizedBlobDownloadRange(ref.blob, byteRange, { readAheadBytes: 0 })
+    await syncVideoRangeRemoteLength(core, syncRange?.start ?? ref.blob.blockOffset)
 
     const wroteAll = await writeBlobRange({
       core,

@@ -68,9 +68,9 @@ class MockResponse extends EventEmitter {
   }
 }
 
-function makeRangeRequest({ range = 'bytes=2-5', type = 'video/mp4' } = {}) {
+function makeRangeRequest({ range = 'bytes=2-5', type = 'video/mp4', blob: overrideBlob = null } = {}) {
   const key = Buffer.from('d'.repeat(64), 'hex')
-  const blob = {
+  const blob = overrideBlob || {
     blockOffset: 0,
     blockLength: 2,
     byteOffset: 0,
@@ -155,6 +155,71 @@ test('serveVideoRangeHttpRequest writes 206 headers before waiting for Hypercore
   t.alike(calls.filter((call) => call[0] === 'write'), [['write', 'cd'], ['write', 'ef']])
   t.ok(res.writableEnded, 'response ends after the requested range is written')
   t.ok(calls.some((call) => call[0] === '_getCore' && call[1] === key.toString('hex') && call[2] === true))
+})
+
+test('serveVideoRangeHttpRequest syncs remote length near the requested seek range', async (t) => {
+  t.teardown(() => releaseAllPrioritizedBlobRanges())
+  const calls = []
+  const byteStart = 90 * 65536
+  const blob = {
+    blockOffset: 10,
+    blockLength: 100,
+    byteOffset: 4096,
+    byteLength: 100 * 65536,
+  }
+  const { req } = makeRangeRequest({
+    blob,
+    range: `bytes=${byteStart}-${byteStart + 3}`,
+  })
+  const core = {
+    peers: [],
+    opened: true,
+    async ready() {
+      calls.push(['ready'])
+    },
+    async has(index) {
+      calls.push(['has', index])
+      return false
+    },
+    update() {
+      calls.push(['update'])
+      return Promise.resolve()
+    },
+    async seek(byteOffset) {
+      calls.push(['seek', byteOffset])
+      return [100, 0]
+    },
+    async get(index) {
+      calls.push(['get', index])
+      return Buffer.from('wxyz')
+    },
+    download(options) {
+      calls.push(['download', options])
+      return {
+        done: () => Promise.resolve(),
+        destroy: () => calls.push(['destroyDownload']),
+      }
+    },
+    close() {
+      calls.push(['close'])
+    },
+  }
+  const blobServer = {
+    token: 'test-token',
+    async _getCore() {
+      calls.push(['_getCore'])
+      return core
+    },
+  }
+
+  const handled = await serveVideoRangeHttpRequest({ blobServer }, req, new MockResponse(calls))
+
+  t.is(handled, true)
+  t.alike(
+    calls.find((call) => call[0] === 'has'),
+    ['has', 100],
+    'remote sync should check the seek target block, not the first block in the blob',
+  )
 })
 
 test('serveVideoRangeHttpRequest ignores non-video range requests', async (t) => {

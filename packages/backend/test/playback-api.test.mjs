@@ -3,10 +3,9 @@ import { EventEmitter } from 'node:events'
 
 import { createApi } from '../src/api.js'
 
-test('preparePlayback waits for bounded startup prefetch before returning a streamable URL', async (t) => {
+test('preparePlayback returns a streamable URL without waiting for startup prefetch', async (t) => {
   const api = createApi({ ctx: {} })
   const calls = []
-  let resolvePrefetch
   const statsValue = {
     status: 'unknown',
     progress: 0,
@@ -28,9 +27,7 @@ test('preparePlayback waits for bounded startup prefetch before returning a stre
 
   api.prefetchVideo = (...args) => {
     calls.push(['prefetchVideo', args])
-    return new Promise((resolve) => {
-      resolvePrefetch = resolve
-    })
+    return new Promise(() => {})
   }
 
   api.getVideoStats = (...args) => {
@@ -38,29 +35,23 @@ test('preparePlayback waits for bounded startup prefetch before returning a stre
     return { ...statsValue }
   }
 
-  const pending = api.preparePlayback(
-    'channel-key',
-    'videos/demo.mp4',
-    'public-bee-key',
-    'blob-id',
-    'blobs-core-key',
-    'video/mp4',
-  )
-
-  await new Promise((resolve) => setImmediate(resolve))
-  t.alike(calls, [
-    ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
-    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
+  const result = await Promise.race([
+    api.preparePlayback(
+      'channel-key',
+      'videos/demo.mp4',
+      'public-bee-key',
+      'blob-id',
+      'blobs-core-key',
+      'video/mp4',
+    ),
+    new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 50)),
   ])
-
-  resolvePrefetch({ success: true })
-  const result = await pending
 
   t.is(result.url, 'http://127.0.0.1:60023/video.mp4')
   t.alike(result.stats, statsValue)
   // The URL remains the same direct blob-server URL; the API-level playback
-  // path now waits for the existing prefetch session's bounded startup gate so
-  // head/tail/index ranges get a chance to arrive before native player handoff.
+  // path now starts prefetch in the background without blocking native player
+  // handoff.
   t.is(result.warmupStarted, undefined)
   t.is(result.peerWarmupStarted, undefined)
   t.is(result.selectedBlobWarmup, undefined)

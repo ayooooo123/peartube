@@ -1292,6 +1292,7 @@ export async function initializeStorage(config) {
   const blobServerReady = new Promise((resolve) => {
     resolveBlobServerReady = resolve
   })
+  let storageContext = null
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
   let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
@@ -1416,7 +1417,11 @@ export async function initializeStorage(config) {
       // errors). Only tagged requests are intercepted; video Range reads and every
       // other request fall through to the upstream handler unchanged.
       try {
-        const handled = await serveThumbnailHttpRequest({ store, swarm, blobServer }, req, res)
+        const handled = await serveThumbnailHttpRequest({
+          store,
+          blobServer,
+          retainDiscovery: (discoveryKey, options) => retainSwarmDiscovery(storageContext || { swarm }, discoveryKey, options)
+        }, req, res)
         if (handled) return
       } catch (err) {
         console.log('[Storage] Thumbnail serve failed:', err?.message || err)
@@ -1661,7 +1666,7 @@ export async function initializeStorage(config) {
   const blobSessionToken = generateSessionToken()
   console.log('[Storage] Generated blob session token:', blobSessionToken.slice(0, 8) + '...')
 
-  return {
+  storageContext = {
     store,
     metaCore,
     metaDb,
@@ -1677,6 +1682,7 @@ export async function initializeStorage(config) {
     wakeup,
     peerPoolDiscovery: globalPeerPoolDiscovery
   };
+  return storageContext
 }
 
 /**

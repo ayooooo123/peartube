@@ -57,6 +57,43 @@ function emitBlobPlayhead(event) {
   }
 }
 
+/**
+ * Emit a playhead update from a long-lived streaming response.
+ *
+ * The Android video range responder serves an open-ended `bytes=N-` request by
+ * streaming the entire remainder of the file in ONE backpressured HTTP response
+ * (video-range-http.js). prioritizeBlobServerRangeRequest therefore fires only
+ * once — at the start — so without this the forward-fill anchors a single
+ * read-ahead window at the open position and never advances, and the window
+ * cache never trims. As that response streams, call this with the live read
+ * block so both followers (PlaybackForwardFill, PlaybackWindowCache) re-anchor
+ * to the real playhead for the whole video, not just the first 128MB.
+ *
+ * @param {{ keyHex: string, blob: { blockOffset: number, blockLength: number, byteLength: number }, blockIndex: number }} params
+ */
+export function publishBlobPlayheadProgress({ keyHex, blob, blockIndex } = {}) {
+  if (typeof keyHex !== 'string' || keyHex.length === 0 || !blob) return
+  const blockOffset = Number(blob.blockOffset)
+  const blockLength = Number(blob.blockLength)
+  const byteLength = Number(blob.byteLength)
+  const windowStart = Number(blockIndex)
+
+  if (!Number.isInteger(blockOffset) || blockOffset < 0) return
+  if (!Number.isInteger(blockLength) || blockLength <= 0) return
+  if (!Number.isFinite(byteLength) || byteLength <= 0) return
+  if (!Number.isInteger(windowStart) || windowStart < blockOffset) return
+  if (windowStart >= blockOffset + blockLength) return
+
+  emitBlobPlayhead({
+    coreKeyHex: keyHex,
+    blockOffset,
+    blockLength,
+    byteLength,
+    windowStart,
+    windowEnd: windowStart,
+  })
+}
+
 function getPriorityRegistryKey(key, blob) {
   return `${key.toString('hex')}:${blob.blockOffset}:${blob.blockLength}`
 }

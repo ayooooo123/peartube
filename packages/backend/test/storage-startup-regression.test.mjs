@@ -44,7 +44,7 @@ test('blob server startup does not await listen before storage init can finish',
   // End anchor matches the outer try/catch (2-space indent) so the capture is
   // not cut short by the `catch (err)` inside the patched _onrequest handler.
   const blobServerBody = storageSource.match(
-    /const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)\n  \} catch \(err\) \{/
+    /const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)\n {2}\} catch \(err\) \{/
   )?.[1] ?? ''
 
   assert.ok(blobServerBody, 'blob server startup block should exist')
@@ -55,7 +55,7 @@ test('blob server startup does not await listen before storage init can finish',
 
 test('blob server serves direct browser range requests without an Electrobun media proxy', () => {
   const requestWrapper =
-    storageSource.match(/blobServer\._onrequest = async function \(req, res\) \{([\s\S]*?)\n      return origOnRequest\(req, res\)/)?.[1] ?? ''
+    storageSource.match(/blobServer\._onrequest = async function \(req, res\) \{([\s\S]*?)\n {6}return origOnRequest\(req, res\)/)?.[1] ?? ''
 
   assert.ok(requestWrapper, 'blob server request wrapper should exist')
   assert.match(requestWrapper, /Access-Control-Allow-Origin', '\*'/)

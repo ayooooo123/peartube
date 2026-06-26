@@ -10,7 +10,9 @@ import {
   getPrioritizedBlobDownloadRange,
   parseHttpByteRange,
   prioritizeBlobServerRangeRequest,
+  publishBlobPlayheadProgress,
   releaseAllPrioritizedBlobRanges,
+  subscribeBlobPlayhead,
 } from '../src/blob-range-priority.js'
 
 const blobIdEncoding = {
@@ -64,6 +66,40 @@ test('getPrioritizedBlobDownloadRange maps a seek byte range to the matching blo
     getPrioritizedBlobDownloadRange(blob, { start: 98 * 65536, end: (99 * 65536) - 1 }, { readAheadBytes: 4 * 65536 }),
     { start: 108, end: 110, blocks: 2 },
   )
+})
+
+test('publishBlobPlayheadProgress emits a playhead event anchored at the live read block', (t) => {
+  const blob = { blockOffset: 10, blockLength: 100, byteLength: 100 * 65536 }
+  const events = []
+  const unsubscribe = subscribeBlobPlayhead((event) => events.push(event))
+  t.teardown(unsubscribe)
+
+  publishBlobPlayheadProgress({ keyHex: 'ab'.repeat(32), blob, blockIndex: 42 })
+
+  t.is(events.length, 1)
+  t.alike(events[0], {
+    coreKeyHex: 'ab'.repeat(32),
+    blockOffset: 10,
+    blockLength: 100,
+    byteLength: 100 * 65536,
+    windowStart: 42,
+    windowEnd: 42,
+  })
+})
+
+test('publishBlobPlayheadProgress ignores out-of-range or malformed positions', (t) => {
+  const blob = { blockOffset: 10, blockLength: 100, byteLength: 100 * 65536 }
+  const events = []
+  const unsubscribe = subscribeBlobPlayhead((event) => events.push(event))
+  t.teardown(unsubscribe)
+
+  publishBlobPlayheadProgress({ keyHex: 'ab'.repeat(32), blob, blockIndex: 9 }) // before blockOffset
+  publishBlobPlayheadProgress({ keyHex: 'ab'.repeat(32), blob, blockIndex: 110 }) // at blockEnd
+  publishBlobPlayheadProgress({ keyHex: '', blob, blockIndex: 42 }) // no key
+  publishBlobPlayheadProgress({ keyHex: 'ab'.repeat(32), blob: null, blockIndex: 42 }) // no blob
+  publishBlobPlayheadProgress() // no args
+
+  t.is(events.length, 0)
 })
 
 test('getPrioritizedBlobDownloadRange keeps open-ended playback ranges bounded', (t) => {

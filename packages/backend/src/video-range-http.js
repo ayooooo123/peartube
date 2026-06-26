@@ -14,8 +14,18 @@ import {
   getPrioritizedBlobDownloadRange,
   parseHttpByteRange,
   prioritizeBlobServerRangeRequest,
+  publishBlobPlayheadProgress,
 } from './blob-range-priority.js'
 import { markPlaybackTiming } from './playback-timing.js'
+
+// A player that issues one open-ended `bytes=N-` request streams the whole
+// remainder through a single response (writeBlobRange below). Emit a playhead
+// progress event every time the live read advances this far so the forward-fill
+// re-anchors its read-ahead window — and the window cache trims behind — against
+// the real read position instead of freezing at the open position. Kept well
+// under the forward-fill's own 16MB re-anchor cadence so re-anchoring stays
+// smooth; the followers throttle the actual work.
+const PLAYHEAD_PROGRESS_EMIT_BYTES = 4 * 1024 * 1024
 
 function isVideoContentType(type) {
   if (!type) return true
@@ -114,6 +124,7 @@ async function writeBlobRange({ core, blob, start, length, res, isCancelled, key
   let { index, offset } = await resolveStartPosition(core, blob, start)
   const blockEnd = blob.blockOffset + blob.blockLength
   let wroteFirstChunk = false
+  let bytesSincePlayheadEmit = 0
 
   while (remaining > 0 && index < blockEnd) {
     if (isCancelled()) return false
@@ -138,6 +149,18 @@ async function writeBlobRange({ core, blob, start, length, res, isCancelled, key
 
     remaining -= block.byteLength
     index++
+
+    // Advance the playhead followers against the live read position. For a single
+    // open-ended response this is the only signal they get after the opening
+    // request, so without it the read-ahead cushion never moves past its first
+    // anchor and playback settles to the backpressured drain rate (rebuffering).
+    bytesSincePlayheadEmit += block.byteLength
+    if (bytesSincePlayheadEmit >= PLAYHEAD_PROGRESS_EMIT_BYTES) {
+      bytesSincePlayheadEmit = 0
+      try {
+        publishBlobPlayheadProgress({ keyHex, blob, blockIndex: index })
+      } catch { /* progress emit is best-effort; never break serving */ }
+    }
   }
 
   return remaining === 0

@@ -5,7 +5,7 @@ import HypercoreID from 'hypercore-id-encoding'
 import z32 from 'z32'
 
 import { serveVideoRangeHttpRequest } from '../src/video-range-http.js'
-import { releaseAllPrioritizedBlobRanges } from '../src/blob-range-priority.js'
+import { releaseAllPrioritizedBlobRanges, subscribeBlobPlayhead } from '../src/blob-range-priority.js'
 
 const blobIdEncoding = {
   preencode(state, blob) {
@@ -219,6 +219,60 @@ test('serveVideoRangeHttpRequest syncs remote length near the requested seek ran
     calls.find((call) => call[0] === 'has'),
     ['has', 100],
     'remote sync should check the seek target block, not the first block in the blob',
+  )
+})
+
+test('serveVideoRangeHttpRequest advances the playhead while streaming one open-ended response', async (t) => {
+  t.teardown(() => releaseAllPrioritizedBlobRanges())
+  const MB = 1024 * 1024
+  // 8 blocks of 2MB each = 16MB. One open-ended `bytes=0-` request streams the
+  // whole blob through a single response, so the only re-anchor signal the
+  // forward-fill/window-cache get after the opening request is the progress
+  // emit (every 4MB) from inside writeBlobRange.
+  const blob = {
+    blockOffset: 0,
+    blockLength: 8,
+    byteOffset: 0,
+    byteLength: 8 * 2 * MB,
+  }
+  const { key, req } = makeRangeRequest({ blob, range: 'bytes=0-' })
+
+  const events = []
+  const unsubscribe = subscribeBlobPlayhead((event) => {
+    if (event.coreKeyHex === key.toString('hex')) events.push(event)
+  })
+  t.teardown(unsubscribe)
+
+  const core = {
+    peers: [],
+    opened: true,
+    async ready() {},
+    async has() { return true },
+    async seek() { return [0, 0] },
+    async get() { return Buffer.alloc(2 * MB, 1) },
+    download() {
+      return { done: () => Promise.resolve(), destroy: () => {} }
+    },
+    close() {},
+  }
+  const blobServer = {
+    token: 'test-token',
+    async _getCore() { return core },
+  }
+  // Discard streamed bytes so the test does not retain 16MB of chunk strings.
+  const res = new MockResponse([])
+
+  const handled = await serveVideoRangeHttpRequest({ blobServer }, req, res)
+  t.is(handled, true)
+
+  // Initial emit from prioritizeBlobServerRangeRequest anchors at block 0; the
+  // streaming progress emits then advance through the blob (blocks 2, 4, 6).
+  const windowStarts = events.map((event) => event.windowStart)
+  t.ok(windowStarts.includes(0), 'opening request anchors the playhead at the start')
+  t.alike(
+    windowStarts.filter((start) => start > 0),
+    [2, 4, 6],
+    'streaming the single response advances the playhead every 4MB',
   )
 })
 

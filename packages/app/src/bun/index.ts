@@ -273,34 +273,6 @@ async function startStaticServer() {
         })
       }
 
-      // Blob proxy — same-origin proxy to the blob server.
-      // mediabunny's UrlSource uses fetch() which enforces CORS.
-      // Proxying through the static server avoids cross-origin issues.
-      if (url.pathname === '/__blob') {
-        const rawPort = url.searchParams.get('__port') || blobServerPort
-        const port = Number(rawPort)
-        if (!Number.isInteger(port) || port <= 0) {
-          return new Response('Blob server is not ready', { status: 503 })
-        }
-        url.searchParams.delete('__port')
-        const blobUrl = `http://127.0.0.1:${port}/?${url.searchParams.toString()}`
-        const headers: Record<string, string> = {}
-        const range = req.headers.get('range')
-        if (range) headers['Range'] = range
-        try {
-          const blobRes = await fetch(blobUrl, { headers, signal: req.signal })
-          const respHeaders = new Headers(blobRes.headers)
-          respHeaders.set('Access-Control-Allow-Origin', '*')
-          respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
-          return new Response(blobRes.body, {
-            status: blobRes.status,
-            headers: respHeaders,
-          })
-        } catch (err: any) {
-          return new Response('Blob proxy error: ' + err?.message, { status: 502 })
-        }
-      }
-
       let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
 
       const file = Bun.file(filePath)

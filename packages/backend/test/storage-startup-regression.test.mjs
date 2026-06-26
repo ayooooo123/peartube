@@ -53,6 +53,19 @@ test('blob server startup does not await listen before storage init can finish',
   assert.match(blobServerBody, /blobServerListenPromise\s*\.then\(/)
 })
 
+test('blob server serves direct browser range requests without an Electrobun media proxy', () => {
+  const requestWrapper =
+    storageSource.match(/blobServer\._onrequest = async function \(req, res\) \{([\s\S]*?)\n      return origOnRequest\(req, res\)/)?.[1] ?? ''
+
+  assert.ok(requestWrapper, 'blob server request wrapper should exist')
+  assert.match(requestWrapper, /Access-Control-Allow-Origin', '\*'/)
+  assert.match(requestWrapper, /Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS'/)
+  assert.match(requestWrapper, /Access-Control-Allow-Headers', 'Range'/)
+  assert.match(requestWrapper, /Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges'/)
+  assert.match(requestWrapper, /if \(req\.method === 'OPTIONS'\) \{ res\.writeHead\(204\); res\.end\(\); return \}/)
+  assert.match(requestWrapper, /serveVideoRangeHttpRequest\(\{ blobServer \}, req, res\)/)
+})
+
 test('blob server video streams use no-timeout core sessions', () => {
   assert.match(
     storageSource,
@@ -111,12 +124,19 @@ test('storage persists and restores DHT routing table state around lifecycle eve
 
 
 
-test('storage does not warm-dial cached peers in the default feed discovery path', () => {
-  assert.match(storageSource, /import \{ createKnownPeerCache \} from '\.\/known-peers\.js'/)
-  assert.doesNotMatch(storageSource, /warmDialKnownPeers/)
-  assert.doesNotMatch(storageSource, /loadKnownPeers\(/)
-  assert.doesNotMatch(storageSource, /swarm\.joinPeer\(b4a\.from\(peer\.key, 'hex'\)\)/)
-  assert.doesNotMatch(storageSource, /swarm\.joinPeer\(/)
+test('storage uses bounded warm reconnect and desktop discovery refreshes', () => {
+  assert.match(storageSource, /import \{ createKnownPeerCache, loadKnownPeers \} from '\.\/known-peers\.js'/)
+  assert.match(storageSource, /const KNOWN_PEER_REDIAL_LIMIT = 16/)
+  assert.match(storageSource, /known\.slice\(0, KNOWN_PEER_REDIAL_LIMIT\)/)
+  assert.match(storageSource, /swarm\.joinPeer\(b4a\.from\(key, 'hex'\)\)/)
+  assert.match(storageSource, /function resolveHyperswarmOptions/)
+  assert.match(storageSource, /new LoadedHyperswarm\(hyperswarmOptions\)/)
+  assert.match(storageSource, /function schedulePeerPoolWarmupRefreshes/)
+  assert.match(storageSource, /schedulePeerPoolWarmupRefreshes\(\{[\s\S]*?platform,[\s\S]*?discovery: poolDiscovery/)
+  assert.match(storageSource, /peer-pool-warm-refresh/)
+  assert.match(storageSource, /swarm\._peartubeSwarmOptions = summarizeSwarmOptions\(hyperswarmOptions\)/)
+  assert.match(storageSource, /options: summarizeSwarmOptions\(swarm\?\._peartubeSwarmOptions\)/)
+  assert.match(storageSource, /swarmOptions: globalSwarm\._peartubeSwarmOptions \|\| null/)
 })
 
 test('storage creates an offline swarm fallback when Hyperswarm is unavailable', () => {

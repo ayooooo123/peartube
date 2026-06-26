@@ -686,6 +686,7 @@ B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager
 B.getSwarmStatus = async () => {
   const s = api.getSwarmStatus()
   return {
+    ...s,
     connected: (s.swarmConnections || 0) > 0,
     peerCount: s.swarmConnections || 0,
     swarmConnections: s.swarmConnections || 0,
@@ -694,6 +695,9 @@ B.getSwarmStatus = async () => {
     feedEntries: s.feedEntries || 0,
     channelsLoaded: s.channelsLoaded || 0,
     network: s.network || null,
+    startupTiming: s.startupTiming || null,
+    doctor: s.doctor || null,
+    directPeerDial: s.directPeerDial || s.doctor?.feed?.directPeerDial || null,
     swarmOffline: Boolean(s.swarmOffline),
     swarmOfflineReason: s.swarmOfflineReason || null,
     swarmListenResolved: Boolean(s.swarmListenResolved),

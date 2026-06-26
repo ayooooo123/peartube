@@ -15,6 +15,7 @@ import {
   parseHttpByteRange,
   prioritizeBlobServerRangeRequest,
 } from './blob-range-priority.js'
+import { markPlaybackTiming } from './playback-timing.js'
 
 function isVideoContentType(type) {
   if (!type) return true
@@ -25,8 +26,8 @@ function isVideoContentType(type) {
 function once(emitter, event) {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
-      try { emitter.off?.(event, onEvent) } catch {}
-      try { emitter.off?.('error', onError) } catch {}
+      try { emitter.off?.(event, onEvent) } catch { /* best effort */ }
+      try { emitter.off?.('error', onError) } catch { /* best effort */ }
     }
     const onEvent = () => {
       cleanup()
@@ -82,7 +83,7 @@ async function syncVideoRangeRemoteLength(core, startBlock) {
       delay(2500).then(() => false),
     ])
     console.log('[Storage] Video range HTTP remote sync:', updated ? 'ready' : 'timeout', JSON.stringify(summarizeVideoRangePeerSync(core)))
-    try { core.core?.replicator?.updateAll?.() } catch {}
+    try { core.core?.replicator?.updateAll?.() } catch { /* best effort */ }
   } catch (err) {
     console.log('[Storage] Video range HTTP remote sync failed:', err?.message || err, JSON.stringify(summarizeVideoRangePeerSync(core)))
   }
@@ -108,7 +109,7 @@ async function resolveStartPosition(core, blob, start) {
   return { index: result[0], offset: result[1] || 0 }
 }
 
-async function writeBlobRange({ core, blob, start, length, res, isCancelled }) {
+async function writeBlobRange({ core, blob, start, length, res, isCancelled, keyHex }) {
   let remaining = length
   let { index, offset } = await resolveStartPosition(core, blob, start)
   const blockEnd = blob.blockOffset + blob.blockLength
@@ -129,6 +130,9 @@ async function writeBlobRange({ core, blob, start, length, res, isCancelled }) {
     await writeResponseChunk(res, block)
     if (!wroteFirstChunk) {
       wroteFirstChunk = true
+      // First byte the player actually receives. markPlaybackTiming only records
+      // the first such mark per video, so the earliest served range wins.
+      markPlaybackTiming(keyHex, 'first-byte', `block ${index}`)
       console.log('[Storage] Video range HTTP first chunk:', block.byteLength, 'bytes at block', index)
     }
 
@@ -192,7 +196,7 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
     res.setHeader('Content-Length', String(length))
     res.setHeader('Cache-Control', 'no-store')
     res.writeHead(statusCode)
-    try { res.flushHeaders?.() } catch {}
+    try { res.flushHeaders?.() } catch { /* best effort */ }
 
     console.log(
       '[Storage] Video range HTTP:',
@@ -221,6 +225,7 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
       length,
       res,
       isCancelled: () => cancelled || res.writableEnded || res.destroyed,
+      keyHex: ref.key?.toString('hex'),
     })
 
     if (!wroteAll || cancelled || res.writableEnded || res.destroyed) {
@@ -239,12 +244,12 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
       res.end()
       return true
     }
-    try { res.destroy?.() } catch {}
+    try { res.destroy?.() } catch { /* best effort */ }
     return true
   } finally {
     try {
       const closing = core?.close?.()
       if (closing?.catch) closing.catch(() => {})
-    } catch {}
+    } catch { /* best effort */ }
   }
 }

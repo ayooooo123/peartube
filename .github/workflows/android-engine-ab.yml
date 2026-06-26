@@ -32,7 +32,7 @@ on:
   # marker [engine-ab]; it builds with the env defaults below (libqjs / arm64-v8a
   # / v2.2.0). Pushes without the marker are ignored by the job `if:` guard.
   push:
-    branches: [claude/codex-apk-size-reduction-ihpcuz]
+    branches: [claude/codex-apk-size-reduction-ihpcuz, claude/apk-size-reduction-3jkmxa]
 
 permissions:
   contents: read

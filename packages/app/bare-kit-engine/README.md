@@ -46,3 +46,20 @@ not source. Do not commit them (that was the flaw in the original blob approach)
   builds the arm64 APK both stock (V8) and with QuickJS, uploads both, and prints
   the size delta in the job summary so you can install both and test
   functionality + speed yourself.
+
+## Shipped in releases (default: QuickJS)
+
+`.github/workflows/release-android.yml` ships QuickJS **by default**. On every
+`v*` tag it runs a `build-engine` job that builds `libqjs/<abi>/libbare-kit.so`
+reproducibly (bare-kit `v2.2.0`, `bare` repointed to the escape-handle fix), then
+overlays it via `apply-bare-kit-engine.mjs` before `assembleRelease`. No binaries
+are committed — the engine is rebuilt per release.
+
+- **Escape hatch:** run the release via *workflow_dispatch* and set the `engine`
+  input to `v8` to ship the stock engine (the `build-engine` job is skipped and
+  no overlay is applied). `libmqjs` / `libjsc` / `libjerry` are also selectable.
+- **If the engine build fails, the release aborts** rather than silently shipping
+  a V8 APK ~50 MB/ABI larger.
+- **Bumping react-native-bare-kit?** Update `BARE_KIT_REF` in the release workflow
+  to the matching bare-kit tag, and drop `BARE_REF` once the QuickJS worklet fix
+  is in the upstream `bare` that bare-kit pins.

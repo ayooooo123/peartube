@@ -10,12 +10,104 @@ on:
         description: Tag to build (for example v1.0.0). Leave empty to build from the current ref.
         required: false
         type: string
+      engine:
+        description: >-
+          JS engine for the BareKit backend runtime. libqjs (QuickJS) keeps the
+          native runtime ~50 MB/ABI smaller than V8. Pick "v8" to ship the stock
+          engine (escape hatch if a QuickJS regression appears).
+        required: false
+        default: libqjs
+        type: choice
+        options: [libqjs, libmqjs, libjsc, libjerry, v8]
 
 permissions:
   contents: write
 
+env:
+  # Engine the release APK ships. Tag pushes have no inputs, so they fall back to
+  # libqjs — i.e. releases ship QuickJS by default. Set to "v8" to keep stock.
+  ENGINE: ${{ github.event.inputs.engine || 'libqjs' }}
+  # bare-kit tag the engine is built from — MUST match the react-native-bare-kit
+  # version in packages/app/package.json (^0.14.4 → bare-kit v2.2.0).
+  BARE_KIT_REF: v2.2.0
+  # Fork/ref of `bare` carrying the QuickJS worklet escape-handle fix required for
+  # playback under non-V8 engines (proven in commit 3c77f59). Empty = bare-kit's
+  # pinned bare (correct once the fix lands upstream).
+  BARE_REF: ayooooo123/bare#escape-handle-v1.29.5
+
 jobs:
+  build-engine:
+    name: Build ${{ github.event.inputs.engine || 'libqjs' }} libbare-kit.so
+    # Skipped when shipping stock V8 — react-native-bare-kit already bundles it.
+    if: ${{ (github.event.inputs.engine || 'libqjs') != 'v8' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout bare-kit
+        uses: actions/checkout@v6
+        with:
+          repository: holepunchto/bare-kit
+          ref: ${{ env.BARE_KIT_REF }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Inject BARE_ENGINE into the Android cmake build
+        run: |
+          set -euo pipefail
+          perl -0pi -e \
+            's/("-DANDROID_STL=c\+\+_shared")/$1, "-DBARE_ENGINE=github:holepunchto\/${{ env.ENGINE }}"/g' \
+            android/build.gradle
+          grep -n "BARE_ENGINE" android/build.gradle
+
+      - name: Repoint bare to the fixed fork (QuickJS playback fix)
+        if: ${{ env.BARE_REF != '' }}
+        env:
+          REF: ${{ env.BARE_REF }}
+        run: |
+          set -euo pipefail
+          echo "Repointing bare -> github:$REF"
+          REF="$REF" perl -0pi -e 's{fetch_package\("github:holepunchto/bare\@[0-9.]+"\)}{qq[fetch_package("github:$ENV{REF}")]}ge' CMakeLists.txt
+          grep -n "fetch_package.*bare" CMakeLists.txt
+
+      - run: npm install --global cmake-runtime ninja-runtime
+      - run: npm install
+      - name: Build release AAR
+        run: ./gradlew aR --no-daemon
+
+      - name: Extract per-ABI libbare-kit.so
+        run: |
+          set -euo pipefail
+          AAR=$(find android/build/outputs/aar -name '*-release.aar' | head -1)
+          echo "AAR: $AAR"
+          unzip -o "$AAR" 'jni/*/libbare-kit.so' -d aar-extract
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            SO="aar-extract/jni/$abi/libbare-kit.so"
+            if [ -f "$SO" ]; then
+              mkdir -p "out/$abi"
+              cp "$SO" "out/$abi/libbare-kit.so"
+              printf '  %-12s %s\n' "$abi" "$(du -h "$SO" | cut -f1)"
+            fi
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bare-kit-engine-${{ env.ENGINE }}
+          path: out/**/libbare-kit.so
+          if-no-files-found: error
+          retention-days: 7
+
   build-release:
+    needs: build-engine
+    # Run when the engine built (success) AND when it was skipped for v8.
+    # A failed engine build aborts the release rather than silently shipping V8.
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -89,6 +181,17 @@ jobs:
       - name: Expo prebuild (Android)
         working-directory: packages/app
         run: npm run android:prebuild
+
+      - name: Download custom engine libbare-kit.so
+        if: ${{ env.ENGINE != 'v8' }}
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: bare-kit-engine-${{ env.ENGINE }}
+          path: packages/app/bare-kit-engine/${{ env.ENGINE }}
+
+      - name: Overlay custom engine onto react-native-bare-kit
+        if: ${{ env.ENGINE != 'v8' }}
+        run: node packages/app/scripts/apply-bare-kit-engine.mjs --engine ${{ env.ENGINE }}
 
       - name: Decode release keystore
         if: ${{ steps.prep.outputs.has_keystore == 'true' }}

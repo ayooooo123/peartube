@@ -40,6 +40,25 @@ function isSeedingAuthorizationError(err) {
 }
 
 const PLAYBACK_STARTUP_PREFETCH_TIMEOUT_MS = 10000
+// If a blob has synced peers but not one block has arrived in this window, the
+// connection is almost certainly half-open (handshaked + synced, but unable to
+// move data — observed: ~42s of zero data before hyperswarm's own ~56s timeout
+// redials and blocks then flow at full speed). Drop the non-delivering
+// connection so the swarm redials a fresh one in seconds. One shot per playback.
+const PLAYBACK_STALL_RECONNECT_MS = 7000
+
+// Best-effort extraction of a hypercore replication peer's 64-hex public key,
+// to match it against a swarm connection's remotePublicKey.
+function extractPeerKeyHex(peer) {
+  try {
+    const key = peer?.remotePublicKey || peer?.stream?.remotePublicKey || peer?.publicKey
+    if (!key) return null
+    const hex = typeof key === 'string' ? key : b4a.toString(key, 'hex')
+    return /^[a-f0-9]{64}$/i.test(hex) ? hex.toLowerCase() : null
+  } catch {
+    return null
+  }
+}
 const PLAYBACK_STATS_HANDOFF_TIMEOUT_MS = 250
 const BLOB_PREFETCH_DISCOVERY_FLUSH_TIMEOUT_MS = 1500
 const BLOB_PREFETCH_CORE_UPDATE_TIMEOUT_MS = 2500
@@ -3114,10 +3133,17 @@ export function createApi({
           let lastUploadBytes = 0
           const downloadedIndices = new Set()
           let assumedComplete = wasCached
+          let stallReconnectTimer = null
+          const clearStallReconnect = () => {
+            if (stallReconnectTimer) { clearTimeout(stallReconnectTimer); stallReconnectTimer = null }
+          }
 
           const onDownload = (index, byteLength) => {
             if (typeof index !== 'number') return
             if (index < startBlock || index >= endBlock) return
+            // Real data is flowing — the connection is healthy; cancel the
+            // half-open-connection failover.
+            clearStallReconnect()
             if (assumedComplete) {
               assumedComplete = false
               initialAvailable = 0
@@ -3208,9 +3234,45 @@ export function createApi({
           if (!wasCached || videoStats) {
             core.on('download', onDownload)
             core.on('upload', onUpload)
+            // Half-open-connection failover. A peer can complete the swarm
+            // handshake and report `remoteSynced` (so it looks like a healthy
+            // source) yet move zero bytes — the connection is dead in one
+            // direction. Hyperswarm only redials after its own ~56s timeout, so
+            // the player stalls for ~40s+ before data ever flows. If no block
+            // has arrived while synced peers exist, drop those non-delivering
+            // connections so the swarm redials a fresh one in seconds. One shot.
+            if (!wasCached) {
+              stallReconnectTimer = setTimeout(() => {
+                stallReconnectTimer = null
+                if (downloadedBlocks > 0) return
+                try {
+                  const syncedKeys = new Set()
+                  for (const p of (core.peers || [])) {
+                    if (p?.remoteSynced === false) continue
+                    const k = extractPeerKeyHex(p)
+                    if (k) syncedKeys.add(k)
+                  }
+                  if (syncedKeys.size === 0) return
+                  let dropped = 0
+                  for (const conn of (ctx.swarm?.connections || [])) {
+                    const ck = conn?.remotePublicKey ? b4a.toString(conn.remotePublicKey, 'hex').toLowerCase() : null
+                    if (ck && syncedKeys.has(ck)) {
+                      try { conn.destroy() } catch { /* best effort */ }
+                      dropped++
+                    }
+                  }
+                  if (dropped > 0) {
+                    console.log(`[API] Playback stall: 0 blob blocks after ${PLAYBACK_STALL_RECONNECT_MS}ms with ${syncedKeys.size} synced peer(s) — dropped ${dropped} stale connection(s) to force redial`)
+                  }
+                } catch (err) {
+                  console.log('[API] Playback stall reconnect error (non-fatal):', err?.message || err)
+                }
+              }, PLAYBACK_STALL_RECONNECT_MS)
+            }
           }
           if (videoStats) {
             videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
+              clearStallReconnect()
               core.off('download', onDownload)
               core.off('upload', onUpload)
             })
@@ -3245,6 +3307,7 @@ export function createApi({
             if (rangeEntry) {
               rangeEntry.cancel = () => {
                 fillCancelled = true
+                clearStallReconnect()
                 unsubscribePlayhead()
               }
             }

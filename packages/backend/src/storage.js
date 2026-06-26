@@ -1530,6 +1530,12 @@ export async function initializeStorage(config) {
   swarm.on('connection', (conn, info) => {
     try {
       if (!conn || conn.destroyed) return
+      // Send liveness keepalives more frequently so a half-open connection (one
+      // that handshakes and syncs but then moves no data) is detected and torn
+      // down sooner — the default lets a dead link linger tens of seconds, which
+      // stalls playback until hyperswarm finally redials. Best-effort: not every
+      // stream implementation exposes setKeepAlive.
+      try { conn.setKeepAlive?.(4000) } catch { /* best effort */ }
       const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
       globalNetworkStartupTiming?.record('socket-connected', { key: remoteKey, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
       globalSwarmDiagnostics?.recordConnection?.(conn, info)

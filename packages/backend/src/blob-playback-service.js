@@ -2,7 +2,6 @@ import b4a from 'b4a'
 
 import { normalizeBlobRefInput, parseBlobRef } from './blob-ref.js'
 import { attachBlobPlaybackProfile } from './blob-playback-profile.js'
-import { prefetchBlobPlaybackStart } from './blob-range-priority.js'
 import { retainSwarmDiscovery } from './storage.js'
 
 function getCorePeerList(core) {
@@ -64,29 +63,15 @@ export class BlobPlaybackService {
     // not prewarming; no blocks are fetched until the player requests them.
     this.warmDirectBlobRef(ref.blobsCoreKey, keyBuffer)
 
-    // Eagerly pull the opening GOPs (byte 0 forward) the moment playback is
-    // prepared, so the native player's first range request lands against
-    // already-downloading bytes instead of a cold P2P round trip. Profile-free
-    // and runs in parallel with the probe below. Detached — URL resolution
-    // must never wait on it.
-    this.prefetchPlaybackStart(ref.blobsCoreKey, keyBuffer, ref.blob, null).catch(() => {})
-
     // Make the blob's playback profile (keyframe index + moov position)
     // available to range prioritization before the player's first range
     // request: stored profile when this device probed the file, remote
-    // header probe otherwise. Once known, eagerly pull the tail moov for
-    // back-moov MP4s — the very first thing the player blocks on — so it is
-    // local before the player asks. Best-effort and detached.
+    // header probe otherwise. Best-effort and detached — URL resolution
+    // must never wait on it.
     attachBlobPlaybackProfile(ctx, {
       blobsCoreKey: ref.blobsCoreKey,
       blobId: ref.blob,
       mimeType: ref.mimeType || mimeType,
-    }).then((profile) => {
-      if (profile?.moovPosition === 'back') {
-        return this.prefetchPlaybackStart(ref.blobsCoreKey, keyBuffer, ref.blob, profile, {
-          startPrefetchBytes: 0,
-        })
-      }
     }).catch(() => {})
 
     return { url }
@@ -105,38 +90,6 @@ export class BlobPlaybackService {
   warmDirectBlobRef(blobsCoreKey, keyBuffer = b4a.from(blobsCoreKey, 'hex')) {
     const blobsCore = this.getBlobCore(blobsCoreKey, keyBuffer)
     this.retainBlobCorePeers(blobsCoreKey, blobsCore).catch(() => {})
-  }
-
-  /**
-   * Eagerly download the bytes the player needs to begin rendering (opening
-   * GOPs, and the tail moov for back-moov MP4s) before the player issues its
-   * first range request. Opens a short-lived core session, runs the bounded
-   * prefetch, then closes it; downloaded blocks persist in shared storage for
-   * the blob server to serve. Best-effort — never throws, never blocks the URL.
-   *
-   * @param {string} blobsCoreKey
-   * @param {Buffer} [keyBuffer]
-   * @param {Object} blob - blob descriptor ({ blockOffset, blockLength, byteLength, ... })
-   * @param {Object|null} [profile] - playback profile (keyframe index + moov position)
-   * @param {Object} [options] - forwarded to prefetchBlobPlaybackStart (e.g. startPrefetchBytes)
-   */
-  async prefetchPlaybackStart(blobsCoreKey, keyBuffer = b4a.from(blobsCoreKey, 'hex'), blob, profile = null, options = {}) {
-    const ctx = this.ctx
-    if (!ctx?.store || !blob) return
-    let core = null
-    try {
-      core = ctx.store.get(keyBuffer)
-      await prefetchBlobPlaybackStart(core, blob, { ...options, profile })
-    } catch {
-      // Best-effort: playback never depends on the prefetch succeeding.
-    } finally {
-      if (core) {
-        try {
-          const closing = core.close?.()
-          if (closing?.catch) closing.catch(() => {})
-        } catch { /* best effort */ }
-      }
-    }
   }
 
   async retainBlobCorePeers(blobsCoreKey, blobsCore = this.getBlobCore(blobsCoreKey)) {

@@ -11,6 +11,16 @@ import { getBlobPlaybackProfile } from './blob-playback-profile.js'
 // front of the stream prioritized ahead of the player without flooding the
 // scheduler with the whole file.
 const DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES = 16 * 1024 * 1024
+// A single explicit range request must not prioritize more than this many bytes
+// ahead of its start, regardless of where its declared end lands. Players (and
+// mediabunny) routinely request `bytes=N-<filesize-1>`; without this cap one
+// such request on a multi-GB file prioritizes the entire remainder (observed: a
+// start→EOF request on an 8GB video enqueuing 121k of 132k blocks into the
+// replication scheduler), which on a single peer starves the bytes the player
+// is actually blocking on — slow start, laggy seek. The deep forward cushion is
+// the forward-fill's job (it follows the playhead); this window only needs to
+// reach the imminent read.
+const DEFAULT_BLOB_RANGE_MAX_PRIORITY_SPAN_BYTES = 16 * 1024 * 1024
 const DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS = 15000
 // Progressive playback re-requests ranges that land inside the window we just
 // started downloading (connection churn, players probing ahead). Reuse that
@@ -26,10 +36,6 @@ const MAX_TRACKED_PRIORITY_BLOBS = 8
 // within a bounded distance so a sparse-keyframe file can't drag the window
 // megabytes behind the playhead.
 const DEFAULT_KEYFRAME_SNAP_BACK_BYTES = 8 * 1024 * 1024
-// How far into the file to eagerly pull the opening GOPs the moment playback is
-// being prepared, so the native player's first range request lands against
-// already-downloading bytes instead of a cold P2P round trip.
-const DEFAULT_PLAYBACK_START_PREFETCH_BYTES = 8 * 1024 * 1024
 
 // One entry per blob currently being prioritized for playback:
 // registryKey -> { core, range, timer, createdAt, start, end }
@@ -194,7 +200,14 @@ export function getPrioritizedBlobDownloadRange(blob, byteRange, options = {}) {
 
   const readAheadBytes = Math.max(0, Number(options.readAheadBytes ?? DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES) || 0)
   const bytesPerBlock = Math.max(1, byteLength / blockLength)
-  const requestedEndByte = byteRange.openEnded === true ? rangeStart : rangeEnd
+  // Cap how far an explicit (non-open-ended) request stretches the window so a
+  // `bytes=N-<EOF>` request can't prioritize the whole rest of the file. The cap
+  // still covers a back-moov index in one shot (moov reads are themselves
+  // bounded), but keeps the scheduler focused on imminent bytes. Open-ended
+  // ranges already anchor on the start.
+  const maxPrioritySpanBytes = Math.max(readAheadBytes, DEFAULT_BLOB_RANGE_MAX_PRIORITY_SPAN_BYTES)
+  const cappedRangeEnd = Math.min(rangeEnd, rangeStart + maxPrioritySpanBytes)
+  const requestedEndByte = byteRange.openEnded === true ? rangeStart : cappedRangeEnd
   const prioritizedEndByte = Math.min(byteLength - 1, requestedEndByte + readAheadBytes)
   const relativeStartBlock = Math.max(0, Math.min(blockLength - 1, Math.floor(effectiveRangeStart / bytesPerBlock)))
   const relativeEndBlock = Math.max(
@@ -285,107 +298,42 @@ function decodeBlobRangeRequest(blobServer, req) {
   return { key, blob, byteRange }
 }
 
-// Kick off a linear, time-bounded download of a precomputed block range and
-// resolve once it lands (or the timeout fires). Downloads of already-local
-// blocks resolve immediately. Never rejects — prefetch is best-effort.
-function downloadRangeWithTimeout(core, downloadRange, timeoutMs) {
-  if (!core || typeof core.download !== 'function' || !downloadRange) return Promise.resolve()
-
-  let range
-  try {
-    range = core.download({ start: downloadRange.start, end: downloadRange.end, linear: true })
-  } catch {
-    return Promise.resolve()
-  }
-
-  const ms = Math.max(
-    1000,
-    Number(timeoutMs ?? DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS) || DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS
-  )
-  return new Promise((resolve) => {
-    let settled = false
-    const stop = () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      try { range?.destroy?.() } catch { /* best effort */ }
-      resolve()
-    }
-    const timer = setTimeout(stop, ms)
-    const done = typeof range?.done === 'function'
-      ? range.done()
-      : typeof range?.downloaded === 'function'
-        ? range.downloaded()
-        : Promise.resolve()
-    Promise.resolve(done).catch(() => {}).finally(stop)
-  })
-}
-
-// The tail-of-file moov block range for a back-moov MP4, or null when the
-// profile is missing/front-moov/malformed.
-function computeBackMoovRange(blob, profile) {
-  if (!profile || profile.moovPosition !== 'back') return null
-  if (!isFiniteNonNegativeInteger(profile.moovStart) || !Number.isInteger(profile.moovEnd)) return null
-  if (profile.moovEnd <= profile.moovStart) return null
-  return getPrioritizedBlobDownloadRange(
-    blob,
-    { start: profile.moovStart, end: profile.moovEnd - 1 },
-    { readAheadBytes: 0 }
-  )
-}
-
 // Back-moov MP4s cannot start rendering until the tail-of-file moov box is
 // local: the player's very next request after probing the head is the tail.
 // Pull those blocks proactively the moment playback traffic appears for the
 // blob, instead of waiting out that extra request round trip. One shot per
 // registered profile; downloads of already-local blocks resolve immediately.
 function boostBackMoovDownload(core, blob, profile, options = {}) {
-  if (!profile || profile._moovBoosted) return
-  const moovRange = computeBackMoovRange(blob, profile)
-  if (!moovRange) return
+  if (!profile || profile.moovPosition !== 'back' || profile._moovBoosted) return
+  if (!isFiniteNonNegativeInteger(profile.moovStart) || !Number.isInteger(profile.moovEnd)) return
+  if (profile.moovEnd <= profile.moovStart) return
   profile._moovBoosted = true
-  downloadRangeWithTimeout(core, moovRange, options.timeoutMs)
-}
 
-// Eagerly pull the bytes the player needs to BEGIN rendering, the moment
-// playback is being prepared — before the native player has even issued its
-// first range request. Two regions:
-//   1. The opening GOPs from byte 0 (front-moov files get their index here too).
-//   2. For back-moov MP4s, the tail moov index — otherwise the very first
-//      thing the player blocks on is a cold round trip to the end of the file.
-// Without this, nothing downloads until the player's first request lands, which
-// is exactly the cold-start / "won't begin until I poke it" stall. Best-effort
-// and time-bounded; resolves when the regions land or the timeout fires.
-export async function prefetchBlobPlaybackStart(core, blob, options = {}) {
-  if (!core || typeof core.download !== 'function' || !blob) return
-  if (typeof core.ready === 'function') {
-    try { await core.ready() } catch { return }
-  }
-
-  const profile = options.profile || null
-  const timeoutMs = options.timeoutMs ?? DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS
-  const jobs = []
-
-  const moovRange = computeBackMoovRange(blob, profile)
-  if (moovRange) {
-    if (profile) profile._moovBoosted = true
-    jobs.push(downloadRangeWithTimeout(core, moovRange, timeoutMs))
-  }
-
-  const startBytes = Math.max(
-    0,
-    Number(options.startPrefetchBytes ?? DEFAULT_PLAYBACK_START_PREFETCH_BYTES) || 0
+  const moovRange = getPrioritizedBlobDownloadRange(
+    blob,
+    { start: profile.moovStart, end: profile.moovEnd - 1 },
+    { readAheadBytes: 0 }
   )
-  if (startBytes > 0) {
-    const headRange = getPrioritizedBlobDownloadRange(
-      blob,
-      { start: 0, end: 0, openEnded: true },
-      { readAheadBytes: startBytes, snapOffsets: profile?.keyframeOffsets }
-    )
-    if (headRange) jobs.push(downloadRangeWithTimeout(core, headRange, timeoutMs))
+  if (!moovRange) return
+
+  let range
+  try {
+    range = core.download({ start: moovRange.start, end: moovRange.end, linear: true })
+  } catch {
+    return
   }
 
-  if (jobs.length > 0) await Promise.all(jobs)
+  const timeoutMs = Math.max(
+    1000,
+    Number(options.timeoutMs ?? DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS) || DEFAULT_BLOB_RANGE_PRIORITY_TIMEOUT_MS
+  )
+  const stop = () => {
+    clearTimeout(timer)
+    try { range?.destroy?.() } catch { /* best effort */ }
+  }
+  const timer = setTimeout(stop, timeoutMs)
+  const done = typeof range?.done === 'function' ? range.done() : Promise.resolve()
+  Promise.resolve(done).catch(() => {}).finally(stop)
 }
 
 export async function prioritizeBlobServerRangeRequest(blobServer, req, options = {}) {

@@ -52,6 +52,20 @@ function createStore({ diskUsageBytes = 0, compactedDiskUsageBytes = null, clear
   }
 }
 
+function createTimerOptions(timers) {
+  return {
+    storageMaintenanceDelayMs: 0,
+    setTimer(fn, delay) {
+      const timer = { fn, delay, cleared: false }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer(timer) {
+      timer.cleared = true
+    }
+  }
+}
+
 const GB = 1024 * 1024 * 1024
 const coreA = 'aa'.repeat(32)
 const coreB = 'bb'.repeat(32)
@@ -99,12 +113,13 @@ test('clearCache reports app P2P disk usage after clearing tracked non-pinned ca
   t.is(cleared.untrackedStorageBytes, 3 * GB)
 })
 
-test('clearCache compacts Corestore before measuring app P2P disk usage', async (t) => {
+test('clearCache schedules Corestore compaction after returning storage stats', async (t) => {
+  const timers = []
   const store = createStore({
     diskUsageBytes: 6 * GB,
     compactedDiskUsageBytes: 4 * GB
   })
-  const manager = new SeedingManager(store, createMetaDb())
+  const manager = new SeedingManager(store, createMetaDb(), createTimerOptions(timers))
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -121,15 +136,23 @@ test('clearCache compacts Corestore before measuring app P2P disk usage', async 
   const cleared = await manager.clearCache()
 
   t.is(store.storage.flushCalls, 1)
-  t.is(store.storage.compactCalls, 1)
+  t.is(store.storage.compactCalls, 0)
   t.is(cleared.clearedBytes, 2 * GB)
-  t.is(cleared.totalStorageBytes, 4 * GB)
-  t.is(cleared.untrackedStorageBytes, 1 * GB)
+  t.is(cleared.totalStorageBytes, 6 * GB)
+  t.is(cleared.untrackedStorageBytes, 3 * GB)
+  t.is(timers.length, 1)
+
+  await timers.shift().fn()
+  const statsAfterMaintenance = await manager.getStorageStats()
+  t.is(store.storage.compactCalls, 1)
+  t.is(statsAfterMaintenance.totalStorageBytes, 4 * GB)
+  t.is(statsAfterMaintenance.untrackedStorageBytes, 1 * GB)
 })
 
 test('quota enforcement evicts tracked cache once the cached bytes exceed the limit', async (t) => {
+  const timers = []
   const store = createStore({ diskUsageBytes: 10 * GB, clearDiskUsageBytes: 4 * GB })
-  const manager = new SeedingManager(store, createMetaDb())
+  const manager = new SeedingManager(store, createMetaDb(), createTimerOptions(timers))
   await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
@@ -145,6 +168,10 @@ test('quota enforcement evicts tracked cache once the cached bytes exceed the li
   t.is(manager.getActiveSeeds().length, 0)
   t.alike(store.get(Buffer.from(coreA, 'hex')).clearCalls, [{ start: 3, end: 8 }])
   t.is(store.storage.flushCalls, 1)
+  t.is(store.storage.compactCalls, 0)
+  t.is(timers.length, 1)
+
+  await timers.shift().fn()
   t.is(store.storage.compactCalls, 1)
 })
 

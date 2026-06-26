@@ -8,6 +8,8 @@
 import { normalizeBlobsCoreKey, normalizeBlobRefInput, stringifyBlobId } from './blob-ref.js';
 import { collectCorestoreGarbage } from './corestore-gc.js';
 
+const DEFAULT_STORAGE_MAINTENANCE_DELAY_MS = 30000
+
 /**
  * @typedef {import('./types.js').SeedingConfig} SeedingConfig
  * @typedef {import('./types.js').SeedInfo} SeedInfo
@@ -34,6 +36,16 @@ function normalizeProtectedSeedKeys(keys) {
 
 function createNoopRelease() {
   return () => {}
+}
+
+function resolveStorageMaintenanceDelayMs(value) {
+  const explicit = Number(value)
+  if (Number.isFinite(explicit) && explicit >= 0) return Math.floor(explicit)
+
+  const envValue = Number(globalThis?.process?.env?.PEARTUBE_STORAGE_MAINTENANCE_DELAY_MS)
+  if (Number.isFinite(envValue) && envValue >= 0) return Math.floor(envValue)
+
+  return DEFAULT_STORAGE_MAINTENANCE_DELAY_MS
 }
 
 /**
@@ -87,7 +99,7 @@ export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
    * @param {import('hyperbee')} metaDb - Metadata database
-   * @param {{ getDiskUsageBytes?: () => number | Promise<number>, isCacheClearBlocked?: () => boolean }} [options]
+   * @param {{ getDiskUsageBytes?: () => number | Promise<number>, isCacheClearBlocked?: () => boolean, storageMaintenanceDelayMs?: number, setTimer?: typeof setTimeout, clearTimer?: typeof clearTimeout }} [options]
    */
   constructor(store, metaDb, options = {}) {
     this.store = store;
@@ -109,6 +121,9 @@ export class SeedingManager {
     this.isCacheClearBlocked = typeof options.isCacheClearBlocked === 'function'
       ? options.isCacheClearBlocked
       : null;
+    this.storageMaintenanceDelayMs = resolveStorageMaintenanceDelayMs(options.storageMaintenanceDelayMs);
+    this.setTimer = typeof options.setTimer === 'function' ? options.setTimer : setTimeout;
+    this.clearTimer = typeof options.clearTimer === 'function' ? options.clearTimer : clearTimeout;
     /** @type {Map<string, SeedInfo>} key: `${driveKey}:${videoPath}` -> seed info */
     this.activeSeeds = new Map();
     /** @type {Map<string, number>} blobsCoreKey -> active playback/prefetch retain count */
@@ -117,6 +132,10 @@ export class SeedingManager {
     this.pinnedChannels = new Set();
     /** @type {ReturnType<typeof setTimeout> | null} pending throttled seed persist */
     this._seedPersistTimer = null;
+    /** @type {ReturnType<typeof setTimeout> | null} pending storage compaction timer */
+    this._storageMaintenanceTimer = null;
+    this._storageMaintenanceCompacting = false;
+    this._storageMaintenancePendingLabel = null;
     /** @type {SeedingConfig} */
     this.config = {
       maxStorageGB: 5,            // Default 5GB quota for seeded peer content
@@ -179,6 +198,53 @@ export class SeedingManager {
 
   shouldSkipSeedClear(seed) {
     return this.isCacheClearBlockedNow() || this.isSeedBlobProtected(seed)
+  }
+
+  scheduleCorestoreCompaction(label = 'cache clear compaction') {
+    if (typeof this.store?.storage?.compact !== 'function') return false
+
+    this._storageMaintenancePendingLabel = label
+    if (this._storageMaintenanceTimer || this._storageMaintenanceCompacting) return true
+
+    let timer = null
+    timer = this.setTimer(() => {
+      if (this._storageMaintenanceTimer === timer) this._storageMaintenanceTimer = null
+      return this.runScheduledCorestoreCompaction()
+    }, this.storageMaintenanceDelayMs)
+    this._storageMaintenanceTimer = timer
+    timer?.unref?.()
+    return true
+  }
+
+  async runScheduledCorestoreCompaction() {
+    if (this.isCacheClearBlockedNow()) {
+      this.scheduleCorestoreCompaction(this._storageMaintenancePendingLabel || 'cache clear compaction')
+      return { compacted: false, blocked: true }
+    }
+    if (this._storageMaintenanceCompacting) return { compacted: false, running: true }
+
+    this._storageMaintenanceCompacting = true
+    const label = this._storageMaintenancePendingLabel || 'cache clear compaction'
+    this._storageMaintenancePendingLabel = null
+    try {
+      return await collectCorestoreGarbage(this.store, {
+        label,
+        log: console.log,
+        skipFlush: true
+      })
+    } finally {
+      this._storageMaintenanceCompacting = false
+      if (this._storageMaintenancePendingLabel) this.scheduleCorestoreCompaction(this._storageMaintenancePendingLabel)
+    }
+  }
+
+  async flushClearedBlobRanges(label) {
+    await collectCorestoreGarbage(this.store, {
+      label,
+      log: console.log,
+      skipCompact: true
+    });
+    this.scheduleCorestoreCompaction(`${label} compaction`);
   }
 
   /**
@@ -365,10 +431,7 @@ export class SeedingManager {
       }
       await this.persistSeeds();
       if (clearedBlob) {
-        await collectCorestoreGarbage(this.store, {
-          label: 'seed removal',
-          log: console.log
-        });
+        await this.flushClearedBlobRanges('seed removal');
       }
       console.log('[SeedingManager] Removed seed:', key.slice(0, 32));
       return true;
@@ -567,10 +630,7 @@ export class SeedingManager {
     await this.persistSeeds();
 
     if (clearedBlob) {
-      await collectCorestoreGarbage(this.store, {
-        label: 'quota enforcement',
-        log: console.log
-      });
+      await this.flushClearedBlobRanges('quota enforcement');
     }
   }
 
@@ -716,10 +776,7 @@ export class SeedingManager {
     if (gb < previousMaxStorageGB) {
       const partials = await this.clearDownloadIntents()
       if (partials.clearedBlob) {
-        await collectCorestoreGarbage(this.store, {
-          label: 'partial download intent clear',
-          log: console.log
-        });
+        await this.flushClearedBlobRanges('partial download intent clear');
       }
     }
     // Enforce quota with the new limit after any lower-limit partial cleanup.
@@ -822,21 +879,10 @@ export class SeedingManager {
     await this.persistSeeds();
 
     if (clearedBlob) {
-      // Flush synchronously so the cleared ranges are durable, but run the
-      // RocksDB compaction in the background: on multi-GB stores it can take
-      // minutes on mobile flash, and awaiting it here held the clearCache RPC
-      // reply (and starved every other storage op) until it finished — the
-      // app appeared to hang on "Clear cache".
-      await collectCorestoreGarbage(this.store, {
-        label: 'cache clear',
-        log: console.log,
-        skipCompact: true
-      });
-      void collectCorestoreGarbage(this.store, {
-        label: 'cache clear compaction',
-        log: console.log,
-        skipFlush: true
-      }).catch(() => {});
+      // Flush synchronously so cleared ranges are durable, then defer RocksDB
+      // compaction until playback is idle. Compacting immediately can contend
+      // with blob-server range reads and make the next stream crawl.
+      await this.flushClearedBlobRanges('cache clear');
     }
 
     const postTotalStorageBytes = await this.getTotalStorageBytes();

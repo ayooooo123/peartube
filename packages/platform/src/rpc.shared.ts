@@ -31,6 +31,10 @@ export type NetworkStatusData = {
   publicFeedDiscoveryJoined?: boolean
   feedTopicHex?: string | null
   recommendedBoundary?: string | null
+  network?: any
+  startupTiming?: any
+  doctor?: any
+  directPeerDial?: any
 }
 
 export type PlatformLifecycleEvent =

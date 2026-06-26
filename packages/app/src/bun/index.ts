@@ -30,9 +30,9 @@ function killStaleLocks() {
       const pid = parseInt(pidStr, 10)
       if (!pid || pid === process.pid) continue
       console.log('[main] Killing stale worker holding Corestore lock: PID', pid)
-      try { process.kill(pid, 'SIGKILL') } catch {}
+      try { process.kill(pid, 'SIGKILL') } catch { /* best effort */ }
     }
-  } catch {}
+  } catch { /* best effort */ }
 }
 killStaleLocks()
 
@@ -120,7 +120,7 @@ function getWorker(specifier: string) {
 function destroyAllWorkers() {
   for (const [specifier, worker] of workers) {
     console.log('[main] Destroying worker:', specifier)
-    try { worker.destroy() } catch {}
+    try { worker.destroy() } catch { /* best effort */ }
   }
   workers.clear()
   // Force-kill any lingering bare processes after 2s
@@ -130,7 +130,7 @@ function destroyAllWorkers() {
       for (const pid of pidsToKill) {
         if (workerPids.has(pid)) {
           console.log('[main] Force-killing worker PID:', pid)
-          try { process.kill(pid, 'SIGKILL') } catch {}
+          try { process.kill(pid, 'SIGKILL') } catch { /* best effort */ }
           workerPids.delete(pid)
         }
       }
@@ -174,7 +174,7 @@ function startIPCWebSocket() {
           worker = getWorker(BACKEND_WORKER)
         } catch (err: any) {
           console.error('[main] IPC WebSocket worker startup failed:', err?.message || err)
-          try { ws.close(1011, 'worker startup failed') } catch {}
+          try { ws.close(1011, 'worker startup failed') } catch { /* best effort */ }
           return
         }
 
@@ -215,7 +215,7 @@ function startIPCWebSocket() {
 
 function stopIPCWebSocket() {
   if (!ipcWsServer) return
-  try { ipcWsServer.stop?.(true) } catch {}
+  try { ipcWsServer.stop?.(true) } catch { /* best effort */ }
   ipcWsServer = null
   ipcWsPort = 0
 }
@@ -273,34 +273,6 @@ async function startStaticServer() {
         })
       }
 
-      // Blob proxy — same-origin proxy to the blob server.
-      // mediabunny's UrlSource uses fetch() which enforces CORS.
-      // Proxying through the static server avoids cross-origin issues.
-      if (url.pathname === '/__blob') {
-        const rawPort = url.searchParams.get('__port') || blobServerPort
-        const port = Number(rawPort)
-        if (!Number.isInteger(port) || port <= 0) {
-          return new Response('Blob server is not ready', { status: 503 })
-        }
-        url.searchParams.delete('__port')
-        const blobUrl = `http://127.0.0.1:${port}/?${url.searchParams.toString()}`
-        const headers: Record<string, string> = {}
-        const range = req.headers.get('range')
-        if (range) headers['Range'] = range
-        try {
-          const blobRes = await fetch(blobUrl, { headers, signal: req.signal })
-          const respHeaders = new Headers(blobRes.headers)
-          respHeaders.set('Access-Control-Allow-Origin', '*')
-          respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
-          return new Response(blobRes.body, {
-            status: blobRes.status,
-            headers: respHeaders,
-          })
-        } catch (err: any) {
-          return new Response('Blob proxy error: ' + err?.message, { status: 502 })
-        }
-      }
-
       let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
 
       const file = Bun.file(filePath)
@@ -345,7 +317,7 @@ async function startStaticServer() {
 
 function stopStaticServer() {
   if (!staticServer) return
-  try { staticServer.stop?.(true) } catch {}
+  try { staticServer.stop?.(true) } catch { /* best effort */ }
   staticServer = null
   staticPort = 0
 }
@@ -384,6 +356,6 @@ process.on('SIGTERM', () => { destroyAllWorkers(); process.exit(0) })
 process.on('SIGINT', () => { destroyAllWorkers(); process.exit(0) })
 process.on('exit', () => {
   for (const pid of workerPids) {
-    try { process.kill(pid, 'SIGKILL') } catch {}
+    try { process.kill(pid, 'SIGKILL') } catch { /* best effort */ }
   }
 })

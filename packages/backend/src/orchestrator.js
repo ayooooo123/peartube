@@ -14,6 +14,7 @@ import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
+import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createPersonalManager } from './personal/personal-manager.js';
@@ -401,6 +402,14 @@ export async function createBackendContext(config) {
   const playbackWindowCache = createPlaybackWindowCache({ store: ctx.store });
   playbackWindowCache.start();
   ctx.playbackWindowCache = playbackWindowCache;
+
+  // Symmetric counterpart to the window cache: keep a deep read-ahead window
+  // downloading *ahead* of the playhead so a fast peer builds a real buffer
+  // instead of the on-demand stream settling at playback bitrate. The window
+  // cache trims behind, so the two together bound the on-disk footprint.
+  const playbackForwardFill = createPlaybackForwardFill({ store: ctx.store });
+  playbackForwardFill.start();
+  ctx.playbackForwardFill = playbackForwardFill;
 
   const uploadManager = createUploadManager({ ctx });
 

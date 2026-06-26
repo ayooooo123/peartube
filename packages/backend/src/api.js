@@ -14,6 +14,7 @@ import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee a
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { createLiveBroadcastService, createLivePlaybackService } from './live/index.js';
 import { subscribeBlobPlayhead } from './blob-range-priority.js';
+import { beginPlaybackTiming, markPlaybackTiming } from './playback-timing.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { FederatedSearch } from './search/federated-search.js';
@@ -1764,6 +1765,10 @@ export function createApi({
       markVideoPlayed(driveKey, videoPath)
       const startedAt = Date.now()
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
+      // Lowercase hex so the begin key matches the marks recorded by the blob
+      // server (key.toString('hex')) and the prefetch path (blobCoreKeyHex).
+      const timingKey = (playbackBlobRef?.blobsCoreKey || (typeof blobsCoreKey === 'string' ? blobsCoreKey : '') || '').toLowerCase() || null
+      beginPlaybackTiming(timingKey, videoPath)
 
       // Resolve the blob-server URL first, then start the playback download
       // session. The direct URL alone is not enough for large/back-index MP4s:
@@ -1778,6 +1783,7 @@ export function createApi({
         mimeType,
         resolveUrl: (...args) => this.getVideoUrl(...args),
       })
+      markPlaybackTiming(timingKey, 'url-resolved')
       let playbackStats = null
       const onDemandStatsPromise = startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef)
         .catch((err) => {
@@ -3092,6 +3098,7 @@ export function createApi({
           }, PLAYBACK_STARTUP_PREFETCH_TIMEOUT_MS)
 
           if (startupHeadReady) {
+            markPlaybackTiming(blobCoreKeyHex, 'head-local', 'cached')
             resolvePlaybackReady?.()
           }
 
@@ -3134,6 +3141,7 @@ export function createApi({
                 )
               }
             }
+            markPlaybackTiming(blobCoreKeyHex, 'first-block', `block ${index}`)
             resolvePlaybackReady?.()
             const chunkBytes =
               typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
@@ -3399,6 +3407,7 @@ export function createApi({
                   if (completed === false || fillCancelled) return
                   console.log('[API] Head prefetch complete (blobs)')
                   logBlobDownloadDiagnostics('startup-head-download-complete', core, startBlock, headEnd)
+                  markPlaybackTiming(blobCoreKeyHex, 'head-local', downloadSpeed > 0 ? `${(downloadSpeed / 1048576).toFixed(2)}MB/s` : '')
                   resolvePlaybackReady?.()
                   startFullDownload()
                 }).catch(err => {

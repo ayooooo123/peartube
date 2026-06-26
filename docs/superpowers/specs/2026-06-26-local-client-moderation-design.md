@@ -298,7 +298,9 @@ label of category ≥ `c`.
    | otherwise | `policy.categories[C]` (default: explicit→`blur`, suggestive→`show`) |
 
    then, in order: if `weakOnly` and the action is `hide`, **downgrade to `blur`** (weak
-   signals never hide); finally **clamp by `mode`** (`mode=="blur"` caps at `blur`).
+   signals never hide); finally **clamp by `mode`** — `mode=="blur"` caps the result at
+   `blur`, so `hideThreshold` and a per-category `"hide"` only produce an actual `hide` when
+   `mode=="hide"`. (Default `mode:"blur"` therefore never hides, only blurs.)
 
    Consequences: a single trusted label ⇒ `blur`, never `hide`; `hide` needs `hideThreshold`
    distinct trusted labelers **or** the user setting `categories[C]="hide"` (their own choice,
@@ -474,7 +476,9 @@ New RPC endpoints:
 - `get-content-labels { channelKey | blobsCoreKey }` → `content-label[]` (bounded pull).
 - `publish-content-label { ... }` → sign + append to the labeler's own label feed
   (relays / opt-in users); **rate-limited** per labeler/target.
-- `get-moderation-policy` / `set-moderation-policy`.
+- `get-moderation-policy` / `set-moderation-policy` — `set` **validates** writes
+  (`blurThreshold ≥ 1`, `hideThreshold ≥ blurThreshold`, known category/action enums) so a
+  malformed policy can't undermine the lattice semantics.
 - `set-content-override { blobsCoreKey, action }`.
 - `subscribe-labeler { labelerKeyHex }` / `unsubscribe-labeler`.
 - `promote-peer-labeler { peerKeyHex }` (manual; moves an advisory peer into the trust set).
@@ -535,6 +539,9 @@ Subscribing to a third-party labeler replicates its label feed and adds its key 
   + signing + golden vector; labeler-owned label feeds; self-label on feed-entry; bounded
   `get-content-labels`; advisory `flagHint` in HAVE_FEED; trust set + thresholds; seed
   quarantine/evict + verdict-change hook in `SeedingManager`; relay dense auto-labeling.
+  **Acceptance gate:** a quarantined blob must be provably non-uploadable — assert via a
+  per-core upload gate, or by keeping the quarantined core unopened/undiscoverable until
+  promotion (resolves the Corestore global-replicate caveat, §3.3).
 - **Phase 3 — Native acceleration.** Core ML / TFLite-NNAPI / ONNX-EP behind
   `NsfwClassifier`. No changes above the interface.
 - **Phase 4 (optional).** Labeler reputation/weighting, more categories (violence/gore),

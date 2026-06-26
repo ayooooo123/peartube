@@ -81,6 +81,7 @@ packages/desktop/video/
 
 # Build caches
 **/.cache/
+.gradle-user-home/
 
 # Android native build artifacts (externalNativeBuild / CMake)
 **/android/.cxx/
@@ -92,6 +93,7 @@ logfile
 .codex
 .codex/
 .sisyphus/
+.superpowers/
 .tmp-device-crashes/
 .evidence/
 .trash-peartube-cleanup/

@@ -136,6 +136,7 @@ export function parseHttpByteRange(rangeHeader, byteLength) {
 
   let start
   let end
+  let openEnded = false
 
   if (!rawStart) {
     const suffixLength = Number(rawEnd)
@@ -144,6 +145,7 @@ export function parseHttpByteRange(rangeHeader, byteLength) {
     end = totalBytes - 1
   } else {
     start = Number(rawStart)
+    openEnded = !rawEnd
     end = rawEnd ? Number(rawEnd) : totalBytes - 1
   }
 
@@ -152,7 +154,7 @@ export function parseHttpByteRange(rangeHeader, byteLength) {
   end = Math.min(end, totalBytes - 1)
   if (end < start) return null
 
-  return { start, end }
+  return { start, end, openEnded }
 }
 
 export function getPrioritizedBlobDownloadRange(blob, byteRange, options = {}) {
@@ -188,7 +190,8 @@ export function getPrioritizedBlobDownloadRange(blob, byteRange, options = {}) {
 
   const readAheadBytes = Math.max(0, Number(options.readAheadBytes ?? DEFAULT_BLOB_RANGE_READ_AHEAD_BYTES) || 0)
   const bytesPerBlock = Math.max(1, byteLength / blockLength)
-  const prioritizedEndByte = Math.min(byteLength - 1, rangeEnd + readAheadBytes)
+  const requestedEndByte = byteRange.openEnded === true ? rangeStart : rangeEnd
+  const prioritizedEndByte = Math.min(byteLength - 1, requestedEndByte + readAheadBytes)
   const relativeStartBlock = Math.max(0, Math.min(blockLength - 1, Math.floor(effectiveRangeStart / bytesPerBlock)))
   const relativeEndBlock = Math.max(
     relativeStartBlock + 1,
@@ -381,6 +384,11 @@ export async function prioritizeBlobServerRangeRequest(blobServer, req, options 
     end: downloadRange.end,
     linear: true
   })
+
+  try {
+    const byteEnd = request.byteRange.openEnded ? '' : request.byteRange.end
+    console.log(`[Storage] Blob range priority: bytes ${request.byteRange.start}-${byteEnd} -> blocks ${downloadRange.start}-${downloadRange.end} (${downloadRange.blocks})`)
+  } catch { /* diagnostics only */ }
 
   const entry = {
     core,

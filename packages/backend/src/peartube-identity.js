@@ -12,21 +12,9 @@
 
 import b4a from 'b4a'
 import * as bip39 from 'bip39-mnemonic'
+import KeyChainImport from 'keet-identity-key/lib/keychain.js'
 
-let KeyChain = null
-
-// Lazy-load keet-identity-key/lib/keychain (may not be installed yet)
-async function ensureLoaded () {
-  if (KeyChain) return
-  try {
-    const keyChainMod = await import('keet-identity-key/lib/keychain.js')
-    KeyChain = keyChainMod.default || keyChainMod
-  } catch (err) {
-    throw new Error(
-      'keet-identity-key not installed. Install with: npm install keet-identity-key'
-    )
-  }
-}
+const KeyChain = KeyChainImport?.default || KeyChainImport
 
 /**
  * PearTube SLIP-48 type constant
@@ -81,8 +69,6 @@ export function validateMnemonic (mnemonic) {
  * @throws {Error} If mnemonic is invalid or keet-identity-key is not installed
  */
 export async function deriveIdentity (mnemonic) {
-  await ensureLoaded()
-
   if (!validateMnemonic(mnemonic)) {
     throw new Error('Invalid mnemonic phrase')
   }
@@ -115,8 +101,6 @@ export async function deriveIdentity (mnemonic) {
  * @throws {Error} If mnemonic is invalid or keet-identity-key is not installed
  */
 export async function derivePrimaryKey (mnemonic) {
-  await ensureLoaded()
-
   if (!validateMnemonic(mnemonic)) {
     throw new Error('Invalid mnemonic phrase')
   }

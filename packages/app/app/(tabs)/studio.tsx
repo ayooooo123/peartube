@@ -18,6 +18,7 @@ import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { Chip, EmptyState } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
+import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -93,7 +94,7 @@ export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos, removeVideo } = useApp()
-  const { pauseVideo, closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo } = useVideoPlayerActions()
+  const { pauseVideo, closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, loadAndPlayVideo } = useVideoPlayerActions()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadSpeed, setUploadSpeed] = useState(0)  // bytes/sec
@@ -824,6 +825,44 @@ export default function StudioScreen() {
     }
   }
 
+  const playPublishedVideo = useCallback(async (item: any) => {
+    if (!rpc) return
+    const channelKey = item?.channelKey || identity?.driveKey
+    if (!channelKey || !item?.id) return
+
+    const videoRef = (item.path && typeof item.path === 'string' && item.path.startsWith('/'))
+      ? item.path
+      : item.id
+    const cacheKey = makeVideoUrlCacheKey(
+      channelKey,
+      videoRef,
+      item.blobId || undefined,
+      item.blobsCoreKey || undefined,
+    )
+    const playbackRequest = {
+      channelKey,
+      videoId: videoRef,
+      publicBeeKey: item.publicBeeKey || undefined,
+      blobId: item.blobId || undefined,
+      blobsCoreKey: item.blobsCoreKey || undefined,
+      mimeType: item.mimeType || undefined,
+    }
+    const video = { ...item, channelKey }
+
+    try {
+      const result = await rpc.preparePlayback(playbackRequest)
+      if (result?.url) {
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+        loadAndPlayVideo(video, result.url)
+      } else {
+        Alert.alert('Playback unavailable', 'Could not prepare this video for playback yet.')
+      }
+    } catch (err: any) {
+      console.error('[Studio] Failed to play published video:', err?.message || err)
+      Alert.alert('Playback unavailable', err?.message || 'Could not prepare this video for playback yet.')
+    }
+  }, [identity?.driveKey, loadAndPlayVideo, rpc])
+
   return (
     <View className="flex-1 bg-pear-bg">
       {/* Header with safe area */}
@@ -872,15 +911,22 @@ export default function StudioScreen() {
         ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
         renderItem={({ item }) => (
           <View className="flex-row bg-pear-bg-elevated rounded-xl overflow-hidden" style={{ minHeight: 72 }}>
-            <View className="w-28 bg-pear-bg-card justify-center items-center">
-              <Ionicons name="play" color={colors.text} size={16} />
-            </View>
-            <View className="flex-1 p-4 justify-center">
-              <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
-              <Text className="text-caption text-pear-text-muted mt-1">
-                {formatBytes(item.size)} · {formatDate(item.uploadedAt)}
-              </Text>
-            </View>
+            <Pressable
+              onPress={() => playPublishedVideo(item)}
+              className="flex-1 flex-row active:opacity-80"
+              accessibilityRole="button"
+              accessibilityLabel={`Play ${item.title}`}
+            >
+              <View className="w-28 bg-pear-bg-card justify-center items-center">
+                <Ionicons name="play" color={colors.text} size={16} />
+              </View>
+              <View className="flex-1 p-4 justify-center">
+                <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
+                <Text className="text-caption text-pear-text-muted mt-1">
+                  {formatBytes(item.size)} · {formatDate(item.uploadedAt)}
+                </Text>
+              </View>
+            </Pressable>
             <Pressable
               onPress={() => setEditingVideo(item)}
               style={({ pressed }) => ({

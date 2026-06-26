@@ -36,4 +36,7 @@ rootProject.name = 'PearTube'
 expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
+// PearTube: compile patched expo-video Android sources.
+include ':expo-video'
+project(':expo-video').projectDir = new File(rootProject.projectDir, '../node_modules/expo-video/android')
 includeBuild(expoAutolinking.reactNativeGradlePlugin)

@@ -10,7 +10,22 @@
 import { startHost } from '@peartube/host/start-host'
 import { PROTOCOL_VERSION } from '@peartube/host'
 import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
+import * as specModule from '@peartube/spec'
+import * as orchestratorModule from '@peartube/backend/orchestrator'
+import * as storageModule from '@peartube/backend/storage'
+import { setHyperswarmModuleForRuntime } from '@peartube/backend/runtime-modules'
+import { isExpectedBlobRequestCancellation } from '@peartube/backend/blob-request-cancellation'
+import * as pathModule from 'bare-path'
+import * as fsModule from 'bare-fs'
+import * as b4aModule from 'b4a'
+import { attachMobileHandlers } from '@peartube/backend/mobile-handlers'
+import { registerSharedHandlers } from '@peartube/backend/hrpc-handlers'
 import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'
+import { attachCastHandlers as importedAttachCastHandlers } from './mobile-cast.mjs'
+import * as mobileTranscoderModule from './transcoder.mjs'
+import * as mobileCastTranscoderModule from '@peartube/backend/transcode/cast-transcoder'
+import * as http1Module from 'bare-http1'
+import HyperswarmModule from 'hyperswarm'
 
 let HRPC = null
 let createBackendContext = null
@@ -27,6 +42,7 @@ let http1 = null
 let transcoder = null
 let castTranscoder = null
 let fsNativeExtensions = null
+let attachCastHandlers = null
 let transcoderPromise = null
 let castTranscoderPromise = null
 let thumbnailModule = null
@@ -35,32 +51,23 @@ let httpModulePromise = null
 let fsNativeExtensionsPromise = null
 
 async function loadBackendModules() {
-  const [
-    specMod,
-    orchestratorMod,
-    storageMod,
-    pathMod,
-    fsMod,
-    b4aMod
-  ] = await Promise.all([
-    import('@peartube/spec'),
-    import('@peartube/backend/orchestrator'),
-    import('@peartube/backend/storage'),
-    import('bare-path'),
-    import('bare-fs'),
-    import('b4a')
-  ])
-
-  HRPC = specMod?.default ?? specMod
-  createBackendContext = orchestratorMod?.createBackendContext
-  setIsShuttingDown = orchestratorMod?.setIsShuttingDown
-  shutdownBackend = storageMod?.shutdownBackend
-  setCastActive = storageMod?.setCastActive
-  isCastActive = storageMod?.isCastActive
-  prefetchVideoForCast = storageMod?.prefetchVideoForCast
-  path = pathMod?.default ?? pathMod
-  fs = fsMod?.default ?? fsMod
-  b4a = b4aMod?.default ?? b4aMod
+  // libqjs/Bare worklets do not support runtime dynamic module loading, so every module that
+  // is required for startup must be statically imported at bundle evaluation
+  // time. Optional feature modules remain lazy below.
+  setHyperswarmModuleForRuntime(HyperswarmModule)
+  HRPC = specModule?.default ?? specModule
+  createBackendContext = orchestratorModule?.createBackendContext
+  setIsShuttingDown = orchestratorModule?.setIsShuttingDown
+  shutdownBackend = storageModule?.shutdownBackend
+  setCastActive = storageModule?.setCastActive
+  isCastActive = storageModule?.isCastActive
+  prefetchVideoForCast = storageModule?.prefetchVideoForCast
+  path = pathModule?.default ?? pathModule
+  fs = fsModule?.default ?? fsModule
+  b4a = b4aModule?.default ?? b4aModule
+  transcoder = mobileTranscoderModule
+  castTranscoder = mobileCastTranscoderModule
+  http1 = http1Module?.default ?? http1Module
 
   const checks = {
     HRPC,
@@ -170,6 +177,18 @@ async function ensureCastTranscoderModule() {
   return castTranscoderPromise
 }
 
+function ensureMobileCastHandlers() {
+  if (attachCastHandlers) return attachCastHandlers
+
+  attachCastHandlers = importedAttachCastHandlers
+
+  if (typeof attachCastHandlers !== 'function') {
+    throw new Error('Missing mobile cast handlers')
+  }
+
+  return attachCastHandlers
+}
+
 // Lazy cast-transcoder wrapper for the AVPlayer/OS-native compatibility layer.
 function createLazyCastTranscoder() {
   return {
@@ -200,8 +219,17 @@ function formatError(error) {
 }
 
 function attachUnhandledHandlers(reportBackendError) {
+  const consumeExpectedCancellation = (reason) => {
+    try {
+      return isExpectedBlobRequestCancellation(reason)
+    } catch {
+      return false
+    }
+  }
+
   if (typeof Bare !== 'undefined' && Bare?.on) {
     Bare.on('unhandledRejection', (reason) => {
+      if (consumeExpectedCancellation(reason)) return true
       try {
         console.error('[Backend] Unhandled rejection:', formatError(reason))
       } catch {}
@@ -218,12 +246,19 @@ function attachUnhandledHandlers(reportBackendError) {
 
   const proc = typeof process !== 'undefined' ? process : null
   if (proc?.on) {
-    proc.on('unhandledRejection', (reason) => reportBackendError('Unhandled rejection', reason))
+    proc.on('unhandledRejection', (reason) => {
+      if (consumeExpectedCancellation(reason)) return
+      reportBackendError('Unhandled rejection', reason)
+    })
     proc.on('uncaughtException', (error) => reportBackendError('Uncaught exception', error))
   }
 
   if (typeof globalThis?.addEventListener === 'function') {
     globalThis.addEventListener('unhandledrejection', (event) => {
+      if (consumeExpectedCancellation(event?.reason ?? event)) {
+        event?.preventDefault?.()
+        return
+      }
       reportBackendError('Unhandled rejection', event?.reason ?? event)
       event?.preventDefault?.()
     })
@@ -381,12 +416,14 @@ export async function createMobileRuntimeBackend(options = {}) {
   const workerBundlePath = workerArgs[0] || ''
   if (workerBundlePath) globalThis.__PEARTUBE_WORKER_PATH__ = workerBundlePath
 
-  // OS-native-player compatibility layer (off unless PEARTUBE_AVPLAYER_COMPAT=1).
-  // launchOptions.player ('avplayer' on iOS / 'exoplayer' on Android) is supplied
-  // by the RN side; when enabled it routes codecs the player can't decode through
-  // a local-HLS bare-ffmpeg transcode in preparePlayback.
-  const avplayerCompatEnabled = globalThis.process?.env?.PEARTUBE_AVPLAYER_COMPAT === '1'
-  const compatDeps = (avplayerCompatEnabled && launchOptions?.player)
+  // OS-native-player compatibility layer. launchOptions.player ('avplayer' on
+  // iOS / 'exoplayer' on Android) is supplied by the RN side; preparePlayback
+  // can then route unstreamable/unsupported direct blob URLs through local HLS.
+  // Keep an env opt-out for debugging native-player regressions.
+  const nativePlayerCompatDisabled =
+    globalThis.process?.env?.PEARTUBE_NATIVE_PLAYER_COMPAT === '0' ||
+    globalThis.process?.env?.PEARTUBE_AVPLAYER_COMPAT === '0'
+  const compatDeps = (!nativePlayerCompatDisabled && launchOptions?.player)
     ? { player: launchOptions.player, castTranscoder: createLazyCastTranscoder() }
     : {}
 
@@ -620,7 +657,6 @@ function removeStaleLocks(storageDir) {
     }
   }
 
-  const { attachMobileHandlers } = await import('@peartube/backend/mobile-handlers')
   attachMobileHandlers(backend, {
     api,
     identityManager,
@@ -645,18 +681,17 @@ function removeStaleLocks(storageDir) {
     if (!castHandlersReadyPromise) {
       castHandlersReadyPromise = (async () => {
         const [
-          { attachCastHandlers },
           transcoderModule,
           castTranscoderModule,
           httpModule,
         ] = await Promise.all([
-          import('./mobile-cast.mjs'),
           ensureTranscoderModule(),
           ensureCastTranscoderModule(),
           ensureHttpModule(),
         ])
+        const attachCastHandlersImpl = ensureMobileCastHandlers()
 
-        castCleanup = attachCastHandlers(backend, {
+        castCleanup = attachCastHandlersImpl(backend, {
           rpc,
           ctx,
           api,
@@ -683,7 +718,6 @@ function removeStaleLocks(storageDir) {
 
   attachLazyCastHandlers(backend, ensureCastHandlersAttached)
 
-  const { registerSharedHandlers } = await import('@peartube/backend/hrpc-handlers')
   registerSharedHandlers(rpc, backend)
   handlersRegistered = true
   attachMobileOnlyRpcHandlers(rpc, api)

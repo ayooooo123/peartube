@@ -50,6 +50,28 @@ test('startHost forwards ready payload with protocolVersion and lifecycle event'
   t.alike(lifecycleEvents, [{ type: 'host.ready', data: ready }])
 })
 
+test('startHost passes the canonical protocol version into backend startup', async (t) => {
+  let receivedProtocolVersion = null
+
+  const session = await startHost({
+    platform: 'desktop',
+    storagePath: '/tmp/peartube-host',
+    entrypoint: 'sidecar-entry',
+    args: [],
+    stream: createFakeStream(),
+    createBackendImpl: async ({ onReady, protocolVersion }) => {
+      receivedProtocolVersion = protocolVersion
+      onReady({ blobServerPort: 7777, protocolVersion })
+      return { destroy: async () => {} }
+    }
+  })
+
+  const ready = await session.waitUntilReady()
+
+  t.is(receivedProtocolVersion, 3)
+  t.is(ready.protocolVersion, 3)
+})
+
 test('startHost forwards degraded blob server readiness details', async (t) => {
   const lifecycleEvents = []
 

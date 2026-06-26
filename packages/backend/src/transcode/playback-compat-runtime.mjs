@@ -16,12 +16,16 @@
  */
 
 const DEFAULT_READY_TIMEOUT_MS = 8000
+const DEFAULT_START_TIMEOUT_MS = 3500
 const READY_POLL_INTERVAL_MS = 200
+const START_TIMEOUT = Symbol('compat-start-timeout')
 
 // Players routed through this HLS-based compat path. WKWebView/Chromium
-// (`webkit`) is handled by the renderer-side MSE/mediabunny path instead, and
-// ExoPlayer is codec-complete, so neither routes here by default.
-const HLS_COMPAT_PLAYERS = new Set(['avplayer'])
+// (`webkit`) is handled by the renderer-side MSE/mediabunny path instead.
+// Android uses this path only when the source codec/container policy requires
+// it; supported MP4 playback should stay on the direct blob URL and let the
+// blob range-priority layer fetch the needed P2P blocks.
+const HLS_COMPAT_PLAYERS = new Set(['avplayer', 'exoplayer'])
 
 /**
  * @param {object} opts
@@ -32,6 +36,9 @@ const HLS_COMPAT_PLAYERS = new Set(['avplayer'])
  *   (startCompatTranscode / getCastHlsUrl / getCastStatus)
  * @param {{log?:Function,warn?:Function}|null} [opts.logger]
  * @param {number} [opts.readyTimeoutMs]
+ * @param {number} [opts.startTimeoutMs]
+ * @param {boolean} [opts.force]
+ * @param {'remux'|'audio-only'|'full'} [opts.forceMode]
  * @returns {Promise<{url: string, transcoded: boolean, mode: string, sessionId?: string}>}
  */
 export async function resolveCompatPlaybackUrl({
@@ -41,6 +48,9 @@ export async function resolveCompatPlaybackUrl({
   castTranscoder,
   logger = null,
   readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,
+  startTimeoutMs = DEFAULT_START_TIMEOUT_MS,
+  force = false,
+  forceMode = null,
 } = {}) {
   const passthrough = { url: directUrl, transcoded: false, mode: 'direct' }
 
@@ -53,7 +63,20 @@ export async function resolveCompatPlaybackUrl({
   }
 
   try {
-    const result = await castTranscoder.startCompatTranscode(directUrl, { player, sourceKey })
+    const result = await withTimeout(
+      castTranscoder.startCompatTranscode(directUrl, {
+        player,
+        sourceKey,
+        force,
+        forceMode,
+      }),
+      startTimeoutMs,
+      START_TIMEOUT,
+    )
+    if (result === START_TIMEOUT) {
+      logger?.warn?.(`[compat-playback] compat startup timed out after ${startTimeoutMs}ms, using direct URL`)
+      return passthrough
+    }
     if (!result || !result.success) {
       // 'no-transcode-needed' (already compatible) or a startup failure → direct.
       return passthrough
@@ -89,6 +112,19 @@ async function waitForFirstFragment(castTranscoder, sessionId, timeoutMs) {
     await delay(READY_POLL_INTERVAL_MS)
   } while (Date.now() < deadline)
   return false
+}
+
+function withTimeout(promise, timeoutMs, timeoutValue) {
+  const ms = Math.max(0, timeoutMs || 0)
+  let timeout = null
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timeout = setTimeout(() => resolve(timeoutValue), ms)
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout)
+  })
 }
 
 function delay(ms) {

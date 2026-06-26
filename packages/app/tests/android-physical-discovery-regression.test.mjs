@@ -142,16 +142,39 @@ test('Home Discover separates feed counts from peers and does not call hydrating
   assert.match(source, /Feed: \{displayFeedEntries\}/, 'Home should show feed entries as Feed, not overload Channels or Peers')
   assert.match(source, /Channels: \{displayChannels\}/, 'Home should still show visible/discovered channel count separately')
   assert.doesNotMatch(source, /5 feed\/channel signals detected; waiting for playable previews/, 'Home should not show stale feed-channel signal copy from older builds')
-  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading playable previews'/, 'hydrating feed entries should not be labeled as looking for peers')
-  assert.match(source, /feed entries detected; resolving playable video previews\./, 'hydrating detail should mention feed entries being resolved')
+  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading video previews'/, 'hydrating feed entries should not be labeled as looking for peers')
+  assert.match(source, /Feed entries detected; resolving video preview metadata\./, 'hydrating detail should mention feed entries being resolved')
 })
 
-test('Android registers network discovery as a TurboReactPackage so release new-architecture builds expose NativeModules.PeartubeNetworkDiscovery', () => {
+test('Android registers network discovery as a legacy BaseReactPackage so release new-architecture builds expose NativeModules.PeartubeNetworkDiscovery', () => {
   const packageSource = readAppFile('android/app/src/main/java/com/peartube/app/PeartubeNetworkDiscoveryPackage.kt')
 
-  assert.match(packageSource, /TurboReactPackage/, 'release new-architecture builds should use TurboReactPackage registration')
+  assert.match(packageSource, /BaseReactPackage/, 'release new-architecture builds should register the plain native module in the legacy registry')
+  assert.doesNotMatch(packageSource, /TurboReactPackage/, 'plain ReactContextBaseJavaModule instances should not be advertised as TurboModules')
   assert.match(packageSource, /override fun getModule\(name: String, reactContext: ReactApplicationContext\): NativeModule\?/, 'package should expose getModule lookup by module name')
   assert.match(packageSource, /if \(name == "PeartubeNetworkDiscovery"\)/, 'package should return the discovery module by exported name')
   assert.match(packageSource, /ReactModuleInfoProvider/, 'package should provide ReactModuleInfo metadata for the custom module')
   assert.match(packageSource, /PeartubeNetworkDiscoveryModule::class\.java\.name/, 'metadata should reference the module class name')
+  assert.match(packageSource, /PeartubeNetworkDiscoveryModule::class\.java\.name,[\s\S]*false,[\s\S]*\)/, 'metadata should keep isTurboModule=false so NativeModules can instantiate it')
+})
+
+test('Expo prebuild regenerates Android network discovery native sources and MainApplication wiring', () => {
+  const appConfig = JSON.parse(readAppFile('app.json'))
+  const plugins = appConfig.expo.plugins.map((plugin) => Array.isArray(plugin) ? plugin[0] : plugin)
+
+  assert.ok(
+    plugins.includes('./plugins/withAndroidNetworkDiscovery.js'),
+    'clean Android prebuilds must run the network discovery config plugin',
+  )
+
+  const pluginSource = readAppFile('plugins/withAndroidNetworkDiscovery.js')
+
+  assert.match(pluginSource, /withDangerousMod/, 'plugin should write native Kotlin files during prebuild')
+  assert.match(pluginSource, /PeartubeNetworkDiscovery\.kt/, 'plugin should regenerate discovery lifecycle source')
+  assert.match(pluginSource, /PeartubeNetworkDiscoveryModule\.kt/, 'plugin should regenerate the React Native module')
+  assert.match(pluginSource, /PeartubeNetworkDiscoveryPackage\.kt/, 'plugin should regenerate the package registration')
+  assert.match(pluginSource, /PeartubeNetworkDiscoveryPackage\(\)/, 'plugin should patch MainApplication package registration')
+  assert.match(pluginSource, /registerActivityLifecycleCallbacks/, 'plugin should patch MainApplication lifecycle callbacks')
+  assert.match(pluginSource, /networkDiscovery\.start\(\)/, 'plugin should start discovery from the application lifecycle')
+  assert.match(pluginSource, /networkDiscovery\.stop\(\)/, 'plugin should stop discovery when the app leaves foreground')
 })

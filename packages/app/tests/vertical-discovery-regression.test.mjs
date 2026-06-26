@@ -35,10 +35,10 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.doesNotMatch(source, /useVideoPlayerContext\(/, 'vertical discovery should not bind the Shorts player to the global watch player context')
   assert.doesNotMatch(source, /handoffToShorts\(\)/, 'Shorts playback should not hand off through the normal player')
   assert.match(source, /preparePlayback\(playbackRequest\)/, 'vertical player should resolve playback through backend preparePlayback')
-  assert.match(source, /getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\)/, 'vertical player should use the short playback URL cache')
+  assert.doesNotMatch(source, /getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\)/, 'vertical player must not bypass backend preparation with a cached local URL')
   assert.doesNotMatch(source, /setAmbientVideoContext\(/, 'Shorts playback and comments should not update global watch-player metadata')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
-  assert.match(source, /const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\) : null/, 'cached Shorts playback should attach directly to the Shorts player')
+  assert.doesNotMatch(source, /setShortsVideoUrl\(cachedUrl\)/, 'cached Shorts playback should not attach directly before backend preparation')
   assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/, 'prepared Shorts playback should resolve through a single preparePlayback call and stream on demand')
   assert.doesNotMatch(source, /preparePlaybackWhenReady/, 'Shorts playback should not poll a readiness warmup loop')
 })
@@ -120,6 +120,17 @@ test('Home Discover no longer prewarms visible feed playback URLs', () => {
 
   assert.doesNotMatch(source, /warmPlaybackUrl/, 'Home should not prewarm visible feed playback URLs')
   assert.doesNotMatch(source, /inflightPlaybackWarmups/, 'Home should not keep playback warmup de-dupe state')
+})
+
+test('Home Discover does not show a peer-fetching badge from feed metadata alone', () => {
+  const source = readAppFile('app/(tabs)/index.tsx')
+  const playBlock = source.slice(source.indexOf('const playVideo = useCallback'), source.indexOf('// Legacy: Play video in overlay only'))
+  const renderBlock = source.slice(source.indexOf('const renderVideoRow = useCallback'), source.indexOf('const renderChannelItem', source.indexOf('const renderVideoRow = useCallback')))
+
+  assert.match(playBlock, /setPlaybackFetchState\(\{ key: playKey, message: 'Fetching video from peers…' \}\)/, 'Home may show a status badge only while an actual playback request is in flight')
+  assert.doesNotMatch(renderBlock, /hasDirectBlobRef|isFeedVideoPlaybackReady|directBlobNotReady/, 'feed metadata should not synthesize a playback-blocking badge before the user requests playback')
+  assert.doesNotMatch(renderBlock, /message: 'Fetching video from peers…'/, 'card rendering should not claim peer fetching without a playback request')
+  assert.match(playBlock, /Could not prepare playback\. Try again shortly\.', isError: true/, 'hard preparation failures should still surface as errors')
 })
 
 test('Home Discover falls back to public feed RPC and labels feed entries separately from live peers', () => {
@@ -208,7 +219,7 @@ test('vertical discovery ignores stale preparePlayback completions after fast sw
   assert.match(source, /const playbackRequestSeqRef = useRef\(0\)/, 'Shorts playback should track request generations')
   assert.match(playBlock, /const requestSeq = \+\+playbackRequestSeqRef\.current/, 'each playback attempt should get a newer generation id')
   assert.match(playBlock, /pendingPlayKeyRef\.current !== playKey \|\| playbackRequestSeqRef\.current !== requestSeq/, 'stale async preparePlayback completions should be ignored')
-  assert.match(playBlock, /if \(isStalePlaybackRequest\(\)\) return/, 'resolved stale playback URLs must not attach to the active card')
+  assert.match(playBlock, /if \(isStalePlaybackRequest\(\) \|\| !result\) return/, 'resolved stale playback URLs must not attach to the active card')
 })
 
 test('vertical discovery stabilizes card order across feed refreshes', () => {
@@ -253,7 +264,9 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.doesNotMatch(discoverSource, /setAmbientVideoContext|closeVideo\(\)|pauseVideo\(\)/, 'Shorts route should be completely separate from global watch player mutations')
   assert.match(overlaySource, /usePathname\(\)/, 'global overlay should know the active route')
   assert.match(overlaySource, /useSegments\(\)/, 'global overlay should inspect active route segments when pathname is group-normalized')
-  assert.match(overlaySource, /segments\.includes\('discover'\)/, 'mobile Discover suppression should not depend on one exact Expo Router pathname string')
+  assert.match(overlaySource, /const activeLeafSegment = segments\[segments\.length - 1\]/, 'mobile Discover suppression should inspect only the active leaf segment')
+  assert.match(overlaySource, /activeLeafSegment === 'discover'/, 'mobile Discover suppression should still work when Expo Router normalizes pathname')
+  assert.doesNotMatch(overlaySource, /segments\.includes\('discover'\)/, 'mobile Discover suppression must not hide Home/watch playback just because a parent navigator knows the Discover tab')
   assert.match(overlaySource, /const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive/, 'mobile Discover should suppress the global watch overlay')
   assert.match(overlaySource, /if \(!currentVideo \|\| playerMode === 'hidden'\) \{[\s\S]*return null/, 'hidden ambient Shorts metadata must not render global overlay tap surfaces on Home')
   assert.match(overlaySource, /if \(hideGlobalOverlayOnDiscover\) \{[\s\S]*return null/, 'Discover should suppress the global overlay entirely, including hidden ambient state tap surfaces')

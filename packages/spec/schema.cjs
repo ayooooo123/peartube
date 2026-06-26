@@ -373,7 +373,7 @@ ns.register({
 ns.register({
   name: 'prepare-playback-response',
   fields: [
-    { name: 'url', type: 'string', required: true },
+    { name: 'url', type: 'string', required: false },
     { name: 'stats', type: '@peartube/video-stats', required: false },
     { name: 'warmupStarted', type: 'bool', required: true },
     { name: 'peerWarmupStarted', type: 'bool', required: false },

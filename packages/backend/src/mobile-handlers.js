@@ -9,6 +9,28 @@
 
 import { resolveCompatPlaybackUrl } from './transcode/playback-compat-runtime.mjs'
 
+function isPearTubeLoopbackBlobUrl(value) {
+  if (typeof value !== 'string' || value.length === 0) return false
+  try {
+    const url = new URL(value)
+    const hostname = url.hostname
+    if (url.protocol !== 'http:') return false
+    if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '[::1]') return false
+    return Boolean(url.searchParams.get('key') && url.searchParams.get('blob'))
+  } catch {
+    return false
+  }
+}
+
+function shouldResolveNativeCompat(player, url) {
+  // Android ExoPlayer can stream PearTube blobs directly. Running the optional
+  // compat layer first forces a backend HTTP/ffmpeg self-probe against the same
+  // loopback URL; under libqjs that probe can wedge before its timeout, so
+  // direct playback never gets bytes.
+  if (player === 'exoplayer' && isPearTubeLoopbackBlobUrl(url)) return false
+  return true
+}
+
 /**
  * @param {Object} B - Backend object to attach handlers to
  * @param {Object} deps - Dependencies from the backend context
@@ -117,6 +139,8 @@ export function attachMobileHandlers(B, deps) {
         thumbnail: v?.thumbnail ? String(v.thumbnail) : null,
         channelKey: v?.channelKey || ck,
         channelName: v?.channelName ? String(v.channelName) : '',
+        size: Number(v?.size || 0) || 0,
+        uploadedAt: Number(v?.uploadedAt || v?.createdAt || 0) || 0,
         createdAt: Number(v?.createdAt || v?.uploadedAt || Date.now()) || 0,
         views: Number(v?.views || 0) || 0,
         category: v?.category ? String(v.category) : null,
@@ -159,7 +183,7 @@ export function attachMobileHandlers(B, deps) {
     // Optional OS-native-player compatibility layer: when the backend was given
     // a `castTranscoder` + `player`, route codecs the player can't decode through
     // a local-HLS transcode. Best-effort — any failure keeps the direct URL.
-    if (castTranscoder && player && prepared?.url) {
+    if (castTranscoder && player && prepared?.url && shouldResolveNativeCompat(player, prepared.url)) {
       try {
         const sourceKey = r.blobsCoreKey && r.blobId ? `${r.blobsCoreKey}:${r.blobId}` : null
         const compat = await resolveCompatPlaybackUrl({

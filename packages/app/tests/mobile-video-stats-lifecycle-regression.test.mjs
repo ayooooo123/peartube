@@ -45,18 +45,24 @@ test('mobile watch page does not keep saying reaching out once playback has byte
   )
   assert.match(
     barBlock,
-    /hasPlayableProgress[\s\S]*\? 'Streaming'[\s\S]*: 'Reaching out to peers…'/,
-    'playback progress should beat the reaching-out empty state when peers are momentarily zero',
+    /sessionDownloadedBytes > 0[\s\S]*sessionDownloadedBlocks > 0[\s\S]*downloadSpeedValue > 0/,
+    'streaming state should depend on bytes from the active playback session, not sampled aggregate progress',
+  )
+  assert.doesNotMatch(
+    barBlock,
+    /Number\(stats\?\.progress \?\? 0\) > 0/,
+    'sampled aggregate progress should not clear the reaching-out/preparing state by itself',
   )
 })
 
-test('backend preparePlayback initializes stats for direct on-demand blob playback', () => {
+test('backend preparePlayback keeps stats bounded and prefetch off the URL handoff path', () => {
   const source = read('../backend/src/api.js')
+  const transcoderSource = read('../backend/src/transcode/transcoder.mjs')
 
   assert.match(
     source,
     /async function startOnDemandPlaybackStats/,
-    'direct blob playback should attach lightweight stats tracking without prefetching',
+    'direct blob playback should keep a lightweight stats fallback when startup prefetch is unavailable',
   )
   assert.match(
     source,
@@ -65,8 +71,28 @@ test('backend preparePlayback initializes stats for direct on-demand blob playba
   )
   assert.match(
     source,
-    /const playbackStats = await startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
-    'preparePlayback should initialize stats before returning to mobile',
+    /PLAYBACK_STATS_HANDOFF_TIMEOUT_MS = 250/,
+    'preparePlayback may wait only briefly for direct stats before handing off the URL',
+  )
+  assert.match(
+    source,
+    /void prefetchPromise/,
+    'preparePlayback should start playback prefetch in the background without awaiting it',
+  )
+  assert.doesNotMatch(
+    source,
+    /await withTimeout\(\s*prefetchPromise,/,
+    'preparePlayback should not wait for the playback prefetch startup gate before handing off the URL',
+  )
+  assert.match(
+    source,
+    /startOnDemandPlaybackStats\(driveKey, videoPath, playbackBlobRef\)/,
+    'preparePlayback should keep direct playback stats while background prefetch runs',
+  )
+  assert.match(
+    transcoderSource,
+    /HTTP_CONTENT_LENGTH_TIMEOUT_MS/,
+    'compat content-length probing should be bounded so it cannot block mobile playback',
   )
 })
 
@@ -108,12 +134,15 @@ test('useP2PVideo gates async completions by request generation', () => {
   assert.match(source, /requestGenerationRef\.current !== requestId \|\| Date\.now\(\) - startTimeRef\.current > opts\.pollTimeout/, 'polling ticks should ignore stale generations')
 })
 
-test('cached playback refreshes active URL only for the current session', () => {
+test('watch page playback prepares the backend before opening a URL', () => {
   const source = read('app/video/[id].tsx')
-  const cachedStart = source.indexOf('if (cachedUrl) {')
-  const cachedBlock = source.slice(cachedStart, source.indexOf('const result = await rpc.preparePlayback(playbackRequest)', cachedStart))
-  assert.notEqual(cachedBlock.length, 0, 'expected cached playback block before the resolve-and-stream call')
+  const prepareStart = source.indexOf('const result = await rpc.preparePlayback(playbackRequest)')
+  assert.notEqual(prepareStart, -1, 'expected preparePlayback before URL handoff')
+  const handoffStart = source.indexOf('loadAndPlayVideo(videoData, result.url)', prepareStart)
+  assert.notEqual(handoffStart, -1, 'expected prepared URL handoff after preparePlayback')
 
-  assert.match(cachedBlock, /loadGenerationRef\.current !== generation/, 'background preparePlayback should be generation-gated')
-  assert.match(cachedBlock, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'background re-resolve should refresh the cached URL only in the active generation')
+  const prepareBlock = source.slice(prepareStart, handoffStart)
+  assert.match(prepareBlock, /loadGenerationRef\.current !== generation/, 'preparePlayback completion should be generation-gated')
+  assert.match(source, /if \(cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'prepared URL should refresh the cache only after backend preparation')
+  assert.doesNotMatch(source, /loadAndPlayVideo\(videoData, cachedUrl\)/, 'watch page must not hand cached URLs to the player before backend preparation')
 })

@@ -5,7 +5,6 @@ export const BACKEND_BUNDLE_VERSION_FILENAME = 'backend-bundle.version'
 
 const FNV_OFFSET_BASIS = 0x811c9dc5
 const FNV_PRIME = 0x01000193
-const FINGERPRINT_SAMPLE_BYTES = 4096
 
 /**
  * FNV-1a 32-bit hash of an ASCII-bounded string. Matches OUR previously
@@ -25,19 +24,17 @@ export function fnv1aHashString(input) {
 
 /**
  * Compute a cheap content fingerprint that is stable for identical bundle
- * outputs and discriminative across builds. Combines length with hashes of a
- * head and tail sample so any code change perturbs the fingerprint.
+ * outputs and discriminative across builds. The native backend bundle is large,
+ * but hashing the full string here is intentional: playback fixes often land in
+ * the middle of the packed Bare bundle, and sampled edge hashes can miss those
+ * edits, causing updated APKs to keep launching stale persisted worklets.
  * @param {string | null | undefined} source
  * @returns {string}
  */
 export function fingerprintBundleSource(source) {
-  if (typeof source !== 'string' || source.length === 0) return '0:00000000:00000000'
+  if (typeof source !== 'string' || source.length === 0) return '0:00000000'
   const len = source.length
-  const head = source.slice(0, Math.min(FINGERPRINT_SAMPLE_BYTES, len))
-  const tail = len > FINGERPRINT_SAMPLE_BYTES
-    ? source.slice(len - FINGERPRINT_SAMPLE_BYTES)
-    : ''
-  return `${len}:${fnv1aHashString(head)}:${fnv1aHashString(tail)}`
+  return `${len}:${fnv1aHashString(source)}`
 }
 
 /**

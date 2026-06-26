@@ -19,7 +19,7 @@ import { resumeWatchEntry } from '@/lib/playback-resume'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl, hasThumbnailBlobRef } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
-import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-virtualization'
 import {
@@ -34,8 +34,6 @@ import {
   selectFeedEntryVideosWithPreviewFallback,
   shouldKeepFeedVideoForVisibleEntries,
   shouldRenderFeedVideo,
-  hasDirectBlobRef,
-  isFeedVideoPlaybackReady,
 } from '@/lib/feed-hydration'
 import {
   createFeedSnapshot,
@@ -126,6 +124,19 @@ function logTiming(label: string, startMs: number, details: Record<string, any> 
     ms: Date.now() - startMs,
     ...details,
   })
+}
+
+function summarizeFeedVideoForLog(video: any) {
+  if (!video) return null
+  return {
+    id: video.id,
+    hasBlob: Boolean(video.blobId && video.blobsCoreKey),
+    byteAvailability: video.byteAvailability,
+    availability: video.availability,
+    hasHeadBlock: Boolean(video.hasHeadBlock),
+    contiguousBlocks: Number(video.contiguousBlocks || 0) || 0,
+    readyForPlayback: Boolean(video.readyForPlayback),
+  }
 }
 
 // Detect Pear desktop vs mobile
@@ -660,8 +671,23 @@ export default function HomeScreen() {
           if (result !== timeoutToken) {
             resolved = true
             loadedVideos = selectFeedEntryVideosWithPreviewFallback((result as any)?.videos || [], previewFallback)
+            console.log('[Home] listVideos result', {
+              channelKey,
+              attempt,
+              rpcVideos: Array.isArray((result as any)?.videos) ? (result as any).videos.length : 0,
+              previewFallback: previewFallback.length,
+              selected: loadedVideos.length,
+              first: summarizeFeedVideoForLog(loadedVideos[0]),
+            })
           } else {
             loadedVideos = previewFallback
+            console.log('[Home] listVideos timeout', {
+              channelKey,
+              attempt,
+              attemptTimeout,
+              previewFallback: previewFallback.length,
+              first: summarizeFeedVideoForLog(loadedVideos[0]),
+            })
           }
           if (Array.isArray(loadedVideos) && loadedVideos.length > 0) break
           if (hydrationMode === 'network' && attempt < attempts - 1) {
@@ -680,6 +706,13 @@ export default function HomeScreen() {
             publicBeeKey: publicBeeKey || undefined,
             channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
           }))
+        console.log('[Home] loadEntry filtered', {
+          channelKey,
+          loaded: loadedVideos.length,
+          filtered: filteredVideos.length,
+          firstLoaded: summarizeFeedVideoForLog(loadedVideos[0]),
+          firstFiltered: summarizeFeedVideoForLog(filteredVideos[0]),
+        })
 
         return {
           channelKey,
@@ -759,8 +792,9 @@ export default function HomeScreen() {
     })
   }, [feedEntries, videos, identity?.driveKey])
 
-  // Seed Discover immediately from live manifest previews so the first render
-  // can show provably playable remote cards before per-channel hydration finishes.
+  // Seed Discover immediately from live manifest previews. Direct blob refs are
+  // enough to open playback; the player path will prefetch/buffer the first
+  // bytes instead of hiding discovered videos until local byte proof exists.
   useEffect(() => {
     const previewVideos = getFeedPreviewVideos(
       feedEntries,
@@ -877,7 +911,6 @@ export default function HomeScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -885,17 +918,6 @@ export default function HomeScreen() {
         blobId: videoAny.blobId || undefined,
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: videoAny.mimeType || undefined,
-      }
-      if (cachedUrl) {
-        // Instant replay from the in-memory URL cache. Re-resolve in the
-        // background to refresh the entry and keep the blob core joined to
-        // swarm discovery so the player can keep streaming on demand.
-        void rpc.preparePlayback(playbackRequest).then((result: any) => {
-          if (!isCurrentPlaybackRequest()) return
-          if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        }).catch(() => {})
-        loadAndPlayVideo(video, cachedUrl)
-        return
       }
       const playKey = getHomePlaybackKey(video)
       setPlaybackFetchState({ key: playKey, message: 'Fetching video from peers…' })
@@ -942,7 +964,6 @@ export default function HomeScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -950,15 +971,6 @@ export default function HomeScreen() {
         blobId: videoAny.blobId || undefined,
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: videoAny.mimeType || undefined,
-      }
-      if (cachedUrl) {
-        // Instant replay from the in-memory URL cache (see playVideo).
-        void rpc.preparePlayback(playbackRequest).then((result: any) => {
-          if (!isCurrentPlaybackRequest()) return
-          if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        }).catch(() => {})
-        loadAndPlayVideo(video, cachedUrl)
-        return
       }
       const playKey = getHomePlaybackKey(video)
       setPlaybackFetchState({ key: playKey, message: 'Fetching video from peers…' })
@@ -1136,12 +1148,9 @@ export default function HomeScreen() {
     } : { marginBottom: 12 }}>
       {rowVideos.map((video, index) => {
         const playKey = getHomePlaybackKey(video)
-        const directBlobNotReady = hasDirectBlobRef(video as any) && !isFeedVideoPlaybackReady(video as any, identity?.driveKey)
         const playbackStatus = playbackFetchState?.key === playKey
           ? playbackFetchState
-          : directBlobNotReady
-            ? { key: playKey, message: 'Fetching video from peers…' }
-            : null
+          : null
         return (
           <View
             key={`${video.channelKey || 'local'}-${video.id}`}
@@ -1163,7 +1172,7 @@ export default function HomeScreen() {
         )
       })}
     </View>
-  ), [identity?.driveKey, isDesktop, playVideo, playbackFetchState, router, videoGridItemStyle])
+  ), [isDesktop, playVideo, playbackFetchState, router, videoGridItemStyle])
 
   const renderChannelItem = useCallback(({ item }: ListRenderItemInfo<ChannelListItem>) => {
     if (item.type === 'loading') {
@@ -1387,7 +1396,7 @@ export default function HomeScreen() {
           : state === 'cached-fallback'
             ? 'Showing what we saw last time'
             : state === 'hydrating'
-              ? 'Almost there…'
+              ? 'Loading video previews'
               : 'Listening for the swarm'
       const detail = state === 'permission-degraded'
         ? 'Allow Nearby devices in system settings, then refresh.'
@@ -1396,7 +1405,7 @@ export default function HomeScreen() {
           : state === 'cached-fallback'
             ? 'No peers are reachable right now — cached videos stay available.'
             : state === 'hydrating'
-              ? 'Found channels nearby; fetching their videos now.'
+              ? 'Feed entries detected; resolving video preview metadata.'
               : 'No channels have appeared yet. Keep the app open or tap refresh — someone will show up.'
 
       return (

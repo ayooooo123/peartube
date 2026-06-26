@@ -43,7 +43,7 @@ test('native desktop validates protocol version and exposes network-aware empty 
   const hostBridge = readWorkspaceFile('packages/desktop-native/Sources/Services/HostBridgeService.swift')
   const emptyState = readWorkspaceFile('packages/desktop-native/Sources/Views/SectionEmptyStateView.swift')
 
-  assert.match(hostBridge, /supportedProtocolVersion = 2/)
+  assert.match(hostBridge, /supportedProtocolVersion = 3/)
   assert.match(hostBridge, /validateProtocolVersion/)
   assert.match(hostBridge, /try Self\.validateProtocolVersion\(response\.protocolVersion\)/)
   assert.match(hostBridge, /NativeNetworkStatus/)

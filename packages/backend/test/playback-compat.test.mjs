@@ -68,6 +68,20 @@ test('exoplayer: DTS audio still needs transcode', () => {
   assert.equal(d.mode, 'audio-only')
 })
 
+test('exoplayer: probe-required remux is honored for streamability', () => {
+  const d = decidePlayback({
+    player: 'exoplayer',
+    container: 'mov,mp4,m4a,3gp,3g2,mj2',
+    videoCodec: 'h264',
+    audioCodec: 'aac',
+    needsRemux: true,
+    remuxReason: 'Very large file needs HLS for reliable streaming',
+  })
+  assert.equal(d.mode, 'remux')
+  assert.equal(d.needsRemux, true)
+  assert.match(d.reason, /Very large file/)
+})
+
 // ─── WKWebView / Chromium (Electrobun) — faithful to checkWebTranscodeNeeded ──
 
 test('webkit: Opus/Vorbis/FLAC audio plays directly', () => {

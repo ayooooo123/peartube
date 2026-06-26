@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from '@peartube/host'
+import { createBackendContext } from './orchestrator.js'
 import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'
 
 function noop() {}
@@ -53,7 +53,20 @@ function safeJson(value) {
   }
 }
 
-export function buildSharedSystemHandlers(backend) {
+export function requireHostProtocolVersion(protocolVersion, callerName) {
+  if (!Number.isSafeInteger(protocolVersion) || protocolVersion <= 0) {
+    throw new Error(`${callerName} requires protocolVersion from @peartube/host`)
+  }
+
+  return protocolVersion
+}
+
+export function buildSharedSystemHandlers(backend, options = {}) {
+  const protocolVersion = requireHostProtocolVersion(
+    options.protocolVersion,
+    'buildSharedSystemHandlers'
+  )
+
   return {
     async DesktopBootstrap(req) {
       const emptySnapshot = {
@@ -64,7 +77,7 @@ export function buildSharedSystemHandlers(backend) {
       }
       return {
         ...getBlobServerStatus(backend),
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion,
         storagePath: req?.storagePath || '',
         snapshot: emptySnapshot
       }
@@ -188,6 +201,7 @@ export function createBackendRuntime(opts = {}) {
     onReady,
     onError,
     onVideoStats,
+    protocolVersion,
     ...lifecycleOptions
   } = opts
 
@@ -205,6 +219,11 @@ export function createBackendRuntime(opts = {}) {
   if (platform !== 'mobile' && platform !== 'desktop') {
     throw new Error('createBackendRuntime requires platform to be "mobile" or "desktop"')
   }
+
+  const hostProtocolVersion = requireHostProtocolVersion(
+    protocolVersion,
+    'createBackendRuntime'
+  )
 
   let backend = null
   let rpc = null
@@ -251,6 +270,7 @@ export function createBackendRuntime(opts = {}) {
           platform,
           runtime: { stream },
           hrpc: null,
+          createBackendContext,
           onStatsUpdate: onVideoStats,
           ...lifecycleOptions
         })
@@ -262,7 +282,7 @@ export function createBackendRuntime(opts = {}) {
         }
         backend.sharedHandlers = {
           ...(backend.sharedHandlers || {}),
-          ...buildSharedSystemHandlers(backend)
+          ...buildSharedSystemHandlers(backend, { protocolVersion: hostProtocolVersion })
         }
 
         rpc = new HRPC(stream)
@@ -298,7 +318,7 @@ export function createBackendRuntime(opts = {}) {
         await core.start()
 
         const blobStatus = getBlobServerStatus(backend)
-        const readyPayload = { ...blobStatus, protocolVersion: PROTOCOL_VERSION }
+        const readyPayload = { ...blobStatus, protocolVersion: hostProtocolVersion }
         readyCallback(readyPayload)
         if (blobStatus.blobServerError) {
           try {

@@ -16,6 +16,10 @@ function createCtx() {
     async update() {
       calls.push(['update'])
     },
+    findingPeers() {
+      calls.push(['findingPeers'])
+      return () => calls.push(['findingPeers.done'])
+    },
   }
   return {
     calls,
@@ -30,8 +34,9 @@ function createCtx() {
         },
       },
       store: {
-        get(key) {
-          calls.push(['store.get', key.toString('hex')])
+        get(opts) {
+          const key = opts?.key || opts
+          calls.push(['store.get', Buffer.isBuffer(key) ? key.toString('hex') : null, Boolean(opts?.key)])
           return core
         },
       },
@@ -57,6 +62,39 @@ test('direct blob refs return a URL before background warmup settles', async (t)
   await Promise.resolve()
   await Promise.resolve()
   t.ok(calls.some((call) => call[0] === 'ready'))
+})
+
+test('direct blob warmup opens the remote core with Corestore key options', async (t) => {
+  const { ctx, calls } = createCtx()
+  const service = new BlobPlaybackService({ ctx })
+
+  service.resolveDirectBlobUrl({
+    blobsCoreKey: VALID_KEY,
+    blobId: VALID_BLOB,
+    mimeType: 'video/mp4',
+  })
+
+  t.alike(calls.find((call) => call[0] === 'store.get'), ['store.get', VALID_KEY, true])
+})
+
+test('direct blob warmup keeps findingPeers active briefly for first range request', async (t) => {
+  const { ctx, calls } = createCtx()
+  const service = new BlobPlaybackService({ ctx, findingPeerLeaseMs: 20 })
+
+  service.resolveDirectBlobUrl({
+    blobsCoreKey: VALID_KEY,
+    blobId: VALID_BLOB,
+    mimeType: 'video/mp4',
+  })
+
+  await Promise.resolve()
+  await Promise.resolve()
+
+  t.ok(calls.some((call) => call[0] === 'findingPeers'), 'warmup marks the blob core as actively finding peers')
+  t.absent(calls.some((call) => call[0] === 'findingPeers.done'), 'peer finding is not released before the player opens the blob URL')
+
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  t.ok(calls.some((call) => call[0] === 'findingPeers.done'), 'peer finding lease is released after its bounded window')
 })
 
 test('metadata fallback resolves direct refs when metadata includes blobsCoreKey', async (t) => {

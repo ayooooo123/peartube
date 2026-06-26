@@ -1,0 +1,95 @@
+# Builds a custom-engine Android libbare-kit.so from holepunchto/bare-kit, so the
+# app can ship a smaller JS engine (QuickJS/Jerry/JSC) instead of V8 — produced
+# reproducibly in CI instead of committed as an opaque binary blob.
+#
+# Mirrors bare-kit's own publish.yml `android:` job, adding -DBARE_ENGINE.
+# Output: artifact `bare-kit-<engine>-android` containing <abi>/libbare-kit.so
+# for arm64-v8a, armeabi-v7a, x86, x86_64. Drop it into
+# packages/app/bare-kit-engine/<engine>/ to use it.
+name: Build BareKit engine (Android)
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine:
+        description: Engine binding (BARE_ENGINE = github:holepunchto/<engine>)
+        required: true
+        default: libqjs
+        type: choice
+        options: [libqjs, libmqjs, libjsc, libjerry, libjs]
+      bare_kit_ref:
+        description: bare-kit git ref/tag to build (must match the version react-native-bare-kit fetches)
+        required: true
+        default: v2.2.0
+        type: string
+
+jobs:
+  build-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout bare-kit
+        uses: actions/checkout@v6
+        with:
+          repository: holepunchto/bare-kit
+          ref: ${{ inputs.bare_kit_ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Inject BARE_ENGINE into the Android cmake build
+        run: |
+          set -euo pipefail
+          ENGINE="github:holepunchto/${{ inputs.engine }}"
+          # Append -DBARE_ENGINE to the existing externalNativeBuild cmake arguments.
+          perl -0pi -e \
+            's/("-DANDROID_STL=c\+\+_shared")/$1, "-DBARE_ENGINE='"$ENGINE"'"/g' \
+            android/build.gradle
+          echo "----- android/build.gradle cmake arguments -----"
+          grep -n "BARE_ENGINE\|ANDROID_STL\|arguments" android/build.gradle || true
+
+      - run: npm install --global cmake-runtime ninja-runtime
+      - run: npm install
+
+      - name: Build release AAR (gradle aR)
+        run: ./gradlew aR --no-daemon
+
+      - name: Extract per-ABI libbare-kit.so from the AAR
+        run: |
+          set -euo pipefail
+          AAR=$(find android/build/outputs/aar -name '*-release.aar' | head -1)
+          echo "AAR: $AAR"
+          mkdir -p out
+          unzip -o "$AAR" 'jni/*/libbare-kit.so' -d aar-extract
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            SO="aar-extract/jni/$abi/libbare-kit.so"
+            if [ -f "$SO" ]; then
+              mkdir -p "out/$abi"
+              cp "$SO" "out/$abi/libbare-kit.so"
+              printf '  %-12s %s\n' "$abi" "$(du -h "$SO" | cut -f1)"
+            else
+              echo "::warning::missing $SO"
+            fi
+          done
+          {
+            echo "### BareKit engine build (${{ inputs.engine }} @ ${{ inputs.bare_kit_ref }})"
+            echo '| ABI | libbare-kit.so |'
+            echo '|---|---|'
+            for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+              [ -f "out/$abi/libbare-kit.so" ] && \
+                echo "| $abi | $(du -h "out/$abi/libbare-kit.so" | cut -f1) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bare-kit-${{ inputs.engine }}-android
+          path: out/**/libbare-kit.so
+          if-no-files-found: error
+          retention-days: 14

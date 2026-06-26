@@ -376,10 +376,11 @@ export function VideoPlayerOverlay() {
 
   // Mini player corner/drag state
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
+  const activeLeafSegment = segments[segments.length - 1]
   const isDiscoverPathActive =
     pathname === '/discover' ||
     pathname === '/(tabs)/discover' ||
-    segments.includes('discover')
+    activeLeafSegment === 'discover'
   const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive
   const showLegacyMiniUi =
     playerMode === 'mini' &&
@@ -2040,6 +2041,17 @@ export function VideoPlayerOverlay() {
       })
     }
   }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
+
+  useEffect(() => {
+    console.log('[VideoPlayerOverlay] route/player:', JSON.stringify({
+      pathname,
+      activeLeafSegment,
+      hideGlobalOverlayOnDiscover,
+      hasCurrentVideo: Boolean(currentVideo),
+      playerMode,
+      hasVideoUrl: Boolean(videoUrl),
+    }))
+  }, [activeLeafSegment, currentVideo, hideGlobalOverlayOnDiscover, pathname, playerMode, videoUrl])
 
   if (!currentVideo || playerMode === 'hidden') {
     return null

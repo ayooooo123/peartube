@@ -80,6 +80,7 @@
       ],
       "./plugins/withAndroidPiP.js",
       "./plugins/withExpoVideoNotificationTap.js",
+      "./plugins/withAndroidNetworkDiscovery.js",
       "./plugins/withPipBackgroundAudio.js",
       "./plugins/withNextLib.js",
       "./plugins/withExoplayerKeepResources.js",

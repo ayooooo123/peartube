@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { serveThumbnailHttpRequest } from '../src/thumbnail-http.js'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const thumbnailSource = readFileSync(resolve(__dirname, '../src/thumbnail-http.js'), 'utf8')
+const storageSource = readFileSync(resolve(__dirname, '../src/storage.js'), 'utf8')
 
 function mockRes() {
   return {
@@ -46,4 +53,27 @@ test('serveThumbnailHttpRequest returns false when no store is available', async
     res
   )
   assert.equal(handled, false)
+})
+
+test('thumbnail blob requests retain swarm discovery while image loaders retry', () => {
+  assert.match(
+    storageSource,
+    /retainDiscovery:\s*\(discoveryKey,\s*options\)\s*=>\s*retainSwarmDiscovery\(/,
+    'storage should pass retained discovery into the thumbnail responder',
+  )
+  assert.match(
+    thumbnailSource,
+    /deps\?\.retainDiscovery/,
+    'thumbnail responder should use the retained discovery hook',
+  )
+  assert.match(
+    thumbnailSource,
+    /retainDiscovery\(core\.discoveryKey,/,
+    'thumbnail responder should retain the blob core discovery key',
+  )
+  assert.doesNotMatch(
+    thumbnailSource,
+    /swarm\.join\(core\.discoveryKey\)/,
+    'thumbnail responder should not use an unretained one-off swarm join',
+  )
 })

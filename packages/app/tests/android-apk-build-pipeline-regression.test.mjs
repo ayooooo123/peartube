@@ -81,3 +81,30 @@ test('bundle freshness guard watches manifest schema changes and regenerates spe
     'ensure-backend-bundles should still rebuild the backend bundle after regenerating spec',
   )
 })
+
+test('Android engine workflows swap the JS engine without patching BareKit source', () => {
+  const engineAbWorkflow = readFile('.github/workflows/android-engine-ab.yml')
+  const engineBuildWorkflow = readFile('.github/workflows/build-bare-kit-engine.yml')
+
+  for (const [name, source] of [
+    ['android-engine-ab', engineAbWorkflow],
+    ['build-bare-kit-engine', engineBuildWorkflow],
+  ]) {
+    assert.match(
+      source,
+      /-DBARE_ENGINE=/,
+      `${name} should still build BareKit with the selected engine`,
+    )
+    assert.doesNotMatch(
+      source,
+      /Patch QJS worklet bootstrap|git apply <<'PATCH'|shared\/worklet\.(c|js)|__BareKitWorkletBootstrap|bootstrap=barefix|PATCHES/,
+      `${name} should not patch holepunchto/bare-kit source at build time`,
+    )
+  }
+
+  assert.equal(
+    fs.existsSync(path.join(repoRoot, 'packages/app/bare-kit-engine/patches/bare-escape-handle.patch')),
+    false,
+    'Bare source patches should not be tracked in the app engine overlay directory',
+  )
+})

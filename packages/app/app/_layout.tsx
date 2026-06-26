@@ -809,11 +809,18 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       }
 
       const startupState = platformRPC.getStartupState?.() || 'idle'
+      const shouldVerifyReadyBackend = Platform.OS === 'android'
+        && platformRPC.isInitialized()
+        && !nativeInitInFlightRef.current
+        && startupState === 'ready'
       const shouldReinitialize = !platformRPC.isInitialized()
         && !nativeInitInFlightRef.current
         && startupState === 'idle'
 
-      if (shouldReinitialize) {
+      if (shouldVerifyReadyBackend) {
+        console.log('[App] Verifying native backend after foreground...')
+        initNativeBackend()
+      } else if (shouldReinitialize) {
         console.log('[App] Backend not initialized, reinitializing...')
         initNativeBackend()
       }

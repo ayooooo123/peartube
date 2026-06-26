@@ -1,0 +1,213 @@
+# A/B Android APK build: stock V8 vs a swapped-in smaller engine (default QuickJS),
+# so you can install both and compare size + functionality + speed yourself.
+# Produces two arm64 APKs as artifacts and prints the size delta in the summary.
+name: Android engine A/B APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine:
+        description: Engine to A/B against V8
+        required: true
+        default: libqjs
+        type: choice
+        options: [libqjs, libmqjs, libjsc, libjerry]
+      abi:
+        description: ABI to build (single, for fast comparison)
+        required: true
+        default: arm64-v8a
+        type: string
+      bare_kit_ref:
+        description: bare-kit ref to build the engine from (match react-native-bare-kit)
+        required: true
+        default: v2.2.0
+        type: string
+      bare_ref:
+        description: Optional fork/ref to build `bare` from (e.g. owner/repo#branch). Empty = bare-kit's pinned bare.
+        required: false
+        default: ''
+        type: string
+  # workflow_dispatch only appears once this file is on the default branch. Until
+  # then, trigger from this branch by pushing a commit whose message contains the
+  # marker [engine-ab]; it builds with the env defaults below (libqjs / arm64-v8a
+  # / v2.2.0). Pushes without the marker are ignored by the job `if:` guard.
+  push:
+    branches: [claude/codex-apk-size-reduction-ihpcuz]
+
+permissions:
+  contents: read
+
+env:
+  # Engine: workflow_dispatch input wins; otherwise a marker like
+  # "[engine-ab] engine=libmqjs" selects it; default libqjs.
+  ENGINE: ${{ github.event.inputs.engine || (contains(github.event.head_commit.message, 'engine=libmqjs') && 'libmqjs') || (contains(github.event.head_commit.message, 'engine=libjsc') && 'libjsc') || (contains(github.event.head_commit.message, 'engine=libjerry') && 'libjerry') || 'libqjs' }}
+  ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
+  BARE_KIT_REF: ${{ github.event.inputs.bare_kit_ref || 'v2.2.0' }}
+
+jobs:
+  engine:
+    name: Build ${{ github.event.inputs.engine || 'libqjs' }} engine
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[engine-ab]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: holepunchto/bare-kit
+          ref: ${{ env.BARE_KIT_REF }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Inject BARE_ENGINE
+        run: |
+          set -euo pipefail
+          perl -0pi -e \
+            's/("-DANDROID_STL=c\+\+_shared")/$1, "-DBARE_ENGINE=github:holepunchto\/${{ env.ENGINE }}"/g' \
+            android/build.gradle
+          grep -n "BARE_ENGINE" android/build.gradle
+      # Optionally swap bare-kit's pinned `bare` for a fixed fork/ref so the
+      # engine compiles the fix straight from source — no patch file. Set via
+      # the bare_ref dispatch input or a "bare=owner/repo#ref" commit marker,
+      # e.g. [engine-ab] bare=ayooooo123/bare#fix/runtime-load-escape-handle
+      - name: Repoint bare to a fixed fork (optional)
+        env:
+          BARE_REF_INPUT: ${{ github.event.inputs.bare_ref || '' }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          REF="$BARE_REF_INPUT"
+          if [ -z "$REF" ]; then
+            REF=$(printf '%s' "$MSG" | grep -oE 'bare=[^[:space:]]+' | head -1 | cut -d= -f2- || true)
+          fi
+          if [ -z "$REF" ]; then
+            echo "No bare override — using bare-kit's pinned bare."
+            exit 0
+          fi
+          echo "Repointing bare -> github:$REF"
+          REF="$REF" perl -0pi -e 's{fetch_package\("github:holepunchto/bare\@[0-9.]+"\)}{qq[fetch_package("github:$ENV{REF}")]}ge' CMakeLists.txt
+          grep -n "fetch_package.*bare" CMakeLists.txt
+      - run: npm install --global cmake-runtime ninja-runtime
+      - run: npm install
+      - run: ./gradlew aR --no-daemon
+      - name: Extract ${{ env.ABI }} libbare-kit.so
+        run: |
+          set -euo pipefail
+          AAR=$(find android/build/outputs/aar -name '*-release.aar' | head -1)
+          unzip -o "$AAR" "jni/${{ env.ABI }}/libbare-kit.so" -d aar-extract
+          mkdir -p out/${{ env.ABI }}
+          cp "aar-extract/jni/${{ env.ABI }}/libbare-kit.so" "out/${{ env.ABI }}/libbare-kit.so"
+          du -h "out/${{ env.ABI }}/libbare-kit.so"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: engine-${{ env.ENGINE }}
+          path: out/**/libbare-kit.so
+          if-no-files-found: error
+
+  apk:
+    name: Build APK (${{ matrix.variant }})
+    needs: engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [v8, engine]
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: ./.github/actions/validate-submodules
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 20.x
+          install: 'true'
+      - uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - uses: android-actions/setup-android@v4.0.1
+      - uses: ./.github/actions/prepare-mobile-backend
+
+      - name: Expo prebuild (Android)
+        working-directory: packages/app
+        run: npm run android:prebuild
+
+      - name: Download + apply custom engine
+        if: ${{ matrix.variant == 'engine' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: engine-${{ env.ENGINE }}
+          path: packages/app/bare-kit-engine/${{ env.ENGINE }}
+      - name: Overlay engine onto react-native-bare-kit
+        if: ${{ matrix.variant == 'engine' }}
+        run: node packages/app/scripts/apply-bare-kit-engine.mjs --engine ${{ env.ENGINE }}
+
+      - name: Configure Gradle memory
+        run: |
+          mkdir -p "$HOME/.gradle"
+          printf '%s\n' \
+            'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8' \
+            'org.gradle.workers.max=2' >> "$HOME/.gradle/gradle.properties"
+
+      - name: Build release APK (${{ env.ABI }}, ${{ matrix.variant }})
+        working-directory: packages/app/android
+        run: ./gradlew assembleRelease -PtargetAbis=${{ env.ABI }} -PreactNativeArchitectures=${{ env.ABI }} --no-daemon --max-workers 2
+
+      - name: Locate + verify + rename APK
+        id: apk
+        run: |
+          set -euo pipefail
+          DIR=packages/app/android/app/build/outputs/apk/release
+          echo "All APKs produced by this build:"
+          find "$DIR" -name '*.apk' -printf '  %f\n' || true
+          # Prefer the ABI-specific split APK; fall back to a universal APK.
+          APK=$(find "$DIR" -name "*${{ env.ABI }}*.apk" | head -1)
+          [ -n "$APK" ] || APK=$(find "$DIR" -name '*.apk' | head -1)
+          echo "Selected APK: $APK"
+          # Prove the packaged native libs are the target ABI ONLY — this is the
+          # real arm64 check; the filename alone is not trustworthy.
+          ARCHS=$(unzip -l "$APK" | grep -oE 'lib/[^/]+/' | sed 's#lib/##; s#/##' | sort -u || true)
+          COUNT=$(printf '%s\n' "$ARCHS" | grep -c . || true)
+          echo "Native lib ABIs inside selected APK: ${ARCHS:-<none>} (count=$COUNT)"
+          if [ -n "$ARCHS" ] && { [ "$COUNT" -ne 1 ] || [ "$ARCHS" != "${{ env.ABI }}" ]; }; then
+            echo "::error::Selected APK packages ABIs [$ARCHS] but expected only ${{ env.ABI }}"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$APK")
+          OUT="peartube-${{ env.ABI }}-${{ matrix.variant }}.apk"
+          cp "$APK" "$OUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "name=$OUT" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.variant }} APK: \`$(basename "$APK")\` → ABIs=[${ARCHS:-none}] ($((SIZE/1048576)) MB)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apk-${{ matrix.variant }}
+          path: ${{ steps.apk.outputs.name }}
+          if-no-files-found: error
+
+  compare:
+    name: Size diff
+    needs: apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { pattern: apk-*, path: apks }
+      - name: Report size delta
+        run: |
+          set -euo pipefail
+          V8=$(stat -c%s "$(find apks -name '*-v8.apk' | head -1)")
+          EN=$(stat -c%s "$(find apks -name '*-engine.apk' | head -1)")
+          DELTA=$((V8 - EN))
+          PCT=$(awk "BEGIN{printf \"%.1f\", ($DELTA/$V8)*100}")
+          {
+            echo "## APK size: V8 vs ${{ env.ENGINE }} (${{ env.ABI }})"
+            echo "| build | bytes | MB |"
+            echo "|---|--:|--:|"
+            echo "| V8 (stock) | $V8 | $(awk "BEGIN{printf \"%.1f\", $V8/1048576}") |"
+            echo "| ${{ env.ENGINE }} | $EN | $(awk "BEGIN{printf \"%.1f\", $EN/1048576}") |"
+            echo "| **saved** | **$DELTA** | **$(awk "BEGIN{printf \"%.1f\", $DELTA/1048576}") ($PCT%)** |"
+          } >> "$GITHUB_STEP_SUMMARY"

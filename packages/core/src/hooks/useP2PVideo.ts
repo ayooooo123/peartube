@@ -20,7 +20,7 @@ export interface P2PVideoState {
 export interface P2PVideoService {
   getVideoUrl(driveKey: string, videoPath: string): Promise<{ url: string }>;
   prefetchVideo(driveKey: string, videoPath: string): Promise<{ success: boolean }>;
-  preparePlayback?(driveKey: string, videoPath: string): Promise<{ url: string; stats?: VideoStats | null }>;
+  preparePlayback?(driveKey: string, videoPath: string): Promise<{ url: string | null; stats?: VideoStats | null }>;
   getVideoStats(driveKey: string, videoPath: string): Promise<VideoStats>;
 }
 

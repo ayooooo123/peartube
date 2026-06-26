@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 1,
   "schema": [
     {
       "name": "empty",
@@ -1044,11 +1044,11 @@
       "name": "prepare-playback-response",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 1,
+      "flagsPosition": 0,
       "fields": [
         {
           "name": "url",
-          "required": true,
+          "required": false,
           "type": "string",
           "version": 1
         },
@@ -3717,6 +3717,116 @@
       ]
     },
     {
+      "name": "assess-upload-offload-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "assess-upload-offload-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "eligible",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "fullCopyPeers",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "relayHasFullCopy",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "ownDeviceHasFullCopy",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "byteLength",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "offload-upload-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "offload-upload-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "freedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "get-video-thumbnail-request",
       "namespace": "peartube",
       "compact": false,
@@ -3750,7 +3860,7 @@
           "name": "thumbnailMimeType",
           "required": false,
           "type": "string",
-          "version": 2
+          "version": 1
         }
       ]
     },
@@ -7256,116 +7366,6 @@
           "required": false,
           "type": "string",
           "version": 1
-        }
-      ]
-    },
-    {
-      "name": "assess-upload-offload-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 3
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 3
-        }
-      ]
-    },
-    {
-      "name": "assess-upload-offload-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "eligible",
-          "required": false,
-          "type": "bool",
-          "version": 3
-        },
-        {
-          "name": "fullCopyPeers",
-          "required": false,
-          "type": "uint",
-          "version": 3
-        },
-        {
-          "name": "relayHasFullCopy",
-          "required": false,
-          "type": "bool",
-          "version": 3
-        },
-        {
-          "name": "ownDeviceHasFullCopy",
-          "required": false,
-          "type": "bool",
-          "version": 3
-        },
-        {
-          "name": "byteLength",
-          "required": false,
-          "type": "uint",
-          "version": 3
-        },
-        {
-          "name": "reason",
-          "required": false,
-          "type": "string",
-          "version": 3
-        }
-      ]
-    },
-    {
-      "name": "offload-upload-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 3
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 3
-        }
-      ]
-    },
-    {
-      "name": "offload-upload-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 3
-        },
-        {
-          "name": "freedBytes",
-          "required": false,
-          "type": "uint",
-          "version": 3
-        },
-        {
-          "name": "reason",
-          "required": false,
-          "type": "string",
-          "version": 3
         }
       ]
     }

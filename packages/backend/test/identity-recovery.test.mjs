@@ -100,6 +100,22 @@ async function testInvalidMnemonicThrows() {
   await assert.rejects(() => deriveIdentity(invalidMnemonic))
 }
 
+function testKeychainImportIsBundleVisible() {
+  const identitySourcePath = new URL('../src/peartube-identity.js', import.meta.url).pathname
+  const source = fs.readFileSync(identitySourcePath, 'utf8')
+
+  assert.match(
+    source,
+    /import\s+KeyChainImport\s+from\s+['"]keet-identity-key\/lib\/keychain\.js['"]/,
+    'mobile bare-pack must see the keet-identity-key keychain dependency as a static import'
+  )
+  assert.doesNotMatch(
+    source,
+    /import\s*\(\s*['"]keet-identity-key\/lib\/keychain\.js['"]\s*\)/,
+    'do not use a dynamic keychain import; libqjs mobile bundles can omit it'
+  )
+}
+
 async function main() {
   let failures = 0
 
@@ -128,6 +144,14 @@ async function main() {
     } catch (err) {
       failures++
       report(false, `invalid mnemonic throws an error: ${err.message}`)
+    }
+
+    try {
+      testKeychainImportIsBundleVisible()
+      report(true, 'keet-identity-key keychain import is visible to the mobile bundler')
+    } catch (err) {
+      failures++
+      report(false, `keet-identity-key keychain import is visible to the mobile bundler: ${err.message}`)
     }
 
     if (failures > 0) {

@@ -32,7 +32,7 @@ const THUMBNAIL_DOWNLOAD_TIMEOUT_MS = 3500
  */
 export async function serveThumbnailHttpRequest(deps, req, res) {
   const store = deps?.store
-  const swarm = deps?.swarm
+  const retainDiscovery = deps?.retainDiscovery
   const blobServer = deps?.blobServer
   if (!store) return false
   if (req?.method !== 'GET' && req?.method !== 'HEAD') return false
@@ -59,8 +59,12 @@ export async function serveThumbnailHttpRequest(deps, req, res) {
   try {
     core = store.get(ref.key)
     await core.ready()
-    if (swarm && core.discoveryKey) {
-      try { swarm.join(core.discoveryKey) } catch { /* best effort */ }
+    if (typeof retainDiscovery === 'function' && core.discoveryKey) {
+      try {
+        retainDiscovery(core.discoveryKey, {
+          label: `thumbnail:${ref.key.toString('hex').slice(0, 16)}`
+        })
+      } catch { /* best effort */ }
     }
 
     const Hyperblobs = (await import('hyperblobs')).default

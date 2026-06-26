@@ -137,124 +137,124 @@ const methods = new Map([
   [63, '@peartube/set-storage-limit'],
   ['@peartube/clear-cache', 64],
   [64, '@peartube/clear-cache'],
-  ['@peartube/get-video-thumbnail', 65],
-  [65, '@peartube/get-video-thumbnail'],
-  ['@peartube/get-video-metadata', 66],
-  [66, '@peartube/get-video-metadata'],
-  ['@peartube/set-video-thumbnail', 67],
-  [67, '@peartube/set-video-thumbnail'],
-  ['@peartube/set-video-thumbnail-from-file', 68],
-  [68, '@peartube/set-video-thumbnail-from-file'],
-  ['@peartube/get-status', 69],
-  [69, '@peartube/get-status'],
-  ['@peartube/pick-video-file', 70],
-  [70, '@peartube/pick-video-file'],
-  ['@peartube/pick-image-file', 71],
-  [71, '@peartube/pick-image-file'],
-  ['@peartube/get-blob-server-port', 72],
-  [72, '@peartube/get-blob-server-port'],
-  ['@peartube/global-search-videos', 73],
-  [73, '@peartube/global-search-videos'],
-  ['@peartube/add-comment', 74],
-  [74, '@peartube/add-comment'],
-  ['@peartube/list-comments', 75],
-  [75, '@peartube/list-comments'],
-  ['@peartube/hide-comment', 76],
-  [76, '@peartube/hide-comment'],
-  ['@peartube/remove-comment', 77],
-  [77, '@peartube/remove-comment'],
-  ['@peartube/add-reaction', 78],
-  [78, '@peartube/add-reaction'],
-  ['@peartube/remove-reaction', 79],
-  [79, '@peartube/remove-reaction'],
-  ['@peartube/get-reactions', 80],
-  [80, '@peartube/get-reactions'],
-  ['@peartube/event-ready', 81],
-  [81, '@peartube/event-ready'],
-  ['@peartube/event-error', 82],
-  [82, '@peartube/event-error'],
-  ['@peartube/event-upload-progress', 83],
-  [83, '@peartube/event-upload-progress'],
-  ['@peartube/event-download-progress', 84],
-  [84, '@peartube/event-download-progress'],
-  ['@peartube/event-feed-update', 85],
-  [85, '@peartube/event-feed-update'],
-  ['@peartube/event-log', 86],
-  [86, '@peartube/event-log'],
-  ['@peartube/event-video-stats', 87],
-  [87, '@peartube/event-video-stats'],
-  ['@peartube/cast-available', 88],
-  [88, '@peartube/cast-available'],
-  ['@peartube/cast-start-discovery', 89],
-  [89, '@peartube/cast-start-discovery'],
-  ['@peartube/cast-stop-discovery', 90],
-  [90, '@peartube/cast-stop-discovery'],
-  ['@peartube/cast-get-devices', 91],
-  [91, '@peartube/cast-get-devices'],
-  ['@peartube/cast-add-manual-device', 92],
-  [92, '@peartube/cast-add-manual-device'],
-  ['@peartube/cast-connect', 93],
-  [93, '@peartube/cast-connect'],
-  ['@peartube/cast-disconnect', 94],
-  [94, '@peartube/cast-disconnect'],
-  ['@peartube/cast-play', 95],
-  [95, '@peartube/cast-play'],
-  ['@peartube/cast-pause', 96],
-  [96, '@peartube/cast-pause'],
-  ['@peartube/cast-resume', 97],
-  [97, '@peartube/cast-resume'],
-  ['@peartube/cast-stop', 98],
-  [98, '@peartube/cast-stop'],
-  ['@peartube/cast-seek', 99],
-  [99, '@peartube/cast-seek'],
-  ['@peartube/cast-set-volume', 100],
-  [100, '@peartube/cast-set-volume'],
-  ['@peartube/cast-get-state', 101],
-  [101, '@peartube/cast-get-state'],
-  ['@peartube/cast-is-connected', 102],
-  [102, '@peartube/cast-is-connected'],
-  ['@peartube/event-cast-device-found', 103],
-  [103, '@peartube/event-cast-device-found'],
-  ['@peartube/event-cast-device-lost', 104],
-  [104, '@peartube/event-cast-device-lost'],
-  ['@peartube/event-cast-playback-state', 105],
-  [105, '@peartube/event-cast-playback-state'],
-  ['@peartube/event-cast-time-update', 106],
-  [106, '@peartube/event-cast-time-update'],
-  ['@peartube/search-videos', 107],
-  [107, '@peartube/search-videos'],
-  ['@peartube/log-watch-event', 108],
-  [108, '@peartube/log-watch-event'],
-  ['@peartube/index-video-vectors', 109],
-  [109, '@peartube/index-video-vectors'],
-  ['@peartube/get-recommendations', 110],
-  [110, '@peartube/get-recommendations'],
-  ['@peartube/get-video-recommendations', 111],
-  [111, '@peartube/get-video-recommendations'],
-  ['@peartube/update-video-metadata', 112],
-  [112, '@peartube/update-video-metadata'],
-  ['@peartube/desktop-bootstrap', 113],
-  [113, '@peartube/desktop-bootstrap'],
-  ['@peartube/desktop-shutdown', 114],
-  [114, '@peartube/desktop-shutdown'],
-  ['@peartube/desktop-refresh-browse', 115],
-  [115, '@peartube/desktop-refresh-browse'],
-  ['@peartube/ffmpeg-decode-available', 116],
-  [116, '@peartube/ffmpeg-decode-available'],
-  ['@peartube/update-channel-avatar', 117],
-  [117, '@peartube/update-channel-avatar'],
-  ['@peartube/transcode-start', 118],
-  [118, '@peartube/transcode-start'],
-  ['@peartube/transcode-stop', 119],
-  [119, '@peartube/transcode-stop'],
-  ['@peartube/transcode-status', 120],
-  [120, '@peartube/transcode-status'],
-  ['@peartube/event-transcode-progress', 121],
-  [121, '@peartube/event-transcode-progress'],
-  ['@peartube/assess-upload-offload', 122],
-  [122, '@peartube/assess-upload-offload'],
-  ['@peartube/offload-upload', 123],
-  [123, '@peartube/offload-upload']
+  ['@peartube/assess-upload-offload', 65],
+  [65, '@peartube/assess-upload-offload'],
+  ['@peartube/offload-upload', 66],
+  [66, '@peartube/offload-upload'],
+  ['@peartube/get-video-thumbnail', 67],
+  [67, '@peartube/get-video-thumbnail'],
+  ['@peartube/get-video-metadata', 68],
+  [68, '@peartube/get-video-metadata'],
+  ['@peartube/set-video-thumbnail', 69],
+  [69, '@peartube/set-video-thumbnail'],
+  ['@peartube/set-video-thumbnail-from-file', 70],
+  [70, '@peartube/set-video-thumbnail-from-file'],
+  ['@peartube/get-status', 71],
+  [71, '@peartube/get-status'],
+  ['@peartube/pick-video-file', 72],
+  [72, '@peartube/pick-video-file'],
+  ['@peartube/pick-image-file', 73],
+  [73, '@peartube/pick-image-file'],
+  ['@peartube/get-blob-server-port', 74],
+  [74, '@peartube/get-blob-server-port'],
+  ['@peartube/global-search-videos', 75],
+  [75, '@peartube/global-search-videos'],
+  ['@peartube/add-comment', 76],
+  [76, '@peartube/add-comment'],
+  ['@peartube/list-comments', 77],
+  [77, '@peartube/list-comments'],
+  ['@peartube/hide-comment', 78],
+  [78, '@peartube/hide-comment'],
+  ['@peartube/remove-comment', 79],
+  [79, '@peartube/remove-comment'],
+  ['@peartube/add-reaction', 80],
+  [80, '@peartube/add-reaction'],
+  ['@peartube/remove-reaction', 81],
+  [81, '@peartube/remove-reaction'],
+  ['@peartube/get-reactions', 82],
+  [82, '@peartube/get-reactions'],
+  ['@peartube/event-ready', 83],
+  [83, '@peartube/event-ready'],
+  ['@peartube/event-error', 84],
+  [84, '@peartube/event-error'],
+  ['@peartube/event-upload-progress', 85],
+  [85, '@peartube/event-upload-progress'],
+  ['@peartube/event-download-progress', 86],
+  [86, '@peartube/event-download-progress'],
+  ['@peartube/event-feed-update', 87],
+  [87, '@peartube/event-feed-update'],
+  ['@peartube/event-log', 88],
+  [88, '@peartube/event-log'],
+  ['@peartube/event-video-stats', 89],
+  [89, '@peartube/event-video-stats'],
+  ['@peartube/cast-available', 90],
+  [90, '@peartube/cast-available'],
+  ['@peartube/cast-start-discovery', 91],
+  [91, '@peartube/cast-start-discovery'],
+  ['@peartube/cast-stop-discovery', 92],
+  [92, '@peartube/cast-stop-discovery'],
+  ['@peartube/cast-get-devices', 93],
+  [93, '@peartube/cast-get-devices'],
+  ['@peartube/cast-add-manual-device', 94],
+  [94, '@peartube/cast-add-manual-device'],
+  ['@peartube/cast-connect', 95],
+  [95, '@peartube/cast-connect'],
+  ['@peartube/cast-disconnect', 96],
+  [96, '@peartube/cast-disconnect'],
+  ['@peartube/cast-play', 97],
+  [97, '@peartube/cast-play'],
+  ['@peartube/cast-pause', 98],
+  [98, '@peartube/cast-pause'],
+  ['@peartube/cast-resume', 99],
+  [99, '@peartube/cast-resume'],
+  ['@peartube/cast-stop', 100],
+  [100, '@peartube/cast-stop'],
+  ['@peartube/cast-seek', 101],
+  [101, '@peartube/cast-seek'],
+  ['@peartube/cast-set-volume', 102],
+  [102, '@peartube/cast-set-volume'],
+  ['@peartube/cast-get-state', 103],
+  [103, '@peartube/cast-get-state'],
+  ['@peartube/cast-is-connected', 104],
+  [104, '@peartube/cast-is-connected'],
+  ['@peartube/event-cast-device-found', 105],
+  [105, '@peartube/event-cast-device-found'],
+  ['@peartube/event-cast-device-lost', 106],
+  [106, '@peartube/event-cast-device-lost'],
+  ['@peartube/event-cast-playback-state', 107],
+  [107, '@peartube/event-cast-playback-state'],
+  ['@peartube/event-cast-time-update', 108],
+  [108, '@peartube/event-cast-time-update'],
+  ['@peartube/search-videos', 109],
+  [109, '@peartube/search-videos'],
+  ['@peartube/log-watch-event', 110],
+  [110, '@peartube/log-watch-event'],
+  ['@peartube/index-video-vectors', 111],
+  [111, '@peartube/index-video-vectors'],
+  ['@peartube/get-recommendations', 112],
+  [112, '@peartube/get-recommendations'],
+  ['@peartube/get-video-recommendations', 113],
+  [113, '@peartube/get-video-recommendations'],
+  ['@peartube/update-video-metadata', 114],
+  [114, '@peartube/update-video-metadata'],
+  ['@peartube/desktop-bootstrap', 115],
+  [115, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 116],
+  [116, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 117],
+  [117, '@peartube/desktop-refresh-browse'],
+  ['@peartube/ffmpeg-decode-available', 118],
+  [118, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 119],
+  [119, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 120],
+  [120, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 121],
+  [121, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 122],
+  [122, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 123],
+  [123, '@peartube/event-transcode-progress']
 ])
 
 class HRPC {
@@ -327,6 +327,8 @@ class HRPC {
       ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-request')],
       ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-request')],
       ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')],
+      ['@peartube/assess-upload-offload', getEncoding('@peartube/assess-upload-offload-request')],
+      ['@peartube/offload-upload', getEncoding('@peartube/offload-upload-request')],
       ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-request')],
       ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-request')],
       ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-request')],
@@ -383,9 +385,7 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
-      ['@peartube/assess-upload-offload', getEncoding('@peartube/assess-upload-offload-request')],
-      ['@peartube/offload-upload', getEncoding('@peartube/offload-upload-request')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -453,6 +453,8 @@ class HRPC {
       ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-response')],
       ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-response')],
       ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')],
+      ['@peartube/assess-upload-offload', getEncoding('@peartube/assess-upload-offload-response')],
+      ['@peartube/offload-upload', getEncoding('@peartube/offload-upload-response')],
       ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-response')],
       ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-response')],
       ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-response')],
@@ -497,9 +499,7 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
-      ['@peartube/assess-upload-offload', getEncoding('@peartube/assess-upload-offload-response')],
-      ['@peartube/offload-upload', getEncoding('@peartube/offload-upload-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -858,6 +858,14 @@ class HRPC {
     return this._call('@peartube/clear-cache', args)
   }
 
+  async assessUploadOffload(args) {
+    return this._call('@peartube/assess-upload-offload', args)
+  }
+
+  async offloadUpload(args) {
+    return this._call('@peartube/offload-upload', args)
+  }
+
   async getVideoThumbnail(args) {
     return this._call('@peartube/get-video-thumbnail', args)
   }
@@ -1084,14 +1092,6 @@ class HRPC {
 
   eventTranscodeProgress(args) {
     return this._callSync('@peartube/event-transcode-progress', args)
-  }
-
-  async assessUploadOffload(args) {
-    return this._call('@peartube/assess-upload-offload', args)
-  }
-
-  async offloadUpload(args) {
-    return this._call('@peartube/offload-upload', args)
   }
 
   onCreateIdentity(responseFn) {
@@ -1354,6 +1354,14 @@ class HRPC {
     this._handlers['@peartube/clear-cache'] = responseFn
   }
 
+  onAssessUploadOffload(responseFn) {
+    this._handlers['@peartube/assess-upload-offload'] = responseFn
+  }
+
+  onOffloadUpload(responseFn) {
+    this._handlers['@peartube/offload-upload'] = responseFn
+  }
+
   onGetVideoThumbnail(responseFn) {
     this._handlers['@peartube/get-video-thumbnail'] = responseFn
   }
@@ -1580,14 +1588,6 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
-  }
-
-  onAssessUploadOffload(responseFn) {
-    this._handlers['@peartube/assess-upload-offload'] = responseFn
-  }
-
-  onOffloadUpload(responseFn) {
-    this._handlers['@peartube/offload-upload'] = responseFn
   }
 
   _requestIsStream(command) {

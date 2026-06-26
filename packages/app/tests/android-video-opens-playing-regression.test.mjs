@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
 const inlineViewPath = new URL('../components/video-player/PearInlineVideoView.tsx', import.meta.url)
+const contextPath = new URL('../lib/VideoPlayerContext.tsx', import.meta.url)
 
 async function source(url) {
   return readFile(url, 'utf8')
@@ -89,4 +90,51 @@ test('Android reasserts desired play when source first becomes ready before nati
 
   assert.match(handler, /status === 'readyToPlay'[\s\S]*!hasReceivedPlayEventRef\.current[\s\S]*isPlayingRef\.current[\s\S]*requestNativePlayback\(\)/, 'readyToPlay should reassert play when Android has desired playback but has not emitted native playing yet')
   assert.ok(handler.indexOf("status === 'readyToPlay'") < handler.indexOf('Date.now() <= seekPlaybackRecoveryUntilRef.current'), 'initial ready-to-play reassertion should run before seek-only recovery')
+})
+
+test('Android startup pause events do not clear desired playback during source replacement', async () => {
+  const src = await source(contextPath)
+
+  assert.match(src, /const STARTUP_AUTOPLAY_GUARD_MS = 3000/, 'startup autoplay guard should be short and bounded')
+  assert.match(src, /const startupAutoplayGuardRef = useRef<\{ key: string; until: number \} \| null>\(null\)/, 'context should track the guarded startup handoff')
+  assert.match(src, /const startupAutoplayReassertTimersRef = useRef<NodeJS\.Timeout\[\]>\(\[\]\)/, 'startup guard should own bounded reassert timers')
+  assert.match(src, /const clearStartupAutoplayGuard = useCallback/, 'startup guard should be cleared through one helper')
+  assert.match(src, /const scheduleStartupAutoplayReassertions = useCallback/, 'startup guard should actively reassert desired playback while the source is attaching')
+  assert.match(src, /for \(const delayMs of \[50, 150, 350, 750\]\)/, 'startup reassertion should be bounded to a short retry window')
+  assert.match(src, /setDesiredPlaying\(true\)[\s\S]*getPlayerPort\(\)\?\.play\?\.\(\)/, 'startup reassertion should restore desired play and re-call native play')
+
+  const startBlockStart = src.indexOf('const performPlaybackStartNow = useCallback')
+  assert.notEqual(startBlockStart, -1, 'expected playback start helper')
+  const startBlock = src.slice(startBlockStart, src.indexOf('const drainQueuedPlaybackStart', startBlockStart))
+  assert.match(startBlock, /startupAutoplayGuardRef\.current = \{[\s\S]*key: playbackKey,[\s\S]*until: now \+ STARTUP_AUTOPLAY_GUARD_MS/, 'loadAndPlayVideo should arm the startup autoplay guard before source replacement can emit pause')
+  assert.ok(
+    startBlock.indexOf('startupAutoplayGuardRef.current = {') < startBlock.indexOf('scheduleStartupAutoplayReassertions(playbackKey)'),
+    'the startup guard must be armed before scheduling playback reassertions',
+  )
+  assert.ok(
+    startBlock.indexOf('currentVideoRef.current = video') < startBlock.indexOf('getPlayerPort()?.stop?.()'),
+    'active video ref must be set before native stop/pause can emit a startup paused event',
+  )
+  assert.ok(
+    startBlock.indexOf('videoUrlRef.current = url') < startBlock.indexOf('getPlayerPort()?.stop?.()'),
+    'active URL ref must be set before native stop/pause can emit a startup paused event',
+  )
+
+  const pausedStart = src.indexOf('const onPaused = useCallback')
+  assert.notEqual(pausedStart, -1, 'expected pause handler')
+  const pausedBlock = src.slice(pausedStart, src.indexOf('const onBuffering = useCallback', pausedStart))
+  assert.match(pausedBlock, /const startupGuard = startupAutoplayGuardRef\.current/, 'pause handler should inspect startup guard')
+  assert.match(pausedBlock, /Date\.now\(\) <= startupGuard\.until/, 'startup guard should expire automatically')
+  assert.match(pausedBlock, /lastPlaybackStartKeyRef\.current === startupGuard\.key/, 'pause guard should preserve autoplay even if the active source ref is briefly behind the pending playback key')
+  assert.match(pausedBlock, /setDesiredPlaying\(true\)/, 'startup pause should preserve desired play state')
+  assert.match(pausedBlock, /getPlayerPort\(\)\?\.play\?\.\(\)/, 'startup pause should reassert play when the new source is active')
+  assert.ok(pausedBlock.indexOf('const startupGuard = startupAutoplayGuardRef.current') < pausedBlock.indexOf('setIsPlaying(false)'), 'startup guard must run before a pause can set isPlaying=false')
+
+  const pauseStart = src.indexOf('const pauseVideo = useCallback')
+  const pauseBlock = src.slice(pauseStart, src.indexOf('const resumeVideo = useCallback', pauseStart))
+  assert.match(pauseBlock, /clearStartupAutoplayGuard\(\)/, 'explicit pause should clear startup guard and reassert timers')
+
+  const playingStart = src.indexOf('const onPlaying = useCallback')
+  const playingBlock = src.slice(playingStart, src.indexOf('const onPaused = useCallback', playingStart))
+  assert.match(playingBlock, /clearStartupAutoplayGuard\(\)/, 'real playing event should clear startup guard and reassert timers')
 })

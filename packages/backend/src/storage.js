@@ -28,6 +28,7 @@ import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache } from './known-peers.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
+import { serveVideoRangeHttpRequest } from './video-range-http.js'
 import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
 
 function resolveDebugLogPath() {
@@ -843,7 +844,7 @@ async function openDeterministicNamedCore(store, name) {
 
 /**
  * Wrap a corestore to add default timeout to all get() calls.
- * This ensures cores used by BlobServer have timeout for P2P fetching.
+ * This keeps ordinary backend P2P operations from hanging forever.
  *
  * @param {import('corestore')} store - Corestore instance
  * @param {number} [defaultTimeout=30000] - Default timeout in ms
@@ -865,6 +866,28 @@ function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
     return originalGet(optsWithTimeout);
   };
   return store;
+}
+
+/**
+ * The HTTP blob server must not inherit the backend's default core.get timeout:
+ * a slow video block should keep the player buffering, not close the response
+ * body and surface as ExoPlayer "unexpected end of stream".
+ *
+ * @param {import('corestore')} store - Timeout-wrapped Corestore instance
+ * @returns {import('corestore')} Store facade for BlobServer
+ */
+function wrapStoreForBlobServerStreaming(store) {
+  const blobStore = Object.create(store)
+  blobStore.get = function(keyOrOpts = {}) {
+    if (b4a.isBuffer(keyOrOpts)) {
+      return store.get({ key: keyOrOpts, timeout: 0 })
+    }
+    return store.get({
+      ...keyOrOpts,
+      timeout: 0
+    })
+  }
+  return blobStore
 }
 
 function getSwarmDiscoveryHandles(ctx) {
@@ -1255,8 +1278,11 @@ export async function initializeStorage(config) {
     await appendDebugLine(`[storage] corestore primaryKey after ready ${primaryKeyHex}`)
   }
 
-  // Wrap store with timeout for P2P operations to prevent indefinite hangs
-  const blobStore = wrapStoreWithTimeout(store, defaultTimeout);
+  // Wrap the shared store with finite timeouts for backend control-plane work,
+  // but give BlobServer a no-timeout facade so media reads don't abort while
+  // waiting for slow P2P blocks.
+  wrapStoreWithTimeout(store, defaultTimeout);
+  const blobStore = wrapStoreForBlobServerStreaming(store);
 
   // Initialize blob server for video streaming only after metadata cores are open.
   let blobServer = null;
@@ -1266,6 +1292,7 @@ export async function initializeStorage(config) {
   const blobServerReady = new Promise((resolve) => {
     resolveBlobServerReady = resolve
   })
+  let storageContext = null
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
   let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
@@ -1377,6 +1404,11 @@ export async function initializeStorage(config) {
       res.setHeader('Access-Control-Allow-Headers', 'Range')
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+      if (String(req.url || '').includes('pt_health=1')) {
+        res.writeHead(204)
+        res.end()
+        return
+      }
 
       // Thumbnails tag their blob URL with pt_thumbnail=1 (see api.getVideoThumbnail).
       // Serve those as a buffered, fixed-length response Android image loaders
@@ -1385,10 +1417,21 @@ export async function initializeStorage(config) {
       // errors). Only tagged requests are intercepted; video Range reads and every
       // other request fall through to the upstream handler unchanged.
       try {
-        const handled = await serveThumbnailHttpRequest({ store, swarm, blobServer }, req, res)
+        const handled = await serveThumbnailHttpRequest({
+          store,
+          blobServer,
+          retainDiscovery: (discoveryKey, options) => retainSwarmDiscovery(storageContext || { swarm }, discoveryKey, options)
+        }, req, res)
         if (handled) return
       } catch (err) {
         console.log('[Storage] Thumbnail serve failed:', err?.message || err)
+      }
+
+      try {
+        const handled = await serveVideoRangeHttpRequest({ blobServer }, req, res)
+        if (handled) return
+      } catch (err) {
+        console.log('[Storage] Video range serve failed:', err?.message || err)
       }
 
       try {
@@ -1623,7 +1666,7 @@ export async function initializeStorage(config) {
   const blobSessionToken = generateSessionToken()
   console.log('[Storage] Generated blob session token:', blobSessionToken.slice(0, 8) + '...')
 
-  return {
+  storageContext = {
     store,
     metaCore,
     metaDb,
@@ -1639,6 +1682,7 @@ export async function initializeStorage(config) {
     wakeup,
     peerPoolDiscovery: globalPeerPoolDiscovery
   };
+  return storageContext
 }
 
 /**

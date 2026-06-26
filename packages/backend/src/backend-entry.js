@@ -1,6 +1,9 @@
-import { PROTOCOL_VERSION } from '@peartube/host'
-
-import { buildSharedSystemHandlers, attachSharedAppHandlers } from './runtime.js'
+import {
+  attachSharedAppHandlers,
+  buildSharedSystemHandlers,
+  requireHostProtocolVersion
+} from './runtime.js'
+import { createBackendContext } from './orchestrator.js'
 import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'
 import { registerSharedHandlers } from './hrpc-handlers.js'
 
@@ -39,6 +42,7 @@ export async function createBackend(opts = {}) {
     onReady,
     onError,
     onVideoStats,
+    protocolVersion,
     HRPCImpl = null,
     ...lifecycleOptions
   } = opts
@@ -58,6 +62,11 @@ export async function createBackend(opts = {}) {
     throw new Error('createBackend requires platform to be "mobile" or "desktop"')
   }
 
+  const hostProtocolVersion = requireHostProtocolVersion(
+    protocolVersion,
+    'createBackend'
+  )
+
   let core = null
   let backend = null
   let rpc = null
@@ -75,6 +84,7 @@ export async function createBackend(opts = {}) {
       platform,
       runtime: { stream },
       hrpc: null,
+      createBackendContext,
       onStatsUpdate: onVideoStats,
       ...lifecycleOptions
     })
@@ -82,7 +92,7 @@ export async function createBackend(opts = {}) {
     backend = await core.init()
     backend.sharedHandlers = {
       ...(backend.sharedHandlers || {}),
-      ...buildSharedSystemHandlers(backend)
+      ...buildSharedSystemHandlers(backend, { protocolVersion: hostProtocolVersion })
     }
 
     const resolvedHRPCImpl = HRPCImpl || (await import('@peartube/spec'))
@@ -110,7 +120,7 @@ export async function createBackend(opts = {}) {
     registerUniversalHandlers(rpc, core)
     await core.start()
 
-    const readyPayload = { ...getBlobServerStatus(backend), protocolVersion: PROTOCOL_VERSION }
+    const readyPayload = { ...getBlobServerStatus(backend), protocolVersion: hostProtocolVersion }
     readyCallback(readyPayload)
     try {
       rpc.eventReady?.(readyPayload)

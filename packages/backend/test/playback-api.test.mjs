@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 
 import { createApi } from '../src/api.js'
 
-test('preparePlayback returns a streamable URL and stats without prewarming', async (t) => {
+test('preparePlayback returns a streamable URL without waiting for startup prefetch', async (t) => {
   const api = createApi({ ctx: {} })
   const calls = []
   const statsValue = {
@@ -25,9 +25,9 @@ test('preparePlayback returns a streamable URL and stats without prewarming', as
     return { url: 'http://127.0.0.1:60023/video.mp4' }
   }
 
-  api.prefetchVideo = async (...args) => {
+  api.prefetchVideo = (...args) => {
     calls.push(['prefetchVideo', args])
-    throw new Error('prefetch must not run during playback')
+    return new Promise(() => {})
   }
 
   api.getVideoStats = (...args) => {
@@ -35,25 +35,30 @@ test('preparePlayback returns a streamable URL and stats without prewarming', as
     return { ...statsValue }
   }
 
-  const result = await api.preparePlayback(
-    'channel-key',
-    'videos/demo.mp4',
-    'public-bee-key',
-    'blob-id',
-    'blobs-core-key',
-    'video/mp4',
-  )
+  const result = await Promise.race([
+    api.preparePlayback(
+      'channel-key',
+      'videos/demo.mp4',
+      'public-bee-key',
+      'blob-id',
+      'blobs-core-key',
+      'video/mp4',
+    ),
+    new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 50)),
+  ])
 
   t.is(result.url, 'http://127.0.0.1:60023/video.mp4')
   t.alike(result.stats, statsValue)
-  // No prewarming: just the streamable URL + stats, no warmup diagnostics.
+  // The URL remains the same direct blob-server URL; the API-level playback
+  // path now starts prefetch in the background without blocking native player
+  // handoff.
   t.is(result.warmupStarted, undefined)
   t.is(result.peerWarmupStarted, undefined)
   t.is(result.selectedBlobWarmup, undefined)
 
-  // preparePlayback resolves the URL then reads stats — and never prefetches.
   t.alike(calls, [
     ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
+    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
     ['getVideoStats', ['channel-key', 'videos/demo.mp4']],
   ])
 })
@@ -153,7 +158,7 @@ test('preparePlayback resolves feed preview blob refs when playback request omit
   t.ok(calls.some((call) => call[0] === 'swarm.join'), 'joins selected blob discovery so the blob server can stream on demand')
 })
 
-test('preparePlayback initializes direct on-demand playback stats from blob range downloads', async (t) => {
+test('preparePlayback falls back to direct on-demand stats when playback prefetch is unavailable', async (t) => {
   const driveKey = 'channel-key'
   const videoPath = 'videos/demo.mp4'
   const blobsCoreKey = '78'.repeat(32)
@@ -197,6 +202,11 @@ test('preparePlayback initializes direct on-demand playback stats from blob rang
     videoStats: new (await import('../src/video-stats.js')).VideoStatsTracker(),
   })
 
+  api.prefetchVideo = async (...args) => {
+    calls.push(['prefetchVideo', args])
+    return { success: false, error: 'prefetch unavailable in test' }
+  }
+
   const prepared = await api.preparePlayback(
     driveKey,
     videoPath,
@@ -222,7 +232,160 @@ test('preparePlayback initializes direct on-demand playback stats from blob rang
   t.is(stats.peerCount, 1)
   t.alike(stats.blobPeerIds, ['a'.repeat(64)])
   t.is(stats.blobCoreKey, blobsCoreKey)
-  t.absent(calls.find((call) => call[0] === 'prefetchVideo'), 'direct playback stats must not start full-file prefetch')
+  t.ok(calls.find((call) => call[0] === 'prefetchVideo'), 'preparePlayback should start playback prefetch in the background')
+})
+
+test('prefetchVideo promotes availability-hint peers before waiting on blob core sync', async (t) => {
+  const driveKey = 'aa'.repeat(32)
+  const publicBeeKey = 'bb'.repeat(32)
+  const blobsCoreKey = 'cc'.repeat(32)
+  const blobId = '0:4:0:4096'
+  const hintedPeer = '11'.repeat(32)
+  const feedPeer = '22'.repeat(32)
+  const calls = []
+  const core = {
+    discoveryKey: Buffer.from('playback-discovery'),
+    peers: [],
+    core: {
+      replicator: {
+        updateAll() {
+          calls.push(['replicator.updateAll'])
+        },
+      },
+    },
+    async ready() {
+      calls.push(['core.ready'])
+    },
+    update() {
+      calls.push(['core.update'])
+      return Promise.resolve()
+    },
+    async has(start, end) {
+      calls.push(['core.has', start, end])
+      return true
+    },
+  }
+
+  const api = createApi({
+    ctx: {
+      store: {
+        closed: false,
+        get() {
+          calls.push(['store.get'])
+          return core
+        },
+      },
+      swarm: {
+        join(discoveryKey) {
+          calls.push(['swarm.join', discoveryKey])
+          return { flushed: async () => calls.push(['discovery.flushed']) }
+        },
+      },
+      metaDb: {
+        async get(key) {
+          calls.push(['meta.get', key])
+          if (key === `download-intent:${driveKey}:video-id`) {
+            return {
+              value: {
+                driveKey,
+                videoPath: 'video-id',
+                blobsCoreKey,
+                blobId,
+                totalBytes: 4096,
+                mimeType: 'video/mp4',
+              },
+            }
+          }
+          return null
+        },
+        async del() {},
+      },
+    },
+    publicFeed: {
+      getEntryFeedPeerIds(key) {
+        calls.push(['getEntryFeedPeerIds', key])
+        return [feedPeer]
+      },
+      async requestAvailabilityHints(requests, options) {
+        calls.push(['requestAvailabilityHints', requests, options])
+        return [{
+          driveKey,
+          id: 'video-id',
+          blobsCoreKey,
+          blobId,
+          availability: 'playable',
+          hasHeadBlock: true,
+          contiguousBlocks: 4,
+          sourcePeerId: hintedPeer,
+        }]
+      },
+      promoteAvailabilityHintPeers(ids, topic, options) {
+        calls.push(['promoteAvailabilityHintPeers', ids.slice().sort(), topic, options])
+        return ids.map((id) => ({ key: id }))
+      },
+    },
+  })
+
+  const result = await api.prefetchVideo(driveKey, 'video-id', publicBeeKey)
+
+  t.is(result.success, true)
+  const promoteIndex = calls.findIndex((call) => call[0] === 'promoteAvailabilityHintPeers')
+  const updateIndex = calls.findIndex((call) => call[0] === 'core.update')
+  t.ok(promoteIndex >= 0, 'promotes peers from feed/availability hints')
+  t.ok(updateIndex >= 0, 'still performs the bounded core sync wait')
+  t.ok(promoteIndex < updateIndex, 'peer promotion happens before core sync wait')
+  const promoted = calls[promoteIndex]
+  t.alike(promoted[1], [hintedPeer, feedPeer].sort())
+  t.is(promoted[2], core.discoveryKey)
+  t.alike(promoted[3], {
+    direct: true,
+    reason: 'playback-availability-hint-peer',
+  })
+})
+
+test('getAvailabilityHints revalidates cached playable head proof', async (t) => {
+  const driveKey = 'ab'.repeat(32)
+  const blobsCoreKey = 'cd'.repeat(32)
+  const blobId = '0:4:0:4096'
+  const hasCalls = []
+  let headAvailable = true
+  const core = {
+    async ready() {},
+    async has(start, end) {
+      hasCalls.push([start, end])
+      return headAvailable
+    },
+  }
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return core
+        },
+      },
+      swarm: {
+        keyPair: { publicKey: Buffer.from('ef'.repeat(32), 'hex') },
+      },
+    },
+  })
+
+  const request = {
+    driveKey,
+    id: 'video-id',
+    blobsCoreKey,
+    blobId,
+  }
+
+  const first = await api.getAvailabilityHints([request])
+  headAvailable = false
+  const second = await api.getAvailabilityHints([request])
+
+  t.is(first[0]?.availability, 'playable')
+  t.is(first[0]?.hasHeadBlock, true)
+  t.is(second[0]?.availability, 'unknown')
+  t.is(second[0]?.hasHeadBlock, false)
+  t.ok(hasCalls.length > 1, 'cached playable proof is rechecked against local blocks')
 })
 
 test('prefetchNextVideos lists channel videos with the correct signature', async (t) => {

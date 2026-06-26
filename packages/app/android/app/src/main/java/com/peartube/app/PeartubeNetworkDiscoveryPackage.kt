@@ -1,13 +1,13 @@
 package com.peartube.app
 
-import com.facebook.react.TurboReactPackage
+import com.facebook.react.BaseReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 import com.facebook.react.uimanager.ViewManager
 
-class PeartubeNetworkDiscoveryPackage : TurboReactPackage() {
+class PeartubeNetworkDiscoveryPackage : BaseReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
     return if (name == "PeartubeNetworkDiscovery") {
       PeartubeNetworkDiscoveryModule(reactContext)
@@ -26,7 +26,7 @@ class PeartubeNetworkDiscoveryPackage : TurboReactPackage() {
           false,
           false,
           false,
-          true,
+          false,
         )
       )
     }

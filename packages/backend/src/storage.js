@@ -2329,6 +2329,10 @@ export async function shutdownBackend(ctx) {
       try { ctx.playbackWindowCache.stop() } catch { /* best effort */ }
     }
 
+    if (ctx.playbackForwardFill) {
+      try { ctx.playbackForwardFill.stop() } catch { /* best effort */ }
+    }
+
     if (ctx.blobServer) {
       console.log('[Backend] Shutdown: closing blobServer...')
       try {

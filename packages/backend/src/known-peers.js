@@ -1,9 +1,12 @@
 /**
  * Known-Peer Cache
  *
- * Persists noise public keys of peers we've connected to for diagnostics and
- * future operator policy. Default PearTube peer discovery is topic-owned by
- * Hyperswarm; cached peers are not dialed during normal startup/resume.
+ * Persists noise public keys of peers we've connected to. Primary PearTube peer
+ * discovery is topic-owned by Hyperswarm, but at startup the most-recently-seen
+ * cached peers are also proactively re-dialed (see storage.js warm reconnect) so
+ * a firewalled client with a cold DHT routing table can reach known-good peers
+ * immediately instead of waiting out topic rediscovery. Keys are learned
+ * dynamically from real connections — this is not a hardcoded relay list.
  */
 
 import b4a from 'b4a'

@@ -59,7 +59,7 @@ test('initPlatformRPC forwards launch options before downloader worker args', ()
 
   assert.match(
     source,
-    /launchOptions:\s*\{[\s\S]*?__peartubeLaunchOptions:\s*true[\s\S]*?network:\s*\{[\s\S]*?relayPeers/s,
-    'mobile startup must pass explicit relay peer launch options into the backend worklet',
+    /launchOptions:\s*\{[\s\S]*?__peartubeLaunchOptions:\s*true/s,
+    'mobile startup must pass launch options into the backend worklet',
   )
 })

@@ -164,10 +164,40 @@ export class MultiWriterChannel extends ReadyResource {
     }
 
     if (this.localWriterKeyHex) {
-      const writer = await this.db.get('@peartubeChannel/writers', { keyHex: this.localWriterKeyHex })
-      if (!writer) {
+      // A writable channel core has exactly one physical owner device. Two code
+      // paths historically derived that device's *writer-table key* from
+      // different names — the identity-scoped `peartube-channel-writer:<id>`
+      // (whose public key equals the channel key) on load, vs. the internal
+      // fallback `peartube-channel-writer-<channelKey>` when the channel was
+      // created/opened without a writer key. Opening the same owned channel via
+      // each path inserted a *second* "owner" record, surfacing in the UI as a
+      // phantom "synced device" that was never paired.
+      //
+      // Reconcile to a single owner: prefer the record this device actually
+      // claimed (it has a device name or a blob drive), adopt that identity so
+      // blob drives and authorship stay consistent across every open path, and
+      // prune leftover un-claimed owner records.
+      const owners = (await this.db.find('@peartubeChannel/writers', {}).toArray())
+        .filter((w) => w?.role === 'owner')
+      const claimed = owners.find((w) => w.keyHex && (w.deviceName || w.blobDriveKey))
+      const ownerKeyHex = claimed?.keyHex || this.localWriterKeyHex
+
+      if (ownerKeyHex !== this.localWriterKeyHex) {
+        this._localWriterKeyHex = ownerKeyHex
+        this._localWriterKey = b4a.from(ownerKeyHex, 'hex')
+      }
+
+      // Only ever delete un-claimed owner records (no device name, no blob
+      // drive) so this can never drop a device that holds uploaded content.
+      for (const w of owners) {
+        if (w.keyHex && w.keyHex !== ownerKeyHex && !w.deviceName && !w.blobDriveKey) {
+          await this.db.delete('@peartubeChannel/writers', { keyHex: w.keyHex })
+        }
+      }
+
+      if (!owners.some((w) => w.keyHex === ownerKeyHex)) {
         await this.db.insert('@peartubeChannel/writers', {
-          keyHex: this.localWriterKeyHex,
+          keyHex: ownerKeyHex,
           role: 'owner',
           deviceName: '',
           addedAt: now,

@@ -1961,10 +1961,20 @@ export async function createChannel(ctx, options = {}) {
       encrypt: Boolean(options.encrypt)
     })
 
+  // Derive the same writer keypair the load paths use (loadChannel passes
+  // `writerKeyName`). Without this, creation falls back to a different internal
+  // writer-key derivation than every subsequent load, so the owner ends up with
+  // two writer-table records — one of which shows up as a phantom "synced
+  // device". Passing it here keeps the owner's writer key stable from creation.
+  const writerKeyPair = typeof ctx.store.createKeyPair === 'function'
+    ? await ctx.store.createKeyPair(writerKeyName)
+    : null
+
   const ch = new MultiWriterChannel(ctx.store, {
     key: derivedChannelKeyHex ? b4a.from(derivedChannelKeyHex, 'hex') : null,
     encryptionKey: derivedEncryptionKeyHex ? b4a.from(derivedEncryptionKeyHex, 'hex') : null,
     encrypt: Boolean(options.encrypt),
+    keyPair: writerKeyPair || undefined,
     swarm: ctx.swarm // Pass swarm for early replication setup
   })
   await ch.ready()

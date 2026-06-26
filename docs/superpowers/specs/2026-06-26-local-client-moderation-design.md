@@ -1,6 +1,6 @@
 # Local-Client Content Moderation — Design
 
-**Status:** Draft / proposal — revision 3 (spec-review hardened)
+**Status:** Draft / proposal — revision 4 (second review pass)
 **Date:** 2026-06-26
 **Author:** Claude (with @ayooooo123)
 **Branch:** `claude/local-client-moderation-spec-fh5rnx`
@@ -15,7 +15,7 @@
   but split into sybil-resistant trusted-set enforcement vs forgeable advisory-only counts;
   local model = ground truth, instant only for on-device content; thumbnails are a weak
   first pass; classifier fed raw RGB to dodge transformers.js image-decode fragility.
-- **Rev 3 (this)** — hardened against a structured spec review. Material changes:
+- **Rev 3** — hardened against a structured spec review. Material changes:
   1. **Connected peers removed from the enforcement trust set** (a connection is not a
      scarce identity → sybil hole). Trust set = default relays ∪ explicit subscriptions
      only; connected peers may be *manually promoted*, never auto-counted (§2).
@@ -41,6 +41,15 @@
      `sharp`/`onnxruntime-node`/`onnxruntime-web` at module scope; bypassing image-decode
      does not prove ORT-WASM loads in BareKit. Phase 1 is contingent on a measured spike;
      on failure we go straight to native bindings (§5.1, §10).
+- **Rev 4 (this)** — second review pass refinements: the resolver is now a **total**
+  function with an exact category→action table (weak/thumb-only never `hide`; D9); labels
+  drop the redundant `id`, supersede by the `(labeler,target,category)` triple ordered by
+  `seq` (D10); a labeler's identity **is** its label-feed core key, self-labels separated
+  onto the channel-writer path (§9, D11); thresholds count **distinct trusted labeler keys**
+  (D14); seeder quarantine respecified as a **pre-admission state** against the real
+  `addSeed` (which commits immediately) with the Corestore global-replicate caveat, and
+  Phase 1 scoped **strictly local** (§3.3, D15); resolved-cache gains wall-clock `validUntil`
+  (§8).
 
 Decision log + open questions: §13.
 
@@ -192,19 +201,21 @@ channel — so an uploader can neither forge nor suppress third-party labels.
 
 ```
 content-label {
-  id                 : string   // labelerKeyHex + seq (stable identity for supersession)
-  seq                : uint      // labeler's monotonic sequence (latest wins per target/category)
-  targetBlobsCoreKey : string    // content-addressed identity of the video blob
+  // Identity: a third-party labeler IS its label-feed Hypercore key; a self-label uses the
+  // channel-writer key. labelerKeyHex == that public key; the signature verifies against it.
+  labelerKeyHex      : string    // labeler identity = label-feed core key | channel-writer key
+  source             : string     // "relay" | "user" | "self"
+  seq                : uint        // labeler's monotonic sequence; latest wins per (labeler,target,category)
+  targetBlobsCoreKey : string      // content-addressed identity of the video blob
   videoId            : string
   channelKey         : string
-  category           : string    // taxonomy §6
-  score              : float      // classifier confidence 0..1
-  classifierVersion  : string     // "nsfw-mnv2-int8@1" | "self-report" | "manual"
-  labelerKeyHex      : string     // public key of the labeler
+  category           : string      // taxonomy §6
+  score              : float        // classifier confidence 0..1
+  classifierVersion  : string       // "nsfw-mnv2-int8@1" | "self-report" | "manual"
   createdAt          : uint
-  expiresAt          : uint        // 0 = no expiry; clients ignore expired labels
-  revoked            : bool         // tombstone supersedes an earlier label with same id
-  signature          : string      // sign(labelerKeyHex_secret, canonical(label-minus-signature))
+  expiresAt          : uint          // 0 = no expiry; clients ignore expired labels
+  revoked            : bool           // higher-seq revoked record tombstones the (labeler,target,category) triple
+  signature          : string         // sign(labeler secret, canonical(label-minus-signature))
 }
 ```
 
@@ -212,15 +223,18 @@ content-label {
   be lifted onto other content. Canonical signing bytes = compact-encoding of all fields
   except `signature`, identical in JS and Swift (golden vector committed, §7).
 - **Transport — labeler-owned feeds (concrete):**
-  - Each labeler maintains an **append-only label feed**: a Hyperbee over a Hypercore,
-    discoverable by `labelerKeyHex`. The labeler writes/ revokes labels there; it is the
-    durable home for that labeler's claims, independent of any uploader.
-  - **Subscribing** to a labeler = replicating its label feed (selectively, keyed by the
-    blobs/channels the client cares about) and adding its key to `trustedLabelers`.
+  - **A third-party labeler's identity *is* its label-feed core.** Each labeler maintains an
+    append-only label feed (a Hyperbee over a Hypercore); the feed's public key *is*
+    `labelerKeyHex` and the key labels are signed with. Discovery, replication, and
+    signature verification all key off this one identity — no separate signing/feed keys, no
+    new PKI.
+  - **Subscribing** = replicating that feed (selectively, by the blobs/channels the client
+    cares about) and adding its key to `trustedLabelers`.
   - **Relays** (the high-signal default labelers) expose a bounded `get-content-labels`
-    `{ channelKey | blobsCoreKey }` over the existing RPC for on-demand pull, backed by
-    their own label feed.
-  - **Self-label** rides in the channel's `feed-entry` (≤1 tiny label by the uploader).
+    `{ channelKey | blobsCoreKey }` over the existing RPC, backed by their own label feed.
+  - **Self-labels take a *separate* path** — they ride the channel's `feed-entry` (≤1 tiny
+    label by the uploader), are *not* third-party feed labels, and carry `source:"self"`
+    with `labelerKeyHex` = the authorizing channel-writer key (authz below).
   - **Advisory hint** in `HAVE_FEED`: a *boolean-ish capped* `flagHint`
     (`{ nsfwExplicit: bool, nsfwSuggestive: bool }`, optionally a coarse bucket) — forgeable,
     **display-only**, feeds the badge, never enforcement. (We deliberately do *not* gossip
@@ -231,12 +245,15 @@ content-label {
     authorized writer for `channelKey` (per `multi-writer-channel.js` `VALID_WRITER_ROLES`)
     **and** it flags *up* (toward more restrictive). A self-label claiming "safe", or from a
     non-writer, is ignored.
-  - **Supersession/expiry:** keep only the latest non-revoked, non-expired label per
-    `(labelerKeyHex, targetBlobsCoreKey, category)`; tombstones (`revoked`) remove prior.
-  - **Quotas (§8):** one effective label per labeler/category/version; cap untrusted labels
-    per blob; bounded canonical payload size; verify-before-persist.
-  - **Counting:** a label counts toward enforcement thresholds **only if** verified **and**
-    `labelerKeyHex ∈ trustedLabelers`. All other verified labels are advisory-only.
+  - **Supersession/expiry:** per `(labelerKeyHex, targetBlobsCoreKey, category)` keep only
+    the **highest-`seq`** record; a higher-`seq` `revoked` record tombstones it; expired
+    (`expiresAt` past) records are ignored. There is no separate `id` — the triple is the
+    stable identity and `seq` the order.
+  - **Quotas (§8):** store one effective record per `(labeler, category)` (latest seq);
+    cap untrusted labelers per blob; bounded canonical payload; verify-before-persist.
+  - **Counting:** thresholds count **distinct trusted labeler keys** (not labels) holding an
+    effective ≥-category record — so one labeler can't inflate a count. A labeler counts only
+    if its key ∈ `trustedLabelers`; every other verified label is advisory-only.
 
 ### 3.3 Layer 3 — Local enforcement, severity lattice, override
 
@@ -257,32 +274,36 @@ moderation-policy {
 }
 ```
 
-**Effective verdict — a severity lattice (replaces "first hit wins").** Severity order:
-`hide-explicit` > `blur-explicit` > `blur-suggestive` > `none`. The resolver is a **pure,
-local-cache-only function** (no model exec, no network, no signature verification — all done
-earlier at import time):
+**Effective verdict — a total resolver over a severity lattice (replaces "first hit
+wins").** Pure and **local-cache-only** (no model exec, no network, no signature
+verification — those happen at import time). Inputs per video: `override`, `localVideo`
+(authoritative pass verdict | none), `localThumb` (weak pass | none), `selfLabelUp`
+(verified | none), and `trustedCount[c]` = distinct trusted labeler keys with an effective
+label of category ≥ `c`.
 
-1. **Override** short-circuits: `show` ⇒ `{action: show}`; `hide` ⇒ `{action: hide}`.
-2. If `mode == "off"` ⇒ `{action: show, badge: advisory}`.
-3. Otherwise compute `sev = none`, then **raise** it (never lower) from each affirmative,
-   verifiable signal:
-   - authoritative local **video** positive (if `trustLocalModel`) → its category, full
-     strength;
-   - local **thumbnail** positive (if `trustLocalModel`) → its category, **capped at blur**;
-   - verified **self-label-up** (authorized writer) → its category;
-   - for each category, `trustedCount = #verified trusted labels ≥ that category`;
-     `trustedCount ≥ blurThreshold` raises to at least `blur` of that category.
-   *Unknown, "safe", expired, advisory-only, and thumbnail-negative signals never lower
-   `sev`.*
-4. If `sev == none` ⇒ `{action: show, badge: advisory}`.
-5. Map `sev` → action via per-category policy and thresholds:
-   - `action = policy.categories[sevCategory]` (default: explicit→blur, suggestive→show);
-   - escalate: if `trustedCount(sevCategory) ≥ hideThreshold` ⇒ `hide`; else if
-     `≥ blurThreshold` and action would be `show` ⇒ `blur`;
-   - clamp by `mode` (`mode==blur` caps action at `blur`; `mode==hide` allows `hide`).
-   A *single* trusted label can therefore **blur** but, by default, not **hide** (hide needs
-   `hideThreshold` trusted labels, or the user's own authoritative local verdict, or an
-   explicit `categories[...]="hide"`). See §13 D3a/NB2.
+1. **Override short-circuits:** `show` ⇒ `{action:"show"}`; `hide` ⇒ `{action:"hide"}`.
+2. If `mode=="off"` ⇒ `{action:"show", badge}`.
+3. **Pick the strongest category** `C ∈ {explicit, suggestive, none}` by *raising* over the
+   affirmative signals — `localVideo` and `localThumb` (if `trustLocalModel`), `selfLabelUp`,
+   and any `c` with `trustedCount[c] ≥ blurThreshold`. Unknown / "safe" / expired / advisory /
+   negative signals contribute nothing (the lattice only raises). Set `weakOnly = true` iff
+   every signal contributing to `C` is weak — i.e. only `localThumb` and/or
+   `trustedCount[C] < hideThreshold`, with no authoritative `localVideo` and no `selfLabelUp`.
+4. If `C == none` ⇒ `{action:"show", badge}`.
+5. **Map `C` to an action via this exact table, then clamp:**
+
+   | condition (for category `C`) | base action |
+   |------------------------------|-------------|
+   | `trustedCount[C] ≥ hideThreshold` | `hide` |
+   | otherwise | `policy.categories[C]` (default: explicit→`blur`, suggestive→`show`) |
+
+   then, in order: if `weakOnly` and the action is `hide`, **downgrade to `blur`** (weak
+   signals never hide); finally **clamp by `mode`** (`mode=="blur"` caps at `blur`).
+
+   Consequences: a single trusted label ⇒ `blur`, never `hide`; `hide` needs `hideThreshold`
+   distinct trusted labelers **or** the user setting `categories[C]="hide"` (their own choice,
+   applied to their own authoritative/self signals — not `weakOnly`, so not downgraded). The
+   local model never auto-hides under the default `blur` policy. See §13 D3a/NB2.
 
 **Advisory counts never affect `action`.** They populate only `moderation.badge`.
 
@@ -295,15 +316,19 @@ earlier at import time):
    returns it flagged for tap-to-reveal; `show` passes through (badge still rendered).
    Policy/label/verdict changes **invalidate** cached lists (or post-filter) rather than
    caching already-filtered results.
-2. **Seed filter (relay/CLI) — fail-closed + quarantine.** In `SeedingManager.addSeed()`
-   (`seeding.js:214`): admit the blob but mark it **quarantined** (not advertised/served,
-   not counted as durable seed) until a verdict exists; run the dense classifier on the
-   downloaded file. Then:
-   - flagged & `seedFlagged=false` ⇒ **evict** (remove from cache, never advertise);
-   - unknown & `seedUnknown=false` ⇒ evict (relay seeds only what it verified acceptable);
-   - otherwise ⇒ promote to a durable seed.
-   A **verdict-change hook** evicts an already-active seed if a later trusted/local verdict
-   marks it flagged. (Viewer caches stay fail-open; this strict policy is seeder-only.)
+2. **Seed filter (relay/CLI) — fail-closed, Phase 2.** `addSeed` (`seeding.js:214`)
+   *immediately* commits to `activeSeeds` + `persistSeeds()`, and Corestore replicates all
+   cores globally — so "quarantine" is a **new pre-admission state**, not a flag on an active
+   seed: download the blob into a *quarantine* set that is **never** added to `activeSeeds`,
+   never announced on the swarm/feed, and excluded from the relay catalog, availability hints,
+   warmup, and durable-quota accounting. Classify densely (the whole file is present). Then:
+   flagged & `seedFlagged=false`, or unknown & `seedUnknown=false` ⇒ delete blocks + drop;
+   acceptable ⇒ promote via the normal `addSeed` path. A **verdict-change hook** evicts an
+   already-active seed when a later trusted/local verdict turns adverse.
+   *(Open caveat — Corestore's global `store.replicate` means true upload-suppression for a
+   quarantined core needs a per-core upload gate or simply not joining its discovery topic;
+   validated in Phase 2. Viewer caches stay fail-open; this strict policy is seeder-only and
+   out of scope for Phase 1.)*
 3. **Override** — `set-content-override { blobsCoreKey, action }` in `metaDb`. Always wins.
 
 Generalizes the existing local `hideChannel` (`api.js:2818`,
@@ -431,8 +456,8 @@ compromised default relay can't bury content.
 
 New message types (names indicative):
 
-- `content-label` — the signed label record (§3.2), incl. `id`, `seq`, `expiresAt`,
-  `revoked`.
+- `content-label` — the signed label record (§3.2): `labelerKeyHex`, `source`, `seq`,
+  `expiresAt`, `revoked` (no separate `id` — identity is the `(labeler,target,category)` triple).
 - `moderation-policy` — local policy (persisted to `metaDb`, typed for RPC).
 - `moderation-verdict` — `{ action, category, score, source: "override"|"local"|"label",
   badge }` attached to `video` results when present.
@@ -468,11 +493,11 @@ Swift — commit a golden vector and cross-check it in tests (§11).
 | `moderation:policy` | `moderation-policy` |
 | `moderation:self:<blobsCoreKey>` | local verdict + `classifierVersion` + timestamp (recomputed on version bump) |
 | `moderation:override:<blobsCoreKey>` | `"show"` \| `"hide"` |
-| `moderation:labels:<blobsCoreKey>` | verified labels (trusted + advisory, tagged), deduped per labeler/category/version |
+| `moderation:labels:<blobsCoreKey>` | verified labels (trusted + advisory, tagged), one effective record per `(labeler, category)` latest `seq` |
 | `moderation:labelers` | trust set (default relays ∪ subscriptions ∪ manually-promoted peers) |
-| `moderation:resolved:<blobsCoreKey>` | cached pure-resolver output for the hot list path; invalidated on policy/label/verdict change |
+| `moderation:resolved:<blobsCoreKey>` | cached resolver output for the hot list path + `validUntil` (next label `expiresAt`); invalidated on policy/label/verdict change **or** when `validUntil` passes |
 
-**Quotas:** one effective label per `(labeler, category, version)`; max untrusted labels per
+**Quotas:** one effective label per `(labeler, category)` (latest `seq`); max untrusted labels per
 blob (e.g. 64); bounded canonical label size; signature verified before persistence. All
 keys are per-client and local; nothing here is authoritative for anyone else.
 
@@ -480,12 +505,20 @@ keys are per-client and local; nothing here is authoritative for anyone else.
 
 ## 9. Identity for labelers
 
-Reuse the existing channel/device keypair model (`VALID_WRITER_ROLES` etc. in
-`packages/backend/src/channel/multi-writer-channel.js`). A labeler key is a Hypercore
-keypair; a relay signs with its relay identity, an opt-in user with their channel key.
-Subscribing replicates a labeler's label feed and adds its key to `trustedLabelers`. Default
-relay labeler keys ship with the app (editable/removable). Self-label authorization is
-verified against channel writer roles (§3.2). No new PKI.
+There are two distinct label sources with two distinct identities:
+
+- **Third-party labelers** (relays, opt-in users): the labeler identity **is** its
+  append-only **label-feed Hypercore key** (§3.2). It signs with that core's keypair;
+  `labelerKeyHex` = that public key; discovery, replication, signature verification, and
+  trust-set membership all key off it. Default relay labeler keys ship with the app
+  (editable/removable). No separate signing/feed keys, no new PKI.
+- **Self-labels** (an uploader tagging its own video): authorized via the existing channel
+  writer model (`VALID_WRITER_ROLES` in `multi-writer-channel.js`); `labelerKeyHex` = the
+  channel-writer key, `source:"self"`. These ride the channel `feed-entry`, never a label
+  feed, and are honored only when they flag *up* (§3.2).
+
+Subscribing to a third-party labeler replicates its label feed and adds its key to
+`trustedLabelers`.
 
 ---
 
@@ -570,13 +603,22 @@ verified against channel writer roles (§3.2). No new PKI.
   on load failure — **gated by the Phase 1a spike** (D12).
 - **D8** Self-labels honored only when they flag *up* **and** come from an authorized
   channel writer.
-- **D9** Effective verdict is a **severity lattice** (only raises); advisory never enforces.
-- **D10** Labels carry id/seq/expiry/revocation; local verdict cache invalidates on model
-  version bump; nothing trusted forever.
-- **D11** Labeler-owned append-only label feeds (Hyperbee/Hypercore) are the durable label
-  transport; relays expose bounded `get-content-labels`.
+- **D9** Effective verdict is a **total resolver** over a severity lattice (only ever
+  *raises* severity; weak/thumb-only signals never `hide`; advisory never enforces; the
+  C→action mapping is an exact table clamped by `mode`).
+- **D10** Labels carry `seq`/`expiresAt`/`revoked` (no separate `id`); supersession is by the
+  `(labeler, target, category)` triple ordered by `seq`; the local verdict cache invalidates
+  on model-version bump and the resolved cache on `validUntil`. Nothing is trusted forever.
+- **D11** A third-party labeler's identity **is** its append-only label-feed Hypercore key
+  (Hyperbee over Hypercore); self-labels use the channel-writer key on a separate path.
+  Relays expose a bounded `get-content-labels`.
 - **D12** Phase 1 is gated by a measured BareKit/Electrobun ONNX-WASM spike (§5.1).
 - **D13** `listVideos` stays hot: the view filter is a pure local-cache resolver only.
+- **D14** Thresholds count **distinct trusted labeler keys** (not labels); one labeler can't
+  inflate a count.
+- **D15** Seeder quarantine is a **pre-admission state** (not a flag on an `activeSeed`);
+  Phase 1 is strictly local (no labels, no seeding control). True upload-suppression under
+  Corestore's global replicate is a Phase-2 caveat (§3.3).
 
 **Flagged for your review:**
 

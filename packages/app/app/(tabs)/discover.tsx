@@ -540,7 +540,9 @@ export default function VerticalDiscoveryScreen() {
         if (active && Array.isArray(subs?.subscriptions)) {
           setFollowedChannels(new Set(subs.subscriptions.map((s: any) => s.channelKey).filter(Boolean)))
         }
-      } catch {}
+      } catch {
+        // Best-effort: leave follow state empty if subscriptions can't be read.
+      }
     })()
     return () => { active = false }
   }, [rpc])

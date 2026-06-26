@@ -25,7 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache } from './known-peers.js'
+import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { serveVideoRangeHttpRequest } from './video-range-http.js'
@@ -83,6 +83,11 @@ async function appendDebugLine(line) {
 }
 
 const log = logger('Storage')
+
+// How many of the most-recently-seen persisted known peers to proactively
+// re-dial at startup for warm reconnect. Bounded so a firewalled client warms
+// its best recent peers without flooding the swarm with stale dials.
+const KNOWN_PEER_REDIAL_LIMIT = 16
 
 // Network stats for debugging connection issues
 let HyperswarmStats = null
@@ -1614,6 +1619,32 @@ export async function initializeStorage(config) {
     globalPeerPoolDiscovery = null
   } else {
     joinPeerPoolDiscoveryImmediately('startup')
+  }
+
+  // Warm reconnect: proactively re-dial peers we have actually connected to in
+  // prior sessions (persisted by the known-peer cache — learned dynamically from
+  // real connections, NOT a hardcoded relay list). Cold DHT discovery can take
+  // many seconds for a firewalled client with no warm routing table, leaving
+  // playback stuck at "0 peers"; re-dialing known-good peers (seeders/relays we
+  // have reached before) gives an immediate path while DHT discovery catches up.
+  // Bounded and best-effort; joinPeer is idempotent so this never duplicates an
+  // existing connection.
+  if (!swarm._peartubeOffline && typeof swarm.joinPeer === 'function') {
+    void (async () => {
+      try {
+        const known = await loadKnownPeers(metaDb)
+        let dialed = 0
+        for (const { key } of known.slice(0, KNOWN_PEER_REDIAL_LIMIT)) {
+          try { swarm.joinPeer(b4a.from(key, 'hex')); dialed++ } catch { /* best effort */ }
+        }
+        if (dialed > 0) {
+          console.log('[Storage] Warm reconnect: re-dialing', dialed, 'known peer(s) from prior sessions')
+          void appendDebugLine(`[storage] warm reconnect re-dialing ${dialed} known peers`)
+        }
+      } catch (err) {
+        console.log('[Storage] Warm reconnect skipped:', err?.message || err)
+      }
+    })()
   }
 
   // Start listening - DON'T block on it since it may hang on mobile

@@ -26,8 +26,8 @@ function isVideoContentType(type) {
 function once(emitter, event) {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
-      try { emitter.off?.(event, onEvent) } catch {}
-      try { emitter.off?.('error', onError) } catch {}
+      try { emitter.off?.(event, onEvent) } catch { /* best effort */ }
+      try { emitter.off?.('error', onError) } catch { /* best effort */ }
     }
     const onEvent = () => {
       cleanup()
@@ -83,7 +83,7 @@ async function syncVideoRangeRemoteLength(core, startBlock) {
       delay(2500).then(() => false),
     ])
     console.log('[Storage] Video range HTTP remote sync:', updated ? 'ready' : 'timeout', JSON.stringify(summarizeVideoRangePeerSync(core)))
-    try { core.core?.replicator?.updateAll?.() } catch {}
+    try { core.core?.replicator?.updateAll?.() } catch { /* best effort */ }
   } catch (err) {
     console.log('[Storage] Video range HTTP remote sync failed:', err?.message || err, JSON.stringify(summarizeVideoRangePeerSync(core)))
   }
@@ -196,7 +196,7 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
     res.setHeader('Content-Length', String(length))
     res.setHeader('Cache-Control', 'no-store')
     res.writeHead(statusCode)
-    try { res.flushHeaders?.() } catch {}
+    try { res.flushHeaders?.() } catch { /* best effort */ }
 
     console.log(
       '[Storage] Video range HTTP:',
@@ -244,12 +244,12 @@ export async function serveVideoRangeHttpRequest(deps, req, res) {
       res.end()
       return true
     }
-    try { res.destroy?.() } catch {}
+    try { res.destroy?.() } catch { /* best effort */ }
     return true
   } finally {
     try {
       const closing = core?.close?.()
       if (closing?.catch) closing.catch(() => {})
-    } catch {}
+    } catch { /* best effort */ }
   }
 }

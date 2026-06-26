@@ -2939,6 +2939,7 @@ export function createApi({
         // Prefetch directly from blobs core using blobId.
         if (blobMeta?.blobsCoreKey && blobMeta?.blobId) {
           const keyBuf = b4a.from(blobMeta.blobsCoreKey, 'hex')
+          const blobCoreKeyHex = String(blobMeta.blobsCoreKey || '').toLowerCase()
           const core = ctx.store.get({ key: keyBuf })
           await core.ready()
 
@@ -3222,7 +3223,6 @@ export function createApi({
             let fullDownloadStarted = false
             let fillCancelled = false
             let currentFillRange = null
-            const blobCoreKeyHex = String(blobMeta.blobsCoreKey || '').toLowerCase()
 
             // Admission check for the full background download. Streaming a video
             // front-to-back fills the whole file to disk (the playback window

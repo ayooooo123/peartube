@@ -23,8 +23,37 @@ async function waitUntil(fn) {
 
 function createMetaDb(seed = {}) {
   const state = new Map(Object.entries(seed))
+  // Download intents now live in the `download-intent` metaDb subspace. This
+  // fake keeps the flat `download-intent:<sub>` storage (so the seed format and
+  // `state.has(...)` assertions are unchanged) while exposing the subspace
+  // accessor the production code uses — its keys are the prefix-stripped form.
+  const DI_PREFIX = 'download-intent:'
+  const subspaces = {
+    downloadIntents: {
+      async get(key) {
+        return state.has(DI_PREFIX + key) ? { value: state.get(DI_PREFIX + key) } : null
+      },
+      async put(key, value) {
+        state.set(DI_PREFIX + key, value)
+      },
+      async del(key) {
+        state.delete(DI_PREFIX + key)
+      },
+      createReadStream() {
+        const entries = Array.from(state.entries())
+          .filter(([key]) => key.startsWith(DI_PREFIX))
+          .map(([key, value]) => ({ key: key.slice(DI_PREFIX.length), value }))
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield * entries
+          }
+        }
+      }
+    }
+  }
   return {
     state,
+    subspaces,
     async get(key) {
       return state.has(key) ? { value: state.get(key) } : null
     },
@@ -128,8 +157,8 @@ test('clearCache clears persisted partial download intents as cache bytes', asyn
   })
   const store = createStore()
   store.get(b4a.from(coreA, 'hex'))
-  const seedingManager = new SeedingManager(store, metaDb)
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
 
   const result = await api.clearCache()
 
@@ -158,8 +187,8 @@ test('setStorageLimit preserves partial download intents when the limit is uncha
   })
   const store = createStore()
   store.get(b4a.from(coreA, 'hex'))
-  const seedingManager = new SeedingManager(store, metaDb)
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
 
   const result = await api.setStorageLimit(5)
   const raised = await api.setStorageLimit(10)
@@ -187,8 +216,8 @@ test('setStorageLimit clears partial download intents when lowering the limit', 
   })
   const store = createStore()
   store.get(b4a.from(coreA, 'hex'))
-  const seedingManager = new SeedingManager(store, metaDb)
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
 
   await api.setStorageLimit(10)
   const lowered = await api.setStorageLimit(5)
@@ -217,9 +246,10 @@ test('setStorageLimit clears stale partial bytes before evicting valid seeds on 
   const store = createStore()
   store.get(b4a.from(coreA, 'hex'))
   const seedingManager = new SeedingManager(store, metaDb, {
+    metaSubspaces: metaDb.subspaces,
     getDiskUsageBytes: () => metaDb.state.has(intentKey) ? 6 * GB : 4 * GB
   })
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
 
   await api.setStorageLimit(10)
   await seedingManager.addSeed('drive-a', 'videos/valid.mp4', 'watched', {
@@ -239,9 +269,9 @@ test('setStorageLimit clears stale partial bytes before evicting valid seeds on 
 test('prefetchVideo registers in-flight downloads with quota tracking before completion', async (t) => {
   const metaDb = createMetaDb()
   const store = createStore()
-  const seedingManager = new SeedingManager(store, metaDb)
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
-  const api = createApi({ ctx: { store, metaDb, swarm: null }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
   api.getVideoData = async () => ({
     id: 'partial',
@@ -272,9 +302,9 @@ test('prefetchVideo registers in-flight downloads with quota tracking before com
 test('prefetchVideo does not reserve the full blob size before bytes are cached', async (t) => {
   const metaDb = createMetaDb()
   const store = createStore()
-  const seedingManager = new SeedingManager(store, metaDb)
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
-  const api = createApi({ ctx: { store, metaDb, swarm: null }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
   api.getVideoData = async () => ({
     id: 'huge-partial',
@@ -298,7 +328,7 @@ test('prefetchVideo does not reserve the full blob size before bytes are cached'
 test('prefetchVideo corrects stale full-size watched seed accounting downward', async (t) => {
   const metaDb = createMetaDb()
   const store = createStore()
-  const seedingManager = new SeedingManager(store, metaDb)
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
   await seedingManager.addSeed('drive-a', 'videos/stale-huge.mp4', 'watched', {
     blockLength: 8,
@@ -306,7 +336,7 @@ test('prefetchVideo corrects stale full-size watched seed accounting downward', 
     blobId: '0:8:0:8589934592',
     blobsCoreKey: coreA
   }, { protectSelf: true })
-  const api = createApi({ ctx: { store, metaDb, swarm: null }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
   api.getVideoData = async () => ({
     id: 'stale-huge',
@@ -331,10 +361,10 @@ test('prefetchVideo corrects stale full-size watched seed accounting downward', 
 test('prefetchVideo quota enforcement preserves active range downloads', async (t) => {
   const metaDb = createMetaDb()
   const store = createStore()
-  const seedingManager = new SeedingManager(store, metaDb)
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
   await seedingManager.init()
   await seedingManager.setMaxStorageGB(5)
-  const api = createApi({ ctx: { store, metaDb, swarm: null }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
 
   api.getVideoData = async (_driveKey, videoPath) => {
     if (videoPath === 'videos/active.mp4') {
@@ -378,7 +408,7 @@ test('prefetchVideo quota enforcement preserves active range downloads', async (
 test('prefetchVideo cleans up core listeners when blob is already fully cached', async (t) => {
   const metaDb = createMetaDb()
   const store = createStore()
-  const api = createApi({ ctx: { store, metaDb, swarm: null } })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null } })
   const core = store.get(b4a.from(coreA, 'hex'))
   core.has = async () => true
 
@@ -409,7 +439,7 @@ test('ending playback flushes the quota eviction that was deferred while playing
   const seedingManager = new SeedingManager(store, metaDb, {
     isCacheClearBlocked: () => isPlaybackActive()
   })
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
   const core = store.get(b4a.from(coreA, 'hex'))
 
   api.setPlaybackActive({ active: false }) // clean baseline for the shared module flag
@@ -441,7 +471,7 @@ test('rapid reopen cancels the post-playback eviction sweep', async (t) => {
   const seedingManager = new SeedingManager(store, metaDb, {
     isCacheClearBlocked: () => isPlaybackActive()
   })
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
   const core = store.get(b4a.from(coreA, 'hex'))
 
   api.setPlaybackActive({ active: false })
@@ -477,7 +507,7 @@ test('post-playback sweep never evicts the most-recently-played video', async (t
   const seedingManager = new SeedingManager(store, metaDb, {
     isCacheClearBlocked: () => isPlaybackActive()
   })
-  const api = createApi({ ctx: { store, metaDb }, seedingManager })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
   const coreCurrent = store.get(b4a.from(coreA, 'hex'))
   const coreOld = store.get(b4a.from(coreB, 'hex'))
 

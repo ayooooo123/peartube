@@ -204,7 +204,7 @@ export function createApi({
 
   async function isMultiWriterChannelKey(channelKey) {
     try {
-      const res = await ctx.metaDb.get(`mw-channel:${channelKey}`)
+      const res = await ctx.metaSubspaces.channelKinds.get(channelKey)
       return Boolean(res?.value)
     } catch {
       // Fall through to other checks
@@ -219,7 +219,7 @@ export function createApi({
       const identities = stored?.value || []
       if (identities.some((i) => i?.channelKey === channelKey || i?.driveKey === channelKey)) {
         // Backfill marker so future checks are fast
-        try { await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', backfilledAt: Date.now() }) } catch { /* best effort */ }
+        try { await ctx.metaSubspaces.channelKinds.put(channelKey, { kind: 'autobase', backfilledAt: Date.now() }) } catch { /* best effort */ }
         return true
       }
     } catch { /* best effort */ }
@@ -229,7 +229,7 @@ export function createApi({
 
   async function markAsMultiWriterChannel(channelKey) {
     try {
-      await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', discoveredAt: Date.now() })
+      await ctx.metaSubspaces.channelKinds.put(channelKey, { kind: 'autobase', discoveredAt: Date.now() })
     } catch { /* best effort */ }
   }
 
@@ -840,14 +840,23 @@ export function createApi({
   // needs a feed announcement), so default deployments lean on the
   // independent-live-peers redundancy threshold.
   function getKnownDurableRelayKeys() {
-    const raw = ctx?.trustedRelayKeys
-    if (!Array.isArray(raw)) return []
-    const keys = []
-    for (const k of raw) {
-      const hex = typeof k === 'string' ? k.toLowerCase() : null
-      if (hex && /^[a-f0-9]{64}$/.test(hex)) keys.push(hex)
+    // Durable relay anchors come from two sources: host-provided config
+    // (ctx.trustedRelayKeys) and the live blind-peering mirror set (config +
+    // feed-discovered relays). A core mirrored to one of these blind peers is a
+    // durable full copy, so it satisfies offload eligibility on its own.
+    const sources = [
+      ctx?.trustedRelayKeys,
+      ctx?.blindPeering?.getActiveMirrorKeys?.(),
+    ]
+    const keys = new Set()
+    for (const raw of sources) {
+      if (!Array.isArray(raw)) continue
+      for (const k of raw) {
+        const hex = typeof k === 'string' ? k.toLowerCase() : null
+        if (hex && /^[a-f0-9]{64}$/.test(hex)) keys.add(hex)
+      }
     }
-    return keys
+    return Array.from(keys)
   }
 
   // Own-device anchor: each device records the swarm key it replicates under in
@@ -1117,8 +1126,7 @@ export function createApi({
    * @returns {Promise<void>}
    */
   async function saveDownloadIntent(ctx, intent) {
-    const key = `download-intent:${intent.driveKey}:${intent.videoPath}`
-    await ctx.metaDb.put(key, intent)
+    await ctx.metaSubspaces.downloadIntents.put(`${intent.driveKey}:${intent.videoPath}`, intent)
   }
 
   /**
@@ -1129,8 +1137,7 @@ export function createApi({
    * @returns {Promise<Object|null>}
    */
   async function loadDownloadIntent(ctx, driveKey, videoPath) {
-    const key = `download-intent:${driveKey}:${videoPath}`
-    const entry = await ctx.metaDb.get(key)
+    const entry = await ctx.metaSubspaces.downloadIntents.get(`${driveKey}:${videoPath}`)
     return entry?.value || null
   }
 
@@ -1142,8 +1149,7 @@ export function createApi({
    * @returns {Promise<void>}
    */
   async function deleteDownloadIntent(ctx, driveKey, videoPath) {
-    const key = `download-intent:${driveKey}:${videoPath}`
-    await ctx.metaDb.del(key)
+    await ctx.metaSubspaces.downloadIntents.del(`${driveKey}:${videoPath}`)
   }
 
   /**
@@ -1153,7 +1159,7 @@ export function createApi({
    */
   async function loadAllDownloadIntents(ctx) {
     const intents = []
-    for await (const entry of ctx.metaDb.createReadStream({ gte: 'download-intent:', lt: 'download-intent:~' })) {
+    for await (const entry of ctx.metaSubspaces.downloadIntents.createReadStream()) {
       if (entry.value) {
         intents.push(entry.value)
       }

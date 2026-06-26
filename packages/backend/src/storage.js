@@ -26,6 +26,7 @@ import {
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
+import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { serveVideoRangeHttpRequest } from './video-range-http.js'
@@ -1391,6 +1392,19 @@ export async function initializeStorage(config) {
     await cleanupFailedMetadataStartup('metaDb.ready', error)
   }
 
+  // Sub-encoded metaDb keyspaces (download intents, channel kinds, playback
+  // profiles) + one-time migration of any legacy flat-prefixed keys. Best-effort:
+  // a migration failure must not block startup (it retries next launch).
+  const metaSubspaces = createMetaSubspaces(metaDb)
+  try {
+    const migration = await migrateMetaSubspaces(metaDb, metaSubspaces)
+    if (migration.migrated > 0 || migration.incomplete) {
+      console.log('[Storage] meta-subspaces migration:', JSON.stringify(migration))
+    }
+  } catch (error) {
+    console.warn('[Storage] meta-subspaces migration skipped (non-fatal):', error?.message)
+  }
+
   try {
     const desiredPort = blobServerPortOverride || 0;
 
@@ -1707,6 +1721,7 @@ export async function initializeStorage(config) {
     store,
     metaCore,
     metaDb,
+    metaSubspaces,
     swarm,
     blobServer,
     blobServerPort,
@@ -2030,7 +2045,7 @@ export async function createChannel(ctx, options = {}) {
 
   // Persist a marker so we can reliably distinguish multi-writer channels.
   try {
-    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'hyperdb', createdAt: Date.now() })
+    await ctx.metaSubspaces.channelKinds.put(channelKeyHex, { kind: 'hyperdb', createdAt: Date.now() })
   } catch { /* best effort */ }
 
   // Set up pairing and replication - AWAIT to ensure handlers are registered
@@ -2095,7 +2110,7 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
 
   // Persist marker for multi-writer channel
   try {
-    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'hyperdb', createdAt: Date.now() })
+    await ctx.metaSubspaces.channelKinds.put(channelKeyHex, { kind: 'hyperdb', createdAt: Date.now() })
   } catch { /* best effort */ }
 
   // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
@@ -2387,6 +2402,13 @@ export async function shutdownBackend(ctx) {
       } catch { /* best effort */ }
       await runShutdownStep('blobServer close', async () => {
         await ctx.blobServer.close()
+      }, 2000)
+    }
+
+    if (ctx.blindPeering) {
+      console.log('[Backend] Shutdown: closing blind-peering client...')
+      await runShutdownStep('blind-peering close', async () => {
+        await ctx.blindPeering.close()
       }, 2000)
     }
 

@@ -284,21 +284,31 @@ test('prefetchVideo promotes availability-hint peers before waiting on blob core
       metaDb: {
         async get(key) {
           calls.push(['meta.get', key])
-          if (key === `download-intent:${driveKey}:video-id`) {
-            return {
-              value: {
-                driveKey,
-                videoPath: 'video-id',
-                blobsCoreKey,
-                blobId,
-                totalBytes: 4096,
-                mimeType: 'video/mp4',
-              },
-            }
-          }
           return null
         },
         async del() {},
+      },
+      metaSubspaces: {
+        downloadIntents: {
+          async get(subKey) {
+            calls.push(['di.get', subKey])
+            if (subKey === `${driveKey}:video-id`) {
+              return {
+                value: {
+                  driveKey,
+                  videoPath: 'video-id',
+                  blobsCoreKey,
+                  blobId,
+                  totalBytes: 4096,
+                  mimeType: 'video/mp4',
+                },
+              }
+            }
+            return null
+          },
+          async put() {},
+          async del() {},
+        },
       },
     },
     publicFeed: {

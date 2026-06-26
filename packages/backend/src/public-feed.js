@@ -129,6 +129,10 @@ export class PublicFeed {
     this.onFeedConnectionOpen = null;
     /** @type {((event: { type: string, added: number, received: number }) => void) | null} */
     this.onFeedSync = null;
+    // Fired with a relay's blind-peer mirror key (hex) when a relay-serving feed
+    // entry advertises one, so the blind-peering client can adopt it as a mirror.
+    /** @type {((mirrorKeyHex: string) => void) | null} */
+    this.onRelayMirrorKey = null;
 
     // Persist discovered feed entries so UIs don't come up empty on restart.
     /** @type {any | null} */
@@ -195,6 +199,28 @@ export class PublicFeed {
    */
   setOnFeedSync(callback) {
     this.onFeedSync = callback;
+  }
+
+  /**
+   * Set callback for when a relay-serving feed entry advertises a blind-peer
+   * mirror key. Used to grow the blind-peering mirror set via discovery.
+   * @param {(mirrorKeyHex: string) => void} callback
+   */
+  setOnRelayMirrorKey(callback) {
+    this.onRelayMirrorKey = callback;
+  }
+
+  /**
+   * Surface a relay's advertised blind-peer mirror key (best-effort). Only fires
+   * for relay-serving entries carrying a valid 64-hex key.
+   * @param {{ relayServing?: boolean, relayMirrorKey?: string | null }} entry
+   */
+  _noteRelayMirrorKey(entry) {
+    try {
+      if (!entry?.relayServing || !this.onRelayMirrorKey) return
+      const key = typeof entry.relayMirrorKey === 'string' ? entry.relayMirrorKey.toLowerCase() : null
+      if (key && /^[a-f0-9]{64}$/.test(key)) this.onRelayMirrorKey(key)
+    } catch { /* best effort */ }
   }
 
   /**
@@ -481,6 +507,9 @@ export class PublicFeed {
       restoredFromCache: Boolean(entry.restoredFromCache),
       restoredFrom: entry.restoredFrom || null,
       requiresAvailabilityProbe: Boolean(entry.requiresAvailabilityProbe),
+      ...(typeof entry.relayMirrorKey === 'string' && /^[a-f0-9]{64}$/i.test(entry.relayMirrorKey)
+        ? { relayMirrorKey: entry.relayMirrorKey.toLowerCase() }
+        : {}),
       lastSeenAt: entry.lastSeenAt || entry.addedAt || Date.now(),
       version: Number(entry.version || 0) || 0,
     }
@@ -535,6 +564,14 @@ export class PublicFeed {
     if (typeof snapshot.relayServing !== 'undefined' && Boolean(snapshot.relayServing) !== Boolean(entry.relayServing)) {
       entry.relayServing = Boolean(snapshot.relayServing)
       changed = true
+    }
+    if (typeof snapshot.relayMirrorKey === 'string' && /^[a-f0-9]{64}$/i.test(snapshot.relayMirrorKey)) {
+      const nextMirrorKey = snapshot.relayMirrorKey.toLowerCase()
+      if (nextMirrorKey !== entry.relayMirrorKey) {
+        entry.relayMirrorKey = nextMirrorKey
+        changed = true
+      }
+      this._noteRelayMirrorKey(entry)
     }
     if (Number(snapshot.lastSeenAt || 0) > Number(entry.lastSeenAt || 0)) {
       entry.lastSeenAt = Number(snapshot.lastSeenAt)
@@ -2082,6 +2119,9 @@ export class PublicFeed {
       catalogVersion: Number(snapshot?.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
       relayRole: snapshot?.relayRole || (source === 'relay-cache' ? 'cache' : source === 'local' ? 'publisher' : null),
       relayServing: Boolean(snapshot?.relayServing || source === 'relay-cache' || source === 'local'),
+      relayMirrorKey: typeof snapshot?.relayMirrorKey === 'string' && /^[a-f0-9]{64}$/i.test(snapshot.relayMirrorKey)
+        ? snapshot.relayMirrorKey.toLowerCase()
+        : null,
       discoveryOnly: Boolean(snapshot?.discoveryOnly),
       restoredFromCache: Boolean(snapshot?.restoredFromCache),
       restoredFrom: typeof snapshot?.restoredFrom === 'string' ? snapshot.restoredFrom : null,
@@ -2099,6 +2139,7 @@ export class PublicFeed {
 
     // Persist (debounced) so restarts retain discovered keys.
     this._schedulePersistDiscovered()
+    this._noteRelayMirrorKey(this.entries.get(driveKey))
 
     return true;
   }

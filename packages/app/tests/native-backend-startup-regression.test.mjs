@@ -234,6 +234,9 @@ test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
   assert.ok(handlerBlock, 'mobile getSwarmStatus handler should exist')
   for (const field of [
     'network',
+    'startupTiming',
+    'doctor',
+    'directPeerDial',
     'swarmOffline',
     'swarmOfflineReason',
     'swarmListenResolved',
@@ -256,6 +259,9 @@ test('desktop worker forwards feed update events and full swarm diagnostics', ()
   assert.match(swarmStatusBlock, /api\.getSwarmStatus\(\)/)
   for (const field of [
     'network',
+    'startupTiming',
+    'doctor',
+    'directPeerDial',
     'swarmOffline',
     'swarmOfflineReason',
     'swarmListenResolved',

@@ -88,6 +88,12 @@ const log = logger('Storage')
 // re-dial at startup for warm reconnect. Bounded so a firewalled client warms
 // its best recent peers without flooding the swarm with stale dials.
 const KNOWN_PEER_REDIAL_LIMIT = 16
+const DESKTOP_SWARM_DEFAULTS = Object.freeze({
+  maxParallel: 12,
+  maxPeers: 96
+})
+const DESKTOP_PEER_POOL_WARM_REFRESH_INTERVALS_MS = Object.freeze([3000, 10000, 30000])
+const DESKTOP_PEER_POOL_MIN_CONNECTIONS = 4
 
 // Network stats for debugging connection issues
 let HyperswarmStats = null
@@ -97,6 +103,125 @@ const HYPERSWARM_MODULE_TIMEOUT_MS = 5000
 
 // Global network stats instance (set after swarm is created)
 let networkStats = null;
+
+function copyDefinedOptions(source, keys) {
+  const out = {}
+  if (!source || typeof source !== 'object') return out
+  for (const key of keys) {
+    if (source[key] !== undefined) out[key] = source[key]
+  }
+  return out
+}
+
+function summarizeSwarmOptions(options = {}) {
+  if (!options || typeof options !== 'object') return null
+  const summary = { ...options }
+  if (summary.keyPair) {
+    summary.keyPair = {
+      publicKey: shortKeyHex(summary.keyPair.publicKey)
+    }
+  }
+  if (summary.dht) summary.dht = '[custom-dht]'
+  if (typeof summary.firewall === 'function') summary.firewall = '[function]'
+  if (typeof summary.relayThrough === 'function') summary.relayThrough = '[function]'
+  return summary
+}
+
+export function resolveHyperswarmOptions({
+  keyPair,
+  platform = 'desktop',
+  network = {},
+  swarmOptions = {}
+} = {}) {
+  const normalizedPlatform = platform === 'mobile' ? 'mobile' : 'desktop'
+  const networkOptions = copyDefinedOptions(network, [
+    'bootstrap',
+    'nodes',
+    'port',
+    'deferRandomPunch',
+    'randomPunchInterval'
+  ])
+  const explicitOptions = swarmOptions && typeof swarmOptions === 'object' ? { ...swarmOptions } : {}
+
+  // Storage owns the persisted Hyperswarm identity; launch-time tuning must not
+  // replace it with an ephemeral caller-provided keypair.
+  delete explicitOptions.keyPair
+
+  return {
+    ...networkOptions,
+    ...(normalizedPlatform === 'desktop' ? DESKTOP_SWARM_DEFAULTS : {}),
+    ...explicitOptions,
+    keyPair
+  }
+}
+
+export function schedulePeerPoolWarmupRefreshes({
+  platform = 'desktop',
+  swarm,
+  discovery,
+  startupTiming = null,
+  intervals = DESKTOP_PEER_POOL_WARM_REFRESH_INTERVALS_MS,
+  minConnections = DESKTOP_PEER_POOL_MIN_CONNECTIONS,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  if (platform !== 'desktop') return { scheduled: 0, reason: 'non-desktop', cancel() {} }
+  if (!swarm || !discovery || typeof discovery.refresh !== 'function') {
+    return { scheduled: 0, reason: 'missing-discovery-refresh', cancel() {} }
+  }
+  const currentConnections = Number(swarm.connections?.size || 0)
+  if (currentConnections >= minConnections) {
+    return { scheduled: 0, reason: 'connection-target-met', cancel() {} }
+  }
+
+  let cancelled = false
+  const timers = []
+
+  intervals.forEach((delayMs, index) => {
+    const timer = setTimer(async () => {
+      if (cancelled) return
+      const connections = Number(swarm.connections?.size || 0)
+      const connecting = Number(swarm.connecting || 0)
+      if (connections >= minConnections) {
+        startupTiming?.record?.('peer-pool-warm-refresh-skipped', {
+          attempt: index + 1,
+          connections,
+          connecting,
+          reason: 'connection-target-met'
+        })
+        return
+      }
+
+      startupTiming?.record?.('peer-pool-warm-refresh', {
+        attempt: index + 1,
+        connections,
+        connecting
+      })
+      try {
+        await discovery.refresh({ server: true, client: true })
+      } catch (err) {
+        startupTiming?.record?.('peer-pool-warm-refresh-failed', {
+          attempt: index + 1,
+          connections,
+          connecting,
+          error: err?.message || String(err)
+        })
+      }
+    }, delayMs)
+    timers.push(timer)
+  })
+
+  return {
+    scheduled: timers.length,
+    reason: 'scheduled',
+    cancel() {
+      cancelled = true
+      for (const timer of timers) {
+        try { clearTimer(timer) } catch { /* best effort */ }
+      }
+    }
+  }
+}
 
 function createNetworkStartupTiming() {
   const startedAt = Date.now()
@@ -595,6 +720,7 @@ function createSwarmDiagnostics(swarm) {
       }
 
       return {
+        options: summarizeSwarmOptions(swarm?._peartubeSwarmOptions),
         recentPeers: recentPeers.slice(-10),
         recentUpdates: recentUpdates.slice(-10),
         recentConnections: recentConnections.slice(-10),
@@ -1093,7 +1219,10 @@ export async function initializeStorage(config) {
     blobServerBindHost: blobServerBindHostOverride,
     primaryKey = null,
     corestoreWaitForLock = false,
-    corestoreAllowBackup = false
+    corestoreAllowBackup = false,
+    platform = 'desktop',
+    network = {},
+    swarmOptions = {}
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -1148,6 +1277,12 @@ export async function initializeStorage(config) {
   console.log('[Storage] Creating Hyperswarm (early, before storage warmup)...');
   await appendDebugLine('[storage] creating hyperswarm early')
   const LoadedHyperswarm = await waitForHyperswarmModule()
+  const hyperswarmOptions = resolveHyperswarmOptions({
+    keyPair,
+    platform,
+    network,
+    swarmOptions
+  })
   let swarm
   if (typeof LoadedHyperswarm !== 'function') {
     console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
@@ -1155,15 +1290,19 @@ export async function initializeStorage(config) {
     swarm = createOfflineSwarm(keyPair, 'module-unavailable')
   } else {
     try {
-      swarm = new LoadedHyperswarm({ keyPair });
+      swarm = new LoadedHyperswarm(hyperswarmOptions);
     } catch (err) {
       console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
       await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
       swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
     }
   }
+  swarm._peartubeSwarmOptions = summarizeSwarmOptions(hyperswarmOptions)
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
-  globalNetworkStartupTiming?.record('swarm-created', { offline: Boolean(swarm._peartubeOffline) })
+  globalNetworkStartupTiming?.record('swarm-created', {
+    offline: Boolean(swarm._peartubeOffline),
+    options: swarm._peartubeSwarmOptions
+  })
   const initialDhtState = describeDhtState(swarm.dht)
   if (initialDhtState) {
     console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
@@ -1597,6 +1736,12 @@ export async function initializeStorage(config) {
       globalPeerPoolDiscovery = poolDiscovery;
       swarm.peerPoolDiscovery = poolDiscovery
       console.log('[Storage] Joined peartube-network topic for peer pool building immediately:', reason)
+      swarm._peartubePeerPoolWarmup = schedulePeerPoolWarmupRefreshes({
+        platform,
+        swarm,
+        discovery: poolDiscovery,
+        startupTiming: globalNetworkStartupTiming
+      })
       // Do not await flushed(); mobile DHT bootstrapping can lag behind the join.
       poolDiscovery.flushed().then(() => {
         console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
@@ -2397,6 +2542,9 @@ export async function shutdownBackend(ctx) {
       } catch (err) {
         console.log('[Backend] Shutdown: DHT routing table persist failed (non-fatal):', err?.message)
       }
+      try {
+        ctx.swarm._peartubePeerPoolWarmup?.cancel?.()
+      } catch { /* best effort */ }
       console.log('[Backend] Shutdown: destroying swarm...')
       await runShutdownStep('swarm destroy', async () => {
         await ctx.swarm.destroy()
@@ -2486,6 +2634,7 @@ export async function suspendNetworking() {
 
     if (globalSwarm) {
       await persistDhtRoutingTable(globalSwarm, globalMetaDb, { reason: 'suspend' })
+      try { globalSwarm._peartubePeerPoolWarmup?.cancel?.() } catch { /* best effort */ }
       await globalSwarm.suspend();
       console.log('[Network] Swarm suspended');
     }
@@ -2748,6 +2897,7 @@ export function getNetworkStats() {
       return {
         connections: globalSwarm.connections?.size || 0,
         peers: globalSwarm.peers?.size || 0,
+        swarmOptions: globalSwarm._peartubeSwarmOptions || null,
         offline: Boolean(globalSwarm._peartubeOffline),
         offlineReason: globalSwarm._peartubeOfflineReason || null,
         listenResolved: Boolean(globalSwarm._peartubeListenResolved),

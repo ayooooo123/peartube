@@ -270,6 +270,11 @@ test('desktop worker boots the universal backend with the real backend context',
   )
   assert.match(
     workerSource,
+    /createBackend\(\{[\s\S]*platform:\s*'desktop'/,
+    'Electrobun desktop worker should boot the universal backend with desktop transport tuning',
+  )
+  assert.match(
+    workerSource,
     /Backend context did not initialize required desktop services/,
     'desktop worker should fail fast before exposing identity handlers without the real context',
   )

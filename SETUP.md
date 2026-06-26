@@ -1,169 +1,206 @@
 # PearTube Setup Guide
 
-## Prerequisites
+This guide documents the current reproducible local setup. Start with [QUICKSTART.md](./QUICKSTART.md) if you only need the shortest path.
 
-- **Node.js 18+**: Required for all platforms
-- **Xcode 15+**: Required for iOS development
-- **CocoaPods**: Required for iOS native modules
-- **Bun + Electrobun toolchain**: Required for the main desktop shell
-- **Pear CLI**: Required only for future Pear OTA/deployment work, not for local desktop launch
+## Supported Toolchain
 
-## Installation
+| Area | Requirement |
+| --- | --- |
+| Node.js | `.nvmrc` (`20.18.0`) or `package.json` engine range (`>=18 <23`) |
+| Package manager | npm, using `npm run install:all` |
+| Submodules | `packages/bare-ffmpeg` |
+| iOS | Xcode, iOS simulator, CocoaPods |
+| Android | Android Studio/SDK, JDK 17 |
+| Electrobun desktop | Bun and Electrobun dependencies |
+| Native macOS | Xcode and `xcodegen` |
+| Relay | Docker with Compose |
 
-### 1. Clone and Install
+CI runs `npm run install:all`; it does not use `npm ci`. The root `package-lock.json` is ignored/local, while `packages/app/package-lock.json` is tracked. If the project decides to require fully locked installs later, update this guide with the new install contract.
+
+## Clone And Install
 
 ```bash
 git clone <repo-url>
 cd peartube
-npm install
+nvm use
+git submodule update --init --recursive
+npm run install:all
+npm run schema:full
 ```
 
-This installs dependencies for all packages in the monorepo.
+`schema:full` regenerates:
 
-### 2. iOS Setup
+- JS HRPC/schema output under `packages/spec/spec/`.
+- Swift support files copied into `packages/desktop-native/Sources/Support/`.
+
+## Mobile Setup
+
+Prepare the BareKit backend bundle:
 
 ```bash
-cd packages/app/ios
-pod install
-cd ..
+npm run bundle:backend
 ```
 
-### 3. Run the App
+Run iOS:
 
-**iOS:**
 ```bash
 npm run ios
 ```
 
-**Electrobun Desktop:**
+Run Android:
+
+```bash
+npm run android
+```
+
+Build Android release artifacts locally:
+
+```bash
+npm run build:android:apk
+npm run build:android:aab
+```
+
+The Android scripts run Expo prebuild and restore/write `android/local.properties` before Gradle runs.
+
+## Electrobun Desktop Setup
+
+Build and launch:
+
 ```bash
 npm run desktop
 ```
 
-## Project Structure
+Build assets only:
 
-```
-peartube/
-├── packages/
-│   ├── app/              # Unified app (mobile + desktop)
-│   │   ├── app/          # Expo Router screens
-│   │   │   ├── (tabs)/   # Tab screens
-│   │   │   │   ├── index.tsx      # Mobile home
-│   │   │   │   ├── index.web.tsx  # Desktop home
-│   │   │   │   ├── settings.tsx
-│   │   │   │   ├── studio.tsx
-│   │   │   │   └── subscriptions.tsx
-│   │   │   ├── video/
-│   │   │   │   └── [id].tsx       # Video player
-│   │   │   └── _layout.tsx        # Root layout
-│   │   ├── components/   # Shared React components
-│   │   ├── lib/          # App utilities
-│   │   ├── backend/      # Mobile BareKit worklet source
-│   │   ├── workers/      # Desktop Bare worker source
-│   │   ├── src/bun/      # Electrobun/Bun desktop main process
-│   │   ├── src/view/     # Electrobun renderer bridge
-│   │   ├── desktop-build/# Built desktop web/worker output (generated)
-│   │   ├── ios/          # iOS native project
-│   │   └── Frameworks/   # iOS native addons
-│   │
-│   ├── backend/          # Backend business logic
-│   ├── core/             # Shared types
-│   ├── platform/         # Platform abstraction
-│   ├── spec/             # HRPC schema
-│   ├── bare-ffmpeg/      # Bare ffmpeg binding
-│   ├── backend/src/cast/ # Cast integration
-│   └── bare-tls/         # Bare TLS support
-│
-└── package.json          # Root package with scripts
+```bash
+npm run desktop:build
 ```
 
-## Available Scripts
+Launch a previously built app:
 
-### Root Level
+```bash
+npm run desktop:start
+```
 
-| Command | Description |
-|---------|-------------|
-| `npm run ios` | Run iOS app |
-| `npm run android` | Run Android app |
-| `npm run desktop` | Build and run Electrobun desktop |
-| `npm run desktop:build` | Build desktop web/worker output only |
-| `npm run bundle:backend` | Bundle mobile backend worklet |
-| `npm run build:android:apk` | Build Android release APKs |
-| `npm start` | Start Expo dev server |
+The desktop worker source is `packages/app/workers/desktop/index.ts`. `npm run desktop:build` compiles it, then packs it into `packages/app/desktop-build/build/workers/core/index.bundle` with native Bare addons offloaded beside the bundle. `npm run desktop:smoke --prefix packages/app` boots that packed worker through `pear-runtime` long enough to catch native addon load regressions.
 
-### Package Level (packages/app)
+Do not use `pear run` for local desktop work. Pear OTA/release automation is not wired; see [docs/pear-runtime-evolution-readiness.md](./docs/pear-runtime-evolution-readiness.md).
 
-| Command | Description |
-|---------|-------------|
-| `npm run ios` | Run iOS app |
-| `npm run desktop:dev` | Build and run Electrobun desktop |
-| `npm run desktop:build` | Build desktop web/worker output only |
-| `npm run desktop:export` | Export Expo web |
-| `npm run desktop:worker` | Compile desktop worker |
-| `npm run bundle:backend` | Bundle mobile worklet |
-| `npm run build:android:apk` | Build release APKs |
+## Native macOS Setup
 
-## Platform Architecture
+Install `xcodegen` if it is not already available:
 
-### Mobile (iOS/Android)
+```bash
+brew install xcodegen
+```
 
-- **React Native** app with Expo Router
-- **BareKit** native worklet for P2P backend
-- **HRPC** communication between app and worklet
+Generate, build, and run the SwiftUI app:
 
-### Desktop (Electrobun + pear-runtime)
+```bash
+npm run desktop:native
+```
 
-- **Expo web export** served in an Electrobun view
-- **Bare worker** launched by embedded `pear-runtime`
-- **HRPC** communication via the `window.bridge` transport in `packages/platform/src/rpc.web.ts`
+Build without running:
 
-Both platforms share:
-- Same React components (with `.web.tsx` variants)
-- Same backend logic (`@peartube/backend`)
-- Same HRPC schema (`@peartube/spec`)
+```bash
+npm run desktop:native:build
+```
+
+Run tests:
+
+```bash
+npm run desktop:native:test
+```
+
+Package-level commands are available under `packages/desktop-native`:
+
+```bash
+npm run generate --prefix packages/desktop-native
+npm run build --prefix packages/desktop-native
+npm run test --prefix packages/desktop-native
+```
+
+`generate` rebuilds the BareKit smoke bundles, Bare runtime, native host sidecar/worklet bundles, supporting frameworks, and the Xcode project.
+
+## Relay Setup
+
+Start the packaged relay:
+
+```bash
+docker compose -f docker-compose.relay.yml up -d
+docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
+```
+
+Open the archive UI:
+
+```bash
+open http://127.0.0.1:8174
+```
+
+Archive a source URL:
+
+```bash
+docker compose -f docker-compose.relay.yml exec relay \
+  /peartube-relay archive --url https://youtu.be/... --run-now
+```
+
+Use `docker-compose.local-relay.yml` for the local directory mirror workflow. Adjust the host-side `/home/user/peartube-local-videos` volume before running it.
 
 ## Troubleshooting
 
-### iOS Pod Install Fails
+### Backend Not Starting On Mobile
+
+```bash
+npm run bundle:backend
+```
+
+### Schema Drift
+
+```bash
+npm run schema:full
+npm test --prefix packages/spec
+```
+
+### Electrobun Desktop Shows Missing Handler Or Stale Export
+
+```bash
+npm run desktop:build
+npm run desktop:smoke --prefix packages/app
+npm run desktop
+```
+
+If the packed bundle reports stale `@peartube/*` source, remove stale physical workspace copies and reinstall:
+
+```bash
+rm -rf packages/app/node_modules/@peartube
+npm run install:all
+```
+
+### iOS Pods Fail
 
 ```bash
 cd packages/app/ios
 rm -rf Pods Podfile.lock
-pod install --repo-update
+npx pod-install
 ```
 
-### Xcframework Conflicts
+### Android SDK Path Missing
 
-If you see "conflicting framework names", remove duplicates:
+The app prebuild writes `android/local.properties` automatically. If you need to run Gradle manually, make sure `ANDROID_HOME` points at your SDK before invoking Gradle.
+
+### Native macOS Project Missing Or Stale
+
 ```bash
-cd packages/app/Frameworks
-# Remove frameworks that are also in node_modules/react-native-bare-kit/ios/addons/
+npm run schema:full
+npm run generate --prefix packages/desktop-native
 ```
 
-### Desktop Won't Launch
+## CI Reference
 
-1. Rebuild: `npm run desktop:build`
-2. Launch: `npm run desktop`
-3. Check `packages/app/src/bun/index.ts` worker startup logs and `packages/app/src/view/index.ts` bridge logs.
+- `.github/workflows/ci-fast.yml`: lint changed files, backend tests, platform typecheck, workflow regressions.
+- `.github/workflows/build-mobile.yml`: Android debug/release artifacts and iOS simulator build.
+- `.github/workflows/build-desktop.yml`: Electrobun desktop build/smoke and native desktop tests/archive.
+- `.github/workflows/build-relay.yml`: relay build coverage.
+- `.github/workflows/release-*.yml`: manually triggered or tag-based release artifact workflows.
 
-### Backend Not Connecting
-
-1. Check worklet exists: `ls packages/app/backend.bundle.js`
-2. Rebuild: `npm run bundle:backend`
-
-### "No handler registered for command" on Desktop
-
-1. Rebuild desktop app + worker: `npm run desktop:build`
-2. Relaunch desktop app: `npm run desktop`
-3. Confirm the Electrobun bridge reaches the Bare worker through embedded `pear-runtime`.
-
-## Environment
-
-- Node.js 18+
-- iOS deployment target: 15.1
-- Desktop runtime: Electrobun + embedded `pear-runtime`
-- Pear CLI deployment/runtime note: `pear run` is deprecated upstream; see `docs/pear-runtime-evolution-readiness.md` before adding desktop OTA release automation.
-
----
-
-**Last Updated**: 2026-02-27
+Last updated: 2026-06-26.

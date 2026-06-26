@@ -28,8 +28,8 @@ That means the immediate article-driven action is documentation and release-flow
 
 ## Remaining gaps
 
-1. Stale docs still mentioned `npm run pear`, `pear run --dev`, `pear-electron`, and generated `pear-src`/`pear/build` paths.
-2. Root `desktop:stage` / `desktop:release` scripts still forward to package scripts that do not exist. Treat Pear OTA deployment as not wired until a dedicated release plan adds a real build/provision/multisig flow.
+1. Historical plans and handoff docs may still contain old `pear run`, `pear-src`, or `pear/build` examples. Prefer the active root docs (`README.md`, `QUICKSTART.md`, `SETUP.md`, `DEVELOPMENT.md`, `DEV_STATUS.md`, and `ARCHITECTURE.md`) for current commands.
+2. Root `desktop:stage` / `desktop:release` scripts intentionally throw because Pear OTA staging/release is not wired yet. Treat Pear OTA deployment as not wired until a dedicated release plan adds a real build/provision/multisig flow.
 3. No committed `upgrade`/Pear app-drive release metadata exists for the Electrobun artifact. Do not claim Pear OTA updates work yet.
 4. Mobile should not migrate to `pear-mobile` until Holepunch publishes a stable module and API docs.
 

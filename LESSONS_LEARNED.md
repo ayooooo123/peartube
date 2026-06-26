@@ -1,5 +1,10 @@
 # Lessons Learned
 
+> Historical note: this file preserves older debugging notes, including Pear-era
+> runtime incidents and playback experiments. For current setup, architecture,
+> and RPC workflow guidance, prefer `README.md`, `SETUP.md`, `DEVELOPMENT.md`,
+> `ARCHITECTURE.md`, and `docs/LESSONS_LEARNED.md`.
+
 ## Pear Runtime
 
 ### Do NOT clear pear's by-dkey cache

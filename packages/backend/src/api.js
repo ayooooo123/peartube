@@ -3375,6 +3375,59 @@ export function createApi({
               startFillPass(nextAnchor)
             })
 
+            // Speculative index pre-warm for the END and MIDDLE of the file
+            // (back-moov MP4 / MKV cues). Deferred until the front head range is
+            // local: on a bandwidth-starved single peer these ~hundreds of
+            // far-away blocks otherwise steal delivery slots from the front-moov
+            // index the player is actually blocked on, adding many seconds to
+            // first frame. Front-moov files (the common case) never need them
+            // during startup; back-moov files still get their tail/index via the
+            // player's own reactive range request + forward-fill, so deferring is
+            // safe — it only stops the pre-warm from competing before the player
+            // can start.
+            let tailMidStarted = false
+            const startTailMidPrefetch = () => {
+              if (tailMidStarted || fillCancelled) return
+              tailMidStarted = true
+
+              if (tailBlocks > 0 && tailBlocks < totalBlocks) {
+                const tailStart = Math.max(startBlock, endBlock - tailBlocks)
+                // Avoid duplicating the head range on tiny files.
+                if (tailStart > startBlock + Math.max(1, headBlocks)) {
+                  console.log('[API] Prefetch tail range (blobs):', (endBlock - tailStart), 'blocks')
+                  const tailRange = core.download({ start: tailStart, end: endBlock })
+                  activeRangeRequests.get(prefetchKey)?.ranges.push(tailRange)
+                  tailRange.done().then((completed) => {
+                    if (completed === false) return
+                    console.log('[API] Tail prefetch complete (blobs)')
+                  }).catch(err => {
+                    console.log('[API] Tail prefetch error (blobs):', err?.message)
+                  })
+                }
+              }
+
+              if (midBlocks > 0 && midBlocks < totalBlocks && totalBlocks > (headBlocks + tailBlocks + midBlocks + 4)) {
+                const midCenter = startBlock + Math.floor(totalBlocks / 2)
+                const midStart = Math.max(startBlock, Math.min(endBlock - 1, midCenter - Math.floor(midBlocks / 2)))
+                const midEnd = Math.min(endBlock, midStart + midBlocks)
+                const headEnd = Math.min(endBlock, startBlock + headBlocks)
+                const tailStart = Math.max(startBlock, endBlock - tailBlocks)
+                const overlapsHead = midStart < headEnd && midEnd > startBlock
+                const overlapsTail = midStart < endBlock && midEnd > tailStart
+                if (!overlapsHead && !overlapsTail && midEnd > midStart) {
+                  console.log('[API] Prefetch mid range (blobs):', (midEnd - midStart), 'blocks')
+                  const midRange = core.download({ start: midStart, end: midEnd })
+                  activeRangeRequests.get(prefetchKey)?.ranges.push(midRange)
+                  midRange.done().then((completed) => {
+                    if (completed === false) return
+                    console.log('[API] Mid prefetch complete (blobs)')
+                  }).catch(err => {
+                    console.log('[API] Mid prefetch error (blobs):', err?.message)
+                  })
+                }
+              }
+            }
+
             const startInitPrefetch = () => {
               // Head prefetch: prioritize container headers and early samples.
               if (headBlocks > 0 && headBlocks < totalBlocks) {
@@ -3410,53 +3463,20 @@ export function createApi({
                   markPlaybackTiming(blobCoreKeyHex, 'head-local', downloadSpeed > 0 ? `${(downloadSpeed / 1048576).toFixed(2)}MB/s` : '')
                   resolvePlaybackReady?.()
                   startFullDownload()
+                  // Front index is local and the player can start — now it is
+                  // safe to pre-warm the end/middle without stealing startup
+                  // bandwidth.
+                  startTailMidPrefetch()
                 }).catch(err => {
                   console.log('[API] Head prefetch error (blobs):', err?.message)
                   logBlobDownloadDiagnostics('startup-head-download-error', core, startBlock, headEnd)
                   if (headTimeout) clearTimeout(headTimeout)
                   startFullDownload()
+                  startTailMidPrefetch()
                 })
               } else {
                 startFullDownload()
-              }
-
-              // Tail prefetch: helps players that seek for indices (MP4 moov-at-end, MKV cues).
-              if (tailBlocks > 0 && tailBlocks < totalBlocks) {
-                const tailStart = Math.max(startBlock, endBlock - tailBlocks)
-                // Avoid duplicating the head range on tiny files.
-                if (tailStart > startBlock + Math.max(1, headBlocks)) {
-                  console.log('[API] Prefetch tail range (blobs):', (endBlock - tailStart), 'blocks')
-                  const tailRange = core.download({ start: tailStart, end: endBlock })
-                  activeRangeRequests.get(prefetchKey).ranges.push(tailRange)
-                  tailRange.done().then((completed) => {
-                    if (completed === false) return
-                    console.log('[API] Tail prefetch complete (blobs)')
-                  }).catch(err => {
-                    console.log('[API] Tail prefetch error (blobs):', err?.message)
-                  })
-                }
-              }
-
-              // Mid prefetch: some files place indexes/headers in the middle; keep it small.
-              if (midBlocks > 0 && midBlocks < totalBlocks && totalBlocks > (headBlocks + tailBlocks + midBlocks + 4)) {
-                const midCenter = startBlock + Math.floor(totalBlocks / 2)
-                const midStart = Math.max(startBlock, Math.min(endBlock - 1, midCenter - Math.floor(midBlocks / 2)))
-                const midEnd = Math.min(endBlock, midStart + midBlocks)
-                const headEnd = Math.min(endBlock, startBlock + headBlocks)
-                const tailStart = Math.max(startBlock, endBlock - tailBlocks)
-                const overlapsHead = midStart < headEnd && midEnd > startBlock
-                const overlapsTail = midStart < endBlock && midEnd > tailStart
-                if (!overlapsHead && !overlapsTail && midEnd > midStart) {
-                  console.log('[API] Prefetch mid range (blobs):', (midEnd - midStart), 'blocks')
-                  const midRange = core.download({ start: midStart, end: midEnd })
-                  activeRangeRequests.get(prefetchKey).ranges.push(midRange)
-                  midRange.done().then((completed) => {
-                    if (completed === false) return
-                    console.log('[API] Mid prefetch complete (blobs)')
-                  }).catch(err => {
-                    console.log('[API] Mid prefetch error (blobs):', err?.message)
-                  })
-                }
+                startTailMidPrefetch()
               }
             }
 

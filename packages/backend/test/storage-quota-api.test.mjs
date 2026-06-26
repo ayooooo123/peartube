@@ -76,6 +76,20 @@ function createStore() {
   }
 }
 
+function createTimerOptions(timers) {
+  return {
+    storageMaintenanceDelayMs: 0,
+    setTimer(fn, delay) {
+      const timer = { fn, delay, cleared: false }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer(timer) {
+      timer.cleared = true
+    }
+  }
+}
+
 class FakeCore extends EventEmitter {
   constructor(key) {
     super()
@@ -112,6 +126,7 @@ const coreA = 'aa'.repeat(32)
 const coreB = 'bb'.repeat(32)
 
 test('clearCache clears persisted partial download intents as cache bytes', async (t) => {
+  const timers = []
   const metaDb = createMetaDb({
     [`download-intent:drive-a:videos/partial.mp4`]: {
       driveKey: 'drive-a',
@@ -128,7 +143,7 @@ test('clearCache clears persisted partial download intents as cache bytes', asyn
   })
   const store = createStore()
   store.get(b4a.from(coreA, 'hex'))
-  const seedingManager = new SeedingManager(store, metaDb)
+  const seedingManager = new SeedingManager(store, metaDb, createTimerOptions(timers))
   const api = createApi({ ctx: { store, metaDb }, seedingManager })
 
   const result = await api.clearCache()
@@ -137,6 +152,10 @@ test('clearCache clears persisted partial download intents as cache bytes', asyn
   t.is(result.clearedBytes, 2 * GB)
   t.alike(store.cores.get(coreA).clearCalls, [{ start: 5, end: 9 }])
   t.is(store.storage.flushCalls, 1)
+  t.is(store.storage.compactCalls, 0)
+  t.is(timers.length, 1)
+
+  await timers.shift().fn()
   t.is(store.storage.compactCalls, 1)
   t.absent(metaDb.state.has('download-intent:drive-a:videos/partial.mp4'))
 })

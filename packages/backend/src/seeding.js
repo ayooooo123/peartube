@@ -105,6 +105,15 @@ export class SeedingManager {
     this.store = store;
     this.metaDb = metaDb;
     this.identityManager = options.identityManager || null;
+    // Optional blind-peering client: lets deliberately-retained content (pinned
+    // channels, subscriptions — which include the user's own published channel)
+    // be mirrored to always-on blind peers, so it stays available while this
+    // device is offline.
+    this.blindPeering = options.blindPeering || null;
+    /** @type {Set<string>} blobsCoreKeys already delegated to blind peers (dedup) */
+    this._mirroredBlobCores = new Set();
+    // Sub-encoded metaDb keyspaces (download intents live here).
+    this.metaSubspaces = options.metaSubspaces || null;
     this.requiresIdentityAuthorization = Object.prototype.hasOwnProperty.call(options, 'identityManager');
     this.getDiskUsageBytes = typeof options.getDiskUsageBytes === 'function'
       ? options.getDiskUsageBytes
@@ -266,6 +275,67 @@ export class SeedingManager {
       }
       console.log('[SeedingManager] Loaded', this.activeSeeds.size, 'active seeds');
     }
+
+    // Re-delegate retained content to blind peers on startup so availability is
+    // restored after a restart (and as new mirrors are later discovered).
+    for (const seed of this.activeSeeds.values()) {
+      this.mirrorSeedToBlindPeers(seed)
+    }
+  }
+
+  /**
+   * Re-run blind-peer delegation across all retained seeds. Called after new
+   * mirrors are discovered so previously-skipped seeds (no mirrors at the time)
+   * get delegated.
+   */
+  remirrorAllSeeds() {
+    let count = 0
+    for (const seed of this.activeSeeds.values()) {
+      if (this.mirrorSeedToBlindPeers(seed)) count++
+    }
+    return count
+  }
+
+  /**
+   * Only deliberately-retained content (pinned / subscribed) is mirrored to
+   * blind peers — transient watch-cache is not, to avoid spending a mirror's
+   * storage on content the user merely viewed.
+   * @param {string | undefined} reason
+   */
+  _seedReasonWantsMirror(reason) {
+    return reason === 'pinned' || reason === 'subscribed'
+  }
+
+  /**
+   * Delegate a seed's blob (and thumbnail) cores to the blind-peering mirrors so
+   * they stay available while this device is offline. Best-effort and idempotent
+   * (dedups by blobsCoreKey); a no-op when no blindPeering client/mirrors exist.
+   * @param {SeedInfo & { thumbnailBlobsCoreKey?: string | null }} seedInfo
+   * @returns {boolean} whether any new core was delegated
+   */
+  mirrorSeedToBlindPeers(seedInfo) {
+    try {
+      const bp = this.blindPeering
+      if (!bp?.enabled || typeof bp.addCore !== 'function') return false
+      if (!this._seedReasonWantsMirror(seedInfo?.reason)) return false
+      const activeMirrors = bp.getActiveMirrorKeys?.() || []
+      if (activeMirrors.length === 0) return false
+
+      let mirrored = false
+      for (const rawKey of [seedInfo?.blobsCoreKey, seedInfo?.thumbnailBlobsCoreKey]) {
+        const hex = normalizeBlobsCoreKey(rawKey)
+        if (!hex || this._mirroredBlobCores.has(hex)) continue
+        // store.get() opens a session blind-peering keeps for replication; it
+        // releases it via the core's own 'close' event, so we hand it off.
+        const core = this.store.get(Buffer.from(hex, 'hex'))
+        this._mirroredBlobCores.add(hex)
+        if (bp.addCore(core)) mirrored = true
+      }
+      return mirrored
+    } catch (err) {
+      console.log('[SeedingManager] blind-peer mirror failed:', err?.message)
+      return false
+    }
   }
 
   /**
@@ -306,6 +376,7 @@ export class SeedingManager {
       }
       this.activeSeeds.set(key, updatedSeedInfo)
       await this.persistSeeds()
+      this.mirrorSeedToBlindPeers(updatedSeedInfo)
       const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
       if (options.protectSelf) protectedKeys.add(key)
       await this.enforceQuota({ protectedKeys });
@@ -331,6 +402,7 @@ export class SeedingManager {
 
     this.activeSeeds.set(key, seedInfo);
     await this.persistSeeds();
+    this.mirrorSeedToBlindPeers(seedInfo)
 
     console.log('[SeedingManager] Added seed:', videoPath, 'reason:', reason, 'bytes:', seedInfo.bytes);
 
@@ -601,16 +673,18 @@ export class SeedingManager {
    */
   async clearDownloadIntents(options = {}) {
     const excludeKeys = normalizeProtectedSeedKeys(options.excludeKeys)
-    if (typeof this.metaDb?.createReadStream !== 'function') {
+    const downloadIntents = this.metaSubspaces?.downloadIntents
+    if (typeof downloadIntents?.createReadStream !== 'function') {
       return { clearedBytes: 0, clearedCount: 0, clearedBlob: false }
     }
 
     const entries = []
-    for await (const entry of this.metaDb.createReadStream({ gte: 'download-intent:', lt: 'download-intent:~' })) {
+    for await (const entry of downloadIntents.createReadStream()) {
       const intent = entry?.value
       if (!intent?.driveKey || !intent?.videoPath) continue
       const seedKey = `${intent.driveKey}:${intent.videoPath}`
       if (excludeKeys.has(seedKey) || this.shouldSkipSeedClear(intent)) continue
+      // entry.key is the decoded sub key (`${driveKey}:${videoPath}`).
       entries.push({ key: entry.key, seedKey, intent })
     }
 
@@ -625,7 +699,7 @@ export class SeedingManager {
         blobId: intent.blobId || null,
         blobsCoreKey: intent.blobsCoreKey || null
       })) || clearedBlob
-      await this.metaDb.del?.(entry.key)
+      await downloadIntents.del(entry.key)
       this.activeSeeds.delete(entry.seedKey)
     }
 

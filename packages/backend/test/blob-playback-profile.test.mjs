@@ -47,16 +47,21 @@ function makeProfile(overrides = {}) {
 
 function makeMetaDbCtx() {
   const entries = new Map()
-  return {
-    metaDb: {
-      async put(key, value) {
-        // JSON round-trip mirrors the hyperbee json valueEncoding.
-        entries.set(key, JSON.parse(JSON.stringify(value)))
-      },
-      async get(key) {
-        return entries.has(key) ? { value: entries.get(key) } : null
-      },
+  // Profiles now live in the `playback-profile` metaDb subspace; the accessor is
+  // backed here by a Map that mirrors the hyperbee json valueEncoding.
+  const playbackProfiles = {
+    async put(key, value) {
+      entries.set(key, JSON.parse(JSON.stringify(value)))
     },
+    async get(key) {
+      return entries.has(key) ? { value: entries.get(key) } : null
+    },
+    async del(key) {
+      entries.delete(key)
+    },
+  }
+  return {
+    metaSubspaces: { playbackProfiles },
     _entries: entries,
   }
 }

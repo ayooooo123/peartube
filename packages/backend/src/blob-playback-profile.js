@@ -41,6 +41,12 @@ function profileDbKey(blobsCoreKey, blobId) {
   return `${PROFILE_DB_PREFIX}${blobsCoreKey}!${blobId}`
 }
 
+// Key within the `playback-profile` metaDb subspace (no namespace prefix — the
+// sub-encoder adds it). Mirrors the legacy key minus the PROFILE_DB_PREFIX.
+function profileSubKey(blobsCoreKey, blobId) {
+  return `${blobsCoreKey}!${blobId}`
+}
+
 function isUsableProfile(profile) {
   return Boolean(profile && profile.version === 1 && profile.moovPosition)
 }
@@ -74,9 +80,9 @@ export function clearBlobPlaybackProfiles() {
 }
 
 export async function saveBlobPlaybackProfile(ctx, { blobsCoreKey, blobId }, profile) {
-  if (!ctx?.metaDb || !blobsCoreKey || !blobId || !isUsableProfile(profile)) return false
+  if (!ctx?.metaSubspaces?.playbackProfiles || !blobsCoreKey || !blobId || !isUsableProfile(profile)) return false
   try {
-    await ctx.metaDb.put(profileDbKey(blobsCoreKey, String(blobId)), profile)
+    await ctx.metaSubspaces.playbackProfiles.put(profileSubKey(blobsCoreKey, String(blobId)), profile)
     return true
   } catch {
     return false
@@ -84,9 +90,9 @@ export async function saveBlobPlaybackProfile(ctx, { blobsCoreKey, blobId }, pro
 }
 
 export async function loadBlobPlaybackProfile(ctx, { blobsCoreKey, blobId }) {
-  if (!ctx?.metaDb || !blobsCoreKey || !blobId) return null
+  if (!ctx?.metaSubspaces?.playbackProfiles || !blobsCoreKey || !blobId) return null
   try {
-    const node = await ctx.metaDb.get(profileDbKey(blobsCoreKey, String(blobId)))
+    const node = await ctx.metaSubspaces.playbackProfiles.get(profileSubKey(blobsCoreKey, String(blobId)))
     return isUsableProfile(node?.value) ? node.value : null
   } catch {
     return null

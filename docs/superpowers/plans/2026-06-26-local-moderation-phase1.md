@@ -536,19 +536,31 @@ git commit -m "feat(moderation): metaDb store with version-keyed verdict invalid
 
 **Files:**
 - Create: `packages/backend/src/moderation/frames.js`
-- Reference: `packages/backend/src/thumbnail.js:215-323` (decode loop to mirror)
+- Reference: `packages/backend/src/thumbnail.js:215-323` (decode loop to mirror);
+  `api.js:2290` (`ctx.blobServer.getLink(coreKey, {...})` → local blob URL)
 
 - [ ] **Step 5.1 — Implement `extractRgbFrames(filePath, { count = 4, size = 224 })`** by
-  adapting the `thumbnail.js` pipeline: open `InputFormatContext`, best video stream, decoder;
-  compute `count` target frame indices spread across `decoder`/duration; for each, scale via
-  `ff.Scaler(inFmt, srcW, srcH, RGB24, size, size)` into a fresh `Frame`; **copy the buffer
-  before `unref`** and push `{ data: Buffer, width: size, height: size, channels: 3 }`. Return
-  `[]` on any failure (fail-open). Differences from `thumbnail.js`: `dstPixelFormat = RGB24`
-  (not the image-encoder format), multiple indices, no encoding.
+  adapting the `thumbnail.js` pipeline (via `createFileReadIOContext`): open
+  `InputFormatContext`, best video stream, decoder; compute `count` indices spread across the
+  duration; for each, scale via `ff.Scaler(inFmt, srcW, srcH, RGB24, size, size)` into a fresh
+  `Frame`; **copy the buffer before `unref`** and push `{ data: Buffer, width: size, height:
+  size, channels: 3 }`. Return `[]` on any failure (fail-open). Differences from
+  `thumbnail.js`: `dstPixelFormat = RGB24`, multiple indices, no encoding.
 
-- [ ] **Step 5.2 — Test** `moderation-frames.test.mjs`: against a tiny bundled test video
-  (add `packages/backend/test/fixtures/sample.mp4` if none exists), assert it returns N frames
-  of `size*size*3` bytes; assert `[]` for a missing file. Run with brittle. Commit.
+- [ ] **Step 5.2 — Implement `resolveClassifiableSource({ blobsCoreKey, blobId, thumbnailBlobsCoreKey, thumbnailBlobId, blobServer, kind })`**
+  → a local file path or null. P2P/playback code only has blob refs + a blob-server URL, **not**
+  a filesystem path, so materialize bytes into a bounded temp file:
+  - `kind:'thumb'` → fetch the small thumbnail blob from
+    `blobServer.getLink(thumbnailBlobsCoreKey, { blob: thumbnailBlobId })` to a temp file.
+  - `kind:'video'` → only if bytes are already local (seeded/cached); stream a **bounded
+    prefix** (covering the sampled frame range) from `blobServer.getLink(blobsCoreKey, { blob:
+    blobId })` to a temp file; if not local yet, return null (fail-open, classify later).
+  Caller deletes the temp file after `extractRgbFrames`.
+
+- [ ] **Step 5.3 — Test** `moderation-frames.test.mjs` (red → green): against a tiny bundled
+  fixture (`packages/backend/test/fixtures/sample.mp4`), assert `extractRgbFrames` returns N
+  frames of `size*size*3` bytes; assert `[]` for a missing file. Run `npx brittle
+  test/moderation-frames.test.mjs`. Commit.
 
 ### Task 6: NsfwClassifier (ONNX impl + test stub)
 
@@ -573,7 +585,7 @@ export class StubClassifier {
   (Task 7) and re-run.
 
 - [ ] **Step 6.3 — Implement `OnnxClassifier`** (only if Chunk 0 PASSED for the platform):
-  mirror `semantic-finder.js:60-110` lazy-load with the string-concatenated import,
+  mirror `packages/backend/src/search/semantic-finder.js:60-110` lazy-load with its string-concatenated import,
   `env.allowRemoteModels=false`, `env.localModelPath`, `env.backends.onnx.wasm.wasmPaths`, a
   load timeout, and **fail-open** (`classifyFrames` returns `none` scores + sets an
   `available=false` diagnostic flag if load failed — never throws to the caller). Build
@@ -601,17 +613,22 @@ git commit -m "feat(moderation): raw-RGB frame sampler + NsfwClassifier (ONNX + 
 - Test: `packages/backend/test/moderation-orchestrator.test.mjs`
 
 - [ ] **Step 7.1 — Implement `Moderation`** holding `{ store, classifier }` with:
-  - `async classifyVideo({ blobsCoreKey, filePath })` → if `store.getSelfVerdict` hit, return
-    it; else `extractRgbFrames` → `classifier.classifyFrames` → reduce to `maxCategory` +
-    max score → `store.putSelfVerdict` → return. Fail-open: on any throw, return
-    `{ category:'none', score:0 }` and do not cache a poisoned verdict.
-  - `async getEffectiveVerdict({ blobsCoreKey })` → read policy + self-verdict + override →
-    call `resolveModerationAction({ override, localVideo: selfVerdict })` (Phase 1 has no
-    labels/thumb-pass split unless implemented; pass `localVideo` for the authoritative pass
-    and optionally `localThumb` for the thumbnail pass) → return the resolver result.
-  - `async applyModeration(videos)` → map each video to `{ ...video, moderation }`, dropping
-    those whose `action === 'hide'`. **Pure local-cache reads only** (spec §3.3 hot-path rule)
-    — no classify, no network here.
+  - `async classifyOne({ blobKey, sourceRefs, kind, blobServer })` → if
+    `store.getSelfVerdict(blobKey)` hits, return it; else `resolveClassifiableSource(...)` →
+    `extractRgbFrames(path)` → `classifier.classifyFrames` → reduce to `maxCategory` + max
+    score → `store.putSelfVerdict(blobKey, verdict)` → delete temp → return. Fail-open: on any
+    throw or null source, return `{ category:'none', score:0 }` and do **not** cache it.
+    `kind:'thumb'` keys on `thumbnailBlobsCoreKey`; `kind:'video'` on `blobsCoreKey` (spec §3.1).
+  - `async getEffectiveVerdict({ blobsCoreKey, thumbnailBlobsCoreKey })` → read policy +
+    override + `store.getSelfVerdict(blobsCoreKey)` (authoritative `localVideo`) +
+    `store.getSelfVerdict(thumbnailBlobsCoreKey)` (weak `localThumb`) →
+    `resolveModerationAction({ override, localVideo, localThumb }, policy)` → return the result
+    (with its nested `badge`).
+  - `async applyModeration(videos)` → for each, `getEffectiveVerdict(...)`, attach a
+    **flattened wire** `moderation` `{ action, category, source, score, badgeLocal,
+    badgeTrusted, badgeSelfReported, badgeAdvisory }` (map the resolver's nested `badge.*`), and
+    drop `action === 'hide'`. **Pure local-cache reads only** (spec §3.3) — no classify, no
+    network here.
 - [ ] **Step 7.2 — Tests:** classifyVideo caches + reuses; getEffectiveVerdict honors override;
   applyModeration drops `hide` and keeps `blur`/`show` with the field. Run, commit.
 
@@ -630,11 +647,11 @@ git commit -m "feat(moderation): raw-RGB frame sampler + NsfwClassifier (ONNX + 
   policy change doesn't serve stale filtered results — spec §3.3), or invalidate
   `listVideosCache` on `setPolicy`/`setOverride`. Choose invalidation: simplest correct option
   is to apply `applyModeration` *after* reading from `listVideosCache`.
-- [ ] **Step 8.3 — Background classify trigger:** on first playback / thumbnail resolution
-  (e.g. in `getVideoThumbnail`/playback URL path), fire-and-forget
-  `context.moderation.classifyVideo({ blobsCoreKey, filePath })` in the `bare-worker` so the
-  next `listVideos` has a verdict. Never block playback. Only when `policy.mode !== 'off'`
-  (dormant when off, spec §6).
+- [ ] **Step 8.3 — Background classify trigger:** when a thumbnail resolves
+  (`getVideoThumbnail`, `api.js:2290`) fire-and-forget `moderation.classifyOne({ blobKey:
+  thumbnailBlobsCoreKey, kind:'thumb', sourceRefs, blobServer: ctx.blobServer })`; on playback,
+  when video bytes are local, schedule the `kind:'video'` pass. Run in the `bare-worker`; never
+  block playback/thumbnail. Skip entirely when `policy.mode === 'off'` (dormant, spec §6).
 - [ ] **Step 8.4 — Add RPC handlers** (methods object in `api.js`): `getModerationPolicy`,
   `setModerationPolicy` (validates), `setContentOverride`, `classifyVideo`. Follow the existing
   method-registration pattern in the `api.js` returned object.
@@ -681,20 +698,30 @@ ns.register({
   category map to `explicitAction`/`suggestiveAction` for the wire; the backend re-inflates to
   `categories`.)
 
-- [ ] **Step 9.2 — Register RPC methods** on `rpcNs`: `getModerationPolicy` (empty →
-  moderation-policy), `setModerationPolicy` (moderation-policy → moderation-policy),
-  `setContentOverride` ({blobsCoreKey, action} → empty), `classifyVideo` ({blobsCoreKey,
-  videoId, channelKey} → moderation-verdict). Match the request/response pattern of existing
-  methods in the file.
+- [ ] **Step 9.2 — Register named request types** in `schema.cjs` (HRPC needs named types,
+  not inline shapes): `set-content-override-request { blobsCoreKey: string, action: string }`
+  and `classify-video-request { blobsCoreKey, videoId, channelKey, thumbnailBlobsCoreKey }`.
 
-- [ ] **Step 9.3 — Regenerate:** `npm run schema:full` (regenerates JS + copies Swift). Verify
-  no errors.
+- [ ] **Step 9.3 — Register RPC methods** on `rpcNs` (~`schema.cjs:2682`):
+  `getModerationPolicy` (empty → moderation-policy), `setModerationPolicy` (moderation-policy →
+  moderation-policy), `setContentOverride` (set-content-override-request → empty),
+  `classifyVideo` (classify-video-request → moderation-verdict). Match the existing method
+  pattern.
 
-- [ ] **Step 9.4 — Expose** the new methods through `create-client.js` (a `moderation`
-  namespace) and `rpc.shared.ts` (app-facing facade), following how `video`/`feed` namespaces
-  are wired.
+- [ ] **Step 9.4 — Register the app-facing namespace (REQUIRED).** Add a `moderation` entry
+  listing these commands to `APP_RPC_NAMESPACES` in
+  `packages/spec/lib/app-rpc-adapter-codegen.cjs` (line 7). An HRPC command absent from this
+  map makes `schema:full` fail as an *unclassified command* and leaves
+  `NAMESPACE_METHODS.moderation` undefined.
 
-- [ ] **Step 9.5 — Commit** (schema, generated output, protocol, platform).
+- [ ] **Step 9.5 — Regenerate:** `npm run schema:full` (JS + Swift). Expected: clean, no
+  "unclassified command" error; generated `app-rpc-adapter.mjs` lists `moderation`.
+
+- [ ] **Step 9.6 — Expose** the `moderation` namespace through `create-client.js` and
+  `rpc.shared.ts`, following the `video`/`feed` wiring. The api handler (Task 8.4) returns the
+  **flattened** `moderation-verdict` (`badge.local → badgeLocal`, etc.).
+
+- [ ] **Step 9.7 — Commit** (schema, generated output, adapter codegen, protocol, platform).
 
 **→ Plan review checkpoint.**
 
@@ -710,8 +737,9 @@ screen, and the video card component.
   switch (off→blur), and when on, an "explicit content" choice (blur/hide) and a
   "blur suggestive" toggle. Wire to `getModerationPolicy`/`setModerationPolicy` via the
   platform facade. Default reflects OFF.
-- [ ] **Step 10.2 — NSFW badge.** On each video card, if `video.moderation?.badge*` is set,
-  render a small "NSFW"/"may be explicit" badge (always visible, even in show mode — spec G4).
+- [ ] **Step 10.2 — NSFW badge.** On each video card, if any of
+  `video.moderation?.badgeLocal | badgeTrusted | badgeSelfReported | badgeAdvisory` is set,
+  render a small "NSFW / may be explicit" badge (always visible, even in show mode — spec G4).
 - [ ] **Step 10.3 — Blur overlay.** If `video.moderation?.action === 'blur'`, render the
   thumbnail behind a blur + tap-to-reveal overlay. (`hide` videos are already absent from the
   list — filtered server-side.)

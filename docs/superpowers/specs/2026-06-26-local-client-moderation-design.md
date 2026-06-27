@@ -41,7 +41,7 @@
      `sharp`/`onnxruntime-node`/`onnxruntime-web` at module scope; bypassing image-decode
      does not prove ORT-WASM loads in BareKit. Phase 1 is contingent on a measured spike;
      on failure we go straight to native bindings (§5.1, §10).
-- **Rev 4 (this)** — second review pass refinements: the resolver is now a **total**
+- **Rev 4** — second review pass refinements: the resolver is now a **total**
   function with an exact category→action table (weak/thumb-only never `hide`; D9); labels
   drop the redundant `id`, supersede by the `(labeler,target,category)` triple ordered by
   `seq` (D10); a labeler's identity **is** its label-feed core key, self-labels separated
@@ -50,6 +50,12 @@
   `addSeed` (which commits immediately) with the Corestore global-replicate caveat, and
   Phase 1 scoped **strictly local** (§3.3, D15); resolved-cache gains wall-clock `validUntil`
   (§8).
+- **Rev 5 (this)** — author set the two flagged product defaults to the **fully
+  decentralized** options: moderation is **off by default** (pure opt-in; `mode:"off"`) and
+  **no default relay labeler set ships** (`trustedLabelers` empty; B-only). Consequence:
+  Phase 1's local on-device model is the entire default-enabled protection story; signed
+  labels / crowd signal (Phase 2) are opt-in only and inert until the user subscribes to a
+  labeler by key. §13 D4/D3a resolved.
 
 Decision log + open questions: §13.
 
@@ -81,8 +87,8 @@ replicate** content they don't want to host.
   file) can publish a signed label so other clients pre-hide content *before downloading
   frames*.
 - **G6 — Trust is opt-in and composable; crowd signal is sybil-resistant.** Auto-enforcing
-  thresholds count only verified labels from a *trust set* (default relays ∪ explicit
-  subscriptions). Raw anonymous counts are advisory-only and never auto-enforce.
+  thresholds count only verified labels from a *trust set* of **explicit subscriptions** (no
+  default labelers ship — §13 D3a). Raw anonymous counts are advisory-only, never auto-enforce.
 - **G7 — Seeder fail-closed.** A relay/seeder/CLI flips one switch (`seedFlagged=false`,
   default) and never durably replicates flagged content; by default it also declines
   *unknown* content until it classifies it. It quarantines while classifying and unseeds on
@@ -122,10 +128,11 @@ and can always override — extended with a **sybil-resistant** crowd signal.
 cost and buries any target. So auto-enforcing thresholds count flags **only** from keys
 that cost something to be:
 
-- **Default relay labelers** — relays run real infrastructure and seed content → expensive
-  to sybil at scale. A small set of relay labeler keys ships with the app
-  (editable/removable). *(Default-set choice flagged for review — §13 D3a.)*
-- **Explicit subscriptions** — labelers the user added by key.
+- **Explicit subscriptions only** — labelers the user added by key. **No default labeler set
+  ships** (§13 D3a): out of the box nothing is trusted and only the local model can enforce.
+  A would-be default labeler (e.g. a relay running a classifier) earns trust the same way —
+  the user subscribes to its key. Relays remain the natural high-signal labelers (they
+  classify everything they replicate, §3.1); they are simply not trusted automatically.
 
 **Connected peers are NOT in the enforcement trust set** — a peer connection is not a
 scarce identity (an attacker opens many connections cheaply). A connected peer's flags are
@@ -261,10 +268,10 @@ Each client holds a **moderation policy** (local, in `metaDb`):
 
 ```
 moderation-policy {
-  mode             : "off" | "blur" | "hide"   // master switch; default "blur"
+  mode             : "off" | "blur" | "hide"   // master switch; default "off" (opt-in)
   categories       : { <category>: "show"|"blur"|"hide" }
   trustLocalModel  : bool                        // default true
-  trustedLabelers  : string[]                    // labelerKeyHex; seeded w/ default relays
+  trustedLabelers  : string[]                    // labelerKeyHex; EMPTY by default (no defaults shipped)
   blurThreshold    : uint                         // trusted labels (per category) → at least blur; default 1
   hideThreshold    : uint                         // trusted labels (per category) → hide; default 3
   showAdvisoryBadge: bool                          // show "unverified peers flagged" badge; default true
@@ -300,12 +307,14 @@ label of category ≥ `c`.
    then, in order: if `weakOnly` and the action is `hide`, **downgrade to `blur`** (weak
    signals never hide); finally **clamp by `mode`** — `mode=="blur"` caps the result at
    `blur`, so `hideThreshold` and a per-category `"hide"` only produce an actual `hide` when
-   `mode=="hide"`. (Default `mode:"blur"` therefore never hides, only blurs.)
+   `mode=="hide"`. (With the default `mode:"off"` nothing is blurred or hidden at all; when
+   set to `blur`, any `hide` is clamped to `blur`.)
 
    Consequences: a single trusted label ⇒ `blur`, never `hide`; `hide` needs `hideThreshold`
    distinct trusted labelers **or** the user setting `categories[C]="hide"` (their own choice,
    applied to their own authoritative/self signals — not `weakOnly`, so not downgraded). The
-   local model never auto-hides under the default `blur` policy. See §13 D3a/NB2.
+   local model never auto-hides — and under the default `mode:"off"` it does not enforce at
+   all until the user enables moderation. See §13 D3a.
 
 **Advisory counts never affect `action`.** They populate only `moderation.badge`.
 
@@ -343,12 +352,12 @@ Generalizes the existing local `hideChannel` (`api.js:2818`,
 - **Raw brigading is defused** — anonymous flags are advisory-only (a badge), never hide
   anything. The advisory hint is even degraded to boolean/coarse so a number can't imply
   precision (§13 Q4).
-- **Connected-peer sybil is closed** — connections aren't counted; only default relays and
-  explicit subscriptions are, and connected peers must be *manually* promoted.
+- **Connected-peer sybil is closed** — connections aren't counted; only explicit
+  subscriptions are, and connected peers must be *manually* promoted.
 - **Sparse-local suppression is closed** — the severity lattice only raises; a weak local
   pass can't cancel a dense trusted relay label.
-- **A malicious trusted labeler** only affects clients that *chose* it (or shipped it as a
-  removable default). A single default relay can `blur` but not unilaterally `hide` (§3.3).
+- **A subscribed labeler** only affects clients that *chose* it; nothing is trusted by
+  default. A single labeler can `blur` but never unilaterally `hide` (needs `hideThreshold`).
 - **The uploader can't poison** the local model (the user runs it), **can't suppress**
   third-party labels (labeler-owned feeds), and **can't self-label "safe"** (flags only
   honored *up*, and only from authorized channel writers).
@@ -440,17 +449,20 @@ the model tiny, false positives low).
 
 Score thresholds (tunable): explicit if max-frame score ≥ 0.85; suggestive if ≥ 0.60.
 
-**Default policy out of the box (flagged — §13 D4):** `mode: "blur"`, `nsfw-explicit → blur`
-ON by default — protective but non-destructive (one tap reveals) and always badge-visible.
-Copy must say *"blurred after a signal is detected,"* **not** "guaranteed you'll never see
-it" (fail-open means brand-new unrated content can appear before any signal exists).
+**Default policy out of the box (D4 — off):** `mode: "off"` — PearTube ships showing
+everything; the user opts in. When enabled (`blur`/`hide`), `nsfw-explicit` defaults to
+`blur` (non-destructive tap-to-reveal, badge-visible); the toggle copy must say *"blurred
+after a signal is detected,"* **not** "guaranteed you'll never see it." While moderation is
+off the feature is **dormant** — no classification, no badges, no enforcement — so the
+default carries zero battery/UX cost; enabling it starts the background classifier.
 
 **Seeder defaults:** `seedFlagged=false`, `seedUnknown=false` — relays/CLI durably seed only
 content they verified acceptable (§3.3, G7).
 
-**Default relay labelers (flagged — §13 D3a):** a single default relay may `blur` alone;
-`hide` requires `hideThreshold` (default 3) trusted labelers or explicit user opt-in, so one
-compromised default relay can't bury content.
+**No default labelers (D3a — B-only):** `trustedLabelers` ships **empty**. Auto-blur/hide
+from labels/crowd is inert until the user subscribes to a labeler by key; until then the
+local model is the sole enforcer. This is the fully-decentralized choice — no shipped trust
+anchors — at the cost of no out-of-the-box pre-download protection (G5 needs a subscription).
 
 ---
 
@@ -498,7 +510,7 @@ Swift — commit a golden vector and cross-check it in tests (§11).
 | `moderation:self:<blobsCoreKey>` | local verdict + `classifierVersion` + timestamp (recomputed on version bump) |
 | `moderation:override:<blobsCoreKey>` | `"show"` \| `"hide"` |
 | `moderation:labels:<blobsCoreKey>` | verified labels (trusted + advisory, tagged), one effective record per `(labeler, category)` latest `seq` |
-| `moderation:labelers` | trust set (default relays ∪ subscriptions ∪ manually-promoted peers) |
+| `moderation:labelers` | trust set — explicit subscriptions ∪ manually-promoted peers (empty by default) |
 | `moderation:resolved:<blobsCoreKey>` | cached resolver output for the hot list path + `validUntil` (next label `expiresAt`); invalidated on policy/label/verdict change **or** when `validUntil` passes |
 
 **Quotas:** one effective label per `(labeler, category)` (latest `seq`); max untrusted labels per
@@ -556,7 +568,7 @@ Subscribing to a third-party labeler replicates its label feed and adds its key 
   category-policy, thresholds} → expected `{action, source, badge}`. The trust logic lives
   here; test it hardest.
 - **Adversarial cases** (explicit tests): connected-peer sybil cannot reach a threshold;
-  a single malicious default relay can blur but not hide; forged `flagHint` returns `show`
+  a single subscribed (manually-trusted) labeler can blur but not hide; forged `flagHint` returns `show`
   and never changes seeding; self-label "safe" ignored; self-label-up from a non-writer
   ignored; self-label-up from a writer enforced; **sparse local false-negative + dense
   trusted relay positive ⇒ hidden** (lattice doesn't suppress); expired/revoked label
@@ -627,13 +639,14 @@ Subscribing to a third-party labeler replicates its label feed and adds its key 
   Phase 1 is strictly local (no labels, no seeding control). True upload-suppression under
   Corestore's global replicate is a Phase-2 caveat (§3.3).
 
-**Flagged for your review:**
+**Resolved (author decision):**
 
-- **D4 — Default policy.** Proposed `nsfw-explicit → blur` ON by default (copy = "blur after
-  a signal," not "guaranteed never see"). Alternative: ship `off` (pure opt-in). *Pick one.*
-- **D3a — Default trust set.** Proposed: ship a small removable set of default relay labeler
-  keys; a single default relay can blur but not hide. Alternative: no defaults (auto-hide
-  -on-crowd won't function until the user subscribes). *Pick one.*
+- **D4 — Default policy: OFF (pure opt-in).** Ships `mode:"off"`; the feature is dormant
+  until enabled. When enabled, `nsfw-explicit → blur`. (Chose the libertarian default over
+  blur-on-by-default.)
+- **D3a — Default trust set: NONE (B-only).** No relay labeler keys ship; `trustedLabelers`
+  empty. The local model is the sole default enforcer; labels/crowd are opt-in via
+  subscription.
 
 **Open questions (revisit with PoC numbers):**
 

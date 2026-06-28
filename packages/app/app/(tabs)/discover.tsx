@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   ImageBackground,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -754,7 +755,11 @@ export default function VerticalDiscoveryScreen() {
                 <View style={[styles.shortsActionRail, { bottom: metaBottomPadding }]}>
                   <View style={styles.shortsRailAvatarWrap}>
                     <Pressable onPress={() => openChannel(video)} style={styles.shortsRailAvatar} accessibilityLabel="Open channel">
-                      <Text style={styles.shortsRailAvatarText}>{getShortsAvatarLetter(video)}</Text>
+                      {video.channel?.avatarUrl ? (
+                        <Image source={{ uri: video.channel.avatarUrl }} style={styles.shortsRailAvatarImage} />
+                      ) : (
+                        <Text style={styles.shortsRailAvatarText}>{getShortsAvatarLetter(video)}</Text>
+                      )}
                     </Pressable>
                     <Pressable
                       onPress={() => toggleFollow(video)}
@@ -988,6 +993,11 @@ const styles = StyleSheet.create({
     fontSize: 18,
     lineHeight: 22,
     fontFamily: fonts.headingMedium,
+  },
+  shortsRailAvatarImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
   },
   shortsRailFollowBadge: {
     position: 'absolute',

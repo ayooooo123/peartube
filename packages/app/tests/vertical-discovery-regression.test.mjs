@@ -79,6 +79,7 @@ test('vertical discovery uses a PearTube-native vertical rail without borrowed s
   assert.match(source, /shortsCardChrome/, 'shorts cards should render through a named PearTube content chrome wrapper')
   assert.match(source, /styles\.shortsActionRail/, 'shorts should use a right-side vertical action rail (TikTok/Shorts convention)')
   assert.match(source, /styles\.shortsRailAvatar/, 'rail should lead with the channel avatar')
+  assert.match(source, /video\.channel\?\.avatarUrl \? \([\s\S]*styles\.shortsRailAvatarImage[\s\S]*getShortsAvatarLetter/, 'rail avatar should use the real channel image when present, letter as fallback')
   assert.match(source, /styles\.shortsRailFollowBadge/, 'rail avatar should carry a real follow/unfollow badge')
   assert.match(source, /styles\.shortsRailItem/, 'rail actions should be stacked icon+label items')
   assert.match(source, /Feather name="share-2"/, 'rail should include a share affordance')

@@ -47,7 +47,11 @@ Each of these is dead in production but has tests or regression assertions built
 around it, so deleting it means deleting/adjusting those too — a deliberate call,
 not a mechanical cleanup.
 
-### 1. `mirror/` subsystem — ~2,150 LOC, no production consumer
+> **Status: #1, #2, #3 DONE** — executed in the Tier-2 commit (dead `mirror/`
+> subsystem, Autobase op trio, and `createUniversalHrpcSurface` removed with
+> their tests; `blob-utils.js` hoisted to `src/`). #4–#6 remain proposals.
+
+### 1. `mirror/` subsystem — ~2,150 LOC, no production consumer ✅ DONE
 `packages/backend/src/mirror/{autobase,seeder,fetcher,refresh,proof,schemas}.js`.
 A self-contained Autobase descriptor/proof "relay" engine. Greps for
 `MirrorSeeder`/`MirrorFetcher`/`seedMirroredVideo`/`fetchMirroredVideo`/etc.
@@ -57,7 +61,7 @@ outside `mirror/` hit **only `test/mirror-*.test.mjs`**. The single live import 
 tests. If it's intended future work, move it to a clearly non-exported
 `experimental/` dir so it stops reading as live infrastructure.
 
-### 2. Autobase op trio — ~700 LOC, contradicts the real storage model
+### 2. Autobase op trio — ~700 LOC, contradicts the real storage model ✅ DONE
 `channel/op-schemas.js`, `channel/op-signing.js`, `channel/migrations.js`.
 `validateOp`/`verifyOp`/`signOp`/`migrateOp` are referenced only by
 `op-signing.test.mjs` and each other. The live channel
@@ -68,7 +72,7 @@ inferior duplicate of the **live** canonical-JSON attestation in
 `channel-descriptor.js`.
 **Proposal:** delete all three + their test; `channel-descriptor.js` is the keeper.
 
-### 3. `createUniversalHrpcSurface` — dead RPC surface on the hot startup path
+### 3. `createUniversalHrpcSurface` — dead RPC surface on the hot startup path ✅ DONE
 `universal-core.js:1062` defines `GetUniversalCoreStatus` +
 `UniversalCoreInit/Start/Suspend/Resume/Shutdown`, registered by
 `backend-entry.js:27-33` and `runtime.js:313`. **None of these method names exist

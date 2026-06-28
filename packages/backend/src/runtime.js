@@ -1,5 +1,5 @@
 import { createBackendContext } from './orchestrator.js'
-import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'
+import { createUniversalCore } from './universal-core.js'
 
 function noop() {}
 
@@ -310,11 +310,6 @@ export function createBackendRuntime(opts = {}) {
         }
 
         registerSharedHandlers(rpc, backend)
-        const universalHandlers = createUniversalHrpcSurface(core)
-        for (const [name, handler] of Object.entries(universalHandlers)) {
-          if (typeof rpc.respond === 'function') rpc.respond(name, handler)
-          else rpc[name] = handler
-        }
         await core.start()
 
         const blobStatus = getBlobServerStatus(backend)

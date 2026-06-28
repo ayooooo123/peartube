@@ -1054,39 +1054,6 @@ export function createUniversalCore(options = {}) {
   return api
 }
 
-/**
- * HRPC surface for the universal core lifecycle.
- * Runtime adapters register this shared surface instead of each shell inventing
- * its own core status/start/suspend/resume/shutdown handlers.
- */
-export function createUniversalHrpcSurface(core) {
-  return {
-    async GetUniversalCoreStatus() {
-      return core.getStatus()
-    },
-    async UniversalCoreInit() {
-      await core.init()
-      return core.getStatus()
-    },
-    async UniversalCoreStart() {
-      await core.start()
-      return core.getStatus()
-    },
-    async UniversalCoreSuspend() {
-      await core.suspend()
-      return core.getStatus()
-    },
-    async UniversalCoreResume() {
-      await core.resume()
-      return core.getStatus()
-    },
-    async UniversalCoreShutdown() {
-      await core.shutdown()
-      return core.getStatus()
-    },
-  }
-}
-
 export default {
   ROLE_MOBILE,
   ROLE_RELAY,
@@ -1106,5 +1073,4 @@ export default {
   createUnifiedAutobaseSink,
   createDualPlayerPlaybackCore,
   createUniversalCore,
-  createUniversalHrpcSurface,
 }

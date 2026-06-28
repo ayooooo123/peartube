@@ -54,7 +54,7 @@ export { logger, setLogLevel, LogLevel } from './logger.js';
 export { createBackendContext } from './orchestrator.js';
 
 // Universal core - shared Bare-native entrypoint across all shells
-export { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js';
+export { createUniversalCore } from './universal-core.js';
 export * as universalCore from './universal-core.js';
 export * as peerScorer from './peer-scorer.js';
 export * as budgetManager from './budget-manager.js';

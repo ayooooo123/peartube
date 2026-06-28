@@ -43,7 +43,6 @@
     "./blob-ref": "./src/blob-ref.js",
     "./archive-schema": "./lib/archive-schema.js",
     "./archive-writer": "./lib/archive-writer.js",
-    "./mirror": "./src/mirror/index.js",
     "./live": "./src/live/index.js"
   },
   "scripts": {

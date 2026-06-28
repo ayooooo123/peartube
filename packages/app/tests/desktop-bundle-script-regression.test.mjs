@@ -154,8 +154,8 @@ test('bundle link check catches a stale universal-core missing an export', async
 
   const entryKey = '/x/node_modules/@peartube/backend/src/backend-entry.js'
   const coreKey = '/x/node_modules/@peartube/backend/src/universal-core.js'
-  const importer = "import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'\nexport function createBackend() {}\n"
-  const freshCore = 'export function createUniversalCore() {}\nexport function createUniversalHrpcSurface() {}\nexport default {}\n'
+  const importer = "import { createUniversalCore, createNewlyAddedExport } from './universal-core.js'\nexport function createBackend() {}\n"
+  const freshCore = 'export function createUniversalCore() {}\nexport function createNewlyAddedExport() {}\nexport default {}\n'
   const staleCore = 'export function createUniversalCore() {}\nexport default {}\n'
   const resolutions = { [entryKey]: { './universal-core.js': coreKey } }
 
@@ -164,7 +164,7 @@ test('bundle link check catches a stale universal-core missing an export', async
 
   const stale = checkBundleLinks(makeBundle({ [entryKey]: importer, [coreKey]: staleCore }, resolutions))
   assert.equal(stale.length, 1, 'stale bundle should produce exactly one problem')
-  assert.match(stale[0], /createUniversalHrpcSurface/, 'problem should name the missing export')
+  assert.match(stale[0], /createNewlyAddedExport/, 'problem should name the missing export')
   assert.match(stale[0], /universal-core\.js/, 'problem should name the stale file')
 
   // `export *` disables verification for that target (cannot check statically).

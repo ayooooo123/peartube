@@ -117,7 +117,7 @@ uses it. Kept.
 
 ## Tier 3 — Proposed: de-duplication & decomposition
 
-### 7. `api.js` is a 4,888-line god-file ⏳ IN PROGRESS
+### 7. `api.js` is a 4,888-line god-file ✅ DONE (safe slices)
 A single `createApi` returning a ~3,700-line object literal with ~110 methods
 spanning channels, playback, livestream, personal store, feed, seeding, pairing,
 search, comments, recommendations. `prefetchVideo` alone is **~780 lines**
@@ -142,6 +142,10 @@ search, comments, recommendations. `prefetchVideo` alone is **~780 lines**
 > **Slice 6 done:** Recommendations/watch-event operations moved to
 > `api/recommendations.js`; the module injects the multi-writer guard, channel
 > loader, and semantic-finder initializer explicitly.
+> **Slice 7 done:** Live, subscriptions, status diagnostics, and network lifecycle
+> operations moved to `api/live.js`, `api/subscriptions.js`, `api/status.js`, and
+> `api/network-lifecycle.js`. Shared playback/cache state stays in `api.js` and is
+> passed as callbacks where needed.
 **Proposal:** split along the comment-banner sections that already exist into
 `api/{personal,comments,feed,seeding,pairing,search}.js`, each taking the shared
 closure deps and returning its method group; `createApi` becomes
@@ -164,12 +168,15 @@ comments/reactions (4512-4658) groups.
   identical but only duplicated once each (~7 and ~10 lines); a shared module +
   imports is barely cheaper than the duplication. Low priority.
 
-### 9. Comments/reactions handlers wrapped twice
+### 9. Comments/reactions handlers wrapped twice ⚠️ DEFERRED
 `api.js` (4512-4658) already returns the HRPC-ready `{success,error}` envelope;
 `mobile-handlers.js` (334-353) wraps each one in a *second* try/catch that can't
 throw, re-normalizing the same fields.
-**Proposal:** drop the redundant outer wrappers; let the camel-case fallback in
-`hrpc-handlers.js` resolve `api.addComment` directly. Several handlers then vanish.
+**Decision:** do not drop these wrappers on this branch. The current HRPC fallback
+invokes handlers as request-object functions, while `api/comments.js` methods are
+positional and rely on `this._getCommentsAutobase`; direct fallback would pass the
+wrong args and lose binding. A later cleanup can replace the wrappers with explicit
+request adapters or make the comments API request-shaped first.
 
 ### 10. Per-method `console.log('[API] …')` + try/catch boilerplate
 172 `console.*` and 125 `try` blocks in `api.js`, including `'====== addComment

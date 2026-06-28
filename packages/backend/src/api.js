@@ -1,3 +1,4 @@
+import b4a from 'b4a';
 /**
  * Core API Module - Shared backend API methods
  *
@@ -5,21 +6,17 @@
  * They operate on the storage context and return results.
  */
 
-import b4a from 'b4a';
-import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, setPlaybackActive as storageSetPlaybackActive, isPlaybackActive as storageIsPlaybackActive, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, isPlaybackActive as storageIsPlaybackActive, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
-import { createLiveBroadcastService, createLivePlaybackService } from './live/index.js';
 import { subscribeBlobPlayhead } from './blob-range-priority.js';
 import { beginPlaybackTiming, markPlaybackTiming } from './playback-timing.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { encodeIndexKey } from './index-encoder.js'
-import { NETWORK_TOPIC_STRING } from './types.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
 import { peerHasFullRange, collectFullCopyPeers, assessOffloadEligibility } from './upload-offload.js'
@@ -32,6 +29,10 @@ import { createPairingApi } from './api/pairing.js'
 import { createSeedingApi } from './api/seeding.js'
 import { createFeedApi } from './api/feed.js'
 import { createRecommendationsApi } from './api/recommendations.js'
+import { createSubscriptionsApi } from './api/subscriptions.js'
+import { createLiveApi } from './api/live.js'
+import { createStatusApi } from './api/status.js'
+import { createNetworkLifecycleApi } from './api/network-lifecycle.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -156,56 +157,6 @@ export function createApi({
   loadPublicBee = storageLoadPublicBee,
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
-
-  // Live services are lazy: most sessions never broadcast or watch live.
-  let liveBroadcast = null
-  let livePlayback = null
-  function getLiveBroadcast() {
-    if (!liveBroadcast) liveBroadcast = createLiveBroadcastService(ctx)
-    return liveBroadcast
-  }
-  function getLivePlayback() {
-    if (!livePlayback) livePlayback = createLivePlaybackService(ctx)
-    return livePlayback
-  }
-
-  // Re-announce the channel's full set of active live sessions on the feed
-  // (an empty set clears the live badge network-wide). Best-effort: feed
-  // gossip must never fail a broadcast lifecycle call.
-  function announceChannelLiveStreams(channelKey) {
-    if (!channelKey || !liveBroadcast || typeof publicFeed?.setChannelLiveStreams !== 'function') return
-    try {
-      const liveStreams = []
-      for (const session of liveBroadcast.sessions.values()) {
-        if (session.state !== 'live') continue
-        if ((session.writer?.descriptor?.channelKey || null) !== channelKey) continue
-        liveStreams.push({
-          videoId: session.videoId,
-          liveCoreKey: session.liveCoreKey,
-          title: session.writer?.descriptor?.title || null,
-          startedAt: session.startedAt,
-        })
-      }
-      publicFeed.setChannelLiveStreams(channelKey, liveStreams)
-    } catch (err) {
-      console.log('[API] live feed announce skipped:', err?.message || err)
-    }
-  }
-
-  function toLivestreamStatus(stats) {
-    if (!stats) return undefined
-    const status = {
-      state: stats.state || 'unknown',
-      videoId: stats.videoId || undefined,
-      liveCoreKey: stats.liveCoreKey || undefined,
-      mediaBlocks: Number(stats.mediaBlocks) || 0,
-      durationMs: Math.max(0, Math.round((Number(stats.durationS) || 0) * 1000)),
-      peerCount: Number(stats.peerCount) || 0,
-      startedAt: Number(stats.startedAt) || 0,
-    }
-    if (stats.endedAt) status.endedAt = Number(stats.endedAt)
-    return status
-  }
 
   async function isMultiWriterChannelKey(channelKey) {
     try {
@@ -1376,7 +1327,11 @@ export function createApi({
      * @returns {Promise<ChannelMetadata>}
      */
     async getChannelMeta(driveKey, publicBeeKey = null) {
-      console.log('[API] GET_CHANNEL_META:', driveKey?.slice(0, 16));
+      if (driveKey && typeof driveKey === 'object') {
+        publicBeeKey = driveKey.publicBeeKey || publicBeeKey
+        driveKey = driveKey.channelKey || driveKey.driveKey || driveKey.key || null
+      }
+      console.log('[API] GET_CHANNEL_META:', driveKey?.slice?.(0, 16));
       try {
         const cached = channelMetaCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
@@ -1863,83 +1818,7 @@ export function createApi({
       return prepared
     },
 
-    /**
-     * Start a live broadcast session on a fresh single-writer core.
-     * The fMP4 byte source attaches to the returned session through the
-     * broadcast service (platform encoder integrations); this surface only
-     * manages lifecycle.
-     * @param {{channelKey?: string, title?: string, targetFragmentDurationMs?: number, width?: number, height?: number}} [options]
-     * @returns {Promise<{success: boolean, videoId?: string, liveCoreKey?: string, error?: string}>}
-     */
-    async startLivestream(options = {}) {
-      try {
-        const targetMs = Number(options.targetFragmentDurationMs)
-        const session = await getLiveBroadcast().startBroadcast({
-          channelKey: options.channelKey || null,
-          title: options.title || null,
-          targetFragmentDuration: targetMs > 0 ? targetMs / 1000 : undefined,
-          width: Number(options.width) || 0,
-          height: Number(options.height) || 0,
-        })
-        console.log('[API] startLivestream:', session.videoId, 'core:', session.liveCoreKey.slice(0, 16))
-        announceChannelLiveStreams(options.channelKey)
-        return { success: true, videoId: session.videoId, liveCoreKey: session.liveCoreKey }
-      } catch (err) {
-        console.error('[API] startLivestream failed:', err?.message || err)
-        return { success: false, error: err?.message || String(err) }
-      }
-    },
-
-    /**
-     * Seal a live broadcast: flush the trailing fragment, append the EOS
-     * marker, keep seeding the core (it IS the recording).
-     * @param {string} videoId
-     */
-    async stopLivestream(videoId) {
-      try {
-        const session = getLiveBroadcast().getSession(videoId)
-        const stats = await getLiveBroadcast().stopBroadcast(videoId)
-        announceChannelLiveStreams(session?.writer?.descriptor?.channelKey)
-        return { success: true, status: toLivestreamStatus(stats) }
-      } catch (err) {
-        return { success: false, error: err?.message || String(err) }
-      }
-    },
-
-    /**
-     * Broadcaster-side status for an active or sealed session.
-     * @param {string} videoId
-     */
-    async getLivestreamStatus(videoId) {
-      const session = getLiveBroadcast().getSession(videoId)
-      if (!session) return { error: 'No live session: ' + videoId }
-      return { status: toLivestreamStatus(session.getStats()) }
-    },
-
-    /**
-     * Backend-internal (not RPC-exposed): the live session object, for
-     * platform encoder integrations to attach a byte source via
-     * session.write()/notifyKeyframe().
-     * @param {string} videoId
-     */
-    getLiveBroadcastSession(videoId) {
-      return getLiveBroadcast().getSession(videoId)
-    },
-
-    /**
-     * Resolve a local live-HLS playlist URL for a live core. Works for both
-     * in-progress streams (sliding window) and sealed recordings (full DVR).
-     * @param {string} liveCoreKey - live core key (hex)
-     * @returns {Promise<{url?: string, isLive?: boolean, error?: string}>}
-     */
-    async prepareLivePlayback(liveCoreKey) {
-      try {
-        const url = await getLivePlayback().getPlaybackUrl(liveCoreKey)
-        return { url, isLive: true }
-      } catch (err) {
-        return { error: err?.message || String(err) }
-      }
-    },
+    ...createLiveApi({ ctx, publicFeed }),
 
     /**
      * Download video to a local file path
@@ -2321,99 +2200,8 @@ export function createApi({
       }
     },
 
-    // ============================================
     // Subscription Operations
-    // ============================================
-
-    /**
-     * Subscribe to a channel
-     * @param {string} driveKey
-     * @returns {Promise<{success: boolean}>}
-     */
-    async subscribeChannel(driveKey) {
-      // Don't let loadChannel hang forever - use a 5s timeout
-      // If it times out, we still add to subscriptions (data will sync later when peers are found)
-      try {
-        await Promise.race([
-          loadChannel(ctx, driveKey),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel load timeout')), 5000))
-        ]);
-      } catch (err) {
-        console.log('[API] subscribeChannel: channel load warning:', err.message, '- continuing anyway');
-      }
-
-      // Prefer the synced personal store when available so subscriptions
-      // follow the user across devices; fall back to device-local metaDb.
-      if (ctx.personal?.writable) {
-        await ctx.personal.subscribe(driveKey, {});
-        return { success: true };
-      }
-
-      const existing = await ctx.metaDb.get('subscriptions');
-      const subs = existing?.value || [];
-
-      if (!subs.find(s => s.driveKey === driveKey)) {
-        subs.push({
-          driveKey,
-          subscribedAt: Date.now()
-        });
-        await ctx.metaDb.put('subscriptions', subs);
-      }
-
-      return { success: true };
-    },
-
-    /**
-     * Unsubscribe from a channel
-     * @param {string} driveKey
-     * @returns {Promise<{success: boolean}>}
-     */
-    async unsubscribeChannel(driveKey) {
-      if (ctx.personal?.writable) {
-        await ctx.personal.unsubscribe(driveKey);
-        return { success: true };
-      }
-
-      const existing = await ctx.metaDb.get('subscriptions');
-      const subs = existing?.value || [];
-
-      const filtered = subs.filter(s => s.driveKey !== driveKey);
-      await ctx.metaDb.put('subscriptions', filtered);
-
-      return { success: true };
-    },
-
-    /**
-     * Get subscriptions list with channel names
-     * @returns {Promise<Array<{driveKey: string, name: string, subscribedAt?: number}>>}
-     */
-    async getSubscriptions() {
-      let subs;
-      if (ctx.personal) {
-        // Normalize personal-store rows to the legacy { driveKey, subscribedAt } shape.
-        subs = (await ctx.personal.listSubscriptions()).map((s) => ({
-          driveKey: s.channelKey,
-          subscribedAt: s.subscribedAt,
-          name: s.name || undefined
-        }));
-      } else {
-        const existing = await ctx.metaDb.get('subscriptions');
-        subs = existing?.value || [];
-      }
-
-      const enriched = [];
-      for (const sub of subs) {
-        let name = sub.name || 'Unknown';
-        try {
-          const channel = await loadChannel(ctx, sub.driveKey)
-          const meta = await channel?.getMetadata().catch(() => null)
-          if (meta?.name) name = meta.name
-        } catch (e) { /* best effort */ }
-        enriched.push({ ...sub, name });
-      }
-
-      return enriched;
-    },
+    ...createSubscriptionsApi({ ctx, loadChannel }),
 
     ...createPersonalApi({ ctx }),
 
@@ -3799,102 +3587,9 @@ export function createApi({
       }
     },
 
-    // ============================================
     // Status Operations
-    // ============================================
+    ...createStatusApi({ ctx, publicFeed, recentPlaybackTimings }),
 
-    /**
-     * Get backend status
-     * @returns {Object}
-     */
-    getStatus() {
-      return {
-        connected: true,
-        peers: ctx.swarm?.connections?.size || 0,
-        blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
-        blobServerHost: ctx.blobServerHost || '127.0.0.1',
-        version: '0.1.115'
-      };
-    },
-
-    /**
-     * Get swarm status for debugging
-     * @returns {Object}
-     */
-    getSwarmStatus() {
-      const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
-      const networkDebug = getNetworkStats()
-      const feedStats = publicFeed?.getStats?.() || {}
-      // Report what the user can actually SEE. The raw entries map includes
-      // hidden/filtered entries, so diagnostics (and the home screen's
-      // discovery-state classifier) were fed counts that didn't match the
-      // rendered feed.
-      const visibleFeedEntries = (() => {
-        try { return publicFeed?.getFeed?.()?.length ?? (publicFeed?.entries?.size || 0) } catch { return publicFeed?.entries?.size || 0 }
-      })()
-      const startupTiming = {
-        storage: networkDebug?.startupTiming || null,
-        publicFeed: feedStats.startupTiming || null,
-      }
-      const doctor = {
-        dht: {
-          bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
-          firewalled: ctx.swarm?.dht?.firewalled ?? null,
-          online: ctx.swarm?.dht?.online ?? null,
-          ephemeral: ctx.swarm?.dht?.ephemeral ?? null,
-        },
-        discovery: {
-          peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-          publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
-          discoveredPeers: feedStats.directPeerDial?.discoveredPeers || 0,
-          recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
-        },
-        socket: {
-          swarmPeers: ctx.swarm?.peers?.size || 0,
-          swarmConnections: ctx.swarm?.connections?.size || 0,
-          connecting: Number(ctx.swarm?.connecting || 0),
-          recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
-          peerStates: networkDebug?.hyperswarm?.peerStates || [],
-        },
-        feed: {
-          feedConnections: publicFeed?.feedConnections?.size || 0,
-          feedEntries: visibleFeedEntries,
-          directPeerDial: feedStats.directPeerDial || null,
-          lastHaveFeed: feedStats.lastHaveFeed || null,
-        },
-        playback: {
-          lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
-          recentPreparePlayback: recentPlaybackTimings.slice(-5),
-        },
-        recommendedBoundary: null,
-      }
-      if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
-      else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
-      else if (doctor.socket.swarmConnections > 0 && doctor.feed.feedConnections === 0) doctor.recommendedBoundary = 'protomux-feed-open'
-      else if (doctor.feed.feedConnections > 0 && doctor.feed.feedEntries === 0) doctor.recommendedBoundary = 'feed-gossip'
-      else doctor.recommendedBoundary = 'content-playback-or-ui'
-      return {
-        swarmConnections: ctx.swarm?.connections?.size || 0,
-        swarmPeers: ctx.swarm?.peers?.size || 0,
-        feedConnections: publicFeed?.feedConnections?.size || 0,
-        feedEntries: visibleFeedEntries,
-        feedTopicHex: topicHex,
-        network: networkDebug,
-        startupTiming,
-        doctor,
-        swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
-        swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
-        swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
-        peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-        publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
-        swarmPublicKey: ctx.swarm?.keyPair?.publicKey
-          ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
-          : 'unknown',
-        channelsLoaded: Math.max(ctx.channels?.size || 0, visibleFeedEntries),
-      };
-    }
-
-    ,
     // ============================================
     // Multi-device pairing (Multi-writer channels)
     // ============================================
@@ -4013,72 +3708,10 @@ export function createApi({
       loadChannel,
     }),
 
-    // ============================================
     // Network Lifecycle Management
-    // ============================================
-
-    /**
-     * Suspend networking for mobile background state.
-     * Call this when the app goes to background to save battery.
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async suspendNetwork() {
-      try {
-        await suspendNetworking()
-        return { success: true }
-      } catch (err) {
-        console.error('[API] suspendNetwork error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Resume networking when app returns to foreground.
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async resumeNetwork() {
-      try {
-        await resumeNetworking()
-        return { success: true }
-      } catch (err) {
-        console.error('[API] resumeNetwork error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Mirror app playback state into the backend so cache cleanup does not
-     * clear blob ranges while a player or blob-server reader is active.
-     * @param {{active?: boolean, ttlMs?: number}} [options]
-     * @returns {{success: boolean, active: boolean, updatedAt: number, expiresAt: number}}
-     */
-    setPlaybackActive(options = {}) {
-      const state = storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
-      // Flush deferred cache eviction when playback ends. enforceQuota() skips
-      // every clear while playback is active (isCacheClearBlocked), and its only
-      // other trigger — addSeed — fires *during* playback, so the over-quota
-      // evictions get deferred and nothing ever re-runs them. Without this hook
-      // the seed cache grows unbounded past maxStorageGB.
-      //
-      // The sweep is debounced and cancelled the moment playback resumes, so
-      // rapid open/close, seeking, and pause/resume never trigger eviction.
-      if (state.active) {
-        cancelScheduledQuotaSweep()
-      } else {
-        scheduleQuotaSweepAfterPlayback()
-      }
-      return { success: true, ...state }
-    },
-
-    /**
-     * Get network stats for debugging.
-     * @returns {{stats: Object|null, readable: string}}
-     */
-    getNetworkDebugStats() {
-      return {
-        stats: getNetworkStats(),
-        readable: getNetworkStatsReadable()
-      }
-    }
+    ...createNetworkLifecycleApi({
+      onPlaybackActive: cancelScheduledQuotaSweep,
+      onPlaybackInactive: scheduleQuotaSweepAfterPlayback,
+    })
   };
 }

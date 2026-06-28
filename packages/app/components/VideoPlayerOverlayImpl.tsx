@@ -22,6 +22,7 @@ import Animated, {
 import { Feather as ExpoFeather, Ionicons as ExpoIonicons } from '@expo/vector-icons'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useChannelMetaName } from '@/lib/useChannelMetaName'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -92,8 +93,6 @@ function showCastAlert(message: string) {
 const Feather = ExpoFeather
 const Ionicons = ExpoIonicons
 
-const CHANNEL_META_CACHE_TTL_MS = 5 * 60 * 1000
-const channelMetaNameCache = new Map<string, { name: string | null; expiresAt: number }>()
 const ZERO_EDGE_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 })
 // ── Responsive mini-player geometry helpers live in ./video-player/overlayDerivedState ──
 
@@ -388,7 +387,7 @@ export function VideoPlayerOverlay() {
     !isInPipMode &&
     !hideGlobalOverlayOnDiscover
   const isLandscapeFullscreenShared = useSharedValue(false)
-  const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
+  const channelMetaName = useChannelMetaName(currentVideo, rpc)
 
   // Casting state
   const [showCastPicker, setShowCastPicker] = useState(false)
@@ -964,46 +963,6 @@ export function VideoPlayerOverlay() {
     reportedTabBarHeight,
     reportedTabBarPadding,
   ])
-
-  // Fetch channel metadata so the channel row remains stable even when currentVideo lacks embedded channel info.
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadChannelMeta() {
-      const channelKey = currentVideo?.channelKey || currentVideo?.channel?.key
-      if (!channelKey || !rpc?.getChannelMeta) {
-        setChannelMetaName(null)
-        return
-      }
-
-      const now = Date.now()
-      const cached = channelMetaNameCache.get(channelKey)
-      if (cached && cached.expiresAt > now) {
-        setChannelMetaName(cached.name)
-        return
-      }
-
-      try {
-        const result = await rpc.getChannelMeta({ channelKey })
-        if (cancelled) return
-        const name = result?.name || null
-        channelMetaNameCache.set(channelKey, {
-          name,
-          expiresAt: now + CHANNEL_META_CACHE_TTL_MS,
-        })
-        setChannelMetaName(name)
-      } catch (err) {
-        if (cancelled) return
-        if (__DEV__) console.warn('[VideoPlayerOverlay] Failed to load channel meta:', err)
-        setChannelMetaName(null)
-      }
-    }
-
-    loadChannelMeta()
-    return () => {
-      cancelled = true
-    }
-  }, [currentVideo?.channelKey])
 
   useEffect(() => {
     // Keep animProgress driven by JS mode changes.

@@ -31,10 +31,7 @@ import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } fro
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { serveVideoRangeHttpRequest } from './video-range-http.js'
 import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
-
-function resolveDebugLogPath() {
-  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
-}
+import { appendDebugLine } from './debug-log.js'
 
 function isEmbeddedBareKitStoragePath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
@@ -69,18 +66,6 @@ function describeDebugError(error) {
   } catch {
     return String(error)
   }
-}
-
-async function appendDebugLine(line) {
-  const filePath = resolveDebugLogPath()
-  if (!filePath) return
-
-  try {
-    const fsModule = await import('bare-fs')
-    const fs = fsModule?.default ?? fsModule
-    if (typeof fs?.appendFileSync !== 'function') return
-    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch { /* best effort */ }
 }
 
 const log = logger('Storage')

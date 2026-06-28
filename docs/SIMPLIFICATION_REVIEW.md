@@ -103,12 +103,15 @@ re-export). The real entrypoint everywhere is `createBackend`.
 `shared-handlers-setup.js`, then drop `runtime.js`. (Adjust the source-text
 regression tests that read `runtime.js`.)
 
-### 6. Dead Hyperbee fallback paths in `public-channel-bee.js`
-`this.bee` raw-Hyperbee branches (lines ~45, 148-203), `applyVideoChanges`
-(293-318), and the `createReadStream` branch in `listVideos` (199-204) are dead —
-`_open` always sets `this.db` (HyperDB) and production reads the
-`videos-by-uploaded-at` index. Kept only "for legacy tests".
-**Proposal:** delete the `!this.db` branches and `applyVideoChanges`.
+### 6. Dead Hyperbee fallback paths in `public-channel-bee.js` ✅ DONE (partial)
+`this.bee` is initialized to `null` and **never assigned** (only `this.db` is, in
+`_open`), so every `this.bee?.…` call in `getMetadata`/`setMetadata`/`listVideos`
+was a permanent no-op. Replaced those dead branches with the equivalent empty
+result, keeping the `if (!this.db)` not-ready guard (`waitForSync` does not
+guarantee `db`, so the guard is real) and the `this.bee = null` line (a test
+asserts the raw-bee path is gone).
+**Correction:** `applyVideoChanges` is **not** dead — `public-channel-hyperdb.test.mjs`
+uses it. Kept.
 
 ---
 
@@ -126,15 +129,20 @@ closure deps and returning its method group; `createApi` becomes
 phase helpers. Start with the self-contained personal (2423-2515) and
 comments/reactions (4512-4658) groups.
 
-### 8. Triplicated `getSwarmStatus` / `safeJson` / `getBlobServerStatus` / debug-log helpers
-`getSwarmStatus` response shaping is written 3× (`api.js:4162`,
-`mobile-handlers.js:284`, `runtime.js:113`) as byte-equivalent transforms.
-`safeJson` is duplicated in `mobile-handlers.js` + `runtime.js`;
-`getBlobServerStatus` is byte-identical in `backend-entry.js:16` + `runtime.js:28`;
-`appendDebugLine`/`resolveDebugLogPath` live in `orchestrator.js`, `runtime.js`,
-*and* `storage.js`.
-**Proposal:** one `toSwarmStatusResponse(raw)`, one `safeJson`, one
-`getBlobServerStatus`, one `debug-log.js` — imported by all sites.
+### 8. Triplicated `getSwarmStatus` / `safeJson` / `getBlobServerStatus` / debug-log helpers ✅ DONE (partial)
+- **debug-log (3 copies → 1): done.** `resolveDebugLogPath` + `appendDebugLine`
+  were byte-duplicated in `orchestrator.js`, `runtime.js`, *and* `storage.js`
+  (storage's are used at 71 call sites). Extracted to `src/debug-log.js`; all
+  three now import it.
+- **`getSwarmStatus` shaping: NOT merged — correction.** The agent claimed
+  `mobile-handlers.js` and `runtime.js` (`buildSharedSystemHandlers`) are
+  byte-equivalent, but they derive `connected`/`peerCount` differently
+  (`swarmConnections > 0` vs `(swarmConnections || peerCount) > 0`). Merging
+  would silently change behavior, so this needs a deliberate "which shape is
+  canonical" decision first — left as a proposal.
+- **`safeJson` / `getBlobServerStatus` (2 copies each): left.** Genuinely
+  identical but only duplicated once each (~7 and ~10 lines); a shared module +
+  imports is barely cheaper than the duplication. Low priority.
 
 ### 9. Comments/reactions handlers wrapped twice
 `api.js` (4512-4658) already returns the HRPC-ready `{success,error}` envelope;

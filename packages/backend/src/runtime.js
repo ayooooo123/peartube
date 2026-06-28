@@ -1,28 +1,11 @@
 import { createBackendContext } from './orchestrator.js'
 import { createUniversalCore } from './universal-core.js'
+import { appendDebugLine } from './debug-log.js'
 
 function noop() {}
 
 function toCallback(fn) {
   return typeof fn === 'function' ? fn : noop
-}
-
-function resolveDebugLogPath() {
-  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
-}
-
-async function appendDebugLine(line) {
-  const filePath = resolveDebugLogPath()
-  if (!filePath) return
-
-  try {
-    const fsModule = await import('bare-fs')
-    const fs = fsModule?.default ?? fsModule
-    if (typeof fs?.appendFileSync !== 'function') return
-    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch {
-    // Debug logging must never affect backend startup.
-  }
 }
 
 function getBlobServerStatus(backend) {

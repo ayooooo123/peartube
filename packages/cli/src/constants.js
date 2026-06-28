@@ -18,6 +18,21 @@ export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 0
 
 export const RELAY_CATALOG_FILENAME = 'relay-catalog.json'
 export const RELAY_STATUS_FILENAME = 'relay-status.json'
+export const RELAY_CREATORS_FILENAME = 'relay-creators.json'
+export const RELAY_CLASSIFICATION_FILENAME = 'relay-classification.json'
+export const RELAY_SETTINGS_FILENAME = 'relay-settings.json'
+
+export const DEFAULT_TMDB_BASE_URL = 'https://api.themoviedb.org/3'
+export const DEFAULT_TMDB_LANGUAGE = 'en-US'
+
+export const DEFAULT_CLASSIFICATION_CONFIG = {
+  tmdb: {
+    enabled: false,
+    apiKey: '',
+    baseUrl: DEFAULT_TMDB_BASE_URL,
+    language: DEFAULT_TMDB_LANGUAGE
+  }
+}
 
 export const RETENTION_PRIORITY = {
   discovery: 1,
@@ -98,6 +113,7 @@ export const DEFAULT_RELAY_CONFIG = {
     trustedBlindPeerClients: []
   },
   archive: DEFAULT_ARCHIVE_CONFIG,
+  classification: DEFAULT_CLASSIFICATION_CONFIG,
   logging: {
     level: 'info'
   }

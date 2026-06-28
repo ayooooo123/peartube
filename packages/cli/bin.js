@@ -5,6 +5,7 @@ import { normalizeCliArgv, parseArgv } from './src/argv.js'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
+import { RelayCreators, summarizeCreatorsFromCatalog, rankUnseededTargets } from './src/creators.js'
 import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
 
 function writeLine(message, preferredStream = 'stdout') {
@@ -41,6 +42,7 @@ function printHelp() {
     '  mirror-local  Import local video files into the relay channel',
     '  validate  Validate and print the normalized relay config',
     '  status    Print relay status from the local catalog',
+    '  creators  List tracked creators and unseeded targets',
     '  init      Write an example config file',
     '',
     'Options:',
@@ -179,6 +181,44 @@ async function statusCommand(flags) {
   writeLine(formatRelayStatus(status) + '\n')
 }
 
+async function creatorsCommand(flags) {
+  const config = await loadRelayConfig(flags)
+  const creatorsDb = await RelayCreators.open({ storagePath: config.storage.path, creatorsPath: config.paths.creators })
+  let creators = creatorsDb.getCreators()
+
+  // Fall back to deriving from the catalog when the persisted creators DB is
+  // empty (e.g. the relay has not run since this feature was added).
+  if (creators.length === 0) {
+    const catalog = await RelayCatalog.open({ storagePath: config.storage.path, catalogPath: config.paths.catalog })
+    creators = summarizeCreatorsFromCatalog(catalog.getChannels())
+  }
+
+  const targets = rankUnseededTargets(creators)
+
+  if (flags.json) {
+    writeLine(JSON.stringify({ creators, unseededTargets: targets }, null, 2) + '\n')
+    return
+  }
+
+  if (creators.length === 0) {
+    writeLine('No creators tracked yet.\n')
+    return
+  }
+
+  const lines = ['Tracked creators:']
+  for (const creator of [...creators].sort((a, b) => (b.videosUnseeded || 0) - (a.videosUnseeded || 0))) {
+    const cls = creator.classification || {}
+    lines.push(`- ${creator.name || creator.creatorId} | archived=${creator.videosArchived || 0} unseeded=${creator.videosUnseeded || 0} movies=${cls.movie || 0} tv=${cls.tv || 0}`)
+  }
+  if (targets.length > 0) {
+    lines.push('', 'Unseeded targets (seed these first):')
+    for (const target of targets.slice(0, 20)) {
+      lines.push(`- ${target.name} (${target.videosUnseeded}/${target.videosArchived} unseeded)`)
+    }
+  }
+  writeLine(lines.join('\n') + '\n')
+}
+
 async function initCommand(flags) {
   const target = flags.config || 'peartube-relay.yml'
   if (existsSync(target)) {
@@ -215,6 +255,9 @@ async function main() {
       break
     case 'status':
       await statusCommand(flags)
+      break
+    case 'creators':
+      await creatorsCommand(flags)
       break
     case 'init':
       await initCommand(flags)

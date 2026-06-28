@@ -194,7 +194,12 @@ export async function enqueueArchiveJob(store, input = {}) {
     description: job.description,
     channelName: job.channelName,
     publish: job.publish,
-    anonymous: job.anonymous
+    anonymous: job.anonymous,
+    creatorSourceId: input.creatorSourceId ? String(input.creatorSourceId) : null,
+    creatorName: input.creatorName ? String(input.creatorName) : null,
+    creatorHandle: input.creatorHandle ? String(input.creatorHandle) : null,
+    sourceType: input.sourceType ? String(input.sourceType) : null,
+    sourceUrl: input.sourceUrl ? String(input.sourceUrl) : url
   })
 }
 

@@ -5,6 +5,11 @@ import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
+import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
+import { RelayClassificationStore } from './classification/store.js'
+import { createTmdbClassifier } from './classification/tmdb.js'
+import { RelaySettings, resolveTmdbOptions } from './settings.js'
+import { classifySourceUrl } from './archive/source-id.js'
 
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
 
@@ -30,6 +35,16 @@ export async function createRelayService({
     storagePath: config.storage.path,
     catalogPath: config.paths.catalog
   })
+  const relayCreators = await RelayCreators.open({
+    storagePath: config.storage.path,
+    creatorsPath: config.paths.creators
+  })
+  const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
+  const classificationStore = await RelayClassificationStore.open({
+    storagePath: config.storage.path,
+    classificationPath: config.paths.classification
+  })
+  let classifier = createTmdbClassifier(resolveTmdbOptions(config, relaySettings))
   const runtime = await runtimeFactory({ config, logger })
 
   let closed = false
@@ -141,11 +156,42 @@ export async function createRelayService({
     }
   }
 
+  function refreshClassifier() {
+    classifier = createTmdbClassifier(resolveTmdbOptions(config, relaySettings))
+    return classifier
+  }
+
+  // Best-effort movie/TV classification. Cached, and never throws so archiving
+  // never depends on TMDB availability.
+  async function classifyPreviewVideo(video) {
+    if (!video?.id) return video
+    try {
+      const result = await classificationStore.classifyVideo({
+        classifier,
+        videoId: video.id,
+        title: video.title
+      })
+      return result ? { ...video, classification: result } : video
+    } catch {
+      return video
+    }
+  }
+
+  async function syncCreators() {
+    try {
+      await relayCreators.syncFromCatalog(relayCatalog.getChannels())
+    } catch (err) {
+      logger.status?.debug?.('Creator sync failed', { error: err?.message || String(err) })
+    }
+  }
+
   async function persistStatus() {
+    await syncCreators()
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
-      runtimeStats: runtime.getNetworkStats?.() || {}
+      runtimeStats: runtime.getNetworkStats?.() || {},
+      creators: relayCreators.getCreators()
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
@@ -411,8 +457,9 @@ export async function createRelayService({
       return { published: false, reason: 'missing-refs' }
     }
 
+    const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
     const previewVideos = [{
-      ...job.previewVideo,
+      ...classifiedPreview,
       publicBeeKey: job.publicBeeKey || job.previewVideo.publicBeeKey || null,
       channelKey: job.channelKey,
       driveKey: job.channelKey,
@@ -488,6 +535,52 @@ export async function createRelayService({
     logger,
     runtime,
     catalog: relayCatalog,
+    creators: relayCreators,
+    classificationStore,
+    settings: relaySettings,
+    getClassifier() {
+      return classifier
+    },
+    async setTmdbSettings({ apiKey, enabled } = {}) {
+      if (apiKey !== undefined) await relaySettings.set('tmdbApiKey', String(apiKey || '').trim())
+      if (enabled !== undefined) await relaySettings.set('tmdbEnabled', Boolean(enabled))
+      refreshClassifier()
+      return resolveTmdbOptions(config, relaySettings)
+    },
+    getCreatorTargets({ limit = 0 } = {}) {
+      return relayCreators.getTargets({ limit })
+    },
+    // Register a creator (by their channel/source URL) in the creators DB and
+    // enqueue an archive job for that URL, attributed to the creator. The
+    // creators DB then tracks how many of their videos remain unseeded.
+    async addCreatorSource({ url, label = null, publish = true, runNow = true } = {}) {
+      const classified = classifySourceUrl(url)
+      if (!classified.type) throw new Error(`Unsupported creator/source URL: ${url}`)
+      const creatorId = creatorIdFromClassifiedSource(classified)
+      const handle = classified.kind === 'handle' ? classified.identifier : null
+      const name = label || handle || creatorId
+      const creator = await relayCreators.upsertCreator({
+        creatorId,
+        manual: true,
+        label: label || null,
+        name,
+        handle,
+        sourceType: classified.type,
+        sourceUrls: [classified.normalizedUrl]
+      })
+      await syncCreators()
+      const job = await service.enqueueArchiveJob({
+        url: classified.normalizedUrl,
+        channelName: name,
+        creatorSourceId: creatorId,
+        creatorName: name,
+        creatorHandle: handle,
+        sourceType: classified.type,
+        sourceUrl: classified.normalizedUrl,
+        publish
+      }, { runNow })
+      return { creator, job }
+    },
     async start() {
       logger.relay.info('Relay starting', {
         mode: config.mode,

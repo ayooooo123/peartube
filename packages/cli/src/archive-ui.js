@@ -34,12 +34,42 @@ export function renderArchiveTui(model = {}) {
   return lines.join('\n')
 }
 
+function classificationBadge(video) {
+  const type = video?.classification?.type
+  if (type === 'movie') return '🎬 Movie'
+  if (type === 'tv') return '📺 TV'
+  return ''
+}
+
 export function renderArchiveWebHome(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
+  const creators = Array.isArray(model.creators) ? model.creators : []
+  const unseededTargets = Array.isArray(model.unseededTargets) ? model.unseededTargets : []
+  const tmdb = model.tmdb || {}
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
   const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
+
+  const creatorRows = creators.length
+    ? creators.map((creator) => `
+        <li>
+          <strong>${escapeHtml(creator.name || creator.creatorId)}</strong>
+          ${creator.handle ? `<small>${escapeHtml(creator.handle)}</small>` : ''}
+          <span class="pill">${escapeHtml(creator.videosArchived || 0)} archived</span>
+          <span class="pill ${Number(creator.videosUnseeded || 0) > 0 ? 'failed' : 'completed'}">${escapeHtml(creator.videosUnseeded || 0)} unseeded</span>
+          ${creator.classification?.movie ? `<span class="pill">🎬 ${escapeHtml(creator.classification.movie)}</span>` : ''}
+          ${creator.classification?.tv ? `<span class="pill">📺 ${escapeHtml(creator.classification.tv)}</span>` : ''}
+        </li>`).join('')
+    : '<li class="empty">No creators tracked yet. Add one below or archive a video.</li>'
+
+  const targetRows = unseededTargets.length
+    ? unseededTargets.map((target) => `
+        <li>
+          <strong>${escapeHtml(target.name || target.creatorId)}</strong>
+          <span class="pill failed">${escapeHtml(target.videosUnseeded)} / ${escapeHtml(target.videosArchived)} unseeded</span>
+        </li>`).join('')
+    : '<li class="empty">Nothing to target — all tracked creator videos are seeded.</li>'
   const rows = jobs.length
     ? jobs.map((job) => `
         <li>
@@ -89,6 +119,7 @@ export function renderArchiveWebHome(model = {}) {
       <div class="stat"><span>Peers</span><b>${escapeHtml(status.peers || 0)}</b></div>
       <div class="stat"><span>Feed entries</span><b>${escapeHtml(status.feedEntries || 0)}</b></div>
       <div class="stat"><span>Seeded videos</span><b>${escapeHtml(seeding.videos || 0)}</b></div>
+      <div class="stat"><span>Creators</span><b>${escapeHtml(creators.length)}</b></div>
     </section>
     <section class="catalog">
       <h2>Simple relay catalog</h2>
@@ -105,6 +136,34 @@ export function renderArchiveWebHome(model = {}) {
       <label><input type="checkbox" name="publish" value="true" checked> Publish to network after import</label>
       <button type="submit">Archive and publish</button>
     </form>
+    <section class="catalog">
+      <h2>Contribute a creator</h2>
+      <p>Paste a creator's channel or video URL (YouTube or Rumble). The relay registers them in its creators database, archives the content, and keeps tracking how many of their videos still need a seeder.</p>
+      <form method="post" action="/creators">
+        <label>Creator channel or video URL<input name="url" required placeholder="https://www.youtube.com/@channel"></label>
+        <label>Display name (optional)<input name="label" placeholder="e.g. My Favourite Channel"></label>
+        <label><input type="checkbox" name="publish" value="true" checked> Publish to network after import</label>
+        <button type="submit">Add creator & archive</button>
+      </form>
+    </section>
+    <section class="queue">
+      <h2>Tracked creators</h2>
+      <ul>${creatorRows}</ul>
+    </section>
+    <section class="queue">
+      <h2>Unseeded targets</h2>
+      <p>Creators with the most under-replicated content. Seed these first to maximise availability.</p>
+      <ul>${targetRows}</ul>
+    </section>
+    <section class="catalog">
+      <h2>Content classification (TMDB)</h2>
+      <p>Add a <a href="https://www.themoviedb.org/settings/api">TMDB API key</a> to automatically identify archived movies and TV shows. Status: <strong>${tmdb.enabled ? 'enabled' : (tmdb.hasKey ? 'key set, disabled' : 'no key')}</strong>.</p>
+      <form method="post" action="/settings/tmdb">
+        <label>TMDB API key<input name="apiKey" type="password" placeholder="${tmdb.hasKey ? '•••••••• (set)' : 'Paste TMDB v3 API key'}"></label>
+        <label><input type="checkbox" name="enabled" value="true" ${tmdb.enabled ? 'checked' : ''}> Enable classification</label>
+        <button type="submit">Save TMDB settings</button>
+      </form>
+    </section>
     <section class="queue">
       <h2>Queue</h2>
       <ul>${rows}</ul>

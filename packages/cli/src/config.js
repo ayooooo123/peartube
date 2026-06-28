@@ -13,8 +13,13 @@ import {
   DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_PATH,
   DEFAULT_LOCAL_MIRROR_POLL_SECONDS,
+  DEFAULT_CLASSIFICATION_CONFIG,
+  DEFAULT_TMDB_BASE_URL,
+  DEFAULT_TMDB_LANGUAGE,
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
+  RELAY_CLASSIFICATION_FILENAME,
+  RELAY_CREATORS_FILENAME,
   RELAY_MODE_PRIVATE,
   RELAY_MODE_PUBLIC,
   RELAY_POLICY_ALLOWLIST,
@@ -275,6 +280,21 @@ function configFromEnv(env = {}) {
   }
   if (env.PEARTUBE_LOG_LEVEL) {
     config.logging = { level: env.PEARTUBE_LOG_LEVEL }
+  }
+  if (
+    env.PEARTUBE_TMDB_API_KEY ||
+    env.PEARTUBE_TMDB_ENABLED ||
+    env.PEARTUBE_TMDB_LANGUAGE ||
+    env.PEARTUBE_TMDB_BASE_URL
+  ) {
+    config.classification = { tmdb: {} }
+    if (env.PEARTUBE_TMDB_API_KEY) config.classification.tmdb.apiKey = env.PEARTUBE_TMDB_API_KEY
+    if (env.PEARTUBE_TMDB_ENABLED) {
+      const parsed = parseBoolean(env.PEARTUBE_TMDB_ENABLED)
+      if (parsed !== undefined) config.classification.tmdb.enabled = parsed
+    }
+    if (env.PEARTUBE_TMDB_LANGUAGE) config.classification.tmdb.language = env.PEARTUBE_TMDB_LANGUAGE
+    if (env.PEARTUBE_TMDB_BASE_URL) config.classification.tmdb.baseUrl = env.PEARTUBE_TMDB_BASE_URL
   }
   if (
     env.PEARTUBE_ARCHIVE_UI_ENABLED ||
@@ -550,6 +570,20 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   return merged
 }
 
+function resolveClassificationConfig(rawClassification) {
+  const merged = deepMerge(DEFAULT_CLASSIFICATION_CONFIG, isPlainObject(rawClassification) ? rawClassification : {})
+  const tmdb = isPlainObject(merged.tmdb) ? merged.tmdb : {}
+  const apiKey = typeof tmdb.apiKey === 'string' ? tmdb.apiKey.trim() : ''
+  return {
+    tmdb: {
+      apiKey,
+      enabled: Boolean(tmdb.enabled) && Boolean(apiKey),
+      baseUrl: typeof tmdb.baseUrl === 'string' && tmdb.baseUrl.trim() ? tmdb.baseUrl.trim() : DEFAULT_TMDB_BASE_URL,
+      language: typeof tmdb.language === 'string' && tmdb.language.trim() ? tmdb.language.trim() : DEFAULT_TMDB_LANGUAGE
+    }
+  }
+}
+
 export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
   const requestedMode = input.mode
   const requestedPolicy = input.policy
@@ -607,11 +641,14 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
 
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
+  config.classification = resolveClassificationConfig(config.classification)
 
   const runtimeDbPath = join(config.storage.path, 'db')
   config.paths = {
     catalog: join(runtimeDbPath, RELAY_CATALOG_FILENAME),
     status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
+    creators: join(runtimeDbPath, RELAY_CREATORS_FILENAME),
+    classification: join(runtimeDbPath, RELAY_CLASSIFICATION_FILENAME),
     corestore: join(config.storage.path, 'corestore'),
     archiveTmpPath: config.archive.tmpPath
   }
@@ -708,6 +745,17 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   } else {
     lines.push('  sources: []')
   }
+
+  const classification = config.classification || DEFAULT_CLASSIFICATION_CONFIG
+  const tmdb = classification.tmdb || {}
+  lines.push(
+    'classification:',
+    '  tmdb:',
+    `    enabled: ${Boolean(tmdb.enabled)}`,
+    `    apiKey: "${tmdb.apiKey || ''}"`,
+    `    baseUrl: ${tmdb.baseUrl || DEFAULT_TMDB_BASE_URL}`,
+    `    language: ${tmdb.language || DEFAULT_TMDB_LANGUAGE}`
+  )
 
   lines.push(
     'logging:',

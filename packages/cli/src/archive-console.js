@@ -1,6 +1,7 @@
 import { createServer } from '#http'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
+import { resolveTmdbOptions } from './settings.js'
 
 function parseForm(body) {
   const params = new URLSearchParams(body)
@@ -11,6 +12,23 @@ function parseForm(body) {
     title: params.get('title') || '',
     description: params.get('description') || '',
     publish: params.get('publish') !== 'false'
+  }
+}
+
+function parseCreatorForm(body) {
+  const params = new URLSearchParams(body)
+  return {
+    url: params.get('url') || '',
+    label: params.get('label') || '',
+    publish: params.get('publish') !== 'false'
+  }
+}
+
+function parseTmdbForm(body) {
+  const params = new URLSearchParams(body)
+  return {
+    apiKey: params.get('apiKey') || '',
+    enabled: params.get('enabled') === 'true' || params.get('enabled') === 'on'
   }
 }
 
@@ -124,10 +142,26 @@ export async function createArchiveConsole({
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
   const manager = createArchiveManager({ store, downloader, publisher, logger, onCompleted: (job) => service.publishArchiveJobToFeed?.(job) })
 
+  function creatorsView() {
+    const creators = service.creators?.getCreators?.() || []
+    return [...creators].sort((a, b) => (Number(b.videosUnseeded || 0) - Number(a.videosUnseeded || 0)) || (Number(b.videosArchived || 0) - Number(a.videosArchived || 0)))
+  }
+
+  function tmdbView() {
+    const opts = service.settings
+      ? resolveTmdbOptions(service.config || {}, service.settings)
+      : { enabled: false, apiKey: '' }
+    return { enabled: Boolean(opts.enabled), hasKey: Boolean(opts.apiKey) }
+  }
+
   async function model() {
+    const status = service.getStatus?.() || {}
     return {
-      status: service.getStatus?.().runtime || {},
-      jobs: await store.listJobs()
+      status: status.runtime || {},
+      jobs: await store.listJobs(),
+      creators: creatorsView(),
+      unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
+      tmdb: tmdbView()
     }
   }
 
@@ -157,6 +191,36 @@ export async function createArchiveConsole({
         return
       }
 
+      if (req.method === 'GET' && req.url === '/creators.json') {
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({
+          schema: 'peartube.relayCreators',
+          version: 1,
+          updatedAt: Date.now(),
+          creators: creatorsView()
+        }, null, 2))
+        return
+      }
+
+      if (req.method === 'GET' && req.url === '/unseeded.json') {
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({
+          schema: 'peartube.relayUnseededTargets',
+          version: 1,
+          updatedAt: Date.now(),
+          targets: service.getCreatorTargets?.({ limit: 50 }) || []
+        }, null, 2))
+        return
+      }
+
       if (req.method === 'GET' && req.url === '/catalog.json') {
         const channels = service.catalog?.getChannels?.() || []
         const catalogChannels = await buildCatalogChannels({
@@ -183,6 +247,26 @@ export async function createArchiveConsole({
         const form = parseForm(await collectBody(req))
         await manager.enqueue(form)
         manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/creators') {
+        const form = parseCreatorForm(await collectBody(req))
+        if (typeof service.addCreatorSource === 'function') {
+          service.addCreatorSource(form).catch((err) => logger?.archive?.error?.('Add creator failed', { error: err?.message || String(err) }))
+        }
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/settings/tmdb') {
+        const form = parseTmdbForm(await collectBody(req))
+        if (typeof service.setTmdbSettings === 'function') {
+          await service.setTmdbSettings(form)
+        }
         res.writeHead(303, { location: '/' })
         res.end()
         return

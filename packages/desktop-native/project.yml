@@ -208,6 +208,8 @@ targets:
       - path: Extensions/MediaFormatReader/Sources
     entitlements:
       path: Extensions/MediaFormatReader/Resources/PearTubeMediaFormatReader.entitlements
+      properties:
+        com.apple.developer.mediaextension.formatreader: true
     dependencies:
       - sdk: MediaExtension.framework
       - sdk: AVFoundation.framework
@@ -241,6 +243,8 @@ targets:
       - path: Extensions/MediaVideoDecoder/Sources
     entitlements:
       path: Extensions/MediaVideoDecoder/Resources/PearTubeSupplementalVideoDecoder.entitlements
+      properties:
+        com.apple.developer.mediaextension.videodecoder: true
     dependencies:
       - sdk: MediaExtension.framework
       - sdk: AVFoundation.framework

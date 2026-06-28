@@ -21,6 +21,7 @@ export const RELAY_STATUS_FILENAME = 'relay-status.json'
 export const RELAY_CREATORS_FILENAME = 'relay-creators.json'
 export const RELAY_CLASSIFICATION_FILENAME = 'relay-classification.json'
 export const RELAY_SETTINGS_FILENAME = 'relay-settings.json'
+export const RELAY_TRUSTED_CLIENTS_FILENAME = 'relay-trusted-clients.json'
 
 export const DEFAULT_TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 export const DEFAULT_TMDB_LANGUAGE = 'en-US'

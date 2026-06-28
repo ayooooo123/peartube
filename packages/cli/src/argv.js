@@ -106,6 +106,16 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--key') {
+      flags.key = consumeValue()
+      continue
+    }
+
+    if (arg === '--label') {
+      flags.label = consumeValue()
+      continue
+    }
+
     if (arg === '--channel') {
       pushFlag(flags, 'channel', consumeValue())
       continue

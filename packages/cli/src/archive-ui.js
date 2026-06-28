@@ -48,6 +48,8 @@ export function renderArchiveWebHome(model = {}) {
   const creators = Array.isArray(model.creators) ? model.creators : []
   const unseededTargets = Array.isArray(model.unseededTargets) ? model.unseededTargets : []
   const tmdb = model.tmdb || {}
+  const trustedClients = Array.isArray(model.trustedClients) ? model.trustedClients : []
+  const link = model.link || {}
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
   const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
 
@@ -70,6 +72,18 @@ export function renderArchiveWebHome(model = {}) {
           <span class="pill failed">${escapeHtml(target.videosUnseeded)} / ${escapeHtml(target.videosArchived)} unseeded</span>
         </li>`).join('')
     : '<li class="empty">Nothing to target — all tracked creator videos are seeded.</li>'
+
+  const clientRows = trustedClients.length
+    ? trustedClients.map((client) => `
+        <li>
+          <strong>${escapeHtml(client.label || 'Device')}</strong>
+          <code>${escapeHtml(client.key)}</code>
+          <form method="post" action="/clients/revoke" style="margin:0">
+            <input type="hidden" name="key" value="${escapeHtml(client.key)}">
+            <button type="submit" class="ghost">Revoke</button>
+          </form>
+        </li>`).join('')
+    : '<li class="empty">No linked devices yet. Authorize a creator\'s device key below.</li>'
   const rows = jobs.length
     ? jobs.map((job) => `
         <li>
@@ -101,6 +115,7 @@ export function renderArchiveWebHome(model = {}) {
     label { display: grid; gap: 6px; color: #c8d1e4; font-weight: 650; }
     input, textarea { width: 100%; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.14); background: #0c101a; color: #f5f7fb; border-radius: 12px; padding: 12px 13px; font: inherit; }
     button { justify-self: start; border: 0; border-radius: 999px; padding: 12px 18px; color: #071016; background: #9effd0; font-weight: 800; cursor: pointer; }
+    button.ghost { background: transparent; color: #ffabab; border: 1px solid rgba(255,255,255,0.2); padding: 6px 12px; }
     ul { padding: 0; list-style: none; display: grid; gap: 10px; }
     li { display: grid; gap: 6px; border-top: 1px solid rgba(255,255,255,0.08); padding: 14px 0; }
     .job-id, small, code { color: #91a0b8; }
@@ -154,6 +169,18 @@ export function renderArchiveWebHome(model = {}) {
       <h2>Unseeded targets</h2>
       <p>Creators with the most under-replicated content. Seed these first to maximise availability.</p>
       <ul>${targetRows}</ul>
+    </section>
+    <section class="catalog">
+      <h2>Linked creator devices</h2>
+      <p>Authorize a creator's device so this relay always mirrors their uploads and livestreams — guaranteeing their content has at least one peer. Paste the 64-character device key shown in their PearTube app.</p>
+      ${link.relayMirrorKey ? `<p>This relay's mirror key (creators' apps adopt this automatically over P2P):</p><code>${escapeHtml(link.relayMirrorKey)}</code>` : '<p><small>Relay mirror key appears once the blind peer is running.</small></p>'}
+      <form method="post" action="/clients">
+        <label>Creator device key<input name="key" required placeholder="64-character hex device key"></label>
+        <label>Device label (optional)<input name="label" placeholder="e.g. Alice's phone"></label>
+        <button type="submit">Authorize device</button>
+      </form>
+      <ul>${clientRows}</ul>
+      <p><small>New authorizations take effect when the relay next starts.</small></p>
     </section>
     <section class="catalog">
       <h2>Content classification (TMDB)</h2>

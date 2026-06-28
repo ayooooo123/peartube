@@ -9,6 +9,7 @@ import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
 import { RelayClassificationStore } from './classification/store.js'
 import { createTmdbClassifier } from './classification/tmdb.js'
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
+import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
 
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
@@ -45,6 +46,20 @@ export async function createRelayService({
     classificationPath: config.paths.classification
   })
   let classifier = createTmdbClassifier(resolveTmdbOptions(config, relaySettings))
+
+  // Merge persisted trusted client device keys into the blind-peer trusted set
+  // before the runtime (and its blind peer) is built, so authorized creator
+  // devices are mirrored on the next start.
+  const trustedClients = await TrustedClients.open({
+    storagePath: config.storage.path,
+    trustedClientsPath: config.paths.trustedClients
+  })
+  config.network = config.network || {}
+  config.network.trustedBlindPeerClients = mergeTrustedClientKeys(
+    config.network.trustedBlindPeerClients,
+    trustedClients.keys()
+  )
+
   const runtime = await runtimeFactory({ config, logger })
 
   let closed = false
@@ -191,7 +206,8 @@ export async function createRelayService({
       config,
       catalog: relayCatalog,
       runtimeStats: runtime.getNetworkStats?.() || {},
-      creators: relayCreators.getCreators()
+      creators: relayCreators.getCreators(),
+      trustedClientsCount: trustedClients.list().length
     })
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
@@ -538,8 +554,48 @@ export async function createRelayService({
     creators: relayCreators,
     classificationStore,
     settings: relaySettings,
+    trustedClients,
     getClassifier() {
       return classifier
+    },
+    getTrustedClients() {
+      return trustedClients.list()
+    },
+    // Authorize a creator's device to delegate uploads to this relay's blind
+    // peer. Persisted immediately; merged into the live trusted set on the next
+    // relay start (and best-effort live-applied if the runtime supports it).
+    async authorizeClient({ key, label = null } = {}) {
+      const record = await trustedClients.add({ key, label })
+      config.network.trustedBlindPeerClients = mergeTrustedClientKeys(
+        config.network.trustedBlindPeerClients,
+        trustedClients.keys()
+      )
+      const liveApplied = Boolean(await runtime.addTrustedBlindPeerClients?.([record.key]).catch?.(() => false))
+      logger.relay?.info?.('Authorized trusted client device', { key: record.key, label: record.label, liveApplied })
+      await persistStatus()
+      return { client: record, liveApplied }
+    },
+    async revokeClient(key) {
+      const removed = await trustedClients.remove(key)
+      if (removed) {
+        config.network.trustedBlindPeerClients = mergeTrustedClientKeys([], trustedClients.keys())
+        await persistStatus()
+      }
+      return { removed: Boolean(removed) }
+    },
+    // The descriptor a creator's app/QR needs to link this relay: the relay's
+    // blind-peer mirror key (which their client delegates uploads to). The
+    // mirror key is also auto-advertised over the P2P feed.
+    getLinkDescriptor() {
+      const status = service.getStatus?.() || {}
+      const blindPeer = status.runtime?.blindPeer || null
+      return {
+        schema: 'peartube.relayLink',
+        version: 1,
+        relayMirrorKey: blindPeer?.publicKey || null,
+        blindPeerEnabled: Boolean(blindPeer?.enabled),
+        trustedClients: trustedClients.list().length
+      }
     },
     async setTmdbSettings({ apiKey, enabled } = {}) {
       if (apiKey !== undefined) await relaySettings.set('tmdbApiKey', String(apiKey || '').trim())

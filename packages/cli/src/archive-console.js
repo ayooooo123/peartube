@@ -32,6 +32,14 @@ function parseTmdbForm(body) {
   }
 }
 
+function parseClientForm(body) {
+  const params = new URLSearchParams(body)
+  return {
+    key: params.get('key') || '',
+    label: params.get('label') || ''
+  }
+}
+
 async function collectBody(req) {
   return new Promise((resolve, reject) => {
     let body = ''
@@ -161,7 +169,9 @@ export async function createArchiveConsole({
       jobs: await store.listJobs(),
       creators: creatorsView(),
       unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
-      tmdb: tmdbView()
+      tmdb: tmdbView(),
+      trustedClients: service.getTrustedClients?.() || [],
+      link: service.getLinkDescriptor?.() || null
     }
   }
 
@@ -221,6 +231,31 @@ export async function createArchiveConsole({
         return
       }
 
+      if (req.method === 'GET' && req.url === '/clients.json') {
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({
+          schema: 'peartube.relayTrustedClients',
+          version: 1,
+          updatedAt: Date.now(),
+          clients: service.getTrustedClients?.() || []
+        }, null, 2))
+        return
+      }
+
+      if (req.method === 'GET' && req.url === '/link.json') {
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify(service.getLinkDescriptor?.() || { schema: 'peartube.relayLink', version: 1, relayMirrorKey: null }, null, 2))
+        return
+      }
+
       if (req.method === 'GET' && req.url === '/catalog.json') {
         const channels = service.catalog?.getChannels?.() || []
         const catalogChannels = await buildCatalogChannels({
@@ -266,6 +301,26 @@ export async function createArchiveConsole({
         const form = parseTmdbForm(await collectBody(req))
         if (typeof service.setTmdbSettings === 'function') {
           await service.setTmdbSettings(form)
+        }
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/clients') {
+        const form = parseClientForm(await collectBody(req))
+        if (typeof service.authorizeClient === 'function') {
+          await service.authorizeClient(form).catch((err) => logger?.archive?.error?.('Authorize client failed', { error: err?.message || String(err) }))
+        }
+        res.writeHead(303, { location: '/' })
+        res.end()
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/clients/revoke') {
+        const form = parseClientForm(await collectBody(req))
+        if (typeof service.revokeClient === 'function') {
+          await service.revokeClient(form.key).catch((err) => logger?.archive?.error?.('Revoke client failed', { error: err?.message || String(err) }))
         }
         res.writeHead(303, { location: '/' })
         res.end()

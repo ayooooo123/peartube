@@ -20,6 +20,7 @@ import {
   RELAY_CATALOG_FILENAME,
   RELAY_CLASSIFICATION_FILENAME,
   RELAY_CREATORS_FILENAME,
+  RELAY_TRUSTED_CLIENTS_FILENAME,
   RELAY_MODE_PRIVATE,
   RELAY_MODE_PUBLIC,
   RELAY_POLICY_ALLOWLIST,
@@ -649,6 +650,7 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
     status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
     creators: join(runtimeDbPath, RELAY_CREATORS_FILENAME),
     classification: join(runtimeDbPath, RELAY_CLASSIFICATION_FILENAME),
+    trustedClients: join(runtimeDbPath, RELAY_TRUSTED_CLIENTS_FILENAME),
     corestore: join(config.storage.path, 'corestore'),
     archiveTmpPath: config.archive.tmpPath
   }

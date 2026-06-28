@@ -15,9 +15,14 @@ function fakeService(overrides = {}) {
     { creatorId: 'youtube:channel:UC1', name: 'One', videosArchived: 3, videosUnseeded: 2, classification: { movie: 1, tv: 0, unknown: 2 } },
     { creatorId: 'youtube:creator:solo', name: 'Solo', videosArchived: 1, videosUnseeded: 0, classification: { movie: 0, tv: 1, unknown: 0 } }
   ]
-  const calls = { addCreator: [], setTmdb: [] }
+  const trustedClients = []
+  const calls = { addCreator: [], setTmdb: [], authorize: [], revoke: [] }
   return {
     calls,
+    getTrustedClients() { return trustedClients },
+    getLinkDescriptor() { return { schema: 'peartube.relayLink', version: 1, relayMirrorKey: 'f'.repeat(64), blindPeerEnabled: true, trustedClients: trustedClients.length } },
+    async authorizeClient(form) { calls.authorize.push(form); trustedClients.push({ key: form.key, label: form.label }); return { client: { key: form.key }, liveApplied: false } },
+    async revokeClient(key) { calls.revoke.push(key); return { removed: true } },
     config: { classification: { tmdb: { baseUrl: 'https://api', language: 'en-US' } } },
     settings: {
       get(key, fallback = null) {
@@ -117,5 +122,51 @@ test('GET / renders the creators and TMDB sections', async function (t) {
     t.ok(html.includes('Unseeded targets'))
     t.ok(html.includes('Contribute a creator'))
     t.ok(html.includes('Content classification (TMDB)'))
+    t.ok(html.includes('Linked creator devices'))
   })
+})
+
+test('GET /link.json returns the relay link descriptor', async function (t) {
+  await withConsole(fakeService(), async (base) => {
+    const res = await fetch(`${base}/link.json`)
+    t.is(res.status, 200)
+    const body = await res.json()
+    t.is(body.schema, 'peartube.relayLink')
+    t.is(body.relayMirrorKey, 'f'.repeat(64))
+  })
+})
+
+test('POST /clients authorizes and GET /clients.json lists devices', async function (t) {
+  const service = fakeService()
+  const deviceKey = 'a'.repeat(64)
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/clients`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ key: deviceKey, label: 'Phone' }).toString(),
+      redirect: 'manual'
+    })
+    t.is(res.status, 303)
+    const listed = await (await fetch(`${base}/clients.json`)).json()
+    t.is(listed.schema, 'peartube.relayTrustedClients')
+    t.is(listed.clients[0].key, deviceKey)
+  })
+  t.is(service.calls.authorize.length, 1)
+  t.is(service.calls.authorize[0].key, deviceKey)
+})
+
+test('POST /clients/revoke forwards to revokeClient', async function (t) {
+  const service = fakeService()
+  const deviceKey = 'b'.repeat(64)
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/clients/revoke`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ key: deviceKey }).toString(),
+      redirect: 'manual'
+    })
+    t.is(res.status, 303)
+  })
+  t.is(service.calls.revoke.length, 1)
+  t.is(service.calls.revoke[0], deviceKey)
 })

@@ -23,6 +23,7 @@ import { Feather as ExpoFeather, Ionicons as ExpoIonicons } from '@expo/vector-i
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { useChannelMetaName } from '@/lib/useChannelMetaName'
+import { useCastBufferingDebounced } from '@/lib/useCastBufferingDebounced'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -404,30 +405,7 @@ export function VideoPlayerOverlay() {
   const effectiveProgress = effectiveDuration > 0 ? effectiveCurrentTime / effectiveDuration : 0
 
   // Debounce cast buffering — brief BUFFERING from HLS segment transitions shouldn't flash the overlay
-  const [castBufferingDebounced, setCastBufferingDebounced] = useState(false)
-  const castBufferingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    const isBuffering = castPlayback.state === 'buffering'
-    if (isBuffering) {
-      if (!castBufferingTimerRef.current) {
-        castBufferingTimerRef.current = setTimeout(() => {
-          setCastBufferingDebounced(true)
-        }, 2000)
-      }
-    } else {
-      if (castBufferingTimerRef.current) {
-        clearTimeout(castBufferingTimerRef.current)
-        castBufferingTimerRef.current = null
-      }
-      setCastBufferingDebounced(false)
-    }
-    return () => {
-      if (castBufferingTimerRef.current) {
-        clearTimeout(castBufferingTimerRef.current)
-        castBufferingTimerRef.current = null
-      }
-    }
-  }, [castPlayback.state])
+  const castBufferingDebounced = useCastBufferingDebounced(castPlayback.state)
 
   const showLoadingOverlay = isCasting ? castBufferingDebounced : isLoading
   const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'

@@ -282,9 +282,10 @@ exists as hooks in `components/video-player/hooks/`.
 **Proposal:** delegate to the existing `useVideoGestures`/`useMiniPlayerPosition`/
 `useLandscapeMode` hooks, deleting the inlined duplicates; target < ~800 lines.
 
-> **Slice 1 done:** extracted the self-contained channel-meta lookup (module cache
-> + effect) into `lib/useChannelMetaName.ts`; component 3,224 → 3,183. Validated
-> with app `tsc` (zero new type errors) and the rules-of-hooks structure.
+> **Slices done (1-2):** extracted the self-contained channel-meta lookup
+> (`lib/useChannelMetaName.ts`) and the cast-buffering debounce
+> (`lib/useCastBufferingDebounced.ts`) into hooks; component 3,224 → 3,161. Each
+> validated with app `tsc` (zero new type errors) and rules-of-hooks structure.
 > **Validation boundary:** the remaining bulk (mini-player drag gestures,
 > fullscreen/landscape animation, PiP geometry, control timers) is gesture- and
 > animation-coupled. CI does **not** build/typecheck the RN app and there are no

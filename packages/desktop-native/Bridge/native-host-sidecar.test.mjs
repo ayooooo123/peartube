@@ -78,7 +78,7 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
   assert.equal(fs.existsSync(bundlePath), true, 'sidecar bundle should exist after generate')
   assert.equal(fs.existsSync(bareRuntimePath), true, 'bare runtime should exist after generate')
 
-  try { fs.rmSync(debugLogPath, { force: true }) } catch {}
+  try { fs.rmSync(debugLogPath, { force: true }) } catch (error) { void error }
 
   const storagePath = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-native-sidecar-'))
   const child = spawn(bareRuntimePath, [bundlePath], {

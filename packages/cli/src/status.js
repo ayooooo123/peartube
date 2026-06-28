@@ -1,5 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from '#fs'
 import { retentionClassPriority } from './admission.js'
+import { rankUnseededTargets, summarizeCreatorsFromCatalog } from './creators.js'
+
+const UNSEEDED_TARGET_LIMIT = 25
 
 function sortEvictionCandidates(channels) {
   return [...channels].sort((left, right) => {
@@ -9,11 +12,37 @@ function sortEvictionCandidates(channels) {
   })
 }
 
-export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
+function summarizeCreators(creators) {
+  let videosArchived = 0
+  let videosUnseeded = 0
+  let classifiedMovies = 0
+  let classifiedTv = 0
+  for (const creator of creators) {
+    videosArchived += Number(creator.videosArchived || 0) || 0
+    videosUnseeded += Number(creator.videosUnseeded || 0) || 0
+    classifiedMovies += Number(creator.classification?.movie || 0) || 0
+    classifiedTv += Number(creator.classification?.tv || 0) || 0
+  }
+  return {
+    totalCreators: creators.length,
+    videosArchived,
+    videosUnseeded,
+    classifiedMovies,
+    classifiedTv
+  }
+}
+
+export function buildRelayStatus({ config, catalog, runtimeStats = {}, creators = null, trustedClientsCount = 0 }) {
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
+  const creatorRecords = Array.isArray(creators) ? creators : summarizeCreatorsFromCatalog(channels)
+  const unseededTargets = rankUnseededTargets(creatorRecords, { limit: UNSEEDED_TARGET_LIMIT })
 
   return {
+    creators: {
+      ...summarizeCreators(creatorRecords),
+      unseededTargets
+    },
     generatedAt: Date.now(),
     mode: config.mode,
     policy: config.policy,
@@ -40,6 +69,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
         online: runtimeStats.dht?.online ?? null
       },
       publicFeedDiscoveryJoined: Boolean(runtimeStats.publicFeedDiscoveryJoined),
+      trustedClients: Number(trustedClientsCount) || 0,
       blindPeer: runtimeStats.blindPeer || runtimeStats.seeding?.blindPeer || null,
       peerPoolJoined: Boolean(runtimeStats.peerPoolJoined),
       directPeerDial: runtimeStats.directPeerDial || null,
@@ -104,10 +134,19 @@ export function formatRelayStatus(status) {
     `network: offline=${status.runtime.swarmOffline} reason=${status.runtime.swarmOfflineReason || 'none'} listenResolved=${status.runtime.swarmListenResolved} peerPoolJoined=${status.runtime.peerPoolJoined} publicFeedDiscoveryJoined=${status.runtime.publicFeedDiscoveryJoined}`,
     `directPeerDial: discovered=${status.runtime.directPeerDial?.discoveredPeers || 0} pending=${status.runtime.directPeerDial?.pending || 0} queued=${status.runtime.directPeerDial?.queued || 0} skipped=${status.runtime.directPeerDial?.skipped || 0} failed=${status.runtime.directPeerDial?.failed || 0} connected=${status.runtime.directPeerDial?.connected || 0} lastReason=${status.runtime.directPeerDial?.lastReason || 'none'} lastError=${firstDialError || 'none'}`,
     `doctor: boundary=${status.runtime.doctor?.recommendedBoundary || 'unknown'} discovered=${status.runtime.doctor?.discovery?.discoveredPeers ?? status.runtime.directPeerDial?.discoveredPeers ?? 0} sockets=${status.runtime.doctor?.socket?.swarmConnections ?? status.runtime.connections ?? 0} feedConnections=${status.runtime.doctor?.feed?.feedConnections ?? status.runtime.feedConnections ?? 0}`,
-    `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0}`,
+    `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0} trustedClients=${status.runtime.trustedClients || 0}`,
     `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`,
-    `blobAvailability: playable=${status.runtime.seeding.blobAvailability?.playable || 0} unavailable=${status.runtime.seeding.blobAvailability?.unavailable || 0} unknown=${status.runtime.seeding.blobAvailability?.unknown || 0}`
+    `blobAvailability: playable=${status.runtime.seeding.blobAvailability?.playable || 0} unavailable=${status.runtime.seeding.blobAvailability?.unavailable || 0} unknown=${status.runtime.seeding.blobAvailability?.unknown || 0}`,
+    `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0} movies=${status.creators?.classifiedMovies || 0} tv=${status.creators?.classifiedTv || 0}`
   ]
+
+  const unseededTargets = Array.isArray(status.creators?.unseededTargets) ? status.creators.unseededTargets : []
+  if (unseededTargets.length > 0) {
+    lines.push('unseededTargets:')
+    for (const target of unseededTargets.slice(0, 10)) {
+      lines.push(`- ${target.name} (${target.videosUnseeded}/${target.videosArchived} unseeded)`)
+    }
+  }
 
   if (status.evictionCandidates.length > 0) {
     lines.push('evictionCandidates:')

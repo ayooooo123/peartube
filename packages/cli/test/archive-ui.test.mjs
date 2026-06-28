@@ -112,6 +112,56 @@ test('archive manager downloads, imports, publishes, and seeds videos through in
 })
 
 
+
+test('archive manager carries explicit TMDB identity into preview classification', async (t) => {
+  const metaDb = new Map()
+  const store = createArchiveJobStore({ metaDb: {
+    async get(key) { return metaDb.has(key) ? { value: metaDb.get(key) } : null },
+    async put(key, value) { metaDb.set(key, value) }
+  } })
+  const manager = createArchiveManager({
+    store,
+    downloader: {
+      async download(input) {
+        return { filePath: '/tmp/matrix.mp4', title: input.title, description: input.description, mimeType: 'video/mp4' }
+      }
+    },
+    publisher: {
+      async ensureAnonymousChannel() {
+        return { channelKey: 'drive-key', publicBeeKey: 'public-bee', channel: { blobs: true } }
+      },
+      async importVideo() {
+        return { videoId: 'video-1', metadata: { blobId: '0:4:0:1', blobsCoreKey: 'aa'.repeat(32) } }
+      },
+      async publishChannel() {},
+      async seedChannel() {}
+    }
+  })
+
+  const job = await manager.enqueue({
+    url: 'https://source.example/matrix.mp4',
+    channelName: 'The Matrix',
+    title: 'The Matrix',
+    description: 'Archived from TMDB Discover',
+    sourceType: 'tmdb',
+    sourceVideoId: 'tmdb:movie:603',
+    tmdbType: 'movie',
+    tmdbId: '603',
+    tmdbTitle: 'The Matrix',
+    tmdbYear: '1999',
+    tmdbPosterPath: '/matrix.jpg'
+  })
+  const result = await manager.runJob(job.id)
+
+  t.is(result.status, 'completed')
+  t.is(result.previewVideo.sourceVideoId, 'tmdb:movie:603')
+  t.is(result.previewVideo.classification.type, 'movie')
+  t.is(result.previewVideo.classification.tmdbId, 603)
+  t.is(result.previewVideo.classification.title, 'The Matrix')
+  t.is(result.previewVideo.classification.year, 1999)
+  t.is(result.previewVideo.classification.posterPath, '/matrix.jpg')
+})
+
 test('archive manager uses source video title and thumbnail without channel suffix in preview cards', async (t) => {
   const metaDb = new Map()
   const store = createArchiveJobStore({ metaDb: {
@@ -612,4 +662,29 @@ test('archive publisher opens separate relay-owned channels for source identitie
   t.is(oneB.channelKey, 'drive-1')
   t.is(uploadOptions[0].creatorSourceId, 'youtube:channel:UC1')
   t.is(uploadOptions[0].sourceVideoId, 'one')
+})
+
+
+test('archive WebUI renders episode-aware TMDB source IDs for Discover archive forms', async (t) => {
+  const html = renderArchiveWebHome({
+    discover: {
+      type: 'tv',
+      query: 'severance',
+      items: [{
+        type: 'tv',
+        tmdbId: 95396,
+        title: 'Severance',
+        year: 2022,
+        season: 2,
+        episode: 4,
+        posterPath: '/severance.jpg',
+        networkStatus: 'missing'
+      }]
+    }
+  })
+
+  t.ok(html.includes('name="tmdbSeason" value="2"'))
+  t.ok(html.includes('name="tmdbEpisode" value="4"'))
+  t.ok(html.includes('name="sourceVideoId" value="tmdb:tv:95396:s2:e4"'))
+  t.ok(html.includes('TV · S2 E4'))
 })

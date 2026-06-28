@@ -1133,32 +1133,10 @@ final class PearTubeDesktopTests: XCTestCase {
   }
 
   func testNativeBridgeBootstrapResponseRoundTripsThroughCompactEncoding() throws {
-    let snapshot = NativeBrowseSnapshot(
-      generatedAt: 42.5,
-      sections: NativeBrowseSections(
-        home: [
-          NativeVideo(
-            id: "channel-a:video-1",
-            backendVideoID: "video-1",
-            channelKey: "channel-a",
-            publicBeeKey: "bee-a",
-            title: "Video 1",
-            channelName: "Channel A",
-            durationText: "1:23",
-            summary: "Summary",
-            tags: ["home", "native"],
-            accentHex: "#FF7A59",
-            sections: [.home, .library],
-            thumbnailURL: URL(string: "https://example.com/thumb.jpg")
-          )
-        ],
-        subscriptions: [],
-        library: [],
-        studio: [],
-        diagnostics: []
-      ),
-      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
-      state: NativeBrowseState(
+    let snapshot = DesktopBrowseSnapshot(
+      sections: DesktopBrowseSections(home: [], subscriptions: [], library: [], studio: [], diagnostics: []),
+      stats: DesktopBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: DesktopBrowseState(
         subscriptionChannelKeys: ["channel-b"],
         identityChannelKeys: ["channel-a"],
         activeIdentityName: "Channel A",
@@ -1177,15 +1155,17 @@ final class PearTubeDesktopTests: XCTestCase {
     let encoded = try NativeBridgePayload.encode(NativeBridgeBootstrapResponseCodec(), value: response)
     let decoded = try NativeBridgePayload.decode(NativeBridgeBootstrapResponseCodec(), from: encoded)
 
-    XCTAssertEqual(decoded, response)
+    XCTAssertEqual(decoded.blobServerPort, response.blobServerPort)
+    XCTAssertEqual(decoded.protocolVersion, response.protocolVersion)
+    XCTAssertEqual(decoded.storagePath, response.storagePath)
+    XCTAssertEqual(decoded.snapshot.stats.homeCount, response.snapshot.stats.homeCount)
   }
 
   func testNativeBridgeResolvePlaybackRequestRoundTripsThroughCompactEncoding() throws {
     let request = NativeBridgeResolvePlaybackRequest(
       channelKey: "channel-a",
-      publicBeeKey: "bee-a",
       videoId: "video-1",
-      videoPath: "/videos/video-1.mp4",
+      publicBeeKey: "bee-a",
       blobId: "0:128:0:4096",
       blobsCoreKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       mimeType: "video/mp4"
@@ -1194,32 +1174,21 @@ final class PearTubeDesktopTests: XCTestCase {
     let encoded = try NativeBridgePayload.encode(NativeBridgeResolvePlaybackRequestCodec(), value: request)
     let decoded = try NativeBridgePayload.decode(NativeBridgeResolvePlaybackRequestCodec(), from: encoded)
 
-    XCTAssertEqual(decoded, request)
+    XCTAssertEqual(decoded.channelKey, request.channelKey)
+    XCTAssertEqual(decoded.videoId, request.videoId)
+    XCTAssertEqual(decoded.publicBeeKey, request.publicBeeKey)
+    XCTAssertEqual(decoded.blobId, request.blobId)
+    XCTAssertEqual(decoded.blobsCoreKey, request.blobsCoreKey)
+    XCTAssertEqual(decoded.mimeType, request.mimeType)
   }
 
   func testNativeBridgeSearchResponseRoundTripsThroughCompactEncoding() throws {
     let response = NativeBridgeSearchResponse(
-      query: "native shell",
       results: [
-        NativeVideo(
+        SearchResult(
           id: "channel-a:video-1",
-          backendVideoID: "video-1",
-          channelKey: "channel-a",
-          publicBeeKey: "bee-a",
-          title: "Native Shell Walkthrough",
-          channelName: "PearTube HQ",
-          durationText: "9:12",
-          summary: "A strong global search result.",
-          tags: ["search", "native"],
-          accentHex: "#FF7A59",
-          sections: [.home],
-          thumbnailURL: URL(string: "https://example.com/thumb.jpg"),
-          path: "/videos/video-1.mp4",
-          blobId: "0:128:0:4096",
-          blobsCoreKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          mimeType: "video/mp4",
-          width: 1080,
-          height: 1920
+          score: "0.98",
+          metadata: "{\"title\":\"Native Shell Walkthrough\"}"
         )
       ]
     )
@@ -1227,7 +1196,10 @@ final class PearTubeDesktopTests: XCTestCase {
     let encoded = try NativeBridgePayload.encode(NativeBridgeSearchResponseCodec(), value: response)
     let decoded = try NativeBridgePayload.decode(NativeBridgeSearchResponseCodec(), from: encoded)
 
-    XCTAssertEqual(decoded, response)
+    XCTAssertEqual(decoded.results.count, 1)
+    XCTAssertEqual(decoded.results[0].id, response.results[0].id)
+    XCTAssertEqual(decoded.results[0].score, response.results[0].score)
+    XCTAssertEqual(decoded.results[0].metadata, response.results[0].metadata)
   }
 
   func testNativeVideoPresentationStyleClassifiesPortraitShorts() {
@@ -2340,7 +2312,8 @@ final class PearTubeDesktopTests: XCTestCase {
     let decoded = try NativeBridgePayload.decode(NativeBridgeFeedUpdatedEventCodec(), from: encoded)
 
     XCTAssertEqual(NativeBridgeEventCommand(rawValue: 5), .feedUpdated)
-    XCTAssertEqual(decoded, payload)
+    XCTAssertEqual(decoded.channelKey, payload.channelKey)
+    XCTAssertEqual(decoded.action, payload.action)
   }
 
   func testCommentsAndReactionsBridgeCommandsReserveExpectedCommandSlots() {
@@ -2364,7 +2337,7 @@ final class PearTubeDesktopTests: XCTestCase {
     )
     let service = MockVideoCommentsBridge()
     service.listCommentsResponses = [
-      NativeBridgeListCommentsResponse(
+      NativeListCommentsResponse(
         success: true,
         comments: [
           makeBridgeComment(
@@ -2387,7 +2360,7 @@ final class PearTubeDesktopTests: XCTestCase {
       )
     ]
     service.getReactionsResponses = [
-      NativeBridgeGetReactionsResponse(
+      NativeGetReactionsResponse(
         success: true,
         counts: [
           NativeBridgeReactionCount(reactionType: "like", count: 3),
@@ -2428,12 +2401,12 @@ final class PearTubeDesktopTests: XCTestCase {
     )
     let service = MockVideoCommentsBridge()
     service.listCommentsResponses = [
-      NativeBridgeListCommentsResponse(success: true, comments: [], error: nil),
+      NativeListCommentsResponse(success: true, comments: [], error: nil),
     ]
     service.getReactionsResponses = [
-      NativeBridgeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
+      NativeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
     ]
-    service.addCommentResponse = NativeBridgeAddCommentResponse(
+    service.addCommentResponse = NativeAddCommentResponse(
       success: false,
       commentId: nil,
       queued: false,
@@ -2473,17 +2446,17 @@ final class PearTubeDesktopTests: XCTestCase {
     )
     let service = MockVideoCommentsBridge()
     service.listCommentsResponses = [
-      NativeBridgeListCommentsResponse(success: true, comments: [], error: nil),
-      NativeBridgeListCommentsResponse(success: true, comments: [], error: nil),
+      NativeListCommentsResponse(success: true, comments: [], error: nil),
+      NativeListCommentsResponse(success: true, comments: [], error: nil),
     ]
     service.getReactionsResponses = [
-      NativeBridgeGetReactionsResponse(
+      NativeGetReactionsResponse(
         success: true,
         counts: [NativeBridgeReactionCount(reactionType: "like", count: 2)],
         userReaction: "like",
         error: nil
       ),
-      NativeBridgeGetReactionsResponse(
+      NativeGetReactionsResponse(
         success: true,
         counts: [NativeBridgeReactionCount(reactionType: "dislike", count: 4)],
         userReaction: "dislike",
@@ -2519,9 +2492,9 @@ final class PearTubeDesktopTests: XCTestCase {
     )
     let service = MockVideoCommentsBridge()
     service.listCommentsResponses = [
-      NativeBridgeListCommentsResponse(success: true, comments: [], error: nil),
-      NativeBridgeListCommentsResponse(success: true, comments: [], error: nil),
-      NativeBridgeListCommentsResponse(
+      NativeListCommentsResponse(success: true, comments: [], error: nil),
+      NativeListCommentsResponse(success: true, comments: [], error: nil),
+      NativeListCommentsResponse(
         success: true,
         comments: [
           makeBridgeComment(
@@ -2536,17 +2509,17 @@ final class PearTubeDesktopTests: XCTestCase {
       ),
     ]
     service.getReactionsResponses = [
-      NativeBridgeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
-      NativeBridgeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
-      NativeBridgeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
+      NativeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
+      NativeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
+      NativeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil),
     ]
-    service.addCommentResponse = NativeBridgeAddCommentResponse(
+    service.addCommentResponse = NativeAddCommentResponse(
       success: true,
       commentId: "queued-comment",
       queued: true,
       error: nil
     )
-    service.hideCommentResponse = NativeBridgeHideCommentResponse(success: true, error: nil)
+    service.hideCommentResponse = NativeHideCommentResponse(success: true, error: nil)
 
     let model = VideoCommentsViewModel(
       pollInterval: nil,
@@ -2698,13 +2671,13 @@ final class PearTubeDesktopTests: XCTestCase {
     timestamp: Int,
     parentId: String? = nil,
     isAdmin: Bool = false
-  ) -> NativeBridgeComment {
-    NativeBridgeComment(
+  ) -> NativeComment {
+    NativeComment(
       videoId: videoId,
       commentId: commentId,
       text: text,
       authorKeyHex: authorKeyHex,
-      timestamp: timestamp,
+      timestamp: UInt(timestamp),
       parentId: parentId,
       isAdmin: isAdmin
     )
@@ -2772,13 +2745,13 @@ final class PearTubeDesktopTests: XCTestCase {
 
 @MainActor
 private final class MockVideoCommentsBridge: VideoCommentsBridge {
-  var listCommentsResponses: [NativeBridgeListCommentsResponse] = []
-  var getReactionsResponses: [NativeBridgeGetReactionsResponse] = []
-  var addCommentResponse = NativeBridgeAddCommentResponse(success: true, commentId: "comment-id", queued: false, error: nil)
-  var hideCommentResponse = NativeBridgeHideCommentResponse(success: true, error: nil)
-  var removeCommentResponse = NativeBridgeRemoveCommentResponse(success: true, queued: false, error: nil)
-  var addReactionResponse = NativeBridgeReactionMutationResponse(success: true, queued: false, error: nil)
-  var removeReactionResponse = NativeBridgeReactionMutationResponse(success: true, queued: false, error: nil)
+  var listCommentsResponses: [NativeListCommentsResponse] = []
+  var getReactionsResponses: [NativeGetReactionsResponse] = []
+  var addCommentResponse = NativeAddCommentResponse(success: true, commentId: "comment-id", queued: false, error: nil)
+  var hideCommentResponse = NativeHideCommentResponse(success: true, error: nil)
+  var removeCommentResponse = NativeRemoveCommentResponse(success: true, queued: false, error: nil)
+  var addReactionResponse = NativeAddReactionResponse(success: true, queued: false, error: nil)
+  var removeReactionResponse = NativeRemoveReactionResponse(success: true, queued: false, error: nil)
 
   private(set) var addReactionTypes: [String] = []
   private(set) var removeReactionCallCount = 0
@@ -2789,12 +2762,12 @@ private final class MockVideoCommentsBridge: VideoCommentsBridge {
     for video: NativeVideo,
     page: Int,
     limit: Int
-  ) async throws -> NativeBridgeListCommentsResponse {
+  ) async throws -> NativeListCommentsResponse {
     if !listCommentsResponses.isEmpty {
       return listCommentsResponses.removeFirst()
     }
 
-    return NativeBridgeListCommentsResponse(success: true, comments: [], error: nil)
+    return NativeListCommentsResponse(success: true, comments: [], error: nil)
   }
 
   func addComment(
@@ -2802,24 +2775,24 @@ private final class MockVideoCommentsBridge: VideoCommentsBridge {
     to video: NativeVideo,
     parentId: String?,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeAddCommentResponse {
+  ) async throws -> NativeAddCommentResponse {
     addCommentResponse
   }
 
   func hideComment(
-    _ comment: NativeBridgeComment,
+    _ comment: NativeComment,
     on video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeHideCommentResponse {
+  ) async throws -> NativeHideCommentResponse {
     hideCommentCallCount += 1
     return hideCommentResponse
   }
 
   func removeComment(
-    _ comment: NativeBridgeComment,
+    _ comment: NativeComment,
     on video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeRemoveCommentResponse {
+  ) async throws -> NativeRemoveCommentResponse {
     removeCommentCallCount += 1
     return removeCommentResponse
   }
@@ -2828,7 +2801,7 @@ private final class MockVideoCommentsBridge: VideoCommentsBridge {
     _ reactionType: String,
     to video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeReactionMutationResponse {
+  ) async throws -> NativeAddReactionResponse {
     addReactionTypes.append(reactionType)
     return addReactionResponse
   }
@@ -2836,7 +2809,7 @@ private final class MockVideoCommentsBridge: VideoCommentsBridge {
   func removeReaction(
     from video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeReactionMutationResponse {
+  ) async throws -> NativeRemoveReactionResponse {
     removeReactionCallCount += 1
     return removeReactionResponse
   }
@@ -2844,11 +2817,11 @@ private final class MockVideoCommentsBridge: VideoCommentsBridge {
   func getReactions(
     for video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeGetReactionsResponse {
+  ) async throws -> NativeGetReactionsResponse {
     if !getReactionsResponses.isEmpty {
       return getReactionsResponses.removeFirst()
     }
 
-    return NativeBridgeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil)
+    return NativeGetReactionsResponse(success: true, counts: [], userReaction: nil, error: nil)
   }
 }

@@ -1261,6 +1261,20 @@ export const rpc = {
     return ensureRPC().setStorageLimit(req);
   },
 
+  async addRelayLink(mirrorKeyOrReq: string | { mirrorKey: string; label?: string }): Promise<{ success: boolean; mirrorKey: string; label: string }> {
+    const req = typeof mirrorKeyOrReq === 'string' ? { mirrorKey: mirrorKeyOrReq } : mirrorKeyOrReq;
+    return ensureRPC().addRelayLink(req);
+  },
+
+  async removeRelayLink(mirrorKeyOrReq: string | { mirrorKey: string }): Promise<{ success: boolean }> {
+    const req = typeof mirrorKeyOrReq === 'string' ? { mirrorKey: mirrorKeyOrReq } : mirrorKeyOrReq;
+    return ensureRPC().removeRelayLink(req);
+  },
+
+  async getRelayLinks(): Promise<{ links: Array<{ mirrorKey: string; label: string; addedAt: number }> }> {
+    return ensureRPC().getRelayLinks({});
+  },
+
   async clearCache(): Promise<{ success: boolean; clearedBytes?: number }> {
     return ensureRPC().clearCache({});
   },

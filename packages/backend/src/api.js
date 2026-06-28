@@ -11,6 +11,7 @@ import z32 from 'z32';
 import c from 'compact-encoding';
 import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, isPlaybackActive as storageIsPlaybackActive, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
+import { addRelayLink as persistAddRelayLink, removeRelayLink as persistRemoveRelayLink, loadRelayLinks } from './relay-links.js';
 import { subscribeBlobPlayhead } from './blob-range-priority.js';
 import { beginPlaybackTiming, markPlaybackTiming } from './playback-timing.js';
 import { SemanticFinder } from './search/semantic-finder.js';
@@ -3480,6 +3481,53 @@ export function createApi({
         return { success: true };
       }
       return { success: false };
+    },
+
+    /**
+     * Link a relay by its blind-peer mirror key. The device delegates its
+     * uploads/livestreams to the relay (so they always have a peer) and treats
+     * it as a durable offload anchor. Persisted so it survives restarts.
+     * @returns {Promise<{ success: boolean, mirrorKey: string, label: string }>}
+     */
+    async addRelayLink(req = {}) {
+      const mirrorKey = typeof req === 'string' ? req : req?.mirrorKey;
+      const label = (req && typeof req === 'object') ? (req.label ?? null) : null;
+      const record = await persistAddRelayLink(ctx.metaDb, { mirrorKey, label });
+      console.log('[API] ADD_RELAY_LINK:', record.mirrorKey.slice(0, 16), record.label || '');
+      // Apply live: delegate uploads to the relay and treat it as a durable anchor.
+      try { ctx.blindPeering?.addMirrorKeys?.(record.mirrorKey); } catch (err) {
+        console.warn('[API] addRelayLink live mirror apply failed:', err?.message || String(err));
+      }
+      if (!Array.isArray(ctx.trustedRelayKeys)) ctx.trustedRelayKeys = [];
+      if (!ctx.trustedRelayKeys.includes(record.mirrorKey)) ctx.trustedRelayKeys.push(record.mirrorKey);
+      try { seedingManager?.remirrorAllSeeds?.(); } catch (err) {
+        console.warn('[API] addRelayLink remirror failed:', err?.message || String(err));
+      }
+      return { success: true, mirrorKey: record.mirrorKey, label: record.label || '' };
+    },
+
+    /**
+     * Unlink a previously-linked relay. Removes it from the persisted list and
+     * the durable-anchor set (the live mirror delegation clears on next start).
+     * @returns {Promise<{ success: boolean }>}
+     */
+    async removeRelayLink(req = {}) {
+      const mirrorKey = typeof req === 'string' ? req : req?.mirrorKey;
+      const removed = await persistRemoveRelayLink(ctx.metaDb, mirrorKey);
+      if (removed && Array.isArray(ctx.trustedRelayKeys)) {
+        const key = String(mirrorKey || '').toLowerCase();
+        ctx.trustedRelayKeys = ctx.trustedRelayKeys.filter((k) => k !== key);
+      }
+      return { success: Boolean(removed) };
+    },
+
+    /**
+     * List the relays this device has linked.
+     * @returns {Promise<{ links: Array<{ mirrorKey: string, label: string, addedAt: number }> }>}
+     */
+    async getRelayLinks() {
+      const list = await loadRelayLinks(ctx.metaDb);
+      return { links: list.map((link) => ({ mirrorKey: link.mirrorKey, label: link.label || '', addedAt: link.addedAt || 0 })) };
     },
 
     /**

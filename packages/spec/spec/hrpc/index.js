@@ -254,7 +254,13 @@ const methods = new Map([
   ['@peartube/transcode-status', 122],
   [122, '@peartube/transcode-status'],
   ['@peartube/event-transcode-progress', 123],
-  [123, '@peartube/event-transcode-progress']
+  [123, '@peartube/event-transcode-progress'],
+  ['@peartube/add-relay-link', 124],
+  [124, '@peartube/add-relay-link'],
+  ['@peartube/remove-relay-link', 125],
+  [125, '@peartube/remove-relay-link'],
+  ['@peartube/get-relay-links', 126],
+  [126, '@peartube/get-relay-links']
 ])
 
 class HRPC {
@@ -385,7 +391,10 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
+      ['@peartube/add-relay-link', getEncoding('@peartube/add-relay-link-request')],
+      ['@peartube/remove-relay-link', getEncoding('@peartube/remove-relay-link-request')],
+      ['@peartube/get-relay-links', getEncoding('@peartube/get-relay-links-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -499,7 +508,10 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
+      ['@peartube/add-relay-link', getEncoding('@peartube/add-relay-link-response')],
+      ['@peartube/remove-relay-link', getEncoding('@peartube/remove-relay-link-response')],
+      ['@peartube/get-relay-links', getEncoding('@peartube/get-relay-links-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1094,6 +1106,18 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
+  async addRelayLink(args) {
+    return this._call('@peartube/add-relay-link', args)
+  }
+
+  async removeRelayLink(args) {
+    return this._call('@peartube/remove-relay-link', args)
+  }
+
+  async getRelayLinks(args) {
+    return this._call('@peartube/get-relay-links', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1588,6 +1612,18 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
+  onAddRelayLink(responseFn) {
+    this._handlers['@peartube/add-relay-link'] = responseFn
+  }
+
+  onRemoveRelayLink(responseFn) {
+    this._handlers['@peartube/remove-relay-link'] = responseFn
+  }
+
+  onGetRelayLinks(responseFn) {
+    this._handlers['@peartube/get-relay-links'] = responseFn
   }
 
   _requestIsStream(command) {

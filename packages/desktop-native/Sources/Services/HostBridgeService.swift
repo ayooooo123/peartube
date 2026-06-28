@@ -919,7 +919,12 @@ final class HostBridgeService {
         )
       }
 
-      let url = URL(string: response.url)
+      guard let urlString = response.url, !urlString.isEmpty else {
+        appendLog("Playback resolution returned no URL.")
+        return nil
+      }
+
+      let url = URL(string: urlString)
       resolvedPlaybackURL = url
       appendLog("Playback URL resolved.")
       return url

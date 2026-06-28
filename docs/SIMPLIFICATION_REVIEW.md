@@ -117,11 +117,20 @@ uses it. Kept.
 
 ## Tier 3 — Proposed: de-duplication & decomposition
 
-### 7. `api.js` is a 4,888-line god-file
+### 7. `api.js` is a 4,888-line god-file ⏳ IN PROGRESS
 A single `createApi` returning a ~3,700-line object literal with ~110 methods
 spanning channels, playback, livestream, personal store, feed, seeding, pairing,
 search, comments, recommendations. `prefetchVideo` alone is **~780 lines**
 (2842-3623, ~16% of the file).
+
+> **Slice 1 done:** the 7 comments/reactions methods extracted to
+> `api/comments.js` as `createCommentsApi({ refreshSearchIndex })`, spread into
+> the api object (so `this._getCommentsAutobase`, which stays in api.js, still
+> resolves). Chosen first because it's the cleanest group (single injected dep)
+> **and** CI's `api-comments-hyperdb.test.mjs` exercises it. Each further slice
+> lands as its own CI-gated commit. The pattern: methods that touch only `this.*`
+> + a small dep set extract cleanly; heavily closure-coupled methods (e.g.
+> `prefetchVideo`, `getCommentsDebugInfo`) stay until they're decomposed in place.
 **Proposal:** split along the comment-banner sections that already exist into
 `api/{personal,comments,feed,seeding,pairing,search}.js`, each taking the shared
 closure deps and returning its method group; `createApi` becomes

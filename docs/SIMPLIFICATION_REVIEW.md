@@ -139,6 +139,9 @@ search, comments, recommendations. `prefetchVideo` alone is **~780 lines**
 > moved to `api/feed.js`, `api/seeding.js`, and `api/pairing.js`. Storage/offload
 > remains in `api.js` because it shares active playback range state and upload
 > offload helpers.
+> **Slice 6 done:** Recommendations/watch-event operations moved to
+> `api/recommendations.js`; the module injects the multi-writer guard, channel
+> loader, and semantic-finder initializer explicitly.
 **Proposal:** split along the comment-banner sections that already exist into
 `api/{personal,comments,feed,seeding,pairing,search}.js`, each taking the shared
 closure deps and returning its method group; `createApi` becomes

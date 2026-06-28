@@ -12,10 +12,3 @@ test('mobile backend entry wires universal core to the real backend orchestrator
   assert.match(source, /import \{ createBackendContext \} from '\.\/orchestrator\.js'/)
   assert.match(source, /createUniversalCore\(\{[\s\S]*?createBackendContext,[\s\S]*?onStatsUpdate: onVideoStats,[\s\S]*?\}\)/)
 })
-
-test('embedded backend runtime wires universal core to the real backend orchestrator', async () => {
-  const source = await readSource('../src/runtime.js')
-
-  assert.match(source, /import \{ createBackendContext \} from '\.\/orchestrator\.js'/)
-  assert.match(source, /createUniversalCore\(\{[\s\S]*?createBackendContext,[\s\S]*?onStatsUpdate: onVideoStats,[\s\S]*?\}\)/)
-})

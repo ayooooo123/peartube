@@ -93,15 +93,19 @@ descriptor-&-proof-ingestion economy (`scorePeer`, `recordUsefulWork`,
 `budget-manager.js`, and the `ingest*`/`score*`/native-transition code to an
 unmerged branch until a real call site exists. Reclaims most of the file + 2 helpers.
 
-### 5. Dead `createBackendRuntime` (~180 LOC near-duplicate of `createBackend`)
-`runtime.js` `createBackendRuntime` duplicates `backend-entry.js` `createBackend`
-almost line-for-line and has **no runtime callers** (only an `index.js`
-re-export). The real entrypoint everywhere is `createBackend`.
-**Proposal:** delete `createBackendRuntime` + its `index.js` export. Keep
-`buildSharedSystemHandlers`/`attachSharedAppHandlers`/`requireHostProtocolVersion`
-(used by tests + `backend-entry.js`) — move them into `backend-entry.js` or a small
-`shared-handlers-setup.js`, then drop `runtime.js`. (Adjust the source-text
-regression tests that read `runtime.js`.)
+### 5. Dead `createBackendRuntime` (~180 LOC near-duplicate of `createBackend`) ✅ DONE
+`runtime.js` `createBackendRuntime` duplicated `backend-entry.js` `createBackend`
+almost line-for-line with **no runtime callers** (only an `index.js` re-export).
+**Done (with explicit go-ahead to remove its guard test):** deleted
+`createBackendRuntime` + the `export default { createBackendRuntime }` + the
+`index.js` re-export, and the now-unused imports (`createBackendContext`,
+`createUniversalCore`, `appendDebugLine`) and helpers (`noop`, `toCallback`).
+runtime.js 350 → 166 lines, keeping the three live exports
+(`requireHostProtocolVersion`, `buildSharedSystemHandlers`,
+`attachSharedAppHandlers`). Removed the `mobile-backend-context-wiring.test.mjs`
+"embedded backend runtime" case that pinned its wiring (kept the sibling case that
+guards the live `createBackend`); the `swarmListenResolved` / no-`@peartube/host`
+guards still hold.
 
 ### 6. Dead Hyperbee fallback paths in `public-channel-bee.js` ✅ DONE (partial)
 `this.bee` is initialized to `null` and **never assigned** (only `this.db` is, in
@@ -218,11 +222,11 @@ primitives).
 the placeholder `stores/`, dropped their `index.ts` re-export and the `./components`
 / `./stores` subpath exports from `package.json`. `@peartube/core` is now
 hooks + types + utils (design tokens).
-**Kept (correction):** `hooks/useP2PVideo.ts` — although no app screen imports it,
-`mobile-video-stats-lifecycle-regression.test.mjs` reads its source and asserts on
-its request-generation race guards. Like `createBackendRuntime` (#5), it's a
-test-guarded "dead-looking" path; removing it means removing its guard test, which
-needs an explicit intent decision, not a mechanical delete.
+**Update — `hooks/useP2PVideo.ts` now removed too (with explicit go-ahead):** no
+app screen imported it; deleted the hook, the (now-empty) `hooks/` barrel, the
+`./hooks` subpath export, and the `mobile-video-stats-lifecycle-regression.test.mjs`
+case that pinned its source (the file's other 6 cases are untouched). `@peartube/core`
+is now just types + utils (design tokens).
 
 ### 14. Collapse the third method-name registry (`core/utils` `CMD`/`RPC_METHODS`) ✅ DONE (the dead map)
 Method names live in three places: the HRPC schema (`spec/`), the per-platform

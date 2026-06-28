@@ -16,7 +16,6 @@ export {
 export { PublicFeed, PublicFeed as PublicFeedManager } from './public-feed.js';
 
 // Modular facades for smaller backend surfaces
-export { createBackendRuntime } from './runtime.js';
 export * as feed from './feed.js';
 // Bare-only media, transcode, and cast surfaces stay available through package
 // subpath exports. Do not re-export them from the package root: root import must

@@ -124,16 +124,6 @@ test('mobile watch page clears stale local stats only when starting a different 
   )
 })
 
-test('useP2PVideo gates async completions by request generation', () => {
-  const source = read('../core/src/hooks/useP2PVideo.ts')
-
-  assert.match(source, /const requestGenerationRef = useRef\(0\)/, 'hook should use a monotonic request generation')
-  assert.match(source, /cleanup\(\);\s*const requestId = requestGenerationRef\.current \+ 1[\s\S]*const isCurrentRequest = \(\) => requestGenerationRef\.current === requestId/, 'each start should clear old polling and capture its own generation')
-  assert.match(source, /if \(!isCurrentRequest\(\)\) return/, 'async prepare/get-url/get-stats completions should be gated')
-  assert.match(source, /const interval = setInterval[\s\S]*const stopThisInterval = \(\) => \{[\s\S]*if \(pollIntervalRef\.current === interval\)/, 'polling ticks should own and clear only their own interval')
-  assert.match(source, /requestGenerationRef\.current !== requestId \|\| Date\.now\(\) - startTimeRef\.current > opts\.pollTimeout/, 'polling ticks should ignore stale generations')
-})
-
 test('watch page playback prepares the backend before opening a URL', () => {
   const source = read('app/video/[id].tsx')
   const prepareStart = source.indexOf('const result = await rpc.preparePlayback(playbackRequest)')

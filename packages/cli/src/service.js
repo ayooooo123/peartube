@@ -201,12 +201,13 @@ export async function createRelayService({
   }
 
   async function persistStatus() {
-    await syncCreators()
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
       runtimeStats: runtime.getNetworkStats?.() || {},
-      creators: relayCreators.getCreators(),
+      // Derive creator stats from the catalog (in-memory, always fresh). The
+      // persisted creators DB is refreshed off the hot path (heartbeat, archive
+      // completion, add-creator) for the console/CLI views.
       trustedClientsCount: trustedClients.list().length
     })
 
@@ -537,6 +538,7 @@ export async function createRelayService({
       source: 'archive-job',
       retentionClass: 'private'
     }).catch(() => {})
+    await syncCreators()
     await persistStatus()
     return { published: true, previewVideos: previewVideos.length }
   }
@@ -687,6 +689,11 @@ export async function createRelayService({
         }
       }
 
+      // Populate the persisted creators DB from the restored catalog so the
+      // console/CLI creator views are accurate on boot (then refreshed on the
+      // heartbeat and on archive completion).
+      await syncCreators()
+
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
@@ -737,6 +744,7 @@ export async function createRelayService({
 
       heartbeatTimer = setIntervalFn(async () => {
         try {
+          await syncCreators()
           const heartbeatStatus = await persistStatus()
           const directPeerDial = heartbeatStatus.runtime.directPeerDial || {}
           if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {

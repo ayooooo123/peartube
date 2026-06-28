@@ -22,7 +22,7 @@ export function parseTitleForTmdb(rawTitle) {
 
   let query = original
     // Strip bracketed/parenthesised qualifiers: (2019), [1080p], etc.
-    .replace(/[\[(][^\])]*[\])]/g, ' ')
+    .replace(/[([][^)\]]*[)\]]/g, ' ')
     .replace(/[._]+/g, ' ')
     .replace(NOISE_RE, ' ')
 

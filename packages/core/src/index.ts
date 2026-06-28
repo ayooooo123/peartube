@@ -1,11 +1,8 @@
 /**
  * PearTube Core
  *
- * Shared UI components, hooks, stores, types, and utilities.
+ * Shared hooks, types, and utilities (incl. design tokens) for PearTube.
  */
-
-// Components
-export * from './components';
 
 // Hooks
 export * from './hooks';
@@ -15,6 +12,3 @@ export * from './types';
 
 // Utilities
 export * from './utils';
-
-// Stores (when available)
-// export * from './stores';

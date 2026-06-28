@@ -209,13 +209,20 @@ verbatim across `start-host.js` and `create-client.js`.
 and the error contract. Kills a package boundary, the re-export layer, and the
 cross-package helper duplication in one move.
 
-### 13. Shrink `@peartube/core` to types + tokens
+### 13. Shrink `@peartube/core` to types + tokens ✅ DONE (partial)
 937 LOC, but every one of its 17 import sites uses either `import type {…}` or
 `colors/theme`. The shipped `components/` (Button/Card/Input/Text), `stores/`, and
 `hooks/useP2PVideo.ts` (243 LOC) have **no app importers** (the app uses RN
-primitives; `useP2PVideo` appears only in archived docs + a source-text test).
-**Proposal:** reduce `@peartube/core` to `types/` + design tokens; delete the
-unused UI/stores/hooks. Or fold the survivors into the app and drop the package.
+primitives).
+**Done:** deleted the unused `components/` (Button/Card/Input/Text + styles) and
+the placeholder `stores/`, dropped their `index.ts` re-export and the `./components`
+/ `./stores` subpath exports from `package.json`. `@peartube/core` is now
+hooks + types + utils (design tokens).
+**Kept (correction):** `hooks/useP2PVideo.ts` — although no app screen imports it,
+`mobile-video-stats-lifecycle-regression.test.mjs` reads its source and asserts on
+its request-generation race guards. Like `createBackendRuntime` (#5), it's a
+test-guarded "dead-looking" path; removing it means removing its guard test, which
+needs an explicit intent decision, not a mechanical delete.
 
 ### 14. Collapse the third method-name registry (`core/utils` `CMD`/`RPC_METHODS`)
 Method names live in three places: the HRPC schema (`spec/`), the per-platform

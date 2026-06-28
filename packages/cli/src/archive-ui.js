@@ -118,6 +118,46 @@ function jobRow(job) {
     </li>`
 }
 
+
+function tmdbPosterUrl(path) {
+  return path ? `https://image.tmdb.org/t/p/w342${path}` : ''
+}
+
+function discoverCard(item) {
+  const poster = tmdbPosterUrl(item.posterPath)
+  const status = item.networkStatus || 'missing'
+  const statusLabel = status === 'seeding'
+    ? `Seeding${item.seededCopies ? ` · ${item.seededCopies}` : ''}`
+    : (status === 'in-network' ? `In network · ${item.networkCopies || 1}` : 'Missing')
+  const typeLabel = item.type === 'tv' ? 'TV' : 'Movie'
+  const title = item.title || 'Untitled'
+  const year = item.year ? ` (${item.year})` : ''
+  return `
+    <article class="discover-item">
+      <div class="poster ${poster ? '' : 'empty-poster'}">
+        ${poster ? `<img src="${escapeHtml(poster)}" alt="${escapeHtml(title)} poster" loading="lazy">` : '<span>No poster</span>'}
+        <span class="status ${escapeHtml(status)}">${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="discover-copy">
+        <div class="discover-title"><strong>${escapeHtml(title)}${escapeHtml(year)}</strong><span>${escapeHtml(typeLabel)}</span></div>
+        <p>${escapeHtml(item.overview || 'No overview from TMDB.')}</p>
+        <form method="post" action="/discover/archive" class="discover-archive">
+          <input type="hidden" name="tmdbType" value="${escapeHtml(item.type)}">
+          <input type="hidden" name="tmdbId" value="${escapeHtml(item.tmdbId)}">
+          <input type="hidden" name="tmdbTitle" value="${escapeHtml(title)}">
+          <input type="hidden" name="tmdbYear" value="${escapeHtml(item.year || '')}">
+          <input type="hidden" name="tmdbPosterPath" value="${escapeHtml(item.posterPath || '')}">
+          <input type="hidden" name="sourceType" value="tmdb">
+          <input type="hidden" name="sourceVideoId" value="tmdb:${escapeHtml(item.type)}:${escapeHtml(item.tmdbId)}">
+          <input type="hidden" name="channelName" value="${escapeHtml(title)}">
+          <input type="hidden" name="title" value="${escapeHtml(title)}">
+          <label>Source URL<input name="url" placeholder="Paste YouTube/Rumble/source URL for this exact title" required></label>
+          <button type="submit">Archive this title</button>
+        </form>
+      </div>
+    </article>`
+}
+
 function deviceRow(client) {
   return `
     <li class="device">
@@ -139,6 +179,8 @@ export function renderArchiveWebHome(model = {}) {
   const creators = Array.isArray(model.creators) ? model.creators : []
   const unseededTargets = Array.isArray(model.unseededTargets) ? model.unseededTargets : []
   const tmdb = model.tmdb || {}
+  const discover = model.discover || { type: 'movie', query: '', items: [] }
+  const discoverItems = Array.isArray(discover.items) ? discover.items : []
   const trustedClients = Array.isArray(model.trustedClients) ? model.trustedClients : []
   const link = model.link || {}
   const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
@@ -162,6 +204,10 @@ export function renderArchiveWebHome(model = {}) {
   const deviceRows = trustedClients.length
     ? trustedClients.map(deviceRow).join('')
     : '<li class="empty">No linked devices yet.</li>'
+
+  const discoverRows = discoverItems.length
+    ? discoverItems.map(discoverCard).join('')
+    : '<div class="empty">Add a TMDB key, then search or use trending to find missing movies and shows.</div>'
 
   const tmdbState = tmdb.enabled ? 'enabled' : (tmdb.hasKey ? 'key set, disabled' : 'no key')
 
@@ -256,6 +302,24 @@ export function renderArchiveWebHome(model = {}) {
     .note { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
     .status-line { font-weight: 700; }
     .status-line.on { color: var(--ok); }
+    /* discover */
+    .discover-toolbar { display: grid; gap: 10px; grid-template-columns: 1fr; margin-bottom: 16px; }
+    @media (min-width: 720px) { .discover-toolbar { grid-template-columns: 1fr 140px auto; align-items: end; } }
+    select { width: 100%; border: 1px solid var(--line); background: #0b0f19; color: var(--ink); border-radius: 11px; padding: 11px 12px; font: inherit; }
+    .discover-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+    .discover-item { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: rgba(255,255,255,0.035); }
+    .poster { position: relative; aspect-ratio: 2 / 3; background: #101725; display: grid; place-items: center; color: var(--muted); }
+    .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .status { position: absolute; left: 10px; top: 10px; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 850; background: rgba(0,0,0,0.68); border: 1px solid rgba(255,255,255,0.12); }
+    .status.seeding { color: var(--ok); }
+    .status.in-network { color: #bcdcff; }
+    .status.missing { color: #ffb0b0; }
+    .discover-copy { padding: 13px; display: grid; gap: 10px; }
+    .discover-title { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; }
+    .discover-title span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .discover-copy p { color: var(--muted); font-size: 13px; line-height: 1.45; margin: 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+    .discover-archive { gap: 9px; }
+    .discover-archive button { padding: 9px 14px; }
   </style>
 </head>
 <body>
@@ -263,6 +327,7 @@ export function renderArchiveWebHome(model = {}) {
     <div class="bar-inner">
       <div class="brand"><span class="dot"></span> PearTube Relay</div>
       <nav>
+        <a href="#discover">Discover</a>
         <a href="#creators">Creators</a>
         <a href="#targets">Targets</a>
         <a href="#devices">Devices</a>
@@ -280,6 +345,18 @@ export function renderArchiveWebHome(model = {}) {
   <main>
     <div class="layout">
       <div class="col">
+        <section class="card" id="discover">
+          <h2>Discover missing movies &amp; shows</h2>
+          <p class="sub">TMDB-powered catalog view for your relay. Cards show whether a title is already seeding, merely known to the network, or missing. TMDB supplies metadata only; paste a source URL to archive the bytes.</p>
+          <form method="get" action="/" class="discover-toolbar">
+            <label>Search TMDB<input name="q" value="${escapeHtml(discover.query || '')}" placeholder="Trending if blank, e.g. Severance"></label>
+            <label>Type<select name="type"><option value="movie" ${discover.type !== 'tv' ? 'selected' : ''}>Movies</option><option value="tv" ${discover.type === 'tv' ? 'selected' : ''}>TV</option></select></label>
+            <button type="submit">Search</button>
+          </form>
+          <div class="discover-grid">${discoverRows}</div>
+          <p class="note"><a href="/discover.json?type=${escapeHtml(discover.type || 'movie')}&amp;q=${escapeHtml(discover.query || '')}">Open Discover JSON</a></p>
+        </section>
+
         <section class="card" id="creators">
           <h2>Tracked creators</h2>
           <p class="sub">Everyone whose content this relay holds, with how much of it is seeded. ${escapeHtml(totalArchived)} videos across ${escapeHtml(creators.length)} creators.</p>

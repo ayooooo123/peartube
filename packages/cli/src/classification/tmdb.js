@@ -68,6 +68,96 @@ function shapeResult(type, result) {
   }
 }
 
+
+function createTimeoutSignal(timeoutMs) {
+  if (typeof AbortController !== 'function') return { signal: undefined, cancel: () => {} }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  timer?.unref?.()
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) }
+}
+
+function normalizeMediaType(type) {
+  return type === 'tv' ? 'tv' : 'movie'
+}
+
+function shapeDiscoverItem(result = {}) {
+  const mediaType = normalizeMediaType(result.media_type || result.type)
+  const title = mediaType === 'movie'
+    ? (result.title || result.original_title || null)
+    : (result.name || result.original_name || null)
+  const date = mediaType === 'movie' ? result.release_date : result.first_air_date
+  const match = String(date || '').match(YEAR_RE)
+  return {
+    type: mediaType,
+    tmdbId: result.id ?? null,
+    title,
+    year: match ? Number(match[1]) : null,
+    overview: result.overview || '',
+    posterPath: result.poster_path || null,
+    backdropPath: result.backdrop_path || null,
+    popularity: Number(result.popularity || 0) || 0,
+    voteAverage: Number(result.vote_average || 0) || 0,
+    releaseDate: date || null
+  }
+}
+
+export function createTmdbDiscoverClient({
+  apiKey,
+  baseUrl = DEFAULT_TMDB_BASE_URL,
+  language = DEFAULT_TMDB_LANGUAGE,
+  fetchFn = (typeof fetch === 'function' ? fetch : null),
+  timeoutMs = 6000
+} = {}) {
+  const enabled = Boolean(apiKey) && typeof fetchFn === 'function'
+  const apiBase = String(baseUrl || DEFAULT_TMDB_BASE_URL).replace(/\/$/, '')
+
+  async function request(path, params = {}) {
+    if (!enabled) return null
+    const query = new URLSearchParams({ api_key: apiKey, language, ...params })
+    const { signal, cancel } = createTimeoutSignal(timeoutMs)
+    try {
+      const res = await fetchFn(`${apiBase}${path}?${query.toString()}`, { signal })
+      if (!res?.ok) return null
+      return await res.json()
+    } catch {
+      return null
+    } finally {
+      cancel()
+    }
+  }
+
+  function normalizeResults(body) {
+    return (Array.isArray(body?.results) ? body.results : [])
+      .map(shapeDiscoverItem)
+      .filter((item) => item.tmdbId && item.title)
+      .sort((a, b) => b.popularity - a.popularity)
+  }
+
+  return {
+    enabled,
+    async trending({ type = 'movie', page = 1 } = {}) {
+      const mediaType = normalizeMediaType(type)
+      const body = await request(`/trending/${mediaType}/week`, { page: String(Math.max(1, Number(page) || 1)) })
+      return normalizeResults(body)
+    },
+    async search({ query, type = 'movie', page = 1 } = {}) {
+      const q = String(query || '').trim()
+      if (!q) return this.trending({ type, page })
+      const mediaType = normalizeMediaType(type)
+      const body = await request(`/search/${mediaType}`, {
+        query: q,
+        include_adult: 'false',
+        page: String(Math.max(1, Number(page) || 1))
+      })
+      return normalizeResults(body)
+    },
+    posterUrl(path, size = 'w342') {
+      return path ? `https://image.tmdb.org/t/p/${size}${path}` : null
+    }
+  }
+}
+
 /**
  * Best-effort movie/TV classifier backed by TMDB's `search` endpoints.
  * `fetchFn` is injectable for testing and defaults to the global fetch (absent

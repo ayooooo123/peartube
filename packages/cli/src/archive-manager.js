@@ -199,7 +199,15 @@ export async function enqueueArchiveJob(store, input = {}) {
     creatorName: input.creatorName ? String(input.creatorName) : null,
     creatorHandle: input.creatorHandle ? String(input.creatorHandle) : null,
     sourceType: input.sourceType ? String(input.sourceType) : null,
-    sourceUrl: input.sourceUrl ? String(input.sourceUrl) : url
+    sourceUrl: input.sourceUrl ? String(input.sourceUrl) : url,
+    sourceVideoId: input.sourceVideoId ? String(input.sourceVideoId) : null,
+    tmdbType: input.tmdbType ? String(input.tmdbType) : null,
+    tmdbId: input.tmdbId ? String(input.tmdbId) : null,
+    tmdbSeason: input.tmdbSeason ? String(input.tmdbSeason) : null,
+    tmdbEpisode: input.tmdbEpisode ? String(input.tmdbEpisode) : null,
+    tmdbPosterPath: input.tmdbPosterPath ? String(input.tmdbPosterPath) : null,
+    tmdbTitle: input.tmdbTitle ? String(input.tmdbTitle) : null,
+    tmdbYear: input.tmdbYear ? String(input.tmdbYear) : null
   })
 }
 
@@ -510,7 +518,17 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           thumbnailBlobId: importedMetadata.thumbnailBlobId || null,
           thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
           thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
-          thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null
+          thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null,
+          classification: privateInput.tmdbId ? {
+            type: privateInput.tmdbType || 'movie',
+            tmdbId: Number(privateInput.tmdbId) || privateInput.tmdbId,
+            title: privateInput.tmdbTitle || sourceTitle || null,
+            year: Number(privateInput.tmdbYear || 0) || null,
+            posterPath: privateInput.tmdbPosterPath || null,
+            season: Number(privateInput.tmdbSeason || 0) || null,
+            episode: Number(privateInput.tmdbEpisode || 0) || null,
+            classifiedAt: now()
+          } : undefined
         } : null
         if (privateInput.publish !== false) {
           await publisher.publishChannel(channelInfo)

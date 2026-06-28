@@ -7,7 +7,7 @@ import { createArchiveJobStore, createArchiveManager, createArchivePublisher, cr
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
 import { RelayClassificationStore } from './classification/store.js'
-import { createTmdbClassifier } from './classification/tmdb.js'
+import { createTmdbClassifier, createTmdbDiscoverClient } from './classification/tmdb.js'
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
@@ -46,6 +46,7 @@ export async function createRelayService({
     classificationPath: config.paths.classification
   })
   let classifier = createTmdbClassifier(resolveTmdbOptions(config, relaySettings))
+  let tmdbDiscover = createTmdbDiscoverClient(resolveTmdbOptions(config, relaySettings))
 
   // Merge persisted trusted client device keys into the blind-peer trusted set
   // before the runtime (and its blind peer) is built, so authorized creator
@@ -172,7 +173,9 @@ export async function createRelayService({
   }
 
   function refreshClassifier() {
-    classifier = createTmdbClassifier(resolveTmdbOptions(config, relaySettings))
+    const opts = resolveTmdbOptions(config, relaySettings)
+    classifier = createTmdbClassifier(opts)
+    tmdbDiscover = createTmdbDiscoverClient(opts)
     return classifier
   }
 
@@ -180,6 +183,10 @@ export async function createRelayService({
   // never depends on TMDB availability.
   async function classifyPreviewVideo(video) {
     if (!video?.id) return video
+    if (video.classification?.tmdbId) {
+      await classificationStore.set({ videoId: video.id, title: video.title }, video.classification).catch(() => {})
+      return video
+    }
     try {
       const result = await classificationStore.classifyVideo({
         classifier,
@@ -559,6 +566,10 @@ export async function createRelayService({
     trustedClients,
     getClassifier() {
       return classifier
+    },
+    async discoverTmdb({ query = '', type = 'movie', page = 1 } = {}) {
+      if (!tmdbDiscover?.enabled) return []
+      return tmdbDiscover.search({ query, type, page })
     },
     getTrustedClients() {
       return trustedClients.list()

@@ -11,7 +11,17 @@ function parseForm(body) {
     channelName: params.get('channelName') || 'Anonymous Archive',
     title: params.get('title') || '',
     description: params.get('description') || '',
-    publish: params.get('publish') !== 'false'
+    publish: params.get('publish') !== 'false',
+    sourceType: params.get('sourceType') || '',
+    sourceUrl: params.get('sourceUrl') || '',
+    sourceVideoId: params.get('sourceVideoId') || '',
+    tmdbType: params.get('tmdbType') || '',
+    tmdbId: params.get('tmdbId') || '',
+    tmdbSeason: params.get('tmdbSeason') || '',
+    tmdbEpisode: params.get('tmdbEpisode') || '',
+    tmdbPosterPath: params.get('tmdbPosterPath') || '',
+    tmdbTitle: params.get('tmdbTitle') || '',
+    tmdbYear: params.get('tmdbYear') || ''
   }
 }
 
@@ -93,6 +103,53 @@ function normalizeCatalogChannel(channel, previewVideos = []) {
   }
 }
 
+
+function tmdbKey(type, id) {
+  if (!type || !id) return null
+  return `${type}:${id}`
+}
+
+export function buildTmdbNetworkIndex(catalogChannels = []) {
+  const index = new Map()
+  for (const channel of catalogChannels || []) {
+    for (const video of [...(channel.previewVideos || []), ...(channel.unavailableVideos || [])]) {
+      const c = video?.classification || {}
+      const key = tmdbKey(c.type, c.tmdbId)
+      if (!key) continue
+      const existing = index.get(key) || { status: 'missing', count: 0, seeded: 0, videos: [], seen: new Set() }
+      const videoKey = `${channel.channelKey || channel.driveKey || ''}:${video.id || ''}:${key}`
+      if (existing.seen.has(videoKey)) continue
+      existing.seen.add(videoKey)
+      const playable = video.availability === 'playable' || video.byteAvailability === 'playable' || Boolean(video.blobId && video.blobsCoreKey)
+      existing.count += 1
+      if (playable) existing.seeded += 1
+      existing.status = (playable || existing.seeded > 0) ? 'seeding' : 'in-network'
+      existing.videos.push({
+        id: video.id,
+        title: video.title,
+        channelKey: channel.channelKey || channel.driveKey,
+        publicBeeKey: channel.publicBeeKey || video.publicBeeKey || null,
+        playable
+      })
+      index.set(key, existing)
+    }
+  }
+  return index
+}
+
+export function annotateTmdbDiscoverItems(items = [], networkIndex = new Map()) {
+  return (items || []).map((item) => {
+    const found = networkIndex.get(tmdbKey(item.type, item.tmdbId))
+    return {
+      ...item,
+      networkStatus: found?.status || 'missing',
+      networkCopies: found?.count || 0,
+      seededCopies: found?.seeded || 0,
+      networkVideos: found?.videos || []
+    }
+  })
+}
+
 async function readPublishedChannels(metaDb) {
   const node = await metaDb?.get?.('published-channels-v2').catch?.(() => null)
   return Array.isArray(node?.value) ? node.value : []
@@ -162,7 +219,29 @@ export async function createArchiveConsole({
     return { enabled: Boolean(opts.enabled), hasKey: Boolean(opts.apiKey) }
   }
 
-  async function model() {
+  async function getCatalogChannels() {
+    return buildCatalogChannels({
+      channels: service.catalog?.getChannels?.() || [],
+      store,
+      publicFeed: service.runtime?.publicFeed,
+      metaDb: service.runtime?.ctx?.metaDb
+    })
+  }
+
+  async function discoverView({ query = '', type = 'movie', page = 1 } = {}) {
+    const rawCatalogChannels = service.catalog?.getChannels?.() || []
+    const catalogChannels = [...rawCatalogChannels, ...await getCatalogChannels()]
+    const items = typeof service.discoverTmdb === 'function'
+      ? await service.discoverTmdb({ query, type, page }).catch(() => [])
+      : []
+    return {
+      query,
+      type: type === 'tv' ? 'tv' : 'movie',
+      items: annotateTmdbDiscoverItems(items, buildTmdbNetworkIndex(catalogChannels))
+    }
+  }
+
+  async function model(discoverParams = {}) {
     const status = service.getStatus?.() || {}
     return {
       status: status.runtime || {},
@@ -170,6 +249,7 @@ export async function createArchiveConsole({
       creators: creatorsView(),
       unseededTargets: service.getCreatorTargets?.({ limit: 25 }) || status.creators?.unseededTargets || [],
       tmdb: tmdbView(),
+      discover: await discoverView(discoverParams),
       trustedClients: service.getTrustedClients?.() || [],
       link: service.getLinkDescriptor?.() || null
     }
@@ -183,10 +263,17 @@ export async function createArchiveConsole({
         return
       }
 
-      if (req.method === 'GET' && (req.url === '/' || req.url === '/ui')) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-        res.end(renderArchiveWebHome(await model()))
-        return
+      if (req.method === 'GET') {
+        const parsed = new URL(req.url, 'http://relay.local')
+        if (parsed.pathname === '/' || parsed.pathname === '/ui') {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+          res.end(renderArchiveWebHome(await model({
+            query: parsed.searchParams.get('q') || '',
+            type: parsed.searchParams.get('type') || 'movie',
+            page: parsed.searchParams.get('page') || '1'
+          })))
+          return
+        }
       }
 
       if (req.method === 'GET' && req.url === '/tui') {
@@ -256,14 +343,29 @@ export async function createArchiveConsole({
         return
       }
 
-      if (req.method === 'GET' && req.url === '/catalog.json') {
-        const channels = service.catalog?.getChannels?.() || []
-        const catalogChannels = await buildCatalogChannels({
-          channels,
-          store,
-          publicFeed: service.runtime?.publicFeed,
-          metaDb: service.runtime?.ctx?.metaDb
+      if (req.method === 'GET' && req.url.startsWith('/discover.json')) {
+        const parsed = new URL(req.url, 'http://relay.local')
+        const discover = await discoverView({
+          query: parsed.searchParams.get('q') || '',
+          type: parsed.searchParams.get('type') || 'movie',
+          page: parsed.searchParams.get('page') || '1'
         })
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({
+          schema: 'peartube.relayDiscover',
+          version: 1,
+          updatedAt: Date.now(),
+          ...discover
+        }, null, 2))
+        return
+      }
+
+      if (req.method === 'GET' && req.url === '/catalog.json') {
+        const catalogChannels = await getCatalogChannels()
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           'access-control-allow-origin': '*',
@@ -275,6 +377,19 @@ export async function createArchiveConsole({
           updatedAt: Date.now(),
           channels: catalogChannels
         }, null, 2))
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/discover/archive') {
+        const form = parseForm(await collectBody(req))
+        await manager.enqueue({
+          ...form,
+          sourceType: form.sourceType || 'tmdb',
+          sourceVideoId: form.sourceVideoId || (form.tmdbType && form.tmdbId ? `tmdb:${form.tmdbType}:${form.tmdbId}` : '')
+        })
+        manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
+        res.writeHead(303, { location: '/#discover' })
+        res.end()
         return
       }
 

@@ -32,9 +32,33 @@ function fakeService(overrides = {}) {
       }
     },
     runtime: { ctx: { metaDb: fakeMetaDb() } },
+    catalog: {
+      getChannels() {
+        return [{
+          channelKey: 'drive-matrix',
+          publicBeeKey: 'bee-matrix',
+          source: 'archive-job',
+          previewVideos: [{
+            id: 'video-matrix',
+            title: 'The Matrix',
+            blobId: '0:4:0:99',
+            blobsCoreKey: 'aa'.repeat(32),
+            availability: 'playable',
+            classification: { type: 'movie', tmdbId: 603, title: 'The Matrix', year: 1999 }
+          }]
+        }]
+      }
+    },
     getStatus() { return { runtime: { peers: 0, seeding: {} }, creators: { unseededTargets: [] } } },
     creators: { getCreators() { return creators } },
     getCreatorTargets() { return [{ creatorId: 'youtube:channel:UC1', name: 'One', videosArchived: 3, videosUnseeded: 2 }] },
+    async discoverTmdb({ query, type }) {
+      calls.discover = { query, type }
+      return [
+        { type: 'movie', tmdbId: 603, title: 'The Matrix', year: 1999, posterPath: '/matrix.jpg', overview: 'A hacker wakes up.', popularity: 99 },
+        { type: 'movie', tmdbId: 999, title: 'Missing Movie', year: 2024, posterPath: '/missing.jpg', overview: 'Not here yet.', popularity: 80 }
+      ]
+    },
     async setTmdbSettings(form) { calls.setTmdb.push(form); tmdb.apiKey = form.apiKey; tmdb.enabled = form.enabled; return { enabled: form.enabled } },
     async addCreatorSource(form) { calls.addCreator.push(form); return { creator: {}, job: {} } },
     ...overrides
@@ -77,6 +101,36 @@ test('GET /unseeded.json returns ranked targets', async function (t) {
     const body = await res.json()
     t.is(body.schema, 'peartube.relayUnseededTargets')
     t.is(body.targets[0].creatorId, 'youtube:channel:UC1')
+  })
+})
+
+
+
+test('GET /discover.json annotates TMDB items with relay network status', async function (t) {
+  const service = fakeService()
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/discover.json?type=movie&q=matrix`)
+    t.is(res.status, 200)
+    const body = await res.json()
+    t.is(body.schema, 'peartube.relayDiscover')
+    t.is(body.query, 'matrix')
+    t.is(body.type, 'movie')
+    t.is(body.items[0].title, 'The Matrix')
+    t.is(body.items[0].networkStatus, 'seeding')
+    t.is(body.items[0].seededCopies, 1)
+    t.is(body.items[1].networkStatus, 'missing')
+  })
+})
+
+test('GET / renders Discover section and TMDB archive forms', async function (t) {
+  await withConsole(fakeService(), async (base) => {
+    const res = await fetch(`${base}/?type=movie&q=matrix`)
+    t.is(res.status, 200)
+    const html = await res.text()
+    t.ok(html.includes('Discover missing movies &amp; shows'))
+    t.ok(html.includes('The Matrix'))
+    t.ok(html.includes('name="tmdbId" value="603"'))
+    t.ok(html.includes('Archive this title'))
   })
 })
 

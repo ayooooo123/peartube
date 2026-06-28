@@ -422,21 +422,6 @@ async function ensureHostBooted(state, storagePath, onError) {
   }
 
   const [hostStream, clientStream] = createLoopbackPair()
-  const hostSession = await startHost({
-    platform: 'desktop',
-    storagePath,
-    entrypoint: 'native-sidecar',
-    args: [],
-    stream: hostStream,
-    createBackendImpl: createNativeSidecarBackend,
-    onFeedUpdate() {
-      state.feedUpdateCount += 1
-      state.lastFeedUpdateAt = Date.now()
-      console.log(`[${runtimeLabel}] feed updated count=${state.feedUpdateCount}`)
-      emitBridgeEvent('feedUpdate', { channelKey: 'feed', action: 'update' }, onError)
-    },
-  })
-
   const client = createProtocolClient({ stream: clientStream })
 
   client.events.on(PROTOCOL_EVENTS.LOG, (payload) => {
@@ -459,11 +444,26 @@ async function ensureHostBooted(state, storagePath, onError) {
     }, onError)
   })
 
+  const hostSession = await startHost({
+    platform: 'desktop',
+    storagePath,
+    entrypoint: 'native-sidecar',
+    args: [],
+    stream: hostStream,
+    createBackendImpl: createNativeSidecarBackend,
+    onFeedUpdate() {
+      state.feedUpdateCount += 1
+      state.lastFeedUpdateAt = Date.now()
+      console.log(`[${runtimeLabel}] feed updated count=${state.feedUpdateCount}`)
+      emitBridgeEvent('feedUpdate', { channelKey: 'feed', action: 'update' }, onError)
+    },
+  })
+
   state.hostSession = hostSession
   state.client = client
   state.currentStoragePath = storagePath
 
-  return client.ready()
+  return hostSession.waitUntilReady()
 }
 
 async function loadBrowseSnapshot(state) {
@@ -761,14 +761,18 @@ function registerHandlers(hrpcInstance, state, reportFatal, cleanupKeepAlive = n
   })
 
   hrpcInstance.onCreateIdentity(async (req) => {
-    const snapshot = await mutateAndReload(
-      state,
-      async (client) => {
-        await client.identity.createIdentity({ name: req.name })
+    const result = await state.client.identity.createIdentity({ name: req.name })
+    return {
+      identity: {
+        publicKey: result?.identity?.publicKey || result?.publicKey || '',
+        driveKey: result?.identity?.driveKey || result?.driveKey || null,
+        name: result?.identity?.name || req.name || 'New Channel',
+        avatar: result?.identity?.avatar || req.avatar || null,
+        seedPhrase: result?.identity?.seedPhrase || result?.mnemonic || null,
+        createdAt: result?.identity?.createdAt || 0,
+        isActive: true,
       },
-      { responseBuilder: loadIdentityMutationSnapshot }
-    )
-    return { identity: snapshot }
+    }
   })
 
   hrpcInstance.onRefreshFeed(async () => {

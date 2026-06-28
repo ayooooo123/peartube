@@ -18,5 +18,24 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>EXAppExtensionAttributes</key>
+	<dict>
+		<key>EXExtensionPointIdentifier</key>
+		<string>com.apple.mediaextension.formatreader</string>
+		<key>EXPrincipalClass</key>
+		<string>PTMediaFormatReaderExtension</string>
+		<key>ClassImplementationID</key>
+		<string>com.peartube.mediaextension.formatreader.experimental</string>
+		<key>MTFileNameExtensionArray</key>
+		<array>
+			<string>mkv</string>
+			<string>webm</string>
+		</array>
+		<key>MTUTTypeArray</key>
+		<array>
+			<string>com.peartube.media.matroska</string>
+			<string>com.peartube.media.webm</string>
+		</array>
+	</dict>
 </dict>
 </plist>

@@ -18,5 +18,19 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>EXAppExtensionAttributes</key>
+	<dict>
+		<key>EXExtensionPointIdentifier</key>
+		<string>com.apple.mediaextension.videodecoder</string>
+		<key>EXPrincipalClass</key>
+		<string>PTSupplementalVideoDecoderExtension</string>
+		<key>ClassImplementationID</key>
+		<string>com.peartube.mediaextension.videodecoder.experimental</string>
+		<key>CodecInfo</key>
+		<array>
+			<string>vp09</string>
+			<string>av01</string>
+		</array>
+	</dict>
 </dict>
 </plist>

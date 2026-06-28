@@ -282,11 +282,15 @@ exists as hooks in `components/video-player/hooks/`.
 **Proposal:** delegate to the existing `useVideoGestures`/`useMiniPlayerPosition`/
 `useLandscapeMode` hooks, deleting the inlined duplicates; target < ~800 lines.
 
-> **Slices done (1-2):** extracted the self-contained channel-meta lookup
-> (`lib/useChannelMetaName.ts`) and the cast-buffering debounce
-> (`lib/useCastBufferingDebounced.ts`) into hooks; component 3,224 → 3,161. Each
-> validated with app `tsc` (zero new type errors) and rules-of-hooks structure.
-> **Validation boundary:** the remaining bulk (mini-player drag gestures,
+> **Slices done (1-3):** extracted the self-contained channel-meta lookup
+> (`lib/useChannelMetaName.ts`), the cast-buffering debounce
+> (`lib/useCastBufferingDebounced.ts`), and delegated desktop mini-player
+> corner/drag positioning to the existing `components/video-player/hooks/useMiniPlayerPosition.ts`
+> hook. Component 3,224 → 3,107. Each validated with app `tsc` (zero new type
+> errors beyond baseline) and rules-of-hooks structure; slice 3 also built and
+> launched on Android emulator (`peartube-pixel`, x86_64) with the player opening
+> fullscreen and buffering from the media session without a fatal JS/native crash.
+> **Validation boundary:** the remaining bulk (mobile mini-player drag gestures,
 > fullscreen/landscape animation, PiP geometry, control timers) is gesture- and
 > animation-coupled. CI does **not** build/typecheck the RN app and there are no
 > component tests, so those extractions can't be verified here without running the

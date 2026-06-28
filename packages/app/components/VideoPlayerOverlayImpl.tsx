@@ -32,6 +32,7 @@ import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
+import { useMiniPlayerPosition } from './video-player/hooks'
 import {
   computeMiniSize,
   computeMiniBounds,
@@ -61,7 +62,6 @@ import {
   MINI_DRAG_OVERSHOOT_BOTTOM,
   DESKTOP_MINI_WIDTH,
   DESKTOP_MINI_HEIGHT,
-  DESKTOP_MINI_PADDING,
   DESKTOP_MINI_CONTROLS_HEIGHT,
   PLAYBACK_SPEEDS,
   SEEK_STEP_SECONDS,
@@ -223,8 +223,6 @@ export function VideoPlayerOverlay() {
   const [miniPlayerCorner, setMiniPlayerCorner] = useState<MiniPlayerCorner>('bottom-right')
   const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')
   const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
-  const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
-  const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
 
   const showControlsTemporarily = useCallback(() => {
     setShowControls(true)
@@ -273,6 +271,11 @@ export function VideoPlayerOverlay() {
   const baseScreenHeight = useScreenFallback ? screenMetrics.height : windowHeight
   const screenWidth = baseScreenWidth
   const screenHeight = baseScreenHeight
+  const {
+    position: desktopMiniPlayerPosition,
+    isDragging: isDraggingDesktopMiniPlayer,
+    handleDragStart: handleMiniPlayerDragStart,
+  } = useMiniPlayerPosition({ screenWidth, screenHeight, sidebarWidth, corner: miniPlayerCorner, setCorner: setMiniPlayerCorner })
   const isWindowLandscape = screenWidth > screenHeight
 
   // Keep the player page frame stable and let the native video view letterbox within it.
@@ -2004,66 +2007,9 @@ export function VideoPlayerOverlay() {
     `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
 
-  // Calculate mini player position based on corner
-  const getMiniPlayerPosition = () => {
-    const baseX = miniPlayerCorner.includes('right') ? screenWidth - DESKTOP_MINI_WIDTH - DESKTOP_MINI_PADDING - sidebarWidth : DESKTOP_MINI_PADDING
-    const baseY = miniPlayerCorner.includes('bottom') ? screenHeight - DESKTOP_MINI_HEIGHT - DESKTOP_MINI_CONTROLS_HEIGHT - DESKTOP_MINI_PADDING - 108 : DESKTOP_MINI_PADDING + 108
-
-    if (isDraggingMiniPlayer) {
-      return {
-        x: baseX + miniPlayerDragOffset.x,
-        y: baseY + miniPlayerDragOffset.y,
-      }
-    }
-    return { x: baseX, y: baseY }
-  }
-
-  // Handle mini player drag start
-  const handleMiniPlayerDragStart = (e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsDraggingMiniPlayer(true)
-    const pos = getMiniPlayerPosition()
-    miniPlayerDragStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      cornerX: pos.x,
-      cornerY: pos.y,
-    }
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - miniPlayerDragStartRef.current.x
-      const deltaY = moveEvent.clientY - miniPlayerDragStartRef.current.y
-      setMiniPlayerDragOffset({ x: deltaX, y: deltaY })
-    }
-
-    const handleMouseUp = (upEvent: MouseEvent) => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-
-      const finalX = miniPlayerDragStartRef.current.cornerX + (upEvent.clientX - miniPlayerDragStartRef.current.x)
-      const finalY = miniPlayerDragStartRef.current.cornerY + (upEvent.clientY - miniPlayerDragStartRef.current.y)
-
-      const centerX = finalX + DESKTOP_MINI_WIDTH / 2
-      const centerY = finalY + (DESKTOP_MINI_HEIGHT + DESKTOP_MINI_CONTROLS_HEIGHT) / 2
-      const screenCenterX = (screenWidth - sidebarWidth) / 2 + sidebarWidth
-      const screenCenterY = screenHeight / 2
-
-      const isRight = centerX > screenCenterX
-      const isBottom = centerY > screenCenterY
-
-      const newCorner = `${isBottom ? 'bottom' : 'top'}-${isRight ? 'right' : 'left'}` as typeof miniPlayerCorner
-      setMiniPlayerCorner(newCorner)
-      setMiniPlayerDragOffset({ x: 0, y: 0 })
-      setIsDraggingMiniPlayer(false)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
   // Desktop mini player mode
   if (isDesktop && Platform.OS === 'web' && playerMode === 'mini') {
-    const miniPos = getMiniPlayerPosition()
+    const miniPos = desktopMiniPlayerPosition
 
     return (
       <div
@@ -2078,9 +2024,9 @@ export function VideoPlayerOverlay() {
           backgroundColor: colors.bg,
           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)',
           border: `1px solid ${colors.border}`,
-          cursor: isDraggingMiniPlayer ? 'grabbing' : 'default',
+          cursor: isDraggingDesktopMiniPlayer ? 'grabbing' : 'default',
           userSelect: 'none',
-          transition: isDraggingMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
+          transition: isDraggingDesktopMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
         }}
       >
         {/* Drag handle - top bar */}
@@ -2094,7 +2040,7 @@ export function VideoPlayerOverlay() {
             left: 0,
             right: 0,
             height: 32,
-            cursor: isDraggingMiniPlayer ? 'grabbing' : 'grab',
+            cursor: isDraggingDesktopMiniPlayer ? 'grabbing' : 'grab',
             zIndex: 10,
           }}
           onKeyDown={(event) => {

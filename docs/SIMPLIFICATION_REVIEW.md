@@ -224,14 +224,18 @@ its request-generation race guards. Like `createBackendRuntime` (#5), it's a
 test-guarded "dead-looking" path; removing it means removing its guard test, which
 needs an explicit intent decision, not a mechanical delete.
 
-### 14. Collapse the third method-name registry (`core/utils` `CMD`/`RPC_METHODS`)
+### 14. Collapse the third method-name registry (`core/utils` `CMD`/`RPC_METHODS`) ✅ DONE (the dead map)
 Method names live in three places: the HRPC schema (`spec/`), the per-platform
 clients (`rpc.native.ts` 1,431 LOC / `rpc.web.ts` 684 LOC), **and** a numeric
-`CMD`/`RPC_METHODS` map in `core/src/utils` (self-labeled "Legacy alias", a
-bare-rpc artifact superseded by HRPC).
-**Proposal:** delete the legacy `CMD`/`RPC_METHODS` map; push more per-method
-client construction into the shared `rpc.shared.ts` (transport-injected) so the two
-transport files shrink toward thin adapters.
+`CMD`/`RPC_METHODS` map in `core/src/utils` (a bare-rpc artifact superseded by HRPC).
+**Done:** deleted the legacy `CMD`/`RPC`/`RPC_METHODS`/`NETWORK_DISCOVERY_TOPIC`/
+`FEED_PROTOCOL_NAME` block from `core/src/utils/index.ts` (−123 lines). Verified
+zero importers repo-wide (the live registry is `APP_RPC_METHODS` from
+`@peartube/spec`); the file is now just design tokens, and the
+`mobile-ui-redesign-regression.test.mjs` source check (which only asserts on the
+color tokens) is unaffected.
+**Still proposed:** pushing more per-method client construction into the shared
+`rpc.shared.ts` so the two transport files shrink toward thin adapters.
 
 ### 15. Quarantine `desktop-native` + Swift codegen out of the main build
 `desktop-native/` is ~13.4k LOC Swift + 24 `.mjs`; the Swift half of `spec/`

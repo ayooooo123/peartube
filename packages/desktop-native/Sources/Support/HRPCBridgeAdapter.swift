@@ -1,4 +1,5 @@
 @preconcurrency import BareRPC
+import CompactEncoding
 import Foundation
 // HRPC and Schema types are compiled in the same module (GeneratedHRPC.swift, Generatedswift)
 
@@ -159,6 +160,38 @@ struct NativeVideoStats: Equatable {
   let isComplete: Bool
   let error: String?
 
+  init(
+    success: Bool = true,
+    status: String? = nil,
+    progress: Int = 0,
+    totalBlocks: Int = 0,
+    downloadedBlocks: Int = 0,
+    totalBytes: Int = 0,
+    downloadedBytes: Int = 0,
+    peerCount: Int = 0,
+    swarmConnections: Int = 0,
+    speedMBps: String = "0",
+    uploadSpeedMBps: String? = nil,
+    elapsed: Int = 0,
+    isComplete: Bool = false,
+    error: String? = nil
+  ) {
+    self.success = success
+    self.status = status
+    self.progress = progress
+    self.totalBlocks = totalBlocks
+    self.downloadedBlocks = downloadedBlocks
+    self.totalBytes = totalBytes
+    self.downloadedBytes = downloadedBytes
+    self.peerCount = peerCount
+    self.swarmConnections = swarmConnections
+    self.speedMBps = speedMBps
+    self.uploadSpeedMBps = uploadSpeedMBps
+    self.elapsed = elapsed
+    self.isComplete = isComplete
+    self.error = error
+  }
+
   init(schema s: VideoStats) {
     self.success = true
     self.status = s.status?.isEmpty == false ? s.status : nil
@@ -204,6 +237,22 @@ struct NativeUploadProgressEvent: Equatable {
   let speed: Int?
   let eta: Int?
 
+  init(
+    videoId: String,
+    progress: Int,
+    bytesUploaded: Int? = nil,
+    totalBytes: Int? = nil,
+    speed: Int? = nil,
+    eta: Int? = nil
+  ) {
+    self.videoId = videoId
+    self.progress = progress
+    self.bytesUploaded = bytesUploaded
+    self.totalBytes = totalBytes
+    self.speed = speed
+    self.eta = eta
+  }
+
   init(schema s: EventUploadProgress) {
     self.videoId = s.videoId
     self.progress = Int(s.progress)
@@ -226,6 +275,79 @@ typealias NativeAddReactionResponse = AddReactionResponse
 typealias NativeRemoveReactionResponse = RemoveReactionResponse
 typealias NativeGetReactionsResponse = GetReactionsResponse
 typealias NativeReactionCount = ReactionCount
+
+
+
+// MARK: - Legacy NativeBridge test compatibility
+
+// Older desktop tests used a generated `NativeBridge*` namespace. The current
+// schema generator emits unprefixed Schema/HRPC names, so keep these aliases in
+// the app module until all native tests are migrated to the generated names.
+typealias NativeBridgeUploadProgressEvent = NativeUploadProgressEvent
+typealias NativeBridgeBootstrapResponse = DesktopBootstrapResponse
+typealias NativeBridgeBootstrapResponseCodec = DesktopBootstrapResponseCodec
+typealias NativeBridgeResolvePlaybackRequest = PreparePlaybackRequest
+typealias NativeBridgeResolvePlaybackRequestCodec = PreparePlaybackRequestCodec
+typealias NativeBridgeSearchResponse = GlobalSearchVideosResponse
+typealias NativeBridgeSearchResponseCodec = GlobalSearchVideosResponseCodec
+typealias NativeBridgeVideoStatsResponse = NativeVideoStats
+typealias NativeBridgeFeedUpdatedEvent = EventFeedUpdate
+typealias NativeBridgeFeedUpdatedEventCodec = EventFeedUpdateCodec
+typealias NativeBridgeReactionCount = NativeReactionCount
+typealias NativeBridgeBootstrapRequest = DesktopBootstrapRequest
+typealias NativeBridgeBootstrapRequestCodec = DesktopBootstrapRequestCodec
+typealias NativeBridgeCreateIdentityRequest = CreateIdentityRequest
+typealias NativeBridgeCreateIdentityRequestCodec = CreateIdentityRequestCodec
+typealias NativeBridgeShutdownResponse = DesktopShutdownResponse
+typealias NativeBridgeShutdownResponseCodec = DesktopShutdownResponseCodec
+typealias NativeBridgeHostMessageEvent = EventLog
+typealias NativeBridgeHostMessageEventCodec = EventLogCodec
+typealias NativeBridgeHostReadyEvent = EventReady
+typealias NativeBridgeHostReadyEventCodec = EventReadyCodec
+typealias NativeBridgeWorkletReadyEvent = EventReady
+typealias NativeBridgeWorkletReadyEventCodec = EventReadyCodec
+typealias NativeBridgeUploadProgressEventCodec = EventUploadProgressCodec
+
+enum NativeBridgePayload {
+  static func encode<C: Codec>(_ codec: C, value: C.Value) throws -> Data {
+    var state = State()
+    codec.preencode(&state, value)
+    state.allocate()
+    try codec.encode(&state, value)
+    return state.buffer
+  }
+
+  static func decode<C: Codec>(_ codec: C, from data: Data) throws -> C.Value {
+    var state = State(data)
+    return try codec.decode(&state)
+  }
+}
+
+enum NativeBridgeCommand: UInt {
+  case bootstrap = 118
+  case unsubscribeChannel = 23
+  case getSubscriptions = 24
+  case getPlaylists = 25
+  case getPlaylistItems = 26
+  case createPlaylist = 27
+  case updatePlaylist = 28
+  case deletePlaylist = 29
+}
+
+enum NativeBridgeEventCommand: UInt {
+  case feedUpdated = 5
+}
+
+enum BridgeRPCChannelError: Error, LocalizedError {
+  case requestTimedOut(UInt)
+
+  var errorDescription: String? {
+    switch self {
+    case .requestTimedOut(let command):
+      return "Request timed out for command \(command)"
+    }
+  }
+}
 
 // MARK: - Channel Meta
 

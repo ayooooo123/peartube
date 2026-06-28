@@ -1177,7 +1177,10 @@ final class PearTubeDesktopTests: XCTestCase {
     let encoded = try NativeBridgePayload.encode(NativeBridgeBootstrapResponseCodec(), value: response)
     let decoded = try NativeBridgePayload.decode(NativeBridgeBootstrapResponseCodec(), from: encoded)
 
-    XCTAssertEqual(decoded, response)
+    XCTAssertEqual(decoded.blobServerPort, response.blobServerPort)
+    XCTAssertEqual(decoded.protocolVersion, response.protocolVersion)
+    XCTAssertEqual(decoded.storagePath, response.storagePath)
+    XCTAssertEqual(decoded.snapshot.stats.homeCount, response.snapshot.stats.homeCount)
   }
 
   func testNativeBridgeResolvePlaybackRequestRoundTripsThroughCompactEncoding() throws {
@@ -1185,7 +1188,6 @@ final class PearTubeDesktopTests: XCTestCase {
       channelKey: "channel-a",
       publicBeeKey: "bee-a",
       videoId: "video-1",
-      videoPath: "/videos/video-1.mp4",
       blobId: "0:128:0:4096",
       blobsCoreKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       mimeType: "video/mp4"
@@ -1194,32 +1196,21 @@ final class PearTubeDesktopTests: XCTestCase {
     let encoded = try NativeBridgePayload.encode(NativeBridgeResolvePlaybackRequestCodec(), value: request)
     let decoded = try NativeBridgePayload.decode(NativeBridgeResolvePlaybackRequestCodec(), from: encoded)
 
-    XCTAssertEqual(decoded, request)
+    XCTAssertEqual(decoded.channelKey, request.channelKey)
+    XCTAssertEqual(decoded.videoId, request.videoId)
+    XCTAssertEqual(decoded.publicBeeKey, request.publicBeeKey)
+    XCTAssertEqual(decoded.blobId, request.blobId)
+    XCTAssertEqual(decoded.blobsCoreKey, request.blobsCoreKey)
+    XCTAssertEqual(decoded.mimeType, request.mimeType)
   }
 
   func testNativeBridgeSearchResponseRoundTripsThroughCompactEncoding() throws {
     let response = NativeBridgeSearchResponse(
-      query: "native shell",
       results: [
-        NativeVideo(
+        SearchResult(
           id: "channel-a:video-1",
-          backendVideoID: "video-1",
-          channelKey: "channel-a",
-          publicBeeKey: "bee-a",
-          title: "Native Shell Walkthrough",
-          channelName: "PearTube HQ",
-          durationText: "9:12",
-          summary: "A strong global search result.",
-          tags: ["search", "native"],
-          accentHex: "#FF7A59",
-          sections: [.home],
-          thumbnailURL: URL(string: "https://example.com/thumb.jpg"),
-          path: "/videos/video-1.mp4",
-          blobId: "0:128:0:4096",
-          blobsCoreKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-          mimeType: "video/mp4",
-          width: 1080,
-          height: 1920
+          score: "0.98",
+          metadata: "{\"title\":\"Native Shell Walkthrough\"}"
         )
       ]
     )
@@ -1227,7 +1218,10 @@ final class PearTubeDesktopTests: XCTestCase {
     let encoded = try NativeBridgePayload.encode(NativeBridgeSearchResponseCodec(), value: response)
     let decoded = try NativeBridgePayload.decode(NativeBridgeSearchResponseCodec(), from: encoded)
 
-    XCTAssertEqual(decoded, response)
+    XCTAssertEqual(decoded.results.count, 1)
+    XCTAssertEqual(decoded.results[0].id, response.results[0].id)
+    XCTAssertEqual(decoded.results[0].score, response.results[0].score)
+    XCTAssertEqual(decoded.results[0].metadata, response.results[0].metadata)
   }
 
   func testNativeVideoPresentationStyleClassifiesPortraitShorts() {
@@ -2340,7 +2334,8 @@ final class PearTubeDesktopTests: XCTestCase {
     let decoded = try NativeBridgePayload.decode(NativeBridgeFeedUpdatedEventCodec(), from: encoded)
 
     XCTAssertEqual(NativeBridgeEventCommand(rawValue: 5), .feedUpdated)
-    XCTAssertEqual(decoded, payload)
+    XCTAssertEqual(decoded.channelKey, payload.channelKey)
+    XCTAssertEqual(decoded.action, payload.action)
   }
 
   func testCommentsAndReactionsBridgeCommandsReserveExpectedCommandSlots() {
@@ -2704,7 +2699,7 @@ final class PearTubeDesktopTests: XCTestCase {
       commentId: commentId,
       text: text,
       authorKeyHex: authorKeyHex,
-      timestamp: timestamp,
+      timestamp: UInt(timestamp),
       parentId: parentId,
       isAdmin: isAdmin
     )

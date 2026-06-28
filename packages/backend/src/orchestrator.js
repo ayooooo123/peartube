@@ -14,6 +14,7 @@ import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createBlindPeeringClient } from './blind-peering-client.js';
+import { loadRelayLinks, relayLinkKeys } from './relay-links.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
@@ -363,9 +364,18 @@ export async function createBackendContext(config) {
   // the user's own uploads stay available while this device is offline. Mirror
   // keys are seeded from config and grown via feed discovery (below). Best-effort
   // — a noop client is returned if the module/DHT is unavailable.
+  // User-linked relays (added in-app by pasting/scanning a relay's mirror key)
+  // are persisted and re-applied on boot: delegate uploads to them and treat
+  // them as durable offload anchors (ctx.trustedRelayKeys, read by api.js
+  // getKnownDurableRelayKeys).
+  const linkedRelayKeys = relayLinkKeys(await loadRelayLinks(ctx.metaDb).catch(() => []))
+  ctx.trustedRelayKeys = Array.from(new Set([
+    ...(Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys : []),
+    ...linkedRelayKeys,
+  ].map((k) => String(k).toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k))))
   const configuredMirrorKeys = [
     ...(Array.isArray(network.blindPeerMirrors) ? network.blindPeerMirrors : []),
-    ...(Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys : []),
+    ...ctx.trustedRelayKeys,
   ]
   ctx.blindPeering = await createBlindPeeringClient({
     ctx,

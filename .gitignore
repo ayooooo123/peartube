@@ -104,3 +104,6 @@ packages/desktop-native/Vendor/bare-rpc-swift/.build/
 
 # Local native debug signing material
 packages/app/android/app/debug.keystore
+
+# Local isolated agent worktrees
+.worktrees/

@@ -103,7 +103,18 @@ jobs:
         run: npm run schema:full
 
       - name: Run native desktop tests
-        run: npm run desktop:native:test
+        timeout-minutes: 25
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node --test \
+              packages/desktop-native/scripts/bare-pack-host-flags.test.mjs \
+              packages/desktop-native/Bridge/bridge-core.test.mjs \
+              packages/desktop-native/Bridge/native-rpc.test.mjs \
+              packages/desktop-native/Bridge/playback-resolution.test.mjs \
+              packages/desktop-native/Bridge/sidecar-addon-roots.test.mjs
+          else
+            npm run desktop:native:test
+          fi
 
   native-desktop-archive:
     if: ${{ github.event_name != 'pull_request' }}

@@ -73,20 +73,23 @@ test('vertical discovery keeps channel navigation and detail escape hatches', ()
   assert.match(source, /styles\.shortsFollowButton/, 'vertical player should include a channel follow/open affordance')
 })
 
-test('vertical discovery uses X-style content chrome without browser chrome', () => {
+test('vertical discovery uses PearTube-adapted content chrome without borrowed social affordances', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
-  assert.match(source, /xStyleChrome/, 'shorts cards should render through a named X-style content chrome wrapper')
-  assert.match(source, /styles\.shortsAuthorAvatar/, 'X-style shorts metadata should include an author avatar')
-  assert.match(source, /styles\.shortsVerifiedBadge/, 'X-style shorts metadata should include a compact verified-style badge')
-  assert.match(source, /styles\.shortsFollowButton/, 'X-style shorts metadata should include a follow affordance')
-  assert.match(source, /styles\.shortsOverflowButton/, 'X-style shorts metadata should include an overflow affordance like an X status')
-  assert.match(source, /styles\.shortsActionRow/, 'X-style shorts metadata should use an inline status action row')
-  assert.match(source, /styles\.shortsActionCluster/, 'X-style shorts actions should be icon-first clusters, not large pill buttons')
-  assert.match(source, /Feather name="bar-chart-2"/, 'X-style shorts actions should include a view-count style analytics glyph')
-  assert.match(source, /Feather name="bookmark"/, 'X-style shorts actions should include a bookmark affordance')
-  assert.match(source, /Feather name="share-2"/, 'X-style shorts actions should include a share affordance')
-  assert.match(source, /formatShortsActionCount/, 'shorts action counts should be compacted for status chrome')
+  assert.match(source, /shortsCardChrome/, 'shorts cards should render through a named PearTube content chrome wrapper')
+  assert.match(source, /styles\.shortsAuthorAvatar/, 'shorts metadata should include a channel avatar')
+  assert.match(source, /styles\.shortsFollowButton/, 'shorts metadata should include a real follow affordance')
+  assert.match(source, /styles\.shortsActionRow/, 'shorts metadata should use an inline action row')
+  assert.match(source, /styles\.shortsActionCluster/, 'shorts actions should be compact icon+label clusters')
+  assert.match(source, /Feather name="share-2"/, 'shorts actions should include a share affordance')
+  assert.match(source, /Feather name="message-circle"/, 'shorts actions should include a comments affordance')
+  // PearTube has no verification, reposts, view analytics, bookmarks, or @handles —
+  // these were borrowed from X and must not be faked with empty/placeholder data.
+  assert.doesNotMatch(source, /shortsVerifiedBadge/, 'PearTube should not show a fake verified badge on every channel')
+  assert.doesNotMatch(source, /Feather name="repeat"/, 'PearTube has no repost concept — drop the retweet-style action')
+  assert.doesNotMatch(source, /Feather name="bar-chart-2"/, 'PearTube feed has no view analytics — drop the view-count glyph')
+  assert.doesNotMatch(source, /Feather name="bookmark"/, 'drop the non-functional bookmark affordance')
+  assert.doesNotMatch(source, /getShortsHandle|formatShortsActionCount|getShortsActionMetrics/, 'drop synthesized @handles and the all-zero action-count machinery')
   assert.doesNotMatch(source, /x\.com|addressBar|browserChrome|mobile browser/i, 'PearTube should not copy the browser/address-bar chrome from the reference screenshot')
   assert.doesNotMatch(source, /bottomActionRail/, 'large pre-redesign action rail should be removed')
   assert.doesNotMatch(source, /bottomActionButton/, 'large pre-redesign action buttons should be removed')
@@ -104,16 +107,18 @@ test('vertical discovery wires the Follow button to real subscription state', ()
   assert.doesNotMatch(source, /style=\{styles\.shortsFollowButton\} accessibilityRole="button" accessibilityLabel="Open channel"/, 'the follow button should no longer be a mislabeled channel-open shim')
 })
 
-test('vertical discovery hides empty action counts instead of showing literal zeros', () => {
+test('vertical discovery action row exposes only real, honest affordances', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
-  assert.match(source, /actionMetrics\.comments > 0 \? \(/, 'comment count should only render when present')
-  assert.match(source, /actionMetrics\.likes > 0 \? \(/, 'like count should only render when present')
-  assert.match(source, /actionMetrics\.reposts > 0 \? \(/, 'repost count should only render when present')
-  assert.match(source, /actionMetrics\.views > 0 \? \(/, 'view count should only render when present')
+  assert.match(source, /accessibilityLabel="Open Shorts comments"/, 'comments action opens the inline comments sheet')
+  assert.match(source, /accessibilityLabel="Share video"/, 'share action uses the native share sheet')
+  assert.match(source, /accessibilityLabel="React to video"/, 'react action routes to the full player where reactions live')
+  // The card surfaces real video metadata (duration) rather than fabricated counts.
+  assert.match(source, /formatDuration\(video\.duration\)/, 'cards should show the real video duration')
+  assert.doesNotMatch(source, /styles\.shortsActionText/, 'the tabular-num count text for fake metrics should be gone')
 })
 
-test('vertical discovery exposes X-style top and playback status affordances', () => {
+test('vertical discovery exposes minimal top and playback status affordances', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
   assert.match(source, /styles\.shortsTopChrome/, 'shorts should have minimal top chrome for back and refresh')
@@ -219,7 +224,7 @@ test('vertical discovery hides all card chrome, including progress, when tapped'
   assert.match(source, /const \[shortsChromeVisible, setShortsChromeVisible\] = useState\(true\)/, 'Discover should track whether Shorts chrome/buttons are visible')
   assert.match(source, /controlsVisible=\{shortsChromeVisible\}/, 'Discover should pass shared chrome visibility to the Shorts player')
   assert.match(source, /onControlsVisibleChange=\{setShortsChromeVisible\}/, 'Shorts player taps should update route chrome visibility')
-  assert.match(source, /const xStyleChrome = shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'X-style card chrome should hide when Shorts controls are hidden')
+  assert.match(source, /const shortsCardChrome = shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'card chrome should hide when Shorts controls are hidden')
   assert.match(source, /verticalVideos\.length > 0 && shortsChromeVisible \? \([\s\S]*styles\.shortsTopChrome/, 'top feed chrome should hide with Shorts controls')
   assert.match(playerSource, /toggleControlsVisibility/, 'Shorts player should toggle controls on tap')
   assert.match(playerSource, /onControlsVisibleChange\?\.\(!controlsVisible\)/, 'Shorts player should notify the parent when controls are toggled')
@@ -350,11 +355,11 @@ test('vertical discovery positions progress and chrome without clumping metadata
   assert.match(source, /numberOfLines=\{2\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
   assert.match(source, /\{feedEntries\.length\} feeds/, 'feed count pill should label what the number means')
   assert.match(source, /styles\.topChromeFade/, 'header should have a subtle backing fade over active video')
-  assert.match(source, /shortsActionRow:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: 8/, 'action buttons should use a tighter X-style bottom row')
+  assert.match(source, /shortsActionRow:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: 10/, 'action buttons should use a tighter bottom row')
   assert.match(source, /accessibilityLabel="Open Shorts comments"/, 'comments action should stay compact and icon-first')
-  assert.match(source, /shortsActionText:\s*\{[\s\S]*fontVariant: \['tabular-nums'\]/, 'bottom action counts should stay compact and stable')
+  assert.match(source, /shortsActionLabel:\s*\{[\s\S]*fontWeight: '700'/, 'action clusters should use short text labels, not fabricated counts')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*minWidth: 0/, 'metadata text should shrink instead of pushing into action controls')
-  assert.match(source, /shortsActionCluster:\s*\{[\s\S]*minHeight: 34/, 'bottom action clusters should stay compact instead of heavy pill blocks')
+  assert.match(source, /shortsActionCluster:\s*\{[\s\S]*minHeight: 36/, 'bottom action clusters should stay compact instead of heavy pill blocks')
   assert.match(source, /<Feather name="message-circle" color="#f4f7fb" size=\{20\}/, 'action icons should be smaller than oversized controls')
   assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
 })

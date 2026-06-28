@@ -40,7 +40,7 @@ import {
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
-import { formatTimeAgo } from '@/lib/formatters'
+import { formatDuration, formatTimeAgo } from '@/lib/formatters'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
 import { ShortsCommentsSheet } from '@/components/discovery/ShortsCommentsSheet'
@@ -102,38 +102,12 @@ function getFeedEntrySignature(entry: FeedEntry) {
   ].join('|')
 }
 
-function formatShortsActionCount(value: unknown) {
-  const count = Number(value || 0)
-  if (!Number.isFinite(count) || count <= 0) return '0'
-  if (count < 1000) return String(Math.floor(count))
-  if (count < 1_000_000) return `${(count / 1000).toFixed(count >= 10_000 ? 0 : 1)}K`
-  return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1)}M`
-}
-
 function getShortsChannelName(video: VideoData) {
   return video.channel?.name || 'Channel'
 }
 
-function getShortsHandle(video: VideoData) {
-  const raw = video.channel?.name || video.channelKey || 'peartube'
-  const handle = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, '')
-    .slice(0, 18)
-  return `@${handle || 'peartube'}`
-}
-
 function getShortsAvatarLetter(video: VideoData) {
   return getShortsChannelName(video).trim().charAt(0).toUpperCase() || 'P'
-}
-
-function getShortsActionMetrics(video: VideoData) {
-  const videoAny = video as any
-  const views = videoAny.views ?? videoAny.viewCount ?? videoAny.stats?.views ?? videoAny.playbackCount ?? 0
-  const comments = videoAny.commentCount ?? videoAny.commentsCount ?? videoAny.stats?.comments ?? 0
-  const reposts = videoAny.repostCount ?? videoAny.shareCount ?? videoAny.stats?.reposts ?? 0
-  const likes = videoAny.likeCount ?? videoAny.reactionCounts?.like ?? videoAny.reactions?.like ?? 0
-  return { comments, reposts, likes, views }
 }
 
 function getVideoRef(video: VideoData) {
@@ -744,29 +718,24 @@ export default function VerticalDiscoveryScreen() {
             const cardKey = `${video.channelKey}:${video.id}`
             const isActiveShort = activeVideoKey === cardKey
             const isFollowing = video.channelKey ? followedChannels.has(video.channelKey) : false
-            const actionMetrics = getShortsActionMetrics(video)
+            const durationLabel = video.duration && video.duration > 0 ? formatDuration(video.duration) : null
             const statusText = shortsPlaybackMessage && shortsPlaybackMessage.key === cardKey
               ? shortsPlaybackMessage.text
               : isActiveShort && degradedCopy
                 ? degradedCopy
                 : null
             const statusIsError = Boolean(shortsPlaybackMessage?.isError && shortsPlaybackMessage.key === cardKey)
-            const xStyleChrome = shortsChromeVisible ? (
+            const shortsCardChrome = shortsChromeVisible ? (
               <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
                 <View style={styles.shortsAuthorRow}>
                   <Pressable onPress={() => openChannel(video)} style={styles.shortsAuthorAvatar} accessibilityLabel="Open channel">
                     <Text style={styles.shortsAuthorAvatarText}>{getShortsAvatarLetter(video)}</Text>
                   </Pressable>
                   <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
-                    <View style={styles.shortsAuthorLine}>
-                      <Text style={styles.videoTitle} numberOfLines={1} ellipsizeMode="tail">{getShortsChannelName(video)}</Text>
-                      <View style={styles.shortsVerifiedBadge}>
-                        <Feather name="check" color="#061018" size={9} />
-                      </View>
-                      <Text style={styles.videoMeta} numberOfLines={1}>
-                        {getShortsHandle(video)} · {formatTimeAgo(video.uploadedAt || Date.now())}
-                      </Text>
-                    </View>
+                    <Text style={styles.videoTitle} numberOfLines={1} ellipsizeMode="tail">{getShortsChannelName(video)}</Text>
+                    <Text style={styles.videoMeta} numberOfLines={1}>
+                      {formatTimeAgo(video.uploadedAt || Date.now())}{durationLabel ? ` · ${durationLabel}` : ''}
+                    </Text>
                     {video.title ? (
                       <Text style={styles.shortsPostText} numberOfLines={2} ellipsizeMode="tail">{video.title}</Text>
                     ) : null}
@@ -785,41 +754,20 @@ export default function VerticalDiscoveryScreen() {
                       {isFollowing ? 'Following' : 'Follow'}
                     </Text>
                   </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.shortsOverflowButton} accessibilityRole="button" accessibilityLabel="Open video options">
-                    <Feather name="more-horizontal" color="#fff" size={21} />
-                  </Pressable>
                 </View>
 
                 <View style={styles.shortsActionRow}>
                   <Pressable onPress={() => openComments(video)} style={styles.shortsActionCluster} accessibilityLabel="Open Shorts comments">
                     <Feather name="message-circle" color="#f4f7fb" size={20} />
-                    {actionMetrics.comments > 0 ? (
-                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.comments)}</Text>
-                    ) : null}
+                    <Text style={styles.shortsActionLabel}>Comments</Text>
                   </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open video details">
-                    <Feather name="repeat" color="#f4f7fb" size={20} />
-                    {actionMetrics.reposts > 0 ? (
-                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.reposts)}</Text>
-                    ) : null}
-                  </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open reactions">
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="React to video">
                     <Feather name="heart" color="#f4f7fb" size={20} />
-                    {actionMetrics.likes > 0 ? (
-                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.likes)}</Text>
-                    ) : null}
+                    <Text style={styles.shortsActionLabel}>React</Text>
                   </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="Open video analytics">
-                    <Feather name="bar-chart-2" color="#f4f7fb" size={20} />
-                    {actionMetrics.views > 0 ? (
-                      <Text style={styles.shortsActionText}>{formatShortsActionCount(actionMetrics.views)}</Text>
-                    ) : null}
-                  </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.shortsIconAction} accessibilityLabel="Bookmark video">
-                    <Feather name="bookmark" color="#f4f7fb" size={21} />
-                  </Pressable>
-                  <Pressable onPress={() => shareVideo(video)} style={styles.shortsIconAction} accessibilityLabel="Share video">
-                    <Feather name="share-2" color="#f4f7fb" size={21} />
+                  <Pressable onPress={() => shareVideo(video)} style={styles.shortsActionCluster} accessibilityLabel="Share video">
+                    <Feather name="share-2" color="#f4f7fb" size={20} />
+                    <Text style={styles.shortsActionLabel}>Share</Text>
                   </Pressable>
                 </View>
               </View>
@@ -854,7 +802,7 @@ export default function VerticalDiscoveryScreen() {
                       </View>
                     ) : null}
                   </View>
-                  {xStyleChrome}
+                  {shortsCardChrome}
                 </ImageBackground>
               </View>
             )
@@ -1012,21 +960,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
     flexShrink: 1,
   },
-  shortsAuthorLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    minWidth: 0,
-  },
-  shortsVerifiedBadge: {
-    width: 15,
-    height: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f6f9fb',
-    flexShrink: 0,
-  },
   videoTitle: {
     color: '#fff',
     fontSize: 16,
@@ -1042,6 +975,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 17,
     fontWeight: '600',
+    marginTop: 2,
     flexShrink: 1,
   },
   shortsPostText: {
@@ -1087,43 +1021,31 @@ const styles = StyleSheet.create({
   shortsFollowTextActive: {
     color: '#f6f9fb',
   },
-  shortsOverflowButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    flexShrink: 0,
-  },
   shortsActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
+    justifyContent: 'flex-start',
+    gap: 10,
     flexShrink: 0,
   },
   shortsActionCluster: {
-    minHeight: 34,
-    minWidth: 44,
+    minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
+    gap: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
   },
-  shortsActionText: {
-    color: 'rgba(255,255,255,0.86)',
-    fontSize: 12,
-    lineHeight: 15,
+  shortsActionLabel: {
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 13,
+    lineHeight: 16,
     fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  shortsIconAction: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   centerState: {
     flex: 1,

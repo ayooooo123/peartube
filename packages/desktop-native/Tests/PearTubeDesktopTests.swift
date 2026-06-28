@@ -16,6 +16,1123 @@ final class PearTubeDesktopTests: XCTestCase {
 
   func testApplyingBrowseSnapshotUpdatesHomeSelection() {
     let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          NativeVideo(
+            id: "channel-a:video-1",
+            backendVideoID: "video-1",
+            channelKey: "channel-a",
+            title: "Video 1",
+            channelName: "Channel A",
+            durationText: "1:23",
+            summary: "Summary",
+            tags: ["home"],
+            accentHex: "#FF7A59",
+            sections: [.home]
+          )
+        ],
+        subscriptions: [],
+        library: [],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1)
+    )
+
+    appState.applySnapshot(snapshot)
+
+    XCTAssertEqual(appState.selectedVideo?.title, "Video 1")
+    XCTAssertEqual(appState.videos().count, 1)
+  }
+
+  func testSectionSelectionKeepsBrowseContentAvailable() {
+    let appState = AppState(catalog: NativeVideo.samples)
+
+    appState.selectSection(.subscriptions)
+
+    XCTAssertEqual(appState.currentSection, .subscriptions)
+    XCTAssertFalse(appState.videos().isEmpty)
+    XCTAssertNotNil(appState.selectedVideo)
+  }
+
+  func testSelectingEmptySectionClearsVideoSelectionInsteadOfFallingBack() {
+    let appState = AppState()
+
+    appState.selectSection(.diagnostics)
+
+    XCTAssertEqual(appState.currentSection, .diagnostics)
+    XCTAssertTrue(appState.videos().isEmpty)
+    XCTAssertNil(appState.selectedVideo)
+  }
+
+  func testSelectingVideoAfterPauseDoesNotReenterPreviewState() {
+    let appState = AppState(
+      catalog: [
+        makeVideo(
+          id: "channel-a:video-1",
+          backendVideoID: "video-1",
+          channelKey: "channel-a",
+          title: "Video 1",
+          channelName: "Channel A",
+          sections: [.home]
+        ),
+        makeVideo(
+          id: "channel-a:video-2",
+          backendVideoID: "video-2",
+          channelKey: "channel-a",
+          title: "Video 2",
+          channelName: "Channel A",
+          sections: [.home]
+        ),
+      ]
+    )
+
+    appState.playSelectedPreview()
+    appState.pausePreview()
+    appState.selectVideo("channel-a:video-1")
+
+    XCTAssertFalse(appState.isPlayingPreview)
+    XCTAssertEqual(appState.playingVideoID, "channel-a:video-1")
+  }
+
+  func testOpeningVideoEntersWatchPage() {
+    let appState = AppState(catalog: NativeVideo.samples)
+
+    appState.openVideo("sample-native-shell-walkthrough")
+
+    XCTAssertTrue(appState.isShowingWatchPage)
+    XCTAssertEqual(appState.selectedVideoID, "sample-native-shell-walkthrough")
+  }
+
+  func testSelectingSectionLeavesWatchPage() {
+    let appState = AppState(catalog: NativeVideo.samples)
+    appState.openVideo("sample-native-shell-walkthrough")
+
+    appState.selectSection(.subscriptions)
+
+    XCTAssertFalse(appState.isShowingWatchPage)
+    XCTAssertEqual(appState.currentSection, .subscriptions)
+  }
+
+  func testApplyingSnapshotKeepsPinnedWatchVideoOpenWhenFeedTemporarilyDropsIt() {
+    let appState = AppState(
+      catalog: [
+        makeVideo(
+          id: "channel-a:video-1",
+          backendVideoID: "video-1",
+          channelKey: "channel-a",
+          title: "Video 1",
+          channelName: "Channel A",
+          sections: [.home]
+        )
+      ]
+    )
+    appState.openVideo("channel-a:video-1")
+
+    let emptySnapshot = NativeBrowseSnapshot(
+      generatedAt: 2,
+      sections: NativeBrowseSections(home: [], subscriptions: [], library: [], studio: [], diagnostics: []),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 0)
+    )
+
+    appState.applySnapshot(emptySnapshot)
+
+    XCTAssertTrue(appState.isShowingWatchPage)
+    XCTAssertEqual(appState.selectedVideoID, "channel-a:video-1")
+    XCTAssertEqual(appState.selectedVideo?.id, "channel-a:video-1")
+  }
+
+  func testClosingWatchPageWhilePlaybackIsActiveLeavesMiniPlayerAvailable() {
+    let appState = AppState(catalog: NativeVideo.samples)
+
+    appState.openVideo("sample-native-shell-walkthrough")
+    appState.playSelectedPreview()
+    appState.closeWatchPage()
+
+    XCTAssertFalse(appState.isShowingWatchPage)
+    XCTAssertEqual(appState.miniPlayerVideo?.id, "sample-native-shell-walkthrough")
+  }
+
+  func testSelectingSectionWhilePlaybackIsActiveKeepsMiniPlayerPinned() {
+    let appState = AppState(catalog: NativeVideo.samples)
+
+    appState.openVideo("sample-native-shell-walkthrough")
+    appState.playSelectedPreview()
+    appState.selectSection(.subscriptions)
+
+    XCTAssertFalse(appState.isShowingWatchPage)
+    XCTAssertEqual(appState.currentSection, .subscriptions)
+    XCTAssertEqual(appState.miniPlayerVideo?.id, "sample-native-shell-walkthrough")
+  }
+
+  func testSelectingEmptySectionWhilePlaybackIsActiveKeepsMiniPlayerAndPlaybackState() {
+    let appState = AppState(
+      catalog: [
+        makeVideo(
+          id: "channel-a:video-1",
+          backendVideoID: "video-1",
+          channelKey: "channel-a",
+          title: "Video 1",
+          channelName: "Channel A",
+          sections: [.home]
+        )
+      ]
+    )
+
+    appState.openVideo("channel-a:video-1")
+    appState.playSelectedPreview()
+    appState.selectSection(.diagnostics)
+
+    XCTAssertFalse(appState.isShowingWatchPage)
+    XCTAssertNil(appState.selectedVideoID)
+    XCTAssertEqual(appState.miniPlayerVideo?.id, "channel-a:video-1")
+    XCTAssertTrue(appState.isPlayingPreview)
+  }
+
+  func testNativeAVPlayerViewShowsBuiltInPlaybackControlsByDefault() {
+    let hostingView = NSHostingView(rootView: NativeAVPlayerView(player: AVPlayer()))
+    hostingView.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+    hostingView.layoutSubtreeIfNeeded()
+
+    let playerView = findSubview(in: hostingView, ofType: AVPlayerView.self)
+
+    XCTAssertNotNil(playerView)
+    XCTAssertEqual(playerView?.controlsStyle, .default)
+    XCTAssertTrue(playerView?.showsFullScreenToggleButton ?? false)
+  }
+
+  func testNativeAVPlayerViewCanHideBuiltInPlaybackControls() {
+    let hostingView = NSHostingView(rootView: NativeAVPlayerView(player: AVPlayer(), hidesControls: true))
+    hostingView.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+    hostingView.layoutSubtreeIfNeeded()
+
+    let playerView = findSubview(in: hostingView, ofType: AVPlayerView.self)
+
+    XCTAssertNotNil(playerView)
+    XCTAssertEqual(playerView?.controlsStyle, .none)
+    XCTAssertFalse(playerView?.showsFullScreenToggleButton ?? true)
+  }
+
+  func testSuccessfulBootstrapLeavesDiagnosticsAndReturnsToHome() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          makeVideo(
+            id: "channel-a:home-1",
+            backendVideoID: "home-1",
+            channelKey: "channel-a",
+            title: "Home 1",
+            channelName: "Channel A",
+            sections: [.home]
+          )
+        ],
+        subscriptions: [],
+        library: [],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1)
+    )
+
+    appState.selectSection(.diagnostics)
+    appState.setError("Boot failed")
+    appState.applySnapshot(snapshot)
+    appState.settleAfterSuccessfulBootstrap()
+
+    XCTAssertEqual(appState.currentSection, .home)
+    XCTAssertEqual(appState.selectedVideo?.title, "Home 1")
+    XCTAssertNil(appState.lastErrorMessage)
+  }
+
+  func testSearchResultsOverrideSectionVideosUntilCleared() {
+    let appState = AppState(catalog: NativeVideo.samples)
+    let sectionVideos = appState.videos(for: .home)
+    XCTAssertFalse(sectionVideos.isEmpty)
+
+    let searchResults = [
+      NativeVideo(
+        id: "channel-search:video-1",
+        backendVideoID: "video-1",
+        channelKey: "channel-search",
+        title: "Search Hit",
+        channelName: "Search Channel",
+        durationText: "2:22",
+        summary: "Global result summary",
+        tags: ["search"],
+        accentHex: "#F59F00",
+        sections: [.home]
+      )
+    ]
+
+    appState.applySearchResults(query: "search", videos: searchResults)
+
+    XCTAssertTrue(appState.isSearchActive)
+    XCTAssertEqual(appState.displayedVideos.map(\.title), ["Search Hit"])
+    XCTAssertEqual(appState.selectedVideo?.title, "Search Hit")
+
+    appState.clearSearch()
+
+    XCTAssertFalse(appState.isSearchActive)
+    XCTAssertEqual(appState.displayedVideos.map(\.id), sectionVideos.map(\.id))
+    XCTAssertEqual(appState.selectedVideo?.id, sectionVideos.first?.id)
+  }
+
+  func testSearchResultsReplaceMissingSelectionWithFirstResult() {
+    let appState = AppState()
+    appState.selectSection(.library)
+    appState.selectVideo("missing-video")
+
+    let searchResults = [
+      NativeVideo(
+        id: "channel-search:video-1",
+        backendVideoID: "video-1",
+        channelKey: "channel-search",
+        title: "First Search Hit",
+        channelName: "Search Channel",
+        durationText: "2:22",
+        summary: "Global result summary",
+        tags: ["search"],
+        accentHex: "#F59F00",
+        sections: [.home]
+      ),
+      NativeVideo(
+        id: "channel-search:video-2",
+        backendVideoID: "video-2",
+        channelKey: "channel-search",
+        title: "Second Search Hit",
+        channelName: "Search Channel",
+        durationText: "3:10",
+        summary: "Another result summary",
+        tags: ["search"],
+        accentHex: "#12B886",
+        sections: [.home]
+      )
+    ]
+
+    appState.applySearchResults(query: "search", videos: searchResults)
+
+    XCTAssertEqual(appState.selectedVideoID, "channel-search:video-1")
+    XCTAssertEqual(appState.displayedVideos.count, 2)
+  }
+
+  func testSectionCountsReflectAppliedSnapshot() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          makeVideo(id: "channel-a:home-1", backendVideoID: "home-1", channelKey: "channel-a", title: "Home 1", channelName: "Channel A", sections: [.home]),
+          makeVideo(id: "channel-b:home-2", backendVideoID: "home-2", channelKey: "channel-b", title: "Home 2", channelName: "Channel B", sections: [.home]),
+        ],
+        subscriptions: [
+          makeVideo(id: "channel-a:sub-1", backendVideoID: "sub-1", channelKey: "channel-a", title: "Sub 1", channelName: "Channel A", sections: [.subscriptions]),
+        ],
+        library: [
+          makeVideo(id: "channel-c:lib-1", backendVideoID: "lib-1", channelKey: "channel-c", title: "Lib 1", channelName: "Channel C", sections: [.library]),
+        ],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 2, subscriptionCount: 1, libraryCount: 1, channelCount: 3)
+    )
+
+    appState.applySnapshot(snapshot)
+
+    XCTAssertEqual(appState.videoCount(for: .home), 2)
+    XCTAssertEqual(appState.videoCount(for: .subscriptions), 1)
+    XCTAssertEqual(appState.videoCount(for: .library), 1)
+    XCTAssertEqual(appState.videoCount(for: .studio), 0)
+  }
+
+  func testBrowseStateTracksIdentityAndSubscriptionFlags() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [makeVideo(id: "channel-b:home-1", backendVideoID: "home-1", channelKey: "channel-b", title: "B1", channelName: "Channel B", sections: [.home])],
+        subscriptions: [],
+        library: [],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: ["channel-b"],
+        identityChannelKeys: ["channel-a"],
+        activeIdentityName: "Channel A",
+        activeIdentityChannelKey: "channel-a",
+        activeChannelPublished: true
+      )
+    )
+
+    appState.applySnapshot(snapshot)
+
+    XCTAssertTrue(appState.hasActiveIdentity)
+    XCTAssertEqual(appState.activeIdentityName, "Channel A")
+    XCTAssertTrue(appState.activeChannelPublished)
+    XCTAssertTrue(appState.ownsChannel("channel-a"))
+    XCTAssertFalse(appState.ownsChannel("channel-b"))
+    XCTAssertTrue(appState.isSubscribed(to: "channel-b"))
+    XCTAssertFalse(appState.isSubscribed(to: "channel-c"))
+  }
+
+  func testChannelPageStateOpensAndClosesWithoutDroppingBrowseSelection() {
+    let appState = AppState(catalog: NativeVideo.samples)
+    let profile = NativeChannelProfile(
+      channelKey: "channel-viewer",
+      publicBeeKey: nil,
+      avatarURL: nil,
+      name: "Viewer Channel",
+      description: "A channel opened from browse.",
+      videoCount: 3,
+      role: .viewer,
+      isSubscribed: true,
+      isPublished: false
+    )
+    let priorSelection = appState.selectedVideoID
+
+    appState.openChannelPage(profile: profile, videos: [
+      makeVideo(
+        id: "channel-viewer:video-1",
+        backendVideoID: "video-1",
+        channelKey: "channel-viewer",
+        title: "Viewer Video",
+        channelName: "Viewer Channel",
+        sections: [.home]
+      )
+    ])
+
+    XCTAssertTrue(appState.isShowingChannelPage)
+    XCTAssertEqual(appState.channelPageProfile?.channelKey, "channel-viewer")
+    XCTAssertEqual(appState.channelPageVideos.count, 1)
+
+    appState.closeChannelPage()
+
+    XCTAssertFalse(appState.isShowingChannelPage)
+    XCTAssertNil(appState.channelPageProfile)
+    XCTAssertEqual(appState.selectedVideoID, priorSelection)
+  }
+
+  func testChannelProfileDerivesOwnerAndViewerModesFromBrowseState() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(home: [], subscriptions: [], library: [], studio: [], diagnostics: []),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 0),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: ["channel-viewer"],
+        identityChannelKeys: ["channel-owner"],
+        activeIdentityName: "Owner",
+        activeIdentityChannelKey: "channel-owner",
+        activeChannelPublished: true
+      )
+    )
+    appState.applySnapshot(snapshot)
+
+    let ownerProfile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: nil,
+      name: "Owner Channel",
+      description: "Owned channel",
+      videoCount: 4
+    )
+    let viewerProfile = appState.makeChannelProfile(
+      channelKey: "channel-viewer",
+      publicBeeKey: nil,
+      name: "Viewer Channel",
+      description: "Subscribed channel",
+      videoCount: 2
+    )
+
+    XCTAssertEqual(ownerProfile.role, .owner)
+    XCTAssertTrue(ownerProfile.isPublished)
+    XCTAssertFalse(ownerProfile.isSubscribed)
+    XCTAssertEqual(viewerProfile.role, .viewer)
+    XCTAssertTrue(viewerProfile.isSubscribed)
+    XCTAssertFalse(viewerProfile.isPublished)
+  }
+
+  func testSelectingSectionClosesOpenChannelPage() {
+    let appState = AppState(catalog: NativeVideo.samples)
+    let profile = NativeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      avatarURL: URL(string: "https://example.com/avatar.png"),
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 1,
+      role: .owner,
+      isSubscribed: false,
+      isPublished: true
+    )
+
+    appState.openChannelPage(profile: profile, videos: [])
+    XCTAssertTrue(appState.isShowingChannelPage)
+
+    appState.selectSection(.home)
+
+    XCTAssertFalse(appState.isShowingChannelPage)
+    XCTAssertNil(appState.channelPageProfile)
+  }
+
+  func testStudioWorkspaceTracksLoadedOwnerProfileAndSelection() {
+    let appState = AppState(catalog: NativeVideo.samples)
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [],
+        studio: [
+          makeVideo(
+            id: "studio:video-1",
+            backendVideoID: "video-1",
+            channelKey: "channel-owner",
+            title: "Studio Video 1",
+            channelName: "Owner Channel",
+            sections: [.studio]
+          )
+        ],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-owner"],
+        activeIdentityName: "Owner Channel",
+        activeIdentityChannelKey: "channel-owner",
+        activeChannelPublished: true
+      )
+    )
+    appState.applySnapshot(snapshot)
+
+    let loadedProfile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      avatarURL: "https://example.com/avatar.png",
+      name: "Owner Channel",
+      description: "Loaded studio profile",
+      videoCount: 2
+    )
+    let loadedVideos = [
+      makeVideo(
+        id: "studio:video-2",
+        backendVideoID: "video-2",
+        channelKey: "channel-owner",
+        title: "Studio Video 2",
+        channelName: "Owner Channel",
+        sections: [.studio]
+      )
+    ]
+
+    appState.updateStudioWorkspace(profile: loadedProfile, videos: loadedVideos)
+
+    XCTAssertEqual(appState.studioWorkspaceProfile?.avatarURL?.absoluteString, "https://example.com/avatar.png")
+    XCTAssertEqual(appState.studioWorkspaceVideos.count, 1)
+    XCTAssertEqual(appState.selectedStudioVideoID, "studio:video-2")
+    XCTAssertEqual(appState.studioEditingVideo?.id, "studio:video-2")
+  }
+
+  func testStudioUploadJobTracksProgressAndFailureState() {
+    let appState = AppState()
+
+    appState.beginStudioUpload(fileName: "clip.mov", title: "Clip")
+    appState.applyUploadProgress(
+      NativeBridgeUploadProgressEvent(
+        videoId: "",
+        progress: 42,
+        bytesUploaded: 420,
+        totalBytes: 1000,
+        speed: 84,
+        eta: 7
+      )
+    )
+
+    XCTAssertEqual(appState.activeStudioUploadJob?.title, "Clip")
+    XCTAssertEqual(appState.activeStudioUploadJob?.state, .uploading)
+    XCTAssertEqual(appState.activeStudioUploadJob?.progress, 42)
+    XCTAssertEqual(appState.activeStudioUploadJob?.bytesUploaded, 420)
+
+    appState.failStudioUpload(message: "Network lost")
+
+    XCTAssertEqual(appState.activeStudioUploadJob?.state, .failed)
+    XCTAssertEqual(appState.activeStudioUploadJob?.errorMessage, "Network lost")
+  }
+
+  func testRetryableStudioUploadFileURLRequiresFailedJobAndExistingSourcePath() {
+    let appState = AppState()
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let fileURL = root.appendingPathComponent("retry-upload.mp4")
+
+    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: fileURL.path, contents: Data())
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    appState.beginStudioUpload(
+      fileName: "retry-upload.mp4",
+      title: "Retry Upload",
+      sourceFilePath: fileURL.path
+    )
+    XCTAssertNil(appState.retryableStudioUploadFileURL())
+
+    appState.failStudioUpload(message: "Network lost")
+
+    XCTAssertEqual(appState.retryableStudioUploadFileURL(), fileURL)
+  }
+
+  func testCompletingStudioUploadSelectsLatestSuccessfulVideoForEditing() {
+    let appState = AppState()
+    let newestVideo = makeVideo(
+      id: "channel-owner:video-new",
+      backendVideoID: "video-new",
+      channelKey: "channel-owner",
+      title: "Newest Upload",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+    let olderVideo = makeVideo(
+      id: "channel-owner:video-old",
+      backendVideoID: "video-old",
+      channelKey: "channel-owner",
+      title: "Older Upload",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+
+    appState.applySnapshot(
+      NativeBrowseSnapshot(
+        generatedAt: 1,
+        sections: NativeBrowseSections(
+          home: [],
+          subscriptions: [],
+          library: [newestVideo],
+          studio: [newestVideo, olderVideo],
+          diagnostics: []
+        ),
+        stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 1, channelCount: 1)
+      )
+    )
+    appState.beginStudioUpload(fileName: "newest.mov", title: "Newest Upload")
+
+    appState.completeStudioUpload(with: newestVideo)
+
+    XCTAssertEqual(appState.activeStudioUploadJob?.state, .completed)
+    XCTAssertEqual(appState.studioEditingVideo?.id, newestVideo.id)
+    XCTAssertEqual(appState.selectedStudioVideoID, newestVideo.id)
+  }
+
+  func testCompletedStudioUploadJobIsHiddenFromStudioStatusCard() {
+    let appState = AppState()
+    let uploadedVideo = makeVideo(
+      id: "channel-owner:video-new",
+      backendVideoID: "video-new",
+      channelKey: "channel-owner",
+      title: "Newest Upload",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+
+    appState.beginStudioUpload(fileName: "newest.mov", title: "Newest Upload")
+    appState.completeStudioUpload(with: uploadedVideo)
+
+    XCTAssertEqual(appState.activeStudioUploadJob?.state, .completed)
+    XCTAssertNil(appState.presentedStudioUploadJob)
+  }
+
+  func testResolveUploadedStudioVideoPrefersProgressVideoIDThenFirstOwnerTitleMatch() {
+    let activeIdentityChannelKey = "channel-owner"
+    let matchingVideo = makeVideo(
+      id: "channel-owner:video-2",
+      backendVideoID: "video-2",
+      channelKey: activeIdentityChannelKey,
+      title: "Uploaded Clip",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+    let fallbackVideo = makeVideo(
+      id: "channel-owner:video-3",
+      backendVideoID: "video-3",
+      channelKey: activeIdentityChannelKey,
+      title: "Uploaded Clip",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [matchingVideo],
+        studio: [matchingVideo, fallbackVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 1, channelCount: 1)
+    )
+    let jobWithVideoID = NativeUploadJob(
+      id: "active-upload",
+      fileName: "uploaded-clip.mp4",
+      title: "Uploaded Clip",
+      createdAt: Date(),
+      sourceFilePath: "/tmp/uploaded-clip.mp4",
+      videoID: "video-2",
+      progress: 100,
+      bytesUploaded: nil,
+      totalBytes: nil,
+      speed: nil,
+      eta: nil,
+      state: .processing,
+      errorMessage: nil
+    )
+    let jobWithoutVideoID = NativeUploadJob(
+      id: "active-upload",
+      fileName: "uploaded-clip.mp4",
+      title: "Uploaded Clip",
+      createdAt: Date(),
+      sourceFilePath: "/tmp/uploaded-clip.mp4",
+      videoID: nil,
+      progress: 100,
+      bytesUploaded: nil,
+      totalBytes: nil,
+      speed: nil,
+      eta: nil,
+      state: .processing,
+      errorMessage: nil
+    )
+
+    XCTAssertEqual(
+      HostBridgeService.resolveUploadedStudioVideo(
+        snapshot: snapshot,
+        uploadJob: jobWithVideoID,
+        activeIdentityChannelKey: activeIdentityChannelKey
+      )?.backendVideoID,
+      "video-2"
+    )
+
+    XCTAssertEqual(
+      HostBridgeService.resolveUploadedStudioVideo(
+        snapshot: snapshot,
+        uploadJob: jobWithoutVideoID,
+        activeIdentityChannelKey: activeIdentityChannelKey
+      )?.id,
+      matchingVideo.id
+    )
+  }
+
+  func testStudioWorkspaceRefreshKeepsCurrentEditingSelectionWhenVideoStillExists() {
+    let appState = AppState()
+    let firstVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "First Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let secondVideo = makeVideo(
+      id: "channel-owner:video-2",
+      backendVideoID: "video-2",
+      channelKey: "channel-owner",
+      title: "Second Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 2
+    )
+
+    appState.updateStudioWorkspace(profile: profile, videos: [firstVideo, secondVideo])
+    appState.selectStudioVideoForEditing(secondVideo.id)
+
+    appState.updateStudioWorkspace(
+      profile: profile,
+      videos: [
+        firstVideo,
+        secondVideo.updating(title: "Second Video Updated")
+      ]
+    )
+
+    XCTAssertEqual(appState.selectedStudioVideoID, secondVideo.id)
+    XCTAssertEqual(appState.studioEditingVideo?.title, "Second Video Updated")
+  }
+
+  func testLoadedEmptyStudioWorkspaceClearsSnapshotFallbackAndEditingSelection() {
+    let appState = AppState()
+    let snapshotVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Snapshot Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [],
+        studio: [snapshotVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-owner"],
+        activeIdentityName: "Owner Channel",
+        activeIdentityChannelKey: "channel-owner",
+        activeChannelPublished: true
+      )
+    )
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 1
+    )
+
+    appState.applySnapshot(snapshot)
+    appState.selectStudioVideoForEditing(snapshotVideo.id)
+    appState.updateStudioWorkspace(profile: profile, videos: [])
+
+    XCTAssertTrue(appState.studioWorkspaceVideos.isEmpty)
+    XCTAssertEqual(appState.studioWorkspaceProfile?.videoCount, 0)
+    XCTAssertNil(appState.selectedStudioVideoID)
+    XCTAssertNil(appState.studioEditingVideo)
+  }
+
+  func testStudioWorkspaceProfileUsesLoadedWorkspaceVideoCount() {
+    let appState = AppState()
+    let loadedVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Loaded Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 4
+    )
+
+    appState.updateStudioWorkspace(profile: profile, videos: [loadedVideo])
+
+    XCTAssertEqual(appState.studioWorkspaceVideos.map(\.id), [loadedVideo.id])
+    XCTAssertEqual(appState.studioWorkspaceProfile?.videoCount, 1)
+  }
+
+  func testApplyingSnapshotForDifferentActiveIdentityClearsPreviouslyLoadedStudioWorkspace() {
+    let appState = AppState()
+    let loadedVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Owner Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let loadedProfile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 1
+    )
+    let snapshotVideo = makeVideo(
+      id: "channel-next:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-next",
+      title: "Next Identity Video",
+      channelName: "Next Channel",
+      sections: [.studio]
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 2,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [],
+        studio: [snapshotVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-next"],
+        activeIdentityName: "Next Channel",
+        activeIdentityChannelKey: "channel-next",
+        activeChannelPublished: false
+      )
+    )
+
+    appState.updateStudioWorkspace(profile: loadedProfile, videos: [loadedVideo])
+    appState.selectStudioVideoForEditing(loadedVideo.id)
+    appState.applySnapshot(snapshot)
+
+    XCTAssertEqual(appState.studioWorkspaceVideos.map(\.id), [snapshotVideo.id])
+    XCTAssertEqual(appState.selectedStudioVideoID, snapshotVideo.id)
+    XCTAssertEqual(appState.studioEditingVideo?.id, snapshotVideo.id)
+    XCTAssertEqual(appState.studioWorkspaceProfile?.channelKey, "channel-next")
+  }
+
+  func testUpsertOwnedVideoRefreshesStudioWorkspaceAndChannelPageCopies() {
+    let appState = AppState()
+    let originalVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Original Title",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+    let updatedVideo = NativeVideo(
+      id: originalVideo.id,
+      backendVideoID: originalVideo.backendVideoID,
+      channelKey: originalVideo.channelKey,
+      title: "Updated Title",
+      channelName: originalVideo.channelName,
+      durationText: originalVideo.durationText,
+      summary: "Updated summary",
+      tags: originalVideo.tags,
+      accentHex: originalVideo.accentHex,
+      sections: originalVideo.sections
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [originalVideo],
+        studio: [originalVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 1, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-owner"],
+        activeIdentityName: "Owner Channel",
+        activeIdentityChannelKey: "channel-owner",
+        activeChannelPublished: true
+      )
+    )
+    appState.applySnapshot(snapshot)
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 1
+    )
+    appState.updateStudioWorkspace(profile: profile, videos: [originalVideo])
+    appState.openChannelPage(profile: profile, videos: [originalVideo])
+    appState.selectStudioVideoForEditing(originalVideo.id)
+
+    appState.upsertOwnedVideo(updatedVideo)
+
+    XCTAssertEqual(appState.videos(for: .studio).first?.title, "Updated Title")
+    XCTAssertEqual(appState.videos(for: .library).first?.title, "Updated Title")
+    XCTAssertEqual(appState.studioWorkspaceVideos.first?.title, "Updated Title")
+    XCTAssertEqual(appState.channelPageVideos.first?.title, "Updated Title")
+    XCTAssertEqual(appState.studioEditingVideo?.title, "Updated Title")
+  }
+
+  func testRemoveOwnedVideoPrunesWorkspaceCopiesAndAdvancesSelection() {
+    let appState = AppState()
+    let firstVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "First Video",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+    let secondVideo = makeVideo(
+      id: "channel-owner:video-2",
+      backendVideoID: "video-2",
+      channelKey: "channel-owner",
+      title: "Second Video",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [firstVideo, secondVideo],
+        studio: [firstVideo, secondVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 2, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-owner"],
+        activeIdentityName: "Owner Channel",
+        activeIdentityChannelKey: "channel-owner",
+        activeChannelPublished: true
+      )
+    )
+    appState.applySnapshot(snapshot)
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 2
+    )
+    appState.updateStudioWorkspace(profile: profile, videos: [firstVideo, secondVideo])
+    appState.openChannelPage(profile: profile, videos: [firstVideo, secondVideo])
+    appState.selectStudioVideoForEditing(firstVideo.id)
+
+    appState.removeOwnedVideo(firstVideo)
+
+    XCTAssertEqual(appState.videos(for: .studio).map(\.id), [secondVideo.id])
+    XCTAssertEqual(appState.videos(for: .library).map(\.id), [secondVideo.id])
+    XCTAssertEqual(appState.studioWorkspaceVideos.map(\.id), [secondVideo.id])
+    XCTAssertEqual(appState.channelPageVideos.map(\.id), [secondVideo.id])
+    XCTAssertEqual(appState.selectedStudioVideoID, secondVideo.id)
+    XCTAssertEqual(appState.studioEditingVideo?.id, secondVideo.id)
+    XCTAssertEqual(appState.channelPageProfile?.videoCount, 1)
+    XCTAssertEqual(appState.studioWorkspaceProfile?.videoCount, 1)
+  }
+
+  func testNativeVideoUpdatingPreservesExistingFields() {
+    let originalVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Original Title",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+
+    let updatedVideo = originalVideo.updating(title: "Updated Title", summary: "Updated Summary")
+
+    XCTAssertEqual(updatedVideo.id, originalVideo.id)
+    XCTAssertEqual(updatedVideo.backendVideoID, originalVideo.backendVideoID)
+    XCTAssertEqual(updatedVideo.channelKey, originalVideo.channelKey)
+    XCTAssertEqual(updatedVideo.title, "Updated Title")
+    XCTAssertEqual(updatedVideo.summary, "Updated Summary")
+    XCTAssertEqual(updatedVideo.sections, originalVideo.sections)
+    XCTAssertEqual(updatedVideo.path, originalVideo.path)
+    XCTAssertEqual(updatedVideo.blobId, originalVideo.blobId)
+  }
+
+  func testHostBridgeUploadProgressEventUpdatesObservedStudioState() {
+    let appState = AppState()
+    let hostBridge = HostBridgeService()
+
+    appState.beginStudioUpload(fileName: "event.mov", title: "Event Upload")
+    hostBridge.applyUploadProgressEvent(
+      NativeBridgeUploadProgressEvent(
+        videoId: "",
+        progress: 64,
+        bytesUploaded: 640,
+        totalBytes: 1000,
+        speed: 32,
+        eta: 11
+      ),
+      to: appState
+    )
+
+    XCTAssertEqual(appState.activeStudioUploadJob?.state, .uploading)
+    XCTAssertEqual(appState.activeStudioUploadJob?.progress, 64)
+    XCTAssertEqual(appState.activeStudioUploadJob?.speed, 32)
+  }
+
+  func testPreferredVideoUploadDropURLPrefersFirstSupportedVideoFile() {
+    let urls = [
+      URL(fileURLWithPath: "/tmp/poster.png"),
+      URL(fileURLWithPath: "/tmp/clip.MP4"),
+      URL(fileURLWithPath: "/tmp/backup.mov"),
+    ]
+
+    let resolved = HostBridgeService.preferredVideoUploadDropURL(from: urls)
+
+    XCTAssertEqual(resolved?.lastPathComponent, "clip.MP4")
+  }
+
+  func testIsSupportedVideoUploadURLRejectsDirectoriesAndImages() {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let directoryURL = root.appendingPathComponent("folder", isDirectory: true)
+    let imageURL = root.appendingPathComponent("poster.png")
+    let videoURL = root.appendingPathComponent("upload.webm")
+
+    try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: imageURL.path, contents: Data())
+    FileManager.default.createFile(atPath: videoURL.path, contents: Data())
+    defer { try? fileManager.removeItem(at: root) }
+
+    XCTAssertFalse(
+      HostBridgeService.isSupportedVideoUploadURL(
+        directoryURL,
+        fileManager: fileManager
+      )
+    )
+    XCTAssertFalse(
+      HostBridgeService.isSupportedVideoUploadURL(
+        imageURL,
+        fileManager: fileManager
+      )
+    )
+    XCTAssertTrue(
+      HostBridgeService.isSupportedVideoUploadURL(
+        videoURL,
+        fileManager: fileManager
+      )
+    )
+  }
+
+  func testRelatedVideosPreferSameChannelAndExcludeSelection() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          makeVideo(id: "channel-a:home-1", backendVideoID: "home-1", channelKey: "channel-a", title: "A1", channelName: "Channel A", sections: [.home]),
+          makeVideo(id: "channel-a:home-2", backendVideoID: "home-2", channelKey: "channel-a", title: "A2", channelName: "Channel A", sections: [.home]),
+          makeVideo(id: "channel-b:home-1", backendVideoID: "home-1", channelKey: "channel-b", title: "B1", channelName: "Channel B", sections: [.home]),
+          makeVideo(id: "channel-c:home-1", backendVideoID: "home-1", channelKey: "channel-c", title: "C1", channelName: "Channel C", sections: [.home]),
+        ],
+        subscriptions: [],
+        library: [
+          makeVideo(id: "channel-a:lib-1", backendVideoID: "lib-1", channelKey: "channel-a", title: "A Library", channelName: "Channel A", sections: [.library]),
+        ],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 4, subscriptionCount: 0, libraryCount: 1, channelCount: 3)
+    )
+
+    appState.applySnapshot(snapshot)
+    appState.selectVideo("channel-a:home-1")
+
+    XCTAssertEqual(
+      appState.relatedVideos(limit: 4).map(\.id),
+      [
+        "channel-a:home-2",
+        "channel-a:lib-1",
+        "channel-b:home-1",
+        "channel-c:home-1",
+      ]
+    )
+  }
+
+  func testNativeBridgeBootstrapResponseRoundTripsThroughCompactEncoding() throws {
     let snapshot = DesktopBrowseSnapshot(
       sections: DesktopBrowseSections(home: [], subscriptions: [], library: [], studio: [], diagnostics: []),
       stats: DesktopBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1),

@@ -17,7 +17,6 @@ Client shell
 | --- | --- | --- | --- |
 | iOS / Android | Expo + React Native | BareKit worklet | HRPC over BareKit IPC |
 | Electrobun desktop | Expo web export in Electrobun | embedded `pear-runtime` worker | HRPC over worker pipe |
-| Native macOS | SwiftUI | bare-native sidecar or embedded BareKit | HRPC over native bridge |
 | Relay | CLI/container | direct backend runtime | in-process API |
 
 ## Package Boundaries
@@ -30,8 +29,7 @@ packages/
   protocol/         Universal HRPC client, readiness, errors, events, namespaces
   host/             Backend lifecycle, host error codes, PROTOCOL_VERSION
   backend/          P2P storage, discovery, API surface, playback, relay logic
-  spec/             HRPC schema source and generated JS/Swift code
-  desktop-native/   SwiftUI native macOS client and bridge
+  spec/             HRPC schema source and generated JS code
   cli/              Relay CLI, standalone build, Docker artifact support
   bare-*/           Native Bare support packages
 ```
@@ -65,18 +63,6 @@ Electrobun view
 ```
 
 `npm run desktop:build` exports the Expo web app, compiles the worker, and packs a Bare worker bundle with offloaded native addons.
-
-### Native macOS
-
-```text
-SwiftUI app
-  -> HostBridgeService.swift
-  -> Bridge/native-rpc.mjs codecs
-  -> Bridge/native-host-sidecar.mjs or embedded BareKit worklet
-  -> @peartube/backend/backend-entry
-```
-
-Native macOS validates the host protocol version before applying backend data.
 
 ## Protocol Contract
 
@@ -116,20 +102,11 @@ Tracked generated output:
 
 - `packages/spec/spec/hrpc/*`
 - `packages/spec/spec/schema/*`
-- `packages/spec/spec/swift-*/*`
 
-Regenerated local/native output:
-
-- `packages/desktop-native/Sources/Support/GeneratedSchema.swift`
-- `packages/desktop-native/Sources/Support/GeneratedHRPC.swift`
-- `packages/desktop-native/Resources/Generated/*`
-- `packages/desktop-native/Resources/Runtime/*`
-
-Use root commands instead of manual copying:
+Use root commands to regenerate:
 
 ```bash
 npm run schema:full
-npm run generate --prefix packages/desktop-native
 ```
 
 ## Build Pipelines
@@ -138,11 +115,10 @@ npm run generate --prefix packages/desktop-native
 npm run ios
 npm run android
 npm run desktop
-npm run desktop:native:build
 npm test
 ```
 
-CI splits coverage across fast tests, mobile builds, Electrobun desktop, native desktop, relay builds, and release artifact workflows under `.github/workflows/`.
+CI splits coverage across fast tests, mobile builds, Electrobun desktop, relay builds, and release artifact workflows under `.github/workflows/`.
 
 ## Runtime Boundaries
 

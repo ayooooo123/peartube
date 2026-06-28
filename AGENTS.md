@@ -23,7 +23,6 @@ The client shell is platform-specific. The backend logic is not.
 | --- | --- | --- | --- |
 | iOS / Android | Expo + React Native | BareKit worklet | HRPC over BareKit IPC |
 | Electrobun desktop | Expo web export | desktop worker | HRPC over worker pipe |
-| `desktop-native` | SwiftUI macOS app | bare-native sidecar or embedded BareKit | HRPC over native bridge |
 
 ## Monorepo Layout
 
@@ -32,7 +31,6 @@ packages/
 ├── app/                # Expo app for mobile and Electrobun desktop
 ├── backend/            # Universal P2P backend logic
 ├── core/               # Shared app components, hooks, stores, and types
-├── desktop-native/     # Native macOS SwiftUI client
 ├── host/               # Universal backend host lifecycle and protocol version
 ├── platform/           # Platform runners and app-facing RPC facade
 ├── protocol/           # Shared protocol client, event map, readiness handling
@@ -50,9 +48,7 @@ packages/
 
 `@peartube/platform` owns app-side runner selection. Mobile uses the native runner, Electrobun uses the web runner, and both expose the same app-facing RPC facade.
 
-`@peartube/spec` is the schema source of truth. Update `packages/spec/schema.cjs`, then regenerate schema outputs before relying on new fields from JS or Swift.
-
-`packages/desktop-native` is a native macOS client, not a second backend. Its Swift service uses generated HRPC types, validates the universal protocol version, and displays backend network diagnostics from `getSwarmStatus`.
+`@peartube/spec` is the schema source of truth. Update `packages/spec/schema.cjs`, then regenerate schema outputs before relying on new fields.
 
 ## Important Files
 
@@ -60,14 +56,12 @@ packages/
 | --- | --- |
 | `packages/host/src/contracts.js` | Shared protocol version and host error codes |
 | `packages/host/src/start-host.js` | Universal host startup wrapper |
-| `packages/backend/src/runtime.js` | Backend runtime used by native/mobile hosts |
+| `packages/backend/src/runtime.js` | Backend runtime used by app hosts |
 | `packages/backend/src/api.js` | Backend API surface and swarm diagnostics |
 | `packages/protocol/src/create-client.js` | Universal protocol client |
 | `packages/protocol/src/event-map.js` | Shared protocol event names |
 | `packages/platform/src/rpc.shared.ts` | Common app-facing RPC bridge |
 | `packages/spec/schema.cjs` | HRPC schema source |
-| `packages/desktop-native/Sources/Services/HostBridgeService.swift` | Native macOS host bridge |
-| `packages/desktop-native/Bridge/native-rpc.mjs` | Compact native bridge codecs |
 
 ## Development Commands
 
@@ -87,8 +81,6 @@ npm run ios
 npm run android
 npm run desktop
 npm run desktop:build
-npm run desktop:native:build
-npm run desktop:native:test
 ```
 
 Schema workflow:
@@ -97,7 +89,7 @@ Schema workflow:
 npm run schema:full
 ```
 
-`schema:full` regenerates JS schema/HRPC output and copies generated Swift files into `packages/desktop-native/Sources/Support/`.
+`schema:full` regenerates JS schema/HRPC output.
 
 ## Architecture Rules
 
@@ -123,23 +115,14 @@ npm run schema:full
 ## Troubleshooting
 
 Protocol version mismatch:
-Check `packages/host/src/contracts.js`, the native bridge codecs, and generated Swift schema output. All clients should speak the same `PROTOCOL_VERSION`.
+Check `packages/host/src/contracts.js`. All clients should speak the same `PROTOCOL_VERSION`.
 
 Backend ready but feed empty:
 Call `getSwarmStatus`. Distinguish DHT bootstrap, zero swarm peers, missing feed channels, and zero feed entries before changing UI behavior.
-
-Native macOS bridge failures:
-Check `packages/desktop-native/Sources/Services/HostBridgeService.swift`, sidecar logs, and generated bridge bundles under `packages/desktop-native/Resources/Generated/`.
 
 Schema drift:
 Update `packages/spec/schema.cjs`, run `npm run schema:full`, then run the focused protocol/spec tests.
 
 ## Storage
 
-Desktop native data is stored under:
-
-```text
-~/Library/Application Support/PearTubeDesktopNative/
-```
-
-Other clients resolve their storage paths through `@peartube/platform` and the active runner.
+Clients resolve their storage paths through `@peartube/platform` and the active runner.

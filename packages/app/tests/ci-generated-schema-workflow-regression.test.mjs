@@ -16,8 +16,6 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
   const workflow = readFile('.github/workflows/build-desktop.yml')
   const validateSubmodulesAction = readFile('.github/actions/validate-submodules/action.yml')
   const appPackage = JSON.parse(readFile('packages/app/package.json'))
-  const archiveProjectIndex = workflow.indexOf('Generate native desktop project')
-  const archiveSchemaIndex = workflow.lastIndexOf('Generate HRPC schema', archiveProjectIndex)
 
   assert.match(
     workflow,
@@ -28,16 +26,6 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
     workflow,
     /npm run schema/,
     'desktop CI must regenerate packages/spec/spec/hrpc before Expo/Bare desktop builds resolve @peartube/spec',
-  )
-  assert.match(
-    workflow,
-    /npm run schema:full/,
-    'native desktop CI must regenerate JS and Swift schema before bundling/testing native desktop sidecar',
-  )
-  assert.ok(archiveProjectIndex >= 0, 'native desktop archive job should generate an Xcode project')
-  assert.ok(
-    archiveSchemaIndex >= 0 && archiveSchemaIndex < archiveProjectIndex,
-    'native desktop archive must run schema:full before xcodegen so generated Swift HRPC/schema types exist',
   )
   assert.doesNotMatch(
     validateSubmodulesAction,

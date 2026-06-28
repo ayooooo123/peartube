@@ -275,14 +275,22 @@ maintenance-multiplier in the repo.
 
 ## Tier 5 — Proposed: frontend decomposition (app)
 
-### 16. `VideoPlayerOverlayImpl.tsx` — 3,224-line god-component (92 stateful hooks)
+### 16. `VideoPlayerOverlayImpl.tsx` — 3,224-line god-component (92 stateful hooks) ⏳ IN PROGRESS
 Owns mini-player drag physics, fullscreen/landscape, cast UI, comments, P2P stats,
 channel-meta caching, reactions — and inlines control/gesture logic that already
 exists as hooks in `components/video-player/hooks/`.
 **Proposal:** delegate to the existing `useVideoGestures`/`useMiniPlayerPosition`/
 `useLandscapeMode` hooks, deleting the inlined duplicates; target < ~800 lines.
-(Tier-1 item A already removed the unused *extracted* components; this is the deeper
-half of the same problem.)
+
+> **Slice 1 done:** extracted the self-contained channel-meta lookup (module cache
+> + effect) into `lib/useChannelMetaName.ts`; component 3,224 → 3,183. Validated
+> with app `tsc` (zero new type errors) and the rules-of-hooks structure.
+> **Validation boundary:** the remaining bulk (mini-player drag gestures,
+> fullscreen/landscape animation, PiP geometry, control timers) is gesture- and
+> animation-coupled. CI does **not** build/typecheck the RN app and there are no
+> component tests, so those extractions can't be verified here without running the
+> app — they should be done in a build/run-capable environment, one validated
+> slice at a time, to avoid silently breaking player behavior.
 
 ### 17. Two sources of truth for player state
 `lib/VideoPlayerContext.tsx` (1,446 lines, 107 hooks) already delegates mode

@@ -95,6 +95,10 @@ export default function ProfileScreen() {
   const [customStorageLimit, setCustomStorageLimit] = useState('')
   const [storageLimitSaving, setStorageLimitSaving] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
+  const [relayLinks, setRelayLinks] = useState<Array<{ mirrorKey: string; label: string; addedAt: number }>>([])
+  const [newRelayKey, setNewRelayKey] = useState('')
+  const [newRelayLabel, setNewRelayLabel] = useState('')
+  const [relayLinkBusy, setRelayLinkBusy] = useState(false)
   const [isPublished, setIsPublished] = useState(false)
   const [publishLoading, setPublishLoading] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -141,6 +145,51 @@ export default function ProfileScreen() {
   }, [rpc])
 
   useEffect(() => { loadStorageStats() }, [loadStorageStats])
+
+  const loadRelayLinks = useCallback(async () => {
+    if (!rpc || typeof (rpc as any).getRelayLinks !== 'function') return
+    try {
+      const res = await (rpc as any).getRelayLinks()
+      setRelayLinks(Array.isArray(res?.links) ? res.links : [])
+    } catch (err) {
+      console.error('[Profile] Failed to load relay links:', err)
+    }
+  }, [rpc])
+
+  useEffect(() => { loadRelayLinks() }, [loadRelayLinks])
+
+  const handleAddRelayLink = useCallback(async () => {
+    const mirrorKey = newRelayKey.trim().toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(mirrorKey)) {
+      notify('Invalid relay key', 'A relay mirror key is 64 hexadecimal characters.')
+      return
+    }
+    if (!rpc) return
+    setRelayLinkBusy(true)
+    try {
+      await (rpc as any).addRelayLink({ mirrorKey, label: newRelayLabel.trim() || undefined })
+      setNewRelayKey('')
+      setNewRelayLabel('')
+      await loadRelayLinks()
+      haptics.success()
+    } catch (err: any) {
+      console.error('[Profile] Failed to link relay:', err)
+      notify('Error', err?.message || 'Failed to link relay')
+    } finally {
+      setRelayLinkBusy(false)
+    }
+  }, [newRelayKey, newRelayLabel, rpc, loadRelayLinks])
+
+  const handleRemoveRelayLink = useCallback(async (mirrorKey: string) => {
+    if (!rpc) return
+    try {
+      await (rpc as any).removeRelayLink({ mirrorKey })
+      await loadRelayLinks()
+    } catch (err: any) {
+      console.error('[Profile] Failed to unlink relay:', err)
+      notify('Error', err?.message || 'Failed to unlink relay')
+    }
+  }, [rpc, loadRelayLinks])
 
   const loadDiagnostics = useCallback(async () => {
     if (!rpc) return
@@ -882,6 +931,68 @@ export default function ProfileScreen() {
         {/* Storage / network support */}
         <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
         {renderStorageCard()}
+
+        {/* Linked relays */}
+        <SectionHeader title="Linked relays" subtitle="Always-on relays that mirror your uploads" />
+        <GlassCard style={styles.sectionCard}>
+          <View style={styles.storageHeader}>
+            <View style={styles.storageIcon}>
+              <Feather name="link" size={18} color={colors.swarm} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.cardTitle}>Linked relays</Text>
+              <Text style={styles.cardMeta}>Paste a relay&apos;s mirror key to guarantee your uploads &amp; livestreams always have a peer. Get the key from the relay operator (their console or `peartube-relay link`).</Text>
+            </View>
+          </View>
+
+          {relayLinks.length > 0 ? (
+            <View style={{ marginTop: 12 }}>
+              {relayLinks.map((linkItem) => (
+                <View
+                  key={linkItem.mirrorKey}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border }}
+                >
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={styles.cardTitle}>{linkItem.label || 'Relay'}</Text>
+                    <Text style={styles.mono} numberOfLines={1}>{linkItem.mirrorKey}</Text>
+                  </View>
+                  <Pressable onPress={() => handleRemoveRelayLink(linkItem.mirrorKey)} style={styles.ghostButton}>
+                    <Feather name="x" size={14} color={colors.textMuted} />
+                    <Text style={styles.ghostLabel}>Unlink</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={[styles.cardMeta, { marginTop: 12 }]}>No linked relays yet.</Text>
+          )}
+
+          <TextInput
+            value={newRelayKey}
+            onChangeText={setNewRelayKey}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Relay mirror key (64 hex characters)"
+            placeholderTextColor={colors.textMuted}
+            style={[styles.input, { marginTop: 14, marginBottom: 8 }]}
+          />
+          <View style={styles.customRow}>
+            <TextInput
+              value={newRelayLabel}
+              onChangeText={setNewRelayLabel}
+              placeholder="Label (optional)"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, { flex: 1, marginBottom: 0 }]}
+            />
+            <Pressable
+              onPress={handleAddRelayLink}
+              disabled={relayLinkBusy}
+              style={[styles.secondaryButton, { marginTop: 0, paddingHorizontal: 16 }, relayLinkBusy && { opacity: 0.7 }]}
+            >
+              <Text style={styles.secondaryLabel}>{relayLinkBusy ? 'Linking…' : 'Link'}</Text>
+            </Pressable>
+          </View>
+        </GlassCard>
 
         {/* Advanced */}
         <SectionHeader title="Advanced" />

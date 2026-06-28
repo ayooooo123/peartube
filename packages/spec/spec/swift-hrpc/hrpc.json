@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -1576,6 +1576,45 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 65,
+      "name": "@peartube/add-relay-link",
+      "request": {
+        "name": "@peartube/add-relay-link-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/add-relay-link-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 66,
+      "name": "@peartube/remove-relay-link",
+      "request": {
+        "name": "@peartube/remove-relay-link-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/remove-relay-link-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 67,
+      "name": "@peartube/get-relay-links",
+      "request": {
+        "name": "@peartube/get-relay-links-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-relay-links-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

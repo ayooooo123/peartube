@@ -208,11 +208,24 @@ targets:
       - path: Extensions/MediaFormatReader/Sources
     entitlements:
       path: Extensions/MediaFormatReader/Resources/PearTubeMediaFormatReader.entitlements
+      properties:
+        com.apple.developer.mediaextension.formatreader: true
     dependencies:
       - sdk: MediaExtension.framework
       - sdk: AVFoundation.framework
     info:
       path: Extensions/MediaFormatReader/Resources/Info.plist
+      properties:
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.mediaextension.formatreader
+          EXPrincipalClass: PTMediaFormatReaderExtension
+          ClassImplementationID: com.peartube.mediaextension.formatreader.experimental
+          MTFileNameExtensionArray:
+            - mkv
+            - webm
+          MTUTTypeArray:
+            - com.peartube.media.matroska
+            - com.peartube.media.webm
     settings:
       base:
         PRODUCT_NAME: PearTubeMediaFormatReader
@@ -230,12 +243,22 @@ targets:
       - path: Extensions/MediaVideoDecoder/Sources
     entitlements:
       path: Extensions/MediaVideoDecoder/Resources/PearTubeSupplementalVideoDecoder.entitlements
+      properties:
+        com.apple.developer.mediaextension.videodecoder: true
     dependencies:
       - sdk: MediaExtension.framework
       - sdk: AVFoundation.framework
       - sdk: VideoToolbox.framework
     info:
       path: Extensions/MediaVideoDecoder/Resources/Info.plist
+      properties:
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.mediaextension.videodecoder
+          EXPrincipalClass: PTSupplementalVideoDecoderExtension
+          ClassImplementationID: com.peartube.mediaextension.videodecoder.experimental
+          CodecInfo:
+            - vp09
+            - av01
     settings:
       base:
         PRODUCT_NAME: PearTubeSupplementalVideoDecoder

@@ -13,6 +13,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let addCommentResponse = AddCommentResponseCodec()
   private let addReactionRequest = AddReactionRequestCodec()
   private let addReactionResponse = AddReactionResponseCodec()
+  private let addRelayLinkRequest = AddRelayLinkRequestCodec()
+  private let addRelayLinkResponse = AddRelayLinkResponseCodec()
   private let addToPlaylistRequest = AddToPlaylistRequestCodec()
   private let addToPlaylistResponse = AddToPlaylistResponseCodec()
   private let assessUploadOffloadRequest = AssessUploadOffloadRequestCodec()
@@ -113,6 +115,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getReactionsResponse = GetReactionsResponseCodec()
   private let getRecommendationsRequest = GetRecommendationsRequestCodec()
   private let getRecommendationsResponse = GetRecommendationsResponseCodec()
+  private let getRelayLinksRequest = GetRelayLinksRequestCodec()
+  private let getRelayLinksResponse = GetRelayLinksResponseCodec()
   private let getResumePositionRequest = GetResumePositionRequestCodec()
   private let getResumePositionResponse = GetResumePositionResponseCodec()
   private let getSeedingStatusRequest = GetSeedingStatusRequestCodec()
@@ -193,6 +197,8 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let removeFromPlaylistResponse = RemoveFromPlaylistResponseCodec()
   private let removeReactionRequest = RemoveReactionRequestCodec()
   private let removeReactionResponse = RemoveReactionResponseCodec()
+  private let removeRelayLinkRequest = RemoveRelayLinkRequestCodec()
+  private let removeRelayLinkResponse = RemoveRelayLinkResponseCodec()
   private let retrySyncChannelRequest = RetrySyncChannelRequestCodec()
   private let retrySyncChannelResponse = RetrySyncChannelResponseCodec()
   private let searchVideosRequest = SearchVideosRequestCodec()
@@ -1853,6 +1859,45 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
     _handlers["@peartube/event-transcode-progress"] = handler
   }
 
+  // Request/response — client
+  public func addRelayLink(_ args: AddRelayLinkRequest) async throws -> AddRelayLinkResponse {
+    let encoded = try _encode(addRelayLinkRequest, args)
+    guard let raw = try await _rpc.request(65, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(addRelayLinkResponse, raw)
+  }
+
+  public func onAddRelayLink(_ handler: @escaping (AddRelayLinkRequest) async throws -> AddRelayLinkResponse) {
+    _handlers["@peartube/add-relay-link"] = handler
+  }
+
+  // Request/response — client
+  public func removeRelayLink(_ args: RemoveRelayLinkRequest) async throws -> RemoveRelayLinkResponse {
+    let encoded = try _encode(removeRelayLinkRequest, args)
+    guard let raw = try await _rpc.request(66, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(removeRelayLinkResponse, raw)
+  }
+
+  public func onRemoveRelayLink(_ handler: @escaping (RemoveRelayLinkRequest) async throws -> RemoveRelayLinkResponse) {
+    _handlers["@peartube/remove-relay-link"] = handler
+  }
+
+  // Request/response — client
+  public func getRelayLinks(_ args: GetRelayLinksRequest) async throws -> GetRelayLinksResponse {
+    let encoded = try _encode(getRelayLinksRequest, args)
+    guard let raw = try await _rpc.request(67, data: encoded) else {
+      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
+    }
+    return try _decode(getRelayLinksResponse, raw)
+  }
+
+  public func onGetRelayLinks(_ handler: @escaping (GetRelayLinksRequest) async throws -> GetRelayLinksResponse) {
+    _handlers["@peartube/get-relay-links"] = handler
+  }
+
   private func _dispatchRequest(_ req: IncomingRequest) async {
     switch req.command {
     case 0:   // @peartube/create-identity
@@ -3308,6 +3353,45 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
         let args = try _decode(transcodeStatusRequest, rawData)
         let response = try await handler(args)
         req.reply(try _encode(transcodeStatusResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 65:   // @peartube/add-relay-link
+      guard let handler = _handlers["@peartube/add-relay-link"] as? (AddRelayLinkRequest) async throws -> AddRelayLinkResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(addRelayLinkRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(addRelayLinkResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 66:   // @peartube/remove-relay-link
+      guard let handler = _handlers["@peartube/remove-relay-link"] as? (RemoveRelayLinkRequest) async throws -> RemoveRelayLinkResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(removeRelayLinkRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(removeRelayLinkResponse, response))
+      } catch {
+        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
+      }
+    case 67:   // @peartube/get-relay-links
+      guard let handler = _handlers["@peartube/get-relay-links"] as? (GetRelayLinksRequest) async throws -> GetRelayLinksResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
+      guard let rawData = req.data else {
+        req.reject("Missing request data", code: "BAD_REQUEST")
+        return
+      }
+      do {
+        let args = try _decode(getRelayLinksRequest, rawData)
+        let response = try await handler(args)
+        req.reply(try _encode(getRelayLinksResponse, response))
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }

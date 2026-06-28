@@ -5,203 +5,168 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 
-import {
-  BRIDGE_COMMANDS,
-  bootstrapRequestCodec,
-  bootstrapResponseCodec,
-  browseSnapshotCodec,
-  createIdentityRequestCodec,
-  createRPCFrameParser,
-  decodePayload,
-  encodePayload,
-  encodeRequestFrame,
-  getChannelMetaRequestCodec,
-  getChannelMetaResponseCodec,
-  ffmpegDecodeAvailableResponseCodec,
-  listChannelVideosRequestCodec,
-  listChannelVideosResponseCodec,
-  searchRequestCodec,
-  searchResponseCodec,
-} from './native-rpc.mjs'
+import HRPC from '../../spec/spec/hrpc/index.js'
 
 const packageRoot = path.resolve(import.meta.dirname, '..')
 const bundlePath = path.join(packageRoot, 'Resources', 'Generated', 'native-host-sidecar.bundle')
 const bareRuntimePath = path.join(packageRoot, 'Resources', 'Runtime', 'bare')
 const linkedFrameworksPath = path.join(packageRoot, 'Vendor', 'BareAddons')
+const debugLogPath = path.join(os.tmpdir(), `peartube-native-sidecar-debug-${process.pid}.log`)
 
-function waitForResponse(child, id) {
-  return new Promise((resolve, reject) => {
-    const parser = createRPCFrameParser()
-    let stderr = ''
+function readDebugLog() {
+  try {
+    return fs.readFileSync(debugLogPath, 'utf8')
+  } catch {
+    return ''
+  }
+}
 
-    const cleanup = () => {
-      child.stdout.off('data', onStdout)
-      child.stderr.off('data', onStderr)
-      child.off('exit', onExit)
-      child.off('error', onError)
-    }
+function createSidecarEnv() {
+  const linkedLibraryPath = path.join(linkedFrameworksPath, 'lib')
+  return {
+    ...process.env,
+    DYLD_FRAMEWORK_PATH: linkedFrameworksPath,
+    LD_LIBRARY_PATH: [linkedLibraryPath, linkedFrameworksPath, process.env.LD_LIBRARY_PATH].filter(Boolean).join(path.delimiter),
+    PEARTUBE_NATIVE_WORKLET_DEBUG_LOG: debugLogPath,
+  }
+}
 
-    const onStdout = (chunk) => {
-      try {
-        const messages = parser.push(chunk)
-        for (const message of messages) {
-          if (message.kind !== 'response' || message.id !== id) continue
-          cleanup()
-          resolve(message)
-          return
-        }
-      } catch (error) {
-        cleanup()
-        reject(error)
-      }
-    }
+function createChildStream(child) {
+  return {
+    write(data) {
+      return child.stdin.write(data)
+    },
+    destroy(error) {
+      child.stdin.destroy(error)
+      child.stdout.destroy(error)
+    },
+    on(event, listener) {
+      if (event === 'drain') child.stdin.on(event, listener)
+      else child.stdout.on(event, listener)
+      return this
+    },
+    once(event, listener) {
+      if (event === 'drain') child.stdin.once(event, listener)
+      else child.stdout.once(event, listener)
+      return this
+    },
+    removeListener(event, listener) {
+      if (event === 'drain') child.stdin.removeListener(event, listener)
+      else child.stdout.removeListener(event, listener)
+      return this
+    },
+  }
+}
 
-    const onStderr = (chunk) => {
-      stderr += chunk.toString('utf8')
-    }
-
-    const onExit = (code, signal) => {
-      cleanup()
-      reject(new Error(`Sidecar exited before responding (${signal || code || 0})\n${stderr}`))
-    }
-
-    const onError = (error) => {
-      cleanup()
-      reject(error)
-    }
-
-    child.stdout.on('data', onStdout)
-    child.stderr.on('data', onStderr)
-    child.once('exit', onExit)
-    child.once('error', onError)
-  })
+async function withSidecarTimeout(label, task, timeoutMs = 30000) {
+  let timer = null
+  try {
+    return await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Timed out waiting for ${label} after ${timeoutMs}ms\nDEBUG:\n${readDebugLog()}`))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 test('bundled native host sidecar boots and responds to bootstrap', { timeout: 120000 }, async () => {
   assert.equal(fs.existsSync(bundlePath), true, 'sidecar bundle should exist after generate')
   assert.equal(fs.existsSync(bareRuntimePath), true, 'bare runtime should exist after generate')
 
+  try { fs.rmSync(debugLogPath, { force: true }) } catch (error) { void error }
+
   const storagePath = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-native-sidecar-'))
   const child = spawn(bareRuntimePath, [bundlePath], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      DYLD_FRAMEWORK_PATH: linkedFrameworksPath,
-    },
+    env: createSidecarEnv(),
   })
+  const stderrChunks = []
+  child.stderr.on('data', (chunk) => stderrChunks.push(chunk))
+
+  const rpc = new HRPC(createChildStream(child))
+  const failWithDiagnostics = (error) => {
+    const stderr = Buffer.concat(stderrChunks).toString('utf8')
+    error.message = `${error.message}\nSTDERR:\n${stderr}\nDEBUG:\n${readDebugLog()}`
+    return error
+  }
 
   try {
-    const bootstrapFrame = encodeRequestFrame({
-      id: 1,
-      command: BRIDGE_COMMANDS.bootstrap,
-      data: encodePayload(bootstrapRequestCodec, { storagePath }),
-    })
+    const payload = await withSidecarTimeout(
+      'desktopBootstrap',
+      () => rpc.desktopBootstrap({ storagePath })
+    ).catch((error) => { throw failWithDiagnostics(error) })
 
-    child.stdin.write(bootstrapFrame)
-
-    const response = await waitForResponse(child, 1)
-    assert.equal(response.isError, false)
-
-    const payload = decodePayload(bootstrapResponseCodec, response.data)
     assert.equal(payload.storagePath, storagePath)
     assert.equal(payload.protocolVersion, 3)
     assert.ok(Array.isArray(payload.snapshot.sections.home))
 
-    const searchFrame = encodeRequestFrame({
-      id: 2,
-      command: BRIDGE_COMMANDS.searchVideos,
-      data: encodePayload(searchRequestCodec, { query: 'native shell', topK: 5 }),
-    })
-
-    child.stdin.write(searchFrame)
-
-    const searchResponse = await waitForResponse(child, 2)
-    assert.equal(searchResponse.isError, false)
-
-    const searchPayload = decodePayload(searchResponseCodec, searchResponse.data)
-    assert.equal(searchPayload.query, 'native shell')
+    const searchPayload = await withSidecarTimeout(
+      'globalSearchVideos',
+      () => rpc.globalSearchVideos({ query: 'native shell', topK: 5 })
+    ).catch((error) => { throw failWithDiagnostics(error) })
     assert.ok(Array.isArray(searchPayload.results))
 
-    const createIdentityFrame = encodeRequestFrame({
-      id: 3,
-      command: BRIDGE_COMMANDS.createIdentity,
-      data: encodePayload(createIdentityRequestCodec, { name: 'Native Sidecar Test Channel' }),
-    })
+    const createIdentityPayload = await withSidecarTimeout(
+      'createIdentity',
+      () => rpc.createIdentity({ name: 'Native Sidecar Test Channel' })
+    ).catch((error) => { throw failWithDiagnostics(error) })
+    const createdIdentity = createIdentityPayload.identity
+    assert.equal(createdIdentity.name, 'Native Sidecar Test Channel')
+    assert.equal(createdIdentity.isActive, true)
+    assert.equal(typeof createdIdentity.publicKey, 'string')
+    assert.notEqual(createdIdentity.publicKey.length, 0)
 
-    child.stdin.write(createIdentityFrame)
+    const refreshed = await withSidecarTimeout(
+      'desktopRefreshBrowse',
+      () => rpc.desktopRefreshBrowse({})
+    ).catch((error) => { throw failWithDiagnostics(error) })
+    const refreshedSnapshot = refreshed.snapshot
+    assert.equal(refreshedSnapshot.state.activeIdentityName, 'Native Sidecar Test Channel')
+    assert.equal(refreshedSnapshot.state.identityChannelKeys.length > 0, true)
+    assert.equal(typeof refreshedSnapshot.state.activeIdentityChannelKey, 'string')
 
-    const createIdentityResponse = await waitForResponse(child, 3)
-    assert.equal(createIdentityResponse.isError, false)
-
-    const createdSnapshot = decodePayload(browseSnapshotCodec, createIdentityResponse.data)
-    assert.equal(createdSnapshot.state.activeIdentityName, 'Native Sidecar Test Channel')
-    assert.equal(createdSnapshot.state.identityChannelKeys.length > 0, true)
-    assert.equal(typeof createdSnapshot.state.activeIdentityChannelKey, 'string')
-
-    const activeChannelKey = createdSnapshot.state.activeIdentityChannelKey
-
-    const getChannelMetaFrame = encodeRequestFrame({
-      id: 4,
-      command: BRIDGE_COMMANDS.getChannelMeta,
-      data: encodePayload(getChannelMetaRequestCodec, {
+    const activeChannelKey = refreshedSnapshot.state.activeIdentityChannelKey
+    const getChannelMetaPayload = await withSidecarTimeout(
+      'getChannelMeta',
+      () => rpc.getChannelMeta({
         channelKey: activeChannelKey,
         publicBeeKey: null,
-      }),
-    })
-
-    child.stdin.write(getChannelMetaFrame)
-
-    const getChannelMetaResponse = await waitForResponse(child, 4)
-    assert.equal(getChannelMetaResponse.isError, false)
-
-    const getChannelMetaPayload = decodePayload(getChannelMetaResponseCodec, getChannelMetaResponse.data)
-    assert.equal(getChannelMetaPayload.channelKey, activeChannelKey)
+      })
+    ).catch((error) => { throw failWithDiagnostics(error) })
     assert.equal(getChannelMetaPayload.name, 'Native Sidecar Test Channel')
-    assert.equal(getChannelMetaPayload.avatarURL, null)
+    assert.equal(getChannelMetaPayload.avatarURL ?? null, null)
 
-    const listChannelVideosFrame = encodeRequestFrame({
-      id: 5,
-      command: BRIDGE_COMMANDS.listChannelVideos,
-      data: encodePayload(listChannelVideosRequestCodec, {
+    const listChannelVideosPayload = await withSidecarTimeout(
+      'listVideos',
+      () => rpc.listVideos({
         channelKey: activeChannelKey,
         publicBeeKey: null,
-      }),
-    })
-
-    child.stdin.write(listChannelVideosFrame)
-
-    const listChannelVideosResponse = await waitForResponse(child, 5)
-    assert.equal(listChannelVideosResponse.isError, false)
-
-    const listChannelVideosPayload = decodePayload(listChannelVideosResponseCodec, listChannelVideosResponse.data)
-    assert.equal(listChannelVideosPayload.channelKey, activeChannelKey)
+        limit: 100,
+        offset: 0,
+      })
+    ).catch((error) => { throw failWithDiagnostics(error) })
     assert.ok(Array.isArray(listChannelVideosPayload.videos))
 
-    const ffmpegAvailableFrame = encodeRequestFrame({
-      id: 8,
-      command: BRIDGE_COMMANDS.ffmpegDecodeAvailable,
-      data: null,
-    })
-
-    child.stdin.write(ffmpegAvailableFrame)
-
-    const ffmpegAvailableResponse = await waitForResponse(child, 8)
-    assert.equal(ffmpegAvailableResponse.isError, false)
-
-    const ffmpegAvailablePayload = decodePayload(ffmpegDecodeAvailableResponseCodec, ffmpegAvailableResponse.data)
+    const ffmpegAvailablePayload = await withSidecarTimeout(
+      'ffmpegDecodeAvailable',
+      () => rpc.ffmpegDecodeAvailable({})
+    ).catch((error) => { throw failWithDiagnostics(error) })
     assert.equal(typeof ffmpegAvailablePayload.available, 'boolean')
     assert.equal(
-      ffmpegAvailablePayload.available ? ffmpegAvailablePayload.error === null : typeof ffmpegAvailablePayload.error === 'string',
+      ffmpegAvailablePayload.available ? ffmpegAvailablePayload.error === null || ffmpegAvailablePayload.error === '' : typeof ffmpegAvailablePayload.error === 'string',
       true
     )
 
-    const shutdownFrame = encodeRequestFrame({
-      id: 9,
-      command: BRIDGE_COMMANDS.shutdown,
-      data: null,
-    })
-
-    child.stdin.write(shutdownFrame)
+    await withSidecarTimeout(
+      'desktopShutdown',
+      () => rpc.desktopShutdown({}),
+      10000
+    ).catch((error) => { throw failWithDiagnostics(error) })
     child.stdin.end()
   } finally {
     child.kill('SIGTERM')

@@ -1347,6 +1347,58 @@ ns.register({
 })
 
 ns.register({
+  name: 'relay-link',
+  fields: [
+    { name: 'mirrorKey', type: 'string', required: true },
+    { name: 'label', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-relay-link-request',
+  fields: [
+    { name: 'mirrorKey', type: 'string', required: true },
+    { name: 'label', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-relay-link-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'mirrorKey', type: 'string', required: false },
+    { name: 'label', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-relay-link-request',
+  fields: [
+    { name: 'mirrorKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'remove-relay-link-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-relay-links-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-relay-links-response',
+  fields: [
+    { name: 'links', type: '@peartube/relay-link', array: true }
+  ]
+})
+
+ns.register({
   name: 'clear-cache-request',
   fields: []
 })
@@ -3082,6 +3134,24 @@ rpcNs.register({
   name: 'clear-cache',
   request: { name: '@peartube/clear-cache-request', stream: false },
   response: { name: '@peartube/clear-cache-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'add-relay-link',
+  request: { name: '@peartube/add-relay-link-request', stream: false },
+  response: { name: '@peartube/add-relay-link-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'remove-relay-link',
+  request: { name: '@peartube/remove-relay-link-request', stream: false },
+  response: { name: '@peartube/remove-relay-link-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-relay-links',
+  request: { name: '@peartube/get-relay-links-request', stream: false },
+  response: { name: '@peartube/get-relay-links-response', stream: false }
 })
 
 rpcNs.register({

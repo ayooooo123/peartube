@@ -1367,6 +1367,39 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": true,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 65,
+      "command": "add-relay-link",
+      "method": "addRelayLink",
+      "handler": "AddRelayLink",
+      "request": "@peartube/add-relay-link-request",
+      "response": "@peartube/add-relay-link-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 66,
+      "command": "remove-relay-link",
+      "method": "removeRelayLink",
+      "handler": "RemoveRelayLink",
+      "request": "@peartube/remove-relay-link-request",
+      "response": "@peartube/remove-relay-link-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 67,
+      "command": "get-relay-links",
+      "method": "getRelayLinks",
+      "handler": "GetRelayLinks",
+      "request": "@peartube/get-relay-links-request",
+      "response": "@peartube/get-relay-links-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -2288,6 +2321,39 @@ export const APP_RPC_METADATA = Object.freeze({
         "send": false,
         "requestStream": false,
         "responseStream": false
+      },
+      {
+        "id": 65,
+        "command": "add-relay-link",
+        "method": "addRelayLink",
+        "handler": "AddRelayLink",
+        "request": "@peartube/add-relay-link-request",
+        "response": "@peartube/add-relay-link-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 66,
+        "command": "remove-relay-link",
+        "method": "removeRelayLink",
+        "handler": "RemoveRelayLink",
+        "request": "@peartube/remove-relay-link-request",
+        "response": "@peartube/remove-relay-link-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 67,
+        "command": "get-relay-links",
+        "method": "getRelayLinks",
+        "handler": "GetRelayLinks",
+        "request": "@peartube/get-relay-links-request",
+        "response": "@peartube/get-relay-links-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
       }
     ],
     "search": [
@@ -2584,6 +2650,7 @@ export const APP_RPC_METADATA = Object.freeze({
   "appCommands": [
     "add-comment",
     "add-reaction",
+    "add-relay-link",
     "add-to-playlist",
     "assess-upload-offload",
     "attest-device",
@@ -2625,6 +2692,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "get-public-feed",
     "get-reactions",
     "get-recommendations",
+    "get-relay-links",
     "get-resume-position",
     "get-seeding-status",
     "get-status",
@@ -2665,6 +2733,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "remove-comment",
     "remove-from-playlist",
     "remove-reaction",
+    "remove-relay-link",
     "search-videos",
     "set-active-identity",
     "set-personal-setting",

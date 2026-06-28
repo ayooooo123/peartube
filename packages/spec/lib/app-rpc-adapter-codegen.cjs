@@ -103,7 +103,10 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'set-storage-limit',
     'clear-cache',
     'assess-upload-offload',
-    'offload-upload'
+    'offload-upload',
+    'add-relay-link',
+    'remove-relay-link',
+    'get-relay-links'
   ],
   search: [
     'search-videos',

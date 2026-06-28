@@ -107,9 +107,10 @@ export function createTmdbDiscoverClient({
   baseUrl = DEFAULT_TMDB_BASE_URL,
   language = DEFAULT_TMDB_LANGUAGE,
   fetchFn = (typeof fetch === 'function' ? fetch : null),
-  timeoutMs = 6000
+  timeoutMs = 6000,
+  enabled: configuredEnabled = true
 } = {}) {
-  const enabled = Boolean(apiKey) && typeof fetchFn === 'function'
+  const enabled = Boolean(configuredEnabled) && Boolean(apiKey) && typeof fetchFn === 'function'
   const apiBase = String(baseUrl || DEFAULT_TMDB_BASE_URL).replace(/\/$/, '')
 
   async function request(path, params = {}) {
@@ -168,9 +169,10 @@ export function createTmdbClassifier({
   baseUrl = DEFAULT_TMDB_BASE_URL,
   language = DEFAULT_TMDB_LANGUAGE,
   fetchFn = (typeof fetch === 'function' ? fetch : null),
-  timeoutMs = 6000
+  timeoutMs = 6000,
+  enabled: configuredEnabled = true
 } = {}) {
-  const enabled = Boolean(apiKey) && typeof fetchFn === 'function'
+  const enabled = Boolean(configuredEnabled) && Boolean(apiKey) && typeof fetchFn === 'function'
 
   async function searchOne(kind, query, year) {
     const params = new URLSearchParams({ api_key: apiKey, query, language, include_adult: 'false' })

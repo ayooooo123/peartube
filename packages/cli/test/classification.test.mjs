@@ -2,7 +2,7 @@ import test from 'brittle'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseTitleForTmdb, createTmdbClassifier } from '../src/classification/tmdb.js'
+import { parseTitleForTmdb, createTmdbClassifier, createTmdbDiscoverClient } from '../src/classification/tmdb.js'
 import { RelayClassificationStore, classificationKey } from '../src/classification/store.js'
 import { RelaySettings, resolveTmdbOptions } from '../src/settings.js'
 
@@ -99,4 +99,22 @@ test('resolveTmdbOptions lets runtime settings override config', async function 
   const resolved = resolveTmdbOptions(config, settings)
   t.is(resolved.apiKey, 'runtime-key')
   t.is(resolved.enabled, true)
+})
+
+
+test('TMDB clients honor enabled=false even when an API key exists', async function (t) {
+  let fetchCalls = 0
+  const fetchFn = async () => {
+    fetchCalls += 1
+    return { ok: true, async json() { return { results: [{ id: 1, title: 'Should Not Fetch', popularity: 1 }] } } }
+  }
+
+  const classifier = createTmdbClassifier({ apiKey: 'key', enabled: false, fetchFn })
+  const discover = createTmdbDiscoverClient({ apiKey: 'key', enabled: false, fetchFn })
+
+  t.is(classifier.enabled, false)
+  t.is(discover.enabled, false)
+  t.is((await classifier.classify({ title: 'The Matrix' })).type, 'unknown')
+  t.alike(await discover.search({ query: 'matrix' }), [])
+  t.is(fetchCalls, 0, 'disabled clients never call TMDB')
 })

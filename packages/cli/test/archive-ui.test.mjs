@@ -663,3 +663,28 @@ test('archive publisher opens separate relay-owned channels for source identitie
   t.is(uploadOptions[0].creatorSourceId, 'youtube:channel:UC1')
   t.is(uploadOptions[0].sourceVideoId, 'one')
 })
+
+
+test('archive WebUI renders episode-aware TMDB source IDs for Discover archive forms', async (t) => {
+  const html = renderArchiveWebHome({
+    discover: {
+      type: 'tv',
+      query: 'severance',
+      items: [{
+        type: 'tv',
+        tmdbId: 95396,
+        title: 'Severance',
+        year: 2022,
+        season: 2,
+        episode: 4,
+        posterPath: '/severance.jpg',
+        networkStatus: 'missing'
+      }]
+    }
+  })
+
+  t.ok(html.includes('name="tmdbSeason" value="2"'))
+  t.ok(html.includes('name="tmdbEpisode" value="4"'))
+  t.ok(html.includes('name="sourceVideoId" value="tmdb:tv:95396:s2:e4"'))
+  t.ok(html.includes('TV · S2 E4'))
+})

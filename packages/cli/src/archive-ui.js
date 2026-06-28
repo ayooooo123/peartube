@@ -123,6 +123,21 @@ function tmdbPosterUrl(path) {
   return path ? `https://image.tmdb.org/t/p/w342${path}` : ''
 }
 
+
+function normalizeTmdbEpisodePart(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function tmdbSourceVideoId(item = {}) {
+  if (!item.type || !item.tmdbId) return ''
+  const type = item.type === 'tv' ? 'tv' : 'movie'
+  const season = normalizeTmdbEpisodePart(item.season)
+  const episode = normalizeTmdbEpisodePart(item.episode)
+  const suffix = type === 'tv' && season && episode ? `:s${season}:e${episode}` : ''
+  return `tmdb:${type}:${item.tmdbId}${suffix}`
+}
+
 function discoverCard(item) {
   const poster = tmdbPosterUrl(item.posterPath)
   const status = item.networkStatus || 'missing'
@@ -130,6 +145,7 @@ function discoverCard(item) {
     ? `Seeding${item.seededCopies ? ` · ${item.seededCopies}` : ''}`
     : (status === 'in-network' ? `In network · ${item.networkCopies || 1}` : 'Missing')
   const typeLabel = item.type === 'tv' ? 'TV' : 'Movie'
+  const episodeLabel = item.type === 'tv' && item.season && item.episode ? ` · S${item.season} E${item.episode}` : ''
   const title = item.title || 'Untitled'
   const year = item.year ? ` (${item.year})` : ''
   return `
@@ -139,16 +155,18 @@ function discoverCard(item) {
         <span class="status ${escapeHtml(status)}">${escapeHtml(statusLabel)}</span>
       </div>
       <div class="discover-copy">
-        <div class="discover-title"><strong>${escapeHtml(title)}${escapeHtml(year)}</strong><span>${escapeHtml(typeLabel)}</span></div>
+        <div class="discover-title"><strong>${escapeHtml(title)}${escapeHtml(year)}</strong><span>${escapeHtml(typeLabel)}${escapeHtml(episodeLabel)}</span></div>
         <p>${escapeHtml(item.overview || 'No overview from TMDB.')}</p>
         <form method="post" action="/discover/archive" class="discover-archive">
           <input type="hidden" name="tmdbType" value="${escapeHtml(item.type)}">
           <input type="hidden" name="tmdbId" value="${escapeHtml(item.tmdbId)}">
           <input type="hidden" name="tmdbTitle" value="${escapeHtml(title)}">
           <input type="hidden" name="tmdbYear" value="${escapeHtml(item.year || '')}">
+          <input type="hidden" name="tmdbSeason" value="${escapeHtml(item.season || '')}">
+          <input type="hidden" name="tmdbEpisode" value="${escapeHtml(item.episode || '')}">
           <input type="hidden" name="tmdbPosterPath" value="${escapeHtml(item.posterPath || '')}">
           <input type="hidden" name="sourceType" value="tmdb">
-          <input type="hidden" name="sourceVideoId" value="tmdb:${escapeHtml(item.type)}:${escapeHtml(item.tmdbId)}">
+          <input type="hidden" name="sourceVideoId" value="${escapeHtml(tmdbSourceVideoId(item))}">
           <input type="hidden" name="channelName" value="${escapeHtml(title)}">
           <input type="hidden" name="title" value="${escapeHtml(title)}">
           <label>Source URL<input name="url" placeholder="Paste YouTube/Rumble/source URL for this exact title" required></label>

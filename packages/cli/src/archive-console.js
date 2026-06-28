@@ -104,9 +104,33 @@ function normalizeCatalogChannel(channel, previewVideos = []) {
 }
 
 
-function tmdbKey(type, id) {
+function normalizeTmdbEpisodePart(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function tmdbKey(type, id, season = null, episode = null) {
   if (!type || !id) return null
-  return `${type}:${id}`
+  const normalizedType = type === 'tv' ? 'tv' : 'movie'
+  const base = `${normalizedType}:${id}`
+  const normalizedSeason = normalizeTmdbEpisodePart(season)
+  const normalizedEpisode = normalizeTmdbEpisodePart(episode)
+  return normalizedType === 'tv' && normalizedSeason && normalizedEpisode
+    ? `${base}:s${normalizedSeason}:e${normalizedEpisode}`
+    : base
+}
+
+function tmdbKeyFromClassification(classification = {}) {
+  return tmdbKey(classification.type, classification.tmdbId, classification.season, classification.episode)
+}
+
+function tmdbKeyFromDiscoverItem(item = {}) {
+  return tmdbKey(item.type, item.tmdbId, item.season, item.episode)
+}
+
+function tmdbSourceVideoId(type, id, season = null, episode = null) {
+  const key = tmdbKey(type, id, season, episode)
+  return key ? `tmdb:${key}` : ''
 }
 
 export function buildTmdbNetworkIndex(catalogChannels = []) {
@@ -114,7 +138,7 @@ export function buildTmdbNetworkIndex(catalogChannels = []) {
   for (const channel of catalogChannels || []) {
     for (const video of [...(channel.previewVideos || []), ...(channel.unavailableVideos || [])]) {
       const c = video?.classification || {}
-      const key = tmdbKey(c.type, c.tmdbId)
+      const key = tmdbKeyFromClassification(c)
       if (!key) continue
       const existing = index.get(key) || { status: 'missing', count: 0, seeded: 0, videos: [], seen: new Set() }
       const videoKey = `${channel.channelKey || channel.driveKey || ''}:${video.id || ''}:${key}`
@@ -139,7 +163,7 @@ export function buildTmdbNetworkIndex(catalogChannels = []) {
 
 export function annotateTmdbDiscoverItems(items = [], networkIndex = new Map()) {
   return (items || []).map((item) => {
-    const found = networkIndex.get(tmdbKey(item.type, item.tmdbId))
+    const found = networkIndex.get(tmdbKeyFromDiscoverItem(item))
     return {
       ...item,
       networkStatus: found?.status || 'missing',
@@ -385,7 +409,7 @@ export async function createArchiveConsole({
         await manager.enqueue({
           ...form,
           sourceType: form.sourceType || 'tmdb',
-          sourceVideoId: form.sourceVideoId || (form.tmdbType && form.tmdbId ? `tmdb:${form.tmdbType}:${form.tmdbId}` : '')
+          sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
         })
         manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
         res.writeHead(303, { location: '/#discover' })

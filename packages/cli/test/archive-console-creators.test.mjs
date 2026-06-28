@@ -1,5 +1,5 @@
 import test from 'brittle'
-import { createArchiveConsole } from '../src/archive-console.js'
+import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole } from '../src/archive-console.js'
 
 function fakeMetaDb() {
   const map = new Map()
@@ -65,11 +65,12 @@ function fakeService(overrides = {}) {
   }
 }
 
-async function withConsole(service, fn) {
+async function withConsole(service, fn, consoleOptions = {}) {
   const console = await createArchiveConsole({
     service,
     downloader: { async download() { throw new Error('not used') } },
     publisher: {},
+    ...consoleOptions,
     host: '127.0.0.1',
     port: 0
   })
@@ -223,4 +224,72 @@ test('POST /clients/revoke forwards to revokeClient', async function (t) {
   })
   t.is(service.calls.revoke.length, 1)
   t.is(service.calls.revoke[0], deviceKey)
+})
+
+
+test('TMDB network status distinguishes TV episodes from show-level matches', function (t) {
+  const index = buildTmdbNetworkIndex([{
+    channelKey: 'drive-tv',
+    publicBeeKey: 'bee-tv',
+    previewVideos: [{
+      id: 'severance-s2e4',
+      title: 'Severance S2E4',
+      blobId: '0:4:0:99',
+      blobsCoreKey: 'aa'.repeat(32),
+      availability: 'playable',
+      classification: { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 4 }
+    }],
+    unavailableVideos: [{
+      id: 'severance-s2e5',
+      title: 'Severance S2E5',
+      availability: 'unavailable',
+      classification: { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 5 }
+    }]
+  }])
+  const annotated = annotateTmdbDiscoverItems([
+    { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 4 },
+    { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 5 },
+    { type: 'tv', tmdbId: 95396, title: 'Severance', season: 2, episode: 6 },
+    { type: 'tv', tmdbId: 95396, title: 'Severance' }
+  ], index)
+
+  t.is(annotated[0].networkStatus, 'seeding')
+  t.is(annotated[1].networkStatus, 'in-network')
+  t.is(annotated[2].networkStatus, 'missing')
+  t.is(annotated[3].networkStatus, 'missing', 'show-level item does not inherit episode availability')
+})
+
+test('POST /discover/archive builds episode-aware TMDB source ids when no hidden source id is supplied', async function (t) {
+  const downloads = []
+  const service = fakeService({
+    async publishArchiveJobToFeed() {}
+  })
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/discover/archive`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        url: 'https://source.example/severance-s2e4.mp4',
+        channelName: 'Severance',
+        title: 'Severance S2E4',
+        tmdbType: 'tv',
+        tmdbId: '95396',
+        tmdbSeason: '2',
+        tmdbEpisode: '4',
+        tmdbTitle: 'Severance'
+      }).toString(),
+      redirect: 'manual'
+    })
+    t.is(res.status, 303)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }, {
+    downloader: {
+      async download(input) {
+        downloads.push(input)
+        return { filePath: '/tmp/severance.mp4', title: input.title, description: '', mimeType: 'video/mp4' }
+      }
+    }
+  })
+
+  t.is(downloads[0].sourceVideoId, 'tmdb:tv:95396:s2:e4')
 })

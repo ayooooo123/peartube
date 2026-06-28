@@ -131,6 +131,14 @@ search, comments, recommendations. `prefetchVideo` alone is **~780 lines**
 > lands as its own CI-gated commit. The pattern: methods that touch only `this.*`
 > + a small dep set extract cleanly; heavily closure-coupled methods (e.g.
 > `prefetchVideo`, `getCommentsDebugInfo`) stay until they're decomposed in place.
+> **Slice 4 done:** Search operations (`searchVideos`, `globalSearchVideos`,
+> `indexVideoVectors`) moved to `api/search.js` with explicit helper injection;
+> the shared search-envelope/indexing helpers remain in `api.js` because comments
+> and background indexing still use them.
+> **Slice 5 done:** Public feed, seeding, and multi-device pairing operations
+> moved to `api/feed.js`, `api/seeding.js`, and `api/pairing.js`. Storage/offload
+> remains in `api.js` because it shares active playback range state and upload
+> offload helpers.
 **Proposal:** split along the comment-banner sections that already exist into
 `api/{personal,comments,feed,seeding,pairing,search}.js`, each taking the shared
 closure deps and returning its method group; `createApi` becomes

@@ -1,1 +1,1 @@
-export { startMobileBackend } from './index.mjs'
+export { parseMobileLaunchArgsForTest, startMobileBackend } from './mobile-start.mjs'

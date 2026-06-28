@@ -1,3 +1,5 @@
+/* global Bare */
+/* eslint-disable no-empty */
 /**
  * PearTube Mobile Cast - Chromecast casting support for mobile backend
  *

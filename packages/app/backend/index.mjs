@@ -7,7 +7,7 @@
  * mobile runtime under the default `createMobileRuntimeBackend()` path.
  */
 
-import { startHost } from '@peartube/host/start-host'
+import { parseMobileLaunchArgsForTest, startMobileBackend as startMobileBackendContract } from './mobile-start.mjs'
 import { PROTOCOL_VERSION } from '@peartube/host'
 import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
 import * as specModule from '@peartube/spec'
@@ -326,76 +326,14 @@ function attachMobileOnlyRpcHandlers(rpc, api) {
   }
 }
 
-function resolveMobileStoragePath(providedStoragePath) {
-  if (providedStoragePath) return providedStoragePath
-
-  let bareStorageDir = ''
-  try {
-    bareStorageDir = require('bare-storage').persistent()
-  } catch {}
-
-  return Bare?.argv?.[0] || bareStorageDir || ''
-}
-
-export function parseMobileLaunchArgsForTest(args = []) {
-  const candidates = [0, 1]
-  for (const index of candidates) {
-    const arg = args[index]
-    if (typeof arg !== 'string' || !arg.trim().startsWith('{')) continue
-    try {
-      const parsed = JSON.parse(arg)
-      if (parsed?.__peartubeLaunchOptions === true) {
-        return { launchOptions: parsed, workerArgs: [...args.slice(0, index), ...args.slice(index + 1)].filter((value) => value !== 'mobile-entry') }
-      }
-    } catch {}
-  }
-
-  const workerArgs = args[0] === 'mobile-entry' ? args.slice(1) : args
-  return { launchOptions: null, workerArgs }
-}
-
 function parseMobileLaunchArgs(args = []) {
   return parseMobileLaunchArgsForTest(args)
 }
 
 export async function startMobileBackend(options = {}) {
-  const {
-    storagePath: providedStoragePath,
-    stream = globalThis.BareKit?.IPC,
-    entrypoint = 'mobile-entry',
-    args = (typeof Bare !== 'undefined' && Array.isArray(Bare?.argv)) ? Bare.argv.slice(1) : [],
-    startHostImpl = startHost,
-    createBackendImpl = createMobileRuntimeBackend,
-    attachMobileHandlersImpl,
-    attachCastHandlersImpl
-  } = options
-
-  const storagePath = resolveMobileStoragePath(providedStoragePath)
-
-  return startHostImpl({
-    platform: 'mobile',
-    storagePath,
-    entrypoint,
-    args,
-    stream,
-    createBackendImpl: async (hostOptions) => {
-      const backendSession = await createBackendImpl({
-        ...hostOptions,
-        storagePath: hostOptions.storagePath || storagePath,
-        stream: hostOptions.stream || stream,
-        args: hostOptions.args ?? args
-      })
-
-      if (backendSession?.backend && typeof attachMobileHandlersImpl === 'function') {
-        attachMobileHandlersImpl(backendSession.backend, backendSession.handlerDeps ?? {})
-      }
-
-      if (backendSession?.backend && typeof attachCastHandlersImpl === 'function') {
-        attachCastHandlersImpl(backendSession.backend, backendSession.handlerDeps ?? {})
-      }
-
-      return backendSession
-    }
+  return startMobileBackendContract({
+    createBackendImpl: createMobileRuntimeBackend,
+    ...options
   })
 }
 

@@ -82,16 +82,21 @@ generated client can ever call them; `rpc.respond` falls through to a no-op.
 Note: `desktop-bundle-script-regression.test.mjs` uses this symbol name as a
 *fixture example* — swap the fixture to a neutral name.
 
-### 4. Speculative peer-economy inside `universal-core.js` (1,110 LOC)
-The lifecycle wrapper (`init/start/suspend/resume/shutdown`) is load-bearing, but
-the bulk of the file is a peer-scoring / useful-work-ledger / sybil-policy /
-descriptor-&-proof-ingestion economy (`scorePeer`, `recordUsefulWork`,
-`ingestDescriptor`, `ingestProof`, plus a `loadNativeModules`/`libhc`/`libkv`/
-`libudx` machinery for native modules that don't exist in the tree). No caller in
-`app/`, `host/`, or `platform/` feeds this economy.
-**Proposal:** keep the thin lifecycle wrapper; extract `peer-scorer.js`,
-`budget-manager.js`, and the `ingest*`/`score*`/native-transition code to an
-unmerged branch until a real call site exists. Reclaims most of the file + 2 helpers.
+### 4. Speculative peer-economy inside `universal-core.js` ❌ NOT VIABLE — economy is live
+The original proposal was to quarantine the peer-scoring / budget / descriptor
+economy as having "no consumer." **On verification that premise is false:**
+- `createUniversalCore` builds `peerScorer` and injects it into the real
+  orchestrator (`createBackendContext({ ...options, peerScorer })`).
+- `orchestrator.js` passes it to `PublicFeedManager`, and **`public-feed.js:748`
+  consumes `peerScorer.requestTimeout(peerKey)`** to size per-peer feed request
+  timeouts — live production behavior.
+- `universal-core-hardening.test.mjs` is a 12+ case suite exercising the peer
+  scorer, budget manager, autobase sink, playback-surface isolation, and the
+  serialized lifecycle.
+The descriptor/proof *ingestion* entrypoints (`ingestDescriptor`/`ingestProof`)
+may lack an external caller, but the scorer/budget machinery is wired into the
+feed path and under test. **Decision: keep it.** Removing it would break
+public-feed and delete an active hardening suite.
 
 ### 5. Dead `createBackendRuntime` (~180 LOC near-duplicate of `createBackend`) ✅ DONE
 `runtime.js` `createBackendRuntime` duplicated `backend-entry.js` `createBackend`
@@ -212,6 +217,15 @@ verbatim across `start-host.js` and `create-client.js`.
 **Proposal:** one `@peartube/host` exposing `startHost`, `createProtocolClient`,
 and the error contract. Kills a package boundary, the re-export layer, and the
 cross-package helper duplication in one move.
+**⚠️ Deferred — needs a build/install environment, not safe to do blind here.**
+Blast radius: 4 `platform/src/*.ts` importers + the `@peartube/protocol/events`
+subpath; `package.json` deps in `platform` + `app` **and `package-lock.json`**
+(can't be safely regenerated without `npm install`); two regression tests pin it
+(`platform-typecheck-regression` asserts the subpath typechecks under bundler
+resolution; `universal-backend-architecture-regression` reads the protocol source
+paths). The mobile/desktop build — where workspace resolution actually bites —
+isn't built on PR CI, so a wrong lockfile/resolution edit can land green yet break
+the real app. Do this where `npm install` + an app build can validate it.
 
 ### 13. Shrink `@peartube/core` to types + tokens ✅ DONE (partial)
 937 LOC, but every one of its 17 import sites uses either `import type {…}` or

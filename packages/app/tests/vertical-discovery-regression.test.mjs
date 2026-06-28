@@ -69,20 +69,26 @@ test('vertical discovery keeps channel navigation and detail escape hatches', ()
   assert.match(source, /router\.push\(\{\s*pathname:\s*'\/channel\/\[key\]'/, 'vertical cards should open channel pages')
   assert.match(source, /router\.push\(\{\s*pathname:\s*'\/video\/\[id\]'/, 'vertical cards should expose full watch/details route')
   assert.match(source, /Feather name="message-circle"/, 'vertical player should include a comments/details affordance')
-  assert.match(source, /styles\.shortsAuthorAvatar/, 'vertical player should include a channel avatar affordance')
-  assert.match(source, /styles\.shortsFollowButton/, 'vertical player should include a channel follow/open affordance')
+  assert.match(source, /styles\.shortsRailAvatar/, 'vertical player should include a channel avatar affordance')
+  assert.match(source, /styles\.shortsRailFollowBadge/, 'vertical player should include a channel follow affordance')
 })
 
-test('vertical discovery uses PearTube-adapted content chrome without borrowed social affordances', () => {
+test('vertical discovery uses a PearTube-native vertical rail without borrowed social affordances', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
   assert.match(source, /shortsCardChrome/, 'shorts cards should render through a named PearTube content chrome wrapper')
-  assert.match(source, /styles\.shortsAuthorAvatar/, 'shorts metadata should include a channel avatar')
-  assert.match(source, /styles\.shortsFollowButton/, 'shorts metadata should include a real follow affordance')
-  assert.match(source, /styles\.shortsActionRow/, 'shorts metadata should use an inline action row')
-  assert.match(source, /styles\.shortsActionCluster/, 'shorts actions should be compact icon+label clusters')
-  assert.match(source, /Feather name="share-2"/, 'shorts actions should include a share affordance')
-  assert.match(source, /Feather name="message-circle"/, 'shorts actions should include a comments affordance')
+  assert.match(source, /styles\.shortsActionRail/, 'shorts should use a right-side vertical action rail (TikTok/Shorts convention)')
+  assert.match(source, /styles\.shortsRailAvatar/, 'rail should lead with the channel avatar')
+  assert.match(source, /styles\.shortsRailFollowBadge/, 'rail avatar should carry a real follow/unfollow badge')
+  assert.match(source, /styles\.shortsRailItem/, 'rail actions should be stacked icon+label items')
+  assert.match(source, /Feather name="share-2"/, 'rail should include a share affordance')
+  assert.match(source, /Feather name="message-circle"/, 'rail should include a comments affordance')
+  assert.match(source, /Feather name="heart"/, 'rail should include a react affordance')
+  // The right rail leaves the bottom-left free for real video metadata.
+  assert.match(source, /styles\.bottomMeta/, 'metadata should sit bottom-left, clear of the rail')
+  // PearTube-native cue: surface real P2P availability instead of fake engagement stats.
+  assert.match(source, /byteAvailability === 'unavailable'/, 'cards should reflect real peer availability state')
+  assert.match(source, /styles\.shortsAvailabilityChip/, 'a waiting-for-peers chip should use real availability data')
   // PearTube has no verification, reposts, view analytics, bookmarks, or @handles —
   // these were borrowed from X and must not be faked with empty/placeholder data.
   assert.doesNotMatch(source, /shortsVerifiedBadge/, 'PearTube should not show a fake verified badge on every channel')
@@ -103,8 +109,9 @@ test('vertical discovery wires the Follow button to real subscription state', ()
   assert.match(source, /\.subscribeChannel\(\{ channelKey \}\)/, 'following should subscribe to the channel over RPC')
   assert.match(source, /\.unsubscribeChannel\(\{ channelKey \}\)/, 'unfollowing should unsubscribe from the channel over RPC')
   assert.match(source, /getSubscriptions/, 'follow state should hydrate from existing subscriptions')
-  assert.match(source, /isFollowing \? 'Following' : 'Follow'/, 'the follow button label should reflect subscription state')
-  assert.doesNotMatch(source, /style=\{styles\.shortsFollowButton\} accessibilityRole="button" accessibilityLabel="Open channel"/, 'the follow button should no longer be a mislabeled channel-open shim')
+  assert.match(source, /Feather name=\{isFollowing \? 'check' : 'plus'\}/, 'the rail follow badge should reflect subscription state (+ vs check)')
+  assert.match(source, /accessibilityLabel=\{isFollowing \? 'Unfollow channel' : 'Follow channel'\}/, 'the follow badge should announce the real follow/unfollow action')
+  assert.doesNotMatch(source, /accessibilityLabel="Open channel">\s*<Text style=\{styles\.shortsFollowText\}>Follow<\/Text>/, 'the follow control should not be a mislabeled channel-open shim')
 })
 
 test('vertical discovery action row exposes only real, honest affordances', () => {
@@ -336,10 +343,10 @@ test('vertical discovery preserves raw titles while constraining long-title layo
 
   assert.doesNotMatch(source, /cleanDiscoverFilenameTitle|getDiscoverDisplayTitle/, 'Discover should not rewrite or clean user/video titles')
   assert.match(source, /<Text style=\{styles\.shortsPostText\} numberOfLines=\{2\} ellipsizeMode="tail">\{video\.title\}<\/Text>/, 'card post text should render the raw title and rely on UI truncation')
-  assert.match(source, /bottomMeta:\s*\{[\s\S]*maxHeight: 238[\s\S]*overflow: 'hidden'/, 'metadata/action block should have a hard visual bound')
+  assert.match(source, /bottomMeta:\s*\{[\s\S]*maxHeight: 210[\s\S]*overflow: 'hidden'/, 'bottom-left metadata block should have a hard visual bound')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*flexShrink: 1/, 'long title text should shrink instead of pushing controls')
   assert.match(source, /videoTitle:\s*\{[\s\S]*flexShrink: 1/, 'raw title text should be layout-constrained, not mutated')
-  assert.match(source, /shortsActionRow:\s*\{[\s\S]*flexShrink: 0/, 'status action row should remain visible even when titles are long')
+  assert.match(source, /bottomMeta:\s*\{[\s\S]*right: 84/, 'metadata should reserve right-edge space for the action rail')
 })
 
 test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {
@@ -355,12 +362,12 @@ test('vertical discovery positions progress and chrome without clumping metadata
   assert.match(source, /numberOfLines=\{2\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
   assert.match(source, /\{feedEntries\.length\} feeds/, 'feed count pill should label what the number means')
   assert.match(source, /styles\.topChromeFade/, 'header should have a subtle backing fade over active video')
-  assert.match(source, /shortsActionRow:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: 10/, 'action buttons should use a tighter bottom row')
-  assert.match(source, /accessibilityLabel="Open Shorts comments"/, 'comments action should stay compact and icon-first')
-  assert.match(source, /shortsActionLabel:\s*\{[\s\S]*fontWeight: '700'/, 'action clusters should use short text labels, not fabricated counts')
+  assert.match(source, /shortsActionRail:\s*\{[\s\S]*position: 'absolute'[\s\S]*right: 12/, 'actions should live in a right-anchored vertical rail')
+  assert.match(source, /accessibilityLabel="Open Shorts comments"/, 'comments action should stay icon-first')
+  assert.match(source, /shortsRailLabel:\s*\{[\s\S]*fontWeight: '700'/, 'rail items should use short text labels, not fabricated counts')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*minWidth: 0/, 'metadata text should shrink instead of pushing into action controls')
-  assert.match(source, /shortsActionCluster:\s*\{[\s\S]*minHeight: 36/, 'bottom action clusters should stay compact instead of heavy pill blocks')
-  assert.match(source, /<Feather name="message-circle" color="#f4f7fb" size=\{20\}/, 'action icons should be smaller than oversized controls')
+  assert.match(source, /shortsRailItem:\s*\{[\s\S]*alignItems: 'center'/, 'rail items should be vertically stacked icon+label clusters')
+  assert.match(source, /<Feather name="message-circle" color="#fff" size=\{29\}/, 'rail icons should be large, prominent tap targets')
   assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
 })
 

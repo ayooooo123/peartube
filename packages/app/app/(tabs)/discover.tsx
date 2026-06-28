@@ -725,17 +725,23 @@ export default function VerticalDiscoveryScreen() {
                 ? degradedCopy
                 : null
             const statusIsError = Boolean(shortsPlaybackMessage?.isError && shortsPlaybackMessage.key === cardKey)
+            const isWaitingForPeers = (video as any).byteAvailability === 'unavailable'
             const shortsCardChrome = shortsChromeVisible ? (
-              <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
-                <View style={styles.shortsAuthorRow}>
-                  <Pressable onPress={() => openChannel(video)} style={styles.shortsAuthorAvatar} accessibilityLabel="Open channel">
-                    <Text style={styles.shortsAuthorAvatarText}>{getShortsAvatarLetter(video)}</Text>
-                  </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
+              <>
+                <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
+                  {isWaitingForPeers ? (
+                    <View style={styles.shortsAvailabilityChip}>
+                      <Feather name="users" color="#ffd9a8" size={11} />
+                      <Text style={styles.shortsAvailabilityText}>Waiting for peers</Text>
+                    </View>
+                  ) : null}
+                  <Pressable onPress={() => openChannel(video)} style={styles.shortsChannelLine} accessibilityLabel="Open channel">
                     <Text style={styles.videoTitle} numberOfLines={1} ellipsizeMode="tail">{getShortsChannelName(video)}</Text>
                     <Text style={styles.videoMeta} numberOfLines={1}>
                       {formatTimeAgo(video.uploadedAt || Date.now())}{durationLabel ? ` · ${durationLabel}` : ''}
                     </Text>
+                  </Pressable>
+                  <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
                     {video.title ? (
                       <Text style={styles.shortsPostText} numberOfLines={2} ellipsizeMode="tail">{video.title}</Text>
                     ) : null}
@@ -743,34 +749,37 @@ export default function VerticalDiscoveryScreen() {
                       <Text style={styles.videoDescription} numberOfLines={2}>{video.description}</Text>
                     ) : null}
                   </Pressable>
-                  <Pressable
-                    onPress={() => toggleFollow(video)}
-                    disabled={!video.channelKey}
-                    style={[styles.shortsFollowButton, isFollowing && styles.shortsFollowButtonActive]}
-                    accessibilityRole="button"
-                    accessibilityLabel={isFollowing ? 'Unfollow channel' : 'Follow channel'}
-                  >
-                    <Text style={[styles.shortsFollowText, isFollowing && styles.shortsFollowTextActive]}>
-                      {isFollowing ? 'Following' : 'Follow'}
-                    </Text>
-                  </Pressable>
                 </View>
 
-                <View style={styles.shortsActionRow}>
-                  <Pressable onPress={() => openComments(video)} style={styles.shortsActionCluster} accessibilityLabel="Open Shorts comments">
-                    <Feather name="message-circle" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionLabel}>Comments</Text>
+                <View style={[styles.shortsActionRail, { bottom: metaBottomPadding }]}>
+                  <View style={styles.shortsRailAvatarWrap}>
+                    <Pressable onPress={() => openChannel(video)} style={styles.shortsRailAvatar} accessibilityLabel="Open channel">
+                      <Text style={styles.shortsRailAvatarText}>{getShortsAvatarLetter(video)}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => toggleFollow(video)}
+                      disabled={!video.channelKey}
+                      style={[styles.shortsRailFollowBadge, isFollowing && styles.shortsRailFollowBadgeActive]}
+                      accessibilityRole="button"
+                      accessibilityLabel={isFollowing ? 'Unfollow channel' : 'Follow channel'}
+                    >
+                      <Feather name={isFollowing ? 'check' : 'plus'} color={isFollowing ? '#fff' : '#061018'} size={13} />
+                    </Pressable>
+                  </View>
+                  <Pressable onPress={() => openDetails(video)} style={styles.shortsRailItem} accessibilityLabel="React to video">
+                    <Feather name="heart" color="#fff" size={29} />
+                    <Text style={styles.shortsRailLabel}>React</Text>
                   </Pressable>
-                  <Pressable onPress={() => openDetails(video)} style={styles.shortsActionCluster} accessibilityLabel="React to video">
-                    <Feather name="heart" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionLabel}>React</Text>
+                  <Pressable onPress={() => openComments(video)} style={styles.shortsRailItem} accessibilityLabel="Open Shorts comments">
+                    <Feather name="message-circle" color="#fff" size={29} />
+                    <Text style={styles.shortsRailLabel}>Chat</Text>
                   </Pressable>
-                  <Pressable onPress={() => shareVideo(video)} style={styles.shortsActionCluster} accessibilityLabel="Share video">
-                    <Feather name="share-2" color="#f4f7fb" size={20} />
-                    <Text style={styles.shortsActionLabel}>Share</Text>
+                  <Pressable onPress={() => shareVideo(video)} style={styles.shortsRailItem} accessibilityLabel="Share video">
+                    <Feather name="share-2" color="#fff" size={28} />
+                    <Text style={styles.shortsRailLabel}>Share</Text>
                   </Pressable>
                 </View>
-              </View>
+              </>
             ) : null
 
             return (
@@ -925,38 +934,92 @@ const styles = StyleSheet.create({
   bottomMeta: {
     position: 'absolute',
     left: 22,
-    right: 18,
+    right: 84,
     bottom: 0,
-    gap: 12,
-    maxHeight: 238,
+    gap: 7,
+    maxHeight: 210,
     overflow: 'hidden',
   },
-  shortsAuthorRow: {
+  shortsAvailabilityChip: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    minWidth: 0,
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(5,8,12,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,217,168,0.32)',
   },
-  shortsAuthorAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+  shortsAvailabilityText: {
+    color: '#ffd9a8',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  shortsChannelLine: {
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  shortsActionRail: {
+    position: 'absolute',
+    right: 12,
+    alignItems: 'center',
+    gap: 20,
+  },
+  shortsRailAvatarWrap: {
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  shortsRailAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.26)',
+    borderWidth: 1.5,
+    borderColor: '#fff',
     overflow: 'hidden',
-    flexShrink: 0,
   },
-  shortsAuthorAvatarText: {
+  shortsRailAvatarText: {
     color: '#fff',
-    fontSize: 17,
-    lineHeight: 21,
+    fontSize: 18,
+    lineHeight: 22,
     fontFamily: fonts.headingMedium,
   },
+  shortsRailFollowBadge: {
+    position: 'absolute',
+    bottom: -8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f6f9fb',
+    borderWidth: 1.5,
+    borderColor: '#050607',
+  },
+  shortsRailFollowBadgeActive: {
+    backgroundColor: 'rgba(5,8,12,0.7)',
+    borderColor: 'rgba(255,255,255,0.5)',
+  },
+  shortsRailItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  shortsRailLabel: {
+    color: '#fff',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
   metaTextBlock: {
-    flex: 1,
     minWidth: 0,
     flexShrink: 1,
   },
@@ -996,56 +1059,6 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.38)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 5,
-  },
-  shortsFollowButton: {
-    minWidth: 64,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-    backgroundColor: '#f6f9fb',
-    flexShrink: 0,
-  },
-  shortsFollowButtonActive: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.42)',
-  },
-  shortsFollowText: {
-    color: '#061018',
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '800',
-  },
-  shortsFollowTextActive: {
-    color: '#f6f9fb',
-  },
-  shortsActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 10,
-    flexShrink: 0,
-  },
-  shortsActionCluster: {
-    minHeight: 36,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-  },
-  shortsActionLabel: {
-    color: 'rgba(255,255,255,0.92)',
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '700',
   },
   centerState: {
     flex: 1,

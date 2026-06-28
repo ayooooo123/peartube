@@ -24,6 +24,7 @@ import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { useChannelMetaName } from '@/lib/useChannelMetaName'
 import { useCastBufferingDebounced } from '@/lib/useCastBufferingDebounced'
+import { useControlVisibilityTimers } from '@/lib/useControlVisibilityTimers'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -211,44 +212,21 @@ export function VideoPlayerOverlay() {
     onVideoStateChange,
   } = useVideoPlayerContext()
 
-  // Simplified PiP state tracking - trust the native event, don't over-engineer
-  const wasInPipRef = useRef(false)
   // Android 12+ seamless PiP can shrink the Activity window before the JS PiP event arrives.
   // Freeze PiP layout branches early based on window shrink, but avoid re-activating them
   // during the PiP exit tail where window metrics can stay small for a few frames.
   const pipExitBlockEarlyDetectRef = useRef(false)
   const pipModePrevRef = useRef(false)
-  const [showControls, setShowControls] = useState(false)
-  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const {
+    wasInPipRef,
+    showControls,
+    setShowControls,
+    controlsTimeoutRef,
+    showControlsTemporarily,
+  } = useControlVisibilityTimers(isInPipMode)
   const [miniPlayerCorner, setMiniPlayerCorner] = useState<MiniPlayerCorner>('bottom-right')
   const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')
   const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
-
-  const showControlsTemporarily = useCallback(() => {
-    setShowControls(true)
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current)
-    }
-    controlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false)
-    }, 3000)
-  }, [])
-
-  useEffect(() => {
-    if (isInPipMode) {
-      wasInPipRef.current = true
-      // PiP has system-level controls; keep fullscreen overlay hidden.
-      setShowControls(false)
-      if (controlsTimeoutRef.current) {
-        clearTimeout(controlsTimeoutRef.current)
-        controlsTimeoutRef.current = null
-      }
-    } else if (wasInPipRef.current) {
-      wasInPipRef.current = false
-      showControlsTemporarily()
-      // PiP re-arm is handled by the main auto-PiP effect using a ref flag.
-    }
-  }, [isInPipMode, showControlsTemporarily])
 
   // On Android in fullscreen, ALWAYS use real screen dimensions for layout.
   // Why: Android PiP (especially Android 12+ seamless mode) shrinks the Activity
@@ -1960,13 +1938,6 @@ export function VideoPlayerOverlay() {
       channelKey,
     }, rpc)
   }, [currentVideo, isDownloading, addDownload])
-
-  // Always register cleanup hooks (even when no video) to avoid changing hook order
-  useEffect(() => {
-    return () => {
-      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
-    }
-  }, [])
 
   // Debug: log player state
   useEffect(() => {

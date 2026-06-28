@@ -65,7 +65,6 @@
     "@peartube/core": "file:../core",
     "@peartube/host": "file:../host",
     "@peartube/platform": "file:../platform",
-    "@peartube/protocol": "file:../protocol",
     "@peartube/spec": "file:../spec",
     "autobase": "^7.27.3",
     "bare-buffer": "^3.6.0",

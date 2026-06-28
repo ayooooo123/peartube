@@ -8,7 +8,7 @@
  * 2. PearWorkerClient (legacy pear run): worker-client.js loaded as unbundled script
  */
 
-import { createProtocolClient } from '@peartube/protocol';
+import { createProtocolClient } from '@peartube/host';
 import { createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';

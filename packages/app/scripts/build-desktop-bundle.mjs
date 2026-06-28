@@ -249,7 +249,7 @@ function parseEsmNamedImports(source) {
 }
 
 function describeWorkingTreeState() {
-  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core', 'packages/protocol'], {
+  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core'], {
     cwd: repoRoot,
     encoding: 'utf8',
   })

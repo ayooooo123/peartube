@@ -1,5 +1,5 @@
 /* eslint-disable no-empty */
-import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
+import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/host'
 
 import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js'
 import type { PlatformLifecycleEvent, PlatformRunner } from './rpc.shared'

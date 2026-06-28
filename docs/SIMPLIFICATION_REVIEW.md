@@ -214,18 +214,21 @@ and re-exporting `HOST_ERROR_CODES`/`PROTOCOL_VERSION` straight from `host`. The
 23-line `host/src/contracts.js` exists *only* to be imported by both sides, and
 `normalizeReadyPayload`/`normalizeHostError`/`appendDebugLine` are copy-pasted
 verbatim across `start-host.js` and `create-client.js`.
-**Proposal:** one `@peartube/host` exposing `startHost`, `createProtocolClient`,
-and the error contract. Kills a package boundary, the re-export layer, and the
-cross-package helper duplication in one move.
-**⚠️ Deferred — needs a build/install environment, not safe to do blind here.**
-Blast radius: 4 `platform/src/*.ts` importers + the `@peartube/protocol/events`
-subpath; `package.json` deps in `platform` + `app` **and `package-lock.json`**
-(can't be safely regenerated without `npm install`); two regression tests pin it
-(`platform-typecheck-regression` asserts the subpath typechecks under bundler
-resolution; `universal-backend-architecture-regression` reads the protocol source
-paths). The mobile/desktop build — where workspace resolution actually bites —
-isn't built on PR CI, so a wrong lockfile/resolution edit can land green yet break
-the real app. Do this where `npm install` + an app build can validate it.
+**✅ DONE.** Folded `@peartube/protocol` into `@peartube/host`:
+- moved `create-client.js` + `event-map.js` (+ types) into `host/src/`;
+  create-client now imports the contract from `./contracts.js` (no cross-package
+  hop). `host/src/index.js` re-exports all three; `host/package.json` adds the
+  `./events` + `./create-client` subpath exports and the `@peartube/spec` dep.
+- repointed the 4 `platform/src/*.ts` importers to `@peartube/host`(`/events`),
+  dropped the `@peartube/protocol` dep from `platform` + `app` package.json,
+  regenerated `app/package-lock.json`, updated root `test`/`install:all` scripts,
+  the bundle manifest + freshness check, and both regression tests; rewrote the
+  living-doc architecture diagrams/tables (kept `docs/superpowers/*` as history).
+- deleted the `@peartube/protocol` package.
+**Validated locally** (this env grew an `npm install --ignore-scripts`): the moved
+`create-client.test.mjs` passes against the new host barrel; all 4 CI-gated app
+regression tests pass (incl. `ci-lockfile-install-regression`); zero
+`@peartube/protocol` refs remain; lockfile is valid JSON.
 
 ### 13. Shrink `@peartube/core` to types + tokens ✅ DONE (partial)
 937 LOC, but every one of its 17 import sites uses either `import type {…}` or

@@ -21,7 +21,6 @@ Every client boots or connects to the same backend contract:
 ```text
 Client shell
   -> platform runner
-  -> @peartube/protocol
   -> @peartube/host
   -> @peartube/backend
   -> Corestore / Autobase / Hyperbee / Hyperblobs / Hyperswarm
@@ -41,8 +40,7 @@ Client shell
 | `packages/app` | Expo app, mobile routes, Electrobun export, mobile BareKit backend bundle, desktop worker bundle |
 | `packages/core` | Shared app components, hooks, stores, and types |
 | `packages/platform` | App-side runner selection and RPC facade |
-| `packages/protocol` | Universal protocol client, readiness normalization, event map, and grouped namespaces |
-| `packages/host` | Backend lifecycle wrapper, host errors, and shared `PROTOCOL_VERSION` |
+| `packages/host` | Backend lifecycle wrapper, host errors, shared `PROTOCOL_VERSION`, and the universal protocol client (readiness normalization, event map, grouped namespaces) |
 | `packages/backend` | P2P storage, discovery, feed, upload, playback, comments, reactions, search, recommendations, livestream, cast, and diagnostics |
 | `packages/spec` | HRPC schema source and JS/Swift code generation |
 | `packages/desktop-native` | Experimental native macOS SwiftUI client and native bridge |
@@ -138,7 +136,6 @@ npm run typecheck
 npm test
 npm run lint:changed
 npm test --prefix packages/backend
-npm test --prefix packages/protocol
 npm test --prefix packages/host
 npm test --prefix packages/spec
 npm run desktop:native:test

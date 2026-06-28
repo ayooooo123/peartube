@@ -5,7 +5,6 @@ PearTube is organized around a universal backend. Platform shells differ, but th
 ```text
 Client shell
   -> platform runner
-  -> @peartube/protocol
   -> @peartube/host
   -> @peartube/backend
   -> Corestore / Autobase / Hyperbee / Hyperblobs / Hyperswarm
@@ -27,8 +26,7 @@ packages/
   app/              Expo mobile app, Electrobun export, mobile bundle, desktop worker
   core/             Shared app components, hooks, stores, and types
   platform/         App-facing runner selection and RPC facade
-  protocol/         Universal HRPC client, readiness, errors, events, namespaces
-  host/             Backend lifecycle, host error codes, PROTOCOL_VERSION
+  host/             Backend lifecycle, host error codes, PROTOCOL_VERSION, universal HRPC client (readiness, errors, events, namespaces)
   backend/          P2P storage, discovery, API surface, playback, relay logic
   spec/             HRPC schema source and generated JS/Swift code
   desktop-native/   SwiftUI native macOS client and bridge
@@ -83,7 +81,7 @@ Native macOS validates the host protocol version before applying backend data.
 - `packages/spec/schema.cjs` is the schema source of truth.
 - `packages/spec/spec/hrpc/app-rpc-adapter.mjs` contains generated app RPC metadata and namespace maps.
 - `packages/host/src/contracts.js` owns `PROTOCOL_VERSION`.
-- `packages/protocol/src/create-client.js` validates readiness, normalizes host errors, emits protocol events, and exposes method namespaces.
+- `packages/host/src/create-client.js` validates readiness, normalizes host errors, emits protocol events, and exposes method namespaces.
 - `packages/platform/src/rpc.shared.ts` provides the common app-facing bridge.
 
 After schema changes:
@@ -147,8 +145,7 @@ CI splits coverage across fast tests, mobile builds, Electrobun desktop, native 
 ## Runtime Boundaries
 
 - Backend behavior belongs in `@peartube/backend`.
-- Host lifecycle and protocol versioning belong in `@peartube/host`.
-- Client readiness/errors/events belong in `@peartube/protocol`.
+- Host lifecycle, protocol versioning, and client readiness/errors/events belong in `@peartube/host`.
 - Platform-specific runner selection belongs in `@peartube/platform`.
 - Native clients must reject unsupported protocol versions before using backend data.
 - Platform-only backend behavior should be added only when the runtime limitation is real and documented.

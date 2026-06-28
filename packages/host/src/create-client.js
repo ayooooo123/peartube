@@ -1,5 +1,5 @@
 /* eslint-disable no-empty, @typescript-eslint/no-require-imports */
-import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
+import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from './contracts.js'
 import DefaultHRPC from '@peartube/spec'
 import { APP_RPC_METHODS } from '@peartube/spec/app-rpc-adapter'
 

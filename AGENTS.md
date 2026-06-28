@@ -11,7 +11,6 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 ```
 Client shell
   -> platform runner
-  -> @peartube/protocol
   -> @peartube/host
   -> @peartube/backend
   -> Hypercore / Hyperdrive / Hyperbee / Hyperswarm
@@ -33,9 +32,8 @@ packages/
 ├── backend/            # Universal P2P backend logic
 ├── core/               # Shared app components, hooks, stores, and types
 ├── desktop-native/     # Native macOS SwiftUI client
-├── host/               # Universal backend host lifecycle and protocol version
+├── host/               # Backend host lifecycle, protocol version, and the protocol client (event map, readiness handling)
 ├── platform/           # Platform runners and app-facing RPC facade
-├── protocol/           # Shared protocol client, event map, readiness handling
 ├── spec/               # HRPC schema and code generation
 └── bare-*/             # Vendored/native Bare addons used by backend runtimes
 ```
@@ -44,9 +42,7 @@ packages/
 
 `@peartube/backend` owns P2P behavior: storage layout, Corestore/Hyperdrive setup, Hyperbee metadata, Hyperswarm networking, public feed gossip, uploads, seeding, playback URLs, and diagnostics.
 
-`@peartube/host` owns backend lifecycle. It validates startup options, starts the backend runtime, reports host readiness/errors, and defines the shared `PROTOCOL_VERSION`.
-
-`@peartube/protocol` owns the universal client contract. It wraps generated HRPC, normalizes host readiness, surfaces protocol events, and exposes grouped namespaces such as `system`, `feed`, `video`, `transfer`, and `shell`.
+`@peartube/host` owns backend lifecycle and the universal client contract. It validates startup options, starts the backend runtime, reports host readiness/errors, defines the shared `PROTOCOL_VERSION`, and (via `create-client.js`) wraps generated HRPC, normalizes host readiness, surfaces protocol events, and exposes grouped namespaces such as `system`, `feed`, `video`, `transfer`, and `shell`.
 
 `@peartube/platform` owns app-side runner selection. Mobile uses the native runner, Electrobun uses the web runner, and both expose the same app-facing RPC facade.
 
@@ -60,10 +56,10 @@ packages/
 | --- | --- |
 | `packages/host/src/contracts.js` | Shared protocol version and host error codes |
 | `packages/host/src/start-host.js` | Universal host startup wrapper |
+| `packages/host/src/create-client.js` | Universal protocol client |
+| `packages/host/src/event-map.js` | Shared protocol event names |
 | `packages/backend/src/runtime.js` | Backend runtime used by native/mobile hosts |
 | `packages/backend/src/api.js` | Backend API surface and swarm diagnostics |
-| `packages/protocol/src/create-client.js` | Universal protocol client |
-| `packages/protocol/src/event-map.js` | Shared protocol event names |
 | `packages/platform/src/rpc.shared.ts` | Common app-facing RPC bridge |
 | `packages/spec/schema.cjs` | HRPC schema source |
 | `packages/desktop-native/Sources/Services/HostBridgeService.swift` | Native macOS host bridge |
@@ -102,7 +98,7 @@ npm run schema:full
 ## Architecture Rules
 
 - Treat `@peartube/backend` as the single backend implementation.
-- Add backend-facing capabilities to `packages/spec/schema.cjs` first, then expose them through `@peartube/protocol` and `@peartube/platform`.
+- Add backend-facing capabilities to `packages/spec/schema.cjs` first, then expose them through `@peartube/host` and `@peartube/platform`.
 - Keep `@peartube/host` as the only place that defines the protocol version.
 - Native clients must reject unsupported protocol versions before applying backend data.
 - Network empty states should use structured swarm diagnostics, not generic “no content” copy.

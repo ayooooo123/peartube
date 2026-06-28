@@ -20,7 +20,6 @@ test('top-level developer docs describe the current universal backend architectu
   for (const source of [readme, agents]) {
     assert.match(source, /universal backend/i)
     assert.match(source, /@peartube\/host/)
-    assert.match(source, /@peartube\/protocol/)
     assert.match(source, /desktop-native/)
     assert.match(source, /Electrobun/)
     assert.doesNotMatch(source, /pear-src/)
@@ -33,9 +32,8 @@ test('root scripts cover universal backend packages and native desktop dependenc
   const pkg = JSON.parse(readWorkspaceFile('package.json'))
 
   assert.match(pkg.scripts.test, /packages\/host/)
-  assert.match(pkg.scripts.test, /packages\/protocol/)
   assert.match(pkg.scripts.test, /packages\/spec/)
-  assert.match(pkg.scripts['install:all'], /packages\/protocol/)
+  assert.match(pkg.scripts['install:all'], /packages\/host/)
   assert.match(pkg.scripts['install:all'], /packages\/desktop-native/)
 })
 
@@ -53,8 +51,8 @@ test('native desktop validates protocol version and exposes network-aware empty 
 })
 
 test('shared protocol exposes network status for universal clients', () => {
-  const events = readWorkspaceFile('packages/protocol/src/event-map.js')
-  const protocol = readWorkspaceFile('packages/protocol/src/create-client.js')
+  const events = readWorkspaceFile('packages/host/src/event-map.js')
+  const protocol = readWorkspaceFile('packages/host/src/create-client.js')
   const platformBridge = readWorkspaceFile('packages/platform/src/rpc.shared.ts')
   const backendRuntime = readWorkspaceFile('packages/backend/src/runtime.js')
   const schema = readWorkspaceFile('packages/spec/schema.cjs')

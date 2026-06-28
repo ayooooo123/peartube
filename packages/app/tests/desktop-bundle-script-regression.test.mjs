@@ -182,7 +182,7 @@ test('bundle link check has zero false positives across the real backend source'
   // records them. The real tree must link cleanly.
   const files = {}
   const resolutions = {}
-  const roots = ['packages/backend/src', 'packages/backend/lib', 'packages/host/src', 'packages/protocol/src', 'packages/core/src']
+  const roots = ['packages/backend/src', 'packages/backend/lib', 'packages/host/src', 'packages/core/src']
 
   function walk(dir) {
     let entries

@@ -9,13 +9,16 @@
   "exports": {
     ".": "./src/index.js",
     "./start-host": "./src/start-host.js",
-    "./sidecar-entry": "./src/sidecar-entry.js"
+    "./sidecar-entry": "./src/sidecar-entry.js",
+    "./events": "./src/event-map.js",
+    "./create-client": "./src/create-client.js"
   },
   "scripts": {
     "test": "brittle test/*.test.mjs"
   },
   "dependencies": {
-    "@peartube/backend": "file:../backend"
+    "@peartube/backend": "file:../backend",
+    "@peartube/spec": "file:../spec"
   },
   "devDependencies": {
     "brittle": "^3.19.1"

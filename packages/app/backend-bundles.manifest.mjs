@@ -1,7 +1,6 @@
 const workspacePackageSourceRoots = [
   'packages/backend/src',
   'packages/host/src',
-  'packages/protocol/src',
   'packages/platform/src',
   'packages/spec/spec',
 ]
@@ -9,7 +8,6 @@ const workspacePackageSourceRoots = [
 const workspacePackageSourceFiles = [
   'packages/backend/package.json',
   'packages/host/package.json',
-  'packages/protocol/package.json',
   'packages/platform/package.json',
   'packages/spec/package.json',
   'packages/spec/schema.cjs',

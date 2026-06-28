@@ -1,4 +1,4 @@
-import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
+import { PROTOCOL_EVENTS } from '@peartube/host/events'
 
 type BlobServerStatus = {
   blobServerPort: number | null

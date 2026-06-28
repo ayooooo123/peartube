@@ -282,15 +282,16 @@ exists as hooks in `components/video-player/hooks/`.
 **Proposal:** delegate to the existing `useVideoGestures`/`useMiniPlayerPosition`/
 `useLandscapeMode` hooks, deleting the inlined duplicates; target < ~800 lines.
 
-> **Slices done (1-4):** extracted the self-contained channel-meta lookup
+> **Slices done (1-5):** extracted the self-contained channel-meta lookup
 > (`lib/useChannelMetaName.ts`), the cast-buffering debounce
 > (`lib/useCastBufferingDebounced.ts`), delegated desktop mini-player
 > corner/drag positioning to the existing `components/video-player/hooks/useMiniPlayerPosition.ts`
-> hook, and moved control-visibility timeout/PiP re-arm state into
-> `lib/useControlVisibilityTimers.ts`. Component 3,224 → 3,078. Each validated
-> with app `tsc` (zero new type errors beyond baseline) and rules-of-hooks
-> structure; slices 3-4 also built and launched on Android emulator
-> (`peartube-pixel`, x86_64) with the player opening fullscreen and buffering from
+> hook, moved control-visibility timeout/PiP re-arm state into
+> `lib/useControlVisibilityTimers.ts`, and moved scrubber/seek sync state and
+> handlers into `lib/useScrubberSeekSync.ts`. Component 3,224 → 3,023. Each
+> validated with app `tsc` (zero new type errors beyond baseline) and
+> rules-of-hooks structure; slices 3-5 also built/launched or hot-loaded on Android
+> emulator (`peartube-pixel`, x86_64) with the player opening and buffering from
 > the media session without a fatal JS/native crash.
 > **Validation boundary:** the remaining bulk (mobile mini-player drag gestures,
 > fullscreen/landscape animation, PiP geometry) is gesture- and

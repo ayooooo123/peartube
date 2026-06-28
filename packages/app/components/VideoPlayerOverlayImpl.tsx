@@ -25,6 +25,7 @@ import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { useChannelMetaName } from '@/lib/useChannelMetaName'
 import { useCastBufferingDebounced } from '@/lib/useCastBufferingDebounced'
 import { useControlVisibilityTimers } from '@/lib/useControlVisibilityTimers'
+import { useScrubberSeekSync } from '@/lib/useScrubberSeekSync'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -343,10 +344,6 @@ export function VideoPlayerOverlay() {
   const [seekFeedback, setSeekFeedback] = useState<'left' | 'right' | null>(null)
 
   // State for drag seeking
-  const [isSeeking, setIsSeeking] = useState(false)
-  const [seekPosition, setSeekPosition] = useState(0)
-  const [scrubPendingTime, setScrubPendingTime] = useState<number | null>(null)
-  const scrubPendingSinceRef = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
 
@@ -385,6 +382,26 @@ export function VideoPlayerOverlay() {
   const effectiveIsPlaying = isCasting ? castIsPlaying : isPlaying
   const effectiveProgress = effectiveDuration > 0 ? effectiveCurrentTime / effectiveDuration : 0
 
+  const {
+    isSeeking,
+    seekPosition,
+    scrubPendingTime,
+    handleDesktopSeekStart,
+    handleDesktopSeekChange,
+    handleDesktopSeekEnd,
+    handleScrubStart,
+    handleScrubCommit,
+  } = useScrubberSeekSync({
+    effectiveCurrentTime,
+    effectiveDuration,
+    isCasting,
+    cast,
+    seekTo,
+    controlsTimeoutRef,
+    setShowControls,
+    showControlsTemporarily,
+  })
+
   // Debounce cast buffering — brief BUFFERING from HLS segment transitions shouldn't flash the overlay
   const castBufferingDebounced = useCastBufferingDebounced(castPlayback.state)
 
@@ -392,30 +409,6 @@ export function VideoPlayerOverlay() {
   const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'
   const castAutoPlayRef = useRef<string | null>(null)
   const castAutoPlayInFlightRef = useRef(false)
-
-  // Sync seek position with current time when not seeking
-  useEffect(() => {
-    if (!isSeeking) {
-      setSeekPosition(effectiveCurrentTime)
-    }
-  }, [effectiveCurrentTime, isSeeking])
-
-  // Clear scrub pending lock once playback catches up (or after a timeout).
-  // This prevents the scrubber UI from snapping back to stale progress right after commit.
-  useEffect(() => {
-    if (scrubPendingTime === null) return
-    if (effectiveDuration <= 0) {
-      setScrubPendingTime(null)
-      return
-    }
-
-    const ageMs = Date.now() - scrubPendingSinceRef.current
-    const closeEnough = Math.abs(effectiveCurrentTime - scrubPendingTime) < 0.75
-    if (closeEnough || ageMs > 1500) {
-      setScrubPendingTime(null)
-    }
-  }, [scrubPendingTime, effectiveCurrentTime, effectiveDuration])
-
 
   const isOwnComment = useCallback((c: any) => {
     if (!identity?.driveKey) return false
@@ -1753,30 +1746,6 @@ export function VideoPlayerOverlay() {
     }
   }, [isCasting, castIsPlaying, cast, isPlaying, pauseVideo, resumeVideo])
 
-  const handleDesktopSeekStart = useCallback(() => {
-    if (effectiveDuration > 0) {
-      setIsSeeking(true)
-    }
-  }, [effectiveDuration])
-
-  const handleDesktopSeekChange = useCallback((event: any) => {
-    const value = Number(event?.target?.value)
-    if (!Number.isFinite(value)) return
-    setSeekPosition(value)
-  }, [])
-
-  const handleDesktopSeekEnd = useCallback(() => {
-    if (effectiveDuration <= 0) return
-    if (isSeeking) {
-      if (isCasting) {
-        cast.seek(seekPosition)
-      } else {
-        seekTo(seekPosition)
-      }
-      setIsSeeking(false)
-    }
-  }, [effectiveDuration, isSeeking, seekPosition, isCasting, cast, seekTo])
-
   // Handle double-tap seek - ±SEEK_STEP_SECONDS forward/backward
   const handleDoubleTapSeek = useCallback((direction: 'left' | 'right') => {
     const delta = direction === 'left' ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS
@@ -1789,30 +1758,6 @@ export function VideoPlayerOverlay() {
     setSeekFeedback(direction)
     setTimeout(() => setSeekFeedback(null), 500)
   }, [isCasting, effectiveCurrentTime, effectiveDuration, cast, seekBy])
-
-  const handleScrubStart = useCallback(() => {
-    // Pause the auto-hide timer while scrubbing
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current)
-      controlsTimeoutRef.current = null
-    }
-    setShowControls(true)
-  }, [])
-
-  const handleScrubCommit = useCallback((timeSeconds: number) => {
-    if (effectiveDuration <= 0) return
-    const clamped = Math.max(0, Math.min(timeSeconds, effectiveDuration))
-    setScrubPendingTime(clamped)
-    scrubPendingSinceRef.current = Date.now()
-    if (isCasting) {
-      cast.seek(clamped)
-    } else {
-      seekTo(clamped)
-    }
-    // Restart auto-hide timer after scrub ends
-    showControlsTemporarily()
-  }, [effectiveDuration, isCasting, cast, seekTo, showControlsTemporarily])
-
 
   // Cycle through playback speeds
   const cyclePlaybackSpeed = useCallback(() => {

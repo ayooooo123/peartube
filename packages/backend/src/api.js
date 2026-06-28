@@ -19,7 +19,6 @@ import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
-import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
@@ -29,6 +28,7 @@ import { peerHasFullRange, collectFullCopyPeers, assessOffloadEligibility } from
 import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
 import { createCommentsApi } from './api/comments.js'
 import { createPersonalApi } from './api/personal.js'
+import { createTranscodeApi } from './api/transcode.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -3797,52 +3797,7 @@ export function createApi({
     // Transcode Settings
     // ============================================
 
-    /**
-     * Get transcoder settings for troubleshooting
-     * @returns {Promise<{ settings: { videoToolboxDecodeEnabled: boolean, videoToolboxDecodeLocked: boolean, videoToolboxDecodeDefault: boolean, videoToolboxDecodeSource: string, videoToolboxHwMapEnabled: boolean, videoToolboxHwMapLocked: boolean, videoToolboxHwMapDefault: boolean, videoToolboxHwMapSource: string } }>}
-     */
-    async getTranscodeSettings() {
-      return { settings: getVideoToolboxDecodeSettings() };
-    },
-
-    /**
-     * Update transcoder settings for troubleshooting
-     * @param {Object} req
-     * @param {boolean} [req.videoToolboxDecodeEnabled]
-     * @param {boolean} [req.videoToolboxHwMapEnabled]
-     * @returns {Promise<{ success: boolean, error?: string, settings: object }>}
-     */
-    async setTranscodeSettings(req) {
-      const decodeEnabled = req?.videoToolboxDecodeEnabled;
-      const hwMapEnabled = req?.videoToolboxHwMapEnabled;
-      const hasDecode = typeof decodeEnabled === 'boolean';
-      const hasHwMap = typeof hwMapEnabled === 'boolean';
-      if (!hasDecode && !hasHwMap) {
-        return { success: false, error: 'Invalid request', settings: getVideoToolboxDecodeSettings() };
-      }
-
-      let settings = getVideoToolboxDecodeSettings();
-      if (hasDecode) settings = setVideoToolboxDecodeEnabled(decodeEnabled, 'ui');
-      if (hasHwMap) settings = setVideoToolboxHwMapEnabled(hwMapEnabled, 'ui');
-
-      if (hasDecode && settings.videoToolboxDecodeLocked) {
-        return { success: false, error: 'Locked by PEARTUBE_ENABLE_VT_DECODE', settings };
-      }
-      if (hasHwMap && settings.videoToolboxHwMapLocked) {
-        return { success: false, error: 'Locked by PEARTUBE_ENABLE_VT_HWMAP', settings };
-      }
-
-      try {
-        await ctx.metaDb.put('transcode-settings', {
-          videoToolboxDecodeEnabled: settings.videoToolboxDecodeEnabled,
-          videoToolboxHwMapEnabled: settings.videoToolboxHwMapEnabled
-        });
-      } catch (err) {
-        console.log('[API] Failed to persist transcode settings:', err?.message);
-      }
-
-      return { success: true, settings };
-    },
+    ...createTranscodeApi({ ctx }),
 
     /**
      * Set seeding config

@@ -19,7 +19,6 @@ Runtime-specific entrypoints still matter:
 
 - Mobile entrypoint: `packages/app/backend/index.mjs`
 - Electrobun worker entrypoint: `packages/app/workers/desktop/index.ts`
-- Native macOS sidecar/worklet bridge: `packages/desktop-native/Bridge/`
 
 Most shared request/response handlers should be registered through `packages/backend/src/hrpc-handlers.js` and `packages/backend/src/backend-entry.js`. Only add platform-specific mappings in an entrypoint when the operation genuinely depends on that runtime.
 
@@ -57,7 +56,6 @@ npm run schema:full                 # schema + generated Swift support
 npm run bundle:backend              # mobile BareKit backend bundle
 npm run desktop:build               # Electrobun web export + desktop worker bundle
 npm run desktop:smoke --prefix packages/app
-npm run desktop:native:test
 ```
 
 Desktop worker output is now under `packages/app/desktop-build/build/workers/core/`, not the old `pear/build` path.

@@ -20,7 +20,7 @@
     "bundle:backend:main": "node ./scripts/build-backend-bundles.js backend",
     "bundle:backend:worker": "node ./scripts/build-backend-bundles.js downloader-worker",
     "bundle:test": "bare-pack --preset mobile --linked --out test.bundle.js backend/test-minimal.mjs",
-    "schema": "cd ../spec && rm -rf spec/hrpc spec/schema spec/swift-hrpc spec/swift-schema && node schema.cjs",
+    "schema": "cd ../spec && rm -rf spec/hrpc spec/schema && node schema.cjs",
     "prepare:mobile-backend": "npm run schema && npm run bundle:backend",
     "desktop:export": "PEARTUBE_WEB_EXPORT=1 EXPO_NO_METRO_WORKSPACE_ROOT=1 expo export --platform web --output-dir .desktop-export",
     "desktop:merge": "mkdir -p desktop-build && rm -rf desktop-build/_expo desktop-build/assets && rm -f desktop-build/*.html desktop-build/metadata.json desktop-build/favicon.ico && rsync -av .desktop-export/ desktop-build/ && rm -rf .desktop-export",

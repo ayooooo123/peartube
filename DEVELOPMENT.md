@@ -29,10 +29,7 @@ Run `npm run bundle:backend` after backend, schema, or mobile runtime changes th
 | `npm run desktop` | Build and launch Electrobun desktop |
 | `npm run desktop:build` | Build Electrobun web and worker assets |
 | `npm run desktop:start` | Launch the built Electrobun app |
-| `npm run desktop:native` | Schema, build, and run native macOS |
-| `npm run desktop:native:build` | Schema and build native macOS |
-| `npm run desktop:native:test` | Run native desktop tests |
-| `npm run schema:full` | Regenerate JS schema output and copy Swift support |
+| `npm run schema:full` | Regenerate JS schema output |
 | `npm run typecheck` | Typecheck `packages/platform` |
 | `npm test` | Run spec, backend, host, and protocol tests |
 | `npm run lint:changed` | Lint changed files |
@@ -47,7 +44,6 @@ Run `npm run bundle:backend` after backend, schema, or mobile runtime changes th
 | `packages/protocol` | `npm test --prefix packages/protocol` |
 | `packages/platform` | `npm run typecheck --prefix packages/platform` |
 | `packages/app` | `npm run bundle:backend --prefix packages/app`, `npm run desktop:build --prefix packages/app`, `npm run desktop:smoke --prefix packages/app` |
-| `packages/desktop-native` | `npm run generate --prefix packages/desktop-native`, `npm run test --prefix packages/desktop-native` |
 | `packages/cli` | `npm test --prefix packages/cli`, `npm run build:standalone --prefix packages/cli` |
 
 ## Schema Workflow
@@ -59,10 +55,7 @@ npm run schema:full
 npm test --prefix packages/spec
 ```
 
-`schema:full` does two things:
-
-1. Regenerates JS HRPC/schema output under `packages/spec/spec/`.
-2. Copies generated Swift schema/HRPC files into `packages/desktop-native/Sources/Support/`.
+`schema:full` regenerates JS HRPC/schema output under `packages/spec/spec/`.
 
 After adding or changing an RPC method:
 
@@ -103,17 +96,6 @@ npm run bundle:backend
 
 Do not restore `pear run` or `global.Pear.run` paths. The local desktop shell embeds `pear-runtime`; Pear OTA deployment is not wired.
 
-## Native macOS Notes
-
-- Native macOS is a SwiftUI client in `packages/desktop-native`.
-- It talks to the same host/protocol/backend contract as mobile and Electrobun.
-- It rejects unsupported protocol versions before applying backend data.
-- The bridge lives in `packages/desktop-native/Bridge/` and `packages/desktop-native/Sources/Services/HostBridgeService.swift`.
-
-```bash
-npm run desktop:native:test
-```
-
 ## Relay Notes
 
 - Relay code lives in `packages/cli`.
@@ -140,7 +122,6 @@ For platform work, add the matching build/smoke command:
 ```bash
 npm run desktop:build
 npm run desktop:smoke --prefix packages/app
-npm run desktop:native:test
 npm run build:android:apk
 ```
 

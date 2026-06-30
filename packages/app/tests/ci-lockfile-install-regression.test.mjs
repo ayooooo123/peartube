@@ -51,7 +51,7 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
   assert.match(
     rootPackage.scripts['install:all'],
     /packages\/spec/,
-    'install:all should install packages/spec so schema generation can require hrpc-swift in CI',
+    'install:all should install packages/spec so schema generation has its deps in CI',
   )
   assert.match(
     rootPackage.scripts['install:all'],
@@ -59,13 +59,8 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
     'install:all should install packages/platform so typecheck has its local deps in CI',
   )
   assert.notEqual(
-    specPackage.dependencies['hrpc-swift'],
+    specPackage.dependencies['hrpc'],
     `^${rootPackage.version}`,
-    'release bumps must not rewrite the external hrpc-swift generator dependency to the PearTube app version',
-  )
-  assert.notEqual(
-    specPackage.dependencies['hyperschema-swift'],
-    `^${rootPackage.version}`,
-    'release bumps must not rewrite the external hyperschema-swift generator dependency to the PearTube app version',
+    'release bumps must not rewrite the external hrpc generator dependency to the PearTube app version',
   )
 })

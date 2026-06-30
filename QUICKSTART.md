@@ -14,7 +14,6 @@ nvm use
 - For iOS: Xcode and CocoaPods.
 - For Android: Android SDK and JDK 17.
 - For Electrobun desktop: Bun and Electrobun dependencies.
-- For native macOS: Xcode and `xcodegen`.
 
 ## 2. Install
 
@@ -25,7 +24,7 @@ npm run schema:full
 npm run bundle:backend
 ```
 
-`install:all` is the repo install contract used by CI. `schema:full` keeps generated JS schema output and native Swift support in sync. `bundle:backend` creates the BareKit mobile backend bundle used by iOS/Android runs.
+`install:all` is the repo install contract used by CI. `schema:full` keeps generated JS schema output in sync. `bundle:backend` creates the BareKit mobile backend bundle used by iOS/Android runs.
 
 ## 3. Run A Surface
 
@@ -33,7 +32,6 @@ npm run bundle:backend
 npm run ios                 # iOS simulator
 npm run android             # Android emulator/device
 npm run desktop             # Electrobun desktop
-npm run desktop:native      # Native macOS, experimental
 ```
 
 For Expo-only iteration:
@@ -64,7 +62,6 @@ Use focused package tests when possible:
 npm test --prefix packages/spec
 npm test --prefix packages/backend
 npm test --prefix packages/protocol
-npm run desktop:native:test
 ```
 
 ## Troubleshooting
@@ -75,7 +72,7 @@ npm run desktop:native:test
 npm run bundle:backend
 ```
 
-### Schema or native Swift output drift
+### Schema output drift
 
 ```bash
 npm run schema:full
@@ -86,12 +83,6 @@ npm run schema:full
 ```bash
 npm run desktop:build
 npm run desktop
-```
-
-### Native macOS generated resources missing
-
-```bash
-npm run generate --prefix packages/desktop-native
 ```
 
 ## More Detail

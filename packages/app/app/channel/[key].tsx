@@ -288,13 +288,13 @@ export default function ChannelScreen() {
         if (isMounted && Array.isArray(subs?.subscriptions)) {
           setIsSubscribed(subs.subscriptions.some((s: any) => s.channelKey === channelKey))
         }
-      } catch {}
+      } catch { /* best-effort: leave subscribe state at default */ }
       try {
         const pinned = await (rpc as any).getPinnedChannels?.()
         if (isMounted && Array.isArray(pinned?.channels)) {
           setIsPinned(pinned.channels.includes(channelKey))
         }
-      } catch {}
+      } catch { /* best-effort: leave pin state at default */ }
     })()
     return () => { isMounted = false }
   }, [channelKey])

@@ -24,26 +24,7 @@ import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
-
-const CHANNEL_PAGE_RPC_TIMEOUT_MS = 4500
-
-type ChannelPageTimeoutResult = { timedOut: true }
-
-function withChannelPageTimeout<T>(promise: Promise<T>, ms = CHANNEL_PAGE_RPC_TIMEOUT_MS): Promise<T | ChannelPageTimeoutResult> {
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  return Promise.race([
-    promise.finally(() => {
-      if (timeout) clearTimeout(timeout)
-    }),
-    new Promise<ChannelPageTimeoutResult>((resolve) => {
-      timeout = setTimeout(() => resolve({ timedOut: true }), ms)
-    }),
-  ])
-}
-
-function isTimedOutResult(result: unknown): result is { timedOut: true } {
-  return Boolean(result && typeof result === 'object' && (result as any).timedOut === true)
-}
+import { withChannelPageTimeout, isTimedOutResult } from '@/lib/channel-page'
 
 type ChannelMeta = {
   name?: string

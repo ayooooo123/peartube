@@ -7,7 +7,7 @@
  * - Sidebar (240px/72px) - collapsible navigation
  * - Content - main content area
  */
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import { DesktopHeader } from './DesktopHeader.web'
 import { DesktopSidebar } from './DesktopSidebar.web'
 import { colors } from '@/lib/colors'
@@ -41,8 +41,13 @@ export function DesktopLayout({ children }: DesktopLayoutProps) {
 
   const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH
 
+  const sidebarContextValue = useMemo(
+    () => ({ isCollapsed, toggleSidebar }),
+    [isCollapsed, toggleSidebar]
+  )
+
   return (
-    <SidebarContext.Provider value={{ isCollapsed, toggleSidebar }}>
+    <SidebarContext.Provider value={sidebarContextValue}>
       <div style={styles.container}>
         {/* Header - below pear bar */}
         <DesktopHeader />

@@ -96,7 +96,7 @@
   },
   "devDependencies": {
     "brittle": "^3.19.1",
-    "typescript": "^5.9.0"
+    "typescript": "^6.0.3"
   },
   "overrides": {
     "bogon": "1.2.0"

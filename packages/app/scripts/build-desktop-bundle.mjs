@@ -51,7 +51,6 @@ const sourceRoots = [
   path.join(repoRoot, 'packages', 'backend', 'src'),
   path.join(repoRoot, 'packages', 'host', 'src'),
   path.join(repoRoot, 'packages', 'core', 'src'),
-  path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
 ]
 
@@ -59,7 +58,6 @@ const sourceFiles = [
   path.join(repoRoot, 'packages', 'backend', 'package.json'),
   path.join(repoRoot, 'packages', 'host', 'package.json'),
   path.join(repoRoot, 'packages', 'core', 'package.json'),
-  path.join(repoRoot, 'packages', 'protocol', 'package.json'),
   path.join(repoRoot, 'packages', 'spec', 'package.json'),
 ]
 
@@ -127,7 +125,7 @@ function getBundleHosts() {
   return [`${process.platform}-${process.arch}`]
 }
 
-const peartubeWorkspacePackages = ['backend', 'host', 'core', 'protocol', 'spec', 'platform']
+const peartubeWorkspacePackages = ['backend', 'host', 'core', 'spec', 'platform']
 
 // bare-pack resolves `@peartube/*` through node_modules. With npm `file:`
 // deps those entries are symlinks to the live packages/ source, so the pack

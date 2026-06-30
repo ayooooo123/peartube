@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 
-import { createProtocolClient, HOST_ERROR_CODES, PROTOCOL_EVENTS } from '../../protocol/src/index.js'
+import { createProtocolClient, HOST_ERROR_CODES, PROTOCOL_EVENTS } from '../../host/src/index.js'
 
 class PendingHRPC {
   constructor() {

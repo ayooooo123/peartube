@@ -16,14 +16,7 @@ export { P2PStatsBar } from './P2PStatsBar'
 export { ChannelInfo } from './ChannelInfo'
 export { ActionButton } from './ActionButton'
 export { ReactionButton } from './ReactionButton'
-export { TimeDisplay } from './TimeDisplay'
 export { Scrubber } from './Scrubber'
-
-// Context-connected components
-export { SeekBar } from './SeekBar'
-export { ControlsOverlay } from './ControlsOverlay'
-export { VideoInfo } from './VideoInfo'
-export { ActionButtons } from './ActionButtons'
 
 // Comments module
 export { CommentItem } from './CommentItem'
@@ -31,10 +24,6 @@ export { CommentComposer } from './CommentComposer'
 export { CommentsSection } from './CommentsSection'
 
 // Platform-specific components
-export { MiniPlayerControls } from './MiniPlayerControls'
-export { MiniPlayerProgressBar } from './MiniPlayerProgressBar'
-export { LoadingOverlay } from './LoadingOverlay'
-export { SeekFeedback } from './SeekFeedback'
 export { PearInlineVideoView, getPearInlinePlayerId } from './PearInlineVideoView'
 
 // Hooks

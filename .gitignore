@@ -95,3 +95,6 @@ logfile
 
 # Local native debug signing material
 packages/app/android/app/debug.keystore
+
+# Local isolated agent worktrees
+.worktrees/

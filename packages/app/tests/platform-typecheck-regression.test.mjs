@@ -12,7 +12,7 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(repoRoot, relativePath), 'utf8'))
 }
 
-test('platform tsconfig uses bundler resolution so @peartube/protocol subpath exports typecheck in CI', () => {
+test('platform tsconfig uses bundler resolution so @peartube/host subpath exports typecheck in CI', () => {
   const tsconfig = readJson('packages/platform/tsconfig.json')
   assert.equal(
     tsconfig.compilerOptions?.moduleResolution,

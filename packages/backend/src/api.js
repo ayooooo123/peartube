@@ -1,3 +1,4 @@
+import b4a from 'b4a';
 /**
  * Core API Module - Shared backend API methods
  *
@@ -5,29 +6,34 @@
  * They operate on the storage context and return results.
  */
 
-import b4a from 'b4a';
-import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, setPlaybackActive as storageSetPlaybackActive, isPlaybackActive as storageIsPlaybackActive, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, isPlaybackActive as storageIsPlaybackActive, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { addRelayLink as persistAddRelayLink, removeRelayLink as persistRemoveRelayLink, loadRelayLinks } from './relay-links.js';
-import { createLiveBroadcastService, createLivePlaybackService } from './live/index.js';
 import { subscribeBlobPlayhead } from './blob-range-priority.js';
 import { beginPlaybackTiming, markPlaybackTiming } from './playback-timing.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
-import { FederatedSearch } from './search/federated-search.js';
-import { Recommender } from './recommendations/recommender.js';
-import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { encodeIndexKey } from './index-encoder.js'
-import { NETWORK_TOPIC_STRING } from './types.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
 import { peerHasFullRange, collectFullCopyPeers, assessOffloadEligibility } from './upload-offload.js'
 import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
+import { createCommentsApi } from './api/comments.js'
+import { createPersonalApi } from './api/personal.js'
+import { createTranscodeApi } from './api/transcode.js'
+import { createSearchApi } from './api/search.js'
+import { createPairingApi } from './api/pairing.js'
+import { createSeedingApi } from './api/seeding.js'
+import { createFeedApi } from './api/feed.js'
+import { createRecommendationsApi } from './api/recommendations.js'
+import { createSubscriptionsApi } from './api/subscriptions.js'
+import { createLiveApi } from './api/live.js'
+import { createStatusApi } from './api/status.js'
+import { createNetworkLifecycleApi } from './api/network-lifecycle.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -152,56 +158,6 @@ export function createApi({
   loadPublicBee = storageLoadPublicBee,
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
-
-  // Live services are lazy: most sessions never broadcast or watch live.
-  let liveBroadcast = null
-  let livePlayback = null
-  function getLiveBroadcast() {
-    if (!liveBroadcast) liveBroadcast = createLiveBroadcastService(ctx)
-    return liveBroadcast
-  }
-  function getLivePlayback() {
-    if (!livePlayback) livePlayback = createLivePlaybackService(ctx)
-    return livePlayback
-  }
-
-  // Re-announce the channel's full set of active live sessions on the feed
-  // (an empty set clears the live badge network-wide). Best-effort: feed
-  // gossip must never fail a broadcast lifecycle call.
-  function announceChannelLiveStreams(channelKey) {
-    if (!channelKey || !liveBroadcast || typeof publicFeed?.setChannelLiveStreams !== 'function') return
-    try {
-      const liveStreams = []
-      for (const session of liveBroadcast.sessions.values()) {
-        if (session.state !== 'live') continue
-        if ((session.writer?.descriptor?.channelKey || null) !== channelKey) continue
-        liveStreams.push({
-          videoId: session.videoId,
-          liveCoreKey: session.liveCoreKey,
-          title: session.writer?.descriptor?.title || null,
-          startedAt: session.startedAt,
-        })
-      }
-      publicFeed.setChannelLiveStreams(channelKey, liveStreams)
-    } catch (err) {
-      console.log('[API] live feed announce skipped:', err?.message || err)
-    }
-  }
-
-  function toLivestreamStatus(stats) {
-    if (!stats) return undefined
-    const status = {
-      state: stats.state || 'unknown',
-      videoId: stats.videoId || undefined,
-      liveCoreKey: stats.liveCoreKey || undefined,
-      mediaBlocks: Number(stats.mediaBlocks) || 0,
-      durationMs: Math.max(0, Math.round((Number(stats.durationS) || 0) * 1000)),
-      peerCount: Number(stats.peerCount) || 0,
-      startedAt: Number(stats.startedAt) || 0,
-    }
-    if (stats.endedAt) status.endedAt = Number(stats.endedAt)
-    return status
-  }
 
   async function isMultiWriterChannelKey(channelKey) {
     try {
@@ -1372,7 +1328,11 @@ export function createApi({
      * @returns {Promise<ChannelMetadata>}
      */
     async getChannelMeta(driveKey, publicBeeKey = null) {
-      console.log('[API] GET_CHANNEL_META:', driveKey?.slice(0, 16));
+      if (driveKey && typeof driveKey === 'object') {
+        publicBeeKey = driveKey.publicBeeKey || publicBeeKey
+        driveKey = driveKey.channelKey || driveKey.driveKey || driveKey.key || null
+      }
+      console.log('[API] GET_CHANNEL_META:', driveKey?.slice?.(0, 16));
       try {
         const cached = channelMetaCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
@@ -1859,83 +1819,7 @@ export function createApi({
       return prepared
     },
 
-    /**
-     * Start a live broadcast session on a fresh single-writer core.
-     * The fMP4 byte source attaches to the returned session through the
-     * broadcast service (platform encoder integrations); this surface only
-     * manages lifecycle.
-     * @param {{channelKey?: string, title?: string, targetFragmentDurationMs?: number, width?: number, height?: number}} [options]
-     * @returns {Promise<{success: boolean, videoId?: string, liveCoreKey?: string, error?: string}>}
-     */
-    async startLivestream(options = {}) {
-      try {
-        const targetMs = Number(options.targetFragmentDurationMs)
-        const session = await getLiveBroadcast().startBroadcast({
-          channelKey: options.channelKey || null,
-          title: options.title || null,
-          targetFragmentDuration: targetMs > 0 ? targetMs / 1000 : undefined,
-          width: Number(options.width) || 0,
-          height: Number(options.height) || 0,
-        })
-        console.log('[API] startLivestream:', session.videoId, 'core:', session.liveCoreKey.slice(0, 16))
-        announceChannelLiveStreams(options.channelKey)
-        return { success: true, videoId: session.videoId, liveCoreKey: session.liveCoreKey }
-      } catch (err) {
-        console.error('[API] startLivestream failed:', err?.message || err)
-        return { success: false, error: err?.message || String(err) }
-      }
-    },
-
-    /**
-     * Seal a live broadcast: flush the trailing fragment, append the EOS
-     * marker, keep seeding the core (it IS the recording).
-     * @param {string} videoId
-     */
-    async stopLivestream(videoId) {
-      try {
-        const session = getLiveBroadcast().getSession(videoId)
-        const stats = await getLiveBroadcast().stopBroadcast(videoId)
-        announceChannelLiveStreams(session?.writer?.descriptor?.channelKey)
-        return { success: true, status: toLivestreamStatus(stats) }
-      } catch (err) {
-        return { success: false, error: err?.message || String(err) }
-      }
-    },
-
-    /**
-     * Broadcaster-side status for an active or sealed session.
-     * @param {string} videoId
-     */
-    async getLivestreamStatus(videoId) {
-      const session = getLiveBroadcast().getSession(videoId)
-      if (!session) return { error: 'No live session: ' + videoId }
-      return { status: toLivestreamStatus(session.getStats()) }
-    },
-
-    /**
-     * Backend-internal (not RPC-exposed): the live session object, for
-     * platform encoder integrations to attach a byte source via
-     * session.write()/notifyKeyframe().
-     * @param {string} videoId
-     */
-    getLiveBroadcastSession(videoId) {
-      return getLiveBroadcast().getSession(videoId)
-    },
-
-    /**
-     * Resolve a local live-HLS playlist URL for a live core. Works for both
-     * in-progress streams (sliding window) and sealed recordings (full DVR).
-     * @param {string} liveCoreKey - live core key (hex)
-     * @returns {Promise<{url?: string, isLive?: boolean, error?: string}>}
-     */
-    async prepareLivePlayback(liveCoreKey) {
-      try {
-        const url = await getLivePlayback().getPlaybackUrl(liveCoreKey)
-        return { url, isLive: true }
-      } catch (err) {
-        return { error: err?.message || String(err) }
-      }
-    },
+    ...createLiveApi({ ctx, publicFeed }),
 
     /**
      * Download video to a local file path
@@ -2317,192 +2201,10 @@ export function createApi({
       }
     },
 
-    // ============================================
     // Subscription Operations
-    // ============================================
+    ...createSubscriptionsApi({ ctx, loadChannel }),
 
-    /**
-     * Subscribe to a channel
-     * @param {string} driveKey
-     * @returns {Promise<{success: boolean}>}
-     */
-    async subscribeChannel(driveKey) {
-      // Don't let loadChannel hang forever - use a 5s timeout
-      // If it times out, we still add to subscriptions (data will sync later when peers are found)
-      try {
-        await Promise.race([
-          loadChannel(ctx, driveKey),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel load timeout')), 5000))
-        ]);
-      } catch (err) {
-        console.log('[API] subscribeChannel: channel load warning:', err.message, '- continuing anyway');
-      }
-
-      // Prefer the synced personal store when available so subscriptions
-      // follow the user across devices; fall back to device-local metaDb.
-      if (ctx.personal?.writable) {
-        await ctx.personal.subscribe(driveKey, {});
-        return { success: true };
-      }
-
-      const existing = await ctx.metaDb.get('subscriptions');
-      const subs = existing?.value || [];
-
-      if (!subs.find(s => s.driveKey === driveKey)) {
-        subs.push({
-          driveKey,
-          subscribedAt: Date.now()
-        });
-        await ctx.metaDb.put('subscriptions', subs);
-      }
-
-      return { success: true };
-    },
-
-    /**
-     * Unsubscribe from a channel
-     * @param {string} driveKey
-     * @returns {Promise<{success: boolean}>}
-     */
-    async unsubscribeChannel(driveKey) {
-      if (ctx.personal?.writable) {
-        await ctx.personal.unsubscribe(driveKey);
-        return { success: true };
-      }
-
-      const existing = await ctx.metaDb.get('subscriptions');
-      const subs = existing?.value || [];
-
-      const filtered = subs.filter(s => s.driveKey !== driveKey);
-      await ctx.metaDb.put('subscriptions', filtered);
-
-      return { success: true };
-    },
-
-    /**
-     * Get subscriptions list with channel names
-     * @returns {Promise<Array<{driveKey: string, name: string, subscribedAt?: number}>>}
-     */
-    async getSubscriptions() {
-      let subs;
-      if (ctx.personal) {
-        // Normalize personal-store rows to the legacy { driveKey, subscribedAt } shape.
-        subs = (await ctx.personal.listSubscriptions()).map((s) => ({
-          driveKey: s.channelKey,
-          subscribedAt: s.subscribedAt,
-          name: s.name || undefined
-        }));
-      } else {
-        const existing = await ctx.metaDb.get('subscriptions');
-        subs = existing?.value || [];
-      }
-
-      const enriched = [];
-      for (const sub of subs) {
-        let name = sub.name || 'Unknown';
-        try {
-          const channel = await loadChannel(ctx, sub.driveKey)
-          const meta = await channel?.getMetadata().catch(() => null)
-          if (meta?.name) name = meta.name
-        } catch (e) { /* best effort */ }
-        enriched.push({ ...sub, name });
-      }
-
-      return enriched;
-    },
-
-    // ============================================
-    // Personal Sync: Playlists / History / Settings
-    // (private per-identity multi-writer store, synced across the user's devices)
-    //
-    // These are registered through the shared HRPC handler table, which calls
-    // them as `api.method(request)` with `this` unbound — so they take the
-    // decoded request object and return the response envelope directly, and
-    // must not rely on `this`.
-    // ============================================
-
-    async getPlaylists() {
-      if (!ctx.personal) return { playlists: [] };
-      return { playlists: await ctx.personal.listPlaylists() };
-    },
-    async getPlaylistItems(req = {}) {
-      if (!ctx.personal) return { items: [] };
-      return { items: await ctx.personal.listPlaylistItems(req.playlistId) };
-    },
-    async createPlaylist(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store (create or activate an identity first)');
-      const id = await ctx.personal.createPlaylist({ name: req.name || '', description: req.description || '' });
-      return { success: true, id };
-    },
-    async updatePlaylist(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.updatePlaylist(req.id, { name: req.name, description: req.description });
-      return { success: true };
-    },
-    async deletePlaylist(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.deletePlaylist(req.id);
-      return { success: true };
-    },
-    async addToPlaylist(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.addToPlaylist(req.playlistId, { channelKey: req.channelKey, videoId: req.videoId, videoKey: req.videoKey });
-      return { success: true };
-    },
-    async removeFromPlaylist(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.removeFromPlaylist(req.playlistId, req.videoKey);
-      return { success: true };
-    },
-
-    async logWatchHistory(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      const eventId = await ctx.personal.logHistory(req);
-      return { success: true, eventId };
-    },
-    async getWatchHistory(req = {}) {
-      if (!ctx.personal) return { entries: [] };
-      return { entries: await ctx.personal.listHistory({ limit: req.limit || 100 }) };
-    },
-    async getResumePosition(req = {}) {
-      if (!ctx.personal) return { found: false };
-      const resume = await ctx.personal.getResume(req.videoKey);
-      return resume ? { found: true, resume } : { found: false };
-    },
-    async listResumePositions() {
-      if (!ctx.personal) return { entries: [] };
-      return { entries: await ctx.personal.listResume() };
-    },
-
-    async setPersonalSetting(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      // Values arrive JSON-encoded over HRPC so a setting can hold any JSON type.
-      let value = req.value;
-      if (typeof value === 'string') {
-        try { value = JSON.parse(value); } catch { /* keep raw string */ }
-      }
-      await ctx.personal.setSetting(req.key, value);
-      return { success: true };
-    },
-    async getPersonalSettings() {
-      if (!ctx.personal) return { settings: [] };
-      const settings = await ctx.personal.getSettings();
-      return { settings: Object.entries(settings).map(([key, value]) => ({ key, value: JSON.stringify(value) })) };
-    },
-
-    /**
-     * Provision the at-rest encryption secret (from the device's native
-     * keychain) for the active identity's personal store, opening it encrypted.
-     * The platform reads-or-generates the secret in the keychain and passes it
-     * here; when omitted, the backend generates one and returns it so the
-     * platform can persist it to the keychain. Must be called before the store
-     * first opens to take effect.
-     */
-    async provisionPersonalEncryption(req = {}) {
-      if (!ctx.personalManager) return { success: false, error: 'personal store unavailable' };
-      const result = await ctx.personalManager.provisionSecret({ secret: req.secret || undefined });
-      return { success: !!result.success, secret: result.secret, encrypted: !!result.encrypted, error: result.error };
-    },
+    ...createPersonalApi({ ctx }),
 
     /**
      * Resolve the signed channel root descriptor for a locally available
@@ -2683,152 +2385,12 @@ export function createApi({
     // Public Feed Operations
     // ============================================
 
-    /**
-     * Get public feed entries
-     * @returns {{entries: Array, stats: Object}}
-     */
-    getPublicFeed() {
-      if (!publicFeed) {
-        return { entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } };
-      }
-      const rawFeed = publicFeed.getFeed();
-      const feed = rawFeed
-        .map((entry) => {
-          return {
-            driveKey: entry?.driveKey || entry?.channelKey || '',
-            channelKey: entry?.channelKey || entry?.driveKey || '',
-            source: entry?.source || 'peer',
-            publicBeeKey: entry?.publicBeeKey || null,
-            relayRole: entry?.relayRole || null,
-            relayServing: Boolean(entry?.relayServing),
-            catalogVersion: entry?.catalogVersion || null,
-            previewVideosHash: entry?.previewVideosHash || null,
-            channelName: entry?.channelName || null,
-            videoCount: entry?.videoCount || 0,
-            peerCount: entry?.peerCount || 0,
-            discoveryOnly: Boolean(entry?.discoveryOnly),
-            restoredFromCache: Boolean(entry?.restoredFromCache),
-            restoredFrom: entry?.restoredFrom || null,
-            requiresAvailabilityProbe: Boolean(entry?.requiresAvailabilityProbe),
-            lastSeen: entry?.lastSeen || entry?.lastSeenAt || entry?.addedAt || 0,
-            manifestUpdatedAt: entry?.manifestUpdatedAt || 0,
-            videos: Array.isArray(entry?.videos) ? entry.videos : Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
-            previewVideos: Array.isArray(entry?.videos) ? entry.videos : Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
-          }
-        })
-        .filter((entry) => typeof entry.channelKey === 'string' && entry.channelKey.length > 0)
-      const stats = publicFeed.getStats();
-      const keyedEntries = feed.filter((e) => typeof e.publicBeeKey === 'string' && e.publicBeeKey.length > 0).length;
-      const unkeyedEntries = feed.length - keyedEntries;
-      console.log(
-        `[API] Returning ${feed.length} feed entries (${stats.peerCount} peers, keyed=${keyedEntries}, fallback=${unkeyedEntries}, raw=${rawFeed.length})`
-      );
-      return {
-        entries: feed,
-        stats: {
-          ...stats,
-          keyedEntries,
-          unkeyedEntries,
-        },
-      };
-    },
-
-    /**
-     * Refresh feed from peers
-     * @returns {{success: boolean, peerCount: number}}
-     */
-    refreshFeed() {
-      console.log('[API] Refreshing feed...');
-      let peerCount = 0;
-      if (publicFeed) {
-        peerCount = publicFeed.requestFeedsFromPeers();
-      }
-      return { success: true, peerCount };
-    },
-
-    /**
-     * Submit channel to public feed
-     * @param {string} driveKey
-     * @returns {Promise<{success: boolean}>}
-     */
-    async submitToFeed(driveKey) {
-      console.log('[API] Submitting channel to feed:', driveKey?.slice(0, 16));
-      if (publicFeed && driveKey) {
-        // Get publicBeeKey from the channel for fast viewer access
-        let publicBeeKey = null;
-        try {
-          const channel = await loadChannel(ctx, driveKey);
-          publicBeeKey = channel?.publicBeeKey || await channel?.getPublicBeeKey();
-          console.log('[API] submitToFeed: got publicBeeKey:', publicBeeKey?.slice(0, 16));
-
-          // Comments are HyperDB-backed in the channel now; publish the channel DB
-          // key as the comments DB key for older clients/debug screens.
-          const commentsDbKey = channel.keyHex || driveKey
-          if (commentsDbKey) {
-            console.log('[API] submitToFeed: comments DB key:', commentsDbKey.slice(0, 16));
-
-            if (channel.publicBee?.writable) {
-              const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}));
-              if (!pubMeta?.commentsDbKey) {
-                await channel.publicBee.setMetadata({
-                  ...pubMeta,
-                  commentsDbKey
-                });
-                console.log('[API] submitToFeed: synced commentsDbKey to PublicBee');
-              }
-            }
-          }
-        } catch (err) {
-          console.log('[API] submitToFeed: channel/comments init error:', err?.message);
-        }
-        if (!isValidHypercoreHex(publicBeeKey)) {
-          return {
-            success: false,
-            error: 'Unable to publish channel: missing publicBeeKey',
-          }
-        }
-        await publicFeed.submitChannel(driveKey, publicBeeKey);
-      }
-      return { success: true };
-    },
-
-    /**
-     * Unpublish channel from public feed
-     * @param {string} driveKey
-     * @returns {Promise<{success: boolean}>}
-     */
-    async unpublishFromFeed(driveKey) {
-      console.log('[API] Unpublishing channel from feed:', driveKey?.slice(0, 16));
-      if (publicFeed && driveKey) {
-        await publicFeed.unpublishChannel(driveKey);
-      }
-      return { success: true };
-    },
-
-    /**
-     * Check if channel is published to feed
-     * @param {string} driveKey
-     * @returns {{published: boolean}}
-     */
-    isChannelPublished(driveKey) {
-      if (publicFeed && driveKey) {
-        return { published: publicFeed.isChannelPublished(driveKey) };
-      }
-      return { published: false };
-    },
-
-    /**
-     * Hide channel from feed
-     * @param {string} driveKey
-     * @returns {{success: boolean}}
-     */
-    hideChannel(driveKey) {
-      console.log('[API] Hiding channel:', driveKey?.slice(0, 16));
-      if (publicFeed && driveKey) {
-        publicFeed.hideChannel(driveKey);
-      }
-      return { success: true };
-    },
+    ...createFeedApi({
+      ctx,
+      publicFeed,
+      loadChannel,
+      isValidHypercoreHex,
+    }),
 
     // ============================================
     // Prefetch and Stats Operations
@@ -3872,130 +3434,18 @@ export function createApi({
     // Seeding Operations
     // ============================================
 
-    /**
-     * Get seeding status
-     * @returns {Promise<Object>}
-     */
-    async getSeedingStatus() {
-      if (seedingManager) {
-        return seedingManager.getStatus();
-      }
-      return { error: 'Seeding manager not initialized' };
-    },
+    ...createSeedingApi({
+      ctx,
+      seedingManager,
+      loadChannel,
+      isSeedingAuthorizationError,
+    }),
 
     // ============================================
     // Transcode Settings
     // ============================================
 
-    /**
-     * Get transcoder settings for troubleshooting
-     * @returns {Promise<{ settings: { videoToolboxDecodeEnabled: boolean, videoToolboxDecodeLocked: boolean, videoToolboxDecodeDefault: boolean, videoToolboxDecodeSource: string, videoToolboxHwMapEnabled: boolean, videoToolboxHwMapLocked: boolean, videoToolboxHwMapDefault: boolean, videoToolboxHwMapSource: string } }>}
-     */
-    async getTranscodeSettings() {
-      return { settings: getVideoToolboxDecodeSettings() };
-    },
-
-    /**
-     * Update transcoder settings for troubleshooting
-     * @param {Object} req
-     * @param {boolean} [req.videoToolboxDecodeEnabled]
-     * @param {boolean} [req.videoToolboxHwMapEnabled]
-     * @returns {Promise<{ success: boolean, error?: string, settings: object }>}
-     */
-    async setTranscodeSettings(req) {
-      const decodeEnabled = req?.videoToolboxDecodeEnabled;
-      const hwMapEnabled = req?.videoToolboxHwMapEnabled;
-      const hasDecode = typeof decodeEnabled === 'boolean';
-      const hasHwMap = typeof hwMapEnabled === 'boolean';
-      if (!hasDecode && !hasHwMap) {
-        return { success: false, error: 'Invalid request', settings: getVideoToolboxDecodeSettings() };
-      }
-
-      let settings = getVideoToolboxDecodeSettings();
-      if (hasDecode) settings = setVideoToolboxDecodeEnabled(decodeEnabled, 'ui');
-      if (hasHwMap) settings = setVideoToolboxHwMapEnabled(hwMapEnabled, 'ui');
-
-      if (hasDecode && settings.videoToolboxDecodeLocked) {
-        return { success: false, error: 'Locked by PEARTUBE_ENABLE_VT_DECODE', settings };
-      }
-      if (hasHwMap && settings.videoToolboxHwMapLocked) {
-        return { success: false, error: 'Locked by PEARTUBE_ENABLE_VT_HWMAP', settings };
-      }
-
-      try {
-        await ctx.metaDb.put('transcode-settings', {
-          videoToolboxDecodeEnabled: settings.videoToolboxDecodeEnabled,
-          videoToolboxHwMapEnabled: settings.videoToolboxHwMapEnabled
-        });
-      } catch (err) {
-        console.log('[API] Failed to persist transcode settings:', err?.message);
-      }
-
-      return { success: true, settings };
-    },
-
-    /**
-     * Set seeding config
-     * @param {Object} config
-     * @returns {Promise<Object>}
-     */
-    async setSeedingConfig(config) {
-      if (seedingManager) {
-        await seedingManager.setConfig(config);
-        return { success: true, config: seedingManager.config };
-      }
-      return { success: false, error: 'Seeding manager not initialized' };
-    },
-
-    /**
-     * Pin a channel
-     * @param {string} driveKey
-     * @returns {Promise<Object>}
-     */
-    async pinChannel(driveKey) {
-      console.log('[API] PIN_CHANNEL:', driveKey?.slice(0, 16));
-      if (seedingManager && driveKey) {
-        try {
-          await seedingManager.pinChannel(driveKey);
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return { success: false, error: err.message };
-          throw err;
-        }
-        await loadChannel(ctx, driveKey);
-        return { success: true };
-      }
-      return { success: false, error: 'Invalid request' };
-    },
-
-    /**
-     * Unpin a channel
-     * @param {string} driveKey
-     * @returns {Promise<Object>}
-     */
-    async unpinChannel(driveKey) {
-      console.log('[API] UNPIN_CHANNEL:', driveKey?.slice(0, 16));
-      if (seedingManager && driveKey) {
-        try {
-          await seedingManager.unpinChannel(driveKey);
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return { success: false, error: err.message };
-          throw err;
-        }
-        return { success: true };
-      }
-      return { success: false, error: 'Invalid request' };
-    },
-
-    /**
-     * Get pinned channels
-     * @returns {{channels: string[]}}
-     */
-    getPinnedChannels() {
-      if (seedingManager) {
-        return { channels: seedingManager.getPinnedChannels() };
-      }
-      return { channels: [] };
-    },
+    ...createTranscodeApi({ ctx }),
 
     // ============================================
     // Storage Management Operations
@@ -4185,351 +3635,31 @@ export function createApi({
       }
     },
 
-    // ============================================
     // Status Operations
-    // ============================================
+    ...createStatusApi({ ctx, publicFeed, recentPlaybackTimings }),
 
-    /**
-     * Get backend status
-     * @returns {Object}
-     */
-    getStatus() {
-      return {
-        connected: true,
-        peers: ctx.swarm?.connections?.size || 0,
-        blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
-        blobServerHost: ctx.blobServerHost || '127.0.0.1',
-        version: '0.1.115'
-      };
-    },
-
-    /**
-     * Get swarm status for debugging
-     * @returns {Object}
-     */
-    getSwarmStatus() {
-      const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
-      const networkDebug = getNetworkStats()
-      const feedStats = publicFeed?.getStats?.() || {}
-      // Report what the user can actually SEE. The raw entries map includes
-      // hidden/filtered entries, so diagnostics (and the home screen's
-      // discovery-state classifier) were fed counts that didn't match the
-      // rendered feed.
-      const visibleFeedEntries = (() => {
-        try { return publicFeed?.getFeed?.()?.length ?? (publicFeed?.entries?.size || 0) } catch { return publicFeed?.entries?.size || 0 }
-      })()
-      const startupTiming = {
-        storage: networkDebug?.startupTiming || null,
-        publicFeed: feedStats.startupTiming || null,
-      }
-      const doctor = {
-        dht: {
-          bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
-          firewalled: ctx.swarm?.dht?.firewalled ?? null,
-          online: ctx.swarm?.dht?.online ?? null,
-          ephemeral: ctx.swarm?.dht?.ephemeral ?? null,
-        },
-        discovery: {
-          peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-          publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
-          discoveredPeers: feedStats.directPeerDial?.discoveredPeers || 0,
-          recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
-        },
-        socket: {
-          swarmPeers: ctx.swarm?.peers?.size || 0,
-          swarmConnections: ctx.swarm?.connections?.size || 0,
-          connecting: Number(ctx.swarm?.connecting || 0),
-          recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
-          peerStates: networkDebug?.hyperswarm?.peerStates || [],
-        },
-        feed: {
-          feedConnections: publicFeed?.feedConnections?.size || 0,
-          feedEntries: visibleFeedEntries,
-          directPeerDial: feedStats.directPeerDial || null,
-          lastHaveFeed: feedStats.lastHaveFeed || null,
-        },
-        playback: {
-          lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
-          recentPreparePlayback: recentPlaybackTimings.slice(-5),
-        },
-        recommendedBoundary: null,
-      }
-      if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
-      else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
-      else if (doctor.socket.swarmConnections > 0 && doctor.feed.feedConnections === 0) doctor.recommendedBoundary = 'protomux-feed-open'
-      else if (doctor.feed.feedConnections > 0 && doctor.feed.feedEntries === 0) doctor.recommendedBoundary = 'feed-gossip'
-      else doctor.recommendedBoundary = 'content-playback-or-ui'
-      return {
-        swarmConnections: ctx.swarm?.connections?.size || 0,
-        swarmPeers: ctx.swarm?.peers?.size || 0,
-        feedConnections: publicFeed?.feedConnections?.size || 0,
-        feedEntries: visibleFeedEntries,
-        feedTopicHex: topicHex,
-        network: networkDebug,
-        startupTiming,
-        doctor,
-        swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
-        swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
-        swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
-        peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-        publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
-        swarmPublicKey: ctx.swarm?.keyPair?.publicKey
-          ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
-          : 'unknown',
-        channelsLoaded: Math.max(ctx.channels?.size || 0, visibleFeedEntries),
-      };
-    }
-
-    ,
     // ============================================
     // Multi-device pairing (Multi-writer channels)
     // ============================================
 
-    /**
-     * Create a device invite code for a multi-writer channel.
-     * @param {string} channelKey
-     * @returns {Promise<{inviteCode: string}>}
-     */
-    async createDeviceInvite(channelKey) {
-      const channel = await loadChannel(ctx, channelKey)
-      const inviteCode = await channel.createInvite({})
-      return { inviteCode }
-    },
-
-    /**
-     * Pair this device to an existing channel using an invite code.
-     * @param {string} inviteCode
-     * @param {string} [deviceName]
-     * @returns {Promise<{success: boolean, channelKey: string, syncState?: string, videoCount?: number}>}
-     */
-    async pairDevice(inviteCode, deviceName = '') {
-      const { channel, channelKeyHex } = await pairChannelDevice(ctx, inviteCode, { deviceName })
-
-      // Use smart sync - waits for peer connection first, then polls for data
-      console.log('[API] pairDevice: starting smart sync...')
-      const syncResult = await channel.waitForInitialSync({
-        peerTimeout: 30000,  // 30s for DHT discovery
-        dataTimeout: 20000,  // 20s for data sync after connected
-        onProgress: (state, detail) => {
-          console.log('[API] pairDevice sync progress:', state, detail)
-        }
-      })
-
-      console.log('[API] pairDevice: sync result:', syncResult)
-
-      return {
-        success: true,
-        channelKey: channelKeyHex,
-        syncState: syncResult.state,
-        videoCount: syncResult.videoCount
-      }
-    },
-
-    /**
-     * Retry syncing a channel that may have failed initial sync.
-     * @param {string} channelKey
-     * @returns {Promise<{success: boolean, state: string, videoCount: number}>}
-     */
-    async retrySyncChannel(channelKey) {
-      const channel = await loadChannel(ctx, channelKey)
-
-      console.log('[API] retrySyncChannel: starting sync for', channelKey?.slice(0, 16))
-      const result = await channel.waitForInitialSync({
-        peerTimeout: 30000,
-        dataTimeout: 20000,
-        onProgress: (state, detail) => {
-          console.log('[API] retrySyncChannel progress:', state, detail)
-        }
-      })
-
-      return {
-        success: result.success,
-        state: result.state,
-        videoCount: result.videoCount
-      }
-    },
-
-    /**
-     * List known devices/writers for a channel.
-     * @param {string} channelKey
-     * @returns {Promise<{devices: Array<{keyHex: string, role?: string, deviceName?: string, addedAt?: number, blobDriveKey?: string|null}>}>}
-     */
-    async listDevices(channelKey) {
-      const channel = await loadChannel(ctx, channelKey)
-      const devices = await channel.listWriters()
-      return { devices }
-    },
+    ...createPairingApi({
+      ctx,
+      loadChannel,
+      pairChannelDevice,
+    }),
 
     // ============================================
     // Search Operations
     // ============================================
 
-    /**
-     * Search videos in a channel using semantic search
-     * @param {string} channelKey
-     * @param {string} query
-     * @param {Object} [options]
-     * @param {number} [options.topK=10]
-     * @param {boolean} [options.federated=true]
-     * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
-     */
-    async searchVideos(channelKey, query, options = {}) {
-      const { topK = 10, federated = true } = options
-
-      // Ensure semantic finder is initialized with persistence
-      await ensureSemanticFinder(ctx)
-
-      // Initialize federated search if not already done
-      if (!ctx.federatedSearch && ctx.swarm) {
-        ctx.federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder)
-        const channelKeyBuf = b4a.from(channelKey, 'hex')
-        ctx.federatedSearch.setupTopic(channelKeyBuf)
-      }
-
-      // Use federated search if available, otherwise local only
-      if (ctx.federatedSearch && federated) {
-        return await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000 })
-      } else {
-        return await ctx.semanticFinder.search(query, topK)
-      }
-    },
-
-    /**
-     * Global search across ALL discovered channels (YouTube-Fast)
-     * Uses pre-built global index for O(1) search instead of iterating channels
-     * @param {string} query - Search query
-     * @param {Object} [options]
-     * @param {number} [options.topK=50] - Max results to return
-     * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
-     */
-    async globalSearchVideos(query, options = {}) {
-      const { topK = 50 } = options
-
-      console.log('[API] globalSearchVideos:', query, 'topK:', topK)
-
-      // Ensure semantic finder is initialized with persistence
-      const finder = await ensureSemanticFinder(ctx)
-
-      // Best-effort: import replicated vectors from any loaded channels.
-      if (ctx.channels && ctx.channels.size > 0) {
-        (async () => {
-          for (const [channelKey, channel] of ctx.channels.entries()) {
-            try {
-              await finder.ensureGlobalIndexedFromChannelView(channelKey, channel)
-            } catch { /* best effort */ }
-          }
-        })()
-      }
-
-      // Fast global search - O(1) not O(channels)
-      const results = await finder.globalSearch(query, topK)
-      console.log('[API] globalSearchVideos: found', results.length, 'results in global index')
-
-      // Validate/enrich results when cheap, but do not prune preview/direct-ref
-      // entries just because PublicBee/channel hydration timed out. Search may
-      // have a durable preview record while loadChannel/listVideos is currently
-      // unproductive over P2P.
-      const validated = []
-      const staleIds = []
-      for (const r of results) {
-        const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {})
-        const channelKey = meta.channelKey || meta.driveKey
-        if (!channelKey) { validated.push(r); continue }
-        const hasDirectRefs = Boolean(meta.blobId && meta.blobsCoreKey)
-        const previewVideo = getPreviewVideoFromFeed(channelKey, r.id, meta.publicBeeKey)
-        if (hasDirectRefs || previewVideo?.blobId) {
-          validated.push({
-            ...r,
-            metadata: {
-              ...meta,
-              ...(previewVideo || {}),
-              channelKey,
-              publicBeeKey: meta.publicBeeKey || previewVideo?.publicBeeKey || null,
-              blobId: meta.blobId || previewVideo?.blobId || null,
-              blobsCoreKey: meta.blobsCoreKey || previewVideo?.blobsCoreKey || null,
-            },
-          })
-          continue
-        }
-        try {
-          const video = await this.getVideoData(channelKey, r.id, meta.publicBeeKey)
-          if (video) { validated.push(r); continue }
-        } catch { /* best effort */ }
-        staleIds.push(r.id)
-      }
-
-      if (staleIds.length > 0) {
-        console.log('[API] globalSearchVideos: pruning', staleIds.length, 'stale entries')
-        for (const id of staleIds) {
-          try { finder.removeVideo(id) } catch { /* best effort */ }
-        }
-      }
-
-      return validated
-    },
-
-    /**
-     * Index a video for semantic search (YouTube-Fast)
-     * Uses global index with persistence for instant search
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @returns {Promise<{success: boolean}>}
-     */
-    async indexVideoVectors(channelKey, videoId) {
-      try {
-        const envelope = await buildSearchEnvelope(channelKey, videoId, { includeComments: true, includeSubtitles: true })
-        if (!envelope) {
-          return { success: false, error: 'Video not found' }
-        }
-
-        const finder = await ensureSemanticFinder(ctx)
-        const needsMetadataRefresh =
-          typeof finder.needsMetadataRefresh === 'function'
-            ? finder.needsMetadataRefresh(envelope)
-            : false
-
-        if (finder.hasVideo(envelope.videoId) && !needsMetadataRefresh) {
-          return { success: true, alreadyIndexed: true }
-        }
-
-        await finder.indexEnvelope(envelope, {
-          channelKey,
-          publicBeeKey: envelope.publicBeeKey || null,
-        })
-
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (isMW) {
-          const channel = await loadChannel(ctx, channelKey)
-          const text = envelope.searchText || `${envelope.title || ''} ${envelope.description || ''}`
-          const embedding = await finder.embed(text)
-          const vectorBase64 = b4a.toString(
-            b4a.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
-            'base64'
-          )
-
-          await channel.base.append({
-            type: 'add-vector-index',
-            schemaVersion: 1,
-            videoId: envelope.videoId,
-            vector: vectorBase64,
-            text,
-            metadata: JSON.stringify({
-              channelKey,
-              title: envelope.title,
-              creatorName: envelope.creatorName || null,
-              channelName: envelope.channelName || null,
-              sources: envelope.sourceFields
-            }),
-            indexedAt: Date.now()
-          })
-        }
-
-        return { success: true }
-      } catch (err) {
-        console.error('[API] indexVideoVectors error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
+    ...createSearchApi({
+      ctx,
+      ensureSemanticFinder,
+      buildSearchEnvelope,
+      getPreviewVideoFromFeed,
+      isMultiWriterChannelKey,
+      loadChannel,
+    }),
 
     // ============================================
     // Comments Operations (HyperDB channel-backed)
@@ -4547,155 +3677,7 @@ export function createApi({
       return loadChannelBounded(channelKey, 3000)
     },
 
-
-    /**
-     * Add a comment to a video
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {string} text
-     * @param {string} [parentId]
-     * @param {string} [publicBeeKey]
-     * @returns {Promise<{success: boolean, commentId?: string, error?: string}>}
-     */
-    async addComment(channelKey, videoId, text, parentId = null, publicBeeKey = null) {
-      // SYNC LOG - this should ALWAYS appear immediately
-      console.log('[API] ====== addComment ENTERED ======')
-      console.log('[API] addComment: channelKey:', channelKey?.slice(0, 16), 'videoId:', videoId?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
-
-      try {
-        console.log('[API] addComment: loading HyperDB channel comments...')
-        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        if (!channel?.comments) throw new Error('Comments not initialized')
-        const result = await channel.comments.addComment(videoId, text, parentId)
-        console.log('[API] addComment: comment added:', result.commentId?.slice(0, 8))
-        await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
-        return { success: true, commentId: result.commentId, queued: false }
-      } catch (err) {
-        console.error('[API] addComment error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * List comments for a video
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {Object} [options]
-     * @param {number} [options.page=0]
-     * @param {number} [options.limit=50]
-     * @param {string} [options.publicBeeKey]
-     * @returns {Promise<{comments: Array, success: boolean, error?: string}>}
-     */
-    async listComments(channelKey, videoId, options = {}) {
-      try {
-        const channel = await this._getCommentsAutobase(channelKey, options.publicBeeKey)
-        if (!channel?.comments) throw new Error('Comments not initialized')
-        const comments = await channel.comments.listComments(videoId, options)
-        return { success: true, comments }
-      } catch (err) {
-        console.error('[API] listComments error:', err.message)
-        return { success: false, comments: [], error: err.message }
-      }
-    },
-
-    /**
-     * Hide a comment (moderator action)
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {string} commentId
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async hideComment(channelKey, videoId, commentId, publicBeeKey = null) {
-      try {
-        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        if (!channel?.comments) throw new Error('Comments not initialized')
-        await channel.comments.hideComment(videoId, commentId)
-        await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
-        return { success: true }
-      } catch (err) {
-        console.error('[API] hideComment error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Remove a comment (moderator or author)
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {string} commentId
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async removeComment(channelKey, videoId, commentId, publicBeeKey = null) {
-      try {
-        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        if (!channel?.comments) throw new Error('Comments not initialized')
-        await channel.comments.removeComment(videoId, commentId)
-        await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
-        return { success: true }
-      } catch (err) {
-        console.error('[API] removeComment error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    // ============================================
-    // Reactions Operations (HyperDB channel-backed)
-    // ============================================
-
-    /**
-     * Add a reaction to a video
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {string} reactionType
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async addReaction(channelKey, videoId, reactionType, publicBeeKey = null) {
-      try {
-        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        if (!channel?.reactions) throw new Error('Reactions not initialized')
-        await channel.reactions.addReaction(videoId, reactionType)
-        return { success: true }
-      } catch (err) {
-        console.error('[API] addReaction error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Remove a reaction from a video
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async removeReaction(channelKey, videoId, publicBeeKey = null) {
-      try {
-        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        if (!channel?.reactions) throw new Error('Reactions not initialized')
-        await channel.reactions.removeReaction(videoId)
-        return { success: true }
-      } catch (err) {
-        console.error('[API] removeReaction error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Get reactions for a video
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @returns {Promise<{counts: Record<string, number>, userReaction: string|null, success: boolean, error?: string}>}
-     */
-    async getReactions(channelKey, videoId, publicBeeKey = null) {
-      try {
-        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        if (!channel?.reactions) throw new Error('Reactions not initialized')
-        const result = await channel.reactions.getReactions(videoId)
-        return { success: true, counts: result.counts || {}, userReaction: result.userReaction || null }
-      } catch (err) {
-        console.error('[API] getReactions error:', err.message)
-        return { success: false, counts: {}, userReaction: null, error: err.message }
-      }
-    },
+    ...createCommentsApi({ refreshSearchIndex }),
 
     /**
      * Get debug info about the comments system for a channel
@@ -4766,171 +3748,18 @@ export function createApi({
       return debugInfo
     },
 
-    // ============================================
     // Recommendations Operations
-    // ============================================
+    ...createRecommendationsApi({
+      ctx,
+      ensureSemanticFinder,
+      isMultiWriterChannelKey,
+      loadChannel,
+    }),
 
-    /**
-     * Log a watch event for recommendations
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {Object} [options]
-     * @param {number} [options.duration]
-     * @param {boolean} [options.completed]
-     * @param {boolean} [options.share=false]
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async logWatchEvent(channelKey, videoId, options = {}) {
-      try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, error: 'Watch events only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.watchLogger) {
-          return { success: false, error: 'Watch logger not initialized' }
-        }
-
-        await channel.watchLogger.logWatchEvent(videoId, options)
-        return { success: true }
-      } catch (err) {
-        console.error('[API] logWatchEvent error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Get video recommendations
-     * @param {string} channelKey
-     * @param {Object} [options]
-     * @param {number} [options.limit=10]
-     * @param {string[]} [options.excludeVideoIds]
-     * @returns {Promise<{recommendations: Array, success: boolean, error?: string}>}
-     */
-    async getRecommendations(channelKey, options = {}) {
-      try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, recommendations: [], error: 'Recommendations only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.watchLogger) {
-          return { success: false, recommendations: [], error: 'Watch logger not initialized' }
-        }
-
-        // Ensure semantic finder is initialized with persistence
-        await ensureSemanticFinder(ctx)
-
-        // Initialize recommender
-        const recommender = new Recommender(channel, ctx.semanticFinder, channel.watchLogger)
-        const recommendations = await recommender.generateRecommendations(options)
-
-        return { success: true, recommendations }
-      } catch (err) {
-        console.error('[API] getRecommendations error:', err.message)
-        return { success: false, recommendations: [], error: err.message }
-      }
-    },
-
-    /**
-     * Get recommendations for a specific video
-     * @param {string} channelKey
-     * @param {string} videoId
-     * @param {number} [limit=5]
-     * @returns {Promise<{recommendations: Array, success: boolean, error?: string}>}
-     */
-    async getVideoRecommendations(channelKey, videoId, limit = 5) {
-      try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, recommendations: [], error: 'Recommendations only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-
-        // Ensure semantic finder is initialized with persistence
-        await ensureSemanticFinder(ctx)
-
-        // Initialize recommender (watch logger may be null, that's ok)
-        const watchLogger = channel.watchLogger || null
-        const recommender = new Recommender(channel, ctx.semanticFinder, watchLogger)
-        const recommendations = await recommender.getVideoRecommendations(videoId, limit)
-
-        return { success: true, recommendations }
-      } catch (err) {
-        console.error('[API] getVideoRecommendations error:', err.message)
-        return { success: false, recommendations: [], error: err.message }
-      }
-    },
-
-    // ============================================
     // Network Lifecycle Management
-    // ============================================
-
-    /**
-     * Suspend networking for mobile background state.
-     * Call this when the app goes to background to save battery.
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async suspendNetwork() {
-      try {
-        await suspendNetworking()
-        return { success: true }
-      } catch (err) {
-        console.error('[API] suspendNetwork error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Resume networking when app returns to foreground.
-     * @returns {Promise<{success: boolean, error?: string}>}
-     */
-    async resumeNetwork() {
-      try {
-        await resumeNetworking()
-        return { success: true }
-      } catch (err) {
-        console.error('[API] resumeNetwork error:', err.message)
-        return { success: false, error: err.message }
-      }
-    },
-
-    /**
-     * Mirror app playback state into the backend so cache cleanup does not
-     * clear blob ranges while a player or blob-server reader is active.
-     * @param {{active?: boolean, ttlMs?: number}} [options]
-     * @returns {{success: boolean, active: boolean, updatedAt: number, expiresAt: number}}
-     */
-    setPlaybackActive(options = {}) {
-      const state = storageSetPlaybackActive(Boolean(options.active), { ttlMs: options.ttlMs })
-      // Flush deferred cache eviction when playback ends. enforceQuota() skips
-      // every clear while playback is active (isCacheClearBlocked), and its only
-      // other trigger — addSeed — fires *during* playback, so the over-quota
-      // evictions get deferred and nothing ever re-runs them. Without this hook
-      // the seed cache grows unbounded past maxStorageGB.
-      //
-      // The sweep is debounced and cancelled the moment playback resumes, so
-      // rapid open/close, seeking, and pause/resume never trigger eviction.
-      if (state.active) {
-        cancelScheduledQuotaSweep()
-      } else {
-        scheduleQuotaSweepAfterPlayback()
-      }
-      return { success: true, ...state }
-    },
-
-    /**
-     * Get network stats for debugging.
-     * @returns {{stats: Object|null, readable: string}}
-     */
-    getNetworkDebugStats() {
-      return {
-        stats: getNetworkStats(),
-        readable: getNetworkStatsReadable()
-      }
-    }
+    ...createNetworkLifecycleApi({
+      onPlaybackActive: cancelScheduledQuotaSweep,
+      onPlaybackInactive: scheduleQuotaSweepAfterPlayback,
+    })
   };
 }

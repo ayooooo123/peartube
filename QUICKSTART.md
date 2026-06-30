@@ -61,7 +61,7 @@ Use focused package tests when possible:
 ```bash
 npm test --prefix packages/spec
 npm test --prefix packages/backend
-npm test --prefix packages/protocol
+npm test --prefix packages/host
 ```
 
 ## Troubleshooting

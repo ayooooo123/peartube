@@ -13,7 +13,7 @@ Status as of 2026-06-26: pre-alpha, active development.
 
 ## Current Architecture Progress
 
-- Universal backend boundary is in place through `@peartube/host`, `@peartube/protocol`, `@peartube/platform`, and `@peartube/backend`.
+- Universal backend boundary is in place through `@peartube/host`, `@peartube/platform`, and `@peartube/backend`.
 - Protocol version is centralized in `packages/host/src/contracts.js` and currently validated by the protocol client.
 - Shared HRPC handlers are centralized in `packages/backend/src/hrpc-handlers.js` and registered by `packages/backend/src/backend-entry.js`.
 - Schema generation produces JS HRPC/schema output via `npm run schema:full`.

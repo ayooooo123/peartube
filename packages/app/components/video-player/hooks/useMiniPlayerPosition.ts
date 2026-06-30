@@ -14,6 +14,8 @@ interface UseMiniPlayerPositionProps {
   screenWidth: number
   screenHeight: number
   sidebarWidth: number
+  corner?: Corner
+  setCorner?: (corner: Corner) => void
 }
 
 interface DragStartRef {
@@ -27,8 +29,12 @@ export function useMiniPlayerPosition({
   screenWidth,
   screenHeight,
   sidebarWidth,
+  corner: controlledCorner,
+  setCorner: controlledSetCorner,
 }: UseMiniPlayerPositionProps) {
-  const [corner, setCorner] = useState<Corner>('bottom-right')
+  const [uncontrolledCorner, setUncontrolledCorner] = useState<Corner>('bottom-right')
+  const corner = controlledCorner ?? uncontrolledCorner
+  const setCorner = controlledSetCorner ?? setUncontrolledCorner
   const [isDragging, setIsDragging] = useState(false)
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const dragStartRef = useRef<DragStartRef>({ x: 0, y: 0, cornerX: 0, cornerY: 0 })

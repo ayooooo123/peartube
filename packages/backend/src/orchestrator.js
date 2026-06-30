@@ -43,26 +43,9 @@ import {
   shouldRetryCorestoreSeedFallback
 } from './corestore-error-utils.js'
 import { createStartupGate } from './startup-gates.js'
+import { appendDebugLine } from './debug-log.js'
 
 const STARTUP_GATE_WARMUP_WAIT_MS = 2000
-
-function resolveDebugLogPath() {
-  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
-}
-
-async function appendDebugLine(line) {
-  const filePath = resolveDebugLogPath()
-  if (!filePath) return
-
-  try {
-    const fsModule = await import('bare-fs')
-    const fs = fsModule?.default ?? fsModule
-    if (typeof fs?.appendFileSync !== 'function') return
-    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch (err) {
-    void err
-  }
-}
 
 // Resolve an async stat/readdir for whichever fs flavour the runtime provides.
 // bare-fs on mobile does not reliably expose `fs.promises`, so the original

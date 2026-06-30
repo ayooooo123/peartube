@@ -1,0 +1,26 @@
+# Smoke flow — the app boots and the core shell renders.
+#
+# This needs NO P2P content, so it's the hard gate: it catches crashes and
+# render regressions from the player / screen decomposition work even on a
+# fresh emulator with no peers. Tab labels come from PillTabBar's
+# accessibilityLabel (Home / Discover / Studio / Library).
+appId: com.peartube.app
+---
+- launchApp:
+    clearState: true
+# Give the JS bundle + backend worklet a moment to boot.
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 60000
+- assertVisible: "Home"
+- assertVisible: "Discover"
+- assertVisible: "Library"
+- takeScreenshot: smoke-home
+# Navigate the tab bar — exercises route mounts without needing content.
+- tapOn: "Discover"
+- assertVisible: "Discover"
+- tapOn: "Library"
+- assertVisible: "Library"
+- tapOn: "Home"
+- assertVisible: "Home"
+- takeScreenshot: smoke-tabs-ok

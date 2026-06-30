@@ -3,7 +3,7 @@
 PearTube development centers on the universal backend contract:
 
 ```text
-client shell -> @peartube/platform -> @peartube/protocol -> @peartube/host -> @peartube/backend
+client shell -> @peartube/platform -> @peartube/host -> @peartube/backend
 ```
 
 Keep backend-facing changes in that shared path unless a limitation is truly runtime-specific.
@@ -31,7 +31,7 @@ Run `npm run bundle:backend` after backend, schema, or mobile runtime changes th
 | `npm run desktop:start` | Launch the built Electrobun app |
 | `npm run schema:full` | Regenerate JS schema output |
 | `npm run typecheck` | Typecheck `packages/platform` |
-| `npm test` | Run spec, backend, host, and protocol tests |
+| `npm test` | Run spec, backend, and host tests |
 | `npm run lint:changed` | Lint changed files |
 
 ## Package Focus
@@ -41,7 +41,6 @@ Run `npm run bundle:backend` after backend, schema, or mobile runtime changes th
 | `packages/spec` | `npm test --prefix packages/spec`, `npm run gen:schema --prefix packages/spec` |
 | `packages/backend` | `npm test --prefix packages/backend`, `npm run test:watch --prefix packages/backend` |
 | `packages/host` | `npm test --prefix packages/host` |
-| `packages/protocol` | `npm test --prefix packages/protocol` |
 | `packages/platform` | `npm run typecheck --prefix packages/platform` |
 | `packages/app` | `npm run bundle:backend --prefix packages/app`, `npm run desktop:build --prefix packages/app`, `npm run desktop:smoke --prefix packages/app` |
 | `packages/cli` | `npm test --prefix packages/cli`, `npm run build:standalone --prefix packages/cli` |
@@ -61,7 +60,7 @@ After adding or changing an RPC method:
 
 - Update `packages/spec/schema.cjs`.
 - Run `npm run schema:full`.
-- Expose the behavior through `@peartube/backend`, `@peartube/protocol`, and `@peartube/platform` as needed.
+- Expose the behavior through `@peartube/backend`, `@peartube/host`, and `@peartube/platform` as needed.
 - Rebuild mobile and desktop generated bundles if the runtime entrypoints depend on the change.
 
 ## Backend And RPC Notes
@@ -70,7 +69,7 @@ After adding or changing an RPC method:
 - `packages/host/src/start-host.js` owns host lifecycle startup.
 - `packages/backend/src/backend-entry.js` creates the universal backend, registers shared handlers, starts the core, and emits readiness.
 - `packages/backend/src/hrpc-handlers.js` is the central shared HRPC handler registry.
-- `packages/protocol/src/create-client.js` validates readiness and groups app-facing methods into namespaces such as `system`, `feed`, `channel`, `video`, `watch`, `transfer`, `search`, and `shell`.
+- `packages/host/src/create-client.js` validates readiness and groups app-facing methods into namespaces such as `system`, `feed`, `channel`, `video`, `watch`, `transfer`, `search`, and `shell`.
 - `packages/platform/src/rpc.shared.ts` is the common app-facing bridge used by platform-specific runners.
 
 Network empty states should use `system.getSwarmStatus()` diagnostics instead of generic "no content" copy.

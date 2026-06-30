@@ -145,10 +145,7 @@ export class PublicChannelBee extends ReadyResource {
 
   async getMetadata() {
     await this.waitForSync(1500)
-    if (!this.db) {
-      const existing = await this.bee?.get?.('meta')?.catch?.(() => null)
-      return this._sanitizePublicMetadata(existing?.value || null)
-    }
+    if (!this.db) return this._sanitizePublicMetadata(null)
     this.db.update?.()
     const meta = await this.db.get('@peartubePublic/metadata', { key: 'meta' })
     return this._sanitizePublicMetadata(meta || null)
@@ -163,13 +160,7 @@ export class PublicChannelBee extends ReadyResource {
 
   async setMetadata(meta) {
     if (!this.writable) throw new Error('Not writable')
-    if (!this.db) {
-      const existing = await this.bee?.get?.('meta')?.catch?.(() => null)
-      const prev = this._sanitizePublicMetadata(existing?.value || null) || {}
-      const patch = this._sanitizePublicMetadata(meta) || {}
-      await this.bee?.put?.('meta', { ...prev, ...patch, updatedAt: Date.now() })
-      return
-    }
+    if (!this.db) return
     // Merge with existing metadata so callers can perform partial updates without
     // accidentally dropping previously published fields.
     const prev = this._sanitizePublicMetadata(await this.getMetadata()) || {}
@@ -195,13 +186,7 @@ export class PublicChannelBee extends ReadyResource {
     // Give replication a chance before scanning.
     await this.waitForSync(syncTimeoutMs)
 
-    if (!this.db) {
-      const stream = this.bee?.createReadStream?.({
-        gte: 'videos/',
-        lt: 'videos0'
-      })
-      return this._collectVideoStream(stream, streamTimeoutMs)
-    }
+    if (!this.db) return this._collectVideoStream(undefined, streamTimeoutMs)
     this.db.update?.()
 
     const stream = this.db.find('@peartubePublic/videos-by-uploaded-at', {}, {

@@ -4,7 +4,7 @@ import {
   requireHostProtocolVersion
 } from './runtime.js'
 import { createBackendContext } from './orchestrator.js'
-import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'
+import { createUniversalCore } from './universal-core.js'
 import { registerSharedHandlers } from './hrpc-handlers.js'
 
 function noop() {}
@@ -21,14 +21,6 @@ function getBlobServerStatus(backend) {
     blobServerPort: port > 0 ? port : null,
     blobServerReady: port > 0 && !error,
     blobServerError: error ? (error?.message || String(error)) : null
-  }
-}
-
-function registerUniversalHandlers(rpc, core) {
-  const universalHandlers = createUniversalHrpcSurface(core)
-  for (const [name, handler] of Object.entries(universalHandlers)) {
-    if (typeof rpc.respond === 'function') rpc.respond(name, handler)
-    else rpc[name] = handler
   }
 }
 
@@ -117,7 +109,6 @@ export async function createBackend(opts = {}) {
     }
 
     registerSharedHandlers(rpc, backend)
-    registerUniversalHandlers(rpc, core)
     await core.start()
 
     const readyPayload = { ...getBlobServerStatus(backend), protocolVersion: hostProtocolVersion }

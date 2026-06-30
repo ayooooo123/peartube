@@ -8,7 +8,8 @@
  * the raw `@peartube/*` source trees into the launched `.app`, so the app was
  * only ever as fresh as the last copy — launching the `.app` directly (or a
  * partial copy) could run a stale `universal-core.js` and fail to link a newly
- * added export (e.g. `createUniversalHrpcSurface`).
+ * added export (e.g. a function added to `universal-core.js` but missing from
+ * the stale copy).
  *
  * This script bare-packs the compiled worker into a runnable `.bundle`, traced
  * from the real `packages/app/node_modules` graph. Native `.bare` addons are
@@ -248,7 +249,7 @@ function parseEsmNamedImports(source) {
 }
 
 function describeWorkingTreeState() {
-  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core', 'packages/protocol'], {
+  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core'], {
     cwd: repoRoot,
     encoding: 'utf8',
   })

@@ -95,7 +95,7 @@ function patchDataSourceSource(source) {
 
   let next = source
   if (!alreadyPatched) {
-    const baseFactoryRegex = /fun buildBaseDataSourceFactory\(context: Context, videoSource: VideoSource\): DataSource\.Factory \{\n  return if \(videoSource\.uri\?\.scheme\?\.startsWith\("http"\) == true\) \{\n    buildOkHttpDataSourceFactory\(context, videoSource\)\n  \} else \{\n    DefaultDataSource\.Factory\(context\)\n  \}\n\}/
+    const baseFactoryRegex = /fun buildBaseDataSourceFactory\(context: Context, videoSource: VideoSource\): DataSource\.Factory \{\n {2}return if \(videoSource\.uri\?\.scheme\?\.startsWith\("http"\) == true\) \{\n {4}buildOkHttpDataSourceFactory\(context, videoSource\)\n {2}\} else \{\n {4}DefaultDataSource\.Factory\(context\)\n {2}\}\n\}/
     if (!baseFactoryRegex.test(source)) {
       return { changed: false, source, missing: true }
     }
@@ -334,7 +334,7 @@ private fun isPearTubeLocalBlobStream(videoSource: VideoSource): Boolean {
       next = `${next.trimEnd()}\n${helper}`
     }
   } else {
-    const helperRegex = /private fun isPearTubeLocalBlobStream\(videoSource: VideoSource\): Boolean \{\n(?:  .*\n)+?\}/
+    const helperRegex = /private fun isPearTubeLocalBlobStream\(videoSource: VideoSource\): Boolean \{\n(?: {2}.*\n)+?\}/
     if (!helperRegex.test(next)) {
       return { changed: false, source, missing: true }
     }

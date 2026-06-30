@@ -187,22 +187,46 @@ positional and rely on `this._getCommentsAutobase`; direct fallback would pass t
 wrong args and lose binding. A later cleanup can replace the wrappers with explicit
 request adapters or make the comments API request-shaped first.
 
-### 10. Per-method `console.log('[API] …')` + try/catch boilerplate
+### 10. Per-method `console.log('[API] …')` + try/catch boilerplate ✅ DONE (safe slice)
 172 `console.*` and 125 `try` blocks in `api.js`, including `'====== addComment
 ENTERED ======'`-style banners and a repeated
 `try {…} catch (err) { return { success:false, error: err.message } }` shape.
-**Proposal:** one tiny `wrap(name, fn)` higher-order helper (not a logging
-framework) removes ~100+ lines of copy-paste.
+**Done:** removed the `addComment` debug-banner trace logs (the `====== addComment
+ENTERED ======` SYNC-LOG banner + the per-step "loading…"/"comment added" traces)
+in `api/comments.js`, so the method matches its siblings — entry/trace noise gone,
+the catch-block `console.error` kept. Zero behavior change; validated by the
+CI-gated `api-comments-hyperdb.test.mjs`.
+**Still proposed (not done — risky):** a `wrap(name, fn)` higher-order helper over
+the remaining try/catch shape. Left out because not every `api.js` method returns
+the `{success,error}` envelope (several return raw values or domain-specific
+shapes), so a uniform wrapper would silently change error contracts on the wire.
+The remaining `console.log('[API] …')` calls in `api.js` are operational P2P
+diagnostics (peer readiness, fast-path/fallback decisions), not banner noise —
+kept deliberately.
 
-### 11. Three overlapping video-normalization layers
+### 11. Three overlapping video-normalization layers ❌ NOT VIABLE as proposed
 `canonical-feed.js` (`normalizeCanonicalFeedVideo*`),
 `canonical-feed-contract.js` (`createCanonicalFeedVideo*`), and
 `public-feed.js` (`_sanitizePreviewVideos`, which does **not** import the canonical
-normalizer and reimplements field selection). Two functions per type ("create" vs
-"normalize") differ only in how many input aliases they accept; callers must know
-which to use.
-**Proposal:** collapse to one normalizer per type; have `public-feed` delegate to
-it so the wire shape can't diverge from the canonical contract.
+normalizer and reimplements field selection).
+**On verification the consolidation premise is false:**
+- The `create*` (contract) and `normalize*` (rich-ingest) families are **test-only**
+  — grepping their call sites outside their own modules hits only
+  `canonical-feed-contract.test.mjs` (+ one app rpc test). Collapsing the "two
+  functions per type" is therefore low-value churn that only risks the contract
+  tests; there is no production caller to simplify.
+- `_sanitizePreviewVideos` is **not** a redundant reimplementation — it emits a
+  distinct, load-bearing wire shape: discovery flags (`discoveryOnly`,
+  `restoredFromCache`, `requiresAvailabilityProbe`, `playbackSupport`,
+  `containerSupport`) that the canonical contract omits, and `_markRestoredDiscoveryOnly`
+  mutates those exact fields on the restore path. Its availability collapse
+  (`playable`/`unknown`/else→`unavailable`) also differs from the canonical
+  `reconcileAvailability` default-to-`unknown`. Delegating it to the canonical
+  normalizer would drop the discovery flags and change availability semantics,
+  breaking preview-restore.
+**Decision: keep all three.** They serve different jobs (canonical storage
+roundtrip vs. live 3-item preview with discovery flags); the overlap is in field
+*names*, not behavior.
 
 ---
 

@@ -14,16 +14,10 @@ export function createCommentsApi({ refreshSearchIndex }) {
      * @returns {Promise<{success: boolean, commentId?: string, error?: string}>}
      */
     async addComment(channelKey, videoId, text, parentId = null, publicBeeKey = null) {
-      // SYNC LOG - this should ALWAYS appear immediately
-      console.log('[API] ====== addComment ENTERED ======')
-      console.log('[API] addComment: channelKey:', channelKey?.slice(0, 16), 'videoId:', videoId?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
-
       try {
-        console.log('[API] addComment: loading HyperDB channel comments...')
         const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
         if (!channel?.comments) throw new Error('Comments not initialized')
         const result = await channel.comments.addComment(videoId, text, parentId)
-        console.log('[API] addComment: comment added:', result.commentId?.slice(0, 8))
         await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
         return { success: true, commentId: result.commentId, queued: false }
       } catch (err) {

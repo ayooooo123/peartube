@@ -10,6 +10,8 @@
 import * as castModule from '@peartube/backend/cast'
 import * as dgramModule from 'bare-dgram'
 import * as udxModule from 'udx-native'
+import crypto from 'hypercore-crypto'
+import b4a from 'b4a'
 
 let CastContext = null
 let castLoadError = null
@@ -689,7 +691,7 @@ async function loadCastContext() {
       return null
     }
     cleanupCastProxySessions(Date.now(), isCastActive)
-    const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+    const token = b4a.toString(crypto.randomBytes(16), 'hex')
     const now = Date.now()
     const isHls = sourceUrl.endsWith('.m3u8') || sourceUrl.includes('.m3u8?')
     castProxySessions.set(token, { url: sourceUrl, isHls, createdAt: now, lastAccessAt: now })

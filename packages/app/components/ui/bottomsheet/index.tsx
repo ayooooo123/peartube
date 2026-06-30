@@ -81,15 +81,18 @@ export const BottomSheet = ({
     onClose && onClose();
   }, [onClose]);
 
+  const contextValue = useMemo(
+    () => ({
+      visible,
+      bottomSheetRef,
+      handleClose,
+      handleOpen,
+    }),
+    [visible, handleClose, handleOpen]
+  );
+
   return (
-    <BottomSheetContext.Provider
-      value={{
-        visible,
-        bottomSheetRef,
-        handleClose,
-        handleOpen,
-      }}
-    >
+    <BottomSheetContext.Provider value={contextValue}>
       {props.children}
     </BottomSheetContext.Provider>
   );

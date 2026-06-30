@@ -218,6 +218,43 @@ export class DeviceDiscoverer extends EventEmitter {
     this._manualDevices = new Map()
     this._socket = null
     this._queryInterval = null
+    this._localIp = undefined
+  }
+
+  /**
+   * Best-effort resolve this host's LAN IPv4 address.
+   *
+   * Multicast must egress (and the group must be joined) on the correct
+   * interface. Phones in particular have several interfaces at once
+   * (wlan0, rmnet/cellular, virtual VPN, ...). If the query goes out the
+   * wrong interface — e.g. cellular instead of Wi-Fi — it never reaches the
+   * Chromecast and no response is ever received, so devices never appear.
+   *
+   * Returns null when it cannot be determined, in which case callers fall
+   * back to binding 0.0.0.0 (the previous behaviour).
+   */
+  async _resolveLocalIPv4() {
+    if (this._localIp !== undefined) return this._localIp
+    this._localIp = null
+    try {
+      const mod = await import('udx-native')
+      const UDX = (mod && mod.default) ? mod.default : mod
+      const udx = new UDX()
+      let fallback = null
+      for (const iface of udx.networkInterfaces()) {
+        if (iface.family !== 4 || iface.internal) continue
+        // Prefer the well-known Wi-Fi interface names where we can tell.
+        if (iface.name === 'wlan0' || iface.name === 'en0') {
+          this._localIp = iface.host
+          return this._localIp
+        }
+        if (!fallback) fallback = iface.host
+      }
+      this._localIp = fallback
+    } catch {
+      this._localIp = null
+    }
+    return this._localIp
   }
 
   /**
@@ -253,6 +290,13 @@ export class DeviceDiscoverer extends EventEmitter {
       throw new Error('bare-dgram not available: ' + e.message)
     }
 
+    const localIp = await this._resolveLocalIPv4()
+    if (localIp) {
+      console.log('[Discovery] Using LAN interface for multicast:', localIp)
+    } else {
+      console.warn('[Discovery] Could not determine LAN IPv4; multicast may use the wrong interface')
+    }
+
     return new Promise((resolve, reject) => {
       try {
         console.log('[Discovery] Creating UDP socket...')
@@ -279,22 +323,9 @@ export class DeviceDiscoverer extends EventEmitter {
 
         this._socket.on('listening', () => {
           const addr = this._socket.address()
-          console.log('[Discovery] mDNS socket listening on port', addr?.port || 'unknown')
+          console.log('[Discovery] mDNS socket listening on', addr?.address || '?', 'port', addr?.port || 'unknown')
 
-          // Try to join multicast group using underlying udx-native socket
-          try {
-            // Access the underlying udx-native socket which has addMembership
-            const innerSocket = this._socket._socket
-            if (innerSocket && typeof innerSocket.addMembership === 'function') {
-              innerSocket.addMembership(MDNS_ADDRESS)
-              console.log('[Discovery] Joined multicast group', MDNS_ADDRESS)
-            } else {
-              console.warn('[Discovery] Multicast not supported, sending queries anyway')
-            }
-          } catch (e) {
-            // Multicast join is optional - we can still send queries
-            console.warn('[Discovery] Could not join multicast group:', e.message)
-          }
+          this._joinMulticast(localIp)
 
           // Send initial queries
           this._sendQueries()
@@ -309,15 +340,50 @@ export class DeviceDiscoverer extends EventEmitter {
           resolve()
         })
 
-        // Bind to a random port on all IPv4 interfaces
-        // We explicitly use '0.0.0.0' to avoid IPv6 issues
-        console.log('[Discovery] Binding to 0.0.0.0:0...')
-        this._socket.bind(0, '0.0.0.0')
+        // Bind to the resolved LAN interface so multicast queries egress on
+        // Wi-Fi (not cellular/VPN) and unicast responses come back to us.
+        // Fall back to 0.0.0.0 when the interface is unknown.
+        const bindHost = localIp || '0.0.0.0'
+        console.log('[Discovery] Binding to ' + bindHost + ':0...')
+        this._socket.bind(0, bindHost)
       } catch (err) {
         console.error('[Discovery] Failed to start mDNS:', err.message)
         reject(err)
       }
     })
+  }
+
+  /**
+   * Join the mDNS multicast group on the given interface.
+   *
+   * udx-native's underlying socket exposes addMembership(address[, iface]).
+   * Passing the interface address makes the kernel deliver multicast
+   * responses arriving on that NIC — without it, a multi-homed device can
+   * join on the wrong interface and never see Chromecast announcements.
+   */
+  _joinMulticast(localIp) {
+    try {
+      const innerSocket = this._socket?._socket
+      if (innerSocket && typeof innerSocket.addMembership === 'function') {
+        if (localIp) {
+          try {
+            innerSocket.addMembership(MDNS_ADDRESS, localIp)
+            console.log('[Discovery] Joined multicast group', MDNS_ADDRESS, 'on', localIp)
+            return
+          } catch (ifaceErr) {
+            console.warn('[Discovery] Interface-scoped multicast join failed, retrying default:', ifaceErr.message)
+          }
+        }
+        innerSocket.addMembership(MDNS_ADDRESS)
+        console.log('[Discovery] Joined multicast group', MDNS_ADDRESS)
+      } else {
+        console.warn('[Discovery] Multicast not supported, relying on unicast responses')
+      }
+    } catch (e) {
+      // Multicast join is optional - we can still send queries and receive
+      // unicast (QU) responses.
+      console.warn('[Discovery] Could not join multicast group:', e.message)
+    }
   }
 
   /**
@@ -361,7 +427,12 @@ export class DeviceDiscoverer extends EventEmitter {
             // Find corresponding SRV and A records
             const instanceName = record.ptr
             const srvRecord = allRecords.find(r => r.type === DNS_TYPE.SRV && r.name === instanceName)
-            const aRecord = allRecords.find(r => r.type === DNS_TYPE.A)
+            // Prefer the A record whose name matches the SRV target so we pair
+            // the right IP with the right device when several answer at once;
+            // fall back to any A record (single-device case).
+            const aRecord = (srvRecord?.target
+              && allRecords.find(r => r.type === DNS_TYPE.A && r.name === srvRecord.target))
+              || allRecords.find(r => r.type === DNS_TYPE.A)
             const txtRecord = allRecords.find(r => r.type === DNS_TYPE.TXT && r.name === instanceName)
 
             if (srvRecord && aRecord) {
@@ -418,6 +489,9 @@ export class DeviceDiscoverer extends EventEmitter {
 
       this._socket = null
     }
+
+    // Re-resolve the interface on the next start in case the network changed.
+    this._localIp = undefined
   }
 
   /**

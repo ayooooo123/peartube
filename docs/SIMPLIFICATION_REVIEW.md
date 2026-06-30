@@ -306,47 +306,77 @@ exists as hooks in `components/video-player/hooks/`.
 **Proposal:** delegate to the existing `useVideoGestures`/`useMiniPlayerPosition`/
 `useLandscapeMode` hooks, deleting the inlined duplicates; target < ~800 lines.
 
-> **Slices done (1-5):** extracted the self-contained channel-meta lookup
+> **Slices done (1-6):** extracted the self-contained channel-meta lookup
 > (`lib/useChannelMetaName.ts`), the cast-buffering debounce
 > (`lib/useCastBufferingDebounced.ts`), delegated desktop mini-player
 > corner/drag positioning to the existing `components/video-player/hooks/useMiniPlayerPosition.ts`
 > hook, moved control-visibility timeout/PiP re-arm state into
-> `lib/useControlVisibilityTimers.ts`, and moved scrubber/seek sync state and
-> handlers into `lib/useScrubberSeekSync.ts`. Component 3,224 → 3,023. Each
-> validated with app `tsc` (zero new type errors beyond baseline) and
-> rules-of-hooks structure; slices 3-5 also built/launched or hot-loaded on Android
-> emulator (`peartube-pixel`, x86_64) with the player opening and buffering from
-> the media session without a fatal JS/native crash.
-> **Validation boundary:** the remaining bulk (mobile mini-player drag gestures,
-> fullscreen/landscape animation, PiP geometry) is gesture- and
-> animation-coupled. CI does **not** build/typecheck the RN app and there are no
-> component tests, so those extractions can't be verified here without running the
-> app — they should be done in a build/run-capable environment, one validated
-> slice at a time, to avoid silently breaking player behavior.
+> `lib/useControlVisibilityTimers.ts`, moved scrubber/seek sync state and
+> handlers into `lib/useScrubberSeekSync.ts`, and (slice 6) moved the
+> landscape-fullscreen screen-dimension shared values + Dimensions listener into
+> `lib/useLandscapeScreenDimensions.ts` (shared values written only by that effect,
+> read only in two animated styles — pure code motion). Each validated with app
+> `tsc` (zero new type errors beyond baseline) and rules-of-hooks structure; slices
+> 3-5 also built/launched or hot-loaded on Android emulator (`peartube-pixel`,
+> x86_64) with the player opening and buffering from the media session without a
+> fatal JS/native crash.
+> **Validation boundary (unchanged):** the remaining bulk — mobile mini-player drag
+> gestures, fullscreen/landscape *animation*, PiP geometry — is gesture- and
+> animation-coupled to Reanimated shared values and the render. `tsc` catches
+> closure/dep mistakes but **cannot** validate gesture/animation behavior, and CI
+> doesn't build the RN app. The cohesive, zero-input blocks (like slice 6) are safe
+> to lift blind; the gesture/animation glue is not, and should land one
+> run-validated slice at a time in a build/run-capable environment to avoid
+> silently breaking the core player UX.
 
-### 17. Two sources of truth for player state
+### 17. Two sources of truth for player state ⏸️ DEFERRED — needs run validation
 `lib/VideoPlayerContext.tsx` (1,446 lines, 107 hooks) already delegates mode
 transitions to `lib/playerStateMachine.ts` (766-line reducer) yet still holds
 ~107 ad-hoc `useState`/`useRef` and exposes 4 consumer hooks as a perf workaround
 for one over-broad context value.
 **Proposal:** migrate the ad-hoc state (position/rate/stats/mode flags) into the
 reducer so the context is a thin provider over `usePlayerStateMachine`.
+**Decision: not attempted blind.** Migrating ~107 interdependent state cells into
+the reducer is the single highest-risk refactor in the backlog — the failure mode
+is subtle state-desync (stale position, mode flag races, lost stats) that `tsc`
+cannot catch and there are no component tests. This is a behavior-bearing
+migration that must be done incrementally in a run-capable environment with the
+player exercised after each cell moves. Left for the emulator/run lane.
 
-### 18. Platform-split screens re-grown duplicate logic
+### 18. Platform-split screens re-grown duplicate logic ✅ DONE (safe de-dup); deeper hook merge deferred
 - `(tabs)/index.tsx` (1,618) vs `(tabs)/index.web.tsx` (3,018): web reimplements
   its own `feedCache`, 12 inline SVG `*Icon` components, and snapshot logic that
   mobile gets from shared `lib/feed-snapshot*` + `home-feed-virtualization`.
 - `channel/[key].tsx` (806) vs `.web.tsx` (678): ~51 combined hooks, **no shared
   `useChannel*` hook** — load/subscribe/follow logic copy-pasted per platform.
-**Proposal:** route web feed caching through the same `lib/` helpers and the shared
-icon set; extract a `useChannelPage(key)` hook so both screens keep only
-platform-specific JSX. Realistic: ~800-1,000 lines out of `index.web.tsx`, several
-hundred out of the channel screens.
+**Done (slice 1):** hoisted the byte-identical channel-page RPC soft-timeout
+(`withChannelPageTimeout`/`isTimedOutResult`/`CHANNEL_PAGE_RPC_TIMEOUT_MS`) into
+`lib/channel-page.ts`; both screens import it.
+**Done (slice 2):** extracted the 10 inline web-home SVG `*Icon` components into
+`components/desktop/feed-icons.web.tsx` (dropping the dead `EyeOffIcon` from the
+screen's imports). **Correction to the premise:** the web `feedCache` is a
+deliberate web-only module-level cache for desktop remount survival (mobile keeps
+the tab mounted), and `index.web.tsx` already imports the shared `feed-hydration`
+helpers — there's no snapshot-logic reimplementation to consolidate.
+**Deferred:** the `useChannelPage(key)` hook merge — the two channel screens
+genuinely diverge (hash routing + `pickImageFile` RPC + single-error on web vs
+Expo Router + `ImagePicker` base64 + thumbnail resolution + separate
+degraded-message state + `getIdentity` on native), so unifying their data/avatar/
+identity flow would change per-platform UX rather than de-duplicate. Needs a
+run-validated pass.
 
-### 19. `lib/cast/useCast.shared.ts` — 824-line monolith hook
+### 19. `lib/cast/useCast.shared.ts` — 824-line monolith hook ✅ DONE (stateless seam); hook split deferred
 Discovery + session lifecycle + media controls + remote-state polling in one hook
 (the `.ts`/`.native.ts`/`.web.ts` files are 3-line shims forwarding to it).
-**Proposal:** split into `useCastDevices` + `useCastSession`; the shims compose them.
+**Done (slice 1):** extracted the stateless helpers — `isChromecastSupported` +
+supported-mime list, `showCastError` (throttled alert), `normalizeVolumeTo/FromCast`
+— into `lib/cast/cast-utils.ts`, carving the seam ahead of the split.
+**Deferred:** the `useCastDevices`/`useCastSession` split. The hook is
+crash-sensitive (serialized play queue, LOAD rate-limiting, transient-retry) and
+the `connect`↔`devices` / device-found↔`connectedDevice` closures are entangled
+via a module-level shared-connection singleton. It can't be exercised on an
+emulator (no Chromecast), so a blind logic split is the worst-risk change here —
+left for real-device validation.
 
 ---
 

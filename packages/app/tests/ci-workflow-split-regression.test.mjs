@@ -107,28 +107,6 @@ test('pull requests run desktop tests but skip app build/packaging jobs', () => 
     /electrobun-desktop-build:\s*\n\s*if:\s*\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/,
     'electrobun-desktop-build (app build) should not run on pull requests',
   )
-  assert.match(
-    buildDesktop,
-    /native-desktop-archive:\s*\n\s*if:\s*\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/,
-    'native-desktop-archive (app build) should not run on pull requests',
-  )
-
-  // The test job must still run on pull requests (no pull_request gate).
-  assert.match(
-    buildDesktop,
-    /native-desktop-test:\s*\n\s*runs-on:/,
-    'native-desktop-test should still run on pull requests',
-  )
-  assert.match(
-    buildDesktop,
-    /if \[ "\$\{\{ github\.event_name \}\}" = "pull_request" \]; then\s*node --test[\s\S]*packages\/desktop-native\/Bridge\/native-rpc\.test\.mjs[\s\S]*packages\/desktop-native\/Bridge\/sidecar-addon-roots\.test\.mjs/s,
-    'native-desktop-test should run source-only native bridge checks on pull requests',
-  )
-  assert.match(
-    buildDesktop,
-    /else\s*npm run desktop:native:test\s*fi/s,
-    'native-desktop-test should keep the full Xcode test path outside pull requests',
-  )
 
   // Mobile app builds already never run on pull requests (push/dispatch only).
   const buildMobile = readFile('.github/workflows/build-mobile.yml')

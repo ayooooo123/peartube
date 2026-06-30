@@ -12,8 +12,6 @@ dist/
 # Generated HRPC schema (regenerate with `npm run schema`)
 spec/hrpc/
 spec/schema/
-packages/desktop-native/Sources/Support/GeneratedSchema.swift
-packages/desktop-native/Sources/Support/GeneratedHRPC.swift
 packages/app/pear/
 packages/app/packages/app/pear/
 packages/app/.pear-build/
@@ -33,12 +31,6 @@ apps/mobile/android/app/build/
 packages/app/Frameworks/
 packages/app/ios/Pods/
 packages/app/ios/build/
-packages/desktop-native/build/
-packages/desktop-native/Resources/Generated/
-packages/desktop-native/Resources/Runtime/
-packages/desktop-native/Vendor/BareAddons/
-packages/desktop-native/Vendor/BareKit.xcframework/
-packages/desktop-native/PearTubeDesktop.xcodeproj/project.xcworkspace/xcshareddata/
 
 # Storage (P2P data)
 storage/
@@ -100,7 +92,6 @@ logfile
 
 # Artifacts
 **/.artifacts/
-packages/desktop-native/Vendor/bare-rpc-swift/.build/
 
 # Local native debug signing material
 packages/app/android/app/debug.keystore

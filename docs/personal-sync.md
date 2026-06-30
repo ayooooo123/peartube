@@ -55,9 +55,7 @@ Done (RPC + lifecycle):
 - HRPC schema (`packages/spec/schema.cjs`) message types + 13 commands for
   playlists/history/settings, classified under a new `personal` app namespace
   (`packages/spec/lib/app-rpc-adapter-codegen.cjs`), regenerated via
-  `node schema.cjs` (JS + Swift). The generated Swift is copied into
-  `packages/desktop-native/Sources/Support/` per the documented workflow (those
-  files are gitignored — regenerated at build).
+  `node schema.cjs`.
 - Backend handlers wired centrally: the new commands are added to
   `SHARED_HANDLER_NAMES` and resolve to `backend.api.<method>` through
   `registerSharedHandlers` — so all platforms (mobile, Electrobun desktop,

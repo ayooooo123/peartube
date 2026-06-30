@@ -26,6 +26,7 @@ import { useChannelMetaName } from '@/lib/useChannelMetaName'
 import { useCastBufferingDebounced } from '@/lib/useCastBufferingDebounced'
 import { useControlVisibilityTimers } from '@/lib/useControlVisibilityTimers'
 import { useScrubberSeekSync } from '@/lib/useScrubberSeekSync'
+import { useLandscapeScreenDimensions } from '@/lib/useLandscapeScreenDimensions'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -152,21 +153,9 @@ export function VideoPlayerOverlay() {
   const exitGateAttemptsRef = useRef(0)
   const playerLogKeyRef = useRef<string | null>(null)
 
-  // For landscape fullscreen, track screen dimensions as shared values
-  // This allows animated styles to use current screen size without React re-renders
-  const landscapeWidth = useSharedValue(Dimensions.get('screen').width)
-  const landscapeHeight = useSharedValue(Dimensions.get('screen').height)
-
-  useEffect(() => {
-    const updateDims = () => {
-      const screen = Dimensions.get('screen')
-      landscapeWidth.value = screen.width
-      landscapeHeight.value = screen.height
-    }
-    updateDims()
-    const subscription = Dimensions.addEventListener('change', updateDims)
-    return () => subscription.remove()
-  }, [])
+  // For landscape fullscreen, track screen dimensions as shared values so the
+  // animated styles can size to the live screen without React re-renders.
+  const { landscapeWidth, landscapeHeight } = useLandscapeScreenDimensions()
 
   // Note: Orientation change mid-gesture is handled implicitly:
   // - The Dimensions change listener above updates shared values

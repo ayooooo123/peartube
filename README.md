@@ -15,38 +15,37 @@ Pear OTA desktop release automation is not wired yet. Use the Electrobun build/r
 
 ## Risks & Transparency
 
-PearTube is pre-alpha, decentralized, and moves fast. Before you run it — especially a relay or a long-lived peer — here is an honest picture of what that means today. This is not legal advice, and it is not meant to scare you off; it is the context you need to make an informed decision.
+PearTube is pre-alpha, decentralized, and moves fast. Here's an honest picture of what running it means today. Not legal advice.
 
-### What running a peer or relay actually does
+### Running a mobile or desktop peer
 
-- **You re-host content you did not create.** The Hypercore stack is peer-to-peer. When your client or relay fetches, caches, or seeds a video, it stores those blobs locally and serves them to other peers. A relay runs as a Holepunch *blind peer* (`packages/backend/src/relay-blind-peer.js`) — "blind" meaning it replicates raw Hypercore blocks at the protocol layer, **not** that the content is hidden from the operator. It downloads and re-serves the channel cores it mirrors, and today's public-feed content stays discoverable and playable by any peer, including you. In practice, running a peer means your machine can hold and redistribute media that other people published.
-- **"Blind" is a capability, not a guarantee we rely on yet.** The blind-peer model can also mirror *encrypted* cores — replicating and serving ciphertext blocks the operator holds no key to read. PearTube does not use that for the public feed today (public videos are meant to be openly viewable, so there is no key withheld from a relay). We may lean on it later: for example, encrypted or private channels where relays provide availability without being able to read what they store, which would give operators a genuine "I cannot see this content" position. That is a **possible future direction, not a current property** — do not assume any content you host is opaque to you today.
-- **Discovery is a single shared public topic.** Channels are announced via gossip on one public feed topic. There is currently no per-topic opt-in, no allow-list of what your node discovers, and no built-in way to subscribe only to a vetted subset of the network.
-- **There is no content-level moderation today.** The backend has *per-user comment actions* (hide/block at the UI level), but it has **no network-level moderation**: no takedown mechanism, no publisher blocklist, no content filtering, no scanning, and no way to purge something from the network once it has replicated. If objectionable or illegal material is published to the public feed, a peer or relay that discovers it may fetch and re-serve it before any human sees it.
-- **You are responsible for what your node stores and serves.** Depending on your jurisdiction, hosting and redistributing third-party content can carry legal and reputational exposure. Run a public relay only if you understand and accept that. If you want tighter control, prefer `docker-compose.local-relay.yml` to mirror a local directory you own rather than seeding the open network.
-- **Storage, bandwidth, and privacy.** A seeding node consumes disk and upload bandwidth, and P2P networking exposes your node's presence (e.g. IP address) to other peers as an inherent property of the protocol.
+The apps are full P2P peers — viewers become seeders.
 
-### Running a normal mobile or desktop peer
+- **Watching re-serves content.** `autoSeedWatched` is on by default (`packages/backend/src/seeding.js`), so playing a video caches its blocks and serves them to other peers while you're connected — including content you haven't vetted. Capped by a 5&nbsp;GB quota; seeding subscribed channels is opt-in. Adjust or disable via seeding settings (`setSeedingConfig`) and clear the cache anytime.
+- **Your IP is visible to peers.** Normal peers connect directly over Hyperswarm with no relay or proxy in front. Factor that into your threat model.
+- **Mobile costs.** P2P upload/download uses cellular data and battery, and can continue in the background.
 
-You do not have to run a relay to participate in the network. The mobile and desktop apps are full P2P peers, and the same "viewers become seeders" model applies to ordinary users — not just operators.
+### Running a relay
 
-- **Watching a video re-serves it by default.** The seeding manager (`packages/backend/src/seeding.js`) ships with `autoSeedWatched: true`. When you play a video, its blocks are cached to disk and your device serves them to other peers while it is connected. In other words, watching is not a purely passive act on this network — you briefly help host what you watch, including content you have not vetted.
-- **Bounded, but on out of the box.** Auto-seeding is capped by a default 5&nbsp;GB quota, and seeding subscribed channels is opt-in (`autoSeedSubscribed: false`). You can change the quota or turn `autoSeedWatched` off via the app's seeding settings (`setSeedingConfig`), and you can clear cached content. But until you do, the default is to participate.
-- **Your IP is visible to peers.** Fetching or serving content means connecting directly to other peers over Hyperswarm, which exposes your IP address to them. There is no relay or proxy in front of a normal peer by default. If that matters for your threat model, account for it before running the app on the open network.
-- **Mobile-specific costs.** On phones, P2P upload/download consumes cellular data and battery, and background networking can continue outside active use depending on the platform. Watch your data plan and battery if you run the mobile app as a long-lived peer.
-- **Same no-moderation reality.** Everything in "There is no content-level moderation today" applies to normal peers too: a client that discovers the public feed can fetch, cache, and re-serve material before any human reviews it. Running the app is lower-exposure than running a public relay, but it is not zero.
+A relay does the above at larger scale, plus:
 
-### Moderation plans
+- **It mirrors channels it doesn't own.** A relay runs as a Holepunch *blind peer* (`packages/backend/src/relay-blind-peer.js`), downloading and re-serving the channel cores it mirrors. "Blind" is a protocol-layer term (it replicates raw blocks) — it does **not** mean the content is hidden from you; public-feed videos stay viewable by any peer, operator included.
+- **Blind peers can also mirror encrypted cores** — serving ciphertext the operator has no key to read. PearTube doesn't use this for the public feed today, but may later for private/encrypted channels, giving operators a genuine "can't see it" position. Future direction, not a current property.
+- **You're responsible for what you host.** Redistributing third-party content can carry legal exposure depending on jurisdiction. For tighter control, use `docker-compose.local-relay.yml` to mirror a local directory you own instead of seeding the open network.
 
-Moderation is a known gap, not an oversight. The current priority is stabilizing the protocol and backend contract. Once the protocol is stable, we intend to introduce moderation capabilities — for example publisher/content blocklists, relay-operator controls over what a node discovers and mirrors, and reporting flows. These are **planned, not implemented**, and the design is expected to change. Do not assume any moderation guarantees exist today.
+### No moderation yet
+
+Discovery runs over a single public gossip topic with no allow-list. There are per-user comment actions, but **no network-level moderation**: no takedowns, blocklists, filtering, or way to purge content once replicated. A peer or relay can fetch and re-serve objectionable material before anyone reviews it.
+
+Moderation is a known gap. Once the protocol stabilizes we intend to add blocklists, relay-operator controls over what a node mirrors, and reporting flows — planned, not implemented, and subject to change.
 
 ### Rapid development & LLM usage
 
-- **Pre-alpha, breaking changes expected.** APIs, schema (`packages/spec`), storage formats, and on-disk data can change without migration paths. Treat any data you publish or store as disposable.
-- **Heavily LLM-assisted.** A large share of this codebase — including code, tests, and docs — was written with substantial help from large language models, and development continues that way. That enables fast iteration but also means code may carry subtle bugs, uneven review depth, and areas that have not been battle-tested. Review the code yourself before relying on it for anything that matters.
-- **Not audited.** There has been no formal security or privacy audit. Do not use PearTube for sensitive content or in a threat model where compromise would be costly.
+- **Pre-alpha.** APIs, schema, and on-disk formats can change without migration. Treat published/stored data as disposable.
+- **Heavily LLM-assisted.** Much of the code, tests, and docs were written with LLMs. Fast iteration, but expect subtle bugs and uneven review depth — read the code before relying on it.
+- **Not audited.** No formal security or privacy review. Don't use it for sensitive content.
 
-For current progress and known constraints, see [DEV_STATUS.md](./DEV_STATUS.md).
+For current progress and constraints, see [DEV_STATUS.md](./DEV_STATUS.md).
 
 ## Architecture
 

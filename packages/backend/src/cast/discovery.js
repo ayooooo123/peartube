@@ -327,7 +327,7 @@ export class DeviceDiscoverer extends EventEmitter {
         console.warn('[Discovery] mDNS bind ' + target.host + ':' + target.port + ' failed:', err?.message)
         // Tear the failed socket down before retrying on the next target.
         if (this._socket) {
-          try { this._socket.close() } catch {}
+          try { this._socket.close() } catch { /* best-effort teardown */ }
           this._socket = null
         }
         if (this._queryInterval) {
@@ -538,11 +538,11 @@ export class DeviceDiscoverer extends EventEmitter {
         if (innerSocket && typeof innerSocket.dropMembership === 'function') {
           innerSocket.dropMembership(MDNS_ADDRESS)
         }
-      } catch (e) {}
+      } catch (e) { /* best-effort: group may not have been joined */ }
 
       try {
         this._socket.close()
-      } catch (e) {}
+      } catch (e) { /* best-effort: socket may already be closed */ }
 
       this._socket = null
     }

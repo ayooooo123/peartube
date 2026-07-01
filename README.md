@@ -26,6 +26,16 @@ PearTube is pre-alpha, decentralized, and moves fast. Before you run it — espe
 - **You are responsible for what your node stores and serves.** Depending on your jurisdiction, hosting and redistributing third-party content can carry legal and reputational exposure. Run a public relay only if you understand and accept that. If you want tighter control, prefer `docker-compose.local-relay.yml` to mirror a local directory you own rather than seeding the open network.
 - **Storage, bandwidth, and privacy.** A seeding node consumes disk and upload bandwidth, and P2P networking exposes your node's presence (e.g. IP address) to other peers as an inherent property of the protocol.
 
+### Running a normal mobile or desktop peer
+
+You do not have to run a relay to participate in the network. The mobile and desktop apps are full P2P peers, and the same "viewers become seeders" model applies to ordinary users — not just operators.
+
+- **Watching a video re-serves it by default.** The seeding manager (`packages/backend/src/seeding.js`) ships with `autoSeedWatched: true`. When you play a video, its blocks are cached to disk and your device serves them to other peers while it is connected. In other words, watching is not a purely passive act on this network — you briefly help host what you watch, including content you have not vetted.
+- **Bounded, but on out of the box.** Auto-seeding is capped by a default 5&nbsp;GB quota, and seeding subscribed channels is opt-in (`autoSeedSubscribed: false`). You can change the quota or turn `autoSeedWatched` off via the app's seeding settings (`setSeedingConfig`), and you can clear cached content. But until you do, the default is to participate.
+- **Your IP is visible to peers.** Fetching or serving content means connecting directly to other peers over Hyperswarm, which exposes your IP address to them. There is no relay or proxy in front of a normal peer by default. If that matters for your threat model, account for it before running the app on the open network.
+- **Mobile-specific costs.** On phones, P2P upload/download consumes cellular data and battery, and background networking can continue outside active use depending on the platform. Watch your data plan and battery if you run the mobile app as a long-lived peer.
+- **Same no-moderation reality.** Everything in "There is no content-level moderation today" applies to normal peers too: a client that discovers the public feed can fetch, cache, and re-serve material before any human reviews it. Running the app is lower-exposure than running a public relay, but it is not zero.
+
 ### Moderation plans
 
 Moderation is a known gap, not an oversight. The current priority is stabilizing the protocol and backend contract. Once the protocol is stable, we intend to introduce moderation capabilities — for example publisher/content blocklists, relay-operator controls over what a node discovers and mirrors, and reporting flows. These are **planned, not implemented**, and the design is expected to change. Do not assume any moderation guarantees exist today.

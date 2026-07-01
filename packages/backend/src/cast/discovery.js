@@ -292,12 +292,62 @@ export class DeviceDiscoverer extends EventEmitter {
 
     const localIp = await this._resolveLocalIPv4()
     if (localIp) {
-      console.log('[Discovery] Using LAN interface for multicast:', localIp)
+      console.log('[Discovery] Joining multicast on LAN interface:', localIp)
     } else {
-      console.warn('[Discovery] Could not determine LAN IPv4; multicast may use the wrong interface')
+      console.warn('[Discovery] Could not determine LAN IPv4; joining multicast on the default interface')
     }
 
+    // mDNS responders send their answers — and the periodic *unsolicited*
+    // announcements Cast devices emit — to the multicast group 224.0.0.251 on
+    // UDP port 5353. To receive them the socket MUST bind 0.0.0.0:5353:
+    //
+    //  - Binding a *specific unicast* interface address (the previous "bind to
+    //    Wi-Fi" attempt) makes the kernel drop inbound multicast, because the
+    //    datagram's destination is the group address, not our unicast address.
+    //    The interface is selected by the multicast membership join instead.
+    //  - Binding an *ephemeral* port only ever caught a legacy one-shot unicast
+    //    reply (RFC 6762 §6.7), never the multicast announcements — so the
+    //    picker stayed empty whenever a device didn't unicast back.
+    //
+    // Fall back to an ephemeral port if 5353 can't be bound (some other mDNS
+    // stack may already hold it without SO_REUSEPORT); legacy unicast replies
+    // still work there.
+    const bindTargets = [
+      { port: MDNS_PORT, host: '0.0.0.0' },
+      { port: 0, host: '0.0.0.0' },
+    ]
+
+    let lastErr = null
+    for (const target of bindTargets) {
+      try {
+        await this._bindMdnsSocket(dgram, target, localIp)
+        return
+      } catch (err) {
+        lastErr = err
+        console.warn('[Discovery] mDNS bind ' + target.host + ':' + target.port + ' failed:', err?.message)
+        // Tear the failed socket down before retrying on the next target.
+        if (this._socket) {
+          try { this._socket.close() } catch {}
+          this._socket = null
+        }
+        if (this._queryInterval) {
+          clearInterval(this._queryInterval)
+          this._queryInterval = null
+        }
+      }
+    }
+
+    throw (lastErr || new Error('Failed to bind mDNS socket'))
+  }
+
+  /**
+   * Create and bind a fresh mDNS socket to the given target, joining the
+   * multicast group on the resolved LAN interface once it is listening.
+   * Resolves when listening, rejects on bind/socket error.
+   */
+  _bindMdnsSocket(dgram, target, localIp) {
     return new Promise((resolve, reject) => {
+      let settled = false
       try {
         console.log('[Discovery] Creating UDP socket...')
         try {
@@ -313,8 +363,12 @@ export class DeviceDiscoverer extends EventEmitter {
 
         this._socket.on('error', (err) => {
           console.error('[Discovery] Socket error:', err.message)
-          this._stopMdns()
-          reject(err)
+          if (!settled) {
+            settled = true
+            reject(err)
+          } else {
+            this._stopMdns()
+          }
         })
 
         this._socket.on('message', (msg, rinfo) => {
@@ -325,6 +379,8 @@ export class DeviceDiscoverer extends EventEmitter {
           const addr = this._socket.address()
           console.log('[Discovery] mDNS socket listening on', addr?.address || '?', 'port', addr?.port || 'unknown')
 
+          // Join the group on the LAN interface so multicast is delivered from
+          // the right NIC on multi-homed hosts (phones with Wi-Fi + cellular).
           this._joinMulticast(localIp)
 
           // Send initial queries
@@ -337,18 +393,19 @@ export class DeviceDiscoverer extends EventEmitter {
             }
           }, 5000)
 
-          resolve()
+          if (!settled) {
+            settled = true
+            resolve()
+          }
         })
 
-        // Bind to the resolved LAN interface so multicast queries egress on
-        // Wi-Fi (not cellular/VPN) and unicast responses come back to us.
-        // Fall back to 0.0.0.0 when the interface is unknown.
-        const bindHost = localIp || '0.0.0.0'
-        console.log('[Discovery] Binding to ' + bindHost + ':0...')
-        this._socket.bind(0, bindHost)
+        console.log('[Discovery] Binding to ' + target.host + ':' + target.port + '...')
+        this._socket.bind(target.port, target.host)
       } catch (err) {
-        console.error('[Discovery] Failed to start mDNS:', err.message)
-        reject(err)
+        if (!settled) {
+          settled = true
+          reject(err)
+        }
       }
     })
   }

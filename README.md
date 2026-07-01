@@ -13,6 +13,30 @@ PearTube is a pre-alpha decentralized video platform built on the Hypercore stac
 
 Pear OTA desktop release automation is not wired yet. Use the Electrobun build/release workflows in this repo; do not reintroduce `pear run` or claim OTA support without a dedicated release-flow change.
 
+## Risks & Transparency
+
+PearTube is pre-alpha, decentralized, and moves fast. Before you run it — especially a relay or a long-lived peer — here is an honest picture of what that means today. This is not legal advice, and it is not meant to scare you off; it is the context you need to make an informed decision.
+
+### What running a peer or relay actually does
+
+- **You re-host content you did not create.** The Hypercore stack is peer-to-peer. When your client or relay fetches, caches, or seeds a video, it stores those blobs locally and serves them to other peers. A relay run as a blind peer (`packages/backend/src/relay-blind-peer.js`) will mirror channel cores it is asked to mirror. In practice, running a peer means your machine can hold and redistribute media that other people published.
+- **Discovery is a single shared public topic.** Channels are announced via gossip on one public feed topic. There is currently no per-topic opt-in, no allow-list of what your node discovers, and no built-in way to subscribe only to a vetted subset of the network.
+- **There is no content-level moderation today.** The backend has *per-user comment actions* (hide/block at the UI level), but it has **no network-level moderation**: no takedown mechanism, no publisher blocklist, no content filtering, no scanning, and no way to purge something from the network once it has replicated. If objectionable or illegal material is published to the public feed, a peer or relay that discovers it may fetch and re-serve it before any human sees it.
+- **You are responsible for what your node stores and serves.** Depending on your jurisdiction, hosting and redistributing third-party content can carry legal and reputational exposure. Run a public relay only if you understand and accept that. If you want tighter control, prefer `docker-compose.local-relay.yml` to mirror a local directory you own rather than seeding the open network.
+- **Storage, bandwidth, and privacy.** A seeding node consumes disk and upload bandwidth, and P2P networking exposes your node's presence (e.g. IP address) to other peers as an inherent property of the protocol.
+
+### Moderation plans
+
+Moderation is a known gap, not an oversight. The current priority is stabilizing the protocol and backend contract. Once the protocol is stable, we intend to introduce moderation capabilities — for example publisher/content blocklists, relay-operator controls over what a node discovers and mirrors, and reporting flows. These are **planned, not implemented**, and the design is expected to change. Do not assume any moderation guarantees exist today.
+
+### Rapid development & LLM usage
+
+- **Pre-alpha, breaking changes expected.** APIs, schema (`packages/spec`), storage formats, and on-disk data can change without migration paths. Treat any data you publish or store as disposable.
+- **Heavily LLM-assisted.** A large share of this codebase — including code, tests, and docs — was written with substantial help from large language models, and development continues that way. That enables fast iteration but also means code may carry subtle bugs, uneven review depth, and areas that have not been battle-tested. Review the code yourself before relying on it for anything that matters.
+- **Not audited.** There has been no formal security or privacy audit. Do not use PearTube for sensitive content or in a threat model where compromise would be costly.
+
+For current progress and known constraints, see [DEV_STATUS.md](./DEV_STATUS.md).
+
 ## Architecture
 
 Every client boots or connects to the same backend contract:

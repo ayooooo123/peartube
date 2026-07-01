@@ -17,7 +17,7 @@ import { fonts } from '@/lib/typography'
 import * as watchHistoryStore from '@/lib/watch-history'
 import { resumeWatchEntry } from '@/lib/playback-resume'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl, hasThumbnailBlobRef } from '@/lib/thumbnail'
+import { fetchThumbnailUrlWithRetry, getRenderableThumbnailUrl } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
@@ -458,10 +458,12 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!ready || isPear) return
     const missing = feedVideos.filter((v) => {
-      const cacheKey = v.channelKey && v.id ? `${v.channelKey}:${v.id}` : ''
-      return v.channelKey && v.id && !thumbnailCache[cacheKey] && (
-        hasThumbnailBlobRef(v) || (!v.thumbnailUrl && !(v as any).thumbnail)
-      )
+      if (!v.channelKey || !v.id) return false
+      const cacheKey = `${v.channelKey}:${v.id}`
+      // Missing = nothing renders yet: no resolved cache URL and no usable inline
+      // URL (a remote http(s)/data: thumbnail already paints; a stale loopback URL
+      // or bare blob refs need a fresh HRPC resolve).
+      return !getRenderableThumbnailUrl(v, thumbnailCache[cacheKey])
     })
     if (missing.length === 0) {
       thumbnailResweepAttemptsRef.current = 0

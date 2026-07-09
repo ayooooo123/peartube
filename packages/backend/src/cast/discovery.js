@@ -56,13 +56,13 @@ export class DeviceDiscoverer extends EventEmitter {
 
     this._state = 'starting'
     const generation = ++this._generation
+    this._startPromise = this._startMdns(generation)
 
     // Emit any manual devices
     for (const device of this._manualDevices.values()) {
       this.emit('deviceFound', device)
     }
 
-    this._startPromise = this._startMdns(generation)
     return this._startPromise
   }
 
@@ -137,11 +137,12 @@ export class DeviceDiscoverer extends EventEmitter {
           })
 
           socket.on('listening', () => {
-            if (
+            const isStaleStart = () => (
               generation !== this._generation ||
               this._state !== 'starting' ||
               this._socket !== socket
-            ) return
+            )
+            if (isStaleStart()) return
 
             try {
               const innerSocket = socket._socket
@@ -149,10 +150,19 @@ export class DeviceDiscoverer extends EventEmitter {
                 throw new Error('Multicast membership is not supported')
               }
 
-              innerSocket.addMembership(MDNS_ADDRESS)
               this._membershipSocket = socket
+              try {
+                innerSocket.addMembership(MDNS_ADDRESS)
+              } catch (err) {
+                if (this._membershipSocket === socket) this._membershipSocket = null
+                throw err
+              }
+              if (isStaleStart()) return
+
               this._sendQuery(generation, socket)
-              this._queryInterval = this._setInterval(() => {
+              if (isStaleStart()) return
+
+              const interval = this._setInterval(() => {
                 if (
                   generation === this._generation &&
                   this._state === 'running' &&
@@ -161,6 +171,14 @@ export class DeviceDiscoverer extends EventEmitter {
                   this._sendQuery(generation, socket)
                 }
               }, 5000)
+              if (isStaleStart()) {
+                try {
+                  this._clearInterval(interval)
+                } catch {}
+                return
+              }
+
+              this._queryInterval = interval
               this._queryIntervalSocket = socket
               this._state = 'running'
               settle()

@@ -25,6 +25,7 @@ class FakeSocket extends EventEmitter {
       this._socket = {
         addMembership: (address) => {
           this.addMembershipCalls.push(address)
+          if (options.membershipEmitsError) this.fail(options.membershipEmitsError)
           if (options.membershipError) throw options.membershipError
         },
         dropMembership: (address) => {
@@ -42,6 +43,7 @@ class FakeSocket extends EventEmitter {
 
   send(...args) {
     this.sendCalls.push(args)
+    if (this.options.sendEmitsError) this.fail(this.options.sendEmitsError)
     if (this.options.sendError) return Promise.reject(this.options.sendError)
     return Promise.resolve()
   }
@@ -155,6 +157,24 @@ test('concurrent start calls share a promise and a running start reuses the sock
   t.is(socket.bindCalls.length, 1)
 })
 
+test('reentrant start from a manual device listener shares the published promise', async (t) => {
+  const socket = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket }])
+  fixture.discoverer.addManualDevice({ name: 'Manual TV', host: '192.168.1.80' })
+  let reentrantStart
+  fixture.discoverer.on('deviceFound', () => {
+    reentrantStart = fixture.discoverer.start()
+  })
+
+  const firstStart = fixture.discoverer.start()
+
+  t.is(reentrantStart, firstStart)
+  await flushMicrotasks()
+  socket.listen()
+  await firstStart
+  t.is(fixture.loadCalls, 1)
+})
+
 test('stop cancels a pending start and ignores callbacks from its old socket', async (t) => {
   const socketA = new FakeSocket()
   const socketB = new FakeSocket()
@@ -219,6 +239,39 @@ startupFailureTest('socket bind', {
 })
 startupFailureTest('multicast membership', {
   socket: new FakeSocket({ membershipError: new Error('membership failed') })
+})
+
+function synchronousStartupErrorTest(name, socketOptions) {
+  test(`synchronous ${name} socket errors clean startup and permit retry`, async (t) => {
+    const socketA = new FakeSocket(socketOptions)
+    const socketB = new FakeSocket()
+    const fixture = createLifecycleFixture([{ socket: socketA }, { socket: socketB }])
+
+    const firstStart = fixture.discoverer.start()
+    await flushMicrotasks()
+    socketA.listen()
+    await firstStart
+
+    t.not(fixture.discoverer.isRunning())
+    t.is(socketA.closeCalls, 1)
+    t.alike(socketA.dropMembershipCalls, [MDNS_ADDRESS])
+    t.is(fixture.intervals.length, 0)
+
+    const retried = fixture.discoverer.start()
+    await flushMicrotasks()
+    socketB.listen()
+    await retried
+
+    t.ok(fixture.discoverer.isRunning())
+    t.is(fixture.loadCalls, 2)
+  })
+}
+
+synchronousStartupErrorTest('membership', {
+  membershipEmitsError: new Error('membership emitted an error')
+})
+synchronousStartupErrorTest('send', {
+  sendEmitsError: new Error('send emitted an error')
 })
 
 test('running socket errors clean up and permit a successful retry', async (t) => {

@@ -70,7 +70,27 @@ async function flushMicrotasks() {
   await Promise.resolve()
 }
 
-function createLifecycleFixture(attempts = [{ socket: new FakeSocket() }]) {
+function createDeferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function createLogger() {
+  const errors = []
+  return {
+    errors,
+    error(...args) {
+      errors.push(args)
+    }
+  }
+}
+
+function createLifecycleFixture(attempts = [{ socket: new FakeSocket() }], dependencies = {}) {
   const createOptions = []
   const intervals = []
   const clearIntervalCalls = []
@@ -97,7 +117,8 @@ function createLifecycleFixture(attempts = [{ socket: new FakeSocket() }]) {
     },
     clearInterval(interval) {
       clearIntervalCalls.push(interval)
-    }
+    },
+    logger: dependencies.logger || { error() {} }
   })
 
   return {
@@ -152,6 +173,7 @@ test('concurrent start calls share a promise and a running start reuses the sock
   socket.listen()
   await first
 
+  t.is(fixture.discoverer._startPromise, null)
   await fixture.discoverer.start()
   t.is(fixture.loadCalls, 1)
   t.is(socket.bindCalls.length, 1)
@@ -202,6 +224,65 @@ test('stop cancels a pending start and ignores callbacks from its old socket', a
   t.is(socketB.closeCalls, 0)
 })
 
+test('start during deferred stop waits for cleanup and then starts a new socket', async (t) => {
+  const close = createDeferred()
+  const socketA = new FakeSocket({ closePromise: close.promise })
+  const socketB = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket: socketA }, { socket: socketB }])
+
+  const firstStart = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketA.listen()
+  await firstStart
+
+  const stopped = fixture.discoverer.stop()
+  const restarted = fixture.discoverer.start()
+  let restartSettled = false
+  restarted.then(() => { restartSettled = true })
+  await flushMicrotasks()
+
+  t.is(fixture.loadCalls, 1)
+  t.is(socketB.bindCalls.length, 0)
+  t.not(restartSettled)
+
+  close.resolve()
+  await stopped
+  await flushMicrotasks()
+
+  t.is(fixture.loadCalls, 2)
+  t.alike(socketB.bindCalls, [[MDNS_PORT, '0.0.0.0']])
+  t.not(restartSettled)
+
+  socketB.listen()
+  await restarted
+  t.ok(restartSettled)
+  t.ok(fixture.discoverer.isRunning())
+})
+
+test('stop cancels a restart queued during deferred cleanup', async (t) => {
+  const close = createDeferred()
+  const socketA = new FakeSocket({ closePromise: close.promise })
+  const socketB = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket: socketA }, { socket: socketB }])
+
+  const firstStart = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketA.listen()
+  await firstStart
+
+  const firstStop = fixture.discoverer.stop()
+  const queuedStart = fixture.discoverer.start()
+  const cancellingStop = fixture.discoverer.stop()
+  t.is(cancellingStop, firstStop)
+  close.resolve()
+  await Promise.all([firstStop, queuedStart, cancellingStop])
+  await flushMicrotasks()
+
+  t.is(fixture.loadCalls, 1)
+  t.is(socketB.bindCalls.length, 0)
+  t.not(fixture.discoverer.isRunning())
+})
+
 function startupFailureTest(name, firstAttempt) {
   test(`${name} failure returns to manual mode and permits retry`, async (t) => {
     const retrySocket = new FakeSocket()
@@ -239,6 +320,40 @@ startupFailureTest('socket bind', {
 })
 startupFailureTest('multicast membership', {
   socket: new FakeSocket({ membershipError: new Error('membership failed') })
+})
+
+test('startup failure cleanup serializes stop and queued retry', async (t) => {
+  const close = createDeferred()
+  const socketA = new FakeSocket({
+    membershipError: new Error('membership failed'),
+    closePromise: close.promise
+  })
+  const socketB = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket: socketA }, { socket: socketB }])
+
+  const failedStart = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketA.listen()
+  const stopped = fixture.discoverer.stop()
+  t.is(fixture.discoverer.stop(), stopped)
+  await flushMicrotasks()
+  const retried = fixture.discoverer.start()
+  await flushMicrotasks()
+
+  t.is(fixture.loadCalls, 1)
+  t.is(socketB.bindCalls.length, 0)
+
+  close.resolve()
+  await Promise.all([failedStart, stopped])
+  await flushMicrotasks()
+
+  t.is(fixture.loadCalls, 2)
+  t.alike(socketB.bindCalls, [[MDNS_PORT, '0.0.0.0']])
+  t.ok(fixture.discoverer._startPromise)
+  socketB.listen()
+  await retried
+  t.ok(fixture.discoverer.isRunning())
+  t.is(fixture.discoverer._startPromise, null)
 })
 
 function synchronousStartupErrorTest(name, socketOptions) {
@@ -297,6 +412,73 @@ test('running socket errors clean up and permit a successful retry', async (t) =
   await retried
 
   t.ok(fixture.discoverer.isRunning())
+})
+
+test('startup and running socket failures preserve concrete diagnostics', async (t) => {
+  const startupError = new Error('bind diagnostics')
+  const runningError = new Error('running diagnostics')
+  const startupLogger = createLogger()
+  const runningLogger = createLogger()
+  const startupFixture = createLifecycleFixture([{
+    socket: new FakeSocket({ bindError: startupError })
+  }], { logger: startupLogger })
+  const runningSocket = new FakeSocket()
+  const runningFixture = createLifecycleFixture([{
+    socket: runningSocket
+  }], { logger: runningLogger })
+
+  await startupFixture.discoverer.start()
+  const runningStart = runningFixture.discoverer.start()
+  await flushMicrotasks()
+  runningSocket.listen()
+  await runningStart
+  runningSocket.fail(runningError)
+  await flushMicrotasks()
+
+  t.is(startupLogger.errors.length, 1)
+  t.ok(String(startupLogger.errors[0]?.[0]).includes('startup'))
+  t.is(startupLogger.errors[0]?.[1], startupError)
+  t.is(runningLogger.errors.length, 1)
+  t.ok(String(runningLogger.errors[0]?.[0]).includes('running'))
+  t.is(runningLogger.errors[0]?.[1], runningError)
+})
+
+test('explicit stop and stale socket errors do not log failures', async (t) => {
+  const logger = createLogger()
+  const socket = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket }], { logger })
+  const started = fixture.discoverer.start()
+  await flushMicrotasks()
+  socket.listen()
+  await started
+
+  await fixture.discoverer.stop()
+  socket.fail(new Error('stale after explicit stop'))
+  await flushMicrotasks()
+
+  t.alike(logger.errors, [])
+})
+
+test('rejected async close cannot wedge cleanup or retry', async (t) => {
+  const close = createDeferred()
+  const socketA = new FakeSocket({ closePromise: close.promise })
+  const socketB = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket: socketA }, { socket: socketB }])
+  const firstStart = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketA.listen()
+  await firstStart
+
+  const stopped = fixture.discoverer.stop()
+  close.reject(new Error('close rejected'))
+  await stopped
+  const restarted = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketB.listen()
+  await restarted
+
+  t.ok(fixture.discoverer.isRunning())
+  t.is(fixture.loadCalls, 2)
 })
 
 test('repeated stop drops membership and closes the socket only once', async (t) => {

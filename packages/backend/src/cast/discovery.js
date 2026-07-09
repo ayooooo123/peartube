@@ -33,11 +33,15 @@ export class DeviceDiscoverer extends EventEmitter {
     this._loadDgram = dependencies.loadDgram || (() => import('bare-dgram'))
     this._setInterval = dependencies.setInterval || globalThis.setInterval
     this._clearInterval = dependencies.clearInterval || globalThis.clearInterval
+    this._logger = dependencies.logger || console
     this._state = 'idle'
+    this._desiredRunning = false
     this._generation = 0
     this._startPromise = null
     this._settleStart = null
     this._stopPromise = null
+    this._queuedStartPromise = null
+    this._resolveQueuedStart = null
     this._devices = new Map()
     this._manualDevices = new Map()
     this._socket = null
@@ -50,20 +54,37 @@ export class DeviceDiscoverer extends EventEmitter {
    * Start device discovery
    */
   start() {
+    this._desiredRunning = true
     if (this._state === 'starting') return this._startPromise
     if (this._state === 'running') return Promise.resolve()
-    if (this._state === 'stopping') return this._stopPromise || Promise.resolve()
+    if (this._state === 'stopping') return this._queueStartAfterCleanup()
 
+    return this._beginStart()
+  }
+
+  _beginStart() {
     this._state = 'starting'
     const generation = ++this._generation
-    this._startPromise = this._startMdns(generation)
+    const startPromise = this._startMdns(generation)
+    this._startPromise = startPromise
+    startPromise.then(() => {
+      if (this._startPromise === startPromise) this._startPromise = null
+    })
 
     // Emit any manual devices
     for (const device of this._manualDevices.values()) {
       this.emit('deviceFound', device)
     }
 
-    return this._startPromise
+    return startPromise
+  }
+
+  _queueStartAfterCleanup() {
+    if (this._queuedStartPromise) return this._queuedStartPromise
+    this._queuedStartPromise = new Promise((resolve) => {
+      this._resolveQueuedStart = resolve
+    })
+    return this._queuedStartPromise
   }
 
   /**
@@ -83,17 +104,14 @@ export class DeviceDiscoverer extends EventEmitter {
       Promise.resolve(cleanup).catch(() => {}).then(resolveStart)
     }
 
-    const fail = (socket) => {
+    const fail = (socket, error) => {
       if (settled) return
-      const cleanup = socket && this._socket === socket
-        ? this._cleanupSocket(socket)
-        : Promise.resolve()
-      const finished = cleanup.then(() => {
-        if (generation === this._generation && this._state === 'starting') {
-          this._state = 'idle'
-        }
-      })
-      settle(finished)
+      this._desiredRunning = false
+      ++this._generation
+      this._state = 'stopping'
+      const cleanup = this._beginOwnedCleanup(socket)
+      this._logError('[Discovery] mDNS startup failed', error)
+      settle(cleanup)
     }
 
     this._settleStart = settle
@@ -111,24 +129,19 @@ export class DeviceDiscoverer extends EventEmitter {
           socket = dgram.createSocket({ type: 'udp4', reuseAddress: true })
           this._socket = socket
 
-          socket.on('error', () => {
+          socket.on('error', (error) => {
             if (generation !== this._generation || this._socket !== socket) return
             if (this._state === 'starting') {
-              fail(socket)
+              fail(socket, error)
               return
             }
             if (this._state !== 'running') return
 
-            const errorGeneration = ++this._generation
+            this._desiredRunning = false
+            ++this._generation
             this._state = 'stopping'
-            const cleanup = this._cleanupSocket(socket)
-            const stopped = cleanup.then(() => {
-              if (errorGeneration === this._generation && this._state === 'stopping') {
-                this._state = 'idle'
-              }
-              if (this._stopPromise === stopped) this._stopPromise = null
-            })
-            this._stopPromise = stopped
+            this._beginOwnedCleanup(socket)
+            this._logError('[Discovery] running mDNS socket failed', error)
           })
 
           socket.on('message', (msg, rinfo) => {
@@ -182,17 +195,17 @@ export class DeviceDiscoverer extends EventEmitter {
               this._queryIntervalSocket = socket
               this._state = 'running'
               settle()
-            } catch {
-              fail(socket)
+            } catch (error) {
+              fail(socket, error)
             }
           })
 
           socket.bind(MDNS_PORT, '0.0.0.0')
-        } catch {
-          fail(socket)
+        } catch (error) {
+          fail(socket, error)
         }
       })
-      .catch(() => fail(null))
+      .catch((error) => fail(null, error))
 
     return startPromise
   }
@@ -297,27 +310,62 @@ export class DeviceDiscoverer extends EventEmitter {
     }
   }
 
+  _beginOwnedCleanup(socket) {
+    if (this._stopPromise) return this._stopPromise
+
+    const cleanup = Promise.resolve()
+      .then(() => this._cleanupSocket(socket))
+      .catch(() => {})
+      .then(() => {
+        if (this._stopPromise !== cleanup) return
+
+        this._stopPromise = null
+        this._state = 'idle'
+        const resolveQueuedStart = this._resolveQueuedStart
+        const hadQueuedStart = this._queuedStartPromise !== null
+        this._resolveQueuedStart = null
+        this._queuedStartPromise = null
+
+        if (!hadQueuedStart) return
+        if (!this._desiredRunning) {
+          resolveQueuedStart()
+          return
+        }
+
+        const restarted = this._beginStart()
+        restarted.then(resolveQueuedStart)
+      })
+
+    this._stopPromise = cleanup
+    return cleanup
+  }
+
+  _logError(message, error) {
+    try {
+      this._logger?.error?.(message, error)
+    } catch {}
+  }
+
   /**
    * Stop device discovery
    */
   stop() {
-    if (this._state === 'idle') return Promise.resolve()
+    this._desiredRunning = false
+    if (this._state === 'idle') {
+      if (this._resolveQueuedStart) this._resolveQueuedStart()
+      this._resolveQueuedStart = null
+      this._queuedStartPromise = null
+      return Promise.resolve()
+    }
     if (this._state === 'stopping') return this._stopPromise || Promise.resolve()
 
     const settleStart = this._settleStart
     const socket = this._socket
-    const stopGeneration = ++this._generation
+    ++this._generation
     this._state = 'stopping'
-    const cleanup = this._cleanupSocket(socket)
-    const stopped = cleanup.then(() => {
-      if (stopGeneration === this._generation && this._state === 'stopping') {
-        this._state = 'idle'
-      }
-      if (this._stopPromise === stopped) this._stopPromise = null
-    })
-    this._stopPromise = stopped
-    if (settleStart) settleStart(stopped)
-    return stopped
+    const cleanup = this._beginOwnedCleanup(socket)
+    if (settleStart) settleStart(cleanup)
+    return cleanup
   }
 
   /**

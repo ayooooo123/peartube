@@ -12,6 +12,9 @@ import { EventEmitter } from 'bare-events'
 // mDNS multicast address and port
 export const MDNS_ADDRESS = '224.0.0.251'
 export const MDNS_PORT = 5353
+// RFC 6762 §11: mDNS packets SHOULD be sent with IP TTL 255. Some responders
+// drop queries with a lower TTL, and the kernel default for multicast is 1.
+export const MDNS_TTL = 255
 
 // Service types
 export const ServiceType = {
@@ -55,6 +58,7 @@ function encodeName(name) {
 function decodeName(buffer, offset, message) {
   const parts = []
   let jumped = false
+  let jumps = 0
   let originalOffset = offset
 
   while (offset < buffer.length) {
@@ -67,6 +71,8 @@ function decodeName(buffer, offset, message) {
 
     // Check for compression pointer (starts with 11xxxxxx)
     if ((len & 0xc0) === 0xc0) {
+      // Guard against malformed packets whose pointers form a loop.
+      if (++jumps > 32) break
       if (!jumped) {
         originalOffset = offset + 2
       }
@@ -217,43 +223,57 @@ export class DeviceDiscoverer extends EventEmitter {
     this._devices = new Map()
     this._manualDevices = new Map()
     this._socket = null
+    this._txSockets = new Map() // iface IPv4 -> query socket bound to it
     this._queryInterval = null
     this._localIp = undefined
+    this._localIps = undefined
   }
 
   /**
-   * Best-effort resolve this host's LAN IPv4 address.
+   * Best-effort enumerate ALL of this host's usable LAN IPv4 addresses.
    *
-   * Multicast must egress (and the group must be joined) on the correct
-   * interface. Phones in particular have several interfaces at once
-   * (wlan0, rmnet/cellular, virtual VPN, ...). If the query goes out the
-   * wrong interface — e.g. cellular instead of Wi-Fi — it never reaches the
-   * Chromecast and no response is ever received, so devices never appear.
+   * Multicast must be joined — and queries must egress — on the correct
+   * interface, but on a multi-homed host we cannot reliably guess which one
+   * that is: phones have wlan0 + rmnet/cellular + VPN at once, desktops have
+   * ethernet + Wi-Fi + docker/VM bridges. Guessing a single interface (the
+   * previous behaviour) silently picked a bridge or the wrong NIC and
+   * discovery went dark. So we operate on every candidate interface instead.
    *
-   * Returns null when it cannot be determined, in which case callers fall
-   * back to binding 0.0.0.0 (the previous behaviour).
+   * Wi-Fi-looking interfaces (wlan0/en0) are ordered first so the preferred
+   * address (used for logging / single-address callers) stays stable.
    */
-  async _resolveLocalIPv4() {
-    if (this._localIp !== undefined) return this._localIp
-    this._localIp = null
+  async _resolveLocalIPv4s() {
+    if (this._localIps !== undefined) return this._localIps
+    this._localIps = []
     try {
       const mod = await import('udx-native')
       const UDX = (mod && mod.default) ? mod.default : mod
       const udx = new UDX()
-      let fallback = null
+      const preferred = []
+      const rest = []
       for (const iface of udx.networkInterfaces()) {
         if (iface.family !== 4 || iface.internal) continue
+        const host = iface.host
+        if (!host || host.startsWith('127.') || host.startsWith('169.254.')) continue
         // Prefer the well-known Wi-Fi interface names where we can tell.
-        if (iface.name === 'wlan0' || iface.name === 'en0') {
-          this._localIp = iface.host
-          return this._localIp
-        }
-        if (!fallback) fallback = iface.host
+        if (iface.name === 'wlan0' || iface.name === 'en0') preferred.push(host)
+        else rest.push(host)
       }
-      this._localIp = fallback
+      this._localIps = [...new Set([...preferred, ...rest])]
     } catch {
-      this._localIp = null
+      this._localIps = []
     }
+    return this._localIps
+  }
+
+  /**
+   * Best-effort resolve this host's preferred LAN IPv4 address (first usable
+   * interface, Wi-Fi first). Returns null when it cannot be determined.
+   */
+  async _resolveLocalIPv4() {
+    if (this._localIp !== undefined) return this._localIp
+    const ips = await this._resolveLocalIPv4s()
+    this._localIp = ips.length > 0 ? ips[0] : null
     return this._localIp
   }
 
@@ -290,11 +310,12 @@ export class DeviceDiscoverer extends EventEmitter {
       throw new Error('bare-dgram not available: ' + e.message)
     }
 
+    const localIps = await this._resolveLocalIPv4s()
     const localIp = await this._resolveLocalIPv4()
     if (localIp) {
-      console.log('[Discovery] Joining multicast on LAN interface:', localIp)
+      console.log('[Discovery] LAN IPv4 interfaces:', localIps.join(', '))
     } else {
-      console.warn('[Discovery] Could not determine LAN IPv4; joining multicast on the default interface')
+      console.warn('[Discovery] Could not determine any LAN IPv4; using the default interface only')
     }
 
     // mDNS responders send their answers — and the periodic *unsolicited*
@@ -320,7 +341,7 @@ export class DeviceDiscoverer extends EventEmitter {
     let lastErr = null
     for (const target of bindTargets) {
       try {
-        await this._bindMdnsSocket(dgram, target, localIp)
+        await this._bindMdnsSocket(dgram, target, localIps)
         return
       } catch (err) {
         lastErr = err
@@ -342,10 +363,10 @@ export class DeviceDiscoverer extends EventEmitter {
 
   /**
    * Create and bind a fresh mDNS socket to the given target, joining the
-   * multicast group on the resolved LAN interface once it is listening.
+   * multicast group on every resolved LAN interface once it is listening.
    * Resolves when listening, rejects on bind/socket error.
    */
-  _bindMdnsSocket(dgram, target, localIp) {
+  _bindMdnsSocket(dgram, target, localIps) {
     return new Promise((resolve, reject) => {
       let settled = false
       try {
@@ -379,9 +400,14 @@ export class DeviceDiscoverer extends EventEmitter {
           const addr = this._socket.address()
           console.log('[Discovery] mDNS socket listening on', addr?.address || '?', 'port', addr?.port || 'unknown')
 
-          // Join the group on the LAN interface so multicast is delivered from
-          // the right NIC on multi-homed hosts (phones with Wi-Fi + cellular).
-          this._joinMulticast(localIp)
+          // Join the group on every LAN interface so multicast is delivered
+          // no matter which NIC the Chromecast is reachable on (phones with
+          // Wi-Fi + cellular, desktops with ethernet + Wi-Fi + bridges).
+          this._joinMulticast(localIps)
+
+          // Per-interface query sockets: steer query egress out each NIC and
+          // catch unicast (QU) replies even where multicast RX is filtered.
+          this._startTxSockets(dgram, localIps)
 
           // Send initial queries
           this._sendQueries()
@@ -411,30 +437,37 @@ export class DeviceDiscoverer extends EventEmitter {
   }
 
   /**
-   * Join the mDNS multicast group on the given interface.
+   * Join the mDNS multicast group on every given interface.
    *
    * udx-native's underlying socket exposes addMembership(address[, iface]).
    * Passing the interface address makes the kernel deliver multicast
    * responses arriving on that NIC — without it, a multi-homed device can
    * join on the wrong interface and never see Chromecast announcements.
+   * Joining on all interfaces means we no longer have to guess which NIC
+   * shares a subnet with the Chromecast.
    */
-  _joinMulticast(localIp) {
+  _joinMulticast(localIps) {
     try {
       const innerSocket = this._socket?._socket
-      if (innerSocket && typeof innerSocket.addMembership === 'function') {
-        if (localIp) {
-          try {
-            innerSocket.addMembership(MDNS_ADDRESS, localIp)
-            console.log('[Discovery] Joined multicast group', MDNS_ADDRESS, 'on', localIp)
-            return
-          } catch (ifaceErr) {
-            console.warn('[Discovery] Interface-scoped multicast join failed, retrying default:', ifaceErr.message)
-          }
-        }
-        innerSocket.addMembership(MDNS_ADDRESS)
-        console.log('[Discovery] Joined multicast group', MDNS_ADDRESS)
-      } else {
+      if (!innerSocket || typeof innerSocket.addMembership !== 'function') {
         console.warn('[Discovery] Multicast not supported, relying on unicast responses')
+        return
+      }
+
+      let joined = 0
+      for (const localIp of (localIps || [])) {
+        try {
+          innerSocket.addMembership(MDNS_ADDRESS, localIp)
+          joined++
+          console.log('[Discovery] Joined multicast group', MDNS_ADDRESS, 'on', localIp)
+        } catch (ifaceErr) {
+          console.warn('[Discovery] Multicast join failed on', localIp + ':', ifaceErr.message)
+        }
+      }
+
+      if (joined === 0) {
+        innerSocket.addMembership(MDNS_ADDRESS)
+        console.log('[Discovery] Joined multicast group', MDNS_ADDRESS, 'on the default interface')
       }
     } catch (e) {
       // Multicast join is optional - we can still send queries and receive
@@ -444,24 +477,106 @@ export class DeviceDiscoverer extends EventEmitter {
   }
 
   /**
-   * Send mDNS queries for Chromecast
+   * Bind one query socket per LAN interface.
+   *
+   * Two reasons these exist alongside the main 0.0.0.0:5353 socket:
+   *
+   *  1. TX egress: udx-native has no IP_MULTICAST_IF, so multicast sent from
+   *     the wildcard socket follows the default route — on a phone that can
+   *     be cellular/VPN and the query never reaches the Chromecast. Sending
+   *     from a socket bound to an interface's own address makes the kernel
+   *     route the multicast query out THAT interface (Linux/Android resolve
+   *     the output device from the source address for multicast).
+   *  2. Unicast replies: our queries set the QU bit, so responders may reply
+   *     unicast to the query's source address:port. That lands on these
+   *     sockets directly, which keeps discovery alive on networks (common
+   *     mesh/enterprise APs) that filter downstream multicast entirely.
+   */
+  _startTxSockets(dgram, localIps) {
+    for (const ip of (localIps || [])) {
+      if (this._txSockets.has(ip)) continue
+      try {
+        let sock
+        try {
+          sock = dgram.createSocket({ type: 'udp4', reuseAddress: true })
+        } catch {
+          sock = dgram.createSocket('udp4')
+        }
+        sock.on('error', (err) => {
+          console.warn('[Discovery] Query socket error on', ip + ':', err?.message)
+          if (this._txSockets.get(ip) === sock) this._txSockets.delete(ip)
+          try { sock.close() } catch { /* best-effort teardown */ }
+        })
+        sock.on('message', (msg, rinfo) => {
+          this._handleMessage(msg, rinfo)
+        })
+        sock.bind(0, ip)
+        this._txSockets.set(ip, sock)
+        console.log('[Discovery] Query socket bound on', ip)
+      } catch (err) {
+        console.warn('[Discovery] Could not bind query socket on', ip + ':', err?.message)
+      }
+    }
+  }
+
+  /**
+   * Send one query buffer from one socket, with the mDNS-standard IP TTL
+   * where the inner udx socket allows it (the bare-dgram wrapper cannot set
+   * a TTL, and the kernel default multicast TTL of 1 is dropped by some
+   * responders that expect 255 per RFC 6762 §11).
+   */
+  async _sendQuery(socket, query) {
+    const inner = socket?._socket
+    if (inner && typeof inner.send === 'function') {
+      await inner.send(query, MDNS_PORT, MDNS_ADDRESS, MDNS_TTL)
+      return
+    }
+    await socket.send(query, 0, query.length, MDNS_PORT, MDNS_ADDRESS)
+  }
+
+  /**
+   * Send mDNS queries for Chromecast from the main socket and from every
+   * per-interface query socket.
    */
   async _sendQueries() {
     if (!this._socket) return
 
-    try {
-      const queries = [
-        buildQuery(ServiceType.CHROMECAST, true),
-        buildQuery(ServiceType.CHROMECAST, false),
-      ]
+    const queries = [
+      buildQuery(ServiceType.CHROMECAST, true),
+      buildQuery(ServiceType.CHROMECAST, false),
+    ]
 
-      for (const query of queries) {
-        await this._socket.send(query, 0, query.length, MDNS_PORT, MDNS_ADDRESS)
+    let sent = 0
+
+    for (const query of queries) {
+      try {
+        await this._sendQuery(this._socket, query)
+        sent++
+      } catch (err) {
+        console.warn('[Discovery] Error sending query on main socket:', err?.message)
       }
+    }
 
-      console.log('[Discovery] Sent mDNS queries to', MDNS_ADDRESS + ':' + MDNS_PORT)
-    } catch (err) {
-      console.warn('[Discovery] Error sending queries:', err.message)
+    for (const [ip, sock] of [...this._txSockets]) {
+      for (const query of queries) {
+        try {
+          await this._sendQuery(sock, query)
+          sent++
+        } catch (err) {
+          // An interface that cannot route multicast (cellular, downed VPN)
+          // fails on every tick — drop its socket instead of spamming warnings.
+          console.warn('[Discovery] Dropping query socket on', ip + ':', err?.message)
+          this._txSockets.delete(ip)
+          try { sock.close() } catch { /* best-effort teardown */ }
+          break
+        }
+      }
+    }
+
+    if (sent > 0) {
+      console.log('[Discovery] Sent', sent, 'mDNS queries to', MDNS_ADDRESS + ':' + MDNS_PORT)
+    } else {
+      console.warn('[Discovery] No mDNS queries could be sent')
     }
   }
 
@@ -536,7 +651,10 @@ export class DeviceDiscoverer extends EventEmitter {
       try {
         const innerSocket = this._socket._socket
         if (innerSocket && typeof innerSocket.dropMembership === 'function') {
-          innerSocket.dropMembership(MDNS_ADDRESS)
+          for (const localIp of (this._localIps || [])) {
+            try { innerSocket.dropMembership(MDNS_ADDRESS, localIp) } catch { /* not joined on this iface */ }
+          }
+          try { innerSocket.dropMembership(MDNS_ADDRESS) } catch { /* not joined on the default iface */ }
         }
       } catch (e) { /* best-effort: group may not have been joined */ }
 
@@ -547,8 +665,14 @@ export class DeviceDiscoverer extends EventEmitter {
       this._socket = null
     }
 
-    // Re-resolve the interface on the next start in case the network changed.
+    for (const sock of this._txSockets.values()) {
+      try { sock.close() } catch { /* best-effort: socket may already be closed */ }
+    }
+    this._txSockets.clear()
+
+    // Re-resolve the interfaces on the next start in case the network changed.
     this._localIp = undefined
+    this._localIps = undefined
   }
 
   /**

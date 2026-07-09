@@ -659,7 +659,7 @@ test('record cache normalizes parsed Chromecast records and builds a device', (t
   }])
 })
 
-test('record cache temporarily ignores ttl-zero records', (t) => {
+test('record cache does not add ttl-zero records', (t) => {
   const helpers = getDiscoveryHelpers(t)
   if (!helpers) return
 
@@ -860,6 +860,7 @@ test('a numerically lower address moves an endpoint with lost before found', asy
   discoverer.on('deviceChanged', device => events.push(['changed', device.id]))
 
   socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  events.length = 0
   socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
 
   t.alike(discoverer.getDevices(), [{
@@ -870,10 +871,263 @@ test('a numerically lower address moves an endpoint with lost before found', asy
     protocol: 'chromecast'
   }])
   t.alike(events, [
-    ['found', '192.168.1.20:8009'],
     ['lost', '192.168.1.20:8009'],
     ['found', '192.168.1.9:8009']
   ])
+})
+
+test('TXT updates change the visible device without changing its endpoint', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device]))
+
+  socket.emit('message', completeServicePacket({ txt: { fn: 'Kitchen' } }), {})
+  events.length = 0
+  socket.emit('message', responsePacket([
+    txtRecord(INSTANCE, { fn: 'Kitchen TV' })
+  ]), {})
+
+  t.alike(events, [['changed', {
+    id: '192.168.1.25:8009',
+    name: 'Kitchen TV',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }]])
+})
+
+test('an A goodbye selects the next address and stale repeats emit nothing', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device.id]))
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
+  events.length = 0
+  socket.emit('message', responsePacket([
+    aRecord(TARGET, '192.168.1.9', { ttl: 0 })
+  ]), {})
+
+  t.alike(events, [
+    ['lost', '192.168.1.9:8009'],
+    ['found', '192.168.1.20:8009']
+  ])
+  t.is(discoverer.getDevices()[0]?.host, '192.168.1.20')
+
+  events.length = 0
+  socket.emit('message', responsePacket([
+    aRecord(TARGET, '192.168.1.9', { ttl: 0 })
+  ]), {})
+  t.alike(events, [])
+})
+
+test('a stale SRV goodbye cannot remove its replacement', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const targetB = 'replacement-chromecast.local.'
+  const events = []
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device.id]))
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  socket.emit('message', responsePacket([
+    aRecord(targetB, '192.168.1.30'),
+    srvRecord(INSTANCE, 8009, targetB)
+  ]), {})
+  events.length = 0
+  socket.emit('message', responsePacket([
+    srvRecord(INSTANCE, 8009, TARGET, { ttl: 0 })
+  ]), {})
+
+  t.alike(events, [])
+  t.is(discoverer.getDevices()[0]?.host, '192.168.1.30')
+
+  socket.emit('message', responsePacket([
+    srvRecord(INSTANCE, 8009, targetB, { ttl: 0 })
+  ]), {})
+  t.alike(events, [['lost', '192.168.1.30:8009']])
+  t.alike(discoverer.getDevices(), [])
+})
+
+test('a stale TXT goodbye cannot remove its replacement', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device.name]))
+
+  socket.emit('message', completeServicePacket({ txt: { fn: 'Old' } }), {})
+  socket.emit('message', responsePacket([txtRecord(INSTANCE, { fn: 'New' })]), {})
+  events.length = 0
+  socket.emit('message', responsePacket([
+    txtRecord(INSTANCE, { fn: 'Old' }, { ttl: 0 })
+  ]), {})
+
+  t.alike(events, [])
+  t.is(discoverer.getDevices()[0]?.name, 'New')
+
+  socket.emit('message', responsePacket([
+    txtRecord(INSTANCE, { fn: 'New' }, { ttl: 0 })
+  ]), {})
+  t.alike(events, [['changed', 'kitchen tv']])
+  t.is(discoverer.getDevices()[0]?.name, 'kitchen tv')
+})
+
+test('shared endpoint remains until every PTR instance says goodbye', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const secondInstance = 'Second TV._googlecast._tcp.local.'
+  const lost = []
+  discoverer.on('deviceLost', id => lost.push(id))
+
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, INSTANCE),
+    ptrRecord(ServiceType.CHROMECAST, secondInstance),
+    srvRecord(INSTANCE, 8009, TARGET),
+    srvRecord(secondInstance, 8009, TARGET),
+    txtRecord(INSTANCE, { fn: 'Shared TV' }),
+    txtRecord(secondInstance, { fn: 'Shared TV' }),
+    aRecord(TARGET, '192.168.1.25')
+  ]), {})
+  lost.length = 0
+
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, INSTANCE, { ttl: 0 })
+  ]), {})
+  t.alike(lost, [])
+  t.is(discoverer.getDevices().length, 1)
+
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, secondInstance, { ttl: 0 })
+  ]), {})
+  t.alike(lost, ['192.168.1.25:8009'])
+  t.alike(discoverer.getDevices(), [])
+})
+
+test('manual overlays mask discovered endpoint changes and goodbyes', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device.id]))
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  events.length = 0
+  const manual20 = discoverer.addManualDevice({
+    name: 'Manual 20',
+    host: '192.168.1.20'
+  })
+  const manual9 = discoverer.addManualDevice({
+    name: 'Manual 9',
+    host: '192.168.1.9'
+  })
+  t.alike(events, [
+    ['changed', '192.168.1.20:8009'],
+    ['found', '192.168.1.9:8009']
+  ])
+
+  events.length = 0
+  socket.emit('message', responsePacket([
+    txtRecord(INSTANCE, { fn: 'Hidden Rename' })
+  ]), {})
+  socket.emit('message', responsePacket([
+    aRecord(TARGET, '192.168.1.9')
+  ]), {})
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, INSTANCE, { ttl: 0 })
+  ]), {})
+
+  t.alike(events, [])
+  const visible = new Map(discoverer.getDevices().map(device => [device.id, device]))
+  t.alike(visible.get(manual20.id), manual20)
+  t.alike(visible.get(manual9.id), manual9)
+})
+
+test('removing a manual collision reveals cached discovery or loses an unowned endpoint', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device]))
+
+  socket.emit('message', completeServicePacket({ txt: { fn: 'Discovered TV' } }), {})
+  discoverer.addManualDevice({ name: 'Manual TV', host: '192.168.1.25' })
+  events.length = 0
+  discoverer.removeManualDevice('192.168.1.25:8009')
+
+  t.alike(events, [['changed', {
+    id: '192.168.1.25:8009',
+    name: 'Discovered TV',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }]])
+
+  discoverer.addManualDevice({ name: 'Manual Only', host: '192.168.1.80' })
+  events.length = 0
+  discoverer.removeManualDevice('192.168.1.80:8009')
+  t.alike(events, [['lost', '192.168.1.80:8009']])
+})
+
+test('clearDevices loses the merged public view and empties every store', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const lost = []
+  discoverer.on('deviceLost', id => lost.push(id))
+
+  socket.emit('message', completeChromecastPacket(), {})
+  discoverer.addManualDevice({ name: 'Manual TV', host: '192.168.1.80' })
+  lost.length = 0
+  discoverer.clearDevices()
+
+  t.alike(lost, ['192.168.1.25:8009', '192.168.1.80:8009'])
+  t.alike(discoverer.getDevices(), [])
+  t.is(discoverer._manualDevices.size, 0)
+  t.is(discoverer._discoveredDevices.size, 0)
+  t.is(discoverer._devices.size, 0)
+  t.is(discoverer._recordCache.ptrInstances.size, 0)
+  t.is(discoverer._recordCache.srvByInstance.size, 0)
+  t.is(discoverer._recordCache.txtByInstance.size, 0)
+  t.is(discoverer._recordCache.addressesByTarget.size, 0)
+})
+
+test('record goodbyes match normalized SRV names and semantic TXT content', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+  const normalizedInstance = INSTANCE.toLowerCase().replace(/\.$/, '')
+
+  helpers.applyDiscoveryRecord(cache, {
+    name: INSTANCE,
+    type: DNS_TYPE.SRV,
+    ttl: 120,
+    target: 'Kitchen-Chromecast.LOCAL.',
+    port: 8009
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: INSTANCE,
+    type: DNS_TYPE.TXT,
+    ttl: 120,
+    txt: { fn: 'Kitchen TV', md: 'Chromecast' }
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: INSTANCE.toUpperCase(),
+    type: DNS_TYPE.SRV,
+    ttl: 0,
+    target: 'kitchen-chromecast.local',
+    port: 8009
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: INSTANCE,
+    type: DNS_TYPE.TXT,
+    ttl: 0,
+    txt: { md: 'Chromecast', fn: 'Kitchen TV' }
+  })
+
+  t.is(cache.srvByInstance.has(normalizedInstance), false)
+  t.is(cache.txtByInstance.has(normalizedInstance), false)
 })
 
 test('replaying a complete response does not emit duplicate discovery events', async (t) => {

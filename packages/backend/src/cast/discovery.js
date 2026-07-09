@@ -54,6 +54,21 @@ function prunePendingATargets(cache) {
   }
 }
 
+function txtRecordsEqual(left, right) {
+  const leftEntries = Object.entries(left).sort(([leftKey], [rightKey]) => (
+    leftKey.localeCompare(rightKey)
+  ))
+  const rightEntries = Object.entries(right).sort(([leftKey], [rightKey]) => (
+    leftKey.localeCompare(rightKey)
+  ))
+
+  return leftEntries.length === rightEntries.length && leftEntries.every(
+    ([key, value], index) => (
+      key === rightEntries[index][0] && value === rightEntries[index][1]
+    )
+  )
+}
+
 export function createDiscoveryRecordCache() {
   return {
     ptrInstances: new Set(),
@@ -64,12 +79,17 @@ export function createDiscoveryRecordCache() {
 }
 
 export function applyDiscoveryRecord(cache, record) {
-  if (!cache || !record || !(record.ttl > 0)) return
+  if (!cache || !record || !(record.ttl >= 0)) return
 
   if (record.type === DNS_TYPE.PTR) {
     if (typeof record.name !== 'string' || typeof record.ptr !== 'string') return
     if (normalizeDnsName(record.name) !== NORMALIZED_CHROMECAST_SERVICE) return
-    cache.ptrInstances.add(normalizeDnsName(record.ptr))
+    const instance = normalizeDnsName(record.ptr)
+    if (record.ttl === 0) {
+      cache.ptrInstances.delete(instance)
+    } else {
+      cache.ptrInstances.add(instance)
+    }
     return
   }
 
@@ -80,10 +100,20 @@ export function applyDiscoveryRecord(cache, record) {
       typeof record.target !== 'string' ||
       !Number.isInteger(record.port)
     ) return
-    cache.srvByInstance.set(instance, {
+    const srv = {
       target: normalizeDnsName(record.target),
       port: record.port
-    })
+    }
+    if (record.ttl === 0) {
+      const current = cache.srvByInstance.get(instance)
+      if (current?.target === srv.target && current?.port === srv.port) {
+        cache.srvByInstance.delete(instance)
+        prunePendingATargets(cache)
+      }
+      return
+    } else {
+      cache.srvByInstance.set(instance, srv)
+    }
     prunePendingATargets(cache)
     return
   }
@@ -95,7 +125,14 @@ export function applyDiscoveryRecord(cache, record) {
       !record.txt ||
       typeof record.txt !== 'object'
     ) return
-    cache.txtByInstance.set(instance, { ...record.txt })
+    if (record.ttl === 0) {
+      const current = cache.txtByInstance.get(instance)
+      if (current && txtRecordsEqual(current, record.txt)) {
+        cache.txtByInstance.delete(instance)
+      }
+    } else {
+      cache.txtByInstance.set(instance, { ...record.txt })
+    }
     return
   }
 
@@ -103,6 +140,12 @@ export function applyDiscoveryRecord(cache, record) {
     if (typeof record.name !== 'string' || typeof record.address !== 'string') return
     const target = normalizeDnsName(record.name)
     let addresses = cache.addressesByTarget.get(target)
+    if (record.ttl === 0) {
+      if (!addresses?.delete(record.address)) return
+      if (addresses.size === 0) cache.addressesByTarget.delete(target)
+      prunePendingATargets(cache)
+      return
+    }
     if (!addresses) {
       addresses = new Set()
       cache.addressesByTarget.set(target, addresses)
@@ -520,12 +563,9 @@ export class DeviceDiscoverer extends EventEmitter {
       manual: true
     }
 
+    const before = new Map(this._devices)
     this._manualDevices.set(id, device)
-    this._devices.set(id, device)
-
-    if (this.isRunning()) {
-      this.emit('deviceFound', device)
-    }
+    this._reconcileDevices(before)
 
     return device
   }
@@ -535,12 +575,9 @@ export class DeviceDiscoverer extends EventEmitter {
    * @param {string} deviceId
    */
   removeManualDevice(deviceId) {
-    const device = this._manualDevices.get(deviceId)
-    if (device) {
-      this._manualDevices.delete(deviceId)
-      this._devices.delete(deviceId)
-      this.emit('deviceLost', deviceId)
-    }
+    const before = new Map(this._devices)
+    this._manualDevices.delete(deviceId)
+    this._reconcileDevices(before)
   }
 
   /**
@@ -555,11 +592,11 @@ export class DeviceDiscoverer extends EventEmitter {
    * Clear all devices
    */
   clearDevices() {
-    for (const id of this._devices.keys()) {
-      this.emit('deviceLost', id)
-    }
-    this._devices.clear()
+    const before = new Map(this._devices)
+    this._recordCache = createDiscoveryRecordCache()
+    this._discoveredDevices.clear()
     this._manualDevices.clear()
+    this._reconcileDevices(before)
   }
 }
 

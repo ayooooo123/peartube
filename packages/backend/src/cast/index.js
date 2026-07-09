@@ -129,7 +129,12 @@ export class CastContext extends EventEmitter {
 
   removeManualDevice(deviceId) {
     this._discoverer.removeManualDevice(deviceId)
-    this._devices.delete(deviceId)
+    const visibleDevice = this._discoverer.getDevices().find(device => device.id === deviceId)
+    if (visibleDevice) {
+      this._devices.set(deviceId, visibleDevice)
+    } else {
+      this._devices.delete(deviceId)
+    }
   }
 
   /**

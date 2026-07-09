@@ -8,204 +8,21 @@
  */
 
 import { EventEmitter } from 'bare-events'
+import {
+  DNS_TYPE,
+  MDNS_ADDRESS,
+  MDNS_PORT,
+  buildQuery,
+  parseResponse
+} from './mdns.js'
 
-// mDNS multicast address and port
-export const MDNS_ADDRESS = '224.0.0.251'
-export const MDNS_PORT = 5353
+export { MDNS_ADDRESS, MDNS_PORT }
 
 // Service types
 export const ServiceType = {
   CHROMECAST: '_googlecast._tcp.local.'
 }
 
-// DNS record types
-const DNS_TYPE = {
-  A: 1,
-  PTR: 12,
-  TXT: 16,
-  AAAA: 28,
-  SRV: 33,
-  ANY: 255
-}
-
-// DNS classes
-const DNS_CLASS = {
-  IN: 1,
-  ANY: 255
-}
-
-/**
- * Encode a DNS name into wire format
- */
-function encodeName(name) {
-  const parts = name.replace(/\.$/, '').split('.')
-  const buffers = []
-  for (const part of parts) {
-    const partBuf = Buffer.from(part, 'utf8')
-    buffers.push(Buffer.from([partBuf.length]))
-    buffers.push(partBuf)
-  }
-  buffers.push(Buffer.from([0])) // null terminator
-  return Buffer.concat(buffers)
-}
-
-/**
- * Decode a DNS name from wire format
- */
-function decodeName(buffer, offset, message) {
-  const parts = []
-  let jumped = false
-  let originalOffset = offset
-
-  while (offset < buffer.length) {
-    const len = buffer[offset]
-
-    if (len === 0) {
-      offset++
-      break
-    }
-
-    // Check for compression pointer (starts with 11xxxxxx)
-    if ((len & 0xc0) === 0xc0) {
-      if (!jumped) {
-        originalOffset = offset + 2
-      }
-      offset = ((len & 0x3f) << 8) | buffer[offset + 1]
-      jumped = true
-      continue
-    }
-
-    offset++
-    parts.push(buffer.slice(offset, offset + len).toString('utf8'))
-    offset += len
-  }
-
-  return {
-    name: parts.join('.'),
-    offset: jumped ? originalOffset : offset
-  }
-}
-
-/**
- * Build an mDNS query packet
- *
- * @param {string} serviceName - The service to query for
- * @param {boolean} unicastResponse - If true, request unicast response (QU bit)
- */
-function buildQuery(serviceName, unicastResponse = true) {
-  const name = encodeName(serviceName)
-
-  // DNS header (12 bytes)
-  const header = Buffer.alloc(12)
-  header.writeUInt16BE(0, 0)      // ID = 0 for mDNS
-  header.writeUInt16BE(0, 2)      // Flags = 0 (standard query)
-  header.writeUInt16BE(1, 4)      // QDCOUNT = 1
-  header.writeUInt16BE(0, 6)      // ANCOUNT = 0
-  header.writeUInt16BE(0, 8)      // NSCOUNT = 0
-  header.writeUInt16BE(0, 10)     // ARCOUNT = 0
-
-  // Question section
-  const question = Buffer.alloc(4)
-  question.writeUInt16BE(DNS_TYPE.PTR, 0)   // QTYPE = PTR
-  // QCLASS = IN, with QU (unicast response) bit set if requested
-  // QU bit is the high bit of the class field (0x8000)
-  const qclass = unicastResponse ? (DNS_CLASS.IN | 0x8000) : DNS_CLASS.IN
-  question.writeUInt16BE(qclass, 2)
-
-  return Buffer.concat([header, name, question])
-}
-
-/**
- * Parse an mDNS response packet
- */
-function parseResponse(buffer) {
-  if (buffer.length < 12) return null
-
-  const result = {
-    id: buffer.readUInt16BE(0),
-    flags: buffer.readUInt16BE(2),
-    qdcount: buffer.readUInt16BE(4),
-    ancount: buffer.readUInt16BE(6),
-    nscount: buffer.readUInt16BE(8),
-    arcount: buffer.readUInt16BE(10),
-    answers: [],
-    additionals: []
-  }
-
-  // Skip if not a response
-  if ((result.flags & 0x8000) === 0) return null
-
-  let offset = 12
-
-  // Skip questions
-  for (let i = 0; i < result.qdcount && offset < buffer.length; i++) {
-    const decoded = decodeName(buffer, offset, buffer)
-    offset = decoded.offset + 4 // skip QTYPE and QCLASS
-  }
-
-  // Parse answers
-  const parseRecords = (count) => {
-    const records = []
-    for (let i = 0; i < count && offset < buffer.length; i++) {
-      try {
-        const decoded = decodeName(buffer, offset, buffer)
-        offset = decoded.offset
-
-        if (offset + 10 > buffer.length) break
-
-        const type = buffer.readUInt16BE(offset)
-        const cls = buffer.readUInt16BE(offset + 2)
-        const ttl = buffer.readUInt32BE(offset + 4)
-        const rdlength = buffer.readUInt16BE(offset + 8)
-        offset += 10
-
-        if (offset + rdlength > buffer.length) break
-
-        const rdata = buffer.slice(offset, offset + rdlength)
-        offset += rdlength
-
-        const record = { name: decoded.name, type, class: cls, ttl, rdata }
-
-        // Parse specific record types
-        if (type === DNS_TYPE.A && rdlength === 4) {
-          record.address = `${rdata[0]}.${rdata[1]}.${rdata[2]}.${rdata[3]}`
-        } else if (type === DNS_TYPE.SRV && rdlength >= 6) {
-          record.priority = rdata.readUInt16BE(0)
-          record.weight = rdata.readUInt16BE(2)
-          record.port = rdata.readUInt16BE(4)
-          const targetDecoded = decodeName(buffer, offset - rdlength + 6, buffer)
-          record.target = targetDecoded.name
-        } else if (type === DNS_TYPE.PTR) {
-          const ptrDecoded = decodeName(buffer, offset - rdlength, buffer)
-          record.ptr = ptrDecoded.name
-        } else if (type === DNS_TYPE.TXT) {
-          record.txt = {}
-          let txtOffset = 0
-          while (txtOffset < rdlength) {
-            const txtLen = rdata[txtOffset]
-            if (txtLen === 0) break
-            const txtStr = rdata.slice(txtOffset + 1, txtOffset + 1 + txtLen).toString('utf8')
-            const eqIdx = txtStr.indexOf('=')
-            if (eqIdx > 0) {
-              record.txt[txtStr.slice(0, eqIdx)] = txtStr.slice(eqIdx + 1)
-            }
-            txtOffset += 1 + txtLen
-          }
-        }
-
-        records.push(record)
-      } catch (e) {
-        break
-      }
-    }
-    return records
-  }
-
-  result.answers = parseRecords(result.ancount)
-  result.additionals = parseRecords(result.arcount + result.nscount)
-
-  return result
-}
 
 /**
  * DeviceDiscoverer - Discovers cast devices on the network using mDNS
@@ -327,10 +144,7 @@ export class DeviceDiscoverer extends EventEmitter {
     if (!this._socket) return
 
     try {
-      const queries = [
-        buildQuery(ServiceType.CHROMECAST, true),
-        buildQuery(ServiceType.CHROMECAST, false),
-      ]
+      const queries = [buildQuery(ServiceType.CHROMECAST)]
 
       for (const query of queries) {
         await this._socket.send(query, 0, query.length, MDNS_PORT, MDNS_ADDRESS)
@@ -351,7 +165,7 @@ export class DeviceDiscoverer extends EventEmitter {
       if (!response) return
 
       // Look for Chromecast PTR records
-      const allRecords = [...response.answers, ...response.additionals]
+      const allRecords = response.records
 
       for (const record of allRecords) {
         if (record.type === DNS_TYPE.PTR) {

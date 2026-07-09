@@ -1,11 +1,13 @@
 import test from 'brittle'
 import { EventEmitter } from 'bare-events'
+import * as discoveryModule from '../src/cast/discovery.js'
 import {
   DeviceDiscoverer,
   MDNS_ADDRESS,
   MDNS_PORT,
   ServiceType
 } from '../src/cast/discovery.js'
+import { DNS_TYPE, parseResponse } from '../src/cast/mdns.js'
 
 const INSTANCE = 'Kitchen TV._googlecast._tcp.local.'
 const TARGET = 'kitchen-chromecast.local.'
@@ -535,29 +537,85 @@ function dnsName(name) {
   return Buffer.concat(parts)
 }
 
-function record(name, type, rdata) {
+function record(name, type, rdata, { ttl = 120 } = {}) {
   const header = Buffer.alloc(10)
   header.writeUInt16BE(type, 0)
   header.writeUInt16BE(1, 2)
-  header.writeUInt32BE(120, 4)
+  header.writeUInt32BE(ttl, 4)
   header.writeUInt16BE(rdata.length, 8)
   return Buffer.concat([dnsName(name), header, rdata])
 }
 
-function completeChromecastPacket() {
-  const srv = Buffer.alloc(6)
-  srv.writeUInt16BE(8009, 4)
-  const txt = Buffer.from('fn=Kitchen TV')
-  const records = [
-    record(ServiceType.CHROMECAST, 12, dnsName(INSTANCE)),
-    record(INSTANCE, 33, Buffer.concat([srv, dnsName(TARGET)])),
-    record(INSTANCE, 16, Buffer.concat([Buffer.from([txt.length]), txt])),
-    record(TARGET, 1, Buffer.from([192, 168, 1, 25]))
-  ]
+function responsePacket(records) {
   const header = Buffer.alloc(12)
   header.writeUInt16BE(0x8400, 2)
   header.writeUInt16BE(records.length, 6)
   return Buffer.concat([header, ...records])
+}
+
+function ptrRecord(service, instance, options) {
+  return record(service, DNS_TYPE.PTR, dnsName(instance), options)
+}
+
+function srvRecord(instance, port, target, options) {
+  const srv = Buffer.alloc(6)
+  srv.writeUInt16BE(port, 4)
+  return record(instance, DNS_TYPE.SRV, Buffer.concat([srv, dnsName(target)]), options)
+}
+
+function txtRecord(instance, values, options) {
+  const entries = Object.entries(values).map(([key, value]) => {
+    const txt = Buffer.from(`${key}=${value}`)
+    return Buffer.concat([Buffer.from([txt.length]), txt])
+  })
+  return record(instance, DNS_TYPE.TXT, Buffer.concat(entries), options)
+}
+
+function aRecord(target, address, options) {
+  return record(target, DNS_TYPE.A, Buffer.from(address.split('.').map(Number)), options)
+}
+
+function completeServicePacket({
+  service = ServiceType.CHROMECAST,
+  instance = INSTANCE,
+  target = TARGET,
+  address = '192.168.1.25',
+  port = 8009,
+  txt = { fn: 'Kitchen TV' }
+} = {}) {
+  return responsePacket([
+    ptrRecord(service, instance),
+    srvRecord(instance, port, target),
+    txtRecord(instance, txt),
+    aRecord(target, address)
+  ])
+}
+
+function completeChromecastPacket() {
+  return completeServicePacket()
+}
+
+function getDiscoveryHelpers(t) {
+  const helpers = {
+    createDiscoveryRecordCache: discoveryModule.createDiscoveryRecordCache,
+    applyDiscoveryRecord: discoveryModule.applyDiscoveryRecord,
+    buildDiscoveredDevices: discoveryModule.buildDiscoveredDevices
+  }
+
+  for (const helper of Object.values(helpers)) t.is(typeof helper, 'function')
+  if (Object.values(helpers).some(helper => typeof helper !== 'function')) return null
+  return helpers
+}
+
+async function startActiveDiscovery(t) {
+  const socket = new FakeSocket()
+  const fixture = createLifecycleFixture([{ socket }])
+  const started = fixture.discoverer.start()
+  await flushMicrotasks()
+  socket.listen()
+  await started
+  t.ok(fixture.discoverer.isRunning())
+  return { ...fixture, socket }
 }
 
 test('complete Chromecast packet still populates idle discoverer state', (t) => {
@@ -568,6 +626,192 @@ test('complete Chromecast packet still populates idle discoverer state', (t) => 
   t.alike(discoverer.getDevices(), [{
     id: '192.168.1.25:8009',
     name: 'Kitchen TV',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+})
+
+test('record cache normalizes parsed Chromecast records and builds a device', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+
+  const instance = 'Kitchen\\032TV._GoogleCast._TCP.Local.'
+  const target = 'Kitchen-Chromecast.Local.'
+  const parsed = parseResponse(responsePacket([
+    ptrRecord('_GoogleCast._TCP.Local.', instance),
+    srvRecord(instance, 8009, target),
+    txtRecord(instance, { md: 'Living Room Cast' }),
+    aRecord(target, '192.168.1.25')
+  ]))
+  const cache = helpers.createDiscoveryRecordCache()
+
+  for (const parsedRecord of parsed.records) {
+    helpers.applyDiscoveryRecord(cache, parsedRecord)
+  }
+
+  t.alike(helpers.buildDiscoveredDevices(cache), [{
+    id: '192.168.1.25:8009',
+    name: 'Living Room Cast',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+})
+
+test('record cache temporarily ignores ttl-zero records', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+
+  const parsed = parseResponse(responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, INSTANCE),
+    srvRecord(INSTANCE, 8009, TARGET),
+    aRecord(TARGET, '192.168.1.20'),
+    aRecord(TARGET, '192.168.1.9', { ttl: 0 })
+  ]))
+  const cache = helpers.createDiscoveryRecordCache()
+  for (const parsedRecord of parsed.records) {
+    helpers.applyDiscoveryRecord(cache, parsedRecord)
+  }
+
+  t.is(helpers.buildDiscoveredDevices(cache)[0]?.host, '192.168.1.20')
+})
+
+test('active discovery resolves records received across four packets', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const found = []
+  discoverer.on('deviceFound', device => found.push(device))
+
+  const packets = [
+    responsePacket([aRecord(TARGET, '192.168.1.25')]),
+    responsePacket([txtRecord(INSTANCE, { fn: 'Kitchen TV' })]),
+    responsePacket([srvRecord(INSTANCE, 8009, TARGET)]),
+    responsePacket([ptrRecord(ServiceType.CHROMECAST, INSTANCE)])
+  ]
+
+  for (const packet of packets.slice(0, -1)) {
+    socket.emit('message', packet, {})
+    t.alike(discoverer.getDevices(), [])
+    t.alike(found, [])
+  }
+  socket.emit('message', packets.at(-1), {})
+
+  const expected = {
+    id: '192.168.1.25:8009',
+    name: 'Kitchen TV',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }
+  t.alike(discoverer.getDevices(), [expected])
+  t.alike(found, [expected])
+})
+
+test('each Chromecast instance resolves through its own SRV target', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const officeInstance = 'Office TV._googlecast._tcp.local.'
+  const officeTarget = 'office-chromecast.local.'
+
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, INSTANCE),
+    ptrRecord(ServiceType.CHROMECAST, officeInstance),
+    srvRecord(INSTANCE, 8009, TARGET),
+    srvRecord(officeInstance, 8009, officeTarget),
+    txtRecord(INSTANCE, { fn: 'Kitchen TV' }),
+    txtRecord(officeInstance, { fn: 'Office TV' }),
+    aRecord(officeTarget, '192.168.1.40'),
+    aRecord(TARGET, '192.168.1.25')
+  ]), {})
+
+  t.alike(discoverer.getDevices(), [{
+    id: '192.168.1.25:8009',
+    name: 'Kitchen TV',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }, {
+    id: '192.168.1.40:8009',
+    name: 'Office TV',
+    host: '192.168.1.40',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+})
+
+test('a numerically lower address moves an endpoint with lost before found', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceLost', id => events.push(['lost', id]))
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+  discoverer.on('deviceChanged', device => events.push(['changed', device.id]))
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
+
+  t.alike(discoverer.getDevices(), [{
+    id: '192.168.1.9:8009',
+    name: 'Kitchen TV',
+    host: '192.168.1.9',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+  t.alike(events, [
+    ['found', '192.168.1.20:8009'],
+    ['lost', '192.168.1.20:8009'],
+    ['found', '192.168.1.9:8009']
+  ])
+})
+
+test('replaying a complete response does not emit duplicate discovery events', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const found = []
+  const changed = []
+  discoverer.on('deviceFound', device => found.push(device))
+  discoverer.on('deviceChanged', device => changed.push(device))
+  const packet = completeChromecastPacket()
+
+  socket.emit('message', packet, {})
+  socket.emit('message', packet, {})
+
+  t.is(found.length, 1)
+  t.alike(changed, [])
+})
+
+test('a complete AirPlay chain does not create a Chromecast device', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const found = []
+  discoverer.on('deviceFound', device => found.push(device))
+
+  socket.emit('message', completeServicePacket({
+    service: '_airplay._tcp.local.',
+    instance: 'Kitchen TV._airplay._tcp.local.',
+    target: 'airplay-tv.local.',
+    address: '192.168.1.70',
+    port: 7000
+  }), {})
+
+  t.alike(discoverer.getDevices(), [])
+  t.alike(found, [])
+})
+
+test('instances sharing an endpoint use the lowest normalized representative', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const alphaInstance = 'Alpha._googlecast._tcp.local.'
+  const zuluInstance = 'Zulu._googlecast._tcp.local.'
+
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, zuluInstance),
+    ptrRecord(ServiceType.CHROMECAST, alphaInstance),
+    srvRecord(zuluInstance, 8009, TARGET),
+    srvRecord(alphaInstance, 8009, TARGET),
+    txtRecord(zuluInstance, { fn: 'Zulu TV' }),
+    txtRecord(alphaInstance, { fn: 'Alpha TV' }),
+    aRecord(TARGET, '192.168.1.25')
+  ]), {})
+
+  t.alike(discoverer.getDevices(), [{
+    id: '192.168.1.25:8009',
+    name: 'Alpha TV',
     host: '192.168.1.25',
     port: 8009,
     protocol: 'chromecast'

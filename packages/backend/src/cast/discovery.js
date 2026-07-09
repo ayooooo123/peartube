@@ -13,6 +13,8 @@ import {
   MDNS_ADDRESS,
   MDNS_PORT,
   buildQuery,
+  compareIpv4,
+  normalizeDnsName,
   parseResponse
 } from './mdns.js'
 
@@ -21,6 +23,97 @@ export { MDNS_ADDRESS, MDNS_PORT }
 // Service types
 export const ServiceType = {
   CHROMECAST: '_googlecast._tcp.local.'
+}
+
+const NORMALIZED_CHROMECAST_SERVICE = normalizeDnsName(ServiceType.CHROMECAST)
+const DEVICE_FIELDS = ['id', 'name', 'host', 'port', 'protocol', 'manual']
+
+export function createDiscoveryRecordCache() {
+  return {
+    ptrInstances: new Set(),
+    srvByInstance: new Map(),
+    txtByInstance: new Map(),
+    addressesByTarget: new Map()
+  }
+}
+
+export function applyDiscoveryRecord(cache, record) {
+  if (!cache || !record || !(record.ttl > 0)) return
+
+  if (record.type === DNS_TYPE.PTR) {
+    if (typeof record.name !== 'string' || typeof record.ptr !== 'string') return
+    if (normalizeDnsName(record.name) !== NORMALIZED_CHROMECAST_SERVICE) return
+    cache.ptrInstances.add(normalizeDnsName(record.ptr))
+    return
+  }
+
+  if (record.type === DNS_TYPE.SRV) {
+    if (
+      typeof record.name !== 'string' ||
+      typeof record.target !== 'string' ||
+      !Number.isInteger(record.port)
+    ) return
+    cache.srvByInstance.set(normalizeDnsName(record.name), {
+      target: normalizeDnsName(record.target),
+      port: record.port
+    })
+    return
+  }
+
+  if (record.type === DNS_TYPE.TXT) {
+    if (
+      typeof record.name !== 'string' ||
+      !record.txt ||
+      typeof record.txt !== 'object'
+    ) return
+    cache.txtByInstance.set(normalizeDnsName(record.name), { ...record.txt })
+    return
+  }
+
+  if (record.type === DNS_TYPE.A) {
+    if (typeof record.name !== 'string' || typeof record.address !== 'string') return
+    const target = normalizeDnsName(record.name)
+    let addresses = cache.addressesByTarget.get(target)
+    if (!addresses) {
+      addresses = new Set()
+      cache.addressesByTarget.set(target, addresses)
+    }
+    addresses.add(record.address)
+  }
+}
+
+export function buildDiscoveredDevices(cache) {
+  const devices = new Map()
+  const instances = Array.from(cache.ptrInstances).sort()
+
+  for (const instance of instances) {
+    const srv = cache.srvByInstance.get(instance)
+    if (!srv) continue
+
+    const addresses = cache.addressesByTarget.get(srv.target)
+    if (!addresses || addresses.size === 0) continue
+
+    const host = Array.from(addresses).sort(compareIpv4)[0]
+    const id = `${host}:${srv.port}`
+    if (devices.has(id)) continue
+
+    const txt = cache.txtByInstance.get(instance)
+    const instanceLabel = instance.split('.')[0].replace(/\\032/g, ' ')
+    const name = txt?.fn || txt?.md || instanceLabel
+    devices.set(id, {
+      id,
+      name,
+      host,
+      port: srv.port,
+      protocol: 'chromecast'
+    })
+  }
+
+  return Array.from(devices.values())
+}
+
+function devicesEqual(left, right) {
+  return DEVICE_FIELDS.every(field => left?.[field] === right?.[field])
 }
 
 
@@ -44,6 +137,8 @@ export class DeviceDiscoverer extends EventEmitter {
     this._resolveQueuedStart = null
     this._devices = new Map()
     this._manualDevices = new Map()
+    this._recordCache = createDiscoveryRecordCache()
+    this._discoveredDevices = new Map()
     this._socket = null
     this._membershipSocket = null
     this._queryInterval = null
@@ -230,47 +325,37 @@ export class DeviceDiscoverer extends EventEmitter {
       const response = parseResponse(msg)
       if (!response) return
 
-      // Look for Chromecast PTR records
-      const allRecords = response.records
-
-      for (const record of allRecords) {
-        if (record.type === DNS_TYPE.PTR) {
-          const isChromecast = record.name.includes('_googlecast._tcp')
-
-          if (isChromecast) {
-            // Find corresponding SRV and A records
-            const instanceName = record.ptr
-            const srvRecord = allRecords.find(r => r.type === DNS_TYPE.SRV && r.name === instanceName)
-            const aRecord = allRecords.find(r => r.type === DNS_TYPE.A)
-            const txtRecord = allRecords.find(r => r.type === DNS_TYPE.TXT && r.name === instanceName)
-
-            if (srvRecord && aRecord) {
-              const host = aRecord.address
-              const port = srvRecord.port
-              const protocol = 'chromecast'
-              const id = `${host}:${port}`
-
-              // Extract friendly name from TXT record or instance name
-              let name = instanceName.split('.')[0].replace(/\\032/g, ' ')
-              if (txtRecord?.txt?.fn) {
-                name = txtRecord.txt.fn
-              } else if (txtRecord?.txt?.md) {
-                name = txtRecord.txt.md
-              }
-
-              const device = { id, name, host, port, protocol }
-
-              if (!this._devices.has(id)) {
-                this._devices.set(id, device)
-                console.log('[Discovery] Found device:', name, host, port, protocol)
-                this.emit('deviceFound', device)
-              }
-            }
-          }
-        }
+      const before = new Map(this._devices)
+      for (const record of response.records) {
+        applyDiscoveryRecord(this._recordCache, record)
       }
+      this._discoveredDevices = new Map(
+        buildDiscoveredDevices(this._recordCache).map(device => [device.id, device])
+      )
+      this._reconcileDevices(before)
     } catch (err) {
       // Ignore parse errors
+    }
+  }
+
+  _reconcileDevices(before) {
+    const after = new Map(this._discoveredDevices)
+    for (const [id, device] of this._manualDevices) after.set(id, device)
+    this._devices = after
+
+    if (!this.isRunning()) return
+
+    for (const id of before.keys()) {
+      if (!after.has(id)) this.emit('deviceLost', id)
+    }
+
+    for (const [id, device] of after) {
+      const previous = before.get(id)
+      if (!previous) {
+        this.emit('deviceFound', device)
+      } else if (!devicesEqual(previous, device)) {
+        this.emit('deviceChanged', device)
+      }
     }
   }
 

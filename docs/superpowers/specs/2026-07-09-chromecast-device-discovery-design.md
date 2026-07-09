@@ -86,6 +86,13 @@ logs the concrete failure, closes partial resources, resets state to `idle`,
 and leaves manual devices available. A later `start()` therefore makes a fresh
 attempt instead of remaining stuck in a nominally running state.
 
+A socket `error` in the `running` state follows the same terminal cleanup
+path: invalidate the active generation, clear the timer, drop membership when
+possible, close the socket, and return to `idle`. Discovery does not retry in a
+background loop; the next explicit or UI-driven `start()` makes a fresh
+attempt. An error from an invalidated generation is ignored after its owned
+resources have been closed.
+
 The discoverer sends a standard multicast PTR query for
 `_googlecast._tcp.local.` immediately and every five seconds. A duplicate
 unicast-response query is unnecessary once the listener receives multicast
@@ -117,11 +124,12 @@ For every cached Chromecast instance, resolution follows the complete chain:
 `_googlecast._tcp.local.` PTR -> instance SRV -> SRV target A
 
 The device ID remains `<ipv4-address>:<port>`. The display name prefers TXT
-`fn`, then TXT `md`, then the instance label. A new resolved device emits
-`deviceFound`. A name or metadata change that preserves the endpoint emits
-`deviceChanged`. If the selected address or port changes, the discoverer emits
-`deviceLost(oldId)` followed by `deviceFound(newDevice)` so `CastContext` does
-not retain the stale endpoint-derived ID.
+`fn`, then TXT `md`, then the instance label. Resolutions are retained by
+service instance first, then aggregated into the discovered-device view by
+endpoint ID. If two instances resolve to one endpoint, the lexicographically
+lowest normalized instance name supplies the representative metadata. Losing
+one instance therefore does not remove an endpoint that another instance still
+resolves.
 
 This repair does not add a general TTL scheduler. A TTL-zero goodbye removes
 only the matching record data: the named PTR instance, the matching SRV
@@ -135,8 +143,18 @@ Broader TTL expiry behavior is outside scope.
 
 Manual and discovered devices are stored separately even though both use
 endpoint-derived IDs. The public device view merges the two maps with a manual
-device taking precedence on an ID collision. A discovered goodbye removes only
-the discovered entry and never removes a manual fallback. Adding a manual
+device taking precedence on an ID collision. Every cache or manual-device
+mutation snapshots this merged public view before and after reconciliation,
+then emits events only from that public diff:
+
+- an ID present only afterward emits `deviceFound`;
+- an ID present only before emits `deviceLost`;
+- an ID present in both with changed public fields emits `deviceChanged`;
+- an unchanged public representation emits nothing.
+
+This single rule covers metadata and endpoint changes without leaking internal
+cache transitions. A hidden discovered metadata change, goodbye, or endpoint
+change emits nothing while a manual device masks that ID. Adding a manual
 device over an existing discovered ID emits `deviceChanged` with the manual
 representation; removing it emits `deviceChanged` with the still-resolved
 discovered representation, or `deviceLost` if no discovered entry remains.
@@ -186,16 +204,21 @@ Add focused backend tests around exported testable packet/parser helpers and
 3. When a packet contains multiple A records, the device uses the address that
    matches the SRV target.
 4. Duplicate records do not emit duplicate `deviceFound` events.
-5. Updated metadata emits `deviceChanged`; endpoint changes emit
-   `deviceLost(oldId)` followed by `deviceFound(newDevice)`.
+5. Updated metadata emits `deviceChanged`; endpoint changes produce the
+   corresponding removed-ID and added-ID public-view events.
 6. TTL-zero goodbyes remove only the matching record-set member and resolve to
    another cached address when one remains.
-7. A discovered goodbye cannot remove a colliding manual device.
+7. Hidden discovered changes and goodbyes emit nothing while a colliding
+   manual device remains visible.
 8. Stop clears timers, leaves the multicast group, and closes the socket,
    including when stop occurs while start is pending; a later start retries.
 9. Malformed compression pointers, truncated records, and unrelated services
    do not create devices or terminate discovery.
-10. Existing backend tests and app cast-handler regression tests remain green.
+10. A socket error after startup performs full cleanup, leaves the discoverer
+    idle, and permits a later explicit retry.
+11. Two service instances resolving to the same endpoint retain one public
+    device until both instances stop resolving.
+12. Existing backend tests and app cast-handler regression tests remain green.
 
 Tests use synthetic DNS response packets and injected/fake socket behavior;
 they do not depend on local multicast networking or physical hardware.

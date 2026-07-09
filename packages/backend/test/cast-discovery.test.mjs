@@ -876,6 +876,26 @@ test('a numerically lower address moves an endpoint with lost before found', asy
   ])
 })
 
+test('a reentrant clear aborts stale events from an endpoint transition', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceLost', id => {
+    events.push(['lost', id])
+    if (id === '192.168.1.20:8009') discoverer.clearDevices()
+  })
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  events.length = 0
+  socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
+
+  t.alike(discoverer.getDevices(), [])
+  t.alike(events, [
+    ['lost', '192.168.1.20:8009'],
+    ['lost', '192.168.1.9:8009']
+  ])
+})
+
 test('TXT updates change the visible device without changing its endpoint', async (t) => {
   const { discoverer, socket } = await startActiveDiscovery(t)
   const events = []

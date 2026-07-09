@@ -63,3 +63,22 @@ test('removing an idle manual device without discovery deletes the context mirro
   t.alike(context.getDevices(), [])
   t.absent(context.getDevice('192.168.1.80:8009'))
 })
+
+test('removing an active manual collision forwards one discovered reveal', (t) => {
+  const context = new CastContext()
+  const changed = []
+  context.on('deviceChanged', device => changed.push(device))
+  context._discoverer._state = 'running'
+  context._discoverer._handleMessage(discoveredPacket(), {})
+  context.addManualDevice({ name: 'Manual TV', host: '192.168.1.25' })
+  changed.length = 0
+
+  context.removeManualDevice(ID)
+
+  t.is(changed.length, 1)
+  t.is(changed[0]?.manual, undefined)
+  t.is(changed[0]?.name, 'Discovered TV')
+  t.is(context.getDevices().length, 1)
+  t.is(context.getDevice(ID)?.manual, undefined)
+  t.is(context.getDevice(ID)?.name, 'Discovered TV')
+})

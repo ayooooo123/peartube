@@ -424,15 +424,20 @@ export class DeviceDiscoverer extends EventEmitter {
     if (!this.isRunning()) return
 
     for (const id of before.keys()) {
-      if (!after.has(id)) this.emit('deviceLost', id)
+      if (!after.has(id)) {
+        this.emit('deviceLost', id)
+        if (this._devices !== after) return
+      }
     }
 
     for (const [id, device] of after) {
       const previous = before.get(id)
       if (!previous) {
         this.emit('deviceFound', device)
+        if (this._devices !== after) return
       } else if (!devicesEqual(previous, device)) {
         this.emit('deviceChanged', device)
+        if (this._devices !== after) return
       }
     }
   }

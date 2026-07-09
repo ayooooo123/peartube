@@ -49,6 +49,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "brittle test/*.test.mjs",
+    "test:cast-context": "brittle-bare test/cast-context-discovery.bare.mjs",
     "test:watch": "brittle --watch test/*.test.mjs",
     "test:multiwriter": "node test/multiwriter-channel-harness.mjs",
     "test:personal": "node test/personal-store-harness.mjs"

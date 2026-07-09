@@ -194,6 +194,14 @@ function devicesEqual(left, right) {
   return DEVICE_FIELDS.every(field => left?.[field] === right?.[field])
 }
 
+function deviceMapsEqual(left, right) {
+  if (left.size !== right.size) return false
+  for (const [id, device] of left) {
+    if (!right.has(id) || !devicesEqual(device, right.get(id))) return false
+  }
+  return true
+}
+
 
 /**
  * DeviceDiscoverer - Discovers cast devices on the network using mDNS
@@ -419,6 +427,7 @@ export class DeviceDiscoverer extends EventEmitter {
   _reconcileDevices(before) {
     const after = new Map(this._discoveredDevices)
     for (const [id, device] of this._manualDevices) after.set(id, device)
+    if (deviceMapsEqual(this._devices, after)) return
     this._devices = after
 
     if (!this.isRunning()) return

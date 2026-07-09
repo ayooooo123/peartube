@@ -896,6 +896,34 @@ test('a reentrant clear aborts stale events from an endpoint transition', async 
   ])
 })
 
+test('a reentrant no-op does not suppress the next endpoint event', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const events = []
+  discoverer.on('deviceLost', id => {
+    events.push(['lost', id])
+    if (id === '192.168.1.20:8009') {
+      discoverer.removeManualDevice('192.168.1.80:8009')
+    }
+  })
+  discoverer.on('deviceFound', device => events.push(['found', device.id]))
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  events.length = 0
+  socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
+
+  t.alike(events, [
+    ['lost', '192.168.1.20:8009'],
+    ['found', '192.168.1.9:8009']
+  ])
+  t.alike(discoverer.getDevices(), [{
+    id: '192.168.1.9:8009',
+    name: 'Kitchen TV',
+    host: '192.168.1.9',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+})
+
 test('TXT updates change the visible device without changing its endpoint', async (t) => {
   const { discoverer, socket } = await startActiveDiscovery(t)
   const events = []

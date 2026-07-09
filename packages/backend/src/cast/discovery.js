@@ -28,132 +28,167 @@ export const ServiceType = {
  * DeviceDiscoverer - Discovers cast devices on the network using mDNS
  */
 export class DeviceDiscoverer extends EventEmitter {
-  constructor() {
+  constructor(dependencies = {}) {
     super()
-    this._running = false
+    this._loadDgram = dependencies.loadDgram || (() => import('bare-dgram'))
+    this._setInterval = dependencies.setInterval || globalThis.setInterval
+    this._clearInterval = dependencies.clearInterval || globalThis.clearInterval
+    this._state = 'idle'
+    this._generation = 0
+    this._startPromise = null
+    this._settleStart = null
+    this._stopPromise = null
     this._devices = new Map()
     this._manualDevices = new Map()
     this._socket = null
+    this._membershipSocket = null
     this._queryInterval = null
+    this._queryIntervalSocket = null
   }
 
   /**
    * Start device discovery
    */
-  async start() {
-    if (this._running) return
-    this._running = true
+  start() {
+    if (this._state === 'starting') return this._startPromise
+    if (this._state === 'running') return Promise.resolve()
+    if (this._state === 'stopping') return this._stopPromise || Promise.resolve()
+
+    this._state = 'starting'
+    const generation = ++this._generation
 
     // Emit any manual devices
     for (const device of this._manualDevices.values()) {
       this.emit('deviceFound', device)
     }
 
-    // Try to start mDNS discovery
-    try {
-      await this._startMdns()
-    } catch (err) {
-      console.warn('[Discovery] mDNS not available, using manual mode only:', err.message)
-    }
+    this._startPromise = this._startMdns(generation)
+    return this._startPromise
   }
 
   /**
    * Start mDNS socket
    */
-  async _startMdns() {
-    // Try to import bare-dgram
-    let dgram
-    try {
-      dgram = await import('bare-dgram')
-      console.log('[Discovery] bare-dgram loaded successfully')
-    } catch (e) {
-      throw new Error('bare-dgram not available: ' + e.message)
+  _startMdns(generation) {
+    let resolveStart
+    let settled = false
+    const startPromise = new Promise((resolve) => {
+      resolveStart = resolve
+    })
+
+    const settle = (cleanup = Promise.resolve()) => {
+      if (settled) return
+      settled = true
+      if (this._settleStart === settle) this._settleStart = null
+      Promise.resolve(cleanup).catch(() => {}).then(resolveStart)
     }
 
-    return new Promise((resolve, reject) => {
-      try {
-        console.log('[Discovery] Creating UDP socket...')
-        try {
-          this._socket = dgram.createSocket({ type: 'udp4', reuseAddress: true })
-        } catch {
-          try {
-            this._socket = dgram.createSocket('udp4')
-          } catch {
-            this._socket = dgram.createSocket()
-          }
+    const fail = (socket) => {
+      if (settled) return
+      const cleanup = socket && this._socket === socket
+        ? this._cleanupSocket(socket)
+        : Promise.resolve()
+      const finished = cleanup.then(() => {
+        if (generation === this._generation && this._state === 'starting') {
+          this._state = 'idle'
         }
-        console.log('[Discovery] Socket created')
+      })
+      settle(finished)
+    }
 
-        this._socket.on('error', (err) => {
-          console.error('[Discovery] Socket error:', err.message)
-          this._stopMdns()
-          reject(err)
-        })
+    this._settleStart = settle
 
-        this._socket.on('message', (msg, rinfo) => {
-          this._handleMessage(msg, rinfo)
-        })
+    Promise.resolve()
+      .then(() => this._loadDgram())
+      .then((dgram) => {
+        if (generation !== this._generation || this._state !== 'starting') {
+          settle()
+          return
+        }
 
-        this._socket.on('listening', () => {
-          const addr = this._socket.address()
-          console.log('[Discovery] mDNS socket listening on port', addr?.port || 'unknown')
+        let socket
+        try {
+          socket = dgram.createSocket({ type: 'udp4', reuseAddress: true })
+          this._socket = socket
 
-          // Try to join multicast group using underlying udx-native socket
-          try {
-            // Access the underlying udx-native socket which has addMembership
-            const innerSocket = this._socket._socket
-            if (innerSocket && typeof innerSocket.addMembership === 'function') {
+          socket.on('error', () => {
+            if (generation !== this._generation || this._socket !== socket) return
+            if (this._state === 'starting') {
+              fail(socket)
+              return
+            }
+            if (this._state !== 'running') return
+
+            const errorGeneration = ++this._generation
+            this._state = 'stopping'
+            const cleanup = this._cleanupSocket(socket)
+            const stopped = cleanup.then(() => {
+              if (errorGeneration === this._generation && this._state === 'stopping') {
+                this._state = 'idle'
+              }
+              if (this._stopPromise === stopped) this._stopPromise = null
+            })
+            this._stopPromise = stopped
+          })
+
+          socket.on('message', (msg, rinfo) => {
+            if (generation !== this._generation || this._socket !== socket) return
+            this._handleMessage(msg, rinfo)
+          })
+
+          socket.on('listening', () => {
+            if (
+              generation !== this._generation ||
+              this._state !== 'starting' ||
+              this._socket !== socket
+            ) return
+
+            try {
+              const innerSocket = socket._socket
+              if (!innerSocket || typeof innerSocket.addMembership !== 'function') {
+                throw new Error('Multicast membership is not supported')
+              }
+
               innerSocket.addMembership(MDNS_ADDRESS)
-              console.log('[Discovery] Joined multicast group', MDNS_ADDRESS)
-            } else {
-              console.warn('[Discovery] Multicast not supported, sending queries anyway')
+              this._membershipSocket = socket
+              this._sendQuery(generation, socket)
+              this._queryInterval = this._setInterval(() => {
+                if (
+                  generation === this._generation &&
+                  this._state === 'running' &&
+                  this._socket === socket
+                ) {
+                  this._sendQuery(generation, socket)
+                }
+              }, 5000)
+              this._queryIntervalSocket = socket
+              this._state = 'running'
+              settle()
+            } catch {
+              fail(socket)
             }
-          } catch (e) {
-            // Multicast join is optional - we can still send queries
-            console.warn('[Discovery] Could not join multicast group:', e.message)
-          }
+          })
 
-          // Send initial queries
-          this._sendQueries()
+          socket.bind(MDNS_PORT, '0.0.0.0')
+        } catch {
+          fail(socket)
+        }
+      })
+      .catch(() => fail(null))
 
-          // Send periodic queries every 5 seconds
-          this._queryInterval = setInterval(() => {
-            if (this._running) {
-              this._sendQueries()
-            }
-          }, 5000)
-
-          resolve()
-        })
-
-        // Bind to a random port on all IPv4 interfaces
-        // We explicitly use '0.0.0.0' to avoid IPv6 issues
-        console.log('[Discovery] Binding to 0.0.0.0:0...')
-        this._socket.bind(0, '0.0.0.0')
-      } catch (err) {
-        console.error('[Discovery] Failed to start mDNS:', err.message)
-        reject(err)
-      }
-    })
+    return startPromise
   }
 
   /**
    * Send mDNS queries for Chromecast
    */
-  async _sendQueries() {
-    if (!this._socket) return
-
+  _sendQuery(generation, socket) {
+    if (generation !== this._generation || this._socket !== socket) return
+    const query = buildQuery(ServiceType.CHROMECAST)
     try {
-      const queries = [buildQuery(ServiceType.CHROMECAST)]
-
-      for (const query of queries) {
-        await this._socket.send(query, 0, query.length, MDNS_PORT, MDNS_ADDRESS)
-      }
-
-      console.log('[Discovery] Sent mDNS queries to', MDNS_ADDRESS + ':' + MDNS_PORT)
-    } catch (err) {
-      console.warn('[Discovery] Error sending queries:', err.message)
-    }
+      const sent = socket.send(query, 0, query.length, MDNS_PORT, MDNS_ADDRESS)
+      Promise.resolve(sent).catch(() => {})
+    } catch {}
   }
 
   /**
@@ -211,26 +246,36 @@ export class DeviceDiscoverer extends EventEmitter {
   /**
    * Stop mDNS discovery
    */
-  _stopMdns() {
-    if (this._queryInterval) {
-      clearInterval(this._queryInterval)
+  _cleanupSocket(socket) {
+    if (!socket || this._socket !== socket) return Promise.resolve()
+
+    this._socket = null
+
+    if (this._queryIntervalSocket === socket) {
+      const interval = this._queryInterval
       this._queryInterval = null
+      this._queryIntervalSocket = null
+      if (interval !== null) {
+        try {
+          this._clearInterval(interval)
+        } catch {}
+      }
     }
 
-    if (this._socket) {
-      // Try to leave multicast group using inner udx-native socket
+    if (this._membershipSocket === socket) {
+      this._membershipSocket = null
       try {
-        const innerSocket = this._socket._socket
+        const innerSocket = socket._socket
         if (innerSocket && typeof innerSocket.dropMembership === 'function') {
           innerSocket.dropMembership(MDNS_ADDRESS)
         }
-      } catch (e) {}
+      } catch {}
+    }
 
-      try {
-        this._socket.close()
-      } catch (e) {}
-
-      this._socket = null
+    try {
+      return Promise.resolve(socket.close()).catch(() => {})
+    } catch {
+      return Promise.resolve()
     }
   }
 
@@ -238,16 +283,30 @@ export class DeviceDiscoverer extends EventEmitter {
    * Stop device discovery
    */
   stop() {
-    this._running = false
-    this._stopMdns()
-    console.log('[Discovery] Stopped')
+    if (this._state === 'idle') return Promise.resolve()
+    if (this._state === 'stopping') return this._stopPromise || Promise.resolve()
+
+    const settleStart = this._settleStart
+    const socket = this._socket
+    const stopGeneration = ++this._generation
+    this._state = 'stopping'
+    const cleanup = this._cleanupSocket(socket)
+    const stopped = cleanup.then(() => {
+      if (stopGeneration === this._generation && this._state === 'stopping') {
+        this._state = 'idle'
+      }
+      if (this._stopPromise === stopped) this._stopPromise = null
+    })
+    this._stopPromise = stopped
+    if (settleStart) settleStart(stopped)
+    return stopped
   }
 
   /**
    * Check if discovery is running
    */
   isRunning() {
-    return this._running
+    return this._state === 'starting' || this._state === 'running'
   }
 
   /**
@@ -278,7 +337,7 @@ export class DeviceDiscoverer extends EventEmitter {
     this._manualDevices.set(id, device)
     this._devices.set(id, device)
 
-    if (this._running) {
+    if (this.isRunning()) {
       this.emit('deviceFound', device)
     }
 

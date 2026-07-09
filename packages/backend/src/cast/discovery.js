@@ -26,7 +26,33 @@ export const ServiceType = {
 }
 
 const NORMALIZED_CHROMECAST_SERVICE = normalizeDnsName(ServiceType.CHROMECAST)
+const CHROMECAST_INSTANCE_SUFFIX = `.${NORMALIZED_CHROMECAST_SERVICE}`
+const MAX_PENDING_A_TARGETS = 256
+const MAX_A_ADDRESSES_PER_TARGET = 8
 const DEVICE_FIELDS = ['id', 'name', 'host', 'port', 'protocol', 'manual']
+
+function normalizedChromecastInstance(name) {
+  if (typeof name !== 'string') return null
+  const normalized = normalizeDnsName(name)
+  if (
+    normalized.length <= CHROMECAST_INSTANCE_SUFFIX.length ||
+    !normalized.endsWith(CHROMECAST_INSTANCE_SUFFIX)
+  ) return null
+  return normalized
+}
+
+function prunePendingATargets(cache) {
+  const referencedTargets = new Set(
+    Array.from(cache.srvByInstance.values(), srv => srv.target)
+  )
+  const pendingTargets = Array.from(cache.addressesByTarget.keys())
+    .filter(target => !referencedTargets.has(target))
+  const excess = pendingTargets.length - MAX_PENDING_A_TARGETS
+
+  for (let i = 0; i < excess; i++) {
+    cache.addressesByTarget.delete(pendingTargets[i])
+  }
+}
 
 export function createDiscoveryRecordCache() {
   return {
@@ -48,25 +74,28 @@ export function applyDiscoveryRecord(cache, record) {
   }
 
   if (record.type === DNS_TYPE.SRV) {
+    const instance = normalizedChromecastInstance(record.name)
     if (
-      typeof record.name !== 'string' ||
+      !instance ||
       typeof record.target !== 'string' ||
       !Number.isInteger(record.port)
     ) return
-    cache.srvByInstance.set(normalizeDnsName(record.name), {
+    cache.srvByInstance.set(instance, {
       target: normalizeDnsName(record.target),
       port: record.port
     })
+    prunePendingATargets(cache)
     return
   }
 
   if (record.type === DNS_TYPE.TXT) {
+    const instance = normalizedChromecastInstance(record.name)
     if (
-      typeof record.name !== 'string' ||
+      !instance ||
       !record.txt ||
       typeof record.txt !== 'object'
     ) return
-    cache.txtByInstance.set(normalizeDnsName(record.name), { ...record.txt })
+    cache.txtByInstance.set(instance, { ...record.txt })
     return
   }
 
@@ -79,6 +108,12 @@ export function applyDiscoveryRecord(cache, record) {
       cache.addressesByTarget.set(target, addresses)
     }
     addresses.add(record.address)
+    if (addresses.size > MAX_A_ADDRESSES_PER_TARGET) {
+      cache.addressesByTarget.set(target, new Set(
+        Array.from(addresses).sort(compareIpv4).slice(0, MAX_A_ADDRESSES_PER_TARGET)
+      ))
+    }
+    prunePendingATargets(cache)
   }
 }
 

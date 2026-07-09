@@ -677,6 +677,120 @@ test('record cache temporarily ignores ttl-zero records', (t) => {
   t.is(helpers.buildDiscoveredDevices(cache)[0]?.host, '192.168.1.20')
 })
 
+test('record cache rejects unrelated service metadata and bounds pending A records', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+
+  for (let i = 0; i < 10000; i++) {
+    const service = i % 2 === 0
+      ? `Noise ${i}._airplay._tcp.local.`
+      : `Noise ${i}._googlecast._tcp.local.evil.`
+    helpers.applyDiscoveryRecord(cache, {
+      name: service,
+      type: DNS_TYPE.SRV,
+      ttl: 120,
+      target: `noise-${i}.local.`,
+      port: 8009
+    })
+    helpers.applyDiscoveryRecord(cache, {
+      name: service,
+      type: DNS_TYPE.TXT,
+      ttl: 120,
+      txt: { fn: `Noise ${i}` }
+    })
+  }
+
+  for (let targetIndex = 0; targetIndex < 300; targetIndex++) {
+    for (let addressIndex = 1; addressIndex <= 12; addressIndex++) {
+      helpers.applyDiscoveryRecord(cache, {
+        name: `noise-${targetIndex}.local.`,
+        type: DNS_TYPE.A,
+        ttl: 120,
+        address: `10.${Math.floor(targetIndex / 256)}.${targetIndex % 256}.${addressIndex}`
+      })
+    }
+  }
+
+  const addressSets = Array.from(cache.addressesByTarget.values())
+  t.is(cache.srvByInstance.size, 0)
+  t.is(cache.txtByInstance.size, 0)
+  t.ok(cache.addressesByTarget.size <= 256)
+  t.not(cache.addressesByTarget.has('noise-0.local'))
+  t.ok(cache.addressesByTarget.has('noise-299.local'))
+  t.ok(addressSets.every(addresses => addresses.size <= 8))
+  t.ok(addressSets.reduce((total, addresses) => total + addresses.size, 0) <= 256 * 8)
+})
+
+test('an early A record resolves after bounded pending traffic and a later Chromecast chain', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+
+  helpers.applyDiscoveryRecord(cache, {
+    name: TARGET,
+    type: DNS_TYPE.A,
+    ttl: 120,
+    address: '192.168.1.25'
+  })
+  for (let i = 0; i < 255; i++) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: `pending-${i}.local.`,
+      type: DNS_TYPE.A,
+      ttl: 120,
+      address: `10.0.${Math.floor(i / 256)}.${i % 256}`
+    })
+  }
+  helpers.applyDiscoveryRecord(cache, {
+    name: INSTANCE,
+    type: DNS_TYPE.SRV,
+    ttl: 120,
+    target: TARGET,
+    port: 8009
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: ServiceType.CHROMECAST,
+    type: DNS_TYPE.PTR,
+    ttl: 120,
+    ptr: INSTANCE
+  })
+
+  t.alike(helpers.buildDiscoveredDevices(cache), [{
+    id: '192.168.1.25:8009',
+    name: 'kitchen tv',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+})
+
+test('a referenced Chromecast A target survives pending-cache churn', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+
+  for (const parsedRecord of parseResponse(completeChromecastPacket()).records) {
+    helpers.applyDiscoveryRecord(cache, parsedRecord)
+  }
+  for (let i = 0; i < 512; i++) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: `churn-${i}.local.`,
+      type: DNS_TYPE.A,
+      ttl: 120,
+      address: `10.1.${Math.floor(i / 256)}.${i % 256}`
+    })
+  }
+
+  t.ok(cache.addressesByTarget.size <= 257)
+  t.alike(helpers.buildDiscoveredDevices(cache), [{
+    id: '192.168.1.25:8009',
+    name: 'Kitchen TV',
+    host: '192.168.1.25',
+    port: 8009,
+    protocol: 'chromecast'
+  }])
+})
+
 test('active discovery resolves records received across four packets', async (t) => {
   const { discoverer, socket } = await startActiveDiscovery(t)
   const found = []

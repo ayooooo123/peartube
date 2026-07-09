@@ -27,7 +27,9 @@ export const ServiceType = {
 
 const NORMALIZED_CHROMECAST_SERVICE = normalizeDnsName(ServiceType.CHROMECAST)
 const CHROMECAST_INSTANCE_SUFFIX = `.${NORMALIZED_CHROMECAST_SERVICE}`
+const MAX_CAST_INSTANCES = 256
 const MAX_PENDING_A_TARGETS = 256
+const MAX_A_TARGETS = 512
 const MAX_A_ADDRESSES_PER_TARGET = 8
 const DEVICE_FIELDS = ['id', 'name', 'host', 'port', 'protocol', 'manual']
 
@@ -41,17 +43,49 @@ function normalizedChromecastInstance(name) {
   return normalized
 }
 
-function prunePendingATargets(cache) {
+function removeAddressTarget(cache, target) {
+  cache.addressesByTarget.delete(target)
+  cache.addressTargetRecency.delete(target)
+}
+
+function pruneAddressTargets(cache) {
   const referencedTargets = new Set(
     Array.from(cache.srvByInstance.values(), srv => srv.target)
   )
-  const pendingTargets = Array.from(cache.addressesByTarget.keys())
-    .filter(target => !referencedTargets.has(target))
-  const excess = pendingTargets.length - MAX_PENDING_A_TARGETS
-
-  for (let i = 0; i < excess; i++) {
-    cache.addressesByTarget.delete(pendingTargets[i])
+  let pendingCount = 0
+  for (const target of cache.addressesByTarget.keys()) {
+    if (!referencedTargets.has(target)) pendingCount++
   }
+
+  for (const target of cache.addressTargetRecency.keys()) {
+    if (
+      pendingCount <= MAX_PENDING_A_TARGETS &&
+      cache.addressesByTarget.size <= MAX_A_TARGETS
+    ) break
+    if (referencedTargets.has(target)) continue
+    removeAddressTarget(cache, target)
+    pendingCount--
+  }
+}
+
+function touchAddressTarget(cache, target) {
+  cache.addressTargetRecency.delete(target)
+  cache.addressTargetRecency.set(target, true)
+}
+
+function touchCastInstance(cache, instance) {
+  cache.instanceRecency.delete(instance)
+  cache.instanceRecency.set(instance, true)
+
+  while (cache.instanceRecency.size > MAX_CAST_INSTANCES) {
+    const oldest = cache.instanceRecency.keys().next().value
+    cache.instanceRecency.delete(oldest)
+    cache.ptrInstances.delete(oldest)
+    cache.srvByInstance.delete(oldest)
+    cache.txtByInstance.delete(oldest)
+  }
+
+  pruneAddressTargets(cache)
 }
 
 function txtRecordsEqual(left, right) {
@@ -74,7 +108,9 @@ export function createDiscoveryRecordCache() {
     ptrInstances: new Set(),
     srvByInstance: new Map(),
     txtByInstance: new Map(),
-    addressesByTarget: new Map()
+    addressesByTarget: new Map(),
+    instanceRecency: new Map(),
+    addressTargetRecency: new Map()
   }
 }
 
@@ -84,11 +120,13 @@ export function applyDiscoveryRecord(cache, record) {
   if (record.type === DNS_TYPE.PTR) {
     if (typeof record.name !== 'string' || typeof record.ptr !== 'string') return
     if (normalizeDnsName(record.name) !== NORMALIZED_CHROMECAST_SERVICE) return
-    const instance = normalizeDnsName(record.ptr)
+    const instance = normalizedChromecastInstance(record.ptr)
+    if (!instance) return
     if (record.ttl === 0) {
       cache.ptrInstances.delete(instance)
     } else {
       cache.ptrInstances.add(instance)
+      touchCastInstance(cache, instance)
     }
     return
   }
@@ -108,13 +146,14 @@ export function applyDiscoveryRecord(cache, record) {
       const current = cache.srvByInstance.get(instance)
       if (current?.target === srv.target && current?.port === srv.port) {
         cache.srvByInstance.delete(instance)
-        prunePendingATargets(cache)
+        pruneAddressTargets(cache)
       }
       return
     } else {
       cache.srvByInstance.set(instance, srv)
+      touchCastInstance(cache, instance)
     }
-    prunePendingATargets(cache)
+    pruneAddressTargets(cache)
     return
   }
 
@@ -132,6 +171,7 @@ export function applyDiscoveryRecord(cache, record) {
       }
     } else {
       cache.txtByInstance.set(instance, { ...record.txt })
+      touchCastInstance(cache, instance)
     }
     return
   }
@@ -142,8 +182,8 @@ export function applyDiscoveryRecord(cache, record) {
     let addresses = cache.addressesByTarget.get(target)
     if (record.ttl === 0) {
       if (!addresses?.delete(record.address)) return
-      if (addresses.size === 0) cache.addressesByTarget.delete(target)
-      prunePendingATargets(cache)
+      if (addresses.size === 0) removeAddressTarget(cache, target)
+      pruneAddressTargets(cache)
       return
     }
     if (!addresses) {
@@ -156,7 +196,8 @@ export function applyDiscoveryRecord(cache, record) {
         Array.from(addresses).sort(compareIpv4).slice(0, MAX_A_ADDRESSES_PER_TARGET)
       ))
     }
-    prunePendingATargets(cache)
+    touchAddressTarget(cache, target)
+    pruneAddressTargets(cache)
   }
 }
 

@@ -11,6 +11,9 @@ import { DNS_TYPE, parseResponse } from '../src/cast/mdns.js'
 
 const INSTANCE = 'Kitchen TV._googlecast._tcp.local.'
 const TARGET = 'kitchen-chromecast.local.'
+const MAX_CAST_INSTANCES = 256
+const MAX_A_TARGETS = 512
+const MAX_A_ADDRESSES_PER_TARGET = 8
 
 class FakeSocket extends EventEmitter {
   constructor(options = {}) {
@@ -791,6 +794,265 @@ test('a referenced Chromecast A target survives pending-cache churn', (t) => {
   }])
 })
 
+function stressInstance(index, prefix = 'Stress') {
+  return `${prefix} ${String(index).padStart(5, '0')}._googlecast._tcp.local.`
+}
+
+function stressTarget(index, prefix = 'stress') {
+  return `${prefix}-${String(index).padStart(5, '0')}.local.`
+}
+
+function stressAddress(index) {
+  return `10.${Math.floor(index / 65536)}.${Math.floor(index / 256) % 256}.${index % 256}`
+}
+
+function applyCompleteCacheChain(helpers, cache, index, prefix = 'Stress') {
+  const instance = stressInstance(index, prefix)
+  const target = stressTarget(index, prefix.toLowerCase())
+  const address = stressAddress(index)
+  helpers.applyDiscoveryRecord(cache, {
+    name: ServiceType.CHROMECAST,
+    type: DNS_TYPE.PTR,
+    ttl: 120,
+    ptr: instance
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: instance,
+    type: DNS_TYPE.SRV,
+    ttl: 120,
+    target,
+    port: 8009
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: instance,
+    type: DNS_TYPE.TXT,
+    ttl: 120,
+    txt: { fn: `${prefix} ${index}` }
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: target,
+    type: DNS_TYPE.A,
+    ttl: 120,
+    address
+  })
+  return {
+    instance: instance.toLowerCase().replace(/\.$/, ''),
+    target: target.toLowerCase().replace(/\.$/, ''),
+    address
+  }
+}
+
+test('complete valid-looking Chromecast chains stay within total cache bounds', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+  let earliest
+  let newest
+
+  for (let i = 0; i < 2000; i++) {
+    const chain = applyCompleteCacheChain(helpers, cache, i)
+    if (i === 0) earliest = chain
+    newest = chain
+  }
+
+  const devices = helpers.buildDiscoveredDevices(cache)
+  const addressCount = Array.from(cache.addressesByTarget.values())
+    .reduce((total, addresses) => total + addresses.size, 0)
+  t.ok(cache.ptrInstances.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.srvByInstance.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.txtByInstance.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.instanceRecency?.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.addressesByTarget.size <= MAX_A_TARGETS)
+  t.ok(cache.addressTargetRecency?.size <= MAX_A_TARGETS)
+  t.ok(addressCount <= MAX_A_TARGETS * MAX_A_ADDRESSES_PER_TARGET)
+  t.not(cache.ptrInstances.has(earliest.instance))
+  t.not(cache.srvByInstance.has(earliest.instance))
+  t.not(cache.txtByInstance.has(earliest.instance))
+  t.not(cache.instanceRecency?.has(earliest.instance))
+  t.ok(cache.ptrInstances.has(newest.instance))
+  t.ok(cache.srvByInstance.has(newest.instance))
+  t.ok(cache.txtByInstance.has(newest.instance))
+  t.ok(cache.instanceRecency?.has(newest.instance))
+  t.ok(devices.some(device => (
+    device.id === `${newest.address}:8009` && device.name === 'Stress 1999'
+  )))
+})
+
+test('valid-looking SRV and TXT records without PTR stay instance-bounded', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+
+  for (let i = 0; i < 2000; i++) {
+    const instance = stressInstance(i, 'Metadata')
+    helpers.applyDiscoveryRecord(cache, {
+      name: instance,
+      type: DNS_TYPE.SRV,
+      ttl: 120,
+      target: stressTarget(i, 'metadata'),
+      port: 8009
+    })
+    helpers.applyDiscoveryRecord(cache, {
+      name: instance,
+      type: DNS_TYPE.TXT,
+      ttl: 120,
+      txt: { fn: `Metadata ${i}` }
+    })
+  }
+
+  const earliest = stressInstance(0, 'Metadata').toLowerCase().replace(/\.$/, '')
+  const newest = stressInstance(1999, 'Metadata').toLowerCase().replace(/\.$/, '')
+  t.is(cache.ptrInstances.size, 0)
+  t.ok(cache.srvByInstance.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.txtByInstance.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.instanceRecency?.size <= MAX_CAST_INSTANCES)
+  t.not(cache.srvByInstance.has(earliest))
+  t.not(cache.txtByInstance.has(earliest))
+  t.ok(cache.srvByInstance.has(newest))
+  t.ok(cache.txtByInstance.has(newest))
+})
+
+test('instance LRU refreshes on positive records but not PTR goodbyes', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+
+  for (let i = 0; i < MAX_CAST_INSTANCES; i++) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: ServiceType.CHROMECAST,
+      type: DNS_TYPE.PTR,
+      ttl: 120,
+      ptr: stressInstance(i, 'Recency')
+    })
+  }
+  helpers.applyDiscoveryRecord(cache, {
+    name: stressInstance(0, 'Recency'),
+    type: DNS_TYPE.TXT,
+    ttl: 120,
+    txt: { fn: 'Refreshed' }
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: ServiceType.CHROMECAST,
+    type: DNS_TYPE.PTR,
+    ttl: 0,
+    ptr: stressInstance(1, 'Recency')
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: ServiceType.CHROMECAST,
+    type: DNS_TYPE.PTR,
+    ttl: 120,
+    ptr: stressInstance(MAX_CAST_INSTANCES, 'Recency')
+  })
+
+  const instance0 = stressInstance(0, 'Recency').toLowerCase().replace(/\.$/, '')
+  const instance1 = stressInstance(1, 'Recency').toLowerCase().replace(/\.$/, '')
+  const instance2 = stressInstance(2, 'Recency').toLowerCase().replace(/\.$/, '')
+  const newest = stressInstance(MAX_CAST_INSTANCES, 'Recency').toLowerCase().replace(/\.$/, '')
+  t.ok(cache.ptrInstances.has(instance0))
+  t.not(cache.instanceRecency.has(instance1))
+  t.ok(cache.ptrInstances.has(instance2))
+  t.ok(cache.ptrInstances.has(newest))
+  t.is(cache.instanceRecency.size, MAX_CAST_INSTANCES)
+})
+
+test('PTR goodbyes and later instance churn stay bounded without stale resurrection', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+  let newest
+
+  for (let i = 0; i < 2000; i++) newest = applyCompleteCacheChain(helpers, cache, i, 'Goodbye')
+  helpers.applyDiscoveryRecord(cache, {
+    name: ServiceType.CHROMECAST,
+    type: DNS_TYPE.PTR,
+    ttl: 0,
+    ptr: stressInstance(1999, 'Goodbye')
+  })
+  for (let i = 0; i < 3000; i++) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: ServiceType.CHROMECAST,
+      type: DNS_TYPE.PTR,
+      ttl: 0,
+      ptr: stressInstance(i, 'Goodbye Churn')
+    })
+  }
+  for (let i = 0; i < 2000; i++) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: ServiceType.CHROMECAST,
+      type: DNS_TYPE.PTR,
+      ttl: 120,
+      ptr: stressInstance(i, 'Replacement')
+    })
+  }
+
+  t.ok(cache.ptrInstances.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.srvByInstance.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.txtByInstance.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.instanceRecency?.size <= MAX_CAST_INSTANCES)
+  t.ok(cache.addressesByTarget.size <= MAX_A_TARGETS)
+  t.not(cache.ptrInstances.has(newest.instance))
+  t.not(cache.srvByInstance.has(newest.instance))
+  t.not(cache.txtByInstance.has(newest.instance))
+  t.not(helpers.buildDiscoveredDevices(cache).some(device => device.id === `${newest.address}:8009`))
+})
+
+test('exact Chromecast PTR owners reject non-Chromecast instance targets', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+
+  for (const ptr of [
+    'Kitchen TV._airplay._tcp.local.',
+    'Kitchen TV._googlecast._tcp.local.evil.',
+    '_googlecast._tcp.local.'
+  ]) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: ServiceType.CHROMECAST,
+      type: DNS_TYPE.PTR,
+      ttl: 120,
+      ptr
+    })
+  }
+
+  t.is(cache.ptrInstances.size, 0)
+  t.is(cache.instanceRecency?.size, 0)
+})
+
+test('A-target LRU refresh preserves referenced and recently refreshed targets', (t) => {
+  const helpers = getDiscoveryHelpers(t)
+  if (!helpers) return
+  const cache = helpers.createDiscoveryRecordCache()
+  const retained = applyCompleteCacheChain(helpers, cache, 1, 'Retained')
+
+  for (let i = 0; i < 256; i++) {
+    helpers.applyDiscoveryRecord(cache, {
+      name: `pending-lru-${i}.local.`,
+      type: DNS_TYPE.A,
+      ttl: 120,
+      address: `10.20.${Math.floor(i / 256)}.${i % 256}`
+    })
+  }
+  helpers.applyDiscoveryRecord(cache, {
+    name: 'pending-lru-0.local.',
+    type: DNS_TYPE.A,
+    ttl: 120,
+    address: '10.20.0.0'
+  })
+  helpers.applyDiscoveryRecord(cache, {
+    name: 'pending-lru-256.local.',
+    type: DNS_TYPE.A,
+    ttl: 120,
+    address: '10.20.1.0'
+  })
+
+  t.ok(cache.addressesByTarget.has(retained.target))
+  t.ok(cache.addressesByTarget.has('pending-lru-0.local'))
+  t.not(cache.addressesByTarget.has('pending-lru-1.local'))
+  t.ok(cache.addressesByTarget.has('pending-lru-256.local'))
+  t.ok(cache.addressesByTarget.size <= MAX_A_TARGETS)
+  t.ok(helpers.buildDiscoveredDevices(cache).some(device => device.id === `${retained.address}:8009`))
+})
+
 test('active discovery resolves records received across four packets', async (t) => {
   const { discoverer, socket } = await startActiveDiscovery(t)
   const found = []
@@ -1139,6 +1401,8 @@ test('clearDevices loses the merged public view and empties every store', async 
   t.is(discoverer._recordCache.srvByInstance.size, 0)
   t.is(discoverer._recordCache.txtByInstance.size, 0)
   t.is(discoverer._recordCache.addressesByTarget.size, 0)
+  t.is(discoverer._recordCache.instanceRecency?.size, 0)
+  t.is(discoverer._recordCache.addressTargetRecency?.size, 0)
 })
 
 test('record goodbyes match normalized SRV names and semantic TXT content', (t) => {

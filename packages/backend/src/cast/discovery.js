@@ -266,6 +266,9 @@ export class DeviceDiscoverer extends EventEmitter {
     this._manualDevices = new Map()
     this._recordCache = createDiscoveryRecordCache()
     this._discoveredDevices = new Map()
+    this._reconciling = false
+    this._reconcilePending = false
+    this._publishedDevices = null
     this._socket = null
     this._membershipSocket = null
     this._queryInterval = null
@@ -472,23 +475,53 @@ export class DeviceDiscoverer extends EventEmitter {
     this._devices = after
 
     if (!this.isRunning()) return
-
-    for (const id of before.keys()) {
-      if (!after.has(id)) {
-        this.emit('deviceLost', id)
-        if (this._devices !== after) return
-      }
+    if (this._reconciling) {
+      this._reconcilePending = true
+      return
     }
 
-    for (const [id, device] of after) {
-      const previous = before.get(id)
-      if (!previous) {
-        this.emit('deviceFound', device)
-        if (this._devices !== after) return
-      } else if (!devicesEqual(previous, device)) {
-        this.emit('deviceChanged', device)
-        if (this._devices !== after) return
+    this._reconciling = true
+    this._publishedDevices = new Map(before)
+    try {
+      while (
+        this._reconcilePending ||
+        !deviceMapsEqual(this._publishedDevices, this._devices)
+      ) {
+        this._reconcilePending = false
+        const published = this._publishedDevices
+        const actual = this._devices
+        let emitted = false
+
+        for (const id of published.keys()) {
+          if (actual.has(id)) continue
+          published.delete(id)
+          this.emit('deviceLost', id)
+          emitted = true
+          break
+        }
+        if (emitted) continue
+
+        for (const [id, device] of actual) {
+          const previous = published.get(id)
+          if (!previous) {
+            published.set(id, device)
+            this.emit('deviceFound', device)
+            emitted = true
+            break
+          }
+          if (!devicesEqual(previous, device)) {
+            published.set(id, device)
+            this.emit('deviceChanged', device)
+            emitted = true
+            break
+          }
+        }
+        if (emitted) continue
       }
+    } finally {
+      this._publishedDevices = null
+      this._reconcilePending = false
+      this._reconciling = false
     }
   }
 

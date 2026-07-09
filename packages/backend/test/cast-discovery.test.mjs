@@ -1153,8 +1153,7 @@ test('a reentrant clear aborts stale events from an endpoint transition', async 
 
   t.alike(discoverer.getDevices(), [])
   t.alike(events, [
-    ['lost', '192.168.1.20:8009'],
-    ['lost', '192.168.1.9:8009']
+    ['lost', '192.168.1.20:8009']
   ])
 })
 
@@ -1184,6 +1183,81 @@ test('a reentrant no-op does not suppress the next endpoint event', async (t) =>
     port: 8009,
     protocol: 'chromecast'
   }])
+})
+
+test('reentrant manual insertion publishes every pending endpoint exactly once', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const observed = new Map()
+  const events = []
+  discoverer.on('deviceFound', device => {
+    observed.set(device.id, device)
+    events.push(['found', device.id])
+  })
+  discoverer.on('deviceChanged', device => {
+    observed.set(device.id, device)
+    events.push(['changed', device.id])
+  })
+  discoverer.on('deviceLost', id => {
+    observed.delete(id)
+    events.push(['lost', id])
+    if (id === '192.168.1.20:8009') {
+      discoverer.addManualDevice({ name: 'Manual TV', host: '192.168.1.80' })
+    }
+  })
+
+  socket.emit('message', completeServicePacket({ address: '192.168.1.20' }), {})
+  events.length = 0
+  socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
+
+  t.alike(events, [
+    ['lost', '192.168.1.20:8009'],
+    ['found', '192.168.1.9:8009'],
+    ['found', '192.168.1.80:8009']
+  ])
+  t.alike(Array.from(observed.values()), discoverer.getDevices())
+  t.ok(observed.has('192.168.1.9:8009'))
+  t.ok(observed.has('192.168.1.80:8009'))
+})
+
+test('reentrant clear publishes every loss from the observer snapshot', async (t) => {
+  const { discoverer, socket } = await startActiveDiscovery(t)
+  const officeInstance = 'Office TV._googlecast._tcp.local.'
+  const officeTarget = 'office-chromecast.local.'
+  const observed = new Map()
+  const events = []
+  discoverer.on('deviceFound', device => {
+    observed.set(device.id, device)
+    events.push(['found', device.id])
+  })
+  discoverer.on('deviceChanged', device => {
+    observed.set(device.id, device)
+    events.push(['changed', device.id])
+  })
+  discoverer.on('deviceLost', id => {
+    observed.delete(id)
+    events.push(['lost', id])
+    if (id === '192.168.1.20:8009') discoverer.clearDevices()
+  })
+
+  socket.emit('message', responsePacket([
+    ptrRecord(ServiceType.CHROMECAST, INSTANCE),
+    ptrRecord(ServiceType.CHROMECAST, officeInstance),
+    srvRecord(INSTANCE, 8009, TARGET),
+    srvRecord(officeInstance, 8009, officeTarget),
+    txtRecord(INSTANCE, { fn: 'Kitchen TV' }),
+    txtRecord(officeInstance, { fn: 'Office TV' }),
+    aRecord(TARGET, '192.168.1.20'),
+    aRecord(officeTarget, '192.168.1.40')
+  ]), {})
+  events.length = 0
+  socket.emit('message', responsePacket([aRecord(TARGET, '192.168.1.9')]), {})
+
+  t.alike(events, [
+    ['lost', '192.168.1.20:8009'],
+    ['lost', '192.168.1.40:8009']
+  ])
+  t.alike(Array.from(observed.values()), [])
+  t.alike(discoverer.getDevices(), [])
 })
 
 test('TXT updates change the visible device without changing its endpoint', async (t) => {

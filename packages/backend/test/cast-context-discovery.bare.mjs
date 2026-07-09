@@ -26,7 +26,7 @@ function record(name, type, rdata) {
   return Buffer.concat([dnsName(name), header, rdata])
 }
 
-function discoveredPacket() {
+function discoveredPacket(address = '192.168.1.25') {
   const srv = Buffer.alloc(6)
   srv.writeUInt16BE(8009, 4)
   const name = Buffer.from('fn=Discovered TV')
@@ -34,12 +34,28 @@ function discoveredPacket() {
     record(SERVICE, DNS_TYPE.PTR, dnsName(INSTANCE)),
     record(INSTANCE, DNS_TYPE.SRV, Buffer.concat([srv, dnsName(TARGET)])),
     record(INSTANCE, DNS_TYPE.TXT, Buffer.concat([Buffer.from([name.length]), name])),
-    record(TARGET, DNS_TYPE.A, Buffer.from([192, 168, 1, 25]))
+    record(TARGET, DNS_TYPE.A, Buffer.from(address.split('.').map(Number)))
   ]
   const header = Buffer.alloc(12)
   header.writeUInt16BE(0x8400, 2)
   header.writeUInt16BE(records.length, 6)
   return Buffer.concat([header, ...records])
+}
+
+function addressPacket(address) {
+  const addressRecord = record(
+    TARGET,
+    DNS_TYPE.A,
+    Buffer.from(address.split('.').map(Number))
+  )
+  const header = Buffer.alloc(12)
+  header.writeUInt16BE(0x8400, 2)
+  header.writeUInt16BE(1, 6)
+  return Buffer.concat([header, addressRecord])
+}
+
+function devicesById(devices) {
+  return [...devices].sort((left, right) => left.id.localeCompare(right.id))
 }
 
 test('removing an idle manual collision reveals the discovered device in context', (t) => {
@@ -81,4 +97,24 @@ test('removing an active manual collision forwards one discovered reveal', (t) =
   t.is(context.getDevices().length, 1)
   t.is(context.getDevice(ID)?.manual, undefined)
   t.is(context.getDevice(ID)?.name, 'Discovered TV')
+})
+
+test('active reentrant discovery keeps the context mirror synchronized', (t) => {
+  const context = new CastContext()
+  context._discoverer._state = 'running'
+  context._discoverer._handleMessage(discoveredPacket('192.168.1.20'), {})
+  context.on('deviceLost', id => {
+    if (id === '192.168.1.20:8009') {
+      context.addManualDevice({ name: 'Manual TV', host: '192.168.1.80' })
+    }
+  })
+
+  context._discoverer._handleMessage(addressPacket('192.168.1.9'), {})
+
+  t.alike(
+    devicesById(context.getDevices()),
+    devicesById(context._discoverer.getDevices())
+  )
+  t.ok(context.getDevice('192.168.1.9:8009'))
+  t.ok(context.getDevice('192.168.1.80:8009'))
 })

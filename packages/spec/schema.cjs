@@ -2377,7 +2377,7 @@ ns.register({
     { name: 'name', type: 'string', required: true },
     { name: 'host', type: 'string', required: true },
     { name: 'port', type: 'uint', required: true },
-    { name: 'castProtocol', type: 'string', required: true }
+    { name: 'protocol', type: 'string', required: true }
   ]
 })
 
@@ -2435,7 +2435,7 @@ ns.register({
     { name: 'name', type: 'string', required: true },
     { name: 'host', type: 'string', required: true },
     { name: 'port', type: 'uint', required: false },
-    { name: 'castProtocol', type: 'string', required: false }
+    { name: 'protocol', type: 'string', required: false }
   ]
 })
 

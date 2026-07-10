@@ -117,3 +117,18 @@ test('preparePlayback response can encode a readiness miss without a URL', async
   t.is(decoded.warmupStarted, true)
   t.is(decoded.selectedBlobWarmup?.error, 'waiting-for-playable-head')
 })
+
+test('cast device codecs use the protocol field exposed by cast clients', async (t) => {
+  const schema = await import('@peartube/spec/schema')
+  const encoding = schema.getEncoding('@peartube/cast-device')
+  const encoded = c.encode(encoding, {
+    id: '192.168.8.152:8009',
+    name: 'Guest room TV',
+    host: '192.168.8.152',
+    port: 8009,
+    protocol: 'chromecast'
+  })
+  const decoded = c.decode(encoding, encoded)
+
+  t.is(decoded.protocol, 'chromecast')
+})

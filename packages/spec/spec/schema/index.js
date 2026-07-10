@@ -6159,14 +6159,14 @@ const encoding243 = {
     c.string.preencode(state, m.name)
     c.string.preencode(state, m.host)
     c.uint.preencode(state, m.port)
-    c.string.preencode(state, m.castProtocol)
+    c.string.preencode(state, m.protocol)
   },
   encode(state, m) {
     c.string.encode(state, m.id)
     c.string.encode(state, m.name)
     c.string.encode(state, m.host)
     c.uint.encode(state, m.port)
-    c.string.encode(state, m.castProtocol)
+    c.string.encode(state, m.protocol)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -6180,7 +6180,7 @@ const encoding243 = {
       name: r1,
       host: r2,
       port: r3,
-      castProtocol: r4
+      protocol: r4
     }
   }
 }
@@ -6250,17 +6250,17 @@ const encoding252 = {
     state.end++ // max flag is 2 so always one byte
 
     if (m.port) c.uint.preencode(state, m.port)
-    if (m.castProtocol) c.string.preencode(state, m.castProtocol)
+    if (m.protocol) c.string.preencode(state, m.protocol)
   },
   encode(state, m) {
-    const flags = (m.port ? 1 : 0) | (m.castProtocol ? 2 : 0)
+    const flags = (m.port ? 1 : 0) | (m.protocol ? 2 : 0)
 
     c.string.encode(state, m.name)
     c.string.encode(state, m.host)
     c.uint.encode(state, flags)
 
     if (m.port) c.uint.encode(state, m.port)
-    if (m.castProtocol) c.string.encode(state, m.castProtocol)
+    if (m.protocol) c.string.encode(state, m.protocol)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -6271,7 +6271,7 @@ const encoding252 = {
       name: r0,
       host: r1,
       port: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      castProtocol: (flags & 2) !== 0 ? c.string.decode(state) : null
+      protocol: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }

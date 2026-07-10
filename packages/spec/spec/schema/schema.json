@@ -6558,7 +6558,7 @@
           "version": 1
         },
         {
-          "name": "castProtocol",
+          "name": "protocol",
           "required": true,
           "type": "string",
           "version": 1
@@ -6675,7 +6675,7 @@
           "version": 1
         },
         {
-          "name": "castProtocol",
+          "name": "protocol",
           "required": false,
           "type": "string",
           "version": 1

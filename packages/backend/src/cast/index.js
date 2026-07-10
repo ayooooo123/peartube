@@ -1,19 +1,22 @@
 /**
- * PearTube Cast - Chromecast sender SDK for Bare/Pear runtime
+ * PearTube Cast - casting sender SDK for Bare/Pear runtime
  *
- * Implements the Chromecast protocol (TLS + protobuf on port 8009) for casting
- * media to receiver devices.
+ * Implements the Chromecast protocol (TLS + protobuf on port 8009) and the
+ * FCast protocol (plain TCP + JSON on port 46899, https://fcast.org) for
+ * casting media to receiver devices.
  */
 
 import { EventEmitter } from 'bare-events'
 import { ChromecastDevice } from './chromecast.js'
+import { FCastDevice } from './fcast.js'
 import { DeviceDiscoverer } from './discovery.js'
 
 /**
  * Protocol types supported
  */
 export const ProtocolType = {
-  CHROMECAST: 'chromecast'
+  CHROMECAST: 'chromecast',
+  FCAST: 'fcast'
 }
 
 /**
@@ -46,7 +49,7 @@ export const PlaybackState = {
  * @property {string} name - Human-readable device name
  * @property {string} host - IP address or hostname
  * @property {number} port - Port number
- * @property {string} protocol - Protocol type ('chromecast')
+ * @property {string} protocol - Protocol type ('chromecast' | 'fcast')
  */
 
 /**
@@ -144,9 +147,12 @@ export class CastContext extends EventEmitter {
   /**
    * Create a device instance from DeviceInfo
    * @param {DeviceInfo} deviceInfo
-   * @returns {ChromecastDevice}
+   * @returns {ChromecastDevice|FCastDevice}
    */
   createDevice(deviceInfo) {
+    if (deviceInfo?.protocol === ProtocolType.FCAST) {
+      return new FCastDevice(deviceInfo)
+    }
     return new ChromecastDevice(deviceInfo)
   }
 
@@ -387,6 +393,7 @@ export class CastContext extends EventEmitter {
 
 // Export classes
 export { ChromecastDevice } from './chromecast.js'
+export { FCastDevice } from './fcast.js'
 export { DeviceDiscoverer } from './discovery.js'
 
 // Default export

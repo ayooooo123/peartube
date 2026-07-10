@@ -30,6 +30,25 @@ const CAST_PROXY_TTL_MS = 8 * 60 * 60 * 1000
 
 const CAST_LOCALHOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1'])
 
+/**
+ * Map an internal device object onto the HRPC wire shape.
+ *
+ * The @peartube/cast-device schema names the protocol field `castProtocol`
+ * (required) while the cast stack uses `protocol` internally. Encoding a
+ * device without `castProtocol` makes compact-encoding throw, which silently
+ * killed deviceFound events and crashed castGetDevices responses — so every
+ * device that crosses the RPC boundary must go through this mapping.
+ */
+function toWireCastDevice(device) {
+  return {
+    id: device.id,
+    name: device.name,
+    host: device.host,
+    port: device.port,
+    castProtocol: device.protocol || 'chromecast',
+  }
+}
+
 let activeCastTranscodeId = null
 let activeCastSourceKey = null
 let castStallMonitor = null
@@ -285,14 +304,10 @@ async function loadCastContext() {
 
       castContext.on('deviceFound', (device) => {
         try {
-          rpc?.eventCastDeviceFound?.({ device: {
-            id: device.id,
-            name: device.name,
-            host: device.host,
-            port: device.port,
-            protocol: device.protocol,
-          }})
-        } catch {}
+          rpc?.eventCastDeviceFound?.({ device: toWireCastDevice(device) })
+        } catch (err) {
+          console.warn('[Backend] eventCastDeviceFound failed:', err?.message)
+        }
       })
 
       castContext.on('deviceLost', (deviceId) => {
@@ -734,9 +749,7 @@ async function loadCastContext() {
     if (!castContext) return { devices: [] }
     try {
       const devices = castContext.getDevices()
-      return { devices: devices.map((d) => ({
-        id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol,
-      })) }
+      return { devices: devices.map(toWireCastDevice) }
     } catch {
       return { devices: [] }
     }
@@ -748,11 +761,9 @@ async function loadCastContext() {
     try {
       const ctx = getCastContext()
       const device = ctx.addManualDevice({
-        name: r.name, host: r.host, port: r.port, protocol: r.protocol || 'chromecast',
+        name: r.name, host: r.host, port: r.port, protocol: r.castProtocol || r.protocol || 'chromecast',
       })
-      return { success: true, device: {
-        id: device.id, name: device.name, host: device.host, port: device.port, protocol: device.protocol,
-      } }
+      return { success: true, device: toWireCastDevice(device) }
     } catch (err) {
       return { success: false, error: err?.message }
     }
@@ -783,7 +794,7 @@ async function loadCastContext() {
       setCastActive(true)
       return device ? {
         success: true,
-        device: { id: device.id, name: device.name, host: device.host, port: device.port, protocol: device.protocol },
+        device: toWireCastDevice(device),
       } : { success: true }
     } catch (err) {
       return { success: false, error: normalizeErrorMessage(err, 'Cannot connect to Chromecast device') }

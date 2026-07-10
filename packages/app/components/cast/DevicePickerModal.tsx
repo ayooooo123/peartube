@@ -1,7 +1,7 @@
 /**
  * DevicePickerModal - Modal to select cast devices
  *
- * Shows available Chromecast devices on the network.
+ * Shows available Chromecast and FCast devices on the network.
  * Also allows adding devices manually by IP address.
  */
 
@@ -53,8 +53,11 @@ export function DevicePickerModal({
   const [manualName, setManualName] = useState('')
   const [manualHost, setManualHost] = useState('')
   const [manualPort, setManualPort] = useState('')
-  const manualProtocol = 'chromecast'
+  const [manualProtocol, setManualProtocol] = useState<'chromecast' | 'fcast'>('chromecast')
   const [isAdding, setIsAdding] = useState(false)
+
+  const manualProtocolLabel = manualProtocol === 'fcast' ? 'FCast' : 'Chromecast'
+  const manualDefaultPort = manualProtocol === 'fcast' ? 46899 : 8009
 
   const sortedDevices = (() => {
     const list = Array.isArray(devices) ? [...devices] : []
@@ -75,7 +78,7 @@ export function DevicePickerModal({
     try {
       const port = manualPort ? parseInt(manualPort, 10) : undefined
       const device = await onAddManualDevice(
-        manualName.trim() || `Chromecast @ ${manualHost}`,
+        manualName.trim() || `${manualProtocolLabel} @ ${manualHost}`,
         manualHost.trim(),
         port,
         manualProtocol
@@ -231,7 +234,7 @@ export function DevicePickerModal({
                 />
                 <TextInput
                   style={[styles.input, styles.inputPort]}
-                  placeholder="Port"
+                  placeholder={`${manualDefaultPort}`}
                   placeholderTextColor={colors.textMuted}
                   value={manualPort}
                   onChangeText={setManualPort}
@@ -239,7 +242,27 @@ export function DevicePickerModal({
                 />
               </View>
 
-              <Text style={styles.manualHint}>Protocol: Chromecast</Text>
+              <View style={styles.protocolRow}>
+                {(['chromecast', 'fcast'] as const).map((protocol) => (
+                  <Pressable
+                    key={protocol}
+                    style={[
+                      styles.protocolButton,
+                      manualProtocol === protocol && styles.protocolButtonActive,
+                    ]}
+                    onPress={() => setManualProtocol(protocol)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Use ${protocol === 'fcast' ? 'FCast' : 'Chromecast'} protocol`}
+                  >
+                    <Text style={[
+                      styles.protocolText,
+                      manualProtocol === protocol && styles.protocolTextActive,
+                    ]}>
+                      {protocol === 'fcast' ? 'FCast' : 'Chromecast'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
 
               <Pressable
                 style={[styles.addButton, !manualHost.trim() && styles.addButtonDisabled]}

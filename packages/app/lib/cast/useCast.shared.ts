@@ -19,7 +19,7 @@ export interface CastDevice {
   name: string
   host: string
   port: number
-  protocol: 'chromecast'
+  protocol: 'chromecast' | 'fcast'
 }
 
 export interface CastPlaybackState {
@@ -76,6 +76,22 @@ export interface UseCastReturn {
 }
 
 type ConnectedDeviceListener = (device: CastDevice | null) => void
+
+/**
+ * Normalize a device object arriving over RPC. The HRPC wire schema names the
+ * protocol field `castProtocol`; the app API uses `protocol`. Accept both so
+ * devices survive the boundary regardless of which side produced them.
+ */
+function normalizeCastDevice(raw: any): CastDevice | null {
+  if (!raw?.id) return null
+  return {
+    id: raw.id,
+    name: raw.name || raw.id,
+    host: raw.host || '',
+    port: typeof raw.port === 'number' ? raw.port : 0,
+    protocol: (raw.protocol || raw.castProtocol || 'chromecast') as CastDevice['protocol'],
+  }
+}
 
 const sharedConnection = {
   connectedDevice: null as CastDevice | null,
@@ -211,7 +227,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     if (!platformEvents?.onCastDeviceFound) return
 
     const handleDeviceFound = (data: any) => {
-      const device = data?.device ?? data
+      const device = normalizeCastDevice(data?.device ?? data)
       if (!device?.id) return
       setDevices(prev => {
         const idx = prev.findIndex(d => d.id === device.id)
@@ -331,7 +347,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       // Load current devices
       const result = await rpc.castGetDevices({})
       if (result?.devices) {
-        setDevices(result.devices)
+        setDevices(result.devices.map(normalizeCastDevice).filter(Boolean) as CastDevice[])
       }
     } catch (err) {
       console.error('[useCast] startDiscovery failed:', err)
@@ -371,9 +387,10 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
         protocol: protocol || 'chromecast'
       })
 
-      if (result?.success && result?.device) {
-        setDevices(prev => [...prev, result.device])
-        return result.device
+      const added = result?.success ? normalizeCastDevice(result?.device) : null
+      if (added) {
+        setDevices(prev => [...prev.filter(d => d.id !== added.id), added])
+        return added
       }
       return null
     } catch (err) {
@@ -418,12 +435,13 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       }
 
       if (result?.success) {
-        let device = result?.device || devices.find((d: CastDevice) => d.id === deviceId) || null
+        let device = normalizeCastDevice(result?.device) || devices.find((d: CastDevice) => d.id === deviceId) || null
         if (!device) {
           const refreshed = await rpc.castGetDevices({})
           if (refreshed?.devices) {
-            setDevices(refreshed.devices)
-            device = refreshed.devices.find((d: CastDevice) => d.id === deviceId) || null
+            const normalized = refreshed.devices.map(normalizeCastDevice).filter(Boolean) as CastDevice[]
+            setDevices(normalized)
+            device = normalized.find((d: CastDevice) => d.id === deviceId) || null
           }
         }
         if (!device) {

@@ -651,7 +651,8 @@ export const rpc = {
   },
 
   async castAddManualDevice(req: { name: string; host: string; port?: number; protocol?: string }): Promise<{ success: boolean; device?: { id: string; name: string; host: string; port: number; protocol: string }; error?: string | null }> {
-    return ensureRPC().castAddManualDevice(req);
+    // Wire schema names the field castProtocol; keep the public API on `protocol`.
+    return ensureRPC().castAddManualDevice({ ...req, castProtocol: req.protocol });
   },
 
   async castConnect(req: { deviceId: string }): Promise<{ success: boolean; error?: string | null }> {

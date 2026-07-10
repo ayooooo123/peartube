@@ -1,10 +1,11 @@
 /**
  * Device Discovery via mDNS
  *
- * Discovers Chromecast devices on the local network using mDNS.
+ * Discovers cast devices on the local network using mDNS.
  *
  * Service types:
  * - _googlecast._tcp.local. - Chromecast devices
+ * - _fcast._tcp.local.      - FCast receivers (https://fcast.org)
  */
 
 import { EventEmitter } from 'bare-events'
@@ -18,7 +19,14 @@ export const MDNS_TTL = 255
 
 // Service types
 export const ServiceType = {
-  CHROMECAST: '_googlecast._tcp.local.'
+  CHROMECAST: '_googlecast._tcp.local.',
+  FCAST: '_fcast._tcp.local.'
+}
+
+// Default connect port per protocol (Chromecast: TLS 8009, FCast: TCP 46899)
+const DEFAULT_PROTOCOL_PORTS = {
+  chromecast: 8009,
+  fcast: 46899
 }
 
 // DNS record types
@@ -541,10 +549,13 @@ export class DeviceDiscoverer extends EventEmitter {
   async _sendQueries() {
     if (!this._socket) return
 
-    const queries = [
-      buildQuery(ServiceType.CHROMECAST, true),
-      buildQuery(ServiceType.CHROMECAST, false),
-    ]
+    // One QU (unicast-reply) and one QM (multicast-reply) query per service
+    // type — receivers vary in which they answer.
+    const queries = []
+    for (const serviceName of Object.values(ServiceType)) {
+      queries.push(buildQuery(serviceName, true))
+      queries.push(buildQuery(serviceName, false))
+    }
 
     let sent = 0
 
@@ -593,9 +604,11 @@ export class DeviceDiscoverer extends EventEmitter {
 
       for (const record of allRecords) {
         if (record.type === DNS_TYPE.PTR) {
-          const isChromecast = record.name.includes('_googlecast._tcp')
+          const serviceProtocol = record.name.includes('_googlecast._tcp')
+            ? 'chromecast'
+            : (record.name.includes('_fcast._tcp') ? 'fcast' : null)
 
-          if (isChromecast) {
+          if (serviceProtocol) {
             // Find corresponding SRV and A records
             const instanceName = record.ptr
             const srvRecord = allRecords.find(r => r.type === DNS_TYPE.SRV && r.name === instanceName)
@@ -610,7 +623,7 @@ export class DeviceDiscoverer extends EventEmitter {
             if (srvRecord && aRecord) {
               const host = aRecord.address
               const port = srvRecord.port
-              const protocol = 'chromecast'
+              const protocol = serviceProtocol
               const id = `${host}:${port}`
 
               // Extract friendly name from TXT record or instance name
@@ -698,13 +711,13 @@ export class DeviceDiscoverer extends EventEmitter {
    * @param {Object} options
    * @param {string} options.name - Device name
    * @param {string} options.host - IP address or hostname
-   * @param {number} [options.port] - Port number (default: 8009 for chromecast)
-   * @param {string} [options.protocol='chromecast'] - Protocol type
+   * @param {number} [options.port] - Port number (default: 8009 for chromecast, 46899 for fcast)
+   * @param {string} [options.protocol='chromecast'] - Protocol type ('chromecast' | 'fcast')
    * @returns {Object} The device info
    */
   addManualDevice(options) {
     const protocol = options.protocol || 'chromecast'
-    const port = options.port || 8009
+    const port = options.port || DEFAULT_PROTOCOL_PORTS[protocol] || 8009
     const id = `${options.host}:${port}`
 
     const device = {

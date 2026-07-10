@@ -345,10 +345,17 @@ function buildTranscodeCacheKey(url: string): string | null {
   } catch { return null }
 }
 
+// The @peartube/cast-device wire schema names the protocol field `castProtocol`
+// (required); the cast stack uses `protocol` internally. Devices crossing the
+// RPC boundary must be mapped or compact-encoding throws and the message is lost.
+function toWireCastDevice(d: any) {
+  return { id: d.id, name: d.name, host: d.host, port: d.port, castProtocol: d.protocol || 'chromecast' }
+}
+
 function getCastContext(): any {
   if (!castContext && CastContext) {
     castContext = new CastContext()
-    castContext.on('deviceFound', (d: any) => { try { rpc?.eventCastDeviceFound?.({ device: { id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol } }) } catch {} })
+    castContext.on('deviceFound', (d: any) => { try { rpc?.eventCastDeviceFound?.({ device: toWireCastDevice(d) }) } catch (e: any) { console.warn('[Worker] eventCastDeviceFound failed:', e?.message) } })
     castContext.on('deviceLost', (id: string) => { try { rpc?.eventCastDeviceLost?.({ deviceId: id }) } catch {} })
     castContext.on('playbackStateChanged', (state: string) => {
       if (state === 'stopped' || state === 'idle' || state === 'disconnected' || state === 'error') { activeCastSourceKey = null; if (activeCastTranscodeId) castSessionsWithLoadSent.delete(activeCastTranscodeId) }
@@ -800,9 +807,9 @@ B.pickImageFile = async () => { const r = await pickImageFile(); return { filePa
 B.castAvailable = async () => { await loadCastContext(); return { available: CastContext !== null, error: castLoadError } }
 B.castStartDiscovery = async () => { await loadCastContext(); if (!CastContext) return { success: false, error: castLoadError || 'not available' }; try { await getCastContext().startDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castStopDiscovery = async () => { if (!castContext) return { success: true }; try { castContext.stopDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
-B.castGetDevices = async () => { if (!castContext) return { devices: [] }; try { return { devices: castContext.getDevices().map((d: any) => ({ id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol })) } } catch { return { devices: [] } } }
-B.castAddManualDevice = async (r: any) => { await loadCastContext(); if (!CastContext) return { success: false, error: 'not available' }; try { const d = getCastContext().addManualDevice({ name: r.name, host: r.host, port: r.port, protocol: r.protocol || 'chromecast' }); return { success: true, device: { id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol } } } catch (e: any) { return { success: false, error: e?.message } } }
-B.castConnect = async (r: any) => { await loadCastContext(); if (!CastContext) return { success: false, error: 'not available' }; const c = getCastContext(); try { const devices = c.getDevices?.() || []; const dev = devices.find((d: any) => d.id === r.deviceId); await c.connect(r.deviceId); return dev ? { success: true, device: { id: dev.id, name: dev.name, host: dev.host, port: dev.port, protocol: dev.protocol } } : { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
+B.castGetDevices = async () => { if (!castContext) return { devices: [] }; try { return { devices: castContext.getDevices().map(toWireCastDevice) } } catch { return { devices: [] } } }
+B.castAddManualDevice = async (r: any) => { await loadCastContext(); if (!CastContext) return { success: false, error: 'not available' }; try { const d = getCastContext().addManualDevice({ name: r.name, host: r.host, port: r.port, protocol: r.castProtocol || r.protocol || 'chromecast' }); return { success: true, device: toWireCastDevice(d) } } catch (e: any) { return { success: false, error: e?.message } } }
+B.castConnect = async (r: any) => { await loadCastContext(); if (!CastContext) return { success: false, error: 'not available' }; const c = getCastContext(); try { const devices = c.getDevices?.() || []; const dev = devices.find((d: any) => d.id === r.deviceId); await c.connect(r.deviceId); return dev ? { success: true, device: toWireCastDevice(dev) } : { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castDisconnect = async () => { if (!castContext) return { success: true }; try { await castContext.disconnect(); castProxySessions.clear(); if (activeCastTranscodeId) { castSessionsWithLoadSent.delete(activeCastTranscodeId); castTranscoder.stopCastTranscode(activeCastTranscodeId); transcodeSessions.delete(activeCastTranscodeId); activeCastTranscodeId = null; activeCastSourceKey = null } return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castPause = async () => { if (!castContext?.isConnected()) return { success: false, error: 'Not connected' }; try { await castContext.pause(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castResume = async () => { if (!castContext?.isConnected()) return { success: false, error: 'Not connected' }; try { await castContext.resume(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
@@ -847,6 +854,11 @@ B.castPlay = async (r: any) => {
         if (!usedDirect) { try { await ensureCastProxyServer(); const pu = await createCastProxyUrl(deviceHost, r.url); if (pu) url = pu } catch {} }
         if (!usedDirect) { try { const p = new URL(r.url); if (CAST_LOCALHOSTS.has(p.hostname)) { const ip = await getLocalIPv4ForTarget(deviceHost); if (ip) url = rewriteUrlHost(r.url, ip) } } catch {} }
       }
+    } else {
+      // FCast (and other non-Chromecast) receivers play the original file
+      // directly, but the source URL points at the local blob server — serve
+      // it through the LAN-reachable cast proxy so the receiver can fetch it.
+      try { await ensureCastProxyServer(); const pu = await createCastProxyUrl(deviceHost, requestedUrl); if (pu) url = pu } catch (e: any) { console.warn('[Worker] Cast proxy for', protocol, 'failed, using direct URL:', e?.message) }
     }
     try { await castContext.stop(); await new Promise(resolve => setTimeout(resolve, 200)) } catch {}
     const prev = activeCastTranscodeId

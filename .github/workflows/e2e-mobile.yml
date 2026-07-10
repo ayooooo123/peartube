@@ -1,0 +1,98 @@
+name: Mobile E2E (Maestro)
+
+# Opt-in, heavy (~20-40 min): builds the debug APK, boots an Android emulator,
+# and runs Maestro UI flows. Use it to validate behavior-level regressions that
+# the JS/lint/typecheck jobs can't catch (player gestures, fullscreen, scrubber,
+# mini-player). NOT on every PR — trigger manually, or add the `e2e-mobile`
+# label to a PR.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-mobile-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-e2e:
+    # Run on manual dispatch, or only when the PR carries the e2e-mobile label.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'e2e-mobile')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: ./.github/actions/validate-submodules
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 20.x
+          install: 'true'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4.0.1
+
+      - uses: ./.github/actions/prepare-mobile-backend
+
+      - name: Expo prebuild (Android)
+        working-directory: packages/app
+        run: npm run android:prebuild
+
+      - name: Build debug APK
+        working-directory: packages/app/android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      # android-emulator-runner needs hardware acceleration.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Maestro flows on emulator
+        # Pinnable: bump to the latest reactivecircus/android-emulator-runner tag.
+        uses: reactivecircus/android-emulator-runner@v2.34.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disable-animations: true
+          script: |
+            APK=packages/app/android/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r "$APK"
+            # Hard gate — must pass.
+            maestro test .maestro/smoke.yaml --format junit --output maestro-smoke.xml
+            # Player flow needs seeded content (see .maestro/README.md); keep it
+            # non-blocking until a fixture video is wired, then drop the `|| true`.
+            maestro test .maestro/player.yaml --format junit --output maestro-player.xml || true
+
+      - name: Upload Maestro results
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: maestro-results
+          path: |
+            maestro-*.xml
+            ${{ github.workspace }}/.maestro/tests/**
+          retention-days: 7

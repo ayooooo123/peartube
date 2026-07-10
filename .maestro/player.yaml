@@ -1,0 +1,65 @@
+# Player flow — the regression net for the VideoPlayerOverlayImpl decomposition
+# (mini-player drag, fullscreen/landscape, scrubber seek, PiP, cast).
+#
+# REQUIRES A PLAYABLE VIDEO in the feed. A fresh CI emulator has no P2P peers,
+# so seed content first (see .maestro/README.md) — e.g. upload a local test
+# video via Studio, or point the run at a known test channel. Until that's
+# wired, the e2e workflow runs this flow non-blocking (`|| true`).
+#
+# This flow asserts on testIDs so it stays stable across the decomposition.
+# Add these testIDs to the components as you extract them (good practice — it
+# also makes each extracted piece independently testable):
+#   - first feed video card .......... testID="video-card"
+#   - the player overlay root ........ testID="player-overlay"
+#   - fullscreen toggle button ....... testID="player-fullscreen-button"
+#   - scrubber / seek bar ............ testID="player-scrubber"
+#   - mini-player container .......... testID="mini-player"
+appId: com.peartube.app
+---
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 60000
+
+# Open the first video. Guarded so the flow is a no-op when the feed is empty.
+- runFlow:
+    when:
+      visible:
+        id: "video-card"
+    commands:
+      - tapOn:
+          id: "video-card"
+      - extendedWaitUntil:
+          visible:
+            id: "player-overlay"
+          timeout: 30000
+      - takeScreenshot: player-opened
+
+      # Fullscreen + landscape rotate, then back to portrait.
+      - tapOn:
+          id: "player-fullscreen-button"
+      - setOrientation: LANDSCAPE
+      - takeScreenshot: player-landscape
+      - setOrientation: PORTRAIT
+
+      # Scrubber seek — drag the seek bar.
+      - swipe:
+          from:
+            id: "player-scrubber"
+          direction: RIGHT
+      - takeScreenshot: player-after-seek
+
+      # Minimize to mini-player (swipe the overlay down), then restore.
+      - swipe:
+          from:
+            id: "player-overlay"
+          direction: DOWN
+      - assertVisible:
+          id: "mini-player"
+      - takeScreenshot: player-mini
+      - tapOn:
+          id: "mini-player"
+      - assertVisible:
+          id: "player-overlay"
+      - takeScreenshot: player-restored

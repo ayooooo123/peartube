@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('node:fs')
 const path = require('node:path')
 const { withDangerousMod } = require('@expo/config-plugins')
@@ -130,14 +131,14 @@ function ensureMainApplicationWiring(source, packageName) {
 
   if (!contents.includes('networkDiscovery.logException("startup", t)')) {
     contents = contents.replace(
-      /(\n    loadReactNative\(this\))/,
+      /(\n {4}loadReactNative\(this\))/,
       `\n${STARTUP_BLOCK}$1`,
     )
   }
 
   if (!contents.includes('registerActivityLifecycleCallbacks')) {
     contents = contents.replace(
-      /(\n    ApplicationLifecycleDispatcher\.onApplicationCreate\(this\))/,
+      /(\n {4}ApplicationLifecycleDispatcher\.onApplicationCreate\(this\))/,
       `\n${LIFECYCLE_BLOCK}$1`,
     )
   }

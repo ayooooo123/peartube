@@ -128,8 +128,10 @@ const AppStoreContext = createContext<{
 export const AppStoreProvider = ({ children }: { children: ReactNode }) => {
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  const contextValue = useMemo(() => ({ state, dispatch }), [state]);
+
   return (
-    <AppStoreContext.Provider value={{ state, dispatch }}>
+    <AppStoreContext.Provider value={contextValue}>
       {children}
     </AppStoreContext.Provider>
   );

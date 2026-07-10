@@ -11,6 +11,16 @@ on:
       - 'packages/bare-*/**'
       - '.github/actions/**'
       - '.github/workflows/build-mobile.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/app/**'
+      - 'packages/backend/**'
+      - 'packages/platform/**'
+      - 'packages/spec/**'
+      - 'packages/bare-*/**'
+      - '.github/actions/**'
+      - '.github/workflows/build-mobile.yml'
   workflow_dispatch:
 
 permissions:
@@ -90,9 +100,9 @@ jobs:
         working-directory: packages/app
         run: npm run android:prebuild
 
-      - name: Build release APK and AAB
+      - name: Build release APKs
         working-directory: packages/app/android
-        run: ./gradlew assembleRelease bundleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Upload Android release artifacts
         uses: actions/upload-artifact@v7.0.1
@@ -100,7 +110,6 @@ jobs:
           name: peartube-android-release-artifacts
           path: |
             packages/app/android/app/build/outputs/apk/release/*.apk
-            packages/app/android/app/build/outputs/bundle/release/*.aab
           retention-days: 14
 
   ios-build:

@@ -23,18 +23,25 @@ class FakeSocket extends EventEmitter {
     this.sendCalls = []
     this.closeCalls = 0
     this.addMembershipCalls = []
+    this.addMembershipInterfaceCalls = []
     this.dropMembershipCalls = []
+    this.dropMembershipInterfaceCalls = []
     this.on('error', () => {})
 
     if (options.hasMembership !== false) {
       this._socket = {
-        addMembership: (address) => {
+        addMembership: (address, interfaceAddress) => {
           this.addMembershipCalls.push(address)
+          this.addMembershipInterfaceCalls.push(interfaceAddress)
+          if (interfaceAddress && options.interfaceMembershipError) {
+            throw options.interfaceMembershipError
+          }
           if (options.membershipEmitsError) this.fail(options.membershipEmitsError)
           if (options.membershipError) throw options.membershipError
         },
-        dropMembership: (address) => {
+        dropMembership: (address, interfaceAddress) => {
           this.dropMembershipCalls.push(address)
+          this.dropMembershipInterfaceCalls.push(interfaceAddress)
           if (options.dropMembershipError) throw options.dropMembershipError
         }
       }
@@ -73,6 +80,10 @@ async function flushMicrotasks() {
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 function createDeferred() {
@@ -100,6 +111,7 @@ function createLifecycleFixture(attempts = [{ socket: new FakeSocket() }], depen
   const intervals = []
   const clearIntervalCalls = []
   let attemptIndex = 0
+  let resolveLocalIPv4Calls = 0
 
   const discoverer = new DeviceDiscoverer({
     loadDgram: async () => {
@@ -123,6 +135,11 @@ function createLifecycleFixture(attempts = [{ socket: new FakeSocket() }], depen
     clearInterval(interval) {
       clearIntervalCalls.push(interval)
     },
+    async resolveLocalIPv4() {
+      resolveLocalIPv4Calls++
+      if (dependencies.resolveLocalIPv4) return dependencies.resolveLocalIPv4()
+      return dependencies.localIp || null
+    },
     logger: dependencies.logger || { error() {} }
   })
 
@@ -131,7 +148,8 @@ function createLifecycleFixture(attempts = [{ socket: new FakeSocket() }], depen
     createOptions,
     intervals,
     clearIntervalCalls,
-    get loadCalls() { return attemptIndex }
+    get loadCalls() { return attemptIndex },
+    get resolveLocalIPv4Calls() { return resolveLocalIPv4Calls }
   }
 }
 
@@ -163,6 +181,54 @@ test('start binds the shared mDNS socket before joining, querying, and schedulin
   t.is(address, MDNS_ADDRESS)
   t.is(fixture.intervals.length, 1)
   t.is(fixture.intervals[0]?.delay, 5000)
+})
+
+test('start joins and leaves multicast on the resolved LAN interface', async (t) => {
+  const socketA = new FakeSocket()
+  const socketB = new FakeSocket()
+  const localIps = ['192.168.1.25', '192.168.1.26']
+  const fixture = createLifecycleFixture(
+    [{ socket: socketA }, { socket: socketB }],
+    { resolveLocalIPv4: () => localIps.shift() }
+  )
+
+  const firstStart = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketA.listen()
+  await firstStart
+
+  t.alike(socketA.bindCalls, [[MDNS_PORT, '0.0.0.0']])
+  t.alike(socketA.addMembershipCalls, [MDNS_ADDRESS])
+  t.alike(socketA.addMembershipInterfaceCalls, ['192.168.1.25'])
+  await fixture.discoverer.stop()
+  t.alike(socketA.dropMembershipInterfaceCalls, ['192.168.1.25'])
+
+  const secondStart = fixture.discoverer.start()
+  await flushMicrotasks()
+  socketB.listen()
+  await secondStart
+
+  t.is(fixture.resolveLocalIPv4Calls, 2)
+  t.alike(socketB.addMembershipInterfaceCalls, ['192.168.1.26'])
+})
+
+test('an interface-scoped membership failure retries the default interface', async (t) => {
+  const socket = new FakeSocket({
+    interfaceMembershipError: new Error('interface unavailable')
+  })
+  const fixture = createLifecycleFixture(
+    [{ socket }],
+    { localIp: '192.168.1.25' }
+  )
+
+  const started = fixture.discoverer.start()
+  await flushMicrotasks()
+  socket.listen()
+  await started
+
+  t.ok(fixture.discoverer.isRunning())
+  t.alike(socket.addMembershipCalls, [MDNS_ADDRESS, MDNS_ADDRESS])
+  t.alike(socket.addMembershipInterfaceCalls, ['192.168.1.25', undefined])
 })
 
 test('concurrent start calls share a promise and a running start reuses the socket', async (t) => {

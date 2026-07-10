@@ -5,6 +5,8 @@ import { normalizeCliArgv, parseArgv } from './src/argv.js'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
+import { RelayCreators, summarizeCreatorsFromCatalog, rankUnseededTargets } from './src/creators.js'
+import { TrustedClients } from './src/trusted-clients.js'
 import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
 
 function writeLine(message, preferredStream = 'stdout') {
@@ -41,6 +43,11 @@ function printHelp() {
     '  mirror-local  Import local video files into the relay channel',
     '  validate  Validate and print the normalized relay config',
     '  status    Print relay status from the local catalog',
+    '  creators  List tracked creators and unseeded targets',
+    '  clients   List authorized creator client devices',
+    '  authorize Authorize a creator device key (--key)',
+    '  revoke    Revoke a creator device key (--key)',
+    '  link      Print this relay\'s link descriptor (mirror key)',
     '  init      Write an example config file',
     '',
     'Options:',
@@ -52,6 +59,8 @@ function printHelp() {
     '  --max-storage <mb>',
     '  --channel <key>',
     '  --owner <key>',
+    '  --key <device-key-hex>',
+    '  --label <name>',
     '  --url <youtube-url>',
     '  --path <local-directory>',
     '  --local-mirror-path <local-directory>',
@@ -179,6 +188,112 @@ async function statusCommand(flags) {
   writeLine(formatRelayStatus(status) + '\n')
 }
 
+async function creatorsCommand(flags) {
+  const config = await loadRelayConfig(flags)
+  const creatorsDb = await RelayCreators.open({ storagePath: config.storage.path, creatorsPath: config.paths.creators })
+  let creators = creatorsDb.getCreators()
+
+  // Fall back to deriving from the catalog when the persisted creators DB is
+  // empty (e.g. the relay has not run since this feature was added).
+  if (creators.length === 0) {
+    const catalog = await RelayCatalog.open({ storagePath: config.storage.path, catalogPath: config.paths.catalog })
+    creators = summarizeCreatorsFromCatalog(catalog.getChannels())
+  }
+
+  const targets = rankUnseededTargets(creators)
+
+  if (flags.json) {
+    writeLine(JSON.stringify({ creators, unseededTargets: targets }, null, 2) + '\n')
+    return
+  }
+
+  if (creators.length === 0) {
+    writeLine('No creators tracked yet.\n')
+    return
+  }
+
+  const lines = ['Tracked creators:']
+  for (const creator of [...creators].sort((a, b) => (b.videosUnseeded || 0) - (a.videosUnseeded || 0))) {
+    const cls = creator.classification || {}
+    lines.push(`- ${creator.name || creator.creatorId} | archived=${creator.videosArchived || 0} unseeded=${creator.videosUnseeded || 0} movies=${cls.movie || 0} tv=${cls.tv || 0}`)
+  }
+  if (targets.length > 0) {
+    lines.push('', 'Unseeded targets (seed these first):')
+    for (const target of targets.slice(0, 20)) {
+      lines.push(`- ${target.name} (${target.videosUnseeded}/${target.videosArchived} unseeded)`)
+    }
+  }
+  writeLine(lines.join('\n') + '\n')
+}
+
+async function clientsCommand(flags) {
+  const config = await loadRelayConfig(flags)
+  const trusted = await TrustedClients.open({ storagePath: config.storage.path, trustedClientsPath: config.paths.trustedClients })
+  const clients = trusted.list()
+
+  if (flags.json) {
+    writeLine(JSON.stringify({ clients }, null, 2) + '\n')
+    return
+  }
+  if (clients.length === 0) {
+    writeLine('No trusted client devices authorized.\n')
+    return
+  }
+  const lines = ['Authorized client devices:']
+  for (const client of clients) {
+    lines.push(`- ${client.label || 'Device'}  ${client.key}`)
+  }
+  writeLine(lines.join('\n') + '\n')
+}
+
+async function authorizeCommand(flags) {
+  if (!flags.key) throw new Error('--key is required')
+  const config = await loadRelayConfig(flags)
+  const trusted = await TrustedClients.open({ storagePath: config.storage.path, trustedClientsPath: config.paths.trustedClients })
+  const record = await trusted.add({ key: flags.key, label: flags.label || null })
+  writeLine(`Authorized client device ${record.key}${record.label ? ` (${record.label})` : ''}.\n`)
+  writeLine('Takes effect when the relay next starts.\n')
+}
+
+async function revokeCommand(flags) {
+  if (!flags.key) throw new Error('--key is required')
+  const config = await loadRelayConfig(flags)
+  const trusted = await TrustedClients.open({ storagePath: config.storage.path, trustedClientsPath: config.paths.trustedClients })
+  const removed = await trusted.remove(flags.key)
+  writeLine(removed ? `Revoked client device ${flags.key}.\n` : `No authorized client device matched ${flags.key}.\n`)
+}
+
+async function linkCommand(flags) {
+  const config = await loadRelayConfig(flags)
+  const status = readRelayStatus(config.paths.status)
+  const relayMirrorKey = status?.runtime?.blindPeer?.publicKey || null
+  const descriptor = {
+    schema: 'peartube.relayLink',
+    version: 1,
+    relayMirrorKey,
+    blindPeerEnabled: Boolean(status?.runtime?.blindPeer?.enabled),
+    trustedClients: status?.runtime?.trustedClients || 0
+  }
+
+  if (flags.json) {
+    writeLine(JSON.stringify(descriptor, null, 2) + '\n')
+    return
+  }
+  if (!relayMirrorKey) {
+    writeLine('Relay mirror key not available yet. Start the relay (with the blind peer enabled) first.\n')
+    return
+  }
+  writeLine([
+    'Relay link descriptor:',
+    `  mirror key: ${relayMirrorKey}`,
+    `  trusted client devices: ${descriptor.trustedClients}`,
+    '',
+    "Creators' apps adopt this mirror key automatically over the P2P feed.",
+    'To guarantee a creator a peer, authorize their device key:',
+    '  peartube-relay authorize --key <device-key>'
+  ].join('\n') + '\n')
+}
+
 async function initCommand(flags) {
   const target = flags.config || 'peartube-relay.yml'
   if (existsSync(target)) {
@@ -215,6 +330,21 @@ async function main() {
       break
     case 'status':
       await statusCommand(flags)
+      break
+    case 'creators':
+      await creatorsCommand(flags)
+      break
+    case 'clients':
+      await clientsCommand(flags)
+      break
+    case 'authorize':
+      await authorizeCommand(flags)
+      break
+    case 'revoke':
+      await revokeCommand(flags)
+      break
+    case 'link':
+      await linkCommand(flags)
       break
     case 'init':
       await initCommand(flags)

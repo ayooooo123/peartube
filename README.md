@@ -1,248 +1,143 @@
 # PearTube
 
-A decentralized P2P video streaming platform built on Hypercore Protocol. Runs on iOS, Android, and macOS from a unified codebase.
+PearTube is a pre-alpha decentralized video platform built on the Hypercore stack. It runs mobile, Electrobun desktop, and relay surfaces against one shared backend contract instead of maintaining separate platform backends.
 
-## Features
+## Current State
 
-- **Decentralized** -- No central servers, pure P2P architecture
-- **Self-sovereign** -- Creators own their channels via cryptographic keypairs
-- **Cross-platform** -- iOS, Android, macOS (Electrobun + experimental native SwiftUI) from shared code
-- **Scalable** -- Popular content automatically gets more seeders
-- **Efficient** -- Sparse replication, only download chunks you watch
-- **Censorship-resistant** -- No single point of control
+| Surface | Status | Primary command |
+| --- | --- | --- |
+| iOS | Active development, Expo + BareKit | `npm run ios` |
+| Android | Active development, Expo + BareKit | `npm run android` |
+| Electrobun desktop | Main desktop shell, Expo web export + embedded `pear-runtime` worker | `npm run desktop` |
+| Relay | CLI/container for discovery, seeding, archive UI, and local mirror workflows | `docker compose -f docker-compose.relay.yml up -d` |
+
+Pear OTA desktop release automation is not wired yet. Use the Electrobun build/release workflows in this repo; do not reintroduce `pear run` or claim OTA support without a dedicated release-flow change.
 
 ## Architecture
 
-PearTube uses a **universal backend** for every client. The UI shells differ by
-platform, but they all talk through `@peartube/protocol` to `@peartube/host`,
-which boots the shared `@peartube/backend` P2P stack.
+Every client boots or connects to the same backend contract:
 
-```
-packages/
-├── app/                # Unified app (iOS, Android, Electrobun Desktop)
-│   ├── app/            # Expo Router screens
-│   ├── backend/        # Mobile BareKit worklet
-│   ├── components/     # React Native components
-│   └── workers/        # Desktop worker (workers/desktop/index.ts)
-├── backend/            # P2P backend (storage, API, swarm, orchestrator)
-├── desktop-native/     # Experimental native macOS app (SwiftUI + bare-native sidecar)
-│   ├── Bridge/         # JS sidecar entry (HRPC over stdin/stdout)
-│   ├── Sources/        # Swift app, services, views
-│   └── scripts/        # Build tooling (sidecar, addons, prebuilds)
-├── host/               # Shared host bootstrap for desktop backends
-├── platform/           # Platform abstraction layer (RPC)
-├── spec/               # HRPC schema -- single source of truth for JS + Swift
-│   ├── schema.cjs      # Schema definition + codegen
-│   └── lib/            # Custom Swift codegen (wire-compatible compact-encoding)
-└── bare-*/             # Native addon submodules (bare-ffmpeg, bare-tls)
+```text
+Client shell
+  -> platform runner
+  -> @peartube/host
+  -> @peartube/backend
+  -> Corestore / Autobase / Hyperbee / Hyperblobs / Hyperswarm
 ```
 
-### Tech Stack
+| Client | UI shell | Backend runner | RPC |
+| --- | --- | --- | --- |
+| iOS / Android | Expo + React Native | BareKit worklet | HRPC over BareKit IPC |
+| Electrobun desktop | Expo web export | embedded `pear-runtime` worker | HRPC over worker pipe |
+| Relay | CLI / container | direct backend runtime | local process API |
 
-| Layer | Technology |
-|-------|-----------|
-| Mobile UI | React Native + Expo Router |
-| Desktop UI (Electrobun) | Expo web export + Electrobun |
-| Desktop UI (native) | SwiftUI (macOS 14+, experimental) |
-| Mobile P2P runtime | BareKit worklet |
-| Desktop P2P runtime | bare-native sidecar (PearTubeHost.app) |
-| RPC | HRPC -- typed binary RPC over compact-encoding |
-| Networking | Hyperswarm (P2P discovery + connections) |
-| Video storage | Hyperdrive (distributed filesystem) |
-| Metadata | Hyperbee (key-value database) |
-| Video playback | OS-native players (AVPlayer, ExoPlayer, MSE) backed by bare-ffmpeg |
+## Packages
 
-## Generated RPC surfaces
+| Package | Responsibility |
+| --- | --- |
+| `packages/app` | Expo app, mobile routes, Electrobun export, mobile BareKit backend bundle, desktop worker bundle |
+| `packages/core` | Shared app components, hooks, stores, and types |
+| `packages/platform` | App-side runner selection and RPC facade |
+| `packages/host` | Backend lifecycle wrapper, host errors, shared `PROTOCOL_VERSION`, and the universal protocol client (readiness normalization, event map, grouped namespaces) |
+| `packages/backend` | P2P storage, discovery, feed, upload, playback, comments, reactions, search, recommendations, livestream, cast, and diagnostics |
+| `packages/spec` | HRPC schema source and JS code generation |
+| `packages/cli` | Relay CLI, standalone build, Docker image, archive UI, and local mirror support |
+| `packages/bare-*` | Vendored/native Bare runtime support, including `bare-ffmpeg` |
 
-`packages/spec/schema.cjs` is the source of truth for HRPC. Running `npm run schema` regenerates JS/Swift HRPC output and the tracked app-facing adapter at `packages/spec/spec/hrpc/app-rpc-adapter.mjs`.
+## Prerequisites
 
-The generated app adapter exports:
+- Node.js from `.nvmrc` (`20.18.0`) or another supported version from `package.json` (`>=18 <23`).
+- Git submodules, currently `packages/bare-ffmpeg`.
+- iOS: Xcode, CocoaPods, and the iOS simulator/toolchain.
+- Android: Android Studio, Android SDK, and JDK 17.
+- Electrobun desktop: Bun and the Electrobun toolchain.
+- Relay/container workflows: Docker with Compose.
 
-- `APP_RPC_METADATA`: schema command metadata, app namespaces, platform-only commands, and runtime-only methods.
-- `APP_RPC_METHODS`: deterministic namespace → method maps for app client code.
-- `createGeneratedAppRpcClient()`: an additive facade builder for future migration away from handwritten RPC declarations.
-
-Platform-only lifecycle/event commands and runtime-only bridge methods are documented in the metadata so drift tests can distinguish intentional exclusions from missing app methods.
-
-Run adapter/drift tests with:
+## Fresh Clone
 
 ```bash
-npm test --prefix packages/spec
-```
-
-## Quick Start
-
-### Prerequisites
-
-- Node.js 18+
-- For iOS: Xcode 15+, CocoaPods
-- For Android: Android Studio, JDK 17
-- For Electrobun Desktop: Electrobun CLI
-- For Native Desktop (experimental): Xcode 15+, git submodules initialized
-
-### Setup
-
-```bash
-# Install all dependencies
-npm run install:all
-
-# Initialize submodules (bare-ffmpeg)
+git clone <repo-url>
+cd peartube
+nvm use
 git submodule update --init --recursive
+npm run install:all
+npm run schema:full
+npm run bundle:backend
 ```
 
-### Run
+`npm run install:all` is the repository install contract and is what CI uses. The repo currently uses plain npm installs across packages; the root `package-lock.json` is local/ignored, while `packages/app/package-lock.json` is tracked. Treat fully locked dependency installs as a separate policy decision.
+
+## Run Locally
 
 ```bash
-# iOS
-npm run ios
-
-# Android
-npm run android
-
-# Electrobun desktop (main)
-npm run desktop
-
-# Native macOS desktop (experimental)
-npm run desktop:native:build
-open packages/desktop-native/build/Build/Products/Debug/PearTubeDesktop.app
+npm start                  # Expo dev server
+npm run ios                # iOS simulator
+npm run android            # Android emulator/device
+npm run desktop            # Build and launch Electrobun desktop
+npm run desktop:build      # Build Electrobun web/worker assets only
+npm run desktop:start      # Launch the built Electrobun app
 ```
 
-### Relay container
+## Relay
 
-Run the packaged relay container from the root compose file:
+Run the packaged relay container:
 
 ```bash
 docker compose -f docker-compose.relay.yml up -d
 docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
 ```
 
-The compose uses `ghcr.io/ayooooo123/peartube-relay:latest`, persists relay storage in `peartube-relay-data`, and exposes the archive WebUI at `http://127.0.0.1:8174`.
+The default compose file exposes the archive UI at `http://127.0.0.1:8174` and persists relay storage in the `peartube-relay-data` volume.
 
-Archive a video from the container without opening the browser:
+Archive a video from the container:
 
 ```bash
 docker compose -f docker-compose.relay.yml exec relay \
   /peartube-relay archive --url https://youtu.be/... --channel-name "Anonymous Archive" --run-now
 ```
 
-Archived source URLs stay in the local relay job input store. Public job/status output only includes imported metadata, generated video IDs, and channel keys.
+Use `docker-compose.local-relay.yml` when you want the relay to mirror a local host directory into PearTube.
 
-### Relay archive mode (YouTube)
+## Generated Code
 
-Beyond the on-demand archive command, a relay can be configured to continuously poll YouTube channels/playlists and publish new uploads into PearTube channels it owns. `yt-dlp` is bundled in the relay Docker image; for a local install ensure `yt-dlp` is on `PATH`.
-
-Add an `archive` block to the relay config (or set `PEARTUBE_ARCHIVE_*` env vars):
-
-```yaml
-archive:
-  enabled: true
-  poll: 3600              # seconds between polls
-  maxItems: 50            # newest videos considered per poll
-  maxRetries: 3           # give up on a video after N consecutive failures
-  budgetReservePercent: 5 # stop archiving when within N% of storage.maxBytes
-  format: "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b"
-  tmpPath: /var/lib/peartube-relay/archive-tmp
-  sources:
-    - url: https://www.youtube.com/@somechannel
-      label: Some Channel
-    - url: https://www.youtube.com/playlist?list=PLxxxxxxxxxxx
-```
-
-Each source maps to a separate PearTube channel whose keypair is deterministic from the relay's persistent identity and the source URL — restarts reopen the same channel, and each archived channel is announced to the public feed and pinned in the relay's cache.
-
-## Development
-
-### Mobile
+`packages/spec/schema.cjs` is the HRPC schema source of truth. After changing the schema, run:
 
 ```bash
-npm run ios              # Run iOS app
-npm run android          # Run Android app
-npm start                # Start Expo dev server
-npm run bundle:backend   # Bundle mobile backend worklet
+npm run schema:full
+npm test --prefix packages/spec
 ```
 
-### Electrobun Desktop
+`schema:full` regenerates JS schema/HRPC output. Generated app-facing metadata lives at `packages/spec/spec/hrpc/app-rpc-adapter.mjs`.
+
+## Verification
+
+Use the narrowest command that covers the change:
 
 ```bash
-npm run desktop          # Build and run Electrobun desktop app
+npm run typecheck
+npm test
+npm run lint:changed
+npm test --prefix packages/backend
+npm test --prefix packages/host
+npm test --prefix packages/spec
+npm run desktop:build
+npm run desktop:smoke --prefix packages/app
 ```
 
-### Native macOS Desktop (experimental)
+CI has separate workflows for fast tests, Android/mobile builds, Electrobun desktop, relay builds, and release artifacts.
 
-```bash
-cd packages/desktop-native
+## Development Docs
 
-# Full build (sidecar + addons + Xcode)
-npm run build
+- [QUICKSTART.md](./QUICKSTART.md) - shortest fresh-clone runbook.
+- [SETUP.md](./SETUP.md) - platform-specific setup and troubleshooting.
+- [DEVELOPMENT.md](./DEVELOPMENT.md) - daily commands and generated-artifact workflow.
+- [DEV_STATUS.md](./DEV_STATUS.md) - current progress, CI coverage, and known constraints.
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - live architecture overview.
+- [docs/pear-runtime-evolution-readiness.md](./docs/pear-runtime-evolution-readiness.md) - desktop runtime/OTA boundary.
 
-# Rebuild just the JS sidecar (after changing Bridge/*.mjs)
-node scripts/build-native-sidecar.mjs
+## Storage
 
-# Rebuild just the Swift app (after changing Sources/*.swift)
-xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop \
-  -configuration Debug -derivedDataPath build build
-
-# Run
-open build/Build/Products/Debug/PearTubeDesktop.app
-```
-
-### HRPC Schema Changes
-
-The HRPC schema is defined once in `packages/spec/schema.cjs` and generates both JS and Swift code:
-
-```bash
-cd packages/spec && node schema.cjs
-
-# Copy generated Swift into the desktop-native app
-cp spec/swift-schema/Sources/Schema.swift \
-   ../desktop-native/Sources/Support/GeneratedSchema.swift
-cp spec/swift-hrpc/Sources/HRPC.swift \
-   ../desktop-native/Sources/Support/GeneratedHRPC.swift
-
-# Then rebuild the sidecar + Xcode app
-```
-
-### Quality
-
-```bash
-npm run typecheck        # TypeScript checks
-npm run lint             # ESLint
-npm run lint:fix         # Fix linting issues
-```
-
-## How It Works
-
-### Platform Architecture
-
-| Platform | UI | P2P Backend | RPC Transport |
-|----------|-----|-------------|---------------|
-| iOS/Android | React Native | BareKit worklet | HRPC over BareKit IPC |
-| Electrobun Desktop | Expo web export | Electrobun worker | HRPC over pipe |
-| Native macOS (experimental) | SwiftUI | bare-native sidecar | HRPC over stdin/stdout |
-
-All platforms share:
-- The same universal backend host boundary (`@peartube/host`)
-- The same protocol client/event map (`@peartube/protocol`)
-- The same backend business logic (`@peartube/backend`)
-- The same HRPC schema (`@peartube/spec`)
-- The same Hypercore Protocol stack
-
-### Video Storage & Streaming
-- Each channel has a **Hyperdrive** for storing video files
-- Videos stored as MP4/MKV/WebM with thumbnail images
-- **Sparse replication** -- only download chunks you watch
-- **Streaming playback** -- progressive streaming from peers into OS-native players
-
-### P2P Networking
-- **Hyperswarm** manages peer connections via a distributed hash table
-- Channels discovered via a shared public feed topic
-- Multiple peers can serve the same video simultaneously
-
-### Identity
-- Self-sovereign Ed25519 keypairs
-- Channels tied to Hyperdrive keys
-- Multi-device pairing via invite codes
-- Data stored locally (`~/Library/Application Support/PearTubeDesktopNative/` on macOS)
+Clients resolve storage paths through `@peartube/platform` and the active runner.
 
 ## License
 

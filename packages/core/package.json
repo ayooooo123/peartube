@@ -1,17 +1,14 @@
 {
   "name": "@peartube/core",
   "version": "0.1.115",
-  "description": "Shared UI components, hooks, and utilities for PearTube",
+  "description": "Shared types and utilities (incl. design tokens) for PearTube",
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./components": "./src/components/index.ts",
-    "./hooks": "./src/hooks/index.ts",
     "./types": "./src/types/index.ts",
-    "./utils": "./src/utils/index.ts",
-    "./stores": "./src/stores/index.ts"
+    "./utils": "./src/utils/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -13,6 +13,8 @@ import { initializeStorage, isPlaybackActive, loadChannel, retainPublicBeeConten
 import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
+import { createBlindPeeringClient } from './blind-peering-client.js';
+import { loadRelayLinks, relayLinkKeys } from './relay-links.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
@@ -41,26 +43,9 @@ import {
   shouldRetryCorestoreSeedFallback
 } from './corestore-error-utils.js'
 import { createStartupGate } from './startup-gates.js'
+import { appendDebugLine } from './debug-log.js'
 
 const STARTUP_GATE_WARMUP_WAIT_MS = 2000
-
-function resolveDebugLogPath() {
-  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
-}
-
-async function appendDebugLine(line) {
-  const filePath = resolveDebugLogPath()
-  if (!filePath) return
-
-  try {
-    const fsModule = await import('bare-fs')
-    const fs = fsModule?.default ?? fsModule
-    if (typeof fs?.appendFileSync !== 'function') return
-    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch (err) {
-    void err
-  }
-}
 
 // Resolve an async stat/readdir for whichever fs flavour the runtime provides.
 // bare-fs on mobile does not reliably expose `fs.promises`, so the original
@@ -357,6 +342,34 @@ export async function createBackendContext(config) {
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb, { peerScorer });
   ctx.publicFeed = publicFeed
+
+  // Blind-peering client: delegates retained content to always-on blind peers so
+  // the user's own uploads stay available while this device is offline. Mirror
+  // keys are seeded from config and grown via feed discovery (below). Best-effort
+  // — a noop client is returned if the module/DHT is unavailable.
+  // User-linked relays (added in-app by pasting/scanning a relay's mirror key)
+  // are persisted and re-applied on boot: delegate uploads to them and treat
+  // them as durable offload anchors (ctx.trustedRelayKeys, read by api.js
+  // getKnownDurableRelayKeys).
+  const linkedRelayKeys = relayLinkKeys(await loadRelayLinks(ctx.metaDb).catch(() => []))
+  ctx.trustedRelayKeys = Array.from(new Set([
+    ...(Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys : []),
+    ...linkedRelayKeys,
+  ].map((k) => String(k).toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k))))
+  const configuredMirrorKeys = [
+    ...(Array.isArray(network.blindPeerMirrors) ? network.blindPeerMirrors : []),
+    ...ctx.trustedRelayKeys,
+  ]
+  ctx.blindPeering = await createBlindPeeringClient({
+    ctx,
+    mirrorKeys: configuredMirrorKeys,
+    enabled: network.blindPeering !== false,
+    logger: { info: (...a) => console.log(...a), warn: (...a) => console.warn(...a) },
+  })
+  // The upload-offload durability check reads the *live* mirror set via
+  // ctx.blindPeering (see api.js getKnownDurableRelayKeys) so a blind-peer full
+  // copy counts as a durable anchor — no static snapshot to go stale.
+
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
   const identityManager = createIdentityManager({ ctx });
@@ -393,8 +406,25 @@ export async function createBackendContext(config) {
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath),
-    isCacheClearBlocked: isPlaybackActive
+    isCacheClearBlocked: isPlaybackActive,
+    blindPeering: ctx.blindPeering,
+    metaSubspaces: ctx.metaSubspaces
   });
+
+  // Feed discovery: when a relay-serving feed entry advertises its blind-peer
+  // mirror key, adopt it as a mirror and re-mirror retained content to it.
+  if (ctx.blindPeering?.enabled) {
+    publicFeed.setOnRelayMirrorKey((mirrorKeyHex) => {
+      try {
+        if (ctx.blindPeering.addMirrorKeys(mirrorKeyHex) > 0) {
+          console.log('[Orchestrator] Adopted blind-peer mirror from feed:', mirrorKeyHex.slice(0, 16))
+          seedingManager.remirrorAllSeeds()
+        }
+      } catch (err) {
+        console.warn('[Orchestrator] Mirror adoption failed:', err?.message)
+      }
+    })
+  }
 
   // Keep a single playing video from filling the disk: trim already-played
   // blocks behind a bounded seek-back window while it streams. Unlike the

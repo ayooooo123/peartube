@@ -178,6 +178,49 @@ jobs:
 
       - uses: ./.github/actions/prepare-mobile-backend
 
+      - name: Resolve release version
+        id: version
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          RELEASE_TAG="$REQUESTED_TAG"
+          if [ -z "$RELEASE_TAG" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+          fi
+
+          if [ -n "$RELEASE_TAG" ]; then
+            VERSION="${RELEASE_TAG#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+
+          # versionName (what users see in Settings → Apps) mirrors the tag.
+          # versionCode must be a monotonically-increasing integer for Android,
+          # so we use the workflow run number rather than the (string) tag.
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Resolved versionName=$VERSION versionCode=${GITHUB_RUN_NUMBER}"
+
+      - name: Pin app version for prebuild
+        working-directory: packages/app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: |
+          # expo prebuild --clean regenerates android/ from app.json, so the
+          # version must live there: expo.version -> versionName,
+          # expo.android.versionCode -> versionCode.
+          node -e '
+            const fs = require("fs");
+            const p = "app.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.expo.version = process.env.VERSION;
+            cfg.expo.android = cfg.expo.android || {};
+            cfg.expo.android.versionCode = Number(process.env.VERSION_CODE);
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+            console.log("app.json version =", cfg.expo.version, "versionCode =", cfg.expo.android.versionCode);
+          '
+
       - name: Expo prebuild (Android)
         working-directory: packages/app
         run: npm run android:prebuild
@@ -248,19 +291,8 @@ jobs:
 
       - name: Rename APK
         env:
-          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          RELEASE_TAG="$REQUESTED_TAG"
-          if [ -z "$RELEASE_TAG" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            RELEASE_TAG="$GITHUB_REF_NAME"
-          fi
-
-          if [ -n "$RELEASE_TAG" ]; then
-            VERSION="${RELEASE_TAG#v}"
-          else
-            VERSION="dev-${GITHUB_SHA::7}"
-          fi
-
           APK_DIR="packages/app/android/app/build/outputs/apk/release"
           APK_FILE=$(find "$APK_DIR" \( -name "app-${{ matrix.abi }}-release*.apk" -o -name "app-release*.apk" \) | head -1)
           if [ -n "$APK_FILE" ]; then

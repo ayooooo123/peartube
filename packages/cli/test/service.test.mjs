@@ -65,6 +65,15 @@ function createFakeRuntime() {
   }
 }
 
+
+async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 5 } = {}) {
+  const started = Date.now()
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('condition timed out')
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+}
+
 function createFakeLogger() {
   const entries = []
   const levels = ['debug', 'info', 'warn', 'error']
@@ -789,14 +798,12 @@ test('createRelayService watches configured local mirror directory', async (t) =
     t.ok(logger.entries.some((entry) => entry.component === 'archive' && entry.msg === 'Local directory mirror started'))
     t.ok(intervals.some((entry) => entry.ms === 5000))
 
-    await Promise.resolve()
-    await Promise.resolve()
-    await new Promise((resolve) => setImmediate(resolve))
+    await waitFor(() => imports.length === 1)
     t.is(imports.length, 1, 'initial local mirror scan starts in the background')
     t.is(submitCalls, 0, 'startup does not wait for initial local mirror publish')
 
     releaseUpload()
-    await new Promise((resolve) => setImmediate(resolve))
+    await waitFor(() => submitCalls === 1)
     t.is(submitCalls, 1)
 
     const localMirrorInterval = intervals.find((entry) => entry.ms === 5000)

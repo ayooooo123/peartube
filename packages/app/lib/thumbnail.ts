@@ -37,34 +37,16 @@ const READY_TIMEOUT_MS = 1_500
 const READY_RETRY_DELAY_MS = 250
 
 const THUMBNAIL_ATTEMPTS = 3
-const LOOPBACK_THUMBNAIL_URL_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i
 
-export function isLoopbackThumbnailUrl(value: unknown): value is string {
-  return typeof value === 'string' && LOOPBACK_THUMBNAIL_URL_RE.test(value)
-}
-
-export function hasThumbnailBlobRef(video: any): boolean {
-  return Boolean(video?.thumbnailBlobId && video?.thumbnailBlobsCoreKey)
-}
-
-export function getInlineThumbnailUrl(video: any): string | null {
-  const value = video?.thumbnailUrl || video?.thumbnail || null
-  return typeof value === 'string' && value.length > 0 ? value : null
-}
-
-export function getRenderableThumbnailUrl(video: any, cachedUrl?: string | null, opts: { native?: boolean } = { native: true }): string | null {
-  if (cachedUrl) return cachedUrl
-
-  const inlineUrl = getInlineThumbnailUrl(video)
-  if (opts.native === false) return inlineUrl
-
-  // Native loopback blob-server URLs are valid only for the backend process/port
-  // that created them. If blob refs are present, force a fresh HRPC resolve and
-  // render only the current-process URL from the thumbnail cache.
-  if (hasThumbnailBlobRef(video)) return null
-
-  return inlineUrl && !isLoopbackThumbnailUrl(inlineUrl) ? inlineUrl : null
-}
+// Pure URL-selection helpers live in a plain .mjs sibling so their behavior can
+// be unit-tested directly. Re-exported here so existing importers of
+// '@/lib/thumbnail' are unaffected.
+export {
+  isLoopbackThumbnailUrl,
+  hasThumbnailBlobRef,
+  getInlineThumbnailUrl,
+  getRenderableThumbnailUrl,
+} from './renderable-thumbnail-url.mjs'
 
 // The backend handler can legitimately spend up to 1.5s on a bounded network
 // wait (plus channel/bee lookups) before answering, and on Android cold start

@@ -25,7 +25,6 @@
   },
   "dependencies": {
     "@peartube/host": "file:../host",
-    "@peartube/protocol": "file:../protocol",
     "@peartube/spec": "file:../spec"
   },
   "peerDependencies": {

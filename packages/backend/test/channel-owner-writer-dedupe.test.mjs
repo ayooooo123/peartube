@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 import test from 'brittle'
 import os from 'node:os'
 import path from 'node:path'

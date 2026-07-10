@@ -243,6 +243,27 @@ function deviceMapsEqual(left, right) {
   return true
 }
 
+async function resolveLanIPv4() {
+  try {
+    const module = await import('udx-native')
+    const UDX = module?.default || module
+    const udx = new UDX()
+    let fallback = null
+
+    for (const networkInterface of udx.networkInterfaces()) {
+      if (networkInterface.family !== 4 || networkInterface.internal) continue
+      if (networkInterface.name === 'wlan0' || networkInterface.name === 'en0') {
+        return networkInterface.host
+      }
+      if (!fallback) fallback = networkInterface.host
+    }
+
+    return fallback
+  } catch {
+    return null
+  }
+}
+
 
 /**
  * DeviceDiscoverer - Discovers cast devices on the network using mDNS
@@ -251,6 +272,7 @@ export class DeviceDiscoverer extends EventEmitter {
   constructor(dependencies = {}) {
     super()
     this._loadDgram = dependencies.loadDgram || (() => import('bare-dgram'))
+    this._resolveLocalIPv4 = dependencies.resolveLocalIPv4 || resolveLanIPv4
     this._setInterval = dependencies.setInterval || globalThis.setInterval
     this._clearInterval = dependencies.clearInterval || globalThis.clearInterval
     this._logger = dependencies.logger || console
@@ -271,6 +293,7 @@ export class DeviceDiscoverer extends EventEmitter {
     this._publishedDevices = null
     this._socket = null
     this._membershipSocket = null
+    this._membershipInterface = null
     this._queryInterval = null
     this._queryIntervalSocket = null
   }
@@ -343,7 +366,11 @@ export class DeviceDiscoverer extends EventEmitter {
 
     Promise.resolve()
       .then(() => this._loadDgram())
-      .then((dgram) => {
+      .then(async (dgram) => ({
+        dgram,
+        localIp: await Promise.resolve(this._resolveLocalIPv4()).catch(() => null)
+      }))
+      .then(({ dgram, localIp }) => {
         if (generation !== this._generation || this._state !== 'starting') {
           settle()
           return
@@ -389,10 +416,25 @@ export class DeviceDiscoverer extends EventEmitter {
               }
 
               this._membershipSocket = socket
+              this._membershipInterface = null
               try {
-                innerSocket.addMembership(MDNS_ADDRESS)
+                if (localIp) {
+                  try {
+                    this._membershipInterface = localIp
+                    innerSocket.addMembership(MDNS_ADDRESS, localIp)
+                  } catch (interfaceError) {
+                    if (isStaleStart()) return
+                    this._membershipInterface = null
+                    innerSocket.addMembership(MDNS_ADDRESS)
+                  }
+                } else {
+                  innerSocket.addMembership(MDNS_ADDRESS)
+                }
               } catch (err) {
-                if (this._membershipSocket === socket) this._membershipSocket = null
+                if (this._membershipSocket === socket) {
+                  this._membershipSocket = null
+                  this._membershipInterface = null
+                }
                 throw err
               }
               if (isStaleStart()) return
@@ -545,11 +587,17 @@ export class DeviceDiscoverer extends EventEmitter {
     }
 
     if (this._membershipSocket === socket) {
+      const membershipInterface = this._membershipInterface
       this._membershipSocket = null
+      this._membershipInterface = null
       try {
         const innerSocket = socket._socket
         if (innerSocket && typeof innerSocket.dropMembership === 'function') {
-          innerSocket.dropMembership(MDNS_ADDRESS)
+          if (membershipInterface) {
+            innerSocket.dropMembership(MDNS_ADDRESS, membershipInterface)
+          } else {
+            innerSocket.dropMembership(MDNS_ADDRESS)
+          }
         }
       } catch {}
     }

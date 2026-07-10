@@ -11,6 +11,7 @@ import path from 'bare-path'
 import os from 'bare-os'
 import { spawn } from 'bare-subprocess'
 import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 import http1 from 'bare-http1'
 // @ts-ignore
 import * as transcoder from '@peartube/backend/transcode/transcoder'
@@ -285,7 +286,7 @@ async function createCastProxyUrl(targetHost: string | undefined, sourceUrl: str
   const localIp = await getLocalIPv4ForTarget(targetHost)
   if (!localIp || !castProxyPort) return null
   cleanupCastProxySessions()
-  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  const token = b4a.toString(crypto.randomBytes(16), 'hex')
   const now = Date.now()
   const isHls = sourceUrl.endsWith('.m3u8') || sourceUrl.includes('.m3u8?')
   castProxySessions.set(token, { url: sourceUrl, createdAt: now, lastAccessAt: now, transcodeSessionId, isHls })
@@ -686,6 +687,7 @@ B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager
 B.getSwarmStatus = async () => {
   const s = api.getSwarmStatus()
   return {
+    ...s,
     connected: (s.swarmConnections || 0) > 0,
     peerCount: s.swarmConnections || 0,
     swarmConnections: s.swarmConnections || 0,
@@ -694,6 +696,9 @@ B.getSwarmStatus = async () => {
     feedEntries: s.feedEntries || 0,
     channelsLoaded: s.channelsLoaded || 0,
     network: s.network || null,
+    startupTiming: s.startupTiming || null,
+    doctor: s.doctor || null,
+    directPeerDial: s.directPeerDial || s.doctor?.feed?.directPeerDial || null,
     swarmOffline: Boolean(s.swarmOffline),
     swarmOfflineReason: s.swarmOfflineReason || null,
     swarmListenResolved: Boolean(s.swarmListenResolved),

@@ -22,6 +22,11 @@ import Animated, {
 import { Feather as ExpoFeather, Ionicons as ExpoIonicons } from '@expo/vector-icons'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useChannelMetaName } from '@/lib/useChannelMetaName'
+import { useCastBufferingDebounced } from '@/lib/useCastBufferingDebounced'
+import { useControlVisibilityTimers } from '@/lib/useControlVisibilityTimers'
+import { useScrubberSeekSync } from '@/lib/useScrubberSeekSync'
+import { useLandscapeScreenDimensions } from '@/lib/useLandscapeScreenDimensions'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -30,6 +35,7 @@ import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
+import { useMiniPlayerPosition } from './video-player/hooks'
 import {
   computeMiniSize,
   computeMiniBounds,
@@ -59,7 +65,6 @@ import {
   MINI_DRAG_OVERSHOOT_BOTTOM,
   DESKTOP_MINI_WIDTH,
   DESKTOP_MINI_HEIGHT,
-  DESKTOP_MINI_PADDING,
   DESKTOP_MINI_CONTROLS_HEIGHT,
   PLAYBACK_SPEEDS,
   SEEK_STEP_SECONDS,
@@ -92,8 +97,6 @@ function showCastAlert(message: string) {
 const Feather = ExpoFeather
 const Ionicons = ExpoIonicons
 
-const CHANNEL_META_CACHE_TTL_MS = 5 * 60 * 1000
-const channelMetaNameCache = new Map<string, { name: string | null; expiresAt: number }>()
 const ZERO_EDGE_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 })
 // ── Responsive mini-player geometry helpers live in ./video-player/overlayDerivedState ──
 
@@ -150,21 +153,9 @@ export function VideoPlayerOverlay() {
   const exitGateAttemptsRef = useRef(0)
   const playerLogKeyRef = useRef<string | null>(null)
 
-  // For landscape fullscreen, track screen dimensions as shared values
-  // This allows animated styles to use current screen size without React re-renders
-  const landscapeWidth = useSharedValue(Dimensions.get('screen').width)
-  const landscapeHeight = useSharedValue(Dimensions.get('screen').height)
-
-  useEffect(() => {
-    const updateDims = () => {
-      const screen = Dimensions.get('screen')
-      landscapeWidth.value = screen.width
-      landscapeHeight.value = screen.height
-    }
-    updateDims()
-    const subscription = Dimensions.addEventListener('change', updateDims)
-    return () => subscription.remove()
-  }, [])
+  // For landscape fullscreen, track screen dimensions as shared values so the
+  // animated styles can size to the live screen without React re-renders.
+  const { landscapeWidth, landscapeHeight } = useLandscapeScreenDimensions()
 
   // Note: Orientation change mid-gesture is handled implicitly:
   // - The Dimensions change listener above updates shared values
@@ -211,46 +202,21 @@ export function VideoPlayerOverlay() {
     onVideoStateChange,
   } = useVideoPlayerContext()
 
-  // Simplified PiP state tracking - trust the native event, don't over-engineer
-  const wasInPipRef = useRef(false)
   // Android 12+ seamless PiP can shrink the Activity window before the JS PiP event arrives.
   // Freeze PiP layout branches early based on window shrink, but avoid re-activating them
   // during the PiP exit tail where window metrics can stay small for a few frames.
   const pipExitBlockEarlyDetectRef = useRef(false)
   const pipModePrevRef = useRef(false)
-  const [showControls, setShowControls] = useState(false)
-  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const {
+    wasInPipRef,
+    showControls,
+    setShowControls,
+    controlsTimeoutRef,
+    showControlsTemporarily,
+  } = useControlVisibilityTimers(isInPipMode)
   const [miniPlayerCorner, setMiniPlayerCorner] = useState<MiniPlayerCorner>('bottom-right')
   const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')
   const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
-  const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
-  const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
-
-  const showControlsTemporarily = useCallback(() => {
-    setShowControls(true)
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current)
-    }
-    controlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false)
-    }, 3000)
-  }, [])
-
-  useEffect(() => {
-    if (isInPipMode) {
-      wasInPipRef.current = true
-      // PiP has system-level controls; keep fullscreen overlay hidden.
-      setShowControls(false)
-      if (controlsTimeoutRef.current) {
-        clearTimeout(controlsTimeoutRef.current)
-        controlsTimeoutRef.current = null
-      }
-    } else if (wasInPipRef.current) {
-      wasInPipRef.current = false
-      showControlsTemporarily()
-      // PiP re-arm is handled by the main auto-PiP effect using a ref flag.
-    }
-  }, [isInPipMode, showControlsTemporarily])
 
   // On Android in fullscreen, ALWAYS use real screen dimensions for layout.
   // Why: Android PiP (especially Android 12+ seamless mode) shrinks the Activity
@@ -273,6 +239,11 @@ export function VideoPlayerOverlay() {
   const baseScreenHeight = useScreenFallback ? screenMetrics.height : windowHeight
   const screenWidth = baseScreenWidth
   const screenHeight = baseScreenHeight
+  const {
+    position: desktopMiniPlayerPosition,
+    isDragging: isDraggingDesktopMiniPlayer,
+    handleDragStart: handleMiniPlayerDragStart,
+  } = useMiniPlayerPosition({ screenWidth, screenHeight, sidebarWidth, corner: miniPlayerCorner, setCorner: setMiniPlayerCorner })
   const isWindowLandscape = screenWidth > screenHeight
 
   // Keep the player page frame stable and let the native video view letterbox within it.
@@ -362,10 +333,6 @@ export function VideoPlayerOverlay() {
   const [seekFeedback, setSeekFeedback] = useState<'left' | 'right' | null>(null)
 
   // State for drag seeking
-  const [isSeeking, setIsSeeking] = useState(false)
-  const [seekPosition, setSeekPosition] = useState(0)
-  const [scrubPendingTime, setScrubPendingTime] = useState<number | null>(null)
-  const scrubPendingSinceRef = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
 
@@ -388,7 +355,7 @@ export function VideoPlayerOverlay() {
     !isInPipMode &&
     !hideGlobalOverlayOnDiscover
   const isLandscapeFullscreenShared = useSharedValue(false)
-  const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
+  const channelMetaName = useChannelMetaName(currentVideo, rpc)
 
   // Casting state
   const [showCastPicker, setShowCastPicker] = useState(false)
@@ -404,60 +371,33 @@ export function VideoPlayerOverlay() {
   const effectiveIsPlaying = isCasting ? castIsPlaying : isPlaying
   const effectiveProgress = effectiveDuration > 0 ? effectiveCurrentTime / effectiveDuration : 0
 
+  const {
+    isSeeking,
+    seekPosition,
+    scrubPendingTime,
+    handleDesktopSeekStart,
+    handleDesktopSeekChange,
+    handleDesktopSeekEnd,
+    handleScrubStart,
+    handleScrubCommit,
+  } = useScrubberSeekSync({
+    effectiveCurrentTime,
+    effectiveDuration,
+    isCasting,
+    cast,
+    seekTo,
+    controlsTimeoutRef,
+    setShowControls,
+    showControlsTemporarily,
+  })
+
   // Debounce cast buffering — brief BUFFERING from HLS segment transitions shouldn't flash the overlay
-  const [castBufferingDebounced, setCastBufferingDebounced] = useState(false)
-  const castBufferingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    const isBuffering = castPlayback.state === 'buffering'
-    if (isBuffering) {
-      if (!castBufferingTimerRef.current) {
-        castBufferingTimerRef.current = setTimeout(() => {
-          setCastBufferingDebounced(true)
-        }, 2000)
-      }
-    } else {
-      if (castBufferingTimerRef.current) {
-        clearTimeout(castBufferingTimerRef.current)
-        castBufferingTimerRef.current = null
-      }
-      setCastBufferingDebounced(false)
-    }
-    return () => {
-      if (castBufferingTimerRef.current) {
-        clearTimeout(castBufferingTimerRef.current)
-        castBufferingTimerRef.current = null
-      }
-    }
-  }, [castPlayback.state])
+  const castBufferingDebounced = useCastBufferingDebounced(castPlayback.state)
 
   const showLoadingOverlay = isCasting ? castBufferingDebounced : isLoading
   const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'
   const castAutoPlayRef = useRef<string | null>(null)
   const castAutoPlayInFlightRef = useRef(false)
-
-  // Sync seek position with current time when not seeking
-  useEffect(() => {
-    if (!isSeeking) {
-      setSeekPosition(effectiveCurrentTime)
-    }
-  }, [effectiveCurrentTime, isSeeking])
-
-  // Clear scrub pending lock once playback catches up (or after a timeout).
-  // This prevents the scrubber UI from snapping back to stale progress right after commit.
-  useEffect(() => {
-    if (scrubPendingTime === null) return
-    if (effectiveDuration <= 0) {
-      setScrubPendingTime(null)
-      return
-    }
-
-    const ageMs = Date.now() - scrubPendingSinceRef.current
-    const closeEnough = Math.abs(effectiveCurrentTime - scrubPendingTime) < 0.75
-    if (closeEnough || ageMs > 1500) {
-      setScrubPendingTime(null)
-    }
-  }, [scrubPendingTime, effectiveCurrentTime, effectiveDuration])
-
 
   const isOwnComment = useCallback((c: any) => {
     if (!identity?.driveKey) return false
@@ -964,46 +904,6 @@ export function VideoPlayerOverlay() {
     reportedTabBarHeight,
     reportedTabBarPadding,
   ])
-
-  // Fetch channel metadata so the channel row remains stable even when currentVideo lacks embedded channel info.
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadChannelMeta() {
-      const channelKey = currentVideo?.channelKey || currentVideo?.channel?.key
-      if (!channelKey || !rpc?.getChannelMeta) {
-        setChannelMetaName(null)
-        return
-      }
-
-      const now = Date.now()
-      const cached = channelMetaNameCache.get(channelKey)
-      if (cached && cached.expiresAt > now) {
-        setChannelMetaName(cached.name)
-        return
-      }
-
-      try {
-        const result = await rpc.getChannelMeta({ channelKey })
-        if (cancelled) return
-        const name = result?.name || null
-        channelMetaNameCache.set(channelKey, {
-          name,
-          expiresAt: now + CHANNEL_META_CACHE_TTL_MS,
-        })
-        setChannelMetaName(name)
-      } catch (err) {
-        if (cancelled) return
-        if (__DEV__) console.warn('[VideoPlayerOverlay] Failed to load channel meta:', err)
-        setChannelMetaName(null)
-      }
-    }
-
-    loadChannelMeta()
-    return () => {
-      cancelled = true
-    }
-  }, [currentVideo?.channelKey])
 
   useEffect(() => {
     // Keep animProgress driven by JS mode changes.
@@ -1835,30 +1735,6 @@ export function VideoPlayerOverlay() {
     }
   }, [isCasting, castIsPlaying, cast, isPlaying, pauseVideo, resumeVideo])
 
-  const handleDesktopSeekStart = useCallback(() => {
-    if (effectiveDuration > 0) {
-      setIsSeeking(true)
-    }
-  }, [effectiveDuration])
-
-  const handleDesktopSeekChange = useCallback((event: any) => {
-    const value = Number(event?.target?.value)
-    if (!Number.isFinite(value)) return
-    setSeekPosition(value)
-  }, [])
-
-  const handleDesktopSeekEnd = useCallback(() => {
-    if (effectiveDuration <= 0) return
-    if (isSeeking) {
-      if (isCasting) {
-        cast.seek(seekPosition)
-      } else {
-        seekTo(seekPosition)
-      }
-      setIsSeeking(false)
-    }
-  }, [effectiveDuration, isSeeking, seekPosition, isCasting, cast, seekTo])
-
   // Handle double-tap seek - ±SEEK_STEP_SECONDS forward/backward
   const handleDoubleTapSeek = useCallback((direction: 'left' | 'right') => {
     const delta = direction === 'left' ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS
@@ -1871,30 +1747,6 @@ export function VideoPlayerOverlay() {
     setSeekFeedback(direction)
     setTimeout(() => setSeekFeedback(null), 500)
   }, [isCasting, effectiveCurrentTime, effectiveDuration, cast, seekBy])
-
-  const handleScrubStart = useCallback(() => {
-    // Pause the auto-hide timer while scrubbing
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current)
-      controlsTimeoutRef.current = null
-    }
-    setShowControls(true)
-  }, [])
-
-  const handleScrubCommit = useCallback((timeSeconds: number) => {
-    if (effectiveDuration <= 0) return
-    const clamped = Math.max(0, Math.min(timeSeconds, effectiveDuration))
-    setScrubPendingTime(clamped)
-    scrubPendingSinceRef.current = Date.now()
-    if (isCasting) {
-      cast.seek(clamped)
-    } else {
-      seekTo(clamped)
-    }
-    // Restart auto-hide timer after scrub ends
-    showControlsTemporarily()
-  }, [effectiveDuration, isCasting, cast, seekTo, showControlsTemporarily])
-
 
   // Cycle through playback speeds
   const cyclePlaybackSpeed = useCallback(() => {
@@ -2021,13 +1873,6 @@ export function VideoPlayerOverlay() {
     }, rpc)
   }, [currentVideo, isDownloading, addDownload])
 
-  // Always register cleanup hooks (even when no video) to avoid changing hook order
-  useEffect(() => {
-    return () => {
-      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
-    }
-  }, [])
-
   // Debug: log player state
   useEffect(() => {
     if (__DEV__) {
@@ -2067,66 +1912,9 @@ export function VideoPlayerOverlay() {
     `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
 
-  // Calculate mini player position based on corner
-  const getMiniPlayerPosition = () => {
-    const baseX = miniPlayerCorner.includes('right') ? screenWidth - DESKTOP_MINI_WIDTH - DESKTOP_MINI_PADDING - sidebarWidth : DESKTOP_MINI_PADDING
-    const baseY = miniPlayerCorner.includes('bottom') ? screenHeight - DESKTOP_MINI_HEIGHT - DESKTOP_MINI_CONTROLS_HEIGHT - DESKTOP_MINI_PADDING - 108 : DESKTOP_MINI_PADDING + 108
-
-    if (isDraggingMiniPlayer) {
-      return {
-        x: baseX + miniPlayerDragOffset.x,
-        y: baseY + miniPlayerDragOffset.y,
-      }
-    }
-    return { x: baseX, y: baseY }
-  }
-
-  // Handle mini player drag start
-  const handleMiniPlayerDragStart = (e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsDraggingMiniPlayer(true)
-    const pos = getMiniPlayerPosition()
-    miniPlayerDragStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      cornerX: pos.x,
-      cornerY: pos.y,
-    }
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - miniPlayerDragStartRef.current.x
-      const deltaY = moveEvent.clientY - miniPlayerDragStartRef.current.y
-      setMiniPlayerDragOffset({ x: deltaX, y: deltaY })
-    }
-
-    const handleMouseUp = (upEvent: MouseEvent) => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-
-      const finalX = miniPlayerDragStartRef.current.cornerX + (upEvent.clientX - miniPlayerDragStartRef.current.x)
-      const finalY = miniPlayerDragStartRef.current.cornerY + (upEvent.clientY - miniPlayerDragStartRef.current.y)
-
-      const centerX = finalX + DESKTOP_MINI_WIDTH / 2
-      const centerY = finalY + (DESKTOP_MINI_HEIGHT + DESKTOP_MINI_CONTROLS_HEIGHT) / 2
-      const screenCenterX = (screenWidth - sidebarWidth) / 2 + sidebarWidth
-      const screenCenterY = screenHeight / 2
-
-      const isRight = centerX > screenCenterX
-      const isBottom = centerY > screenCenterY
-
-      const newCorner = `${isBottom ? 'bottom' : 'top'}-${isRight ? 'right' : 'left'}` as typeof miniPlayerCorner
-      setMiniPlayerCorner(newCorner)
-      setMiniPlayerDragOffset({ x: 0, y: 0 })
-      setIsDraggingMiniPlayer(false)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
   // Desktop mini player mode
   if (isDesktop && Platform.OS === 'web' && playerMode === 'mini') {
-    const miniPos = getMiniPlayerPosition()
+    const miniPos = desktopMiniPlayerPosition
 
     return (
       <div
@@ -2141,9 +1929,9 @@ export function VideoPlayerOverlay() {
           backgroundColor: colors.bg,
           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)',
           border: `1px solid ${colors.border}`,
-          cursor: isDraggingMiniPlayer ? 'grabbing' : 'default',
+          cursor: isDraggingDesktopMiniPlayer ? 'grabbing' : 'default',
           userSelect: 'none',
-          transition: isDraggingMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
+          transition: isDraggingDesktopMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
         }}
       >
         {/* Drag handle - top bar */}
@@ -2157,7 +1945,7 @@ export function VideoPlayerOverlay() {
             left: 0,
             right: 0,
             height: 32,
-            cursor: isDraggingMiniPlayer ? 'grabbing' : 'grab',
+            cursor: isDraggingDesktopMiniPlayer ? 'grabbing' : 'grab',
             zIndex: 10,
           }}
           onKeyDown={(event) => {

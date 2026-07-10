@@ -199,6 +199,9 @@ export async function createRelayRuntime({ config, logger } = {}) {
         source: 'relay-cache',
         relayRole: 'cache',
         relayServing: true,
+        // Advertise this relay's blind-peer mirror key so clients can delegate
+        // their own uploads to it for offline availability (feed discovery).
+        ...(blindPeer?.enabled && blindPeer.publicKey ? { relayMirrorKey: blindPeer.publicKey } : {}),
         ...entry,
         driveKey: entry.driveKey,
         publicBeeKey: entry.publicBeeKey,

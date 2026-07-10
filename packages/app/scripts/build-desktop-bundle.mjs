@@ -8,7 +8,8 @@
  * the raw `@peartube/*` source trees into the launched `.app`, so the app was
  * only ever as fresh as the last copy — launching the `.app` directly (or a
  * partial copy) could run a stale `universal-core.js` and fail to link a newly
- * added export (e.g. `createUniversalHrpcSurface`).
+ * added export (e.g. a function added to `universal-core.js` but missing from
+ * the stale copy).
  *
  * This script bare-packs the compiled worker into a runnable `.bundle`, traced
  * from the real `packages/app/node_modules` graph. Native `.bare` addons are
@@ -50,7 +51,6 @@ const sourceRoots = [
   path.join(repoRoot, 'packages', 'backend', 'src'),
   path.join(repoRoot, 'packages', 'host', 'src'),
   path.join(repoRoot, 'packages', 'core', 'src'),
-  path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
 ]
 
@@ -58,7 +58,6 @@ const sourceFiles = [
   path.join(repoRoot, 'packages', 'backend', 'package.json'),
   path.join(repoRoot, 'packages', 'host', 'package.json'),
   path.join(repoRoot, 'packages', 'core', 'package.json'),
-  path.join(repoRoot, 'packages', 'protocol', 'package.json'),
   path.join(repoRoot, 'packages', 'spec', 'package.json'),
 ]
 
@@ -126,7 +125,7 @@ function getBundleHosts() {
   return [`${process.platform}-${process.arch}`]
 }
 
-const peartubeWorkspacePackages = ['backend', 'host', 'core', 'protocol', 'spec', 'platform']
+const peartubeWorkspacePackages = ['backend', 'host', 'core', 'spec', 'platform']
 
 // bare-pack resolves `@peartube/*` through node_modules. With npm `file:`
 // deps those entries are symlinks to the live packages/ source, so the pack
@@ -248,7 +247,7 @@ function parseEsmNamedImports(source) {
 }
 
 function describeWorkingTreeState() {
-  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core', 'packages/protocol'], {
+  const result = spawnSync('git', ['status', '--porcelain', '--', 'packages/backend', 'packages/host', 'packages/core'], {
     cwd: repoRoot,
     encoding: 'utf8',
   })

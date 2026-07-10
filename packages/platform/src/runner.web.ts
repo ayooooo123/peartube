@@ -1,4 +1,4 @@
-import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
+import { PROTOCOL_EVENTS } from '@peartube/host/events'
 
 import type { PlatformLifecycleEvent, PlatformRunner, ProtocolClientLike } from './rpc.shared'
 

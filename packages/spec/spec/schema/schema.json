@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -7366,6 +7366,127 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "relay-link",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "mirrorKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "addedAt",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "add-relay-link-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "mirrorKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "add-relay-link-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "mirrorKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "remove-relay-link-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "mirrorKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "remove-relay-link-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "get-relay-links-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-relay-links-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "links",
+          "array": true,
+          "type": "@peartube/relay-link",
+          "version": 2
         }
       ]
     }

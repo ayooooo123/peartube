@@ -7,4 +7,4 @@ export {
   stringifyBlobId,
   updateBlobScore,
   pruneExpiredBlobScores,
-} from './mirror/blob-utils.js'
+} from './blob-utils.js'

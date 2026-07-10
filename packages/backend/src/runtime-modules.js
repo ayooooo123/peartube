@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 function unwrapModule(mod) {
   return mod?.default || mod
 }

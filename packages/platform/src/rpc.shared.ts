@@ -1,4 +1,4 @@
-import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
+import { PROTOCOL_EVENTS } from '@peartube/host/events'
 
 type BlobServerStatus = {
   blobServerPort: number | null
@@ -31,6 +31,10 @@ export type NetworkStatusData = {
   publicFeedDiscoveryJoined?: boolean
   feedTopicHex?: string | null
   recommendedBoundary?: string | null
+  network?: any
+  startupTiming?: any
+  doctor?: any
+  directPeerDial?: any
 }
 
 export type PlatformLifecycleEvent =

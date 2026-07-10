@@ -44,7 +44,6 @@ test('backend API module imports in relay runtime', async (t) => {
 test('backend package root imports without stale export drift', async (t) => {
   const backendModule = await import('../src/index.js')
   t.is(typeof backendModule.createUniversalCore, 'function')
-  t.is(typeof backendModule.createUniversalHrpcSurface, 'function')
 })
 
 test('attachSharedAppHandlers skips loading shared app handlers unless requested', async (t) => {
@@ -173,8 +172,6 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(session.core.state, 'started')
   t.is(readyPayload.protocolVersion, 42)
   t.is(session.rpc.ready.protocolVersion, 42)
-  t.ok(responses.has('GetUniversalCoreStatus'))
-  t.alike(await responses.get('GetUniversalCoreStatus')(), session.core.getStatus())
   t.ok(lifecycle.includes('hc:init'))
   t.ok(lifecycle.includes('hc:start'))
 

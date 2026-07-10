@@ -43,7 +43,6 @@ module.exports = {
       files: [
         'packages/app/**/*.{js,jsx,ts,tsx}',
         'packages/spec/**/*.{js,jsx,ts,tsx}',
-        'packages/desktop-native/**/*.{js,jsx,ts,tsx}',
         'scripts/**/*.js',
       ],
       rules: {

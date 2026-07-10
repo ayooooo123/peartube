@@ -1,133 +1,93 @@
 # PearTube Quick Start
 
-## Prerequisites
+Use this when you want a fresh clone running with the current development flow.
 
-- Node.js 18+
-- For iOS: Xcode 15+, CocoaPods
-- For Desktop: Bun + Electrobun toolchain; Pear CLI is only needed for future OTA/deployment work
+## 1. Prerequisites
 
-## Setup
-
-### 1. Install Dependencies
+- Node.js from `.nvmrc`:
 
 ```bash
-cd /Users/jd/projects/peartube
-npm install
+nvm use
 ```
 
-### 2. Run the App
+- Git submodules enabled.
+- For iOS: Xcode and CocoaPods.
+- For Android: Android SDK and JDK 17.
+- For Electrobun desktop: Bun and Electrobun dependencies.
 
-#### iOS (Simulator)
+## 2. Install
 
 ```bash
-npm run ios
+git submodule update --init --recursive
+npm run install:all
+npm run schema:full
+npm run bundle:backend
 ```
 
-This will:
-1. Build the React Native app
-2. Bundle the BareKit worklet
-3. Launch in iOS Simulator
-4. Start the P2P backend
+`install:all` is the repo install contract used by CI. `schema:full` keeps generated JS schema output in sync. `bundle:backend` creates the BareKit mobile backend bundle used by iOS/Android runs.
 
-#### Electrobun Desktop
+## 3. Run A Surface
 
 ```bash
-npm run desktop
+npm run ios                 # iOS simulator
+npm run android             # Android emulator/device
+npm run desktop             # Electrobun desktop
 ```
 
-This will:
-1. Export Expo web build
-2. Compile the worker
-3. Launch the Electrobun shell with embedded `pear-runtime`
-4. Display the desktop UI
-
-## Project Structure
-
-```
-peartube/
-├── packages/
-│   ├── app/              # Unified app (mobile + desktop)
-│   │   ├── app/          # Expo Router screens
-│   │   ├── components/   # React components
-│   │   ├── backend/      # Mobile BareKit worklet
-│   │   ├── workers/      # Desktop Bare worker
-│   │   └── src/          # Electrobun Bun/view bridge
-│   ├── backend/          # Backend business logic
-│   ├── core/             # Shared types + UI helpers
-│   ├── platform/         # Platform abstraction
-│   ├── spec/             # HRPC schema
-│   ├── bare-ffmpeg/      # Bare native ffmpeg binding
-│   ├── backend/src/cast/ # Chromecast sender implementation
-│   └── bare-tls/         # TLS support for Bare runtime
-└── package.json
-```
-
-## Available Commands
-
-### From Root
+For Expo-only iteration:
 
 ```bash
-npm run ios            # Run iOS app
-npm run android        # Run Android app
-npm run desktop        # Run Electrobun desktop app
-npm run desktop:build  # Build desktop web/worker output only
-npm run bundle:backend # Bundle mobile backend
-npm run build:android:apk  # Build Android release APKs
-npm start              # Start Expo dev server
+npm start
 ```
 
-### From packages/app
+## 4. Relay Container
 
 ```bash
-npm run ios            # Run iOS
-npm run desktop:dev    # Build and run Electrobun desktop
-npm run desktop:build  # Build desktop web/worker output only
-npm run bundle:backend # Bundle backend worklet
-npm run build:android:apk # Build release APKs
+docker compose -f docker-compose.relay.yml up -d
+docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
+open http://127.0.0.1:8174
+```
+
+## 5. Verify A Change
+
+```bash
+npm run lint:changed
+npm run typecheck
+npm test
+```
+
+Use focused package tests when possible:
+
+```bash
+npm test --prefix packages/spec
+npm test --prefix packages/backend
+npm test --prefix packages/host
 ```
 
 ## Troubleshooting
 
-### iOS Build Fails
+### Backend bundle missing
 
-```bash
-cd packages/app/ios
-rm -rf Pods Podfile.lock
-pod install
-cd ..
-npm run ios
-```
-
-### Desktop Won't Start
-
-Rebuild and launch the Electrobun app:
-```bash
-npm run desktop:build
-npm run desktop
-```
-
-### Backend Not Connecting
-
-Check that the worklet bundle exists:
-```bash
-ls packages/app/backend.bundle.js
-```
-
-If missing, rebuild:
 ```bash
 npm run bundle:backend
 ```
 
-### Create Channel Hangs / "No handler registered"
+### Schema output drift
 
-If desktop logs include `No handler registered for command`, rebuild and relaunch Pear so worker and backend handler wiring are in sync:
+```bash
+npm run schema:full
+```
+
+### Electrobun desktop worker stale
 
 ```bash
 npm run desktop:build
 npm run desktop
 ```
 
-## What's Next?
+## More Detail
 
-- See [README.md](./README.md) for project overview
-- See [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details
+- [SETUP.md](./SETUP.md) for platform-specific setup.
+- [DEVELOPMENT.md](./DEVELOPMENT.md) for daily commands.
+- [DEV_STATUS.md](./DEV_STATUS.md) for current progress and known constraints.
+- [ARCHITECTURE.md](./ARCHITECTURE.md) for the live architecture map.

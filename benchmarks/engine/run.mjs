@@ -1,3 +1,4 @@
+/* global Bare */
 // Entry point. Run under each engine you want to compare:
 //
 //   node   benchmarks/engine/run.mjs --label v8        --out results/v8.json

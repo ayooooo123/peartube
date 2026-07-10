@@ -98,34 +98,24 @@ test('tagged Android releases build arm64 and x86 APKs', () => {
   )
 })
 
-test('pull requests run desktop tests but skip app build/packaging jobs', () => {
+test('pull requests skip the desktop app build but exercise the mobile build', () => {
   const buildDesktop = readFile('.github/workflows/build-desktop.yml')
 
-  // App build/packaging jobs must be gated off on pull requests.
+  // The desktop app build/packaging job must be gated off on pull requests.
   assert.match(
     buildDesktop,
     /electrobun-desktop-build:\s*\n\s*if:\s*\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/,
     'electrobun-desktop-build (app build) should not run on pull requests',
   )
-  assert.match(
-    buildDesktop,
-    /native-desktop-archive:\s*\n\s*if:\s*\$\{\{\s*github\.event_name != 'pull_request'\s*\}\}/,
-    'native-desktop-archive (app build) should not run on pull requests',
-  )
 
-  // The test job must still run on pull requests (no pull_request gate).
-  assert.match(
-    buildDesktop,
-    /native-desktop-test:\s*\n\s*runs-on:/,
-    'native-desktop-test should still run on pull requests',
-  )
-
-  // Mobile app builds already never run on pull requests (push/dispatch only).
+  // build-mobile intentionally runs on pull_request (path-filtered) so the
+  // Android build is exercised on PRs — see the "run Build Mobile on
+  // pull_request" change. Publishing still lives in separate release workflows.
   const buildMobile = readFile('.github/workflows/build-mobile.yml')
-  assert.doesNotMatch(
+  assert.match(
     buildMobile,
     /^\s*pull_request:/m,
-    'build-mobile should not be triggered by pull requests',
+    'build-mobile should run on pull requests to exercise the mobile build',
   )
 })
 

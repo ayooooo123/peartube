@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 /**
  * Mobile Transcoder Module
  *
@@ -241,11 +242,11 @@ function handleHttpRequest(req, res) {
   }
 
   // Parse URL: /transcode/{sessionId}/stream.m3u8 or /transcode/{sessionId}/segment{N}.ts
-  const playlistMatch = url.match(/^\/transcode\/([^\/]+)\/stream\.m3u8/)
-  const segmentMatch = url.match(/^\/transcode\/([^\/]+)\/segment(\d+)\.ts/)
+  const playlistMatch = url.match(/^\/transcode\/([^/]+)\/stream\.m3u8/)
+  const segmentMatch = url.match(/^\/transcode\/([^/]+)\/segment(\d+)\.ts/)
 
   // Also support legacy single-file URL: /transcode/{sessionId}
-  const legacyMatch = url.match(/^\/transcode\/([^\/]+)$/)
+  const legacyMatch = url.match(/^\/transcode\/([^/]+)$/)
 
   let sessionId = null
   let requestType = null

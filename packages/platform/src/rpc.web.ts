@@ -8,7 +8,7 @@
  * 2. PearWorkerClient (legacy pear run): worker-client.js loaded as unbundled script
  */
 
-import { createProtocolClient } from '@peartube/protocol';
+import { createProtocolClient } from '@peartube/host';
 import { createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
@@ -537,6 +537,20 @@ export const rpc = {
   async setStorageLimit(maxGBOrReq: number | { maxGB: number }): Promise<{ success: boolean }> {
     const req = typeof maxGBOrReq === 'number' ? { maxGB: maxGBOrReq } : maxGBOrReq;
     return ensureRPC().setStorageLimit(req);
+  },
+
+  async addRelayLink(mirrorKeyOrReq: string | { mirrorKey: string; label?: string }): Promise<{ success: boolean; mirrorKey: string; label: string }> {
+    const req = typeof mirrorKeyOrReq === 'string' ? { mirrorKey: mirrorKeyOrReq } : mirrorKeyOrReq;
+    return ensureRPC().addRelayLink(req);
+  },
+
+  async removeRelayLink(mirrorKeyOrReq: string | { mirrorKey: string }): Promise<{ success: boolean }> {
+    const req = typeof mirrorKeyOrReq === 'string' ? { mirrorKey: mirrorKeyOrReq } : mirrorKeyOrReq;
+    return ensureRPC().removeRelayLink(req);
+  },
+
+  async getRelayLinks(): Promise<{ links: Array<{ mirrorKey: string; label: string; addedAt: number }> }> {
+    return ensureRPC().getRelayLinks({});
   },
 
   async clearCache(): Promise<{ success: boolean; clearedBytes?: number }> {

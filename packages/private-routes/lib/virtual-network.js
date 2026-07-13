@@ -17,6 +17,7 @@ export const TEST_ONLY_INSERTION_HOOK = Symbol('test-only-insertion-hook')
 export const TEST_ONLY_PACKET_OBSERVER = Symbol('test-only-packet-observer')
 
 const DEFAULT_MAX_DELIVERIES = 100_000
+const CANCELLATION_STATES = new WeakMap()
 const DEFAULT_LIMITS = Object.freeze({
   maxPendingPackets: MAX_PENDING_PACKETS,
   maxPendingBytes: MAX_PENDING_BYTES,
@@ -211,6 +212,10 @@ export class VirtualNetwork {
   }
 
   send(from, to, packet) {
+    this.sendOwned(from, to, packet)
+  }
+
+  sendOwned(from, to, packet) {
     if (this.#guarded) this.#violate()
     const ownsViolation = !this.#flushing
     if (ownsViolation) this.#violation = false
@@ -246,8 +251,16 @@ export class VirtualNetwork {
       }
       clear(source)
       source = null
+      const entries = new Array(prepared.length)
+      for (let index = 0; index < prepared.length; index++) entries[index] = prepared[index]
       this.#enqueue(from, to, prepared)
       prepared.length = 0
+      let handle = null
+      handle = Object.freeze({
+        cancel: () => this.cancel(handle)
+      })
+      CANCELLATION_STATES.set(handle, { network: this, entries, active: true })
+      return handle
     } catch {
       clear(source)
       for (const value of prepared) clear(value.packet)
@@ -256,6 +269,31 @@ export class VirtualNetwork {
       this.#guarded = false
       if (ownsViolation) this.#violation = false
     }
+  }
+
+  cancel(handle) {
+    if (this.#guarded) this.#violate()
+    const state = CANCELLATION_STATES.get(handle)
+    if (!state || state.network !== this) invalid()
+    if (!state.active) return 0
+    state.active = false
+    const selected = new Set(state.entries)
+    const remaining = []
+    let cancelled = 0
+    for (let index = this.#head; index < this.#queue.length; index++) {
+      const value = this.#queue[index]
+      if (!selected.has(value)) {
+        remaining.push(value)
+        continue
+      }
+      cancelled++
+      this.#pendingBytes -= value.byteLength
+      clear(value.packet)
+      value.packet = null
+    }
+    this.#queue = remaining
+    this.#head = 0
+    return cancelled
   }
 
   advance(ms) {

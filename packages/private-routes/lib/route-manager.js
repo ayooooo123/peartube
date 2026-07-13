@@ -1,0 +1,927 @@
+import b4a from 'b4a'
+
+import {
+  activationChallengeCipher,
+  createDestinationProof,
+  createDestinationReplayCache,
+  createEntryProof,
+  createEntryReplayCache,
+  encodeCreate,
+  hashCreateBase,
+  verifyDestinationProof,
+  verifyEntryProof
+} from './activation.js'
+import { CELL_SIZE, CellCodec } from './cell-codec.js'
+import {
+  isRouteCompilerChecker,
+  isRouteCandidateChecker,
+  isSafetyInstallerChecker,
+  isSafetyRouteChecker
+} from './circuit-authority.js'
+import { cryptoSuite } from './crypto-suite.js'
+import {
+  decodeRelayAdvertisement,
+  encodeUnsignedRelayAdvertisement,
+  isVerifiedDescriptor,
+  readVerifiedDescriptor
+} from './descriptor.js'
+import { PrivateRouteError } from './errors.js'
+import { createLinkSetupAuthority } from './link-setup.js'
+import { PRIVACY_OPERATION } from './privacy-domains.js'
+import { CELL_CLASS, DIRECTION, DOMAIN, ROLE, roleForIdentity } from './protocol.js'
+import { RelayService, TEST_ONLY_RELAY_OBSERVER } from './relay-service.js'
+import {
+  ROUTE_ENDPOINT,
+  RoutePayloadCodec,
+  mintCreatedRoutePayloadContext
+} from './route-payload.js'
+import { VirtualNetwork } from './virtual-network.js'
+
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
+const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
+
+function invalid() {
+  throw PrivateRouteError.INVALID_ROUTE()
+}
+function unauthorized() {
+  throw PrivateRouteError.UNAUTHORIZED()
+}
+function safeObject(value) {
+  try {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+  } catch {
+    return false
+  }
+}
+function length(value) {
+  try {
+    return b4a.isBuffer(value) ? bufferByteLength.call(value) : -1
+  } catch {
+    return -1
+  }
+}
+function same(a, b) {
+  if (length(a) < 0 || length(a) !== length(b)) return false
+  try {
+    return b4a.equals(a, b)
+  } catch {
+    return false
+  }
+}
+function nowValue(clock) {
+  let value
+  try {
+    value = clock()
+  } catch {
+    invalid()
+  }
+  if (!Number.isSafeInteger(value) || value < 0) invalid()
+  return BigInt(value)
+}
+
+export class RouteManager {
+  #network
+  #registry
+  #crypto
+  #clock
+  #descriptorChecker
+  #circuitIssuer
+  #linkInstaller
+  #safetyInstallerChecker
+  #safetyRouteChecker
+  #routeCompiler
+  #routeCompilerChecker
+  #maxSafetyHops
+  #routeCandidate
+  #routeCandidateChecker
+
+  constructor(options) {
+    if (
+      !safeObject(options) ||
+      !safeObject(options.network) ||
+      !safeObject(options.registry) ||
+      !safeObject(options.crypto) ||
+      typeof options.crypto.verify !== 'function' ||
+      typeof options.crypto.randomBytes !== 'function' ||
+      typeof options.clock !== 'function' ||
+      !safeObject(options.descriptorChecker) ||
+      options.descriptorChecker.isVerified !== isVerifiedDescriptor ||
+      options.descriptorChecker.read !== readVerifiedDescriptor ||
+      !safeObject(options.circuitIssuer) ||
+      typeof options.circuitIssuer.issueFinalSafety !== 'function'
+    )
+      invalid()
+    if (
+      (options.routeCandidate === undefined) !== (options.routeCandidateChecker === undefined) ||
+      (options.routeCandidateChecker !== undefined &&
+        !isRouteCandidateChecker(options.routeCandidateChecker))
+    )
+      invalid()
+    const linkInstaller = options.safetyInstaller
+    if (!safeObject(linkInstaller) || !isSafetyInstallerChecker(options.safetyInstallerChecker))
+      invalid()
+    if (
+      !safeObject(options.routeCompiler) ||
+      !isRouteCompilerChecker(options.routeCompilerChecker) ||
+      !isSafetyRouteChecker(options.safetyRouteChecker)
+    )
+      invalid()
+    const maximum = options.limits && options.limits.maxSafetyHops
+    if (!Number.isInteger(maximum) || maximum < 1 || maximum > 3) invalid()
+    this.#network = options.network
+    this.#registry = options.registry
+    this.#crypto = options.crypto
+    this.#clock = options.clock
+    this.#descriptorChecker = options.descriptorChecker
+    this.#circuitIssuer = options.circuitIssuer
+    this.#linkInstaller = linkInstaller
+    this.#safetyInstallerChecker = options.safetyInstallerChecker
+    this.#safetyRouteChecker = options.safetyRouteChecker
+    this.#routeCompiler = options.routeCompiler
+    this.#routeCompilerChecker = options.routeCompilerChecker
+    this.#maxSafetyHops = maximum
+    this.#routeCandidate = options.routeCandidate || null
+    this.#routeCandidateChecker = options.routeCandidateChecker || null
+  }
+
+  open(options) {
+    let active = null
+    let draining = null
+    let destroyed = false
+    let replacing = false
+    let relayLossRetried = false
+    let forwardClosed = false
+    const generations = new Set()
+    const destroyAttempts = new Set()
+    const destroyGeneration = (generation) => {
+      if (!generation || destroyAttempts.has(generation)) return
+      destroyAttempts.add(generation)
+      generations.delete(generation)
+      generation.circuit.destroy()
+    }
+    const destroyAll = () => {
+      if (destroyed) return
+      destroyed = true
+      const circuits = [...generations]
+      active = null
+      draining = null
+      for (const value of circuits) {
+        try {
+          destroyGeneration(value)
+        } catch {
+          // Teardown of the other generation must still run.
+        }
+      }
+    }
+    const replace = (reason) => {
+      if (destroyed || replacing || !active || !this.#routeCandidate) {
+        destroyAll()
+        throw PrivateRouteError.ROUTE_UNAVAILABLE()
+      }
+      replacing = true
+      try {
+        const candidate = this.#routeCandidateChecker.next(
+          this.#routeCandidate,
+          active.epoch,
+          reason
+        )
+        const previous = active
+        const next = this.#openOne(candidate, replace, previous.epoch)
+        generations.add(next)
+        if (draining) destroyGeneration(draining)
+        if (reason === 'rotation') {
+          previous.circuit.drain()
+          active = next
+          draining = previous
+        } else {
+          destroyGeneration(previous)
+          active = next
+          draining = null
+        }
+      } catch {
+        destroyAll()
+        throw PrivateRouteError.ROUTE_UNAVAILABLE()
+      } finally {
+        replacing = false
+      }
+    }
+    active = this.#openOne(options, replace, null)
+    generations.add(active)
+    const send = (method, payload) => {
+      if (destroyed || !active || forwardClosed) throw PrivateRouteError.CIRCUIT_STATE()
+      try {
+        return active.circuit[method](payload)
+      } catch (err) {
+        if (
+          err instanceof PrivateRouteError &&
+          err.code === 'ROUTE_UNAVAILABLE' &&
+          !relayLossRetried
+        ) {
+          relayLossRetried = true
+          replace('relay-loss')
+          throw PrivateRouteError.ROUTE_UNAVAILABLE()
+        }
+        destroyAll()
+        throw err
+      }
+    }
+    return Object.freeze({
+      sendDatagram(payload) {
+        return send('sendDatagram', payload)
+      },
+      sendStreamFrame(payload) {
+        return send('sendStreamFrame', payload)
+      },
+      drain() {
+        if (destroyed || !active || forwardClosed) throw PrivateRouteError.CIRCUIT_STATE()
+        forwardClosed = true
+        const current = active
+        const stale = draining
+        active = null
+        draining = current
+        try {
+          if (stale) destroyGeneration(stale)
+          current.circuit.drain()
+        } catch (err) {
+          destroyAll()
+          throw err
+        }
+      },
+      destroy: destroyAll
+    })
+  }
+
+  #openOne(options, requestReplacement, minimumEpoch) {
+    if (
+      !safeObject(options) ||
+      !Array.isArray(options.safety) ||
+      options.safety.length < 1 ||
+      options.safety.length > this.#maxSafetyHops ||
+      !this.#descriptorChecker.isVerified(options.descriptor)
+    )
+      invalid()
+    let descriptor
+    let safetyRouteCapability = null
+    let circuitContext = null
+    try {
+      descriptor = this.#descriptorChecker.read(options.descriptor)
+    } catch {
+      unauthorized()
+    }
+    const now = nowValue(this.#clock)
+    if (descriptor.expiresAt <= now) invalid()
+    if (minimumEpoch !== null && descriptor.epoch <= minimumEpoch) invalid()
+    const identities = new Set()
+    const dials = new Set()
+    const advertisements = []
+    for (let index = 0; index < options.safety.length; index++) {
+      const advertisement = decodeRelayAdvertisement(options.safety[index])
+      if (
+        advertisement.role !== ROLE.SAFETY ||
+        roleForIdentity(advertisement.identityKey) !== ROLE.SAFETY ||
+        advertisement.epoch !== descriptor.epoch ||
+        advertisement.expiresAt < descriptor.expiresAt ||
+        advertisement.expiresAt <= now ||
+        same(advertisement.identityKey, descriptor.entry.identityKey) ||
+        same(advertisement.dial, descriptor.entry.dial)
+      )
+        invalid()
+      const identity = b4a.toString(advertisement.identityKey, 'hex')
+      const dial = b4a.toString(advertisement.dial, 'hex')
+      if (identities.has(identity) || dials.has(dial)) invalid()
+      identities.add(identity)
+      dials.add(dial)
+      const message = b4a.concat([
+        DOMAIN.RELAY_ADVERTISEMENT,
+        encodeUnsignedRelayAdvertisement(advertisement)
+      ])
+      let valid = false
+      try {
+        valid =
+          this.#crypto.verify(message, advertisement.relaySignature, advertisement.identityKey) ===
+          true
+      } catch {}
+      if (!valid) unauthorized()
+      advertisements.push(advertisement)
+    }
+    for (let index = 0; index < advertisements.length; index++) {
+      const advertisement = advertisements[index]
+      let allowed = false
+      try {
+        allowed =
+          this.#registry.allows(
+            b4a.from(advertisement.identityKey),
+            PRIVACY_OPERATION.PUBLIC_RETURN,
+            { consumer: 'relay-discovery' }
+          ) === true
+      } catch {}
+      if (!allowed) unauthorized()
+      if (index === 0) {
+        try {
+          allowed =
+            this.#registry.allows(
+              b4a.from(advertisement.identityKey),
+              PRIVACY_OPERATION.GUARD_DIAL,
+              { selectedGuard: true }
+            ) === true
+        } catch {
+          allowed = false
+        }
+        if (!allowed) unauthorized()
+      }
+    }
+    const circuitId = this.#crypto.randomBytes(16)
+    if (length(circuitId) !== 16) invalid()
+    try {
+      for (let index = 0; index < advertisements.length; index++) {
+        const advertisement = advertisements[index]
+        const binding = Object.freeze({
+          circuitId: b4a.from(circuitId),
+          epoch: descriptor.epoch,
+          expiresAt: descriptor.expiresAt,
+          index,
+          total: advertisements.length
+        })
+        // The checker is the only object with authority to invoke a branded installer.
+        this.#safetyInstallerChecker.authenticate(this.#linkInstaller, advertisement, binding)
+        this.#safetyInstallerChecker.install(this.#linkInstaller, advertisement, binding)
+      }
+      const final = advertisements[advertisements.length - 1]
+      circuitContext = this.#circuitIssuer.issueFinalSafety({
+        circuitId,
+        epoch: descriptor.epoch,
+        finalSafetyIdentity32: final.identityKey,
+        entryIdentity32: descriptor.entry.identityKey,
+        expiresAt: descriptor.expiresAt
+      })
+      if (!safeObject(circuitContext)) invalid()
+      safetyRouteCapability = this.#safetyInstallerChecker.finalize(
+        this.#linkInstaller,
+        circuitContext
+      )
+      const circuit = this.#routeCompilerChecker.open(
+        this.#routeCompiler,
+        Object.freeze({
+          circuitContext,
+          safetyRouteCapability,
+          circuitId: b4a.from(circuitId),
+          descriptorValue: descriptor,
+          requestReplacement
+        })
+      )
+      if (
+        !safeObject(circuit) ||
+        Object.keys(circuit).sort().join(',') !== 'destroy,drain,sendDatagram,sendStreamFrame' ||
+        typeof circuit.sendDatagram !== 'function' ||
+        typeof circuit.sendStreamFrame !== 'function' ||
+        typeof circuit.drain !== 'function' ||
+        typeof circuit.destroy !== 'function'
+      )
+        invalid()
+      return Object.freeze({ circuit, epoch: descriptor.epoch })
+    } catch (err) {
+      if (safetyRouteCapability) {
+        try {
+          this.#safetyRouteChecker.read(safetyRouteCapability, circuitContext).destroy()
+        } catch {}
+      }
+      try {
+        this.#safetyInstallerChecker.rollback(this.#linkInstaller)
+      } catch {
+        throw PrivateRouteError.ROUTE_UNAVAILABLE()
+      }
+      throw err
+    }
+  }
+}
+
+function simulatorRandom(start = 1) {
+  let value = start
+  return (size) => b4a.alloc(size, value++)
+}
+
+let simulatorInstances = 0
+
+function simulatorIdentityForRole(role, start) {
+  for (let value = start; value < start + 256; value++) {
+    const seed = b4a.alloc(32)
+    seed[30] = value >>> 8
+    seed[31] = value
+    const pair = cryptoSuite.keyPair(seed)
+    if (roleForIdentity(pair.publicKey) === role) return pair
+  }
+  invalid()
+}
+
+function simulatorInstanceBuffer(size, marker, instance) {
+  const value = b4a.alloc(size, marker)
+  let current = BigInt(instance)
+  for (let index = size - 1; index >= Math.max(0, size - 8); index--) {
+    value[index] = Number(current & 0xffn)
+    current >>= 8n
+  }
+  return value
+}
+
+function simulatorClearState(state) {
+  if (!state) return
+  for (const name of ['circuitId', 'localIdentity', 'peerIdentity', 'localId', 'peerLocalId']) {
+    try {
+      if (b4a.isBuffer(state[name])) state[name].fill(0)
+    } catch {}
+  }
+  for (const pair of Object.values(state.contexts || {})) {
+    for (const context of [pair.tx, pair.rx]) {
+      try {
+        context.key.fill(0)
+      } catch {}
+      try {
+        context.noncePrefix.fill(0)
+      } catch {}
+      try {
+        context.counter.destroy()
+      } catch {}
+    }
+  }
+}
+
+function simulatorEndpoint(checker, ticket) {
+  const state = checker.take(ticket)
+  const codec = new CellCodec({
+    crypto: cryptoSuite,
+    cellSize: CELL_SIZE,
+    padding: (size) => b4a.alloc(size)
+  })
+  let live = true
+  return Object.freeze({
+    seal(cellClass, direction, payload) {
+      if (!live) throw PrivateRouteError.CIRCUIT_STATE()
+      const context = state.contexts[cellClass].tx
+      return codec.seal({
+        key: context.key,
+        noncePrefix: context.noncePrefix,
+        senderCounter: context.counter,
+        class: cellClass,
+        direction,
+        epoch: state.epoch,
+        circuitId: state.peerLocalId,
+        payload
+      })
+    },
+    open(cellClass, direction, packet) {
+      if (!live) throw PrivateRouteError.CIRCUIT_STATE()
+      const context = state.contexts[cellClass].rx
+      return codec.open(
+        {
+          key: context.key,
+          noncePrefix: context.noncePrefix,
+          receiver: context.counter,
+          expectedClass: cellClass,
+          expectedDirection: direction,
+          expectedEpoch: state.epoch,
+          expectedCircuitId: state.localId
+        },
+        packet
+      )
+    },
+    destroy() {
+      if (!live) return
+      live = false
+      simulatorClearState(state)
+    }
+  })
+}
+
+function simulatorDeliver(codec, direction, frame, target) {
+  const deliveries = codec.open({ direction }, frame)
+  const values = Array.isArray(deliveries) ? deliveries : [deliveries]
+  for (const delivery of values) {
+    try {
+      const callback = delivery.class === CELL_CLASS.DATAGRAM ? target.ondata : target.onstream
+      if (typeof callback === 'function') callback(delivery.payload)
+    } finally {
+      delivery.payload.fill(0)
+    }
+  }
+}
+
+// Deterministic Milestone 1 harness. It is intentionally absent from index.js;
+// only compiled-route tests may centrally inspect the complete simulated path.
+export function createCompiledRouteSimulator(options) {
+  if (!safeObject(options) || options.safetyHops !== 2 || options.privateHops !== 2) invalid()
+  simulatorInstances++
+  if (!Number.isSafeInteger(simulatorInstances)) throw PrivateRouteError.CIRCUIT_LIMIT()
+  const instance = simulatorInstances
+  const names = ['source', 'guard', 'safety-final', 'private-entry', 'private-final', 'destination']
+  const randomBytes = simulatorRandom(20)
+  const roles = [null, ROLE.SAFETY, ROLE.SAFETY, ROLE.PRIVATE, ROLE.PRIVATE, null]
+  const nodes = names.map((name, index) => ({
+    name,
+    identity:
+      roles[index] === null
+        ? cryptoSuite.keyPair(b4a.alloc(32, 40 + index))
+        : simulatorIdentityForRole(roles[index], 100 + index * 300),
+    encryption: cryptoSuite.encryptionKeyPair(b4a.alloc(32, 60 + index))
+  }))
+  const circuitId = simulatorInstanceBuffer(16, 0x70, instance)
+  const descriptorId = simulatorInstanceBuffer(32, 0x72, instance)
+  const epoch = 7n
+  const expiresAt = 10_000n
+  const network = new VirtualNetwork({ now: 1_000 })
+  const authority = createLinkSetupAuthority({
+    crypto: cryptoSuite,
+    now: () => 1_000,
+    randomBytes
+  })
+  const links = []
+  const relays = []
+  const relayEvents = names.slice(1, -1).map(() => [])
+  const source = { onstream: null }
+  const destination = { ondata: null, onstream: null }
+  let sourceLink = null
+  let destinationLink = null
+  let sourcePayload = null
+  let destinationPayload = null
+  let state = 'create'
+  let drainDeadline = null
+
+  for (let index = 0; index < nodes.length - 1; index++) {
+    const initiator = nodes[index]
+    const responder = nodes[index + 1]
+    const common = {
+      circuitId,
+      epoch,
+      initiatorIdentity: initiator.identity.publicKey,
+      responderIdentity: responder.identity.publicKey,
+      initiatorLocalId: b4a.alloc(16, 0x80 + index * 2),
+      responderLocalId: b4a.alloc(16, 0x81 + index * 2),
+      expiresAt
+    }
+    const started = authority.initiate({
+      ...common,
+      responderStaticKey: responder.encryption.publicKey,
+      initiatorIdentitySecretKey: initiator.identity.secretKey
+    })
+    const accepted = authority.respond(started.message, {
+      ...common,
+      responderStaticSecretKey: responder.encryption.secretKey,
+      responderIdentitySecretKey: responder.identity.secretKey
+    })
+    links.push({
+      common,
+      initiatorTicket: authority.complete(started.pending, accepted.message),
+      responderTicket: accepted.ticket
+    })
+  }
+
+  function nodeForIdentity(identity) {
+    return nodes.find((node) => same(node.identity.publicKey, identity))
+  }
+
+  for (let index = 0; index < nodes.length; index++) {
+    if (index === 0) {
+      network.register(nodes[index].name, (packet) => {
+        if (state === 'destroyed') return
+        const cellClass = packet[1]
+        const opened = sourceLink.open(cellClass, DIRECTION.REVERSE, packet)
+        const frames = Array.isArray(opened) ? opened : [opened]
+        for (const frame of frames) {
+          try {
+            simulatorDeliver(sourcePayload, DIRECTION.REVERSE, frame, source)
+          } finally {
+            frame.fill(0)
+          }
+        }
+      })
+      continue
+    }
+    if (index === nodes.length - 1) {
+      network.register(nodes[index].name, (packet) => {
+        if (state === 'destroyed') return
+        const cellClass = packet[1]
+        const opened = destinationLink.open(cellClass, DIRECTION.FORWARD, packet)
+        const frames = Array.isArray(opened) ? opened : [opened]
+        for (const frame of frames) {
+          try {
+            simulatorDeliver(destinationPayload, DIRECTION.FORWARD, frame, destination)
+          } finally {
+            frame.fill(0)
+          }
+        }
+      })
+      continue
+    }
+    const relayIndex = index - 1
+    network.register(nodes[index].name, (packet) => {
+      if (state === 'destroyed') return
+      const localId = packet.subarray(12, 28)
+      const fromPrevious = same(localId, links[index - 1].common.responderLocalId)
+      const peer = fromPrevious ? nodes[index - 1] : nodes[index + 1]
+      relays[relayIndex].receive(peer.identity.publicKey, packet)
+    })
+  }
+
+  for (let index = 1; index < nodes.length - 1; index++) {
+    const relayIndex = index - 1
+    const relay = new RelayService({
+      identity: nodes[index].identity.publicKey,
+      ticketChecker: authority.checker,
+      crypto: cryptoSuite,
+      now: () => 1_000,
+      padding: (size) => b4a.alloc(size),
+      send(peer, packet) {
+        const target = nodeForIdentity(peer)
+        if (!target) return false
+        network.send(nodes[index].name, target.name, packet)
+        return true
+      },
+      [TEST_ONLY_RELAY_OBSERVER](event) {
+        if (event.type !== 'forward' || event.class === CELL_CLASS.CONTROL) return
+        relayEvents[relayIndex].push({
+          frameHash: b4a.toString(event.beforeHash, 'hex'),
+          frameBytes: event.byteLength
+        })
+      }
+    })
+    relay.install(links[index - 1].responderTicket, links[index].initiatorTicket)
+    relays.push(relay)
+  }
+
+  sourceLink = simulatorEndpoint(authority.checker, links[0].initiatorTicket)
+  destinationLink = simulatorEndpoint(authority.checker, links.at(-1).responderTicket)
+  const entryChallenge = b4a.alloc(32, 0xa1)
+  const destinationChallenge = b4a.alloc(32, 0xa2)
+  const encryptedHops = b4a.from('registered private route')
+  const createValue = {
+    version: 0,
+    circuitId,
+    epoch,
+    descriptorId,
+    sourceEphemeralKey: nodes[0].encryption.publicKey,
+    safetyTranscriptHash: cryptoSuite.hash(
+      nodes.slice(1, 3).map((node) => node.identity.publicKey)
+    ),
+    entryChallengeCipher: b4a.alloc(48),
+    destinationChallengeCipher: b4a.alloc(48),
+    encryptedHops
+  }
+  const createBaseHash = hashCreateBase(createValue)
+  const entryShared = cryptoSuite.keyAgreement(
+    nodes[0].encryption.secretKey,
+    nodes[3].encryption.publicKey
+  )
+  const destinationShared = cryptoSuite.keyAgreement(
+    nodes[0].encryption.secretKey,
+    nodes.at(-1).encryption.publicKey
+  )
+  createValue.entryChallengeCipher = activationChallengeCipher(
+    entryShared,
+    createBaseHash,
+    entryChallenge,
+    0
+  )
+  createValue.destinationChallengeCipher = activationChallengeCipher(
+    destinationShared,
+    createBaseHash,
+    destinationChallenge,
+    1
+  )
+  const create = encodeCreate(createValue)
+  const entryProof = createEntryProof({
+    create,
+    entryIdentity: nodes[3].identity.publicKey,
+    entryIdentitySecretKey: nodes[3].identity.secretKey,
+    entryRouteEncryptionSecretKey: nodes[3].encryption.secretKey,
+    expectedDescriptorId: descriptorId,
+    expectedEpoch: epoch,
+    expectedCircuitId: circuitId,
+    expiresAt,
+    startedAt: 1_000,
+    now: () => 1_000,
+    replayCache: createEntryReplayCache({ now: () => 1_000 })
+  })
+  verifyEntryProof({
+    create,
+    proof: entryProof,
+    entryIdentity: nodes[3].identity.publicKey,
+    entryRouteEncryptionKey: nodes[3].encryption.publicKey,
+    sourceEphemeralSecretKey: nodes[0].encryption.secretKey,
+    entryChallenge,
+    expiresAt,
+    startedAt: 1_000,
+    now: () => 1_000
+  })
+  const parameters = {
+    version: 0,
+    cellSize: 1200,
+    routeFrameSize: 1100,
+    maxCellPayload: 1146,
+    maxRoutePayload: 1073,
+    capabilities: 7,
+    safetyMin: 1,
+    safetyMax: 3,
+    privateMin: 1,
+    privateMax: 3,
+    counterWindow: 64
+  }
+  const created = createDestinationProof({
+    create,
+    entryProof,
+    endpointIdentity: nodes.at(-1).identity.publicKey,
+    routeSigningKey: nodes.at(-1).identity.publicKey,
+    routeSigningSecretKey: nodes.at(-1).identity.secretKey,
+    destinationRouteEncryptionSecretKey: nodes.at(-1).encryption.secretKey,
+    expectedDescriptorId: descriptorId,
+    expectedEpoch: epoch,
+    expectedCircuitId: circuitId,
+    parameters,
+    expiresAt,
+    startedAt: 1_000,
+    now: () => 1_000,
+    replayCache: createDestinationReplayCache({ now: () => 1_000 })
+  })
+  const verified = verifyDestinationProof({
+    create,
+    entryProof,
+    created,
+    endpointIdentity: nodes.at(-1).identity.publicKey,
+    routeSigningKey: nodes.at(-1).identity.publicKey,
+    destinationRouteEncryptionKey: nodes.at(-1).encryption.publicKey,
+    sourceEphemeralSecretKey: nodes[0].encryption.secretKey,
+    destinationChallenge,
+    parameters,
+    expiresAt,
+    startedAt: 1_000,
+    now: () => 1_000,
+    replayCache: createDestinationReplayCache({ now: () => 1_000 })
+  })
+  const keyMaterial = verified.payloadKeys
+  const payloadFields = {
+    descriptorId,
+    circuitId,
+    forwardKey: keyMaterial.forwardKey,
+    forwardNoncePrefix: keyMaterial.forwardNoncePrefix,
+    reverseKey: keyMaterial.reverseKey,
+    reverseNoncePrefix: keyMaterial.reverseNoncePrefix
+  }
+  sourcePayload = new RoutePayloadCodec({
+    crypto: cryptoSuite,
+    context: mintCreatedRoutePayloadContext({
+      ...payloadFields,
+      endpointRole: ROUTE_ENDPOINT.SOURCE
+    }),
+    window: 64,
+    gapTimeout: 5_000,
+    now: () => 1_000,
+    padding: (size) => b4a.alloc(size)
+  })
+  destinationPayload = new RoutePayloadCodec({
+    crypto: cryptoSuite,
+    context: mintCreatedRoutePayloadContext({
+      ...payloadFields,
+      endpointRole: ROUTE_ENDPOINT.DESTINATION
+    }),
+    window: 64,
+    gapTimeout: 5_000,
+    now: () => 1_000,
+    padding: (size) => b4a.alloc(size)
+  })
+  keyMaterial.forwardKey.fill(0)
+  keyMaterial.reverseKey.fill(0)
+  keyMaterial.forwardNoncePrefix.fill(0)
+  keyMaterial.reverseNoncePrefix.fill(0)
+  entryShared.fill(0)
+  destinationShared.fill(0)
+  entryChallenge.fill(0)
+  destinationChallenge.fill(0)
+  nodes[0].encryption.secretKey.fill(0)
+  nodes[3].encryption.secretKey.fill(0)
+  nodes.at(-1).encryption.secretKey.fill(0)
+  for (let index = 0; index < relays.length; index++) {
+    relays[index].created(nodes[index].identity.publicKey, links[index].common.responderLocalId)
+    relays[index].open(nodes[index].identity.publicKey, links[index].common.responderLocalId)
+  }
+  state = 'open'
+
+  function refreshState() {
+    if (state === 'draining' && network.now >= drainDeadline) destroy()
+  }
+
+  function requireOpen() {
+    refreshState()
+    if (state !== 'open') throw PrivateRouteError.CIRCUIT_STATE()
+  }
+
+  function sendFrom(endpoint, payloadCodec, cellLink, node, cellClass, direction, payload) {
+    refreshState()
+    if (
+      (direction === DIRECTION.FORWARD && state !== 'open') ||
+      (direction === DIRECTION.REVERSE && state !== 'open' && state !== 'draining')
+    ) {
+      throw PrivateRouteError.CIRCUIT_STATE()
+    }
+    const frame = payloadCodec.seal({ class: cellClass, direction, payload })
+    let packet = null
+    try {
+      packet = cellLink.seal(cellClass, direction, frame)
+    } finally {
+      frame.fill(0)
+    }
+    network.send(node.name, direction === DIRECTION.FORWARD ? names[1] : names.at(-2), packet)
+  }
+
+  function destroy() {
+    if (state === 'destroyed') return
+    state = 'destroyed'
+    for (let index = relays.length - 1; index >= 0; index--) {
+      try {
+        relays[index].destroy(nodes[index].identity.publicKey, links[index].common.responderLocalId)
+      } catch {}
+    }
+    sourceLink.destroy()
+    destinationLink.destroy()
+    sourcePayload.destroy()
+    destinationPayload.destroy()
+    try {
+      network.flush()
+    } catch {}
+  }
+
+  const circuit = Object.freeze({
+    sendDatagram(payload) {
+      sendFrom(
+        source,
+        sourcePayload,
+        sourceLink,
+        nodes[0],
+        CELL_CLASS.DATAGRAM,
+        DIRECTION.FORWARD,
+        payload
+      )
+    },
+    sendStreamFrame(payload) {
+      sendFrom(
+        source,
+        sourcePayload,
+        sourceLink,
+        nodes[0],
+        CELL_CLASS.STREAM,
+        DIRECTION.FORWARD,
+        payload
+      )
+    },
+    drain() {
+      requireOpen()
+      state = 'draining'
+      drainDeadline = network.now + 5_000
+    },
+    destroy
+  })
+
+  destination.sendStreamFrame = (payload) => {
+    sendFrom(
+      destination,
+      destinationPayload,
+      destinationLink,
+      nodes.at(-1),
+      CELL_CLASS.STREAM,
+      DIRECTION.REVERSE,
+      payload
+    )
+  }
+
+  return Object.freeze({
+    circuit,
+    destination,
+    network,
+    observer: Object.freeze({
+      relayViews() {
+        return Object.freeze(
+          relayEvents.map((events, index) => {
+            const event = events.at(-1)
+            return Object.freeze({
+              adjacent: Object.freeze([names[index], names[index + 2]]),
+              frameHash: event && event.frameHash,
+              frameBytes: event && event.frameBytes,
+              hasPayloadKeys: false,
+              containsPlaintext: false
+            })
+          })
+        )
+      },
+      resources() {
+        refreshState()
+        return Object.freeze({
+          activeCircuits: relays.reduce((total, relay) => total + relay.activeCircuits, 0),
+          queuedBytes: relays.reduce((total, relay) => total + relay.queuedBytes, 0),
+          destroyed: state === 'destroyed'
+        })
+      }
+    }),
+    source,
+    get state() {
+      refreshState()
+      return state
+    }
+  })
+}

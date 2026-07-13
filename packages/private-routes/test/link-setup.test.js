@@ -34,7 +34,7 @@ function shadowedAlias(value) {
   return alias
 }
 
-function fixture() {
+function fixture(observeTickets = true) {
   const initiatorIdentity = cryptoSuite.keyPair(seed(1))
   const responderIdentity = cryptoSuite.keyPair(seed(2))
   const responderStatic = cryptoSuite.encryptionKeyPair(seed(3))
@@ -43,9 +43,13 @@ function fixture() {
     crypto: cryptoSuite,
     now: () => 1_000,
     randomBytes: randomSequence([4, 5]),
-    [TEST_ONLY_TICKET_OBSERVER](ticket, value) {
-      observed.set(ticket, value)
-    }
+    ...(observeTickets
+      ? {
+          [TEST_ONLY_TICKET_OBSERVER](ticket, value) {
+            observed.set(ticket, value)
+          }
+        }
+      : {})
   })
   const common = {
     circuitId: b4a.alloc(16, 0x11),
@@ -150,6 +154,150 @@ test('authenticated link setup agrees on six peer contexts without exposing tick
     }
   }
   t.is(new Set(counters).size, 12)
+})
+
+test('aborted pending and revoked responder setup state are deeply zeroized', (t) => {
+  {
+    const f = fixture(false)
+    const allocations = []
+    const originalAlloc = b4a.allocUnsafeSlow
+    let started
+    b4a.allocUnsafeSlow = (size) => {
+      const value = originalAlloc(size)
+      if (size === 16 || size === 32) allocations.push(value)
+      return value
+    }
+    try {
+      started = f.start()
+      t.is(f.authority.abort(started.pending), true)
+      t.is(f.authority.abort(started.pending), false)
+    } finally {
+      b4a.allocUnsafeSlow = originalAlloc
+    }
+    t.ok(allocations.length > 0)
+    for (const value of allocations) t.alike(value, b4a.alloc(value.byteLength))
+    expectCode(t, () => f.authority.complete(started.pending, b4a.alloc(337)), 'REPLAY')
+  }
+
+  {
+    const f = fixture(false)
+    const started = f.start()
+    const allocations = []
+    const originalAlloc = b4a.allocUnsafeSlow
+    let accepted
+    b4a.allocUnsafeSlow = (size) => {
+      const value = originalAlloc(size)
+      if (size === 16 || size === 32) allocations.push(value)
+      return value
+    }
+    try {
+      accepted = f.respond(started.message)
+      t.is(f.authority.revoke(accepted.ticket), true)
+      t.is(f.authority.revoke(accepted.ticket), false)
+    } finally {
+      b4a.allocUnsafeSlow = originalAlloc
+    }
+    t.ok(allocations.length > 0)
+    for (const value of allocations) t.alike(value, b4a.alloc(value.byteLength))
+    expectCode(t, () => f.authority.checker.take(accepted.ticket), 'UNAUTHORIZED')
+    f.authority.abort(started.pending)
+  }
+})
+
+test('throwing ticket observation is passive and clears its snapshot', (t) => {
+  const initiatorIdentity = cryptoSuite.keyPair(seed(31))
+  const responderIdentity = cryptoSuite.keyPair(seed(32))
+  const responderStatic = cryptoSuite.encryptionKeyPair(seed(33))
+  const snapshots = []
+  const authority = createLinkSetupAuthority({
+    crypto: cryptoSuite,
+    now: () => 1_000,
+    randomBytes: randomSequence([34, 35]),
+    [TEST_ONLY_TICKET_OBSERVER](ticket, snapshot) {
+      t.alike(Object.keys(ticket), [])
+      snapshots.push(snapshot)
+      throw new Error('diagnostics must be passive')
+    }
+  })
+  const common = {
+    circuitId: b4a.alloc(16, 0x31),
+    epoch: 7n,
+    initiatorIdentity: initiatorIdentity.publicKey,
+    responderIdentity: responderIdentity.publicKey,
+    initiatorLocalId: b4a.alloc(16, 0x32),
+    responderLocalId: b4a.alloc(16, 0x33),
+    expiresAt: 2_000n
+  }
+  const allocations = []
+  const originalAlloc = b4a.allocUnsafeSlow
+  let started = null
+  let accepted = null
+  let initiatorTicket = null
+  let responderState = null
+  b4a.allocUnsafeSlow = (size) => {
+    const output = originalAlloc(size)
+    if (size === 16 || size === 32) allocations.push(output)
+    return output
+  }
+  try {
+    started = authority.initiate({
+      ...common,
+      responderStaticKey: responderStatic.publicKey,
+      initiatorIdentitySecretKey: initiatorIdentity.secretKey
+    })
+    accepted = authority.respond(started.message, {
+      ...common,
+      responderStaticSecretKey: responderStatic.secretKey,
+      responderIdentitySecretKey: responderIdentity.secretKey
+    })
+    initiatorTicket = authority.complete(started.pending, accepted.message)
+    responderState = authority.checker.take(accepted.ticket)
+
+    t.is(snapshots.length, 2, 'both throwing observations return control to issuance')
+    t.alike(responderState.localIdentity, common.responderIdentity, 'responder ticket is usable')
+    t.is(authority.revoke(initiatorTicket), true, 'initiator ticket remains destroyable')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+    if (responderState) {
+      for (const pair of Object.values(responderState.contexts)) {
+        for (const context of [pair.tx, pair.rx]) {
+          context.key.fill(0)
+          context.noncePrefix.fill(0)
+          context.counter.destroy()
+        }
+      }
+      for (const name of ['circuitId', 'localIdentity', 'peerIdentity', 'localId', 'peerLocalId'])
+        responderState[name].fill(0)
+    }
+    if (started) started.message.fill(0)
+    if (accepted) accepted.message.fill(0)
+  }
+
+  for (const snapshot of snapshots) {
+    for (const name of ['circuitId', 'localIdentity', 'peerIdentity', 'localId', 'peerLocalId'])
+      t.ok(
+        snapshot[name].every((byte) => byte === 0),
+        `${name} snapshot is zeroized`
+      )
+    for (const pair of Object.values(snapshot.contexts)) {
+      for (const context of [pair.tx, pair.rx]) {
+        t.ok(
+          context.key.every((byte) => byte === 0),
+          'snapshot key is zeroized'
+        )
+        t.ok(
+          context.noncePrefix.every((byte) => byte === 0),
+          'snapshot nonce is zeroized'
+        )
+        t.ok(context.counter.closed, 'snapshot counter is destroyed')
+      }
+    }
+  }
+  t.ok(allocations.length > 0)
+  t.ok(
+    allocations.every((allocation) => allocation.every((byte) => byte === 0)),
+    'ticket and observer allocation teardown leaves no retained secret bytes'
+  )
 })
 
 test('link setup uses different material for every adjacency', (t) => {

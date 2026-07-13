@@ -77,6 +77,51 @@ test('virtual link exposes only sender and receiver for each delivery', (t) => {
   }
 })
 
+test('virtual network cancellation removes only the owned pending send', (t) => {
+  const delivered = []
+  const network = new VirtualNetwork()
+  network.register('a', () => {})
+  network.register('b', (packet) => delivered.push(text(packet)))
+  const owned = network.sendOwned('a', 'b', b4a.from('owned'))
+  network.send('a', 'b', b4a.from('unrelated'))
+
+  t.alike(Object.keys(owned), ['cancel'])
+  t.is(owned.cancel(), 1)
+  t.is(owned.cancel(), 0)
+  t.is(network.flush(), 1)
+  t.alike(delivered, ['unrelated'])
+  t.is(network.flush(), 0)
+})
+
+test('route cancellation during delivery preserves unrelated queued packets', (t) => {
+  const delivered = []
+  let owned = null
+  let cancelled = null
+  const network = limited(
+    { maxPacketBytes: 8, maxPendingPackets: 3, maxPendingBytes: 12 },
+    {
+      fault({ packet }) {
+        return text(packet) === 'same' ? [{ packet }, { packet }] : undefined
+      }
+    }
+  )
+  network.register('a', () => {})
+  network.register('b', (packet) => {
+    delivered.push(text(packet))
+    if (text(packet) !== 'same') return
+    cancelled = owned.cancel()
+    network.send('a', 'b', b4a.from('newbytes'))
+  })
+  owned = network.sendOwned('a', 'b', b4a.from('same'))
+  network.send('a', 'b', b4a.from('else'))
+
+  t.is(network.flush(), 3)
+  t.is(cancelled, 1, 'only the still-pending duplicate is cancelled')
+  t.is(owned.cancel(), 0, 'the cancellation token remains idempotent')
+  t.alike(delivered, ['same', 'else', 'newbytes'])
+  t.is(network.flush(), 0)
+})
+
 test('send copies intrinsic packet bytes and ignores shadowed lengths', (t) => {
   const received = []
   const network = new VirtualNetwork({ now: 0 })

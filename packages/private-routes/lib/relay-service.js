@@ -1,6 +1,6 @@
 import b4a from 'b4a'
 
-import { CELL_SIZE, CellCodec } from './cell-codec.js'
+import { CELL_SIZE, MAX_CELL_PAYLOAD, CellCodec } from './cell-codec.js'
 import { PrivateRouteError } from './errors.js'
 import { isLinkTicketChecker } from './link-setup.js'
 import { CELL_CLASS, CIRCUIT_STATE, DIRECTION } from './protocol.js'
@@ -568,17 +568,33 @@ export class RelayService {
       if (this.#onControl) {
         let borrowed = null
         let consumed
+        let callbackSucceeded = false
+        const capability = { live: true, used: false, batch: null }
         try {
           borrowed = copyBuffer(payload)
           consumed = this.#onControl({
             direction: fromPrevious ? DIRECTION.FORWARD : DIRECTION.REVERSE,
             byteLength: bufferLength(payload),
-            payload: borrowed
+            payload: borrowed,
+            forward: (payloads) => this.#stageControlBatch(record, false, payloads, capability),
+            reply: (payloads) => this.#stageControlBatch(record, true, payloads, capability)
           })
+          callbackSucceeded = true
         } catch {
           invalidCell()
         } finally {
+          capability.live = false
           clear(borrowed)
+          if (!callbackSucceeded) this.#clearControlBatch(capability)
+        }
+        if (capability.used) {
+          try {
+            this.#requireLive(record)
+            this.#commitControlBatch(record, fromPrevious, capability)
+          } finally {
+            this.#clearControlBatch(capability)
+          }
+          return
         }
         this.#requireLive(record)
         if (consumed === true) return
@@ -607,15 +623,21 @@ export class RelayService {
       this.#requireLive(record, sealed)
       if (this.#observe) {
         const afterHash = this.#payloadHash(payload)
+        const frame = copyBuffer(payload)
         this.#requireLive(record, sealed)
-        this.#safeObserve({
-          type: 'forward',
-          class: cellClass,
-          direction,
-          byteLength: bufferLength(payload),
-          beforeHash,
-          afterHash
-        })
+        try {
+          this.#safeObserve({
+            type: 'forward',
+            class: cellClass,
+            direction,
+            byteLength: bufferLength(payload),
+            beforeHash,
+            afterHash,
+            frame
+          })
+        } finally {
+          clear(frame)
+        }
         this.#requireLive(record, sealed)
       }
       this.#transmit(record, outbound.peerIdentity, sealed)
@@ -623,6 +645,102 @@ export class RelayService {
     } finally {
       clear(sealed)
     }
+  }
+
+  #stageControlBatch(record, reply, payloads, capability) {
+    if (!capability.live || record.destroyed) {
+      this.#destroyRecord(record, true)
+      throw PrivateRouteError.CIRCUIT_STATE()
+    }
+    if (capability.used) {
+      this.#destroyRecord(record, true)
+      throw PrivateRouteError.CIRCUIT_STATE()
+    }
+    capability.used = true
+
+    let values
+    try {
+      values = b4a.isBuffer(payloads) ? [payloads] : Array.isArray(payloads) ? payloads : null
+    } catch {
+      invalidCell()
+    }
+    if (values === null || values.length < 1 || values.length > 8) invalidCell()
+
+    const owned = []
+    try {
+      const count = values.length
+      for (let index = 0; index < count; index++) {
+        let value
+        try {
+          value = values[index]
+        } catch {
+          invalidCell()
+        }
+        const size = bufferLength(value)
+        if (size < 0 || size > MAX_CELL_PAYLOAD) invalidCell()
+        owned.push(copyBuffer(value))
+      }
+      capability.batch = { reply, values: owned }
+      return undefined
+    } catch (err) {
+      for (const value of owned) clear(value)
+      throw err
+    }
+  }
+
+  #commitControlBatch(record, fromPrevious, capability) {
+    const batch = capability.batch
+    if (!batch || !Array.isArray(batch.values)) invalidCell()
+    const packets = []
+    try {
+      this.#requireLive(record)
+      const outbound = batch.reply
+        ? fromPrevious
+          ? record.previous
+          : record.next
+        : fromPrevious
+          ? record.next
+          : record.previous
+      const direction = batch.reply
+        ? fromPrevious
+          ? DIRECTION.REVERSE
+          : DIRECTION.FORWARD
+        : fromPrevious
+          ? DIRECTION.FORWARD
+          : DIRECTION.REVERSE
+      const context = outbound.contexts[CELL_CLASS.CONTROL].tx
+      for (const value of batch.values) {
+        packets.push(
+          this.#codec.seal({
+            key: context.key,
+            noncePrefix: context.noncePrefix,
+            senderCounter: context.counter,
+            class: CELL_CLASS.CONTROL,
+            direction,
+            epoch: outbound.epoch,
+            circuitId: outbound.peerLocalId,
+            payload: value
+          })
+        )
+      }
+      this.#requireLive(record)
+      for (let index = 0; index < packets.length; index++) {
+        const packet = packets[index]
+        packets[index] = null
+        this.#transmit(record, outbound.peerIdentity, packet)
+      }
+      return undefined
+    } finally {
+      for (const packet of packets) clear(packet)
+    }
+  }
+
+  #clearControlBatch(capability) {
+    const batch = capability.batch
+    if (!batch || !Array.isArray(batch.values)) return
+    for (const value of batch.values) clear(value)
+    batch.values.length = 0
+    capability.batch = null
   }
 
   #transmit(record, peer, packet) {
@@ -680,7 +798,7 @@ export class RelayService {
     const contexts = this.#contexts(record)
     this.#clearTicket(record.previous)
     this.#clearTicket(record.next)
-    this.#safeObserve({ type: 'zeroized', contexts })
+    this.#safeObserve({ type: 'zeroized', contexts, queuedBytes: this.#queuedBytes })
 
     if (this.#destroying) {
       for (const notice of notices) clear(notice.packet)

@@ -2,6 +2,7 @@ import test from 'brittle'
 import b4a from 'b4a'
 
 import {
+  ActivationReassembler,
   CELL_CLASS,
   CELL_SIZE,
   CIRCUIT_STATE,
@@ -464,6 +465,170 @@ test('relay forwards raw fixed cells through one route-local binding in both dir
   t.alike(f.openSent('previous', CELL_CLASS.DATAGRAM, f.sent[1].packet), routeFrame(2))
 })
 
+test('CONTROL callback can forward one bounded replacement batch without exposing link state', (t) => {
+  const payloads = [b4a.from('nested-1'), b4a.from('nested-2')]
+  let fields = null
+  const f = relayFixture({
+    onControl(event) {
+      fields = Object.keys(event).sort()
+      event.forward(payloads)
+      return false
+    }
+  })
+  f.relay.receive(
+    f.previous.publicKey,
+    f.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('outer'))
+  )
+  t.alike(fields, ['byteLength', 'direction', 'forward', 'payload', 'reply'])
+  t.is(f.sent.length, 2)
+  t.alike(
+    f.sent.map(({ peer }) => peer),
+    [f.next.publicKey, f.next.publicKey]
+  )
+  t.alike(
+    f.sent.map(({ packet }) => f.openSent('next', CELL_CLASS.CONTROL, packet)),
+    payloads
+  )
+})
+
+test('CONTROL callback can reply with a bounded reverse batch', (t) => {
+  const payloads = [b4a.from('ack-1'), b4a.from('ack-2')]
+  const f = relayFixture({
+    onControl(event) {
+      event.reply(payloads)
+    }
+  })
+  f.relay.receive(
+    f.previous.publicKey,
+    f.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('register'))
+  )
+  t.is(f.sent.length, 2)
+  t.alike(
+    f.sent.map(({ peer }) => peer),
+    [f.previous.publicKey, f.previous.publicKey]
+  )
+  t.alike(
+    f.sent.map(({ packet }) => f.openSent('previous', CELL_CLASS.CONTROL, packet)),
+    payloads
+  )
+})
+
+test('CONTROL callback capabilities are one-shot, mutually exclusive, bounded, and revoked', (t) => {
+  let escaped = null
+  const revoked = relayFixture({
+    onControl(event) {
+      escaped = event.forward
+      return true
+    }
+  })
+  revoked.relay.receive(
+    revoked.previous.publicKey,
+    revoked.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('x'))
+  )
+  expectCode(t, () => escaped(b4a.from('late')), 'CIRCUIT_STATE')
+  t.is(revoked.relay.activeCircuits, 0)
+
+  const double = relayFixture({
+    onControl(event) {
+      event.forward(b4a.from('one'))
+      event.reply(b4a.from('two'))
+    }
+  })
+  expectCode(
+    t,
+    () =>
+      double.relay.receive(
+        double.previous.publicKey,
+        double.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('x'))
+      ),
+    'CELL_INVALID'
+  )
+  t.is(double.relay.activeCircuits, 0)
+  t.is(double.sent.length, 2)
+  t.alike(
+    double.sent.map(({ peer }) => peer),
+    [double.previous.publicKey, double.next.publicKey]
+  )
+
+  const throwing = relayFixture({
+    onControl(event) {
+      event.forward(b4a.from('staged'))
+      throw new Error('later failure')
+    }
+  })
+  expectCode(
+    t,
+    () =>
+      throwing.relay.receive(
+        throwing.previous.publicKey,
+        throwing.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('x'))
+      ),
+    'CELL_INVALID'
+  )
+  t.is(throwing.relay.activeCircuits, 0)
+  t.is(throwing.sent.length, 2)
+  t.alike(
+    throwing.sent.map(({ peer }) => peer),
+    [throwing.previous.publicKey, throwing.next.publicKey]
+  )
+
+  let selfDestroy = null
+  selfDestroy = relayFixture({
+    onControl(event) {
+      event.forward(b4a.alloc(1146, 0xaa))
+      selfDestroy.relay.transportClosed(selfDestroy.previous.publicKey)
+      return true
+    }
+  })
+  expectCode(
+    t,
+    () =>
+      selfDestroy.relay.receive(
+        selfDestroy.previous.publicKey,
+        selfDestroy.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('x'))
+      ),
+    'CELL_INVALID'
+  )
+  t.is(selfDestroy.relay.activeCircuits, 0)
+  t.is(selfDestroy.sent.length, 2)
+  t.is(selfDestroy.relayEvents.filter((event) => event.type === 'zeroized').length, 1)
+
+  const boundedArray = [b4a.from('bounded-index')]
+  boundedArray[Symbol.iterator] = () => {
+    throw new Error('must not iterate')
+  }
+  const bounded = relayFixture({
+    onControl(event) {
+      event.forward(boundedArray)
+    }
+  })
+  bounded.relay.receive(
+    bounded.previous.publicKey,
+    bounded.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('x'))
+  )
+  t.is(bounded.sent.length, 1)
+  t.alike(bounded.openSent('next', CELL_CLASS.CONTROL, bounded.sent[0].packet), boundedArray[0])
+
+  for (const payloads of [[], Array.from({ length: 9 }, () => b4a.alloc(0)), [b4a.alloc(1147)]]) {
+    const invalid = relayFixture({
+      onControl(event) {
+        event.forward(payloads)
+      }
+    })
+    expectCode(
+      t,
+      () =>
+        invalid.relay.receive(
+          invalid.previous.publicKey,
+          invalid.sealInbound('previous', CELL_CLASS.CONTROL, b4a.from('x'))
+        ),
+      'CELL_INVALID'
+    )
+    t.is(invalid.relay.activeCircuits, 0)
+    t.is(invalid.sent.length, 2)
+  }
+})
+
 test('relay constructor intrinsically copies an identity with a shadowed length', (t) => {
   const relayIdentity = cryptoSuite.keyPair(seed(32))
   const identity = shadowedBuffer(relayIdentity.publicKey, { length: 1 })
@@ -494,6 +659,24 @@ test('relay accepts only raw 1200-byte authenticated packets and fails closed af
   expectCode(t, () => forged.relay.receive(forged.previous.publicKey, packet), 'CELL_INVALID')
   t.is(forged.relay.activeCircuits, 0)
   t.is(forged.relay.queuedBytes, 0)
+})
+
+test('forged CONTROL cells never invoke activation reassembly', (t) => {
+  let calls = 0
+  const reassembler = new ActivationReassembler({ now: () => 1_000 })
+  const f = relayFixture({
+    onControl(event) {
+      calls++
+      reassembler.pushAuthenticated(event.payload)
+      return true
+    }
+  })
+  const packet = f.sealInbound('previous', CELL_CLASS.CONTROL, b4a.alloc(22))
+  packet[100] ^= 1
+
+  expectCode(t, () => f.relay.receive(f.previous.publicKey, packet), 'CELL_INVALID')
+  t.is(calls, 0)
+  t.is(reassembler.bufferedBytes, 0)
 })
 
 test('relay enforces half-open state, exact opaque frame size, and independent classes', (t) => {

@@ -329,7 +329,8 @@ export function linkChallengeCipher(sharedSecret, baseHash, challenge) {
 
 function possessionTag(crypto, sharedSecret, baseHash, challenge, createHash) {
   const transcript = b4a.concat([DOMAIN.LINK_CREATE, baseHash])
-  const associatedData = b4a.concat([hash(crypto, [challenge]), createHash])
+  const challengeHash = hash(crypto, [challenge])
+  const associatedData = b4a.concat([challengeHash, createHash])
   const keys = derive(crypto, sharedSecret, transcript)
   let tag = null
   try {
@@ -351,6 +352,7 @@ function possessionTag(crypto, sharedSecret, baseHash, challenge, createHash) {
     clear(keys.forwardNoncePrefix)
     clear(keys.reverseNoncePrefix)
     clear(transcript)
+    clear(challengeHash)
     clear(associatedData)
     clear(tag)
   }
@@ -529,17 +531,26 @@ function ticketState(crypto, shared, createHash, createdHash, common, initiator,
 }
 
 function observeState(state, now) {
-  const contexts = {}
-  for (const cellClass of [CELL_CLASS.CONTROL, CELL_CLASS.STREAM, CELL_CLASS.DATAGRAM]) {
-    contexts[cellClass] = {
-      tx: counterContext(
+  const snapshot = { contexts: {} }
+  try {
+    snapshot.circuitId = copyBuffer(state.circuitId)
+    snapshot.epoch = state.epoch
+    snapshot.localIdentity = copyBuffer(state.localIdentity)
+    snapshot.peerIdentity = copyBuffer(state.peerIdentity)
+    snapshot.localId = copyBuffer(state.localId)
+    snapshot.peerLocalId = copyBuffer(state.peerLocalId)
+    snapshot.expiresAt = state.expiresAt
+    for (const cellClass of [CELL_CLASS.CONTROL, CELL_CLASS.STREAM, CELL_CLASS.DATAGRAM]) {
+      const pair = {}
+      snapshot.contexts[cellClass] = pair
+      pair.tx = counterContext(
         cellClass,
         state.contexts[cellClass].tx.key,
         state.contexts[cellClass].tx.noncePrefix,
         true,
         now
-      ),
-      rx: counterContext(
+      )
+      pair.rx = counterContext(
         cellClass,
         state.contexts[cellClass].rx.key,
         state.contexts[cellClass].rx.noncePrefix,
@@ -547,17 +558,46 @@ function observeState(state, now) {
         now
       )
     }
+    return snapshot
+  } catch (err) {
+    clearTicketState(snapshot)
+    throw err
   }
-  return {
-    circuitId: copyBuffer(state.circuitId),
-    epoch: state.epoch,
-    localIdentity: copyBuffer(state.localIdentity),
-    peerIdentity: copyBuffer(state.peerIdentity),
-    localId: copyBuffer(state.localId),
-    peerLocalId: copyBuffer(state.peerLocalId),
-    expiresAt: state.expiresAt,
-    contexts
+}
+
+function clearDecodedFields(value) {
+  if (!value) return
+  for (const field of Object.values(value)) clear(field)
+}
+
+function clearPendingState(state) {
+  if (!state) return
+  clear(state.common && state.common.initiatorEphemeralKey)
+  clear(state.responderStaticKey)
+  clear(state.ephemeralSecretKey)
+  clear(state.challenge)
+  clear(state.createHash)
+}
+
+function clearTicketState(state) {
+  if (!state) return
+  for (const pair of Object.values(state.contexts || {})) {
+    for (const context of [pair && pair.tx, pair && pair.rx]) {
+      if (!context) continue
+      clear(context.key)
+      clear(context.noncePrefix)
+      try {
+        context.counter.destroy()
+      } catch {
+        // Continue clearing the remaining ticket material.
+      }
+    }
   }
+  clear(state.circuitId)
+  clear(state.localIdentity)
+  clear(state.peerIdentity)
+  clear(state.localId)
+  clear(state.peerLocalId)
 }
 
 export function createLinkSetupAuthority(options = {}) {
@@ -584,7 +624,16 @@ export function createLinkSetupAuthority(options = {}) {
   function issue(state) {
     const ticket = Object.freeze({})
     ticketStates.set(ticket, state)
-    if (observe) observe(ticket, observeState(state, now))
+    if (observe) {
+      let snapshot = null
+      try {
+        snapshot = observeState(state, now)
+        observe(ticket, snapshot)
+        snapshot = null
+      } catch {
+        clearTicketState(snapshot)
+      }
+    }
     return ticket
   }
 
@@ -606,6 +655,23 @@ export function createLinkSetupAuthority(options = {}) {
 
   return Object.freeze({
     checker,
+
+    abort(pending) {
+      const state = safeObject(pending) ? pendingStates.get(pending) : null
+      if (!state || spentPending.has(pending)) return false
+      pendingStates.delete(pending)
+      spentPending.add(pending)
+      clearPendingState(state)
+      return true
+    },
+
+    revoke(ticket) {
+      const state = safeObject(ticket) ? ticketStates.get(ticket) : null
+      if (!state) return false
+      ticketStates.delete(ticket)
+      clearTicketState(state)
+      return true
+    },
 
     initiate(value) {
       validateCommon(value)
@@ -664,33 +730,40 @@ export function createLinkSetupAuthority(options = {}) {
       if (!fixed(option(expected, 'responderStaticSecretKey'), 32)) invalidRoute()
       if (!fixed(option(expected, 'responderIdentitySecretKey'), 64)) invalidRoute()
 
-      const create = decodeLinkCreate(message)
-      const current = nowValue(now)
-      if (!matchesCommon(create, expected) || create.expiresAt <= current) invalidRoute()
-
-      const unsigned = b4a.concat([DOMAIN.LINK_CREATE, createUnsigned(create)])
-      if (!verify(crypto, unsigned, create.initiatorIdentitySignature, create.initiatorIdentity)) {
-        clear(unsigned)
-        unauthorized()
-      }
-      clear(unsigned)
-
-      const createHash = hash(crypto, [encodeLinkCreate(create)])
-      const replayKey = b4a.toString(createHash, 'hex')
-      pruneReplay(current)
-      if (replay.has(replayKey)) unauthorizedReplay()
-      if (replay.size >= MAX_REPLAYS) throw PrivateRouteError.CIRCUIT_LIMIT()
-      // A valid identity signature is enough to consume the create transcript.
-      // Otherwise an authenticated initiator can replay a deliberately bad
-      // challenge indefinitely and force repeated static-key work.
-      replay.set(replayKey, create.expiresAt)
-
-      const baseHash = hash(crypto, [DOMAIN.LINK_CREATE, createBase(create)])
+      let create = null
+      let createHash = null
+      let baseHash = null
       let shared = null
       let challenge = null
       let pair = null
       let ephemeralShared = null
+      let created = null
+      let responderCreatedHash = null
       try {
+        create = decodeLinkCreate(message)
+        const current = nowValue(now)
+        if (!matchesCommon(create, expected) || create.expiresAt <= current) invalidRoute()
+
+        const unsigned = b4a.concat([DOMAIN.LINK_CREATE, createUnsigned(create)])
+        if (
+          !verify(crypto, unsigned, create.initiatorIdentitySignature, create.initiatorIdentity)
+        ) {
+          clear(unsigned)
+          unauthorized()
+        }
+        clear(unsigned)
+
+        createHash = hash(crypto, [encodeLinkCreate(create)])
+        const replayKey = b4a.toString(createHash, 'hex')
+        pruneReplay(current)
+        if (replay.has(replayKey)) unauthorizedReplay()
+        if (replay.size >= MAX_REPLAYS) throw PrivateRouteError.CIRCUIT_LIMIT()
+        // A valid identity signature is enough to consume the create transcript.
+        // Otherwise an authenticated initiator can replay a deliberately bad
+        // challenge indefinitely and force repeated static-key work.
+        replay.set(replayKey, create.expiresAt)
+
+        baseHash = hash(crypto, [DOMAIN.LINK_CREATE, createBase(create)])
         shared = agreement(crypto, expected.responderStaticSecretKey, create.initiatorEphemeralKey)
         const transcript = b4a.concat([DOMAIN.LINK_CREATE, baseHash])
         const keys = derive(crypto, shared, transcript)
@@ -730,7 +803,7 @@ export function createLinkSetupAuthority(options = {}) {
         }
         const tag = possessionTag(crypto, shared, baseHash, challenge, createHash)
         const signed = b4a.concat([DOMAIN.LINK_CREATED, createdUnsigned(createdBase), tag])
-        const created = {
+        created = {
           ...createdBase,
           staticPossessionTag: tag,
           responderIdentitySignature: sign(crypto, signed, expected.responderIdentitySecretKey)
@@ -738,13 +811,13 @@ export function createLinkSetupAuthority(options = {}) {
         clear(signed)
 
         const encoded = encodeLinkCreated(created)
-        const createdHash = hash(crypto, [encoded])
+        responderCreatedHash = hash(crypto, [encoded])
         ephemeralShared = agreement(crypto, pair.secretKey, create.initiatorEphemeralKey)
         const state = ticketState(
           crypto,
           ephemeralShared,
           createHash,
-          createdHash,
+          responderCreatedHash,
           create,
           false,
           now
@@ -755,8 +828,12 @@ export function createLinkSetupAuthority(options = {}) {
         clear(challenge)
         clear(baseHash)
         clear(createHash)
+        clear(responderCreatedHash)
+        clear(pair && pair.publicKey)
         clear(pair && pair.secretKey)
         clear(ephemeralShared)
+        clearDecodedFields(created)
+        clearDecodedFields(create)
       }
     },
 
@@ -768,8 +845,9 @@ export function createLinkSetupAuthority(options = {}) {
 
       let shared = null
       let createdHash = null
+      let created = null
       try {
-        const created = decodeLinkCreated(message)
+        created = decodeLinkCreated(message)
         if (
           !matchesCommon(created, state.common) ||
           !same(created.initiatorEphemeralKey, state.common.initiatorEphemeralKey) ||
@@ -825,10 +903,8 @@ export function createLinkSetupAuthority(options = {}) {
       } finally {
         clear(shared)
         clear(createdHash)
-        clear(state.responderStaticKey)
-        clear(state.ephemeralSecretKey)
-        clear(state.challenge)
-        clear(state.createHash)
+        clearDecodedFields(created)
+        clearPendingState(state)
       }
     }
   })

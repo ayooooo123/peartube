@@ -717,18 +717,26 @@ export class RoutePayloadCodec {
     }
     this.#mutating = true
     let result = null
+    let failure = null
+    let failed = false
+    let teardown = false
     try {
       result = operation()
-      if (this.#destroyRequested || this.#destroyed) {
+    } catch (err) {
+      failed = true
+      failure = err
+    } finally {
+      teardown = this.#destroyRequested || this.#destroyed
+      if (teardown) {
         clearOperationResult(result)
         result = null
-        throw PrivateRouteError.CIRCUIT_STATE()
       }
-      return result
-    } finally {
       this.#mutating = false
       if (this.#destroyRequested) this.#destroyNow()
     }
+    if (teardown) throw PrivateRouteError.CIRCUIT_STATE()
+    if (failed) throw failure
+    return result
   }
 
   #destroyNow() {

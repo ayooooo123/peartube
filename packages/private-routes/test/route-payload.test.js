@@ -742,6 +742,103 @@ test('destroy requested by clock, open crypto, or receiver clears buffered work'
   }
 })
 
+test('pending teardown overrides failures from every injected operation callback', (t) => {
+  for (const trigger of ['padding', 'seal crypto']) {
+    let source = null
+    source = route(
+      trigger === 'padding'
+        ? {
+            padding() {
+              source.destroy()
+              throw new Error('padding failed after destroy')
+            }
+          }
+        : {
+            crypto: {
+              ...cryptoSuite,
+              seal() {
+                source.destroy()
+                throw new Error('seal failed after destroy')
+              }
+            }
+          }
+    )
+
+    expectCode(t, () => seal(source), 'CIRCUIT_STATE')
+    t.is(source.stats.destroyed, true)
+    t.is(source.stats.forward.senderNext, 0n)
+    t.is(source.stats.forward.datagramSenderNext, 0n)
+  }
+
+  for (const trigger of ['clock', 'open crypto', 'ordered receiver', 'datagram receiver']) {
+    let destination = null
+    const destinationOverrides = {}
+    if (trigger === 'clock') {
+      destinationOverrides.now = () => {
+        destination.destroy()
+        throw new Error('clock failed after destroy')
+      }
+    } else if (trigger === 'open crypto') {
+      destinationOverrides.crypto = {
+        ...cryptoSuite,
+        open(options) {
+          cryptoSuite.open(options)
+          destination.destroy()
+          throw new Error('open failed after destroy')
+        }
+      }
+    } else {
+      const ordered = new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 })
+      const datagram = new DatagramReplayWindow({ window: 8 })
+      destinationOverrides.receivers = {
+        forwardOrdered:
+          trigger === 'ordered receiver'
+            ? {
+                next: 0n,
+                buffered: 0,
+                needsRotation: false,
+                pushAuthenticated() {
+                  destination.destroy()
+                  throw new Error('ordered receiver failed after destroy')
+                },
+                destroy() {
+                  this.next = 0n
+                  this.buffered = 0
+                }
+              }
+            : ordered,
+        forwardDatagram:
+          trigger === 'datagram receiver'
+            ? {
+                highest: null,
+                needsRotation: false,
+                acceptAuthenticated() {
+                  destination.destroy()
+                  throw new Error('datagram receiver failed after destroy')
+                },
+                destroy() {
+                  this.highest = null
+                }
+              }
+            : datagram,
+        reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+        reverseDatagram: new DatagramReplayWindow({ window: 8 })
+      }
+    }
+    const pair = routePair({}, destinationOverrides)
+    destination = pair.destination
+    if (trigger === 'clock') seal(pair.source)
+    const frame = seal(pair.source, {
+      class: trigger === 'datagram receiver' ? CELL_CLASS.DATAGRAM : CELL_CLASS.STREAM
+    })
+
+    expectCode(t, () => open(destination, frame), 'CIRCUIT_STATE')
+    t.is(destination.stats.destroyed, true)
+    t.is(destination.stats.forward.orderedBuffered, 0)
+    t.is(destination.stats.forward.datagramHighest, null)
+  }
+})
+
 test('reentrant seal and open fail closed even when the callback catches the nested error', (t) => {
   let sealing = false
   let sealNested = null

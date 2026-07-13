@@ -310,7 +310,7 @@ export class PrivacyDomainRegistry {
           ? existingPublic.expiresAt
           : state.expiresAt
     })
-    this.#noteExpiry(record, state.expiresAt)
+    this.#noteExpiry(record, record.publicEvidence.get(state.epoch).expiresAt)
   }
 
   learnRoute(identity, material) {
@@ -343,7 +343,7 @@ export class PrivacyDomainRegistry {
           privateOnlyExpiresAt: material.expiresAt
         })
       }
-      this.#noteExpiry(record, material.expiresAt)
+      this.#noteExpiry(record, record.routeEpochs.get(material.epoch).privateOnlyExpiresAt)
       return
     }
 
@@ -419,7 +419,7 @@ export class PrivacyDomainRegistry {
       route.expiresAt = descriptor.expiresAt
     }
     route.circuits.set(bindingKey, binding)
-    this.#noteExpiry(record, descriptor.expiresAt)
+    this.#noteExpiry(record, route.expiresAt)
     this.#noteExpiry(record, binding.expiresAt)
   }
 

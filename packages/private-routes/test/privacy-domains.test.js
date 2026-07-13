@@ -799,6 +799,96 @@ test('registry amortizes capacity sweeps until the earliest known expiry', (t) =
   }
 })
 
+test('registry capacity watermark follows retained expiries after shorter merges', (t) => {
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const limits = smallLimits({ maxIdentities: 1 })
+  const assertRetainedExpiry = (registry, setNow, admittedIdentity) => {
+    for (const expiresAt of [200_000n, 300_000n]) {
+      setNow(expiresAt)
+      expectCode(
+        t,
+        () =>
+          registry.learnRoute(admittedIdentity, {
+            provenance: 'private-only',
+            epoch: 9n,
+            expiresAt: 1_000_000n
+          }),
+        'CIRCUIT_LIMIT'
+      )
+      t.is(registry.sweepCount, 0)
+    }
+    setNow(900_000n)
+    registry.learnRoute(admittedIdentity, {
+      provenance: 'private-only',
+      epoch: 9n,
+      expiresAt: 1_000_000n
+    })
+    t.is(registry.sweepCount, 1)
+  }
+
+  {
+    let current = 100_000n
+    const safety = safetyRoleIdentity(100)
+    const registry = registryFor(
+      evidenceAuthority.checker,
+      circuitAuthority.checker,
+      () => current,
+      limits
+    )
+    registry.learnPublic(issueEvidence(evidenceAuthority, safety, { expiresAt: 900_000n }))
+    registry.learnPublic(issueEvidence(evidenceAuthority, safety, { expiresAt: 200_000n }))
+    registry.learnPublic(issueEvidence(evidenceAuthority, safety, { expiresAt: 300_000n }))
+    assertRetainedExpiry(registry, (value) => (current = value), numericIdentity(10))
+  }
+
+  {
+    let current = 100_000n
+    const identity = numericIdentity(20)
+    const registry = registryFor(
+      evidenceAuthority.checker,
+      circuitAuthority.checker,
+      () => current,
+      limits
+    )
+    for (const expiresAt of [900_000n, 200_000n, 300_000n]) {
+      registry.learnRoute(identity, {
+        provenance: 'private-only',
+        epoch: 7n,
+        expiresAt
+      })
+    }
+    assertRetainedExpiry(registry, (value) => (current = value), numericIdentity(21))
+  }
+
+  {
+    let current = 100_000n
+    const safety = safetyRoleIdentity(100)
+    const entry = privateRoleIdentity(120)
+    const registry = registryFor(
+      evidenceAuthority.checker,
+      circuitAuthority.checker,
+      () => current,
+      limits
+    )
+    const context = circuitAuthority.issuer.issueFinalSafety({
+      circuitId: b4a.alloc(16, 40),
+      epoch: 7n,
+      finalSafetyIdentity32: safety.publicKey,
+      entryIdentity32: entry.publicKey,
+      expiresAt: 900_000n
+    })
+    for (const expiresAt of [900_000n, 200_000n, 300_000n]) {
+      registry.learnRoute(entry.publicKey, {
+        provenance: 'route-entry',
+        descriptor: verifiedRouteDescriptor(entry, { descriptor: { expiresAt } }),
+        circuitContext: context
+      })
+    }
+    assertRetainedExpiry(registry, (value) => (current = value), numericIdentity(30))
+  }
+})
+
 test('all-quarantined capacity rejects without global sweeps', (t) => {
   let current = 100_000n
   const safety = safetyRoleIdentity(100)

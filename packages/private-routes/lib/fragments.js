@@ -261,8 +261,13 @@ export class Reassembler {
       if (existing) this.#remove(existing)
       invalid()
     }
-    if (total > Math.ceil(this.#maxMessageBytes / MAX_FRAGMENT_DATA)) limit()
-    if (index === total - 1 && maximumBytes > this.#maxMessageBytes) limit()
+    if (
+      total > Math.ceil(this.#maxMessageBytes / MAX_FRAGMENT_DATA) ||
+      (index === total - 1 && maximumBytes > this.#maxMessageBytes)
+    ) {
+      if (existing) this.#remove(existing)
+      limit()
+    }
 
     if (existing && existing.parts.has(index)) {
       const accepted = existing.parts.get(index)

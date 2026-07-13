@@ -10,14 +10,20 @@ import {
   MAX_COUNTER,
   OrderedReceiver,
   PrivateRouteError,
+  Reassembler,
   ROUTE_FRAME_SIZE,
   RoutePayloadCodec,
   SenderCounter,
-  cryptoSuite
+  cryptoSuite,
+  fragment
 } from '../index.js'
 import { expectCode, seed } from './helpers.js'
 import { TEST_ONLY_BUFFER_OBSERVER } from '../lib/counters.js'
-import { TEST_ONLY_RECEIVERS } from '../lib/route-payload.js'
+import {
+  TEST_ONLY_RECEIVERS,
+  destroyCreatedRoutePayloadContext,
+  mintCreatedRoutePayloadContext
+} from '../lib/route-payload.js'
 import * as publicRoutes from '../index.js'
 
 const DESCRIPTOR_ID = b4a.alloc(32, 0x31)
@@ -29,15 +35,31 @@ function zeroPadding(size) {
 }
 
 function route(overrides = {}) {
-  const { receivers, ...rest } = overrides
+  const {
+    receivers,
+    context,
+    descriptorId = DESCRIPTOR_ID,
+    circuitId = CIRCUIT_ID,
+    forwardKey = ROUTE_KEYS.forwardKey,
+    forwardNoncePrefix = ROUTE_KEYS.forwardNoncePrefix,
+    reverseKey = ROUTE_KEYS.reverseKey,
+    reverseNoncePrefix = ROUTE_KEYS.reverseNoncePrefix,
+    ...rest
+  } = overrides
+  const createdContext =
+    context === undefined
+      ? mintCreatedRoutePayloadContext({
+          descriptorId,
+          circuitId,
+          forwardKey,
+          forwardNoncePrefix,
+          reverseKey,
+          reverseNoncePrefix
+        })
+      : context
   return new RoutePayloadCodec({
     crypto: cryptoSuite,
-    descriptorId: DESCRIPTOR_ID,
-    circuitId: CIRCUIT_ID,
-    forwardKey: ROUTE_KEYS.forwardKey,
-    forwardNoncePrefix: ROUTE_KEYS.forwardNoncePrefix,
-    reverseKey: ROUTE_KEYS.reverseKey,
-    reverseNoncePrefix: ROUTE_KEYS.reverseNoncePrefix,
+    context: createdContext,
     window: 8,
     gapTimeout: 100,
     now: () => 0,
@@ -50,6 +72,64 @@ function route(overrides = {}) {
 test('route receiver injection hook is test-only and non-public', (t) => {
   t.is(typeof TEST_ONLY_RECEIVERS, 'symbol')
   t.is('TEST_ONLY_RECEIVERS' in publicRoutes, false)
+})
+
+test('only a one-use authenticated-CREATED context can construct a route codec', (t) => {
+  const options = {
+    crypto: cryptoSuite,
+    window: 8,
+    gapTimeout: 100,
+    now: () => 0,
+    padding: zeroPadding
+  }
+  const rawKeys = {
+    descriptorId: DESCRIPTOR_ID,
+    circuitId: CIRCUIT_ID,
+    forwardKey: ROUTE_KEYS.forwardKey,
+    forwardNoncePrefix: ROUTE_KEYS.forwardNoncePrefix,
+    reverseKey: ROUTE_KEYS.reverseKey,
+    reverseNoncePrefix: ROUTE_KEYS.reverseNoncePrefix
+  }
+
+  expectCode(t, () => new RoutePayloadCodec({ ...options, ...rawKeys }), 'INVALID_ROUTE')
+  expectCode(t, () => new RoutePayloadCodec({ ...options, context: {} }), 'INVALID_ROUTE')
+  const context = mintCreatedRoutePayloadContext(rawKeys)
+  t.alike(Reflect.ownKeys(context), [])
+  t.is(Object.isFrozen(context), true)
+  const codec = new RoutePayloadCodec({ ...options, context })
+  t.is(codec.stats.destroyed, false)
+  expectCode(t, () => new RoutePayloadCodec({ ...options, context }), 'INVALID_ROUTE')
+  t.is('mintCreatedRoutePayloadContext' in publicRoutes, false)
+})
+
+test('an unconsumed authenticated-CREATED context can be disposed and zeroed', (t) => {
+  const allocations = []
+  const originalAlloc = b4a.allocUnsafeSlow
+  b4a.allocUnsafeSlow = (size) => {
+    const value = originalAlloc(size)
+    allocations.push(value)
+    return value
+  }
+  let context
+  try {
+    context = mintCreatedRoutePayloadContext({
+      descriptorId: DESCRIPTOR_ID,
+      circuitId: CIRCUIT_ID,
+      forwardKey: ROUTE_KEYS.forwardKey,
+      forwardNoncePrefix: ROUTE_KEYS.forwardNoncePrefix,
+      reverseKey: ROUTE_KEYS.reverseKey,
+      reverseNoncePrefix: ROUTE_KEYS.reverseNoncePrefix
+    })
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  t.is(allocations.length, 6)
+  destroyCreatedRoutePayloadContext(context)
+  destroyCreatedRoutePayloadContext(context)
+  for (const value of allocations) t.alike(value, b4a.alloc(value.byteLength))
+  expectCode(t, () => route({ context }), 'INVALID_ROUTE')
+  t.is('destroyCreatedRoutePayloadContext' in publicRoutes, false)
 })
 
 function seal(codec, overrides = {}) {
@@ -191,6 +271,106 @@ test('authentication and body checks precede every receiver call', (t) => {
   const opened = open(destination, frame)
   t.is(calls.length, 1)
   t.alike(opened[0].payload, b4a.from('private payload'))
+})
+
+test('every forged route input leaves observed receivers and counter stats untouched', (t) => {
+  const frame = seal(route())
+
+  function observed(overrides = {}) {
+    let traffic = 0
+    let calls = 0
+    function receiver(datagram) {
+      return new Proxy(
+        {},
+        {
+          get(target, property) {
+            traffic++
+            if (property === 'pushAuthenticated') {
+              return () => {
+                calls++
+                return []
+              }
+            }
+            if (property === 'acceptAuthenticated') {
+              return () => {
+                calls++
+                return true
+              }
+            }
+            if (property === 'next') return 0n
+            if (property === 'buffered') return 0
+            if (property === 'highest') return datagram ? null : undefined
+            return undefined
+          }
+        }
+      )
+    }
+    const codec = route({
+      ...overrides,
+      receivers: {
+        forwardOrdered: receiver(false),
+        forwardDatagram: receiver(true),
+        reverseOrdered: receiver(false),
+        reverseDatagram: receiver(true)
+      }
+    })
+    return {
+      codec,
+      reset() {
+        traffic = 0
+        calls = 0
+      },
+      observations() {
+        return { traffic, calls }
+      }
+    }
+  }
+
+  const cases = [
+    { overrides: { forwardKey: seed(99) }, frame, direction: DIRECTION.FORWARD },
+    {
+      overrides: { descriptorId: b4a.alloc(32, 0xa1) },
+      frame,
+      direction: DIRECTION.FORWARD
+    },
+    {
+      overrides: { circuitId: b4a.alloc(16, 0xa2) },
+      frame,
+      direction: DIRECTION.FORWARD
+    },
+    { overrides: {}, frame, direction: DIRECTION.REVERSE },
+    {
+      overrides: {},
+      frame: (() => {
+        const changed = b4a.from(frame)
+        changed[7] ^= 1
+        return changed
+      })(),
+      direction: DIRECTION.FORWARD
+    },
+    {
+      overrides: {},
+      frame: (() => {
+        const changed = b4a.from(frame)
+        changed[changed.byteLength - 1] ^= 1
+        return changed
+      })(),
+      direction: DIRECTION.FORWARD
+    }
+  ]
+
+  for (const forged of cases) {
+    const spy = observed(forged.overrides)
+    const before = spy.codec.stats
+    spy.reset()
+    expectCode(
+      t,
+      () => spy.codec.open({ direction: forged.direction }, forged.frame),
+      'INVALID_ROUTE'
+    )
+    t.alike(spy.observations(), { traffic: 0, calls: 0 })
+    t.alike(spy.codec.stats, before)
+  }
 })
 
 test('counter mutation cannot be authenticated or touch the receiver', (t) => {
@@ -394,6 +574,40 @@ test('datagram receivers must return exactly true', (t) => {
     })
     expectCode(t, () => open(destination, frame), 'INVALID_ROUTE')
   }
+})
+
+test('fresh route counters may carry completed-fragment replay without closing the route', (t) => {
+  const source = route()
+  const destination = route()
+  const reassembler = new Reassembler({ now: () => 0, epochExpiresAt: 1000 })
+  let reassemblerCalls = 0
+  function receive(frame) {
+    const deliveries = open(destination, frame)
+    let result = null
+    for (const delivery of deliveries) {
+      reassemblerCalls++
+      result = reassembler.pushAuthenticated(delivery.payload)
+    }
+    return result
+  }
+
+  const completed = fragment(b4a.from('first message'), { messageId: b4a.alloc(16, 0xb1) })[0]
+  const firstFrame = seal(source, { payload: completed })
+  t.alike(receive(firstFrame), b4a.from('first message'))
+
+  const freshCounterReplay = seal(source, { payload: completed })
+  expectCode(t, () => receive(freshCounterReplay), 'REPLAY')
+  t.is(destination.stats.forward.orderedNext, 2n)
+
+  const another = fragment(b4a.from('second message'), { messageId: b4a.alloc(16, 0xb2) })[0]
+  const usableFrame = seal(source, { payload: another })
+  t.alike(receive(usableFrame), b4a.from('second message'))
+  t.is(destination.stats.forward.orderedNext, 3n)
+
+  const callsBeforeRouteReplay = reassemblerCalls
+  expectCode(t, () => receive(usableFrame), 'REPLAY')
+  t.is(reassemblerCalls, callsBeforeRouteReplay)
+  t.is(destination.stats.forward.orderedNext, 3n)
 })
 
 test('route payload validates exact public and authenticated bounds before reserving counters', (t) => {

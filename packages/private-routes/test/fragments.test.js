@@ -260,10 +260,18 @@ test('global byte limit rejects new data and preserves existing fragments', (t) 
   t.alike(receiver.pushAuthenticated(a[1]), b4a.alloc(MAX_FRAGMENT_DATA + 1, 5))
 })
 
-test('per-message byte limit rejects excess without corrupting accepted state', (t) => {
-  const receiver = reassembler({ maxMessageBytes: MAX_FRAGMENT_DATA + 1 })
+test('per-message overflow zeroes only the affected message', (t) => {
+  const owned = []
+  const receiver = reassembler({
+    maxMessageBytes: MAX_FRAGMENT_DATA + 1,
+    [TEST_ONLY_FRAGMENT_OBSERVER](value) {
+      owned.push(value)
+    }
+  })
   const first = frame(id(18), 0, 2, b4a.alloc(MAX_FRAGMENT_DATA, 7))
+  const other = fragment(b4a.alloc(MAX_FRAGMENT_DATA + 1, 8), { messageId: id(38) })
   receiver.pushAuthenticated(first)
+  receiver.pushAuthenticated(other[0])
 
   expectCode(
     t,
@@ -271,10 +279,8 @@ test('per-message byte limit rejects excess without corrupting accepted state', 
     'CIRCUIT_LIMIT'
   )
   t.is(receiver.stats.messages, 1)
-  t.alike(
-    receiver.pushAuthenticated(frame(id(18), 1, 2, b4a.alloc(1, 7))),
-    b4a.alloc(MAX_FRAGMENT_DATA + 1, 7)
-  )
+  t.alike(owned[0], b4a.alloc(MAX_FRAGMENT_DATA))
+  t.alike(receiver.pushAuthenticated(other[1]), b4a.alloc(MAX_FRAGMENT_DATA + 1, 8))
 })
 
 test('completed-ID capacity never evicts early and rejects new IDs', (t) => {

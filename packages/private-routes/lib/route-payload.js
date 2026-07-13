@@ -12,6 +12,9 @@ export const MAX_ROUTE_PAYLOAD = 1073
 
 export const TEST_ONLY_RECEIVERS = Symbol('test-only-route-payload-receivers')
 
+const CREATED_CONTEXTS = new WeakMap()
+const CREATED_CONTEXT_TOKENS = new WeakSet()
+
 const KEY_BYTES = 32
 const NONCE_PREFIX_BYTES = 16
 const DESCRIPTOR_ID_BYTES = 32
@@ -211,6 +214,89 @@ function decodeDeliveries(deliveries) {
   }
 }
 
+function contextFields(options) {
+  options = optionsObject(options)
+  const descriptorId = option(options, 'descriptorId')
+  const circuitId = option(options, 'circuitId')
+  const forwardKey = option(options, 'forwardKey')
+  const forwardNoncePrefix = option(options, 'forwardNoncePrefix')
+  const reverseKey = option(options, 'reverseKey')
+  const reverseNoncePrefix = option(options, 'reverseNoncePrefix')
+  if (
+    !isBuffer(descriptorId, DESCRIPTOR_ID_BYTES) ||
+    !isBuffer(circuitId, CIRCUIT_ID_BYTES) ||
+    !isBuffer(forwardKey, KEY_BYTES) ||
+    !isBuffer(reverseKey, KEY_BYTES) ||
+    !isBuffer(forwardNoncePrefix, NONCE_PREFIX_BYTES) ||
+    !isBuffer(reverseNoncePrefix, NONCE_PREFIX_BYTES)
+  ) {
+    invalid()
+  }
+  try {
+    if (b4a.equals(forwardKey, reverseKey) || b4a.equals(forwardNoncePrefix, reverseNoncePrefix)) {
+      invalid()
+    }
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  }
+  return { descriptorId, circuitId, forwardKey, forwardNoncePrefix, reverseKey, reverseNoncePrefix }
+}
+
+// Internal post-authentication boundary. Task 11's verified CREATED handler is
+// the only production issuer. This mint is deliberately absent from index.js.
+export function mintCreatedRoutePayloadContext(options) {
+  const fields = contextFields(options)
+  const owned = {}
+  try {
+    for (const [name, value] of Object.entries(fields)) owned[name] = copy(value)
+    const context = Object.freeze(Object.create(null))
+    CREATED_CONTEXTS.set(context, owned)
+    CREATED_CONTEXT_TOKENS.add(context)
+    return context
+  } catch (err) {
+    for (const value of Object.values(owned)) clear(value)
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  }
+}
+
+function clearCreatedContext(owned) {
+  if (!owned) return
+  for (const value of Object.values(owned)) clear(value)
+}
+
+// Task 11 must call this if activation aborts after minting but before the
+// context is consumed by RoutePayloadCodec.
+export function destroyCreatedRoutePayloadContext(context) {
+  let known = false
+  let owned = null
+  try {
+    known = CREATED_CONTEXT_TOKENS.has(context)
+    owned = CREATED_CONTEXTS.get(context)
+  } catch {
+    invalid()
+  }
+  if (!known) invalid()
+  if (!owned) return
+  CREATED_CONTEXTS.delete(context)
+  clearCreatedContext(owned)
+}
+
+function takeCreatedContext(context) {
+  let known = false
+  let owned = null
+  try {
+    known = CREATED_CONTEXT_TOKENS.has(context)
+    owned = CREATED_CONTEXTS.get(context)
+  } catch {
+    invalid()
+  }
+  if (!known || !owned) invalid()
+  CREATED_CONTEXTS.delete(context)
+  return owned
+}
+
 export class RoutePayloadCodec {
   #crypto
   #padding
@@ -223,8 +309,7 @@ export class RoutePayloadCodec {
   constructor(options) {
     options = optionsObject(options)
     const crypto = option(options, 'crypto')
-    const descriptorId = option(options, 'descriptorId')
-    const circuitId = option(options, 'circuitId')
+    const context = option(options, 'context')
     const window = option(options, 'window')
     const gapTimeout = option(options, 'gapTimeout')
     const now = option(options, 'now')
@@ -248,34 +333,8 @@ export class RoutePayloadCodec {
       typeof seal !== 'function' ||
       typeof open !== 'function' ||
       (configuredPadding === undefined && typeof randomBytes !== 'function') ||
-      (configuredPadding !== undefined && typeof configuredPadding !== 'function') ||
-      !isBuffer(descriptorId, DESCRIPTOR_ID_BYTES) ||
-      !isBuffer(circuitId, CIRCUIT_ID_BYTES)
+      (configuredPadding !== undefined && typeof configuredPadding !== 'function')
     ) {
-      invalid()
-    }
-
-    const forwardKey = option(options, 'forwardKey')
-    const forwardNoncePrefix = option(options, 'forwardNoncePrefix')
-    const reverseKey = option(options, 'reverseKey')
-    const reverseNoncePrefix = option(options, 'reverseNoncePrefix')
-    if (
-      !isBuffer(forwardKey, KEY_BYTES) ||
-      !isBuffer(reverseKey, KEY_BYTES) ||
-      !isBuffer(forwardNoncePrefix, NONCE_PREFIX_BYTES) ||
-      !isBuffer(reverseNoncePrefix, NONCE_PREFIX_BYTES)
-    ) {
-      invalid()
-    }
-    try {
-      if (
-        b4a.equals(forwardKey, reverseKey) ||
-        b4a.equals(forwardNoncePrefix, reverseNoncePrefix)
-      ) {
-        invalid()
-      }
-    } catch (err) {
-      if (err instanceof PrivateRouteError) throw err
       invalid()
     }
 
@@ -289,12 +348,13 @@ export class RoutePayloadCodec {
     let ownedCircuit = null
 
     try {
-      ownedForwardKey = copy(forwardKey)
-      ownedForwardPrefix = copy(forwardNoncePrefix)
-      ownedReverseKey = copy(reverseKey)
-      ownedReversePrefix = copy(reverseNoncePrefix)
-      ownedDescriptor = copy(descriptorId)
-      ownedCircuit = copy(circuitId)
+      const created = takeCreatedContext(context)
+      ownedForwardKey = created.forwardKey
+      ownedForwardPrefix = created.forwardNoncePrefix
+      ownedReverseKey = created.reverseKey
+      ownedReversePrefix = created.reverseNoncePrefix
+      ownedDescriptor = created.descriptorId
+      ownedCircuit = created.circuitId
 
       const forwardDefaults = Object.freeze({
         key: ownedForwardKey,

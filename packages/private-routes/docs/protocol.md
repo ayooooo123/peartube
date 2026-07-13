@@ -66,6 +66,8 @@ CREATE -> CREATED -> OPEN -> DRAINING -> DESTROYED
 - **DRAINING:** no new streams or datagram flows may start. Existing allowed work MAY complete within a bounded drain deadline.
 - **DESTROYED:** no traffic is accepted or forwarded. All forwarding bindings, queues, replay state, counters, and route secrets have been removed.
 
+`RoutePayloadCodec` is a post-authentication primitive. It accepts only a one-use, internally branded context minted after the `CREATED` transcript has been authenticated. The mint is deliberately absent from the package entry point. Task 11's verified `CREATED` handler is the sole planned production issuer; direct construction from raw route keys is internal and unsupported.
+
 Implementations MUST NOT skip or reverse transitions. Any failed confirmation, invalid transition, authentication failure, transport close, setup timeout, circuit timeout, expiry, quota failure requiring teardown, or counter exhaustion MUST fail closed. Teardown MUST send an authenticated close when the adjacent transport remains available, remove both forward and reverse bindings, erase route keys and intermediate secrets, and enter `DESTROYED`. Timeout and expiry decisions MUST be locally enforced even if an authenticated close cannot be delivered.
 
 Failure, including exhausted route candidates, MUST NOT enable direct endpoint dialing, an ordinary public endpoint DHT socket, or hole punching.

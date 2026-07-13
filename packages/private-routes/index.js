@@ -1,4 +1,5 @@
 export { ERROR_CODES, PrivateRouteError } from './lib/errors.js'
+export { cryptoSuite } from './lib/crypto-suite.js'
 export {
   CAPABILITY,
   CELL_CLASS,

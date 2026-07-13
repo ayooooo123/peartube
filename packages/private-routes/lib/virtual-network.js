@@ -35,6 +35,8 @@ const bufferByteLength = Object.getOwnPropertyDescriptor(
 ).get
 const bufferFill = Uint8Array.prototype.fill
 const bufferSet = Uint8Array.prototype.set
+const arrayPush = Array.prototype.push
+const arraySort = Array.prototype.sort
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -231,8 +233,7 @@ export class VirtualNetwork {
           from,
           to,
           packet: source,
-          time: this.#now,
-          packetId: `packet-${this.#packetId(from, to) + 1}`
+          time: this.#now
         })
         this.#guarded = true
         try {
@@ -474,7 +475,7 @@ export class VirtualNetwork {
       value.sequence = this.#sequence + i + 1
       value.packetId = `packet-${packetId + i + 1}`
     }
-    prepared.sort(compare)
+    arraySort.call(prepared, compare)
     this.#guarded = true
     try {
       if (this.#insertionHook !== undefined) {
@@ -487,37 +488,43 @@ export class VirtualNetwork {
     }
     if (this.#violation) limit()
 
-    this.#compact(true)
-    try {
-      for (const value of prepared) this.#insert(value)
-    } catch {
-      const inserted = new Set(prepared)
-      for (let i = this.#queue.length - 1; i >= 0; i--) {
-        if (inserted.has(this.#queue[i])) this.#queue.splice(i, 1)
-      }
-      throw PrivateRouteError.VIRTUAL_LIMIT()
-    }
+    this.#commitPrepared(prepared)
     this.#pendingBytes += bytes
     this.#sequence = this.#sequence === -1 ? count - 1 : this.#sequence + count
     this.#setPacketId(from, to, packetId + count)
   }
 
-  #insert(value) {
-    const queue = this.#queue
-    const last = queue[queue.length - 1]
-    if (last === undefined || compare(last, value) <= 0) {
-      queue.push(value)
+  #commitPrepared(prepared) {
+    const pending = this.#pending()
+    if (pending === 0) {
+      this.#queue = []
+      this.#head = 0
+      for (const value of prepared) arrayPush.call(this.#queue, value)
       return
     }
 
-    let lower = 0
-    let upper = queue.length
-    while (lower < upper) {
-      const middle = (lower + upper) >>> 1
-      if (compare(queue[middle], value) <= 0) lower = middle + 1
-      else upper = middle
+    const last = this.#queue[this.#queue.length - 1]
+    if (compare(last, prepared[0]) <= 0) {
+      for (const value of prepared) arrayPush.call(this.#queue, value)
+      return
     }
-    queue.splice(lower, 0, value)
+
+    const candidate = new Array(pending + prepared.length)
+    let oldIndex = this.#head
+    let newIndex = 0
+    let outputIndex = 0
+    while (oldIndex < this.#queue.length || newIndex < prepared.length) {
+      if (
+        newIndex < prepared.length &&
+        (oldIndex >= this.#queue.length || compare(prepared[newIndex], this.#queue[oldIndex]) < 0)
+      ) {
+        candidate[outputIndex++] = prepared[newIndex++]
+      } else {
+        candidate[outputIndex++] = this.#queue[oldIndex++]
+      }
+    }
+    this.#queue = candidate
+    this.#head = 0
   }
 
   #packetId(from, to) {
@@ -629,9 +636,9 @@ export class VirtualNetwork {
     return this.#queue.length - this.#head
   }
 
-  #compact(force = false) {
+  #compact() {
     if (this.#head === 0) return
-    if (!force && this.#head < 1024 && this.#head * 2 < this.#queue.length) return
+    if (this.#head < 1024 || this.#head * 2 < this.#queue.length) return
     this.#queue = this.#queue.slice(this.#head)
     this.#head = 0
   }

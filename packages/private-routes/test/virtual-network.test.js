@@ -194,7 +194,7 @@ test('fault hooks receive an isolated copy and fixed local metadata', (t) => {
   network.flush()
 
   t.alike(received, ['x'])
-  t.alike(Object.keys(event), ['from', 'to', 'packet', 'time', 'packetId'])
+  t.alike(Object.keys(event), ['from', 'to', 'packet', 'time'])
   t.is(event.from, 'a')
   t.is(event.to, 'b')
   t.is(event.time, 4)
@@ -772,7 +772,7 @@ test('multi-output insertion is transactional and does not burn IDs', (t) => {
   )
 })
 
-test('native later-insertion failure rolls back only the current batch', (t) => {
+test('interleaving is independent of persistently failing live-array splice', (t) => {
   let mode = 'preexisting'
   const observed = []
   const received = []
@@ -798,29 +798,61 @@ test('native later-insertion failure rolls back only the current batch', (t) => 
 
   mode = 'multi'
   const originalSplice = Array.prototype.splice
-  let calls = 0
-  Array.prototype.splice = function (...args) {
-    const result = originalSplice.apply(this, args)
-    calls++
-    if (calls === 2) throw new Error('injected native insertion failure')
-    return result
+  Array.prototype.splice = function () {
+    throw new Error('persistent splice failure')
   }
+  let error = null
   try {
-    expectCode(t, () => network.send('a', 'b', b4a.from('trigger')), 'VIRTUAL_LIMIT')
+    network.send('a', 'b', b4a.from('trigger'))
+  } catch (cause) {
+    error = cause
   } finally {
     Array.prototype.splice = originalSplice
   }
-  t.ok(calls >= 2)
+  t.is(error, null)
   t.is(observed.length, 2)
+  t.is(network.flush(), 1)
+  network.advance(5)
+  t.is(network.flush(), 1)
+  network.advance(5)
+  t.is(network.flush(), 1)
+  network.advance(10)
+  t.is(network.flush(), 1)
+  t.alike(received, ['new-0', 'new-5', 'old-10', 'old-20'])
   for (const packet of observed) t.alike(packet, b4a.alloc(packet.byteLength))
-
-  network.advance(20)
-  t.is(network.flush(), 2)
-  t.alike(received, ['old-10', 'old-20'])
   t.alike(
     network.view('a').map(({ packetId }) => packetId),
-    ['packet-1', 'packet-2']
+    ['packet-3', 'packet-4', 'packet-1', 'packet-2']
   )
+})
+
+test('long handler forwarding does not compact the queue per hop', (t) => {
+  const network = new VirtualNetwork({ now: 0 })
+  const deliveries = 1100
+  let delivered = 0
+  const forward = (from, to, packet) => {
+    delivered++
+    if (delivered < deliveries) network.send(from, to, packet)
+  }
+  network.register('a', (packet) => forward('a', 'b', packet))
+  network.register('b', (packet) => forward('b', 'a', packet))
+
+  const originalSlice = Array.prototype.slice
+  let slices = 0
+  Array.prototype.slice = function (...args) {
+    slices++
+    return originalSlice.apply(this, args)
+  }
+  let flushed = 0
+  try {
+    network.send('a', 'b', b4a.from('forward'))
+    flushed = network.flush({ maxDeliveries: 2000 })
+  } finally {
+    Array.prototype.slice = originalSlice
+  }
+  t.is(flushed, deliveries)
+  t.is(delivered, deliveries)
+  t.ok(slices < 10, 'queue compaction remains amortized')
 })
 
 test('reentrant cycles hit the delivery guard and clear the adversarial batch', (t) => {

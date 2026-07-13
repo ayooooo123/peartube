@@ -32,6 +32,22 @@ test('roleForIdentity deterministically assigns a binary role', (t) => {
   t.is(error.code, 'INVALID_IDENTITY')
 })
 
+test('roleForIdentity rejects every invalid identity shape', (t) => {
+  const invalid = [null, 'identity', b4a.alloc(0), b4a.alloc(31), b4a.alloc(33)]
+
+  for (const identity of invalid) {
+    let error = null
+    try {
+      roleForIdentity(identity)
+    } catch (err) {
+      error = err
+    }
+
+    t.ok(error instanceof PrivateRouteError)
+    t.is(error.code, 'INVALID_IDENTITY')
+  }
+})
+
 test('protocol enumerations are exact and frozen', (t) => {
   const expected = [
     [ROLE, { SAFETY: 0, PRIVATE: 1 }],
@@ -80,6 +96,19 @@ test('protocol domains are exact buffers in a frozen map', (t) => {
   }
 })
 
+test('protocol domains return defensive copies', (t) => {
+  const role = DOMAIN.ROLE
+  role.fill(0)
+
+  t.is(b4a.toString(DOMAIN.ROLE), 'hyperdht-private-routes/role/v0')
+  t.is(roleForIdentity(b4a.alloc(32, 7)), ROLE.PRIVATE)
+
+  const cellHeader = DOMAIN.CELL_HEADER
+  cellHeader.fill(0xff)
+
+  t.is(b4a.toString(DOMAIN.CELL_HEADER), 'hyperdht-private-routes/cell/header/v0')
+})
+
 test('private route error codes and constructors are exact and sanitized', (t) => {
   const expected = [
     'INVALID_IDENTITY',
@@ -113,6 +142,26 @@ test('private route error codes and constructors are exact and sanitized', (t) =
     t.absent(/[a-f0-9]{32,}/i.test(error.message))
     t.absent(/\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(error.message))
   }
+})
+
+test('private route error constructor rejects unknown codes and ignores messages', (t) => {
+  const sensitive = 'secret 0123456789abcdef0123456789abcdef at 192.168.100.200'
+
+  let unknownCodeError = null
+  try {
+    new PrivateRouteError('BOGUS', sensitive)
+  } catch (err) {
+    unknownCodeError = err
+  }
+
+  t.ok(unknownCodeError instanceof TypeError)
+
+  const error = new PrivateRouteError('INVALID_KEY', sensitive)
+  t.is(error.code, 'INVALID_KEY')
+  t.is(error.message, PrivateRouteError.INVALID_KEY().message)
+  t.absent(error.message.includes(sensitive))
+  t.absent(/[a-f0-9]{32,}/i.test(error.message))
+  t.absent(/\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(error.message))
 })
 
 test('protocol version is version zero', (t) => {

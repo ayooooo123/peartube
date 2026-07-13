@@ -36,7 +36,7 @@ export const CAPABILITY = Object.freeze({
   KNOWN: 7
 })
 
-export const DOMAIN = Object.freeze({
+const DOMAIN_VALUES = Object.freeze({
   ROLE: b4a.from('hyperdht-private-routes/role/v0'),
   RELAY_ADVERTISEMENT: b4a.from('hyperdht-private-routes/relay-advertisement/v0'),
   DESCRIPTOR_DIRECT: b4a.from('hyperdht-private-routes/descriptor/direct/v0'),
@@ -59,10 +59,22 @@ export const DOMAIN = Object.freeze({
   ROUTE_PAYLOAD: b4a.from('hyperdht-private-routes/route-payload/v0')
 })
 
+const domainProperties = {}
+for (const [name, value] of Object.entries(DOMAIN_VALUES)) {
+  domainProperties[name] = {
+    enumerable: true,
+    get() {
+      return b4a.from(value)
+    }
+  }
+}
+
+export const DOMAIN = Object.freeze(Object.defineProperties({}, domainProperties))
+
 export function roleForIdentity(publicKey) {
   if (!b4a.isBuffer(publicKey) || publicKey.byteLength !== 32) {
     throw PrivateRouteError.INVALID_IDENTITY()
   }
 
-  return crypto.hash([DOMAIN.ROLE, publicKey])[0] & 1
+  return crypto.hash([DOMAIN_VALUES.ROLE, publicKey])[0] & 1
 }

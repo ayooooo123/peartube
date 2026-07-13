@@ -35,69 +35,73 @@ const MESSAGES = Object.freeze({
 })
 
 export class PrivateRouteError extends Error {
-  constructor(code, message) {
-    super(message)
+  constructor(code) {
+    if (!ERROR_CODES.includes(code)) {
+      throw new TypeError('Unknown private route error code')
+    }
+
+    super(MESSAGES[code])
     this.name = 'PrivateRouteError'
     this.code = code
   }
 
   static INVALID_IDENTITY() {
-    return new PrivateRouteError('INVALID_IDENTITY', MESSAGES.INVALID_IDENTITY)
+    return new PrivateRouteError('INVALID_IDENTITY')
   }
 
   static INVALID_KEY() {
-    return new PrivateRouteError('INVALID_KEY', MESSAGES.INVALID_KEY)
+    return new PrivateRouteError('INVALID_KEY')
   }
 
   static INVALID_ROLE() {
-    return new PrivateRouteError('INVALID_ROLE', MESSAGES.INVALID_ROLE)
+    return new PrivateRouteError('INVALID_ROLE')
   }
 
   static INVALID_ROUTE() {
-    return new PrivateRouteError('INVALID_ROUTE', MESSAGES.INVALID_ROUTE)
+    return new PrivateRouteError('INVALID_ROUTE')
   }
 
   static INVALID_DESCRIPTOR() {
-    return new PrivateRouteError('INVALID_DESCRIPTOR', MESSAGES.INVALID_DESCRIPTOR)
+    return new PrivateRouteError('INVALID_DESCRIPTOR')
   }
 
   static UNAUTHORIZED() {
-    return new PrivateRouteError('UNAUTHORIZED', MESSAGES.UNAUTHORIZED)
+    return new PrivateRouteError('UNAUTHORIZED')
   }
 
   static REPLAY() {
-    return new PrivateRouteError('REPLAY', MESSAGES.REPLAY)
+    return new PrivateRouteError('REPLAY')
   }
 
   static COUNTER_INVALID() {
-    return new PrivateRouteError('COUNTER_INVALID', MESSAGES.COUNTER_INVALID)
+    return new PrivateRouteError('COUNTER_INVALID')
   }
 
   static COUNTER_GAP() {
-    return new PrivateRouteError('COUNTER_GAP', MESSAGES.COUNTER_GAP)
+    return new PrivateRouteError('COUNTER_GAP')
   }
 
   static COUNTER_EXHAUSTED() {
-    return new PrivateRouteError('COUNTER_EXHAUSTED', MESSAGES.COUNTER_EXHAUSTED)
+    return new PrivateRouteError('COUNTER_EXHAUSTED')
   }
 
   static CELL_INVALID() {
-    return new PrivateRouteError('CELL_INVALID', MESSAGES.CELL_INVALID)
+    return new PrivateRouteError('CELL_INVALID')
   }
 
   static CIRCUIT_LIMIT() {
-    return new PrivateRouteError('CIRCUIT_LIMIT', MESSAGES.CIRCUIT_LIMIT)
+    return new PrivateRouteError('CIRCUIT_LIMIT')
   }
 
   static CIRCUIT_STATE() {
-    return new PrivateRouteError('CIRCUIT_STATE', MESSAGES.CIRCUIT_STATE)
+    return new PrivateRouteError('CIRCUIT_STATE')
   }
 
   static ROUTE_UNAVAILABLE() {
-    return new PrivateRouteError('ROUTE_UNAVAILABLE', MESSAGES.ROUTE_UNAVAILABLE)
+    return new PrivateRouteError('ROUTE_UNAVAILABLE')
   }
 
   static VIRTUAL_LIMIT() {
-    return new PrivateRouteError('VIRTUAL_LIMIT', MESSAGES.VIRTUAL_LIMIT)
+    return new PrivateRouteError('VIRTUAL_LIMIT')
   }
 }

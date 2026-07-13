@@ -323,6 +323,33 @@ test('a regressing clock closes and clears an established ordered gap', (t) => {
   if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
 })
 
+test('ordered gap rejects regression from its last accepted explicit reading', (t) => {
+  const { owned, receiver } = observedOrdered({ gapTimeout: 100, now: () => 100 })
+
+  receiver.pushAuthenticated(1n, b4a.from('secret'))
+  t.is(receiver.expire(150), false)
+  expectCode(t, () => receiver.expire(149), 'COUNTER_INVALID')
+  t.is(owned.length, 1)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+})
+
+test('draining an ordered gap resets its monotonic clock baseline', (t) => {
+  let current = 100
+  const receiver = new OrderedReceiver({ window: 4, gapTimeout: 100, now: () => current })
+
+  receiver.pushAuthenticated(1n, 'one')
+  current = 150
+  t.is(receiver.expire(), false)
+  t.alike(receiver.pushAuthenticated(0n, 'zero'), ['zero', 'one'])
+
+  current = 10
+  t.alike(receiver.pushAuthenticated(3n, 'three'), [])
+  t.is(receiver.closed, false)
+  t.is(receiver.buffered, 1)
+})
+
 test('a throwing clock closes and clears an established ordered gap', (t) => {
   let broken = false
   const { owned, receiver } = observedOrdered({

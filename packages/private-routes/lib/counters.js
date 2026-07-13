@@ -104,6 +104,7 @@ export class OrderedReceiver {
   #next
   #buffer
   #gapStartedAt
+  #lastObservedAt
   #closed
   #mutating
   #observeBuffered
@@ -125,6 +126,7 @@ export class OrderedReceiver {
     this.#next = counterValue(configured === undefined ? 0n : configured)
     this.#buffer = new Map()
     this.#gapStartedAt = null
+    this.#lastObservedAt = null
     this.#closed = false
     this.#mutating = false
     this.#observeBuffered = observeBuffered || null
@@ -168,10 +170,14 @@ export class OrderedReceiver {
       if (counter - this.#next >= this.#window) this.#failGap()
       if (this.#gapTimeout === 0) this.#failGap()
 
-      const startedAt = this.#gapStartedAt === null ? this.#readNow() : this.#gapStartedAt
+      const startsGap = this.#gapStartedAt === null
+      const startedAt = startsGap ? this.#readNow() : this.#gapStartedAt
       const owned = this.#copyForBuffer(payload)
       this.#buffer.set(counter, owned)
-      this.#gapStartedAt = startedAt
+      if (startsGap) {
+        this.#gapStartedAt = startedAt
+        this.#lastObservedAt = startedAt
+      }
       this.#notifyObserver(owned)
       return []
     }
@@ -194,7 +200,10 @@ export class OrderedReceiver {
       this.#next++
     }
 
-    if (this.#buffer.size === 0) this.#gapStartedAt = null
+    if (this.#buffer.size === 0) {
+      this.#gapStartedAt = null
+      this.#lastObservedAt = null
+    }
     return delivered
   }
 
@@ -230,7 +239,8 @@ export class OrderedReceiver {
 
   #expireAt(current) {
     if (this.#gapStartedAt === null) return false
-    if (current < this.#gapStartedAt) this.#failInvalid()
+    if (current < this.#lastObservedAt) this.#failInvalid()
+    this.#lastObservedAt = current
     if (current - this.#gapStartedAt < this.#gapTimeout) return false
     this.#failGap()
   }
@@ -293,6 +303,7 @@ export class OrderedReceiver {
     for (const payload of this.#buffer.values()) clearPayload(payload)
     this.#buffer.clear()
     this.#gapStartedAt = null
+    this.#lastObservedAt = null
   }
 
   #failGap() {

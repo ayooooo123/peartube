@@ -16,6 +16,9 @@ export const TEST_ONLY_FRAGMENT_OBSERVER = Symbol('test-only-fragment-observer')
 
 const MESSAGE_ID_BYTES = 16
 const MAX_FRAGMENTS = Math.ceil(MAX_MESSAGE_BYTES / MAX_FRAGMENT_DATA)
+const bufferFill = Uint8Array.prototype.fill
+const bufferSet = Uint8Array.prototype.set
+const bufferSubarray = Uint8Array.prototype.subarray
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -29,8 +32,7 @@ function optionsObject(options, optional = false) {
   if (options === undefined && optional) return {}
   try {
     if (options === null || typeof options !== 'object' || Array.isArray(options)) invalid()
-  } catch (err) {
-    if (err instanceof PrivateRouteError) throw err
+  } catch {
     invalid()
   }
   return options
@@ -58,18 +60,50 @@ function isBuffer(value, size) {
 
 function clear(value) {
   try {
-    if (b4a.isBuffer(value)) b4a.fill(value, 0)
+    if (b4a.isBuffer(value)) bufferFill.call(value, 0)
   } catch {
     // Best-effort zeroization only.
   }
 }
 
-function copy(value) {
+function allocate(size) {
+  let owned = null
   try {
-    const owned = b4a.allocUnsafeSlow(value.byteLength)
-    owned.set(value)
+    owned = b4a.allocUnsafeSlow(size)
+    if (!isBuffer(owned, size)) invalid()
     return owned
   } catch {
+    clear(owned)
+    invalid()
+  }
+}
+
+function subarray(value, start, end) {
+  try {
+    return bufferSubarray.call(value, start, end)
+  } catch {
+    invalid()
+  }
+}
+
+function set(target, source, offset = 0) {
+  try {
+    bufferSet.call(target, source, offset)
+  } catch {
+    invalid()
+  }
+}
+
+function copy(value) {
+  let owned = null
+  try {
+    const length = bufferLength(value)
+    if (length < 0) invalid()
+    owned = allocate(length)
+    set(owned, value)
+    return owned
+  } catch {
+    clear(owned)
     invalid()
   }
 }
@@ -133,17 +167,25 @@ export function fragment(message, options) {
 
   const total = Math.max(1, Math.ceil(messageLength / MAX_FRAGMENT_DATA))
   const frames = new Array(total)
-  for (let index = 0; index < total; index++) {
-    const start = index * MAX_FRAGMENT_DATA
-    const end = Math.min(start + MAX_FRAGMENT_DATA, messageLength)
-    const frame = b4a.allocUnsafeSlow(FRAGMENT_HEADER_SIZE + end - start)
-    frame.set(messageId, 0)
-    writeUint16BE(frame, index, 16)
-    writeUint16BE(frame, total, 18)
-    frame.set(message.subarray(start, end), FRAGMENT_HEADER_SIZE)
-    frames[index] = frame
+  let frame = null
+  try {
+    for (let index = 0; index < total; index++) {
+      const start = index * MAX_FRAGMENT_DATA
+      const end = Math.min(start + MAX_FRAGMENT_DATA, messageLength)
+      frame = allocate(FRAGMENT_HEADER_SIZE + end - start)
+      set(frame, messageId, 0)
+      writeUint16BE(frame, index, 16)
+      writeUint16BE(frame, total, 18)
+      set(frame, subarray(message, start, end), FRAGMENT_HEADER_SIZE)
+      frames[index] = frame
+      frame = null
+    }
+    return frames
+  } catch {
+    clear(frame)
+    for (const value of frames) clear(value)
+    invalid()
   }
-  return frames
 }
 
 export class Reassembler {
@@ -224,9 +266,16 @@ export class Reassembler {
     const current = this.#readNow()
     this.#expireAt(current)
     const length = bufferLength(value)
-    if (length < FRAGMENT_HEADER_SIZE) invalid()
+    if (length < FRAGMENT_HEADER_SIZE) {
+      if (length >= MESSAGE_ID_BYTES) {
+        const shortKey = idKey(subarray(value, 0, MESSAGE_ID_BYTES))
+        const shortExisting = this.#messages.get(shortKey)
+        if (shortExisting) this.#remove(shortExisting)
+      }
+      invalid()
+    }
 
-    const messageId = value.subarray(0, MESSAGE_ID_BYTES)
+    const messageId = subarray(value, 0, MESSAGE_ID_BYTES)
     const key = idKey(messageId)
     if (this.#completed.has(key)) throw PrivateRouteError.REPLAY()
     const existing = this.#messages.get(key)
@@ -271,7 +320,7 @@ export class Reassembler {
 
     if (existing && existing.parts.has(index)) {
       const accepted = existing.parts.get(index)
-      if (same(accepted, value.subarray(FRAGMENT_HEADER_SIZE))) throw PrivateRouteError.REPLAY()
+      if (same(accepted, subarray(value, FRAGMENT_HEADER_SIZE))) throw PrivateRouteError.REPLAY()
       this.#remove(existing)
       invalid()
     }
@@ -284,7 +333,7 @@ export class Reassembler {
 
     let owned
     try {
-      owned = copy(value.subarray(FRAGMENT_HEADER_SIZE))
+      owned = copy(subarray(value, FRAGMENT_HEADER_SIZE))
     } catch (err) {
       if (existing) this.#remove(existing)
       throw err
@@ -317,19 +366,18 @@ export class Reassembler {
     if (state.bytes > this.#maxMessageBytes) limit()
     let message = null
     try {
-      message = b4a.allocUnsafeSlow(state.bytes)
+      message = allocate(state.bytes)
       let offset = 0
       for (let index = 0; index < state.total; index++) {
         const part = state.parts.get(index)
         if (!part) invalid()
-        message.set(part, offset)
+        set(message, part, offset)
         offset += part.byteLength
       }
       if (offset !== state.bytes) invalid()
-    } catch (err) {
+    } catch {
       clear(message)
       this.#remove(state)
-      if (err instanceof PrivateRouteError) throw err
       invalid()
     }
 

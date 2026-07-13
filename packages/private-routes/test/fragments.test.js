@@ -105,6 +105,73 @@ test('fragment copies message and identifier and supports the empty message', (t
   t.alike(reassembler().pushAuthenticated(empty[0]), b4a.alloc(0))
 })
 
+test('fragment slicing never dispatches through buffer instance methods', (t) => {
+  let instanceSlices = 0
+  const hostileSlice = () => {
+    instanceSlices++
+    throw new Error('instance subarray must not run')
+  }
+  const message = b4a.alloc(MAX_FRAGMENT_DATA + 1, 0x4a)
+  Object.defineProperty(message, 'subarray', { value: hostileSlice })
+  const frames = fragment(message, { messageId: id(39) })
+  for (const value of frames) Object.defineProperty(value, 'subarray', { value: hostileSlice })
+
+  const receiver = reassembler()
+  t.is(receiver.pushAuthenticated(frames[0]), null)
+  t.alike(receiver.pushAuthenticated(frames[1]), b4a.alloc(MAX_FRAGMENT_DATA + 1, 0x4a))
+  t.is(instanceSlices, 0)
+})
+
+test('fragment failure clears earlier frames and the current partial allocation', (t) => {
+  const message = b4a.alloc(MAX_FRAGMENT_DATA + 1, 0x5a)
+  const originalAlloc = b4a.allocUnsafeSlow
+  const allocations = []
+  let calls = 0
+  b4a.allocUnsafeSlow = (size) => {
+    calls++
+    if (calls === 2) throw new Error('second frame allocation failed')
+    const value = originalAlloc(size)
+    value.fill(0xaa)
+    allocations.push(value)
+    return value
+  }
+  try {
+    expectCode(t, () => fragment(message, { messageId: id(40) }), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+  t.is(allocations.length, 1)
+  t.alike(allocations[0], b4a.alloc(allocations[0].byteLength))
+
+  calls = 0
+  allocations.length = 0
+  b4a.allocUnsafeSlow = (size) => {
+    calls++
+    const value = originalAlloc(calls === 2 ? size - 1 : size)
+    value.fill(0xbb)
+    allocations.push(value)
+    return value
+  }
+  try {
+    expectCode(t, () => fragment(message, { messageId: id(41) }), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+  t.is(allocations.length, 2)
+  for (const value of allocations) t.alike(value, b4a.alloc(value.byteLength))
+
+  const revoked = Proxy.revocable({}, {})
+  revoked.revoke()
+  b4a.allocUnsafeSlow = () => {
+    throw revoked.proxy
+  }
+  try {
+    expectCode(t, () => fragment(message, { messageId: id(43) }), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+})
+
 test('malformed fragment arithmetic is rejected before allocation', (t) => {
   let allocations = 0
   const receiver = reassembler({
@@ -232,6 +299,40 @@ test('completed identifiers are sticky and every fresh-counter reuse is replay',
     bufferedBytes: 0,
     completedIds: 1
   })
+})
+
+test('short fragment headers clean active IDs without erasing completed tombstones', (t) => {
+  for (let length = 16; length < 20; length++) {
+    const activeId = id(50 + length)
+    const completedId = id(60 + length)
+    const otherId = id(70 + length)
+    const owned = []
+    const receiver = reassembler({
+      [TEST_ONLY_FRAGMENT_OBSERVER](value) {
+        owned.push(value)
+      }
+    })
+    const active = fragment(b4a.alloc(MAX_FRAGMENT_DATA + 1, 1), { messageId: activeId })
+    const other = fragment(b4a.alloc(MAX_FRAGMENT_DATA + 1, 2), { messageId: otherId })
+    const completed = fragment(b4a.from('done'), { messageId: completedId })[0]
+    receiver.pushAuthenticated(active[0])
+    receiver.pushAuthenticated(other[0])
+    t.alike(receiver.pushAuthenticated(completed), b4a.from('done'))
+
+    const malformedActive = b4a.alloc(length)
+    malformedActive.set(activeId)
+    expectCode(t, () => receiver.pushAuthenticated(malformedActive), 'INVALID_ROUTE')
+    t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+    t.is(receiver.stats.messages, 1)
+    t.is(receiver.stats.completedIds, 1)
+
+    const malformedCompleted = b4a.alloc(length)
+    malformedCompleted.set(completedId)
+    expectCode(t, () => receiver.pushAuthenticated(malformedCompleted), 'INVALID_ROUTE')
+    t.is(receiver.stats.completedIds, 1)
+    expectCode(t, () => receiver.pushAuthenticated(completed), 'REPLAY')
+    t.alike(receiver.pushAuthenticated(other[1]), b4a.alloc(MAX_FRAGMENT_DATA + 1, 2))
+  }
 })
 
 test('concurrent limit rejects a new message and preserves existing messages', (t) => {
@@ -450,6 +551,38 @@ test('copy failure zeroes all prior parts of only the affected message', (t) => 
     b4a.allocUnsafeSlow = originalAlloc
   }
 
+  t.alike(owned[0], b4a.alloc(MAX_FRAGMENT_DATA))
+  t.is(receiver.stats.messages, 0)
+  t.is(receiver.stats.bufferedBytes, 0)
+})
+
+test('partial fragment copy allocation is cleared before the message is removed', (t) => {
+  const owned = []
+  const receiver = reassembler({
+    [TEST_ONLY_FRAGMENT_OBSERVER](value) {
+      owned.push(value)
+    }
+  })
+  const frames = fragment(b4a.alloc(MAX_FRAGMENT_DATA + 2, 8), { messageId: id(42) })
+  receiver.pushAuthenticated(frames[0])
+  const originalAlloc = b4a.allocUnsafeSlow
+  let partial = null
+  b4a.allocUnsafeSlow = (size) => {
+    if (size === 2) {
+      partial = originalAlloc(1)
+      partial.fill(0xcc)
+      return partial
+    }
+    return originalAlloc(size)
+  }
+  try {
+    expectCode(t, () => receiver.pushAuthenticated(frames[1]), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  t.ok(partial)
+  t.alike(partial, b4a.alloc(1))
   t.alike(owned[0], b4a.alloc(MAX_FRAGMENT_DATA))
   t.is(receiver.stats.messages, 0)
   t.is(receiver.stats.bufferedBytes, 0)

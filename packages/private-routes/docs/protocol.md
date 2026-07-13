@@ -74,6 +74,8 @@ Implementations MUST NOT skip or reverse transitions. Any failed confirmation, i
 
 Payload-codec teardown is idempotent and covers all sender counters, ordered receive buffers, and datagram replay windows in both directions. If teardown is requested reentrantly from an injected clock, padding source, cryptographic adapter, or replay receiver, the codec defers destructive cleanup until the active operation unwinds, discards any result produced by that operation, and returns a circuit-state failure. A reentrant seal or open request likewise fails closed and tears the codec down so no partially advanced state can be reused.
 
+Payload and fragment processing MUST treat input buffers, allocation hooks, and adapter outputs as hostile. It MUST use non-overridable byte slicing and copying operations, validate every owned allocation's exact size, normalize foreign exceptions to protocol errors, and erase every partially built owned output on failure. A malformed fragment of 16–19 bytes identifies an active message but lacks the complete header: the receiver MUST erase that active message's buffered parts, MUST NOT disturb unrelated messages, and MUST retain any completed-ID replay tombstone for the same identifier.
+
 Failure, including exhausted route candidates, MUST NOT enable direct endpoint dialing, an ordinary public endpoint DHT socket, or hole punching.
 
 ## Counters and replay protection

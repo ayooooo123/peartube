@@ -27,6 +27,9 @@ const MAX_LOGICAL_COUNTER = (1n << 63n) - 1n
 const MAX_NONCE_DOMAIN_CLAIMS = 4096
 const NONCE_DOMAIN_CLAIM = b4a.from('hyperdht-private-routes/nonce-domain/v0')
 const RECEIVER_CODES = new Set(['REPLAY', 'COUNTER_INVALID', 'COUNTER_GAP', 'COUNTER_EXHAUSTED'])
+const bufferFill = Uint8Array.prototype.fill
+const bufferSet = Uint8Array.prototype.set
+const bufferSubarray = Uint8Array.prototype.subarray
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -35,8 +38,7 @@ function invalid() {
 function optionsObject(options) {
   try {
     if (options === null || typeof options !== 'object' || Array.isArray(options)) invalid()
-  } catch (err) {
-    if (err instanceof PrivateRouteError) throw err
+  } catch {
     invalid()
   }
   return options
@@ -62,21 +64,53 @@ function isBuffer(value, size) {
   return bufferLength(value) === size
 }
 
-function copy(value) {
+function clear(value) {
   try {
-    const owned = b4a.allocUnsafeSlow(value.byteLength)
-    owned.set(value)
+    if (b4a.isBuffer(value)) bufferFill.call(value, 0)
+  } catch {
+    // Best-effort zeroization only.
+  }
+}
+
+function allocate(size) {
+  let owned = null
+  try {
+    owned = b4a.allocUnsafeSlow(size)
+    if (!isBuffer(owned, size)) invalid()
     return owned
+  } catch {
+    clear(owned)
+    invalid()
+  }
+}
+
+function subarray(value, start, end) {
+  try {
+    return bufferSubarray.call(value, start, end)
   } catch {
     invalid()
   }
 }
 
-function clear(value) {
+function set(target, source, offset = 0) {
   try {
-    if (b4a.isBuffer(value)) b4a.fill(value, 0)
+    bufferSet.call(target, source, offset)
   } catch {
-    // Best-effort zeroization only.
+    invalid()
+  }
+}
+
+function copy(value) {
+  let owned = null
+  try {
+    const length = bufferLength(value)
+    if (length < 0) invalid()
+    owned = allocate(length)
+    set(owned, value)
+    return owned
+  } catch {
+    clear(owned)
+    invalid()
   }
 }
 
@@ -133,12 +167,18 @@ function writeUint16BE(buffer, value, offset) {
 }
 
 function associatedData(descriptorId, circuitId, direction, counter) {
-  const data = b4a.allocUnsafeSlow(DESCRIPTOR_ID_BYTES + CIRCUIT_ID_BYTES + 1 + 8)
-  data.set(descriptorId, 0)
-  data.set(circuitId, DESCRIPTOR_ID_BYTES)
-  data[DESCRIPTOR_ID_BYTES + CIRCUIT_ID_BYTES] = direction
-  writeUint64BE(data, counter, DESCRIPTOR_ID_BYTES + CIRCUIT_ID_BYTES + 1)
-  return data
+  let data = null
+  try {
+    data = allocate(DESCRIPTOR_ID_BYTES + CIRCUIT_ID_BYTES + 1 + 8)
+    set(data, descriptorId, 0)
+    set(data, circuitId, DESCRIPTOR_ID_BYTES)
+    data[DESCRIPTOR_ID_BYTES + CIRCUIT_ID_BYTES] = direction
+    writeUint64BE(data, counter, DESCRIPTOR_ID_BYTES + CIRCUIT_ID_BYTES + 1)
+    return data
+  } catch {
+    clear(data)
+    invalid()
+  }
 }
 
 function normalizeCrypto(operation) {
@@ -149,11 +189,11 @@ function normalizeCrypto(operation) {
   }
 }
 
-function receiverFailure(err) {
+function privateRouteCode(err, allowed) {
   try {
     if (!(err instanceof PrivateRouteError)) return null
     const code = err.code
-    return RECEIVER_CODES.has(code) ? code : null
+    return allowed.has(code) ? code : null
   } catch {
     return null
   }
@@ -163,7 +203,7 @@ function invokeReceiver(operation) {
   try {
     return operation()
   } catch (err) {
-    const code = receiverFailure(err)
+    const code = privateRouteCode(err, RECEIVER_CODES)
     if (code !== null) throw new PrivateRouteError(code)
     invalid()
   }
@@ -233,7 +273,7 @@ function decodeDelivery(value) {
   const length = bufferLength(value)
   if (length < 1 || length > MAX_ROUTE_PAYLOAD + 1) invalid()
   const cellClass = routeClass(value[0])
-  return Object.freeze({ class: cellClass, payload: copy(value.subarray(1)) })
+  return Object.freeze({ class: cellClass, payload: copy(subarray(value, 1)) })
 }
 
 function decodeDeliveries(deliveries) {
@@ -241,8 +281,7 @@ function decodeDeliveries(deliveries) {
   try {
     if (!Array.isArray(deliveries)) invalid()
     values = Array.from(deliveries)
-  } catch (err) {
-    if (err instanceof PrivateRouteError) throw err
+  } catch {
     invalid()
   }
   const decoded = []
@@ -282,8 +321,7 @@ function contextFields(options) {
     if (b4a.equals(forwardKey, reverseKey) || b4a.equals(forwardNoncePrefix, reverseNoncePrefix)) {
       invalid()
     }
-  } catch (err) {
-    if (err instanceof PrivateRouteError) throw err
+  } catch {
     invalid()
   }
   return {
@@ -347,10 +385,9 @@ export function mintCreatedRoutePayloadContext(options) {
     CREATED_CONTEXTS.set(context, owned)
     CREATED_CONTEXT_TOKENS.add(context)
     return context
-  } catch (err) {
+  } catch {
     releasePendingClaim(owned)
     clearCreatedContext(owned)
-    if (err instanceof PrivateRouteError) throw err
     invalid()
   }
 }
@@ -495,7 +532,7 @@ export class RoutePayloadCodec {
       this.#destroyed = false
       this.#mutating = false
       this.#destroyRequested = false
-    } catch (err) {
+    } catch {
       releasePendingClaim(created)
       clear(ownedForwardKey)
       clear(ownedForwardPrefix)
@@ -503,7 +540,6 @@ export class RoutePayloadCodec {
       clear(ownedReversePrefix)
       clear(ownedDescriptor)
       clear(ownedCircuit)
-      if (err instanceof PrivateRouteError) throw err
       invalid()
     }
   }
@@ -555,27 +591,29 @@ export class RoutePayloadCodec {
 
     const state = direction === DIRECTION.FORWARD ? this.#forward : this.#reverse
     const sender = cellClass === CELL_CLASS.STREAM ? state.streamSender : state.datagramSender
-    const plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
+    let plaintext = null
     let padding = null
     let data = null
     let ciphertext = null
+    let frame = null
 
     try {
+      plaintext = allocate(ROUTE_PLAINTEXT_SIZE)
       plaintext[0] = cellClass
       writeUint16BE(plaintext, payloadLength, 1)
-      plaintext.set(payload, 3)
+      set(plaintext, payload, 3)
       const paddingSize = MAX_ROUTE_PAYLOAD - payloadLength
       if (paddingSize > 0) {
         padding = normalizeCrypto(() => this.#padding(paddingSize))
         if (!isBuffer(padding, paddingSize)) invalid()
-        plaintext.set(padding, 3 + payloadLength)
+        set(plaintext, padding, 3 + payloadLength)
       }
 
       let counter
       try {
         counter = wireCounter(sender.next(), cellClass)
       } catch (err) {
-        const code = receiverFailure(err)
+        const code = privateRouteCode(err, RECEIVER_CODES)
         if (code !== null) throw new PrivateRouteError(code)
         invalid()
       }
@@ -592,10 +630,15 @@ export class RoutePayloadCodec {
       )
       if (!isBuffer(ciphertext, ROUTE_CIPHERTEXT_SIZE)) invalid()
 
-      const frame = b4a.allocUnsafeSlow(ROUTE_FRAME_SIZE)
+      frame = allocate(ROUTE_FRAME_SIZE)
       writeUint64BE(frame, counter, 0)
-      frame.set(ciphertext, ROUTE_COUNTER_SIZE)
+      set(frame, ciphertext, ROUTE_COUNTER_SIZE)
       return frame
+    } catch (err) {
+      clear(frame)
+      const code = privateRouteCode(err, RECEIVER_CODES)
+      if (code !== null) throw new PrivateRouteError(code)
+      invalid()
     } finally {
       clear(plaintext)
       clear(data)
@@ -614,18 +657,19 @@ export class RoutePayloadCodec {
     if (direction !== this.#receiveDirection) invalid()
     const state = direction === DIRECTION.FORWARD ? this.#forward : this.#reverse
     const counter = readUint64BE(frame, 0)
-    const data = associatedData(this.#descriptorId, this.#circuitId, direction, counter)
+    let data = null
     let plaintext = null
     let delivery = null
 
     try {
+      data = associatedData(this.#descriptorId, this.#circuitId, direction, counter)
       plaintext = normalizeCrypto(() =>
         this.#crypto.open({
           key: state.key,
           noncePrefix: state.noncePrefix,
           counter,
           associatedData: data,
-          ciphertext: frame.subarray(ROUTE_COUNTER_SIZE)
+          ciphertext: subarray(frame, ROUTE_COUNTER_SIZE)
         })
       )
       if (plaintext === null || !isBuffer(plaintext, ROUTE_PLAINTEXT_SIZE)) invalid()
@@ -640,13 +684,13 @@ export class RoutePayloadCodec {
         if (accepted !== true) invalid()
         return Object.freeze({
           class: cellClass,
-          payload: copy(plaintext.subarray(3, 3 + payloadLength))
+          payload: copy(subarray(plaintext, 3, 3 + payloadLength))
         })
       }
 
-      delivery = b4a.allocUnsafeSlow(payloadLength + 1)
+      delivery = allocate(payloadLength + 1)
       delivery[0] = cellClass
-      delivery.set(plaintext.subarray(3, 3 + payloadLength), 1)
+      set(delivery, subarray(plaintext, 3, 3 + payloadLength), 1)
       const deliveries = invokeReceiver(() => state.pushAuthenticated(logical, delivery))
       return decodeDeliveries(deliveries)
     } finally {

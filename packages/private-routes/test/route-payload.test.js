@@ -1100,3 +1100,148 @@ test('hostile construction and call inputs normalize to stable route errors', (t
   expectCode(t, () => codec.seal(revoked.proxy), 'INVALID_ROUTE')
   expectCode(t, () => codec.open(revoked.proxy, b4a.alloc(1100)), 'INVALID_ROUTE')
 })
+
+test('route payload slicing never dispatches through buffer instance methods', (t) => {
+  let instanceSlices = 0
+  const hostileSlice = () => {
+    instanceSlices++
+    throw new Error('instance subarray must not run')
+  }
+  const pair = routePair(
+    {},
+    {
+      crypto: {
+        ...cryptoSuite,
+        open(options) {
+          const plaintext = cryptoSuite.open(options)
+          Object.defineProperty(plaintext, 'subarray', { value: hostileSlice })
+          return plaintext
+        }
+      }
+    }
+  )
+  const frame = seal(pair.source, { payload: b4a.from('safe slice') })
+  Object.defineProperty(frame, 'subarray', { value: hostileSlice })
+
+  t.alike(open(pair.destination, frame)[0].payload, b4a.from('safe slice'))
+  t.is(instanceSlices, 0)
+
+  const encoded = b4a.concat([b4a.from([CELL_CLASS.STREAM]), b4a.from('safe delivery')])
+  Object.defineProperty(encoded, 'subarray', { value: hostileSlice })
+  const receivers = {
+    forwardOrdered: {
+      next: 0n,
+      buffered: 0,
+      needsRotation: false,
+      pushAuthenticated() {
+        return [encoded]
+      },
+      destroy() {}
+    },
+    forwardDatagram: new DatagramReplayWindow({ window: 8 }),
+    reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+    reverseDatagram: new DatagramReplayWindow({ window: 8 })
+  }
+  const decodedPair = routePair({}, { receivers })
+
+  t.alike(
+    open(decodedPair.destination, seal(decodedPair.source))[0].payload,
+    b4a.from('safe delivery')
+  )
+  t.is(instanceSlices, 0)
+})
+
+test('route allocation failures normalize and zero partially built outputs', (t) => {
+  const frameCodec = route()
+  const originalAlloc = b4a.allocUnsafeSlow
+  let partialFrame = null
+  b4a.allocUnsafeSlow = (size) => {
+    if (size === ROUTE_FRAME_SIZE) {
+      partialFrame = originalAlloc(size - 1)
+      partialFrame.fill(0xaa)
+      return partialFrame
+    }
+    return originalAlloc(size)
+  }
+  try {
+    expectCode(t, () => seal(frameCodec), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+  t.ok(partialFrame)
+  t.alike(partialFrame, b4a.alloc(ROUTE_FRAME_SIZE - 1))
+  t.is(frameCodec.stats.forward.senderNext, 1n)
+
+  const pair = routePair()
+  const datagram = seal(pair.source, {
+    class: CELL_CLASS.DATAGRAM,
+    payload: b4a.from('1234567')
+  })
+  let partialCopy = null
+  b4a.allocUnsafeSlow = (size) => {
+    if (size === 7) {
+      partialCopy = originalAlloc(size - 1)
+      partialCopy.fill(0xbb)
+      return partialCopy
+    }
+    return originalAlloc(size)
+  }
+  try {
+    expectCode(t, () => open(pair.destination, datagram), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+  t.ok(partialCopy)
+  t.alike(partialCopy, b4a.alloc(6))
+
+  const dataCodec = route()
+  b4a.allocUnsafeSlow = (size) => {
+    if (size === 57) throw new Error('associated data allocation failed')
+    return originalAlloc(size)
+  }
+  try {
+    expectCode(t, () => seal(dataCodec), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  const proxyCodec = route()
+  const revoked = Proxy.revocable({}, {})
+  revoked.revoke()
+  b4a.allocUnsafeSlow = () => {
+    throw revoked.proxy
+  }
+  try {
+    expectCode(t, () => seal(proxyCodec), 'INVALID_ROUTE')
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  const classificationCodec = route()
+  const classificationProxy = Proxy.revocable({}, {})
+  classificationProxy.revoke()
+  const hasInstance = Object.getOwnPropertyDescriptor(PrivateRouteError, Symbol.hasInstance)
+  let classified = null
+  Object.defineProperty(PrivateRouteError, Symbol.hasInstance, {
+    configurable: true,
+    value() {
+      throw classificationProxy.proxy
+    }
+  })
+  b4a.allocUnsafeSlow = () => {
+    throw new Error('allocator failed')
+  }
+  try {
+    try {
+      seal(classificationCodec)
+    } catch (err) {
+      classified = err
+    }
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+    if (hasInstance) Object.defineProperty(PrivateRouteError, Symbol.hasInstance, hasInstance)
+    else delete PrivateRouteError[Symbol.hasInstance]
+  }
+  t.ok(classified instanceof PrivateRouteError)
+  t.is(classified.code, 'INVALID_ROUTE')
+})

@@ -1,6 +1,7 @@
 import test from 'brittle'
 import b4a from 'b4a'
 
+import * as publicRoutes from '../index.js'
 import {
   DatagramReplayWindow,
   MAX_COUNTER,
@@ -8,7 +9,30 @@ import {
   ROTATE_AT,
   SenderCounter
 } from '../index.js'
+import * as counterInternals from '../lib/counters.js'
 import { expectCode } from './helpers.js'
+
+const TEST_ONLY_BUFFER_OBSERVER = counterInternals.TEST_ONLY_BUFFER_OBSERVER
+
+test('counter zeroization test hook is a non-public symbol', (t) => {
+  t.is(typeof TEST_ONLY_BUFFER_OBSERVER, 'symbol')
+  t.is('TEST_ONLY_BUFFER_OBSERVER' in publicRoutes, false)
+})
+
+function observedOrdered(overrides = {}) {
+  const owned = []
+  const receiver = new OrderedReceiver({
+    window: 4,
+    gapTimeout: 50,
+    now: () => 0,
+    ...overrides,
+    [TEST_ONLY_BUFFER_OBSERVER](payload) {
+      owned.push(payload)
+    }
+  })
+
+  return { owned, receiver }
+}
 
 test('ordered receiver buffers a bounded authenticated gap then drains', (t) => {
   const receiver = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
@@ -111,32 +135,32 @@ test('ordered gap expires exactly at the configured timeout', (t) => {
 })
 
 test('ordered receiver closes and discards owned buffers on a too-far gap', (t) => {
-  const receiver = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  const { owned, receiver } = observedOrdered()
   const source = b4a.from('secret')
 
   receiver.pushAuthenticated(1n, source)
-  const owned = receiver._buffer.get(1n)
-  t.ok(owned !== source)
+  t.is(owned.length, 1)
+  t.ok(owned[0] !== source)
   expectCode(t, () => receiver.pushAuthenticated(4n, 'too-far'), 'COUNTER_GAP')
   t.is(receiver.closed, true)
   t.is(receiver.buffered, 0)
-  t.alike(owned, b4a.alloc(owned.byteLength))
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
   t.is(b4a.toString(source), 'secret')
 })
 
 test('ordered buffered payloads are copied, delivered independently, and cleared', (t) => {
-  const receiver = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  const { owned, receiver } = observedOrdered()
   const source = b4a.from('b')
 
   receiver.pushAuthenticated(1n, source)
-  const owned = receiver._buffer.get(1n)
   source[0] = 'x'.charCodeAt(0)
   const delivered = receiver.pushAuthenticated(0n, b4a.from('a'))
 
+  t.is(owned.length, 1)
   t.is(b4a.toString(delivered[0]), 'a')
   t.is(b4a.toString(delivered[1]), 'b')
-  t.ok(delivered[1] !== owned)
-  t.alike(owned, b4a.alloc(owned.byteLength))
+  t.ok(delivered[1] !== owned[0])
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
   t.is(receiver.buffered, 0)
 })
 
@@ -231,4 +255,184 @@ test('ordered receiver rejects reentrant state mutation from its clock', (t) => 
   t.is(reentrantError.code, 'COUNTER_INVALID')
   t.is(receiver.next, 0n)
   t.is(receiver.buffered, 1)
+})
+
+test('window one accepts only the exact ordered counter and latest datagram', (t) => {
+  const ordered = new OrderedReceiver({ window: 1, gapTimeout: 50, now: () => 0 })
+  t.alike(ordered.pushAuthenticated(0n, 'exact'), ['exact'])
+  expectCode(t, () => ordered.pushAuthenticated(2n, 'gap'), 'COUNTER_GAP')
+  t.is(ordered.closed, true)
+
+  const datagram = new DatagramReplayWindow({ window: 1 })
+  t.is(datagram.acceptAuthenticated(7n), true)
+  t.is(datagram.floor, 7n)
+  expectCode(t, () => datagram.acceptAuthenticated(6n), 'REPLAY')
+  t.is(datagram.acceptAuthenticated(8n), true)
+  t.is(datagram.floor, 8n)
+  t.is(datagram.buffered, 1)
+})
+
+test('ordered window accepts window minus one and rejects an exact window jump', (t) => {
+  const allowed = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  t.alike(allowed.pushAuthenticated(3n, 'inside'), [])
+  t.is(allowed.buffered, 1)
+
+  const rejected = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  expectCode(t, () => rejected.pushAuthenticated(4n, 'outside'), 'COUNTER_GAP')
+  t.is(rejected.closed, true)
+  t.is(rejected.buffered, 0)
+})
+
+test('datagram replay window handles a huge jump without a huge shift', (t) => {
+  const receiver = new DatagramReplayWindow({ window: 8 })
+
+  receiver.acceptAuthenticated(0n)
+  t.is(receiver.acceptAuthenticated(MAX_COUNTER - 1n), true)
+  t.is(receiver.highest, MAX_COUNTER - 1n)
+  t.is(receiver.floor, MAX_COUNTER - 8n)
+  t.is(receiver.buffered, 1)
+})
+
+test('zero gap timeout fails closed without reading the clock', (t) => {
+  let calls = 0
+  const receiver = new OrderedReceiver({
+    window: 4,
+    gapTimeout: 0,
+    now() {
+      calls++
+      throw new Error('clock must not run')
+    }
+  })
+
+  expectCode(t, () => receiver.pushAuthenticated(1n, 'future'), 'COUNTER_GAP')
+  t.is(calls, 0)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+})
+
+test('a regressing clock closes and clears an established ordered gap', (t) => {
+  let current = 100
+  const { owned, receiver } = observedOrdered({ now: () => current })
+
+  receiver.pushAuthenticated(1n, b4a.from('secret'))
+  current = 99
+  expectCode(t, () => receiver.expire(), 'COUNTER_INVALID')
+  t.is(owned.length, 1)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+})
+
+test('a throwing clock closes and clears an established ordered gap', (t) => {
+  let broken = false
+  const { owned, receiver } = observedOrdered({
+    now() {
+      if (broken) throw new Error('clock failed')
+      return 0
+    }
+  })
+
+  receiver.pushAuthenticated(1n, b4a.from('secret'))
+  broken = true
+  expectCode(t, () => receiver.expire(), 'COUNTER_INVALID')
+  t.is(owned.length, 1)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+})
+
+test('an invalid clock closes and clears an established ordered gap', (t) => {
+  let current = 0
+  const { owned, receiver } = observedOrdered({ now: () => current })
+
+  receiver.pushAuthenticated(1n, b4a.from('secret'))
+  current = Number.NaN
+  expectCode(t, () => receiver.expire(), 'COUNTER_INVALID')
+  t.is(owned.length, 1)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+})
+
+test('ordered receiver bounds byte payloads before buffering', (t) => {
+  const accepted = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  t.alike(accepted.pushAuthenticated(1n, b4a.alloc(1146)), [])
+  t.is(accepted.buffered, 1)
+
+  const rejected = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  expectCode(t, () => rejected.pushAuthenticated(1n, b4a.alloc(1147)), 'COUNTER_INVALID')
+  t.is(rejected.closed, true)
+  t.is(rejected.buffered, 0)
+})
+
+test('copy failure while buffering closes and zeroes prior owned payloads', (t) => {
+  const { owned, receiver } = observedOrdered()
+  const failing = b4a.from('second')
+  receiver.pushAuthenticated(1n, b4a.from('first'))
+
+  const originalFrom = b4a.from
+  b4a.from = (value, ...args) => {
+    if (value === failing) throw new Error('copy failed')
+    return originalFrom(value, ...args)
+  }
+  try {
+    expectCode(t, () => receiver.pushAuthenticated(2n, failing), 'COUNTER_INVALID')
+  } finally {
+    b4a.from = originalFrom
+  }
+
+  t.is(owned.length, 1)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+})
+
+test('copy failure while draining closes and zeroes the undelivered payload', (t) => {
+  const { owned, receiver } = observedOrdered()
+  receiver.pushAuthenticated(1n, b4a.from('buffered'))
+
+  const originalFrom = b4a.from
+  b4a.from = (value, ...args) => {
+    if (value === owned[0]) throw new Error('copy failed')
+    return originalFrom(value, ...args)
+  }
+  try {
+    expectCode(t, () => receiver.pushAuthenticated(0n, 'first'), 'COUNTER_INVALID')
+  } finally {
+    b4a.from = originalFrom
+  }
+
+  t.is(owned.length, 1)
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+})
+
+test('hostile and revoked constructor options use stable counter errors', (t) => {
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error('hostile getter')
+      }
+    }
+  )
+  const revocable = Proxy.revocable({}, {})
+  revocable.revoke()
+
+  for (const options of [hostile, revocable.proxy]) {
+    expectCode(t, () => new SenderCounter(options), 'COUNTER_INVALID')
+    expectCode(t, () => new OrderedReceiver(options), 'COUNTER_INVALID')
+    expectCode(t, () => new DatagramReplayWindow(options), 'COUNTER_INVALID')
+  }
+})
+
+test('counter instances expose no externally mutable implementation state', (t) => {
+  const instances = [
+    new SenderCounter(),
+    new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 }),
+    new DatagramReplayWindow({ window: 8 })
+  ]
+
+  for (const instance of instances) t.alike(Reflect.ownKeys(instance), [])
 })

@@ -5,8 +5,12 @@ import { PrivateRouteError } from './errors.js'
 export const MAX_COUNTER = (1n << 64n) - 1n
 export const ROTATE_AT = MAX_COUNTER - 1024n
 
-// Bounds both ordered storage and datagram bitmap work to a small, fixed amount.
+// Imported only by this module's tests. It is intentionally absent from the
+// package entry point so production callers cannot depend on owned buffers.
+export const TEST_ONLY_BUFFER_OBSERVER = Symbol('test-only-buffer-observer')
+
 const MAX_WINDOW = 4096
+const MAX_BUFFERED_PAYLOAD = 1146
 
 function invalid() {
   throw PrivateRouteError.COUNTER_INVALID()
@@ -14,7 +18,14 @@ function invalid() {
 
 function optionsObject(options, optional = false) {
   if (options === undefined && optional) return {}
-  if (options === null || typeof options !== 'object' || Array.isArray(options)) invalid()
+
+  try {
+    if (options === null || typeof options !== 'object' || Array.isArray(options)) invalid()
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  }
+
   return options
 }
 
@@ -36,13 +47,13 @@ function windowSize(value) {
   return value
 }
 
-function timeValue(value) {
-  if (!Number.isSafeInteger(value) || value < 0) invalid()
-  return value
+function isTime(value) {
+  return Number.isSafeInteger(value) && value >= 0
 }
 
-function copyBuffered(payload) {
-  return b4a.isBuffer(payload) ? b4a.from(payload) : payload
+function timeValue(value) {
+  if (!isTime(value)) invalid()
+  return value
 }
 
 function clearPayload(payload) {
@@ -50,40 +61,53 @@ function clearPayload(payload) {
 }
 
 export class SenderCounter {
+  #value
+  #closed
+
   constructor(options) {
     options = optionsObject(options, true)
     const configured = option(options, 'initial')
 
-    this._value = counterValue(configured === undefined ? 0n : configured)
-    this._closed = false
+    this.#value = counterValue(configured === undefined ? 0n : configured)
+    this.#closed = false
   }
 
   // While open, value is the next counter that next() will emit. Once MAX is
   // emitted and the sender closes, it remains MAX and never wraps.
   get value() {
-    return this._value
+    return this.#value
   }
 
   get needsRotation() {
-    return this._value >= ROTATE_AT
+    return this.#value >= ROTATE_AT
   }
 
   get closed() {
-    return this._closed
+    return this.#closed
   }
 
   next() {
-    if (this._closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
+    if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
 
-    const counter = this._value
-    if (counter === MAX_COUNTER) this._closed = true
-    else this._value = counter + 1n
+    const counter = this.#value
+    if (counter === MAX_COUNTER) this.#closed = true
+    else this.#value = counter + 1n
 
     return counter
   }
 }
 
 export class OrderedReceiver {
+  #window
+  #gapTimeout
+  #now
+  #next
+  #buffer
+  #gapStartedAt
+  #closed
+  #mutating
+  #observeBuffered
+
   constructor(options) {
     options = optionsObject(options)
 
@@ -91,172 +115,242 @@ export class OrderedReceiver {
     const gapTimeout = option(options, 'gapTimeout')
     const now = option(options, 'now')
     const configured = option(options, 'initial')
+    const observeBuffered = option(options, TEST_ONLY_BUFFER_OBSERVER)
 
-    this._window = BigInt(windowSize(window))
-    this._gapTimeout = timeValue(gapTimeout)
+    this.#window = BigInt(windowSize(window))
+    this.#gapTimeout = timeValue(gapTimeout)
     if (typeof now !== 'function') invalid()
-    this._now = now
-    this._next = counterValue(configured === undefined ? 0n : configured)
-    this._buffer = new Map()
-    this._gapStartedAt = null
-    this._closed = false
-    this._mutating = false
+    if (observeBuffered !== undefined && typeof observeBuffered !== 'function') invalid()
+    this.#now = now
+    this.#next = counterValue(configured === undefined ? 0n : configured)
+    this.#buffer = new Map()
+    this.#gapStartedAt = null
+    this.#closed = false
+    this.#mutating = false
+    this.#observeBuffered = observeBuffered || null
   }
 
   get next() {
-    return this._next
+    return this.#next
   }
 
   get needsRotation() {
-    return this._next >= ROTATE_AT
+    return this.#next >= ROTATE_AT
   }
 
   get closed() {
-    return this._closed
+    return this.#closed
   }
 
   get buffered() {
-    return this._buffer.size
+    return this.#buffer.size
   }
 
   pushAuthenticated(counter, payload) {
-    return this._mutate(() => this._pushAuthenticated(counterValue(counter), payload))
+    return this.#mutate(() => this.#pushAuthenticated(counterValue(counter), payload))
   }
 
   expire(at) {
-    return this._mutate(() => {
-      if (this._closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
-      const current = at === undefined ? this._readNow() : timeValue(at)
-      return this._expireAt(current)
+    return this.#mutate(() => {
+      if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
+      const current = at === undefined ? this.#readNow() : this.#clockValue(at)
+      return this.#expireAt(current)
     })
   }
 
-  _pushAuthenticated(counter, payload) {
-    if (this._closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
+  #pushAuthenticated(counter, payload) {
+    if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
 
-    if (this._gapStartedAt !== null) this._expireAt(this._readNow())
-    if (counter < this._next || this._buffer.has(counter)) throw PrivateRouteError.REPLAY()
+    if (this.#gapStartedAt !== null) this.#expireAt(this.#readNow())
+    if (counter < this.#next || this.#buffer.has(counter)) throw PrivateRouteError.REPLAY()
 
-    if (counter > this._next) {
-      if (counter - this._next >= this._window) this._failGap()
+    if (counter > this.#next) {
+      if (counter - this.#next >= this.#window) this.#failGap()
+      if (this.#gapTimeout === 0) this.#failGap()
 
-      const startedAt = this._gapStartedAt === null ? this._readNow() : this._gapStartedAt
-      if (this._gapTimeout === 0) this._failGap()
-
-      const owned = copyBuffered(payload)
-      this._buffer.set(counter, owned)
-      this._gapStartedAt = startedAt
+      const startedAt = this.#gapStartedAt === null ? this.#readNow() : this.#gapStartedAt
+      const owned = this.#copyForBuffer(payload)
+      this.#buffer.set(counter, owned)
+      this.#gapStartedAt = startedAt
+      this.#notifyObserver(owned)
       return []
     }
 
     const delivered = [payload]
     if (counter === MAX_COUNTER) {
-      this._closeExhausted()
+      this.#closeExhausted()
       return delivered
     }
 
-    this._next = counter + 1n
-    while (this._buffer.has(this._next)) {
-      const buffered = this._takeBuffered(this._next)
+    this.#next = counter + 1n
+    while (this.#buffer.has(this.#next)) {
+      const buffered = this.#takeBuffered(this.#next)
       delivered.push(buffered)
 
-      if (this._next === MAX_COUNTER) {
-        this._closeExhausted()
+      if (this.#next === MAX_COUNTER) {
+        this.#closeExhausted()
         return delivered
       }
-      this._next++
+      this.#next++
     }
 
-    if (this._buffer.size === 0) this._gapStartedAt = null
+    if (this.#buffer.size === 0) this.#gapStartedAt = null
     return delivered
   }
 
-  _mutate(operation) {
-    if (this._mutating) invalid()
-    this._mutating = true
+  #mutate(operation) {
+    if (this.#mutating) invalid()
+    this.#mutating = true
     try {
       return operation()
     } finally {
-      this._mutating = false
+      this.#mutating = false
     }
   }
 
-  _readNow() {
+  #readNow() {
     let current
     try {
-      current = this._now()
+      current = this.#now()
     } catch {
-      invalid()
+      return this.#failClock()
     }
-    return timeValue(current)
+    return this.#clockValue(current)
   }
 
-  _expireAt(current) {
-    if (this._gapStartedAt === null) return false
-    if (current - this._gapStartedAt < this._gapTimeout) return false
-    this._failGap()
+  #clockValue(current) {
+    if (!isTime(current)) return this.#failClock()
+    return current
   }
 
-  _takeBuffered(counter) {
-    const owned = this._buffer.get(counter)
-    this._buffer.delete(counter)
+  #failClock() {
+    if (this.#gapStartedAt !== null) this.#failInvalid()
+    invalid()
+  }
 
-    if (!b4a.isBuffer(owned)) return owned
-    const delivered = b4a.from(owned)
+  #expireAt(current) {
+    if (this.#gapStartedAt === null) return false
+    if (current < this.#gapStartedAt) this.#failInvalid()
+    if (current - this.#gapStartedAt < this.#gapTimeout) return false
+    this.#failGap()
+  }
+
+  #copyForBuffer(payload) {
+    let isBuffer
+    try {
+      isBuffer = b4a.isBuffer(payload)
+    } catch {
+      this.#failInvalid()
+    }
+
+    if (isBuffer) {
+      if (payload.byteLength > MAX_BUFFERED_PAYLOAD) this.#failInvalid()
+      try {
+        return b4a.from(payload)
+      } catch {
+        this.#failInvalid()
+      }
+    }
+
+    if (typeof payload !== 'string') this.#failInvalid()
+    try {
+      if (b4a.byteLength(payload) > MAX_BUFFERED_PAYLOAD) this.#failInvalid()
+    } catch (err) {
+      if (err instanceof PrivateRouteError) throw err
+      this.#failInvalid()
+    }
+    return payload
+  }
+
+  #notifyObserver(owned) {
+    if (this.#observeBuffered === null) return
+    try {
+      this.#observeBuffered(owned)
+    } catch {
+      this.#failInvalid()
+    }
+  }
+
+  #takeBuffered(counter) {
+    const owned = this.#buffer.get(counter)
+    if (!b4a.isBuffer(owned)) {
+      this.#buffer.delete(counter)
+      return owned
+    }
+
+    let delivered
+    try {
+      delivered = b4a.from(owned)
+    } catch {
+      this.#failInvalid()
+    }
+    this.#buffer.delete(counter)
     owned.fill(0)
     return delivered
   }
 
-  _clearBuffered() {
-    for (const payload of this._buffer.values()) clearPayload(payload)
-    this._buffer.clear()
-    this._gapStartedAt = null
+  #clearBuffered() {
+    for (const payload of this.#buffer.values()) clearPayload(payload)
+    this.#buffer.clear()
+    this.#gapStartedAt = null
   }
 
-  _failGap() {
-    this._clearBuffered()
-    this._closed = true
+  #failGap() {
+    this.#clearBuffered()
+    this.#closed = true
     throw PrivateRouteError.COUNTER_GAP()
   }
 
-  _closeExhausted() {
-    this._clearBuffered()
-    this._next = MAX_COUNTER
-    this._closed = true
+  #failInvalid() {
+    this.#clearBuffered()
+    this.#closed = true
+    invalid()
+  }
+
+  #closeExhausted() {
+    this.#clearBuffered()
+    this.#next = MAX_COUNTER
+    this.#closed = true
   }
 }
 
 export class DatagramReplayWindow {
+  #window
+  #mask
+  #highest
+  #bitmap
+  #closed
+
   constructor(options) {
     options = optionsObject(options)
     const window = windowSize(option(options, 'window'))
 
-    this._window = BigInt(window)
-    this._mask = (1n << this._window) - 1n
-    this._highest = null
-    this._bitmap = 0n
-    this._closed = false
+    this.#window = BigInt(window)
+    this.#mask = (1n << this.#window) - 1n
+    this.#highest = null
+    this.#bitmap = 0n
+    this.#closed = false
   }
 
   get floor() {
-    if (this._highest === null || this._highest < this._window) return 0n
-    return this._highest - this._window + 1n
+    if (this.#highest === null || this.#highest < this.#window) return 0n
+    return this.#highest - this.#window + 1n
   }
 
   get highest() {
-    return this._highest
+    return this.#highest
   }
 
   get needsRotation() {
-    return this._highest !== null && this._highest >= ROTATE_AT
+    return this.#highest !== null && this.#highest >= ROTATE_AT
   }
 
   get closed() {
-    return this._closed
+    return this.#closed
   }
 
   get buffered() {
-    let bitmap = this._bitmap
+    let bitmap = this.#bitmap
     let count = 0
     while (bitmap !== 0n) {
       bitmap &= bitmap - 1n
@@ -267,29 +361,29 @@ export class DatagramReplayWindow {
 
   acceptAuthenticated(value) {
     const counter = counterValue(value)
-    if (this._closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
+    if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
 
-    if (this._highest === null) {
-      this._highest = counter
-      this._bitmap = 1n
-      if (counter === MAX_COUNTER) this._closed = true
+    if (this.#highest === null) {
+      this.#highest = counter
+      this.#bitmap = 1n
+      if (counter === MAX_COUNTER) this.#closed = true
       return true
     }
 
-    if (counter > this._highest) {
-      const shift = counter - this._highest
-      this._bitmap = shift >= this._window ? 1n : ((this._bitmap << shift) | 1n) & this._mask
-      this._highest = counter
-      if (counter === MAX_COUNTER) this._closed = true
+    if (counter > this.#highest) {
+      const shift = counter - this.#highest
+      this.#bitmap = shift >= this.#window ? 1n : ((this.#bitmap << shift) | 1n) & this.#mask
+      this.#highest = counter
+      if (counter === MAX_COUNTER) this.#closed = true
       return true
     }
 
     if (counter < this.floor) throw PrivateRouteError.REPLAY()
 
-    const bit = 1n << (this._highest - counter)
-    if ((this._bitmap & bit) !== 0n) throw PrivateRouteError.REPLAY()
+    const bit = 1n << (this.#highest - counter)
+    if ((this.#bitmap & bit) !== 0n) throw PrivateRouteError.REPLAY()
 
-    this._bitmap |= bit
+    this.#bitmap |= bit
     return true
   }
 }

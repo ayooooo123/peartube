@@ -164,9 +164,17 @@ export class PrivacyDomainRegistry {
     ) {
       unauthorized()
     }
-    this.#evidenceChecker = evidenceChecker
-    this.#descriptorChecker = descriptorChecker
-    this.#circuitChecker = circuitChecker
+    this.#evidenceChecker = Object.freeze({
+      isVerified: evidenceChecker.isVerified.bind(evidenceChecker),
+      read: evidenceChecker.read.bind(evidenceChecker)
+    })
+    this.#descriptorChecker = Object.freeze({
+      isVerified: isVerifiedDescriptor,
+      read: readVerifiedDescriptor
+    })
+    this.#circuitChecker = Object.freeze({
+      read: circuitChecker.read.bind(circuitChecker)
+    })
     this.#now = now
   }
 

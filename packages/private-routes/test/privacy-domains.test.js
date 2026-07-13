@@ -513,6 +513,55 @@ test('forged checker capabilities cannot mint registry provenance', (t) => {
   )
 })
 
+test('registry snapshots checker capabilities before caller mutation', (t) => {
+  const safety = safetyRoleIdentity(100)
+  const entry = privateRoleIdentity(120)
+  const evidenceResult = verifiedEvidence(safety)
+  const circuitAuthority = routes.createCircuitAuthority()
+  const context = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 13),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 200_000n
+  })
+  const descriptor = verifiedRouteDescriptor(entry)
+  const mutableDescriptorChecker = {
+    isVerified: routes.isVerifiedDescriptor,
+    read: routes.readVerifiedDescriptor
+  }
+  const registry = new routes.PrivacyDomainRegistry({
+    evidenceChecker: evidenceResult.checker,
+    descriptorChecker: mutableDescriptorChecker,
+    circuitChecker: circuitAuthority.checker,
+    now: () => 100_000n
+  })
+
+  mutableDescriptorChecker.isVerified = () => true
+  mutableDescriptorChecker.read = () => routes.readVerifiedDescriptor(descriptor)
+  expectCode(
+    t,
+    () =>
+      registry.learnRoute(entry.publicKey, {
+        provenance: 'route-entry',
+        descriptor: {},
+        circuitContext: context
+      }),
+    'UNAUTHORIZED'
+  )
+
+  t.is(
+    Reflect.set(evidenceResult.checker, 'isVerified', () => false),
+    false
+  )
+  t.is(
+    Reflect.set(circuitAuthority.checker, 'read', () => ({})),
+    false
+  )
+  registry.learnPublic(evidenceResult.evidence)
+  t.is(registry.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), true)
+})
+
 function issueEvidence(authority, identity, overrides = {}) {
   const advertisement = signedAdvertisement(identity, overrides)
   const encoded = routes.encodeRelayAdvertisement(advertisement)

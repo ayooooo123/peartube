@@ -37,9 +37,17 @@ function option(options, name) {
   }
 }
 
-function counterValue(value) {
-  if (typeof value !== 'bigint' || value < 0n || value > MAX_COUNTER) invalid()
+function counterValue(value, maximum = MAX_COUNTER) {
+  if (typeof value !== 'bigint' || value < 0n || value > maximum) invalid()
   return value
+}
+
+function counterMaximum(value) {
+  return counterValue(value === undefined ? MAX_COUNTER : value)
+}
+
+function rotationAt(maximum) {
+  return maximum > 1024n ? maximum - 1024n : 0n
 }
 
 function windowSize(value) {
@@ -62,13 +70,17 @@ function clearPayload(payload) {
 
 export class SenderCounter {
   #value
+  #maximum
+  #rotateAt
   #closed
 
   constructor(options) {
     options = optionsObject(options, true)
     const configured = option(options, 'initial')
+    this.#maximum = counterMaximum(option(options, 'maximum'))
+    this.#rotateAt = rotationAt(this.#maximum)
 
-    this.#value = counterValue(configured === undefined ? 0n : configured)
+    this.#value = counterValue(configured === undefined ? 0n : configured, this.#maximum)
     this.#closed = false
   }
 
@@ -79,7 +91,7 @@ export class SenderCounter {
   }
 
   get needsRotation() {
-    return this.#value >= ROTATE_AT
+    return this.#value >= this.#rotateAt
   }
 
   get closed() {
@@ -90,7 +102,7 @@ export class SenderCounter {
     if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
 
     const counter = this.#value
-    if (counter === MAX_COUNTER) this.#closed = true
+    if (counter === this.#maximum) this.#closed = true
     else this.#value = counter + 1n
 
     return counter
@@ -102,6 +114,8 @@ export class OrderedReceiver {
   #gapTimeout
   #now
   #next
+  #maximum
+  #rotateAt
   #buffer
   #gapStartedAt
   #lastObservedAt
@@ -123,7 +137,9 @@ export class OrderedReceiver {
     if (typeof now !== 'function') invalid()
     if (observeBuffered !== undefined && typeof observeBuffered !== 'function') invalid()
     this.#now = now
-    this.#next = counterValue(configured === undefined ? 0n : configured)
+    this.#maximum = counterMaximum(option(options, 'maximum'))
+    this.#rotateAt = rotationAt(this.#maximum)
+    this.#next = counterValue(configured === undefined ? 0n : configured, this.#maximum)
     this.#buffer = new Map()
     this.#gapStartedAt = null
     this.#lastObservedAt = null
@@ -137,7 +153,7 @@ export class OrderedReceiver {
   }
 
   get needsRotation() {
-    return this.#next >= ROTATE_AT
+    return this.#next >= this.#rotateAt
   }
 
   get closed() {
@@ -149,7 +165,9 @@ export class OrderedReceiver {
   }
 
   pushAuthenticated(counter, payload) {
-    return this.#mutate(() => this.#pushAuthenticated(counterValue(counter), payload))
+    return this.#mutate(() =>
+      this.#pushAuthenticated(counterValue(counter, this.#maximum), payload)
+    )
   }
 
   expire(at) {
@@ -190,7 +208,7 @@ export class OrderedReceiver {
     }
 
     const delivered = [payload]
-    if (counter === MAX_COUNTER) {
+    if (counter === this.#maximum) {
       this.#closeExhausted()
       return delivered
     }
@@ -200,7 +218,7 @@ export class OrderedReceiver {
       const buffered = this.#takeBuffered(this.#next)
       delivered.push(buffered)
 
-      if (this.#next === MAX_COUNTER) {
+      if (this.#next === this.#maximum) {
         this.#closeExhausted()
         return delivered
       }
@@ -327,7 +345,7 @@ export class OrderedReceiver {
 
   #closeExhausted() {
     this.#clearBuffered()
-    this.#next = MAX_COUNTER
+    this.#next = this.#maximum
     this.#closed = true
   }
 }
@@ -336,12 +354,16 @@ export class DatagramReplayWindow {
   #window
   #mask
   #highest
+  #maximum
+  #rotateAt
   #bitmap
   #closed
 
   constructor(options) {
     options = optionsObject(options)
     const window = windowSize(option(options, 'window'))
+    this.#maximum = counterMaximum(option(options, 'maximum'))
+    this.#rotateAt = rotationAt(this.#maximum)
 
     this.#window = BigInt(window)
     this.#mask = (1n << this.#window) - 1n
@@ -360,7 +382,7 @@ export class DatagramReplayWindow {
   }
 
   get needsRotation() {
-    return this.#highest !== null && this.#highest >= ROTATE_AT
+    return this.#highest !== null && this.#highest >= this.#rotateAt
   }
 
   get closed() {
@@ -378,13 +400,13 @@ export class DatagramReplayWindow {
   }
 
   acceptAuthenticated(value) {
-    const counter = counterValue(value)
+    const counter = counterValue(value, this.#maximum)
     if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
 
     if (this.#highest === null) {
       this.#highest = counter
       this.#bitmap = 1n
-      if (counter === MAX_COUNTER) this.#closed = true
+      if (counter === this.#maximum) this.#closed = true
       return true
     }
 
@@ -392,7 +414,7 @@ export class DatagramReplayWindow {
       const shift = counter - this.#highest
       this.#bitmap = shift >= this.#window ? 1n : ((this.#bitmap << shift) | 1n) & this.#mask
       this.#highest = counter
-      if (counter === MAX_COUNTER) this.#closed = true
+      if (counter === this.#maximum) this.#closed = true
       return true
     }
 

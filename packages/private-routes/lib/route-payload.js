@@ -1,4 +1,5 @@
 import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 
 import { DatagramReplayWindow, OrderedReceiver, SenderCounter } from './counters.js'
 import { PrivateRouteError } from './errors.js'
@@ -11,15 +12,20 @@ export const ROUTE_PLAINTEXT_SIZE = 1076
 export const MAX_ROUTE_PAYLOAD = 1073
 
 export const TEST_ONLY_RECEIVERS = Symbol('test-only-route-payload-receivers')
+export const ROUTE_ENDPOINT = Object.freeze({ SOURCE: 0, DESTINATION: 1 })
 
 const CREATED_CONTEXTS = new WeakMap()
 const CREATED_CONTEXT_TOKENS = new WeakSet()
+const NONCE_DOMAIN_CLAIMS = new Map()
 
 const KEY_BYTES = 32
 const NONCE_PREFIX_BYTES = 16
 const DESCRIPTOR_ID_BYTES = 32
 const CIRCUIT_ID_BYTES = 16
 const MAX_UINT64 = (1n << 64n) - 1n
+const MAX_LOGICAL_COUNTER = (1n << 63n) - 1n
+const MAX_NONCE_DOMAIN_CLAIMS = 4096
+const NONCE_DOMAIN_CLAIM = b4a.from('hyperdht-private-routes/nonce-domain/v0')
 const RECEIVER_CODES = new Set(['REPLAY', 'COUNTER_INVALID', 'COUNTER_GAP', 'COUNTER_EXHAUSTED'])
 
 function invalid() {
@@ -79,6 +85,15 @@ function directionValue(value) {
   return value
 }
 
+function endpointRoleValue(value) {
+  if (value !== ROUTE_ENDPOINT.SOURCE && value !== ROUTE_ENDPOINT.DESTINATION) invalid()
+  return value
+}
+
+function sendDirection(endpointRole) {
+  return endpointRole === ROUTE_ENDPOINT.SOURCE ? DIRECTION.FORWARD : DIRECTION.REVERSE
+}
+
 function routeClass(value) {
   if (value !== CELL_CLASS.STREAM && value !== CELL_CLASS.DATAGRAM) invalid()
   return value
@@ -86,6 +101,17 @@ function routeClass(value) {
 
 function uint64(value) {
   return typeof value === 'bigint' && value >= 0n && value <= MAX_UINT64
+}
+
+function wireCounter(logical, cellClass) {
+  if (typeof logical !== 'bigint' || logical < 0n || logical > MAX_LOGICAL_COUNTER) invalid()
+  return (logical << 1n) | (cellClass === CELL_CLASS.DATAGRAM ? 1n : 0n)
+}
+
+function logicalCounter(wire, cellClass) {
+  const expected = cellClass === CELL_CLASS.DATAGRAM ? 1n : 0n
+  if ((wire & 1n) !== expected) invalid()
+  return wire >> 1n
 }
 
 function writeUint64BE(buffer, value, offset) {
@@ -175,7 +201,8 @@ function directionState(receivers, name, defaults) {
   return Object.freeze({
     key: defaults.key,
     noncePrefix: defaults.noncePrefix,
-    sender: defaults.sender,
+    streamSender: defaults.streamSender,
+    datagramSender: defaults.datagramSender,
     ordered,
     datagram,
     pushAuthenticated: method(ordered, 'pushAuthenticated'),
@@ -216,6 +243,7 @@ function decodeDeliveries(deliveries) {
 
 function contextFields(options) {
   options = optionsObject(options)
+  const endpointRole = endpointRoleValue(option(options, 'endpointRole'))
   const descriptorId = option(options, 'descriptorId')
   const circuitId = option(options, 'circuitId')
   const forwardKey = option(options, 'forwardKey')
@@ -240,22 +268,70 @@ function contextFields(options) {
     if (err instanceof PrivateRouteError) throw err
     invalid()
   }
-  return { descriptorId, circuitId, forwardKey, forwardNoncePrefix, reverseKey, reverseNoncePrefix }
+  return {
+    endpointRole,
+    descriptorId,
+    circuitId,
+    forwardKey,
+    forwardNoncePrefix,
+    reverseKey,
+    reverseNoncePrefix
+  }
+}
+
+function nonceDomainClaim(owned) {
+  const direction = sendDirection(owned.endpointRole)
+  const key = direction === DIRECTION.FORWARD ? owned.forwardKey : owned.reverseKey
+  const noncePrefix =
+    direction === DIRECTION.FORWARD ? owned.forwardNoncePrefix : owned.reverseNoncePrefix
+  let digest = null
+  let claimKey = null
+  try {
+    digest = crypto.hash([NONCE_DOMAIN_CLAIM, key, noncePrefix])
+    claimKey = b4a.toString(digest, 'hex')
+  } catch {
+    invalid()
+  } finally {
+    clear(digest)
+  }
+  if (NONCE_DOMAIN_CLAIMS.has(claimKey)) invalid()
+  if (NONCE_DOMAIN_CLAIMS.size >= MAX_NONCE_DOMAIN_CLAIMS) invalid()
+  const claim = { key: claimKey, state: 'pending' }
+  NONCE_DOMAIN_CLAIMS.set(claimKey, claim)
+  return claim
+}
+
+function releasePendingClaim(owned) {
+  const claim = owned && owned.claim
+  if (!claim || claim.state !== 'pending') return
+  if (NONCE_DOMAIN_CLAIMS.get(claim.key) === claim) NONCE_DOMAIN_CLAIMS.delete(claim.key)
+  claim.state = 'released'
+}
+
+function activateClaim(owned) {
+  const claim = owned && owned.claim
+  if (!claim || claim.state !== 'pending' || NONCE_DOMAIN_CLAIMS.get(claim.key) !== claim) invalid()
+  claim.state = 'active'
+  return claim
 }
 
 // Internal post-authentication boundary. Task 11's verified CREATED handler is
 // the only production issuer. This mint is deliberately absent from index.js.
 export function mintCreatedRoutePayloadContext(options) {
   const fields = contextFields(options)
-  const owned = {}
+  const owned = { endpointRole: fields.endpointRole, claim: null }
   try {
-    for (const [name, value] of Object.entries(fields)) owned[name] = copy(value)
+    for (const [name, value] of Object.entries(fields)) {
+      if (name !== 'endpointRole') owned[name] = copy(value)
+    }
+    owned.claim = nonceDomainClaim(owned)
     const context = Object.freeze(Object.create(null))
     CREATED_CONTEXTS.set(context, owned)
     CREATED_CONTEXT_TOKENS.add(context)
     return context
   } catch (err) {
-    for (const value of Object.values(owned)) clear(value)
+    releasePendingClaim(owned)
+    clearCreatedContext(owned)
     if (err instanceof PrivateRouteError) throw err
     invalid()
   }
@@ -280,6 +356,7 @@ export function destroyCreatedRoutePayloadContext(context) {
   if (!known) invalid()
   if (!owned) return
   CREATED_CONTEXTS.delete(context)
+  releasePendingClaim(owned)
   clearCreatedContext(owned)
 }
 
@@ -304,6 +381,10 @@ export class RoutePayloadCodec {
   #circuitId
   #forward
   #reverse
+  #endpointRole
+  #sendDirection
+  #receiveDirection
+  #nonceDomainClaim
   #destroyed
 
   constructor(options) {
@@ -338,17 +419,24 @@ export class RoutePayloadCodec {
       invalid()
     }
 
-    const counterOptions = senderInitial === undefined ? undefined : { initial: senderInitial }
-    const receiverOptions = { window, gapTimeout, now, initial: receiverInitial }
+    const counterOptions = { initial: senderInitial, maximum: MAX_LOGICAL_COUNTER }
+    const receiverOptions = {
+      window,
+      gapTimeout,
+      now,
+      initial: receiverInitial,
+      maximum: MAX_LOGICAL_COUNTER
+    }
     let ownedForwardKey = null
     let ownedForwardPrefix = null
     let ownedReverseKey = null
     let ownedReversePrefix = null
     let ownedDescriptor = null
     let ownedCircuit = null
+    let created = null
 
     try {
-      const created = takeCreatedContext(context)
+      created = takeCreatedContext(context)
       ownedForwardKey = created.forwardKey
       ownedForwardPrefix = created.forwardNoncePrefix
       ownedReverseKey = created.reverseKey
@@ -359,22 +447,28 @@ export class RoutePayloadCodec {
       const forwardDefaults = Object.freeze({
         key: ownedForwardKey,
         noncePrefix: ownedForwardPrefix,
-        sender: new SenderCounter(counterOptions),
+        streamSender: new SenderCounter(counterOptions),
+        datagramSender: new SenderCounter(counterOptions),
         ordered: new OrderedReceiver(receiverOptions),
-        datagram: new DatagramReplayWindow({ window })
+        datagram: new DatagramReplayWindow({ window, maximum: MAX_LOGICAL_COUNTER })
       })
       const reverseDefaults = Object.freeze({
         key: ownedReverseKey,
         noncePrefix: ownedReversePrefix,
-        sender: new SenderCounter(counterOptions),
+        streamSender: new SenderCounter(counterOptions),
+        datagramSender: new SenderCounter(counterOptions),
         ordered: new OrderedReceiver(receiverOptions),
-        datagram: new DatagramReplayWindow({ window })
+        datagram: new DatagramReplayWindow({ window, maximum: MAX_LOGICAL_COUNTER })
       })
 
       this.#crypto = Object.freeze({ seal: seal.bind(crypto), open: open.bind(crypto) })
       this.#padding = configuredPadding === undefined ? randomBytes.bind(crypto) : configuredPadding
       this.#descriptorId = ownedDescriptor
       this.#circuitId = ownedCircuit
+      this.#endpointRole = created.endpointRole
+      this.#sendDirection = sendDirection(created.endpointRole)
+      this.#receiveDirection =
+        this.#sendDirection === DIRECTION.FORWARD ? DIRECTION.REVERSE : DIRECTION.FORWARD
       this.#forward = directionState(receivers, 'forward', forwardDefaults)
       this.#reverse = directionState(receivers, 'reverse', reverseDefaults)
       if (!this.#forward.pushAuthenticated) {
@@ -393,8 +487,10 @@ export class RoutePayloadCodec {
           destroyOrdered: optionalMethod(this.#reverse.ordered, 'destroy')
         })
       }
+      this.#nonceDomainClaim = activateClaim(created)
       this.#destroyed = false
     } catch (err) {
+      releasePendingClaim(created)
       clear(ownedForwardKey)
       clear(ownedForwardPrefix)
       clear(ownedReverseKey)
@@ -410,18 +506,30 @@ export class RoutePayloadCodec {
     return Object.freeze({
       destroyed: this.#destroyed,
       forward: Object.freeze({
-        senderNext: this.#forward.sender.value,
-        senderClosed: this.#forward.sender.closed,
+        senderNext: this.#forward.streamSender.value,
+        senderClosed: this.#forward.streamSender.closed,
+        senderNeedsRotation: this.#forward.streamSender.needsRotation,
+        datagramSenderNext: this.#forward.datagramSender.value,
+        datagramSenderClosed: this.#forward.datagramSender.closed,
+        datagramSenderNeedsRotation: this.#forward.datagramSender.needsRotation,
         orderedNext: this.#forward.ordered.next,
         orderedBuffered: this.#forward.ordered.buffered,
-        datagramHighest: this.#forward.datagram.highest
+        orderedNeedsRotation: this.#forward.ordered.needsRotation,
+        datagramHighest: this.#forward.datagram.highest,
+        datagramNeedsRotation: this.#forward.datagram.needsRotation
       }),
       reverse: Object.freeze({
-        senderNext: this.#reverse.sender.value,
-        senderClosed: this.#reverse.sender.closed,
+        senderNext: this.#reverse.streamSender.value,
+        senderClosed: this.#reverse.streamSender.closed,
+        senderNeedsRotation: this.#reverse.streamSender.needsRotation,
+        datagramSenderNext: this.#reverse.datagramSender.value,
+        datagramSenderClosed: this.#reverse.datagramSender.closed,
+        datagramSenderNeedsRotation: this.#reverse.datagramSender.needsRotation,
         orderedNext: this.#reverse.ordered.next,
         orderedBuffered: this.#reverse.ordered.buffered,
-        datagramHighest: this.#reverse.datagram.highest
+        orderedNeedsRotation: this.#reverse.ordered.needsRotation,
+        datagramHighest: this.#reverse.datagram.highest,
+        datagramNeedsRotation: this.#reverse.datagram.needsRotation
       })
     })
   }
@@ -430,12 +538,14 @@ export class RoutePayloadCodec {
     if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
     options = optionsObject(options)
     const direction = directionValue(option(options, 'direction'))
+    if (direction !== this.#sendDirection) invalid()
     const cellClass = routeClass(option(options, 'class'))
     const payload = option(options, 'payload')
     const payloadLength = bufferLength(payload)
     if (payloadLength < 0 || payloadLength > MAX_ROUTE_PAYLOAD) invalid()
 
     const state = direction === DIRECTION.FORWARD ? this.#forward : this.#reverse
+    const sender = cellClass === CELL_CLASS.STREAM ? state.streamSender : state.datagramSender
     const plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
     let padding = null
     let data = null
@@ -454,7 +564,7 @@ export class RoutePayloadCodec {
 
       let counter
       try {
-        counter = state.sender.next()
+        counter = wireCounter(sender.next(), cellClass)
       } catch (err) {
         const code = receiverFailure(err)
         if (code !== null) throw new PrivateRouteError(code)
@@ -489,6 +599,7 @@ export class RoutePayloadCodec {
     if (!isBuffer(frame, ROUTE_FRAME_SIZE)) invalid()
     options = optionsObject(options)
     const direction = directionValue(option(options, 'direction'))
+    if (direction !== this.#receiveDirection) invalid()
     const state = direction === DIRECTION.FORWARD ? this.#forward : this.#reverse
     const counter = readUint64BE(frame, 0)
     const data = associatedData(this.#descriptorId, this.#circuitId, direction, counter)
@@ -508,11 +619,12 @@ export class RoutePayloadCodec {
       if (plaintext === null || !isBuffer(plaintext, ROUTE_PLAINTEXT_SIZE)) invalid()
 
       const cellClass = routeClass(plaintext[0])
+      const logical = logicalCounter(counter, cellClass)
       const payloadLength = (plaintext[1] << 8) | plaintext[2]
       if (payloadLength > MAX_ROUTE_PAYLOAD) invalid()
 
       if (cellClass === CELL_CLASS.DATAGRAM) {
-        const accepted = invokeReceiver(() => state.acceptAuthenticated(counter))
+        const accepted = invokeReceiver(() => state.acceptAuthenticated(logical))
         if (accepted !== true) invalid()
         return Object.freeze({
           class: cellClass,
@@ -523,7 +635,7 @@ export class RoutePayloadCodec {
       delivery = b4a.allocUnsafeSlow(payloadLength + 1)
       delivery[0] = cellClass
       delivery.set(plaintext.subarray(3, 3 + payloadLength), 1)
-      const deliveries = invokeReceiver(() => state.pushAuthenticated(counter, delivery))
+      const deliveries = invokeReceiver(() => state.pushAuthenticated(logical, delivery))
       return decodeDeliveries(deliveries)
     } finally {
       clear(data)
@@ -548,5 +660,8 @@ export class RoutePayloadCodec {
     clear(this.#reverse.noncePrefix)
     clear(this.#descriptorId)
     clear(this.#circuitId)
+    if (this.#nonceDomainClaim && this.#nonceDomainClaim.state === 'active') {
+      this.#nonceDomainClaim.state = 'spent'
+    }
   }
 }

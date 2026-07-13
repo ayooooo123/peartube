@@ -7,11 +7,12 @@ import {
   CellCodec,
   DIRECTION,
   DatagramReplayWindow,
-  MAX_COUNTER,
   OrderedReceiver,
   PrivateRouteError,
   Reassembler,
+  ROUTE_COUNTER_SIZE,
   ROUTE_FRAME_SIZE,
+  ROUTE_PLAINTEXT_SIZE,
   RoutePayloadCodec,
   SenderCounter,
   cryptoSuite,
@@ -20,6 +21,7 @@ import {
 import { expectCode, seed } from './helpers.js'
 import { TEST_ONLY_BUFFER_OBSERVER } from '../lib/counters.js'
 import {
+  ROUTE_ENDPOINT,
   TEST_ONLY_RECEIVERS,
   destroyCreatedRoutePayloadContext,
   mintCreatedRoutePayloadContext
@@ -29,26 +31,35 @@ import * as publicRoutes from '../index.js'
 const DESCRIPTOR_ID = b4a.alloc(32, 0x31)
 const CIRCUIT_ID = b4a.alloc(16, 0x41)
 const ROUTE_KEYS = cryptoSuite.deriveKeys(seed(7), b4a.from('authenticated-created'))
+let routeSequence = 0
 
 function zeroPadding(size) {
   return b4a.alloc(size)
+}
+
+function routeKeys() {
+  routeSequence++
+  return cryptoSuite.deriveKeys(seed(70), b4a.from(`route-payload-test-${routeSequence}`))
 }
 
 function route(overrides = {}) {
   const {
     receivers,
     context,
+    endpointRole = ROUTE_ENDPOINT.SOURCE,
+    keys = routeKeys(),
     descriptorId = DESCRIPTOR_ID,
     circuitId = CIRCUIT_ID,
-    forwardKey = ROUTE_KEYS.forwardKey,
-    forwardNoncePrefix = ROUTE_KEYS.forwardNoncePrefix,
-    reverseKey = ROUTE_KEYS.reverseKey,
-    reverseNoncePrefix = ROUTE_KEYS.reverseNoncePrefix,
+    forwardKey = keys.forwardKey,
+    forwardNoncePrefix = keys.forwardNoncePrefix,
+    reverseKey = keys.reverseKey,
+    reverseNoncePrefix = keys.reverseNoncePrefix,
     ...rest
   } = overrides
   const createdContext =
     context === undefined
       ? mintCreatedRoutePayloadContext({
+          endpointRole,
           descriptorId,
           circuitId,
           forwardKey,
@@ -69,6 +80,31 @@ function route(overrides = {}) {
   })
 }
 
+function routePair(sourceOverrides = {}, destinationOverrides = {}) {
+  const keys = routeKeys()
+  return {
+    source: route({ ...sourceOverrides, keys, endpointRole: ROUTE_ENDPOINT.SOURCE }),
+    destination: route({
+      ...destinationOverrides,
+      keys,
+      endpointRole: ROUTE_ENDPOINT.DESTINATION
+    }),
+    keys
+  }
+}
+
+function receivingRoute(keys, overrides = {}) {
+  const outbound = routeKeys()
+  return route({
+    endpointRole: ROUTE_ENDPOINT.DESTINATION,
+    forwardKey: keys.forwardKey,
+    forwardNoncePrefix: keys.forwardNoncePrefix,
+    reverseKey: outbound.reverseKey,
+    reverseNoncePrefix: outbound.reverseNoncePrefix,
+    ...overrides
+  })
+}
+
 test('route receiver injection hook is test-only and non-public', (t) => {
   t.is(typeof TEST_ONLY_RECEIVERS, 'symbol')
   t.is('TEST_ONLY_RECEIVERS' in publicRoutes, false)
@@ -83,12 +119,10 @@ test('only a one-use authenticated-CREATED context can construct a route codec',
     padding: zeroPadding
   }
   const rawKeys = {
+    endpointRole: ROUTE_ENDPOINT.SOURCE,
     descriptorId: DESCRIPTOR_ID,
     circuitId: CIRCUIT_ID,
-    forwardKey: ROUTE_KEYS.forwardKey,
-    forwardNoncePrefix: ROUTE_KEYS.forwardNoncePrefix,
-    reverseKey: ROUTE_KEYS.reverseKey,
-    reverseNoncePrefix: ROUTE_KEYS.reverseNoncePrefix
+    ...routeKeys()
   }
 
   expectCode(t, () => new RoutePayloadCodec({ ...options, ...rawKeys }), 'INVALID_ROUTE')
@@ -104,6 +138,7 @@ test('only a one-use authenticated-CREATED context can construct a route codec',
 
 test('an unconsumed authenticated-CREATED context can be disposed and zeroed', (t) => {
   const allocations = []
+  const keys = routeKeys()
   const originalAlloc = b4a.allocUnsafeSlow
   b4a.allocUnsafeSlow = (size) => {
     const value = originalAlloc(size)
@@ -113,12 +148,10 @@ test('an unconsumed authenticated-CREATED context can be disposed and zeroed', (
   let context
   try {
     context = mintCreatedRoutePayloadContext({
+      endpointRole: ROUTE_ENDPOINT.SOURCE,
       descriptorId: DESCRIPTOR_ID,
       circuitId: CIRCUIT_ID,
-      forwardKey: ROUTE_KEYS.forwardKey,
-      forwardNoncePrefix: ROUTE_KEYS.forwardNoncePrefix,
-      reverseKey: ROUTE_KEYS.reverseKey,
-      reverseNoncePrefix: ROUTE_KEYS.reverseNoncePrefix
+      ...keys
     })
   } finally {
     b4a.allocUnsafeSlow = originalAlloc
@@ -130,6 +163,74 @@ test('an unconsumed authenticated-CREATED context can be disposed and zeroed', (
   for (const value of allocations) t.alike(value, b4a.alloc(value.byteLength))
   expectCode(t, () => route({ context }), 'INVALID_ROUTE')
   t.is('destroyCreatedRoutePayloadContext' in publicRoutes, false)
+})
+
+test('nonce-domain claims are unique, disposable before use, and spent after activation', (t) => {
+  const keys = routeKeys()
+  const raw = {
+    endpointRole: ROUTE_ENDPOINT.SOURCE,
+    descriptorId: DESCRIPTOR_ID,
+    circuitId: CIRCUIT_ID,
+    ...keys
+  }
+
+  const disposable = mintCreatedRoutePayloadContext(raw)
+  expectCode(t, () => mintCreatedRoutePayloadContext(raw), 'INVALID_ROUTE')
+  destroyCreatedRoutePayloadContext(disposable)
+
+  const failed = mintCreatedRoutePayloadContext(raw)
+  expectCode(t, () => route({ context: failed, receivers: {} }), 'INVALID_ROUTE')
+  const activated = mintCreatedRoutePayloadContext(raw)
+  const codec = route({ context: activated })
+  expectCode(t, () => mintCreatedRoutePayloadContext(raw), 'INVALID_ROUTE')
+  codec.destroy()
+  expectCode(t, () => mintCreatedRoutePayloadContext(raw), 'INVALID_ROUTE')
+})
+
+test('nonce claims collide on key and prefix even across endpoint roles and fields', (t) => {
+  const sourceKeys = routeKeys()
+  const destinationKeys = routeKeys()
+  const source = mintCreatedRoutePayloadContext({
+    endpointRole: ROUTE_ENDPOINT.SOURCE,
+    descriptorId: DESCRIPTOR_ID,
+    circuitId: CIRCUIT_ID,
+    ...sourceKeys
+  })
+
+  expectCode(
+    t,
+    () =>
+      mintCreatedRoutePayloadContext({
+        endpointRole: ROUTE_ENDPOINT.DESTINATION,
+        descriptorId: DESCRIPTOR_ID,
+        circuitId: CIRCUIT_ID,
+        forwardKey: destinationKeys.forwardKey,
+        forwardNoncePrefix: destinationKeys.forwardNoncePrefix,
+        reverseKey: sourceKeys.forwardKey,
+        reverseNoncePrefix: sourceKeys.forwardNoncePrefix
+      }),
+    'INVALID_ROUTE'
+  )
+  destroyCreatedRoutePayloadContext(source)
+})
+
+test('complementary endpoint roles own opposite send domains and reject wrong directions', (t) => {
+  const { source, destination } = routePair()
+  const forward = seal(source, { payload: b4a.from('forward only') })
+  const reverse = seal(destination, {
+    direction: DIRECTION.REVERSE,
+    payload: b4a.from('reverse only')
+  })
+
+  t.alike(open(destination, forward)[0].payload, b4a.from('forward only'))
+  t.alike(
+    open(source, reverse, { direction: DIRECTION.REVERSE })[0].payload,
+    b4a.from('reverse only')
+  )
+  expectCode(t, () => seal(source, { direction: DIRECTION.REVERSE }), 'INVALID_ROUTE')
+  expectCode(t, () => seal(destination, { direction: DIRECTION.FORWARD }), 'INVALID_ROUTE')
+  expectCode(t, () => open(source, forward), 'INVALID_ROUTE')
+  expectCode(t, () => open(destination, reverse, { direction: DIRECTION.REVERSE }), 'INVALID_ROUTE')
 })
 
 function seal(codec, overrides = {}) {
@@ -180,8 +281,7 @@ function relayCell(frame) {
 }
 
 test('route frame is opaque to relays and opens only at the destination', (t) => {
-  const source = route()
-  const destination = route()
+  const { source, destination } = routePair()
   const plaintext = b4a.from('private payload')
   const frame = seal(source, { payload: plaintext })
   const relayed = relayCell(frame)
@@ -207,8 +307,7 @@ test('route frame is opaque to relays and opens only at the destination', (t) =>
 })
 
 test('route payload keeps direction senders and receivers independent', (t) => {
-  const source = route()
-  const destination = route()
+  const { source, destination } = routePair()
   const forward = seal(source, { payload: b4a.from('forward') })
   const reverse = seal(destination, {
     direction: DIRECTION.REVERSE,
@@ -222,8 +321,7 @@ test('route payload keeps direction senders and receivers independent', (t) => {
 })
 
 test('datagram route payloads use the replay window and return exact payloads', (t) => {
-  const source = route()
-  const destination = route()
+  const { source, destination } = routePair()
   const frame = seal(source, {
     class: CELL_CLASS.DATAGRAM,
     payload: b4a.from('datagram')
@@ -233,6 +331,95 @@ test('datagram route payloads use the replay window and return exact payloads', 
   t.is(opened.class, CELL_CLASS.DATAGRAM)
   t.alike(opened.payload, b4a.from('datagram'))
   expectCode(t, () => open(destination, frame), 'REPLAY')
+})
+
+test('dropped and reordered datagrams never create an ordered stream gap', (t) => {
+  const { source, destination } = routePair()
+  const streamZero = seal(source, { payload: b4a.from('stream zero') })
+  const droppedDatagram = seal(source, {
+    class: CELL_CLASS.DATAGRAM,
+    payload: b4a.from('dropped')
+  })
+  const streamOne = seal(source, { payload: b4a.from('stream one') })
+  const datagramOne = seal(source, {
+    class: CELL_CLASS.DATAGRAM,
+    payload: b4a.from('datagram one')
+  })
+
+  t.is(b4a.toString(streamZero.subarray(0, 8), 'hex'), '0000000000000000')
+  t.is(b4a.toString(droppedDatagram.subarray(0, 8), 'hex'), '0000000000000001')
+  t.is(b4a.toString(streamOne.subarray(0, 8), 'hex'), '0000000000000002')
+  t.is(b4a.toString(datagramOne.subarray(0, 8), 'hex'), '0000000000000003')
+
+  t.alike(open(destination, streamZero)[0].payload, b4a.from('stream zero'))
+  t.alike(open(destination, datagramOne).payload, b4a.from('datagram one'))
+  t.alike(open(destination, streamOne)[0].payload, b4a.from('stream one'))
+  t.alike(open(destination, droppedDatagram).payload, b4a.from('dropped'))
+  t.is(destination.stats.forward.orderedNext, 2n)
+  t.is(destination.stats.forward.datagramHighest, 1n)
+})
+
+test('class namespaces prevent the XOR signature of AEAD nonce reuse', (t) => {
+  const counters = []
+  const plaintexts = []
+  const keys = routeKeys()
+  const source = route({
+    keys,
+    crypto: {
+      ...cryptoSuite,
+      seal(options) {
+        counters.push(options.counter)
+        plaintexts.push(b4a.from(options.plaintext))
+        return cryptoSuite.seal(options)
+      }
+    }
+  })
+  const stream = seal(source, { payload: b4a.from('same body') })
+  const datagram = seal(source, {
+    class: CELL_CLASS.DATAGRAM,
+    payload: b4a.from('same body')
+  })
+  const plaintextXor = b4a.alloc(ROUTE_PLAINTEXT_SIZE)
+  const ciphertextXor = b4a.alloc(ROUTE_PLAINTEXT_SIZE)
+
+  for (let i = 0; i < ROUTE_PLAINTEXT_SIZE; i++) {
+    plaintextXor[i] = plaintexts[0][i] ^ plaintexts[1][i]
+    ciphertextXor[i] = stream[ROUTE_COUNTER_SIZE + i] ^ datagram[ROUTE_COUNTER_SIZE + i]
+  }
+
+  t.alike(counters, [0n, 1n])
+  t.unlike(ciphertextXor, plaintextXor)
+})
+
+test('authenticated class must match the public counter namespace bit', (t) => {
+  let receiverCalls = 0
+  let plaintext = null
+  const destination = route({
+    endpointRole: ROUTE_ENDPOINT.DESTINATION,
+    crypto: {
+      ...cryptoSuite,
+      open() {
+        plaintext = b4a.alloc(ROUTE_PLAINTEXT_SIZE)
+        plaintext[0] = CELL_CLASS.DATAGRAM
+        return plaintext
+      }
+    },
+    receivers: {
+      forwardOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+      forwardDatagram: {
+        acceptAuthenticated() {
+          receiverCalls++
+          return true
+        }
+      },
+      reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+      reverseDatagram: new DatagramReplayWindow({ window: 8 })
+    }
+  })
+
+  expectCode(t, () => open(destination, b4a.alloc(ROUTE_FRAME_SIZE)), 'INVALID_ROUTE')
+  t.is(receiverCalls, 0)
+  t.alike(plaintext, b4a.alloc(ROUTE_PLAINTEXT_SIZE))
 })
 
 test('authentication and body checks precede every receiver call', (t) => {
@@ -253,12 +440,14 @@ test('authentication and body checks precede every receiver call', (t) => {
     reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
     reverseDatagram: new DatagramReplayWindow({ window: 8 })
   }
-  const destination = route({ receivers })
-  const frame = seal(route())
+  const keys = routeKeys()
+  const source = route({ keys })
+  const destination = receivingRoute(keys, { receivers })
+  const frame = seal(source)
   const cases = [
-    route({ forwardKey: seed(99) }),
-    route({ descriptorId: b4a.alloc(32, 1) }),
-    route({ circuitId: b4a.alloc(16, 2) })
+    receivingRoute(keys, { forwardKey: seed(99) }),
+    receivingRoute(keys, { descriptorId: b4a.alloc(32, 1) }),
+    receivingRoute(keys, { circuitId: b4a.alloc(16, 2) })
   ]
 
   for (const codec of cases) expectCode(t, () => open(codec, frame), 'INVALID_ROUTE')
@@ -274,7 +463,8 @@ test('authentication and body checks precede every receiver call', (t) => {
 })
 
 test('every forged route input leaves observed receivers and counter stats untouched', (t) => {
-  const frame = seal(route())
+  const keys = routeKeys()
+  const frame = seal(route({ keys }))
 
   function observed(overrides = {}) {
     let traffic = 0
@@ -305,7 +495,7 @@ test('every forged route input leaves observed receivers and counter stats untou
         }
       )
     }
-    const codec = route({
+    const codec = receivingRoute(keys, {
       ...overrides,
       receivers: {
         forwardOrdered: receiver(false),
@@ -381,7 +571,8 @@ test('counter mutation cannot be authenticated or touch the receiver', (t) => {
       return []
     }
   }
-  const destination = route({
+  const keys = routeKeys()
+  const destination = receivingRoute(keys, {
     receivers: {
       forwardOrdered: receiver,
       forwardDatagram: new DatagramReplayWindow({ window: 8 }),
@@ -389,7 +580,7 @@ test('counter mutation cannot be authenticated or touch the receiver', (t) => {
       reverseDatagram: new DatagramReplayWindow({ window: 8 })
     }
   })
-  const frame = seal(route())
+  const frame = seal(route({ keys }))
   frame[7] ^= 1
 
   expectCode(t, () => open(destination, frame), 'INVALID_ROUTE')
@@ -397,8 +588,7 @@ test('counter mutation cannot be authenticated or touch the receiver', (t) => {
 })
 
 test('ordered route payloads preserve bounded out-of-order delivery', (t) => {
-  const source = route()
-  const destination = route()
+  const { source, destination } = routePair()
   const first = seal(source, { payload: b4a.from('first') })
   const second = seal(source, { payload: b4a.from('second') })
 
@@ -419,16 +609,19 @@ test('route open clears immediate encoded delivery after copying its result', (t
       return [value]
     }
   }
-  const destination = route({
-    receivers: {
-      forwardOrdered: receiver,
-      forwardDatagram: new DatagramReplayWindow({ window: 8 }),
-      reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
-      reverseDatagram: new DatagramReplayWindow({ window: 8 })
+  const { source, destination } = routePair(
+    {},
+    {
+      receivers: {
+        forwardOrdered: receiver,
+        forwardDatagram: new DatagramReplayWindow({ window: 8 }),
+        reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+        reverseDatagram: new DatagramReplayWindow({ window: 8 })
+      }
     }
-  })
+  )
 
-  const opened = open(destination, seal(route()))
+  const opened = open(destination, seal(source))
   t.alike(opened[0].payload, b4a.from('private payload'))
   t.alike(encoded, b4a.alloc(encoded.byteLength))
 })
@@ -443,15 +636,17 @@ test('route destroy clears buffered ordered payloads and rejects later operation
       owned.push(value)
     }
   })
-  const destination = route({
-    receivers: {
-      forwardOrdered: ordered,
-      forwardDatagram: new DatagramReplayWindow({ window: 8 }),
-      reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
-      reverseDatagram: new DatagramReplayWindow({ window: 8 })
+  const { source, destination } = routePair(
+    {},
+    {
+      receivers: {
+        forwardOrdered: ordered,
+        forwardDatagram: new DatagramReplayWindow({ window: 8 }),
+        reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+        reverseDatagram: new DatagramReplayWindow({ window: 8 })
+      }
     }
-  })
-  const source = route()
+  )
   seal(source)
   const later = seal(source, { payload: b4a.from('buffered route secret') })
   t.alike(open(destination, later), [])
@@ -467,6 +662,7 @@ test('route destroy clears buffered ordered payloads and rejects later operation
 
 test('constructor failure zeroes every key and identifier copy it allocated', (t) => {
   const allocations = []
+  const keys = routeKeys()
   const originalAlloc = b4a.allocUnsafeSlow
   b4a.allocUnsafeSlow = (size) => {
     const value = originalAlloc(size)
@@ -475,7 +671,7 @@ test('constructor failure zeroes every key and identifier copy it allocated', (t
   }
 
   try {
-    expectCode(t, () => route({ receivers: {} }), 'INVALID_ROUTE')
+    expectCode(t, () => route({ keys, receivers: {} }), 'INVALID_ROUTE')
   } finally {
     b4a.allocUnsafeSlow = originalAlloc
   }
@@ -485,19 +681,23 @@ test('constructor failure zeroes every key and identifier copy it allocated', (t
 })
 
 test('constructor rejects overlapping forward and reverse cryptographic contexts', (t) => {
+  const keyOverlap = routeKeys()
   expectCode(
     t,
     () =>
       route({
-        reverseKey: ROUTE_KEYS.forwardKey
+        keys: keyOverlap,
+        reverseKey: keyOverlap.forwardKey
       }),
     'INVALID_ROUTE'
   )
+  const nonceOverlap = routeKeys()
   expectCode(
     t,
     () =>
       route({
-        reverseNoncePrefix: ROUTE_KEYS.forwardNoncePrefix
+        keys: nonceOverlap,
+        reverseNoncePrefix: nonceOverlap.forwardNoncePrefix
       }),
     'INVALID_ROUTE'
   )
@@ -507,6 +707,7 @@ test('authenticated body validation precedes receiver calls and clears plaintext
   let calls = 0
   let plaintext = null
   const destination = route({
+    endpointRole: ROUTE_ENDPOINT.DESTINATION,
     crypto: {
       ...cryptoSuite,
       open() {
@@ -534,7 +735,8 @@ test('authenticated body validation precedes receiver calls and clears plaintext
 })
 
 test('receiver failures expose only intended counter codes', (t) => {
-  const frame = seal(route())
+  const keys = routeKeys()
+  const frame = seal(route({ keys }))
   const cases = [
     [PrivateRouteError.REPLAY(), 'REPLAY'],
     [PrivateRouteError.COUNTER_INVALID(), 'COUNTER_INVALID'],
@@ -545,7 +747,7 @@ test('receiver failures expose only intended counter codes', (t) => {
   ]
 
   for (const [error, code] of cases) {
-    const destination = route({
+    const destination = receivingRoute(keys, {
       receivers: {
         forwardOrdered: {
           pushAuthenticated() {
@@ -562,9 +764,10 @@ test('receiver failures expose only intended counter codes', (t) => {
 })
 
 test('datagram receivers must return exactly true', (t) => {
-  const frame = seal(route(), { class: CELL_CLASS.DATAGRAM })
+  const keys = routeKeys()
+  const frame = seal(route({ keys }), { class: CELL_CLASS.DATAGRAM })
   for (const result of [false, undefined, 1, 'true']) {
-    const destination = route({
+    const destination = receivingRoute(keys, {
       receivers: {
         forwardOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
         forwardDatagram: { acceptAuthenticated: () => result },
@@ -577,8 +780,7 @@ test('datagram receivers must return exactly true', (t) => {
 })
 
 test('fresh route counters may carry completed-fragment replay without closing the route', (t) => {
-  const source = route()
-  const destination = route()
+  const { source, destination } = routePair()
   const reassembler = new Reassembler({ now: () => 0, epochExpiresAt: 1000 })
   let reassemblerCalls = 0
   function receive(frame) {
@@ -622,7 +824,11 @@ test('route payload validates exact public and authenticated bounds before reser
 
   const frame = seal(codec, { payload: b4a.alloc(1073) })
   t.is(frame.byteLength, ROUTE_FRAME_SIZE)
-  expectCode(t, () => open(route(), frame.subarray(1)), 'INVALID_ROUTE')
+  expectCode(
+    t,
+    () => open(route({ endpointRole: ROUTE_ENDPOINT.DESTINATION }), frame.subarray(1)),
+    'INVALID_ROUTE'
+  )
 })
 
 test('seal reserves a counter exactly once and burns it after crypto failure', (t) => {
@@ -643,13 +849,60 @@ test('seal reserves a counter exactly once and burns it after crypto failure', (
 })
 
 test('route counter exhaustion emits MAX once then remains exhausted', (t) => {
-  const source = route({ senderInitial: MAX_COUNTER })
-  const destination = route({ receiverInitial: MAX_COUNTER })
+  const maximum = (1n << 63n) - 1n
+  const { source, destination } = routePair(
+    { senderInitial: maximum },
+    { receiverInitial: maximum }
+  )
   const frame = seal(source)
 
   t.alike(open(destination, frame)[0].payload, b4a.from('private payload'))
   expectCode(t, () => seal(source), 'COUNTER_EXHAUSTED')
   expectCode(t, () => open(destination, frame), 'COUNTER_EXHAUSTED')
+})
+
+test('each route class emits uint63 max once in its disjoint wire namespace', (t) => {
+  const maximum = (1n << 63n) - 1n
+  const { source, destination } = routePair(
+    { senderInitial: maximum },
+    { receiverInitial: maximum }
+  )
+  const stream = seal(source)
+  const datagram = seal(source, { class: CELL_CLASS.DATAGRAM })
+
+  t.is(b4a.toString(stream.subarray(0, 8), 'hex'), 'fffffffffffffffe')
+  t.is(b4a.toString(datagram.subarray(0, 8), 'hex'), 'ffffffffffffffff')
+  t.alike(open(destination, stream)[0].payload, b4a.from('private payload'))
+  t.alike(open(destination, datagram).payload, b4a.from('private payload'))
+  expectCode(t, () => seal(source), 'COUNTER_EXHAUSTED')
+  expectCode(t, () => seal(source, { class: CELL_CLASS.DATAGRAM }), 'COUNTER_EXHAUSTED')
+})
+
+test('route class rotation signals use the logical uint63 boundary', (t) => {
+  const rotateAt = (1n << 63n) - 1n - 1024n
+  const { source, destination } = routePair(
+    { senderInitial: rotateAt - 1n },
+    { receiverInitial: rotateAt - 1n }
+  )
+
+  t.is(source.stats.forward.senderNeedsRotation, false)
+  t.is(source.stats.forward.datagramSenderNeedsRotation, false)
+  t.is(destination.stats.forward.orderedNeedsRotation, false)
+  t.is(destination.stats.forward.datagramNeedsRotation, false)
+
+  const stream = seal(source)
+  const datagram = seal(source, { class: CELL_CLASS.DATAGRAM })
+  open(destination, stream)
+  open(destination, datagram)
+
+  t.is(source.stats.forward.senderNeedsRotation, true)
+  t.is(source.stats.forward.datagramSenderNeedsRotation, true)
+  t.is(destination.stats.forward.orderedNeedsRotation, true)
+  t.is(destination.stats.forward.datagramNeedsRotation, false)
+
+  const nextDatagram = seal(source, { class: CELL_CLASS.DATAGRAM })
+  open(destination, nextDatagram)
+  t.is(destination.stats.forward.datagramNeedsRotation, true)
 })
 
 test('hostile construction and call inputs normalize to stable route errors', (t) => {

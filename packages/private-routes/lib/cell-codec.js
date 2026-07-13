@@ -9,10 +9,14 @@ export const CELL_BODY_SIZE = 1148
 export const MAX_CELL_PAYLOAD = 1146
 export const AEAD_TAG_BYTES = 16
 
+// Deep test/fuzz import only. Production callers use the default allocator.
+export const TEST_ONLY_CELL_ALLOCATOR = Symbol('test-only-cell-allocator')
+
 const MAX_UINT64 = (1n << 64n) - 1n
 const KEY_BYTES = 32
 const NONCE_PREFIX_BYTES = 16
 const CIRCUIT_ID_BYTES = 16
+const CELL_HEADER_DOMAIN = DOMAIN.CELL_HEADER
 const RECEIVER_FAILURES = new Set(['REPLAY', 'COUNTER_INVALID', 'COUNTER_GAP', 'COUNTER_EXHAUSTED'])
 const bufferByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
@@ -93,8 +97,57 @@ function readUint64BE(buffer, offset) {
   return value
 }
 
-function associatedData(header) {
-  return b4a.concat([DOMAIN.CELL_HEADER, header])
+function defaultScratchAllocate(size) {
+  return b4a.allocUnsafeSlow(size)
+}
+
+function defaultScratchRelease() {}
+
+function allocateScratch(allocator, size) {
+  let value = null
+  try {
+    value = allocator.allocate(size)
+  } catch {
+    invalid()
+  }
+  if (isBuffer(value, size)) return value
+  try {
+    allocator.release(value)
+  } catch {
+    invalid()
+  }
+  invalid()
+}
+
+function releaseScratch(allocator, values) {
+  let failed = false
+  for (const value of values) {
+    if (value === null) continue
+    clear(value)
+    try {
+      allocator.release(value)
+    } catch {
+      failed = true
+    }
+  }
+  if (failed) invalid()
+}
+
+function associatedData(header, allocator) {
+  let data = null
+  let complete = false
+  try {
+    data = allocateScratch(allocator, bufferLength(CELL_HEADER_DOMAIN) + CELL_HEADER_SIZE)
+    data.set(CELL_HEADER_DOMAIN, 0)
+    data.set(header, bufferLength(CELL_HEADER_DOMAIN))
+    complete = true
+    return data
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (!complete && data !== null) releaseScratch(allocator, [data])
+  }
 }
 
 function normalizeCrypto(operation) {
@@ -137,20 +190,26 @@ function retainsPayload(delivery, payload) {
 export class CellCodec {
   #crypto
   #padding
+  #scratch
 
   constructor(options) {
     options = optionsObject(options)
     const crypto = option(options, 'crypto')
     const cellSize = option(options, 'cellSize')
     const configuredPadding = option(options, 'padding')
+    const configuredScratch = option(options, TEST_ONLY_CELL_ALLOCATOR)
 
     let seal
     let open
     let randomBytes
+    let allocate
+    let release
     try {
       seal = crypto && crypto.seal
       open = crypto && crypto.open
       randomBytes = crypto && crypto.randomBytes
+      allocate = configuredScratch && configuredScratch.allocate
+      release = configuredScratch && configuredScratch.release
     } catch {
       invalid()
     }
@@ -160,13 +219,21 @@ export class CellCodec {
       typeof seal !== 'function' ||
       typeof open !== 'function' ||
       (configuredPadding === undefined && typeof randomBytes !== 'function') ||
-      (configuredPadding !== undefined && typeof configuredPadding !== 'function')
+      (configuredPadding !== undefined && typeof configuredPadding !== 'function') ||
+      (configuredScratch !== undefined &&
+        (typeof allocate !== 'function' || typeof release !== 'function'))
     ) {
       invalid()
     }
 
     this.#crypto = Object.freeze({ seal: seal.bind(crypto), open: open.bind(crypto) })
     this.#padding = configuredPadding === undefined ? randomBytes.bind(crypto) : configuredPadding
+    this.#scratch = Object.freeze({
+      allocate:
+        configuredScratch === undefined ? defaultScratchAllocate : allocate.bind(configuredScratch),
+      release:
+        configuredScratch === undefined ? defaultScratchRelease : release.bind(configuredScratch)
+    })
   }
 
   seal(options) {
@@ -202,12 +269,15 @@ export class CellCodec {
       invalid()
     }
 
-    const header = b4a.allocUnsafe(CELL_HEADER_SIZE)
-    const body = b4a.allocUnsafeSlow(CELL_BODY_SIZE)
+    let header = null
+    let body = null
+    let data = null
     let padding = null
     let ciphertext = null
 
     try {
+      header = allocateScratch(this.#scratch, CELL_HEADER_SIZE)
+      body = allocateScratch(this.#scratch, CELL_BODY_SIZE)
       writeUint16BE(body, payloadLength, 0)
       body.set(payload, 2)
 
@@ -235,14 +305,10 @@ export class CellCodec {
       header.set(circuitId, 12)
       writeUint64BE(header, counter, 28)
 
-      const data = associatedData(header)
-      try {
-        ciphertext = normalizeCrypto(() =>
-          this.#crypto.seal({ key, noncePrefix, counter, associatedData: data, plaintext: body })
-        )
-      } finally {
-        clear(data)
-      }
+      data = associatedData(header, this.#scratch)
+      ciphertext = normalizeCrypto(() =>
+        this.#crypto.seal({ key, noncePrefix, counter, associatedData: data, plaintext: body })
+      )
 
       if (!isBuffer(ciphertext, CELL_BODY_SIZE + AEAD_TAG_BYTES)) invalid()
 
@@ -251,7 +317,7 @@ export class CellCodec {
       packet.set(ciphertext, CELL_HEADER_SIZE)
       return packet
     } finally {
-      clear(body)
+      releaseScratch(this.#scratch, [data, body, header])
       // Padding and ciphertext outputs remain adapter-owned and are not secret.
       // Clearing them could corrupt aliased caller storage after the codec copies them.
     }
@@ -302,12 +368,13 @@ export class CellCodec {
       invalid()
     }
 
-    const data = associatedData(header)
+    let data = null
     let plaintext = null
     let payload = null
     let transferred = false
 
     try {
+      data = associatedData(header, this.#scratch)
       // Contract: crypto.open transfers an exclusive plaintext buffer to this
       // codec. It is always cleared below, on both success and failure.
       plaintext = normalizeCrypto(() =>
@@ -353,9 +420,9 @@ export class CellCodec {
       transferred = retainsPayload(delivery, payload)
       return delivery
     } finally {
-      clear(data)
       clear(plaintext)
       if (!transferred) clear(payload)
+      releaseScratch(this.#scratch, [data])
     }
   }
 }

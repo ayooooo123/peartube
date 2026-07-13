@@ -1,0 +1,51 @@
+name: Private routes
+
+on:
+  pull_request:
+    paths:
+      - "packages/private-routes/**"
+      - ".github/workflows/private-routes.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/private-routes/**"
+      - ".github/workflows/private-routes.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/private-routes
+    steps:
+      # actions/checkout v4 and actions/setup-node v4, resolved 2026-07-13.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/private-routes/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run test:node
+      - run: npm run fuzz:cell -- --seed 1 --iterations 10000
+
+  bare:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/private-routes
+    steps:
+      # Action refs were resolved from their official v4 tags on 2026-07-13.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/private-routes/package-lock.json
+      - run: npm ci
+      - run: test "$(npm exec -- bare --version)" = "v1.30.3"
+      - run: npm run test:bare

@@ -359,25 +359,34 @@ export class RouteManager {
         this.#linkInstaller,
         circuitContext
       )
-      const circuit = this.#routeCompilerChecker.open(
-        this.#routeCompiler,
-        Object.freeze({
-          circuitContext,
-          safetyRouteCapability,
-          circuitId: b4a.from(circuitId),
-          descriptorValue: descriptor,
-          requestReplacement
-        })
-      )
-      if (
-        !safeObject(circuit) ||
-        Object.keys(circuit).sort().join(',') !== 'destroy,drain,sendDatagram,sendStreamFrame' ||
-        typeof circuit.sendDatagram !== 'function' ||
-        typeof circuit.sendStreamFrame !== 'function' ||
-        typeof circuit.drain !== 'function' ||
-        typeof circuit.destroy !== 'function'
-      )
-        invalid()
+      let circuit
+      try {
+        circuit = this.#routeCompilerChecker.open(
+          this.#routeCompiler,
+          Object.freeze({
+            circuitContext,
+            safetyRouteCapability,
+            circuitId: b4a.from(circuitId),
+            descriptorValue: descriptor,
+            requestReplacement
+          })
+        )
+        if (
+          !safeObject(circuit) ||
+          Object.keys(circuit).sort().join(',') !== 'destroy,drain,sendDatagram,sendStreamFrame' ||
+          typeof circuit.sendDatagram !== 'function' ||
+          typeof circuit.sendStreamFrame !== 'function' ||
+          typeof circuit.drain !== 'function' ||
+          typeof circuit.destroy !== 'function'
+        )
+          invalid()
+      } catch (err) {
+        // A missing or timed-out circuit is an availability failure. Preserve
+        // authenticated protocol rejections so callers cannot mistake forged
+        // route material for a transient outage.
+        if (err instanceof PrivateRouteError && err.code !== 'CIRCUIT_STATE') throw err
+        throw PrivateRouteError.ROUTE_UNAVAILABLE()
+      }
       return Object.freeze({ circuit, epoch: descriptor.epoch })
     } catch (err) {
       if (safetyRouteCapability) {

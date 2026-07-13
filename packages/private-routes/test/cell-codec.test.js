@@ -17,7 +17,8 @@ import {
   CELL_BODY_SIZE,
   CELL_HEADER_SIZE,
   CELL_SIZE,
-  MAX_CELL_PAYLOAD
+  MAX_CELL_PAYLOAD,
+  TEST_ONLY_CELL_ALLOCATOR
 } from '../lib/cell-codec.js'
 import { expectCode, seed } from './helpers.js'
 
@@ -92,6 +93,110 @@ test('cell layout constants lock the 1200-byte experimental format', (t) => {
   t.is(MAX_CELL_PAYLOAD, 1146)
   t.is(AEAD_TAG_BYTES, 16)
   t.is(CELL_HEADER_SIZE + CELL_BODY_SIZE + AEAD_TAG_BYTES, CELL_SIZE)
+})
+
+function scratchTracker(overrides = {}) {
+  const allocations = new Map()
+  const sizes = []
+  const released = []
+  let current = 0
+  let highWater = 0
+  return {
+    allocator: {
+      allocate(size) {
+        if (overrides.allocate) return overrides.allocate(size)
+        const value = b4a.allocUnsafeSlow(size)
+        allocations.set(value, size)
+        sizes.push(size)
+        current += size
+        if (current > highWater) highWater = current
+        return value
+      },
+      release(value) {
+        if (overrides.release) return overrides.release(value)
+        const size = allocations.get(value)
+        if (size === undefined) throw new Error('unknown scratch allocation')
+        released.push(b4a.from(value))
+        allocations.delete(value)
+        current -= size
+      }
+    },
+    get current() {
+      return current
+    },
+    get highWater() {
+      return highWater
+    },
+    get sizes() {
+      return sizes
+    },
+    get released() {
+      return released
+    }
+  }
+}
+
+test('injected cell scratch allocator releases exact owned bytes on success', (t) => {
+  const tracker = scratchTracker()
+  const cell = codec({ [TEST_ONLY_CELL_ALLOCATOR]: tracker.allocator })
+  const packet = cell.seal(sealOptions())
+  t.is(tracker.current, 0)
+  t.ok(tracker.highWater <= 4096)
+  t.alike(tracker.sizes, [CELL_HEADER_SIZE, CELL_BODY_SIZE, DOMAIN.CELL_HEADER.byteLength + 36])
+  t.alike(packet.subarray(0, 4), b4a.from([0, CELL_CLASS.STREAM, DIRECTION.FORWARD, 0]))
+
+  t.alike(cell.open(openOptions(orderedSpy()), packet), b4a.from('hello'))
+  t.is(tracker.current, 0)
+  t.is(tracker.released.length, 4)
+  for (const value of tracker.released) t.alike(value, b4a.alloc(value.byteLength))
+})
+
+test('injected cell scratch allocator releases on crypto failure and rejects invalid allocators', (t) => {
+  const sealing = scratchTracker()
+  const brokenSeal = codec({
+    crypto: {
+      ...cryptoSuite,
+      seal: () => {
+        throw new Error('seal failed')
+      }
+    },
+    [TEST_ONLY_CELL_ALLOCATOR]: sealing.allocator
+  })
+  expectCode(t, () => brokenSeal.seal(sealOptions()), 'CELL_INVALID')
+  t.is(sealing.current, 0)
+
+  const packet = codec().seal(sealOptions())
+  const opening = scratchTracker()
+  const brokenOpen = codec({
+    crypto: {
+      ...cryptoSuite,
+      open: () => {
+        throw new Error('open failed')
+      }
+    },
+    [TEST_ONLY_CELL_ALLOCATOR]: opening.allocator
+  })
+  expectCode(t, () => brokenOpen.open(openOptions(orderedSpy()), packet), 'CELL_INVALID')
+  t.is(opening.current, 0)
+
+  expectCode(
+    t,
+    () => codec({ [TEST_ONLY_CELL_ALLOCATOR]: { allocate: b4a.allocUnsafeSlow } }),
+    'CELL_INVALID'
+  )
+  let releases = 0
+  const wrongSize = {
+    allocate: (size) => b4a.allocUnsafeSlow(size - 1),
+    release() {
+      releases++
+    }
+  }
+  expectCode(
+    t,
+    () => codec({ [TEST_ONLY_CELL_ALLOCATOR]: wrongSize }).seal(sealOptions()),
+    'CELL_INVALID'
+  )
+  t.is(releases, 1)
 })
 
 test('cell round trip preserves payload and hides its length on wire', (t) => {

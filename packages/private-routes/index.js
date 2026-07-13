@@ -8,6 +8,14 @@ export {
 } from './lib/counters.js'
 export { cryptoSuite } from './lib/crypto-suite.js'
 export {
+  AEAD_TAG_BYTES,
+  CELL_BODY_SIZE,
+  CELL_HEADER_SIZE,
+  CELL_SIZE,
+  CellCodec,
+  MAX_CELL_PAYLOAD
+} from './lib/cell-codec.js'
+export {
   DISCOVERY_MAX_AGE,
   PUBLIC_DHT,
   createDiscoveryEvidenceAuthority

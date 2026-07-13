@@ -1,6 +1,10 @@
 export { ERROR_CODES, PrivateRouteError } from './lib/errors.js'
 export { cryptoSuite } from './lib/crypto-suite.js'
-export { PUBLIC_DHT, createDiscoveryEvidenceAuthority } from './lib/discovery-evidence.js'
+export {
+  DISCOVERY_MAX_AGE,
+  PUBLIC_DHT,
+  createDiscoveryEvidenceAuthority
+} from './lib/discovery-evidence.js'
 export { createCircuitAuthority } from './lib/circuit-authority.js'
 export {
   PRIVACY_OPERATION,

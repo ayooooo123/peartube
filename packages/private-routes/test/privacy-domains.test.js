@@ -143,6 +143,28 @@ test('discovery verification rejects stale, future, and expired observations', (
   expectCode(t, () => fixture.verifier.verify(expiredEncoding, receipt), 'UNAUTHORIZED')
 })
 
+test('discovery freshness is fixed at exactly thirty seconds', (t) => {
+  const identity = privateRoleIdentity(40)
+  const advertisement = signedAdvertisement(identity)
+  const encoded = routes.encodeRelayAdvertisement(advertisement)
+  const fixture = evidenceFixture()
+
+  t.is(routes.DISCOVERY_MAX_AGE, 30_000n)
+  const boundary = receiptFor(fixture.receiptIssuer, encoded, advertisement, {
+    observedAt: 70_000n
+  })
+  t.ok(fixture.checker.isVerified(fixture.verifier.verify(encoded, boundary)))
+  const stale = receiptFor(fixture.receiptIssuer, encoded, advertisement, {
+    observedAt: 69_999n
+  })
+  expectCode(t, () => fixture.verifier.verify(encoded, stale), 'UNAUTHORIZED')
+  expectCode(
+    t,
+    () => routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n, maxAge: 30_001 }),
+    'INVALID_ROUTE'
+  )
+})
+
 test('discovery verification rejects peer, dial, hash, and channel mismatches', (t) => {
   const identity = privateRoleIdentity(40)
   const other = privateRoleIdentity(80)
@@ -327,7 +349,10 @@ test('private-only route material never promotes public or direct authorization'
     expiresAt: 200_000n
   })
 
-  t.is(registry.allows(entry.publicKey, 'route-forward'), true)
+  t.is(registry.allows(entry.publicKey, 'route-forward'), false)
+  t.is(registry.allows(entry.publicKey, 'route-forward', {}), false)
+  t.is(registry.allows(entry.publicKey, 'route-forward', { epoch: 7 }), false)
+  t.is(registry.allows(entry.publicKey, 'route-forward', { epoch: 7n }), true)
   t.is(registry.allows(entry.publicKey, 'route-forward', { epoch: 8n }), false)
   t.is(registry.allows(entry.publicKey, 'guard-dial', { selectedGuard: true }), false)
   t.is(registry.allows(entry.publicKey, 'direct-dial'), false)
@@ -393,6 +418,35 @@ test('route-entry requires Task 4 brand and exact circuit identity, epoch, and e
       }),
     'UNAUTHORIZED'
   )
+})
+
+test('route-entry circuit expiry is part of the exact installed binding', (t) => {
+  const fixture = policyFixture()
+  const { registry, entry, safety, circuitAuthority } = fixture
+  const installed = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 12),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 110_000n
+  })
+  const extended = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 12),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 200_000n
+  })
+  registry.learnRoute(entry.publicKey, {
+    provenance: 'route-entry',
+    descriptor: verifiedRouteDescriptor(entry),
+    circuitContext: installed
+  })
+
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', extended), false)
+  fixture.setNow(150_000n)
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', installed), false)
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', extended), false)
 })
 
 test('expired public and route records deny only their own operations', (t) => {
@@ -497,6 +551,46 @@ test('same-epoch public claims conflict on canonical dial or capabilities and qu
     registry.learnPublic(issueEvidence(evidenceAuthority, safety))
     t.is(registry.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), false)
   }
+})
+
+test('public claims are retained and compared independently per epoch', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const claim7 = {
+    epoch: 7n,
+    expiresAt: 150_000n,
+    dial: b4a.from('public-epoch7.example:49737')
+  }
+  const claim8 = {
+    epoch: 8n,
+    expiresAt: 250_000n,
+    dial: b4a.from('public-epoch8.example:49737'),
+    routeEncryptionKey: seed(201)
+  }
+  const rotation = registryFor(evidenceAuthority.checker, circuitAuthority.checker, () => current)
+  rotation.learnPublic(issueEvidence(evidenceAuthority, safety, claim7))
+  rotation.learnPublic(issueEvidence(evidenceAuthority, safety, claim7))
+  rotation.learnPublic(issueEvidence(evidenceAuthority, safety, claim8))
+
+  current = 150_000n
+  t.is(rotation.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), true)
+  current = 250_000n
+  t.is(rotation.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), false)
+
+  current = 100_000n
+  const conflict = registryFor(evidenceAuthority.checker, circuitAuthority.checker, () => current)
+  conflict.learnPublic(issueEvidence(evidenceAuthority, safety, claim7))
+  conflict.learnPublic(issueEvidence(evidenceAuthority, safety, claim8))
+  conflict.learnPublic(
+    issueEvidence(evidenceAuthority, safety, {
+      ...claim7,
+      dial: b4a.from('conflicting-old-epoch.example:49737')
+    })
+  )
+  t.is(conflict.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), false)
+  t.is(conflict.allows(safety.publicKey, 'public-return', { consumer: 'relay-discovery' }), false)
 })
 
 test('same-epoch descriptor and public claims conflict and quarantine every operation', (t) => {

@@ -75,7 +75,7 @@ function circuitKey(value) {
   return `${b4a.toString(value.circuitId, 'hex')}:${b4a.toString(
     value.finalSafetyIdentity32,
     'hex'
-  )}:${b4a.toString(value.entryIdentity32, 'hex')}:${value.epoch}`
+  )}:${b4a.toString(value.entryIdentity32, 'hex')}:${value.epoch}:${value.expiresAt}`
 }
 
 function claimsConflict(left, right) {
@@ -177,7 +177,7 @@ export class PrivacyDomainRegistry {
       record = {
         identity: b4a.from(identity),
         provenance: new Set(),
-        publicEvidence: null,
+        publicEvidence: new Map(),
         routeEpochs: new Map(),
         caps: new Map(),
         quarantined: false
@@ -204,8 +204,9 @@ export class PrivacyDomainRegistry {
       capabilities: state.capabilities,
       epoch: state.epoch
     }
+    const existingPublic = record.publicEvidence.get(state.epoch)
     if (
-      (record.publicEvidence !== null && claimsConflict(record.publicEvidence, claim)) ||
+      (existingPublic !== undefined && claimsConflict(existingPublic, claim)) ||
       [...record.routeEpochs.values()].some(
         (route) => route.dial !== undefined && claimsConflict(route, claim)
       )
@@ -214,7 +215,7 @@ export class PrivacyDomainRegistry {
       return
     }
     record.provenance.add(PRIVACY_PROVENANCE.PUBLIC)
-    record.publicEvidence = {
+    record.publicEvidence.set(state.epoch, {
       peerIdentity32: b4a.from(state.peerIdentity32),
       observedDial: b4a.from(state.observedDial),
       dial: b4a.from(state.observedDial),
@@ -223,7 +224,7 @@ export class PrivacyDomainRegistry {
       capabilities: state.capabilities,
       epoch: state.epoch,
       expiresAt: state.expiresAt
-    }
+    })
   }
 
   learnRoute(identity, material) {
@@ -274,7 +275,8 @@ export class PrivacyDomainRegistry {
     }
     const existing = record.routeEpochs.get(descriptor.entry.epoch)
     if (
-      (record.publicEvidence !== null && claimsConflict(record.publicEvidence, routeClaim)) ||
+      (record.publicEvidence.has(routeClaim.epoch) &&
+        claimsConflict(record.publicEvidence.get(routeClaim.epoch), routeClaim)) ||
       (existing?.dial !== undefined && claimsConflict(existing, routeClaim))
     ) {
       record.quarantined = true
@@ -313,9 +315,7 @@ export class PrivacyDomainRegistry {
       case PRIVACY_OPERATION.GUARD_DIAL:
         return (
           context?.selectedGuard === true &&
-          record.publicEvidence !== null &&
-          record.publicEvidence.expiresAt > current &&
-          record.publicEvidence.role === ROLE.SAFETY &&
+          this.#hasLivePublic(record, current, ROLE.SAFETY) &&
           roleForIdentity(record.identity) === ROLE.SAFETY
         )
       case PRIVACY_OPERATION.ROUTE_ENTRY_DIAL:
@@ -326,11 +326,7 @@ export class PrivacyDomainRegistry {
       case PRIVACY_OPERATION.DIRECT_PING:
         return false
       case PRIVACY_OPERATION.PUBLIC_RETURN:
-        return (
-          context?.consumer === 'relay-discovery' &&
-          record.publicEvidence !== null &&
-          record.publicEvidence.expiresAt > current
-        )
+        return context?.consumer === 'relay-discovery' && this.#hasLivePublic(record, current)
       default:
         return false
     }
@@ -351,6 +347,7 @@ export class PrivacyDomainRegistry {
       route.expiresAt > current &&
       route.role === ROLE.PRIVATE &&
       installedCircuit !== undefined &&
+      installedCircuit.expiresAt > current &&
       b4a.equals(record.identity, circuit.entryIdentity32) &&
       b4a.equals(installedCircuit.circuitId, circuit.circuitId) &&
       b4a.equals(installedCircuit.finalSafetyIdentity32, circuit.finalSafetyIdentity32) &&
@@ -359,8 +356,16 @@ export class PrivacyDomainRegistry {
     )
   }
 
+  #hasLivePublic(record, current, role) {
+    for (const evidence of record.publicEvidence.values()) {
+      if (evidence.expiresAt > current && (role === undefined || evidence.role === role))
+        return true
+    }
+    return false
+  }
+
   #allowsRouteForward(record, context, current) {
-    if (context !== undefined && (!isObject(context) || !u64(context.epoch))) return false
+    if (!exactKeys(context, ['epoch']) || !u64(context.epoch)) return false
     for (const route of record.routeEpochs.values()) {
       if (route.expiresAt <= current) continue
       if (context !== undefined && context.epoch !== route.epoch) continue

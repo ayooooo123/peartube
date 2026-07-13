@@ -6,6 +6,7 @@ import { PrivateRouteError } from './errors.js'
 import { DOMAIN, ROLE, roleForIdentity } from './protocol.js'
 
 export const PUBLIC_DHT = 0
+export const DISCOVERY_MAX_AGE = 30_000n
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn
 const MAX_DIAL = 256
@@ -67,9 +68,10 @@ function normalizeMaxAge(value) {
   return value
 }
 
-export function createDiscoveryEvidenceAuthority({ now, maxAge = 30_000 } = {}) {
+export function createDiscoveryEvidenceAuthority({ now, maxAge = DISCOVERY_MAX_AGE } = {}) {
   if (typeof now !== 'function') invalidRoute()
   const maximumAge = normalizeMaxAge(maxAge)
+  if (maximumAge !== DISCOVERY_MAX_AGE) invalidRoute()
   const receipts = new WeakMap()
   const evidenceStates = new WeakMap()
 

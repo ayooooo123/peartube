@@ -1,6 +1,13 @@
 import b4a from 'b4a'
 
-import { PrivateRouteError, ROLE, cryptoSuite, roleForIdentity } from '../index.js'
+import {
+  PrivateRouteError,
+  ROLE,
+  cryptoSuite,
+  isVerifiedDescriptor,
+  readVerifiedDescriptor,
+  roleForIdentity
+} from '../index.js'
 
 export function seed(value) {
   return b4a.alloc(32, value)
@@ -26,4 +33,20 @@ export function privateRoleIdentity(start = 1) {
   }
 
   throw new Error('Unable to derive deterministic private-role identity')
+}
+
+export function safetyRoleIdentity(start = 1) {
+  for (let value = start; value < 256; value++) {
+    const pair = cryptoSuite.keyPair(seed(value))
+    if (roleForIdentity(pair.publicKey) === ROLE.SAFETY) return pair
+  }
+
+  throw new Error('Unable to derive deterministic safety-role identity')
+}
+
+export function descriptorChecker() {
+  return Object.freeze({
+    isVerified: isVerifiedDescriptor,
+    read: readVerifiedDescriptor
+  })
 }

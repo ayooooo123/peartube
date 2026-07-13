@@ -1,4 +1,11 @@
 export { ERROR_CODES, PrivateRouteError } from './lib/errors.js'
+export {
+  DatagramReplayWindow,
+  MAX_COUNTER,
+  OrderedReceiver,
+  ROTATE_AT,
+  SenderCounter
+} from './lib/counters.js'
 export { cryptoSuite } from './lib/crypto-suite.js'
 export {
   DISCOVERY_MAX_AGE,

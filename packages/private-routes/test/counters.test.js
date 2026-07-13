@@ -435,6 +435,19 @@ test('copy failure while draining closes and zeroes the undelivered payload', (t
   if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
 })
 
+test('ordered receiver destroy closes and zeroes every buffered payload', (t) => {
+  const { owned, receiver } = observedOrdered()
+  receiver.pushAuthenticated(1n, b4a.from('buffered secret'))
+
+  receiver.destroy()
+  receiver.destroy()
+
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+  expectCode(t, () => receiver.pushAuthenticated(0n, b4a.from('later')), 'COUNTER_EXHAUSTED')
+})
+
 test('hostile and revoked constructor options use stable counter errors', (t) => {
   const hostile = new Proxy(
     {},

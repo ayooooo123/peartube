@@ -16,6 +16,25 @@ export {
   MAX_CELL_PAYLOAD
 } from './lib/cell-codec.js'
 export {
+  MAX_ROUTE_PAYLOAD,
+  ROUTE_CIPHERTEXT_SIZE,
+  ROUTE_COUNTER_SIZE,
+  ROUTE_FRAME_SIZE,
+  ROUTE_PLAINTEXT_SIZE,
+  RoutePayloadCodec
+} from './lib/route-payload.js'
+export {
+  FRAGMENT_HEADER_SIZE,
+  MAX_BUFFERED_BYTES,
+  MAX_COMPLETED_IDS,
+  MAX_FRAGMENT_DATA,
+  MAX_MESSAGE_BYTES,
+  MAX_MESSAGES,
+  MESSAGE_TIMEOUT,
+  Reassembler,
+  fragment
+} from './lib/fragments.js'
+export {
   DISCOVERY_MAX_AGE,
   PUBLIC_DHT,
   createDiscoveryEvidenceAuthority

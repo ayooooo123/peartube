@@ -160,6 +160,13 @@ export class OrderedReceiver {
     })
   }
 
+  destroy() {
+    return this.#mutate(() => {
+      this.#clearBuffered()
+      this.#closed = true
+    })
+  }
+
   #pushAuthenticated(counter, payload) {
     if (this.#closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
 

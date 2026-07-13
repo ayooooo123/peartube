@@ -7,6 +7,7 @@ import {
   CellCodec,
   DIRECTION,
   DatagramReplayWindow,
+  MAX_ROUTE_PAYLOAD,
   OrderedReceiver,
   PrivateRouteError,
   Reassembler,
@@ -1246,6 +1247,40 @@ test('route payload slicing never dispatches through buffer instance methods', (
     b4a.from('safe delivery')
   )
   t.is(instanceSlices, 0)
+})
+
+test('route payload ignores a shadowed byteLength and pads the actual one-byte payload', (t) => {
+  let plaintext = null
+  const source = route({
+    crypto: {
+      ...cryptoSuite,
+      seal(options) {
+        plaintext = b4a.from(options.plaintext)
+        return cryptoSuite.seal(options)
+      }
+    }
+  })
+  const payload = b4a.from([0x7a])
+  Object.defineProperty(payload, 'byteLength', { value: MAX_ROUTE_PAYLOAD })
+  const originalAlloc = b4a.allocUnsafeSlow
+  b4a.allocUnsafeSlow = (size) => {
+    const value = originalAlloc(size)
+    value.fill(0xa7)
+    return value
+  }
+  let frame
+  try {
+    frame = seal(source, { payload })
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  t.is(frame.byteLength, ROUTE_FRAME_SIZE)
+  t.ok(plaintext)
+  t.is((plaintext[1] << 8) | plaintext[2], 1)
+  t.is(plaintext[3], 0x7a)
+  t.alike(plaintext.subarray(4), b4a.alloc(MAX_ROUTE_PAYLOAD - 1))
+  plaintext.fill(0)
 })
 
 test('route allocation failures normalize and zero partially built outputs', (t) => {

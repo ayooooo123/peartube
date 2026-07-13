@@ -4,6 +4,7 @@ import b4a from 'b4a'
 import * as publicRoutes from '../index.js'
 import {
   DatagramReplayWindow,
+  MAX_CELL_PAYLOAD,
   MAX_COUNTER,
   OrderedReceiver,
   ROTATE_AT,
@@ -162,6 +163,30 @@ test('ordered buffered payloads are copied, delivered independently, and cleared
   t.ok(delivered[1] !== owned[0])
   if (owned[0]) t.alike(owned[0], b4a.alloc(owned[0].byteLength))
   t.is(receiver.buffered, 0)
+})
+
+test('ordered buffering accounts for intrinsic buffer length despite own shadows', (t) => {
+  const small = b4a.from([0x61])
+  Object.defineProperty(small, 'byteLength', { value: MAX_CELL_PAYLOAD + 1 })
+  const acceptsSmall = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  let smallResult = null
+  let smallError = null
+  try {
+    smallResult = acceptsSmall.pushAuthenticated(1n, small)
+  } catch (err) {
+    smallError = err
+  }
+  t.is(smallError, null)
+  t.alike(smallResult, [])
+  const delivered = acceptsSmall.pushAuthenticated(0n, b4a.from([0x60]))
+  t.alike(delivered[1], b4a.from([0x61]))
+
+  const oversized = b4a.alloc(MAX_CELL_PAYLOAD + 1, 0x62)
+  Object.defineProperty(oversized, 'byteLength', { value: 1 })
+  const rejectsLarge = new OrderedReceiver({ window: 4, gapTimeout: 50, now: () => 0 })
+  expectCode(t, () => rejectsLarge.pushAuthenticated(1n, oversized), 'COUNTER_INVALID')
+  t.is(rejectsLarge.closed, true)
+  t.is(rejectsLarge.buffered, 0)
 })
 
 test('rotation signals use the next, expected, and highest counters exactly', (t) => {
@@ -397,15 +422,14 @@ test('copy failure while buffering closes and zeroes prior owned payloads', (t) 
   const failing = b4a.from('second')
   receiver.pushAuthenticated(1n, b4a.from('first'))
 
-  const originalFrom = b4a.from
-  b4a.from = (value, ...args) => {
-    if (value === failing) throw new Error('copy failed')
-    return originalFrom(value, ...args)
+  const originalAllocUnsafeSlow = b4a.allocUnsafeSlow
+  b4a.allocUnsafeSlow = () => {
+    throw new Error('copy failed')
   }
   try {
     expectCode(t, () => receiver.pushAuthenticated(2n, failing), 'COUNTER_INVALID')
   } finally {
-    b4a.from = originalFrom
+    b4a.allocUnsafeSlow = originalAllocUnsafeSlow
   }
 
   t.is(owned.length, 1)
@@ -418,15 +442,14 @@ test('copy failure while draining closes and zeroes the undelivered payload', (t
   const { owned, receiver } = observedOrdered()
   receiver.pushAuthenticated(1n, b4a.from('buffered'))
 
-  const originalFrom = b4a.from
-  b4a.from = (value, ...args) => {
-    if (value === owned[0]) throw new Error('copy failed')
-    return originalFrom(value, ...args)
+  const originalAllocUnsafeSlow = b4a.allocUnsafeSlow
+  b4a.allocUnsafeSlow = () => {
+    throw new Error('copy failed')
   }
   try {
     expectCode(t, () => receiver.pushAuthenticated(0n, 'first'), 'COUNTER_INVALID')
   } finally {
-    b4a.from = originalFrom
+    b4a.allocUnsafeSlow = originalAllocUnsafeSlow
   }
 
   t.is(owned.length, 1)

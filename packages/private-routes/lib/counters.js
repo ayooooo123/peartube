@@ -11,6 +11,12 @@ export const TEST_ONLY_BUFFER_OBSERVER = Symbol('test-only-buffer-observer')
 
 const MAX_WINDOW = 4096
 const MAX_BUFFERED_PAYLOAD = 1146
+const bufferByteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  'byteLength'
+).get
+const bufferFill = Uint8Array.prototype.fill
+const bufferSet = Uint8Array.prototype.set
 
 function invalid() {
   throw PrivateRouteError.COUNTER_INVALID()
@@ -34,6 +40,14 @@ function option(options, name) {
     return options[name]
   } catch {
     invalid()
+  }
+}
+
+function bufferLength(value) {
+  try {
+    return b4a.isBuffer(value) ? bufferByteLength.call(value) : -1
+  } catch {
+    return -1
   }
 }
 
@@ -65,7 +79,11 @@ function timeValue(value) {
 }
 
 function clearPayload(payload) {
-  if (b4a.isBuffer(payload)) payload.fill(0)
+  try {
+    if (b4a.isBuffer(payload)) bufferFill.call(payload, 0)
+  } catch {
+    // Best-effort zeroization only.
+  }
 }
 
 export class SenderCounter {
@@ -277,18 +295,17 @@ export class OrderedReceiver {
   }
 
   #copyForBuffer(payload) {
-    let isBuffer
-    try {
-      isBuffer = b4a.isBuffer(payload)
-    } catch {
-      this.#failInvalid()
-    }
-
-    if (isBuffer) {
-      if (payload.byteLength > MAX_BUFFERED_PAYLOAD) this.#failInvalid()
+    const length = bufferLength(payload)
+    if (length >= 0) {
+      if (length > MAX_BUFFERED_PAYLOAD) this.#failInvalid()
+      let owned = null
       try {
-        return b4a.from(payload)
+        owned = b4a.allocUnsafeSlow(length)
+        if (bufferLength(owned) !== length) this.#failInvalid()
+        bufferSet.call(owned, payload)
+        return owned
       } catch {
+        clearPayload(owned)
         this.#failInvalid()
       }
     }
@@ -319,14 +336,19 @@ export class OrderedReceiver {
       return owned
     }
 
-    let delivered
+    let delivered = null
     try {
-      delivered = b4a.from(owned)
+      const length = bufferLength(owned)
+      if (length < 0) this.#failInvalid()
+      delivered = b4a.allocUnsafeSlow(length)
+      if (bufferLength(delivered) !== length) this.#failInvalid()
+      bufferSet.call(delivered, owned)
     } catch {
+      clearPayload(delivered)
       this.#failInvalid()
     }
     this.#buffer.delete(counter)
-    owned.fill(0)
+    clearPayload(owned)
     return delivered
   }
 

@@ -334,6 +334,40 @@ test('deterministic padding injection fills only the hidden body tail', (t) => {
   plaintext.fill(0)
 })
 
+test('cell seal ignores shadowed byteLength and never encrypts allocator tail bytes', (t) => {
+  let plaintext = null
+  const cell = codec({
+    crypto: {
+      ...cryptoSuite,
+      seal(options) {
+        plaintext = b4a.from(options.plaintext)
+        return cryptoSuite.seal(options)
+      }
+    }
+  })
+  const payload = b4a.from([0x6b])
+  Object.defineProperty(payload, 'byteLength', { value: MAX_CELL_PAYLOAD })
+  const originalAlloc = b4a.allocUnsafeSlow
+  b4a.allocUnsafeSlow = (size) => {
+    const value = originalAlloc(size)
+    value.fill(0xe7)
+    return value
+  }
+  let packet
+  try {
+    packet = cell.seal(sealOptions({ payload }))
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  t.is(packet.byteLength, CELL_SIZE)
+  t.ok(plaintext)
+  t.is((plaintext[0] << 8) | plaintext[1], 1)
+  t.is(plaintext[2], 0x6b)
+  t.alike(plaintext.subarray(3), b4a.alloc(MAX_CELL_PAYLOAD - 1))
+  plaintext.fill(0)
+})
+
 test('public padding and ciphertext adapter outputs never corrupt aliased caller storage', (t) => {
   const paddingKey = b4a.alloc(32, 0x91)
   const paddingKeySnapshot = b4a.from(paddingKey)

@@ -14,6 +14,10 @@ const KEY_BYTES = 32
 const NONCE_PREFIX_BYTES = 16
 const CIRCUIT_ID_BYTES = 16
 const RECEIVER_FAILURES = new Set(['REPLAY', 'COUNTER_INVALID', 'COUNTER_GAP', 'COUNTER_EXHAUSTED'])
+const bufferByteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  'byteLength'
+).get
 
 function invalid() {
   throw PrivateRouteError.CELL_INVALID()
@@ -47,7 +51,7 @@ function option(options, name) {
 
 function bufferLength(value) {
   try {
-    return b4a.isBuffer(value) ? value.byteLength : -1
+    return b4a.isBuffer(value) ? bufferByteLength.call(value) : -1
   } catch {
     return -1
   }

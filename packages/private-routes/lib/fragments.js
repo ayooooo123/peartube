@@ -16,6 +16,10 @@ export const TEST_ONLY_FRAGMENT_OBSERVER = Symbol('test-only-fragment-observer')
 
 const MESSAGE_ID_BYTES = 16
 const MAX_FRAGMENTS = Math.ceil(MAX_MESSAGE_BYTES / MAX_FRAGMENT_DATA)
+const bufferByteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  'byteLength'
+).get
 const bufferFill = Uint8Array.prototype.fill
 const bufferSet = Uint8Array.prototype.set
 const bufferSubarray = Uint8Array.prototype.subarray
@@ -48,7 +52,7 @@ function option(options, name) {
 
 function bufferLength(value) {
   try {
-    return b4a.isBuffer(value) ? value.byteLength : -1
+    return b4a.isBuffer(value) ? bufferByteLength.call(value) : -1
   } catch {
     return -1
   }
@@ -372,7 +376,9 @@ export class Reassembler {
         const part = state.parts.get(index)
         if (!part) invalid()
         set(message, part, offset)
-        offset += part.byteLength
+        const partLength = bufferLength(part)
+        if (partLength < 0) invalid()
+        offset += partLength
       }
       if (offset !== state.bytes) invalid()
     } catch {

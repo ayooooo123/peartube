@@ -27,6 +27,10 @@ const MAX_LOGICAL_COUNTER = (1n << 63n) - 1n
 const MAX_NONCE_DOMAIN_CLAIMS = 4096
 const NONCE_DOMAIN_CLAIM = b4a.from('hyperdht-private-routes/nonce-domain/v0')
 const RECEIVER_CODES = new Set(['REPLAY', 'COUNTER_INVALID', 'COUNTER_GAP', 'COUNTER_EXHAUSTED'])
+const bufferByteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  'byteLength'
+).get
 const bufferFill = Uint8Array.prototype.fill
 const bufferSet = Uint8Array.prototype.set
 const bufferSubarray = Uint8Array.prototype.subarray
@@ -54,7 +58,7 @@ function option(options, name) {
 
 function bufferLength(value) {
   try {
-    return b4a.isBuffer(value) ? value.byteLength : -1
+    return b4a.isBuffer(value) ? bufferByteLength.call(value) : -1
   } catch {
     return -1
   }

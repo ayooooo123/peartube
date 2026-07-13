@@ -122,6 +122,28 @@ test('fragment slicing never dispatches through buffer instance methods', (t) =>
   t.is(instanceSlices, 0)
 })
 
+test('fragment ignores a shadowed byteLength and never emits allocator tail bytes', (t) => {
+  const message = b4a.from([0x6a])
+  Object.defineProperty(message, 'byteLength', { value: MAX_FRAGMENT_DATA })
+  const originalAlloc = b4a.allocUnsafeSlow
+  b4a.allocUnsafeSlow = (size) => {
+    const value = originalAlloc(size)
+    value.fill(0xd7)
+    return value
+  }
+  let frames
+  try {
+    frames = fragment(message, { messageId: id(44) })
+  } finally {
+    b4a.allocUnsafeSlow = originalAlloc
+  }
+
+  t.is(frames.length, 1)
+  t.is(frames[0].byteLength, 21)
+  t.is(frames[0][20], 0x6a)
+  t.alike(reassembler().pushAuthenticated(frames[0]), b4a.from([0x6a]))
+})
+
 test('fragment failure clears earlier frames and the current partial allocation', (t) => {
   const message = b4a.alloc(MAX_FRAGMENT_DATA + 1, 0x5a)
   const originalAlloc = b4a.allocUnsafeSlow

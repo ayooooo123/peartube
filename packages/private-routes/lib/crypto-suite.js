@@ -19,6 +19,11 @@ function copySlow(buffer) {
   return copy
 }
 
+// JavaScript zeroization is best-effort. Secret buffers returned by this adapter are caller-owned.
+function clear(buffer) {
+  if (buffer) b4a.fill(buffer, 0)
+}
+
 function validateSeed(seed) {
   if (seed !== undefined && (!b4a.isBuffer(seed) || seed.byteLength !== 32)) {
     throw PrivateRouteError.INVALID_KEY()
@@ -28,18 +33,28 @@ function validateSeed(seed) {
 function keyPair(seed) {
   validateSeed(seed)
   const pair = crypto.keyPair(seed)
-  return {
-    publicKey: copySlow(pair.publicKey),
-    secretKey: copySlow(pair.secretKey)
+
+  try {
+    return {
+      publicKey: copySlow(pair.publicKey),
+      secretKey: copySlow(pair.secretKey)
+    }
+  } finally {
+    clear(pair.secretKey)
   }
 }
 
 function encryptionKeyPair(seed) {
   validateSeed(seed)
   const pair = crypto.encryptionKeyPair(seed)
-  return {
-    publicKey: copySlow(pair.publicKey),
-    secretKey: copySlow(pair.secretKey)
+
+  try {
+    return {
+      publicKey: copySlow(pair.publicKey),
+      secretKey: copySlow(pair.secretKey)
+    }
+  } finally {
+    clear(pair.secretKey)
   }
 }
 
@@ -58,11 +73,13 @@ function keyAgreement(localSecretKey, remotePublicKey) {
   try {
     const result = sodium.crypto_scalarmult(shared, localSecretKey, remotePublicKey)
     if (result === false || b4a.equals(shared, ZERO_KEY)) throw PrivateRouteError.INVALID_KEY()
+
+    return copySlow(shared)
   } catch {
     throw PrivateRouteError.INVALID_KEY()
+  } finally {
+    clear(shared)
   }
-
-  return shared
 }
 
 function writeUint16BE(buffer, value, offset) {
@@ -92,8 +109,16 @@ function derive(sharedSecret, label, transcript) {
   message.set(transcript, offset)
 
   const output = b4a.allocUnsafeSlow(32)
-  sodium.crypto_generichash(output, message, sharedSecret)
-  return output
+  let complete = false
+
+  try {
+    sodium.crypto_generichash(output, message, sharedSecret)
+    complete = true
+    return output
+  } finally {
+    clear(message)
+    if (!complete) clear(output)
+  }
 }
 
 function deriveKeys(sharedSecret, transcript) {
@@ -106,14 +131,39 @@ function deriveKeys(sharedSecret, transcript) {
     throw PrivateRouteError.INVALID_KEY()
   }
 
-  const forwardNonce = derive(sharedSecret, DOMAIN.KDF_FORWARD_NONCE, transcript)
-  const reverseNonce = derive(sharedSecret, DOMAIN.KDF_REVERSE_NONCE, transcript)
+  let forwardNonce = null
+  let reverseNonce = null
+  let forwardKey = null
+  let reverseKey = null
+  let forwardNoncePrefix = null
+  let reverseNoncePrefix = null
+  let transferred = false
 
-  return {
-    forwardKey: derive(sharedSecret, DOMAIN.KDF_FORWARD_KEY, transcript),
-    reverseKey: derive(sharedSecret, DOMAIN.KDF_REVERSE_KEY, transcript),
-    forwardNoncePrefix: copySlow(forwardNonce.subarray(0, 16)),
-    reverseNoncePrefix: copySlow(reverseNonce.subarray(0, 16))
+  try {
+    forwardNonce = derive(sharedSecret, DOMAIN.KDF_FORWARD_NONCE, transcript)
+    reverseNonce = derive(sharedSecret, DOMAIN.KDF_REVERSE_NONCE, transcript)
+    forwardKey = derive(sharedSecret, DOMAIN.KDF_FORWARD_KEY, transcript)
+    reverseKey = derive(sharedSecret, DOMAIN.KDF_REVERSE_KEY, transcript)
+    forwardNoncePrefix = copySlow(forwardNonce.subarray(0, 16))
+    reverseNoncePrefix = copySlow(reverseNonce.subarray(0, 16))
+
+    const result = {
+      forwardKey,
+      reverseKey,
+      forwardNoncePrefix,
+      reverseNoncePrefix
+    }
+    transferred = true
+    return result
+  } finally {
+    clear(forwardNonce)
+    clear(reverseNonce)
+    if (!transferred) {
+      clear(forwardKey)
+      clear(reverseKey)
+      clear(forwardNoncePrefix)
+      clear(reverseNoncePrefix)
+    }
   }
 }
 
@@ -166,6 +216,7 @@ function seal(options) {
   }
 
   const ciphertext = b4a.allocUnsafeSlow(plaintext.byteLength + AEAD_TAG_BYTES)
+  const nonce = nonceFor(noncePrefix, counter)
 
   try {
     sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
@@ -173,11 +224,14 @@ function seal(options) {
       plaintext,
       associatedData,
       null,
-      nonceFor(noncePrefix, counter),
+      nonce,
       key
     )
   } catch {
+    clear(ciphertext)
     throw PrivateRouteError.CELL_INVALID()
+  } finally {
+    clear(nonce)
   }
 
   return ciphertext
@@ -196,22 +250,32 @@ function open(options) {
   }
 
   const plaintext = b4a.allocUnsafeSlow(ciphertext.byteLength - AEAD_TAG_BYTES)
+  const nonce = nonceFor(noncePrefix, counter)
 
   try {
-    const result = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-      plaintext,
-      null,
-      ciphertext,
-      associatedData,
-      nonceFor(noncePrefix, counter),
-      key
-    )
-    if (result === false) return null
-  } catch {
-    return null
-  }
+    let result
 
-  return plaintext
+    try {
+      result = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+        plaintext,
+        null,
+        ciphertext,
+        associatedData,
+        nonce,
+        key
+      )
+    } catch (err) {
+      // sodium-native throws this exact error for authentication failure in Node and Bare.
+      if (err && err.message === 'could not verify data') return null
+      throw err
+    }
+
+    if (result === false) return null
+    return copySlow(plaintext)
+  } finally {
+    clear(plaintext)
+    clear(nonce)
+  }
 }
 
 export const cryptoSuite = Object.freeze({

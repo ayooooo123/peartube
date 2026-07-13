@@ -348,6 +348,17 @@ export function decodeUnsignedDescriptor(buffer) {
 }
 
 function decodeDescriptorValue(buffer, signed) {
+  const value = decodeOuterDescriptor(buffer, signed)
+  value.entryAdvertisement = b4a.from(value.entryAdvertisement)
+  if (value.authorizationMode === AUTHORIZATION_MODE.DELEGATED) {
+    value.delegation = decodeDelegation(value.delegationEncoding)
+    delete value.delegationEncoding
+  }
+  validateDescriptor(value, signed)
+  return value
+}
+
+function decodeOuterDescriptor(buffer, signed) {
   const input = reader(buffer, MAX_DESCRIPTOR)
   const value = {
     version: input.u32(),
@@ -364,11 +375,10 @@ function decodeDescriptorValue(buffer, signed) {
     encryptedHops: input.bounded(MAX_ENCRYPTED_HOPS, true)
   }
   if (value.authorizationMode === AUTHORIZATION_MODE.DELEGATED)
-    value.delegation = decodeDelegation(input.fixed(DELEGATION_BYTES))
+    value.delegationEncoding = input.fixed(DELEGATION_BYTES)
   else if (value.authorizationMode !== AUTHORIZATION_MODE.DIRECT) throw invalid()
   if (signed) value.signature = input.fixed(64)
   input.done()
-  validateDescriptor(value, signed)
   return value
 }
 
@@ -424,26 +434,32 @@ function rejectInvalid() {
 
 // Returned data describes authorization and routing metadata only. Possession and activation are separate.
 export function verifyDescriptor(encoding, options) {
-  const descriptor = decodeDescriptor(encoding)
+  const descriptor = decodeOuterDescriptor(encoding, true)
   if (!isObject(options)) rejectInvalid()
   checkBuffer(options.requestedEndpointKey, 32)
   checkU64(options.now)
 
+  checkVersion(descriptor.version)
+  checkCapabilities(descriptor.capabilities)
+  if (descriptor.cellSize !== 1200) rejectInvalid()
+  if (descriptor.expiresAt <= options.now) rejectInvalid()
+
+  if (!b4a.equals(descriptor.endpointKey, options.requestedEndpointKey)) rejectUnauthorized()
+
   const entry = decodeRelayAdvertisement(descriptor.entryAdvertisement)
 
-  if (descriptor.expiresAt <= options.now || entry.expiresAt <= options.now) rejectInvalid()
+  if (entry.expiresAt <= options.now) rejectInvalid()
   if (descriptor.expiresAt > entry.expiresAt) rejectInvalid()
   if (descriptor.epoch !== entry.epoch) rejectInvalid()
   if ((descriptor.capabilities & entry.capabilities) !== descriptor.capabilities) rejectInvalid()
-
-  if (!b4a.equals(descriptor.endpointKey, options.requestedEndpointKey)) rejectUnauthorized()
   if (entry.role !== ROLE.PRIVATE || roleForIdentity(entry.identityKey) !== ROLE.PRIVATE)
     rejectInvalid()
-  if (b4a.equals(descriptor.routeEncryptionKey, entry.routeEncryptionKey)) rejectInvalid()
 
   if (descriptor.authorizationMode === AUTHORIZATION_MODE.DIRECT) {
     if (!b4a.equals(descriptor.routeSigningKey, descriptor.endpointKey)) rejectUnauthorized()
   } else {
+    descriptor.delegation = decodeDelegation(descriptor.delegationEncoding)
+    delete descriptor.delegationEncoding
     verifyDelegatedScope(descriptor, options.now)
   }
 

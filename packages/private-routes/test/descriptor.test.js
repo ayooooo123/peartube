@@ -308,6 +308,77 @@ test('direct authorization rejects distinct route signers and request mismatches
   )
 })
 
+test('verification rejects a requested endpoint mismatch before parsing nested relay bytes', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(20))
+  const other = routes.cryptoSuite.keyPair(seed(30))
+  const identity = privateRoleIdentity(21)
+  const encoded = encodeDescriptor(signedDirectDescriptor(endpoint, signedAdvertisement(identity)))
+  const malformedEntry = b4a.from(encoded)
+  const entryOffset = 4 + 1 + 32 * 4 + 2
+
+  malformedEntry[entryOffset] = 1
+
+  expectCode(
+    t,
+    () =>
+      routes.verifyDescriptor(malformedEntry, {
+        requestedEndpointKey: other.publicKey,
+        now: 10n
+      }),
+    'UNAUTHORIZED'
+  )
+  expectCode(
+    t,
+    () =>
+      routes.verifyDescriptor(malformedEntry, {
+        requestedEndpointKey: endpoint.publicKey,
+        now: 10n
+      }),
+    'INVALID_DESCRIPTOR'
+  )
+})
+
+test('verification checks outer version, capabilities, cell size, and time before endpoint', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(20))
+  const other = routes.cryptoSuite.keyPair(seed(30))
+  const identity = privateRoleIdentity(21)
+  const encoded = encodeDescriptor(signedDirectDescriptor(endpoint, signedAdvertisement(identity)))
+  const entryLength = encoded[133] * 0x100 + encoded[134]
+  const epochOffset = 135 + entryLength
+  const expiresOffset = epochOffset + 8
+  const capabilitiesOffset = expiresOffset + 8
+  const cellSizeOffset = capabilitiesOffset + 4
+  const mutations = [
+    (value) => {
+      value[3] = 1
+    },
+    (value) => {
+      value.fill(0, capabilitiesOffset, capabilitiesOffset + 4)
+      value[capabilitiesOffset + 3] = 8
+    },
+    (value) => {
+      value.fill(0, cellSizeOffset, cellSizeOffset + 2)
+    },
+    (value) => {
+      value.fill(0, expiresOffset, expiresOffset + 8)
+    }
+  ]
+
+  for (const mutate of mutations) {
+    const changed = b4a.from(encoded)
+    mutate(changed)
+    expectCode(
+      t,
+      () =>
+        routes.verifyDescriptor(changed, {
+          requestedEndpointKey: other.publicKey,
+          now: 10n
+        }),
+      'INVALID_DESCRIPTOR'
+    )
+  }
+})
+
 test('direct verification rejects relay signature, safety role, scope, and expiry failures', (t) => {
   const endpoint = routes.cryptoSuite.keyPair(seed(20))
   const identity = privateRoleIdentity(21)
@@ -354,14 +425,6 @@ test('direct verification rejects relay signature, safety role, scope, and expir
   expectCode(
     t,
     () => verify(signedDirectDescriptor(endpoint, entry, { expiresAt: 101n })),
-    'INVALID_DESCRIPTOR'
-  )
-  expectCode(
-    t,
-    () =>
-      verify(
-        signedDirectDescriptor(endpoint, entry, { routeEncryptionKey: entry.routeEncryptionKey })
-      ),
     'INVALID_DESCRIPTOR'
   )
   expectCode(
@@ -588,5 +651,37 @@ test('delegated signature binds the canonical delegation and destination route e
     t,
     () => verify({ ...valid, delegation: { ...authorization, maxEpoch: 21n } }),
     'UNAUTHORIZED'
+  )
+})
+
+test('relay and destination route encryption keys may be equal in either authorization mode', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(50))
+  const routeSigner = routes.cryptoSuite.keyPair(seed(51))
+  const identity = privateRoleIdentity(52)
+  const sharedRouteKey = seed(70)
+  const entry = signedAdvertisement(identity, { routeEncryptionKey: sharedRouteKey })
+  const direct = signedDirectDescriptor(endpoint, entry, {
+    routeEncryptionKey: sharedRouteKey
+  })
+  const authorization = signedDelegation(endpoint, routeSigner)
+  const delegated = signedDelegatedDescriptor(endpoint, routeSigner, entry, authorization, {
+    routeEncryptionKey: sharedRouteKey
+  })
+
+  t.ok(
+    routes.isVerifiedDescriptor(
+      routes.verifyDescriptor(encodeDescriptor(direct), {
+        requestedEndpointKey: endpoint.publicKey,
+        now: 10n
+      })
+    )
+  )
+  t.ok(
+    routes.isVerifiedDescriptor(
+      routes.verifyDescriptor(encodeDescriptor(delegated), {
+        requestedEndpointKey: endpoint.publicKey,
+        now: 10n
+      })
+    )
   )
 })

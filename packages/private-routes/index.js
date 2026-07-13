@@ -7,6 +7,7 @@ export {
   SenderCounter
 } from './lib/counters.js'
 export { cryptoSuite } from './lib/crypto-suite.js'
+export { VirtualNetwork } from './lib/virtual-network.js'
 export {
   AEAD_TAG_BYTES,
   CELL_BODY_SIZE,

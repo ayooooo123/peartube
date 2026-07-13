@@ -8,6 +8,7 @@ import {
   DatagramReplayWindow,
   DOMAIN,
   OrderedReceiver,
+  PrivateRouteError,
   SenderCounter,
   cryptoSuite
 } from '../index.js'
@@ -199,6 +200,89 @@ test('datagram receiver enforces replay only after successful authentication', (
   expectCode(t, () => cell.open(options, packet), 'REPLAY')
 })
 
+test('datagram receiver must return exactly true and rejected payloads are cleared', (t) => {
+  const cell = codec()
+  const packet = cell.seal(
+    sealOptions({ senderCounter: new SenderCounter(), class: CELL_CLASS.DATAGRAM })
+  )
+  const payloadCopies = []
+  const originalFrom = b4a.from
+  b4a.from = (value, ...args) => {
+    const copy = originalFrom(value, ...args)
+    if (value && value.byteLength === 5) payloadCopies.push(copy)
+    return copy
+  }
+
+  try {
+    for (const result of [false, undefined, 0, 'true']) {
+      const receiver = { acceptAuthenticated: () => result }
+      expectCode(
+        t,
+        () => cell.open(openOptions(receiver, { expectedClass: CELL_CLASS.DATAGRAM }), packet),
+        'CELL_INVALID'
+      )
+    }
+  } finally {
+    b4a.from = originalFrom
+  }
+
+  t.is(payloadCopies.length, 4)
+  for (const payload of payloadCopies) t.alike(payload, b4a.alloc(5))
+})
+
+test('receiver calls expose only replay and counter failures and clear rejected payloads', (t) => {
+  const cell = codec()
+  const packet = cell.seal(sealOptions())
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error('hostile error getter')
+      },
+      getPrototypeOf() {
+        throw new Error('hostile error prototype')
+      }
+    }
+  )
+  const revocable = Proxy.revocable({}, {})
+  revocable.revoke()
+  let codeReads = 0
+  const dynamicCounterError = PrivateRouteError.REPLAY()
+  Object.defineProperty(dynamicCounterError, 'code', {
+    get() {
+      codeReads++
+      return codeReads === 1 ? 'REPLAY' : 'UNAUTHORIZED'
+    }
+  })
+  const cases = [
+    { error: new TypeError('receiver detail'), code: 'CELL_INVALID' },
+    { error: hostile, code: 'CELL_INVALID' },
+    { error: revocable.proxy, code: 'CELL_INVALID' },
+    { error: PrivateRouteError.UNAUTHORIZED(), code: 'CELL_INVALID' },
+    { error: dynamicCounterError, code: 'REPLAY' },
+    { error: PrivateRouteError.REPLAY(), code: 'REPLAY' },
+    { error: PrivateRouteError.COUNTER_INVALID(), code: 'COUNTER_INVALID' },
+    { error: PrivateRouteError.COUNTER_GAP(), code: 'COUNTER_GAP' },
+    { error: PrivateRouteError.COUNTER_EXHAUSTED(), code: 'COUNTER_EXHAUSTED' }
+  ]
+
+  for (const { error, code } of cases) {
+    let rejectedPayload = null
+    const receiver = {
+      pushAuthenticated(counter, payload) {
+        t.is(counter, 3n)
+        rejectedPayload = payload
+        throw error
+      }
+    }
+
+    expectCode(t, () => cell.open(openOptions(receiver), packet), code)
+    t.ok(rejectedPayload !== null)
+    if (rejectedPayload) t.alike(rejectedPayload, b4a.alloc(5))
+  }
+  t.is(codeReads, 1)
+})
+
 test('maximum payload round trips and one-byte overflow does not advance sender', (t) => {
   const cell = codec()
   const payload = b4a.alloc(MAX_CELL_PAYLOAD, 0x5a)
@@ -248,6 +332,33 @@ test('deterministic padding injection fills only the hidden body tail', (t) => {
   t.alike(plaintext.subarray(2, 5), b4a.from('pad'))
   t.alike(plaintext.subarray(5), b4a.alloc(MAX_CELL_PAYLOAD - 3, 0xa5))
   plaintext.fill(0)
+})
+
+test('public padding and ciphertext adapter outputs never corrupt aliased caller storage', (t) => {
+  const paddingKey = b4a.alloc(32, 0x91)
+  const paddingKeySnapshot = b4a.from(paddingKey)
+  codec({ padding: () => paddingKey }).seal(
+    sealOptions({
+      key: paddingKey,
+      payload: b4a.alloc(MAX_CELL_PAYLOAD - paddingKey.byteLength)
+    })
+  )
+  t.alike(paddingKey, paddingKeySnapshot)
+
+  const publicCiphertext = b4a.alloc(CELL_BODY_SIZE + AEAD_TAG_BYTES, 0x6d)
+  const ciphertextSnapshot = b4a.from(publicCiphertext)
+  const ciphertextKey = publicCiphertext.subarray(0, 32)
+  const cell = codec({
+    crypto: {
+      ...cryptoSuite,
+      seal: () => publicCiphertext
+    }
+  })
+  const packet = cell.seal(sealOptions({ key: ciphertextKey }))
+
+  t.is(packet.byteLength, CELL_SIZE)
+  t.alike(publicCiphertext, ciphertextSnapshot)
+  t.alike(ciphertextKey, ciphertextSnapshot.subarray(0, 32))
 })
 
 test('every public header field is validated or authenticated', (t) => {

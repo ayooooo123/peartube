@@ -13,6 +13,7 @@ const MAX_UINT64 = (1n << 64n) - 1n
 const KEY_BYTES = 32
 const NONCE_PREFIX_BYTES = 16
 const CIRCUIT_ID_BYTES = 16
+const RECEIVER_FAILURES = new Set(['REPLAY', 'COUNTER_INVALID', 'COUNTER_GAP', 'COUNTER_EXHAUSTED'])
 
 function invalid() {
   throw PrivateRouteError.CELL_INVALID()
@@ -96,6 +97,26 @@ function normalizeCrypto(operation) {
   try {
     return operation()
   } catch {
+    invalid()
+  }
+}
+
+function receiverFailureCode(err) {
+  try {
+    if (!(err instanceof PrivateRouteError)) return null
+    const code = err.code
+    return RECEIVER_FAILURES.has(code) ? code : null
+  } catch {
+    return null
+  }
+}
+
+function invokeReceiver(operation) {
+  try {
+    return operation()
+  } catch (err) {
+    const code = receiverFailureCode(err)
+    if (code !== null) throw new PrivateRouteError(code)
     invalid()
   }
 }
@@ -227,8 +248,8 @@ export class CellCodec {
       return packet
     } finally {
       clear(body)
-      clear(padding)
-      clear(ciphertext)
+      // Padding and ciphertext outputs remain adapter-owned and are not secret.
+      // Clearing them could corrupt aliased caller storage after the codec copies them.
     }
   }
 
@@ -283,6 +304,8 @@ export class CellCodec {
     let transferred = false
 
     try {
+      // Contract: crypto.open transfers an exclusive plaintext buffer to this
+      // codec. It is always cleared below, on both success and failure.
       plaintext = normalizeCrypto(() =>
         this.#crypto.open({
           key,
@@ -316,12 +339,13 @@ export class CellCodec {
       if (typeof receive !== 'function') invalid()
 
       if (cellClass === CELL_CLASS.DATAGRAM) {
-        receive.call(receiver, counter)
+        const accepted = invokeReceiver(() => receive.call(receiver, counter))
+        if (accepted !== true) invalid()
         transferred = true
         return payload
       }
 
-      const delivery = receive.call(receiver, counter, payload)
+      const delivery = invokeReceiver(() => receive.call(receiver, counter, payload))
       transferred = retainsPayload(delivery, payload)
       return delivery
     } finally {

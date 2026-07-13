@@ -739,6 +739,101 @@ test('registry bounds identities and prunes expired nonquarantined records', (t)
   t.is(registry.size, 1)
 })
 
+test('registry amortizes capacity sweeps until the earliest known expiry', (t) => {
+  let current = 50_000n
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 50_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits()
+  )
+  registry.learnRoute(numericIdentity(1), {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 100_000n
+  })
+  registry.learnRoute(numericIdentity(2), {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 200_000n
+  })
+  t.is(registry.sweepCount, 0)
+
+  for (const value of [3, 4, 5]) {
+    expectCode(
+      t,
+      () =>
+        registry.learnRoute(numericIdentity(value), {
+          provenance: 'private-only',
+          epoch: 7n,
+          expiresAt: 300_000n
+        }),
+      'CIRCUIT_LIMIT'
+    )
+    t.is(registry.sweepCount, 0)
+  }
+
+  current = 100_000n
+  registry.learnRoute(numericIdentity(3), {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 300_000n
+  })
+  t.is(registry.sweepCount, 1)
+  t.is(registry.size, 2)
+
+  for (const value of [4, 5]) {
+    expectCode(
+      t,
+      () =>
+        registry.learnRoute(numericIdentity(value), {
+          provenance: 'private-only',
+          epoch: 7n,
+          expiresAt: 300_000n
+        }),
+      'CIRCUIT_LIMIT'
+    )
+    t.is(registry.sweepCount, 1)
+  }
+})
+
+test('all-quarantined capacity rejects without global sweeps', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits({ maxIdentities: 1 })
+  )
+  registry.learnPublic(issueEvidence(evidenceAuthority, safety, { expiresAt: 200_000n }))
+  registry.learnPublic(
+    issueEvidence(evidenceAuthority, safety, {
+      expiresAt: 200_000n,
+      dial: b4a.from('capacity-quarantine.example:49737')
+    })
+  )
+
+  current = 200_000n
+  for (const value of [1, 2, 3]) {
+    expectCode(
+      t,
+      () =>
+        registry.learnRoute(numericIdentity(value), {
+          provenance: 'private-only',
+          epoch: 7n,
+          expiresAt: 300_000n
+        }),
+      'CIRCUIT_LIMIT'
+    )
+    t.is(registry.sweepCount, 0)
+  }
+})
+
 test('registry hot paths prune only the requested identity', (t) => {
   let current = 100_000n
   const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })

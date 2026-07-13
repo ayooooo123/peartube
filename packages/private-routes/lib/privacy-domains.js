@@ -183,6 +183,9 @@ export class PrivacyDomainRegistry {
   #now
   #limits
   #records = new Map()
+  #nextGlobalSweepAt = null
+  #expirableRecords = 0
+  #sweepCount = 0
 
   constructor({ evidenceChecker, descriptorChecker, circuitChecker, now, limits } = {}) {
     if (
@@ -225,6 +228,10 @@ export class PrivacyDomainRegistry {
     return this.#records.size
   }
 
+  get sweepCount() {
+    return this.#sweepCount
+  }
+
   #record(identity, current) {
     const key = identityHex(identity)
     const record = this.#records.get(key)
@@ -232,7 +239,14 @@ export class PrivacyDomainRegistry {
       if (!record.quarantined) this.#pruneRecord(record, current)
       return record
     }
-    if (this.#records.size >= this.#limits.maxIdentities) this.#prune(current)
+    if (this.#records.size >= this.#limits.maxIdentities) {
+      // Capacity exhaustion is intentionally fail-closed. The receipt issuer/upstream owns
+      // admission and rate policy; this registry makes no production-anonymity claim.
+      if (this.#nextGlobalSweepAt === null || current < this.#nextGlobalSweepAt) {
+        throw PrivateRouteError.CIRCUIT_LIMIT()
+      }
+      this.#prune(current)
+    }
     if (this.#records.size >= this.#limits.maxIdentities) {
       throw PrivateRouteError.CIRCUIT_LIMIT()
     }
@@ -241,6 +255,7 @@ export class PrivacyDomainRegistry {
       provenance: new Set(),
       publicEvidence: new Map(),
       routeEpochs: new Map(),
+      nextExpiryAt: null,
       quarantined: false
     }
     this.#records.set(key, created)
@@ -295,6 +310,7 @@ export class PrivacyDomainRegistry {
           ? existingPublic.expiresAt
           : state.expiresAt
     })
+    this.#noteExpiry(record, state.expiresAt)
   }
 
   learnRoute(identity, material) {
@@ -327,6 +343,7 @@ export class PrivacyDomainRegistry {
           privateOnlyExpiresAt: material.expiresAt
         })
       }
+      this.#noteExpiry(record, material.expiresAt)
       return
     }
 
@@ -402,6 +419,8 @@ export class PrivacyDomainRegistry {
       route.expiresAt = descriptor.expiresAt
     }
     route.circuits.set(bindingKey, binding)
+    this.#noteExpiry(record, descriptor.expiresAt)
+    this.#noteExpiry(record, binding.expiresAt)
   }
 
   allows(identity, operation, context) {
@@ -473,11 +492,13 @@ export class PrivacyDomainRegistry {
   }
 
   #prune(current) {
+    this.#sweepCount++
     for (const [identity, record] of this.#records) {
       if (record.quarantined) continue
       this.#pruneRecord(record, current)
       if (this.#isEmpty(record)) this.#records.delete(identity)
     }
+    this.#recomputeExpiryWatermark()
   }
 
   #pruneRecord(record, current) {
@@ -511,9 +532,61 @@ export class PrivacyDomainRegistry {
         record.routeEpochs.delete(epoch)
       }
     }
+    this.#refreshRecordExpiry(record)
+  }
+
+  #noteExpiry(record, expiresAt) {
+    if (record.nextExpiryAt === null) this.#expirableRecords++
+    if (record.nextExpiryAt === null || expiresAt < record.nextExpiryAt) {
+      record.nextExpiryAt = expiresAt
+    }
+    if (this.#nextGlobalSweepAt === null || expiresAt < this.#nextGlobalSweepAt) {
+      this.#nextGlobalSweepAt = expiresAt
+    }
+  }
+
+  #refreshRecordExpiry(record) {
+    const previous = record.nextExpiryAt
+    const next = this.#recordExpiryAt(record)
+    record.nextExpiryAt = next
+    if (previous === null && next !== null) this.#expirableRecords++
+    if (previous !== null && next === null) this.#expirableRecords--
+    if (next !== null && (this.#nextGlobalSweepAt === null || next < this.#nextGlobalSweepAt)) {
+      this.#nextGlobalSweepAt = next
+    }
+    if (this.#expirableRecords === 0) this.#nextGlobalSweepAt = null
+  }
+
+  #recordExpiryAt(record) {
+    let next = null
+    const include = (expiresAt) => {
+      if (expiresAt !== undefined && (next === null || expiresAt < next)) next = expiresAt
+    }
+    for (const evidence of record.publicEvidence.values()) include(evidence.expiresAt)
+    for (const route of record.routeEpochs.values()) {
+      if (route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY) include(route.expiresAt)
+      include(route.privateOnlyExpiresAt)
+      for (const circuit of route.circuits?.values() ?? []) include(circuit.expiresAt)
+    }
+    return next
+  }
+
+  #recomputeExpiryWatermark() {
+    this.#nextGlobalSweepAt = null
+    this.#expirableRecords = 0
+    for (const record of this.#records.values()) {
+      if (record.quarantined) continue
+      record.nextExpiryAt = this.#recordExpiryAt(record)
+      if (record.nextExpiryAt === null) continue
+      this.#expirableRecords++
+      if (this.#nextGlobalSweepAt === null || record.nextExpiryAt < this.#nextGlobalSweepAt) {
+        this.#nextGlobalSweepAt = record.nextExpiryAt
+      }
+    }
   }
 
   #quarantine(record) {
+    if (record.nextExpiryAt !== null) this.#expirableRecords--
     record.provenance.clear()
     record.publicEvidence.clear()
     for (const route of record.routeEpochs.values()) route.circuits?.clear()
@@ -521,7 +594,9 @@ export class PrivacyDomainRegistry {
     delete record.provenance
     delete record.publicEvidence
     delete record.routeEpochs
+    delete record.nextExpiryAt
     record.quarantined = true
+    if (this.#expirableRecords === 0) this.#nextGlobalSweepAt = null
   }
 
   #isEmpty(record) {

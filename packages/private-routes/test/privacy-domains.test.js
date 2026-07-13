@@ -53,6 +53,12 @@ function receiptFor(receiptIssuer, encoded, advertisement, overrides = {}) {
   })
 }
 
+function numericIdentity(value) {
+  const identity = b4a.alloc(32)
+  identity.writeUInt32BE(value, 28)
+  return identity
+}
+
 test('discovery evidence authority exposes three isolated frozen capabilities', (t) => {
   const authority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
 
@@ -341,6 +347,89 @@ test('privacy registry implements the exact private-mode operation matrix', (t) 
   }
 })
 
+test('guard and public-return contexts require exact own data properties without throwing', (t) => {
+  const fixture = policyFixture()
+  fixture.registry.learnPublic(fixture.evidence)
+
+  const inheritedGuard = Object.create({ selectedGuard: true })
+  const getterGuard = Object.defineProperty({}, 'selectedGuard', {
+    enumerable: true,
+    get() {
+      throw new Error('guard getter must not run')
+    }
+  })
+  const proxyGuard = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error('guard proxy must not run')
+      },
+      get() {
+        throw new Error('guard proxy must not run')
+      }
+    }
+  )
+  const cyclicGuard = { selectedGuard: true }
+  cyclicGuard.self = cyclicGuard
+  const invalidGuards = [
+    { selectedGuard: true, extra: true },
+    inheritedGuard,
+    getterGuard,
+    proxyGuard,
+    cyclicGuard,
+    null,
+    'guard'
+  ]
+
+  t.is(
+    fixture.registry.allows(fixture.safety.publicKey, 'guard-dial', { selectedGuard: true }),
+    true
+  )
+  for (const context of invalidGuards) {
+    t.is(fixture.registry.allows(fixture.safety.publicKey, 'guard-dial', context), false)
+  }
+
+  const inheritedReturn = Object.create({ consumer: 'relay-discovery' })
+  const getterReturn = Object.defineProperty({}, 'consumer', {
+    enumerable: true,
+    get() {
+      throw new Error('return getter must not run')
+    }
+  })
+  const proxyReturn = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error('return proxy must not run')
+      },
+      get() {
+        throw new Error('return proxy must not run')
+      }
+    }
+  )
+  const cyclicReturn = { consumer: 'relay-discovery' }
+  cyclicReturn.self = cyclicReturn
+  const invalidReturns = [
+    { consumer: 'relay-discovery', extra: true },
+    inheritedReturn,
+    getterReturn,
+    proxyReturn,
+    cyclicReturn,
+    null,
+    'return'
+  ]
+
+  t.is(
+    fixture.registry.allows(fixture.safety.publicKey, 'public-return', {
+      consumer: 'relay-discovery'
+    }),
+    true
+  )
+  for (const context of invalidReturns) {
+    t.is(fixture.registry.allows(fixture.safety.publicKey, 'public-return', context), false)
+  }
+})
+
 test('private-only route material never promotes public or direct authorization', (t) => {
   const { registry, entry } = policyFixture()
   registry.learnRoute(entry.publicKey, {
@@ -363,6 +452,25 @@ test('private-only route material never promotes public or direct authorization'
     () => registry.learnPublic({ peerIdentity32: entry.publicKey, authenticated: true }),
     'UNAUTHORIZED'
   )
+})
+
+test('invalid route imports do not allocate identity records', (t) => {
+  const fixture = policyFixture()
+
+  for (let value = 1; value <= 32; value++) {
+    expectCode(
+      t,
+      () =>
+        fixture.registry.learnRoute(numericIdentity(value), {
+          provenance: 'private-only',
+          epoch: 7,
+          expiresAt: 200_000n
+        }),
+      'INVALID_ROUTE'
+    )
+  }
+
+  t.is(fixture.registry.size, 0)
 })
 
 test('route-entry requires Task 4 brand and exact circuit identity, epoch, and expiry', (t) => {
@@ -569,14 +677,208 @@ function issueEvidence(authority, identity, overrides = {}) {
   return authority.verifier.verify(encoded, receipt)
 }
 
-function registryFor(evidenceChecker, circuitChecker, now) {
+function registryFor(evidenceChecker, circuitChecker, now, limits) {
   return new routes.PrivacyDomainRegistry({
     evidenceChecker,
     descriptorChecker: descriptorChecker(),
     circuitChecker,
-    now
+    now,
+    limits
   })
 }
+
+function smallLimits(overrides = {}) {
+  return {
+    maxIdentities: 2,
+    maxPublicEpochsPerIdentity: 2,
+    maxRouteEpochsPerIdentity: 2,
+    maxCircuitsPerEpoch: 2,
+    ...overrides
+  }
+}
+
+test('registry bounds identities and prunes expired nonquarantined records', (t) => {
+  t.is(routes.MAX_IDENTITIES, 4096)
+  t.is(routes.MAX_PUBLIC_EPOCHS_PER_IDENTITY, 8)
+  t.is(routes.MAX_ROUTE_EPOCHS_PER_IDENTITY, 8)
+  t.is(routes.MAX_CIRCUITS_PER_EPOCH, 128)
+
+  let current = 100_000n
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits()
+  )
+  for (let value = 1; value <= 2; value++) {
+    registry.learnRoute(numericIdentity(value), {
+      provenance: 'private-only',
+      epoch: 7n,
+      expiresAt: 110_000n
+    })
+  }
+  expectCode(
+    t,
+    () =>
+      registry.learnRoute(numericIdentity(3), {
+        provenance: 'private-only',
+        epoch: 7n,
+        expiresAt: 200_000n
+      }),
+    'CIRCUIT_LIMIT'
+  )
+  t.is(registry.size, 2)
+  current = 110_000n
+  registry.learnRoute(numericIdentity(3), {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 200_000n
+  })
+  t.is(registry.size, 1)
+})
+
+test('quarantine tombstones are sticky and count against the identity bound', (t) => {
+  const safety = safetyRoleIdentity(100)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => 500_000n,
+    smallLimits()
+  )
+  registry.learnPublic(issueEvidence(evidenceAuthority, safety, { expiresAt: 600_000n, epoch: 7n }))
+  registry.learnPublic(
+    issueEvidence(evidenceAuthority, safety, {
+      expiresAt: 600_000n,
+      epoch: 7n,
+      dial: b4a.from('quarantine.example:49737')
+    })
+  )
+  registry.learnRoute(numericIdentity(1000), {
+    provenance: 'private-only',
+    epoch: 1n,
+    expiresAt: 600_000n
+  })
+
+  expectCode(
+    t,
+    () =>
+      registry.learnRoute(numericIdentity(1001), {
+        provenance: 'private-only',
+        epoch: 1n,
+        expiresAt: 600_000n
+      }),
+    'CIRCUIT_LIMIT'
+  )
+  t.is(registry.size, 2)
+  t.is(registry.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), false)
+})
+
+test('registry bounds and prunes public and private route epochs', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const publicRegistry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits()
+  )
+  publicRegistry.learnPublic(
+    issueEvidence(evidenceAuthority, safety, { epoch: 7n, expiresAt: 110_000n })
+  )
+  publicRegistry.learnPublic(
+    issueEvidence(evidenceAuthority, safety, { epoch: 8n, expiresAt: 200_000n })
+  )
+  const epoch9 = issueEvidence(evidenceAuthority, safety, { epoch: 9n, expiresAt: 200_000n })
+  expectCode(t, () => publicRegistry.learnPublic(epoch9), 'CIRCUIT_LIMIT')
+  current = 110_000n
+  publicRegistry.learnPublic(epoch9)
+  t.is(publicRegistry.size, 1)
+
+  current = 100_000n
+  const routeRegistry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits()
+  )
+  for (const [epoch, expiresAt] of [
+    [7n, 110_000n],
+    [8n, 200_000n]
+  ]) {
+    routeRegistry.learnRoute(numericIdentity(2000), {
+      provenance: 'private-only',
+      epoch,
+      expiresAt
+    })
+  }
+  expectCode(
+    t,
+    () =>
+      routeRegistry.learnRoute(numericIdentity(2000), {
+        provenance: 'private-only',
+        epoch: 9n,
+        expiresAt: 200_000n
+      }),
+    'CIRCUIT_LIMIT'
+  )
+  current = 110_000n
+  routeRegistry.learnRoute(numericIdentity(2000), {
+    provenance: 'private-only',
+    epoch: 9n,
+    expiresAt: 200_000n
+  })
+  t.is(routeRegistry.size, 1)
+})
+
+test('registry bounds and prunes exact circuit bindings per route epoch', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const entry = privateRoleIdentity(120)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits()
+  )
+  const descriptor = verifiedRouteDescriptor(entry, {
+    entry: { expiresAt: 300_000n },
+    descriptor: { expiresAt: 300_000n }
+  })
+  const contexts = [
+    [21, 110_000n],
+    [22, 200_000n],
+    [23, 200_000n]
+  ].map(([id, expiresAt]) =>
+    circuitAuthority.issuer.issueFinalSafety({
+      circuitId: b4a.alloc(16, id),
+      epoch: 7n,
+      finalSafetyIdentity32: safety.publicKey,
+      entryIdentity32: entry.publicKey,
+      expiresAt
+    })
+  )
+  const learn = (circuitContext) =>
+    registry.learnRoute(entry.publicKey, {
+      provenance: 'route-entry',
+      descriptor,
+      circuitContext
+    })
+  learn(contexts[0])
+  learn(contexts[1])
+  expectCode(t, () => learn(contexts[2]), 'CIRCUIT_LIMIT')
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', contexts[1]), true)
+  current = 110_000n
+  learn(contexts[2])
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', contexts[2]), true)
+})
 
 test('same-epoch public claims conflict on canonical dial or capabilities and quarantine', (t) => {
   const safety = safetyRoleIdentity(100)
@@ -640,6 +942,28 @@ test('public claims are retained and compared independently per epoch', (t) => {
   )
   t.is(conflict.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), false)
   t.is(conflict.allows(safety.publicKey, 'public-return', { consumer: 'relay-discovery' }), false)
+})
+
+test('identical public claims retain their longest same-epoch expiry', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const long = { epoch: 7n, expiresAt: 200_000n }
+  const short = { epoch: 7n, expiresAt: 150_000n }
+
+  for (const claims of [
+    [long, short],
+    [short, long]
+  ]) {
+    const registry = registryFor(evidenceAuthority.checker, circuitAuthority.checker, () => current)
+    for (const claim of claims)
+      registry.learnPublic(issueEvidence(evidenceAuthority, safety, claim))
+    current = 175_000n
+    t.is(registry.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), true)
+    t.is(registry.allows(safety.publicKey, 'public-return', { consumer: 'relay-discovery' }), true)
+    current = 100_000n
+  }
 })
 
 test('same-epoch descriptor and public claims conflict and quarantine every operation', (t) => {

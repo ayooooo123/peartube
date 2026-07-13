@@ -7,6 +7,20 @@ import { PrivateRouteError } from './errors.js'
 import { ROLE, roleForIdentity } from './protocol.js'
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn
+const INVALID_CONTEXT = Symbol('invalid-context')
+
+// Experimental implementation safety bounds. These are not stable wire-protocol limits.
+export const MAX_IDENTITIES = 4096
+export const MAX_PUBLIC_EPOCHS_PER_IDENTITY = 8
+export const MAX_ROUTE_EPOCHS_PER_IDENTITY = 8
+export const MAX_CIRCUITS_PER_EPOCH = 128
+
+const DEFAULT_LIMITS = Object.freeze({
+  maxIdentities: MAX_IDENTITIES,
+  maxPublicEpochsPerIdentity: MAX_PUBLIC_EPOCHS_PER_IDENTITY,
+  maxRouteEpochsPerIdentity: MAX_ROUTE_EPOCHS_PER_IDENTITY,
+  maxCircuitsPerEpoch: MAX_CIRCUITS_PER_EPOCH
+})
 
 export const PRIVACY_PROVENANCE = Object.freeze({
   PRIVATE_ONLY: 'private-only',
@@ -42,12 +56,39 @@ function exactKeys(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index])
 }
 
+function exactContextValue(value, name) {
+  if (!isObject(value)) return INVALID_CONTEXT
+  try {
+    const keys = Reflect.ownKeys(value)
+    if (keys.length !== 1 || keys[0] !== name) return INVALID_CONTEXT
+    const descriptor = Object.getOwnPropertyDescriptor(value, name)
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+      return INVALID_CONTEXT
+    }
+    return descriptor.value
+  } catch {
+    return INVALID_CONTEXT
+  }
+}
+
 function fixed(value, size) {
   return b4a.isBuffer(value) && value.byteLength === size
 }
 
 function u64(value) {
   return typeof value === 'bigint' && value >= 0n && value <= MAX_U64
+}
+
+function normalizeLimits(limits) {
+  if (limits === undefined) return DEFAULT_LIMITS
+  if (!exactKeys(limits, Object.keys(DEFAULT_LIMITS))) invalidRoute()
+  const normalized = {}
+  for (const [name, maximum] of Object.entries(DEFAULT_LIMITS)) {
+    const value = limits[name]
+    if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) invalidRoute()
+    normalized[name] = value
+  }
+  return Object.freeze(normalized)
 }
 
 function currentTime(now) {
@@ -140,9 +181,10 @@ export class PrivacyDomainRegistry {
   #descriptorChecker
   #circuitChecker
   #now
+  #limits
   #records = new Map()
 
-  constructor({ evidenceChecker, descriptorChecker, circuitChecker, now } = {}) {
+  constructor({ evidenceChecker, descriptorChecker, circuitChecker, now, limits } = {}) {
     if (
       !isObject(evidenceChecker) ||
       typeof evidenceChecker.isVerified !== 'function' ||
@@ -176,18 +218,25 @@ export class PrivacyDomainRegistry {
       read: circuitChecker.read.bind(circuitChecker)
     })
     this.#now = now
+    this.#limits = normalizeLimits(limits)
+  }
+
+  get size() {
+    return this.#records.size
   }
 
   #record(identity) {
     const key = identityHex(identity)
     let record = this.#records.get(key)
     if (!record) {
+      if (this.#records.size >= this.#limits.maxIdentities) {
+        throw PrivateRouteError.CIRCUIT_LIMIT()
+      }
       record = {
         identity: b4a.from(identity),
         provenance: new Set(),
         publicEvidence: new Map(),
         routeEpochs: new Map(),
-        caps: new Map(),
         quarantined: false
       }
       this.#records.set(key, record)
@@ -203,7 +252,9 @@ export class PrivacyDomainRegistry {
     } catch {
       unauthorized()
     }
-    if (!validEvidence(state) || state.expiresAt <= currentTime(this.#now)) unauthorized()
+    const current = currentTime(this.#now)
+    if (!validEvidence(state) || state.expiresAt <= current) unauthorized()
+    this.#prune(current)
 
     const record = this.#record(state.peerIdentity32)
     const claim = {
@@ -222,6 +273,12 @@ export class PrivacyDomainRegistry {
       record.quarantined = true
       return
     }
+    if (
+      existingPublic === undefined &&
+      record.publicEvidence.size >= this.#limits.maxPublicEpochsPerIdentity
+    ) {
+      throw PrivateRouteError.CIRCUIT_LIMIT()
+    }
     record.provenance.add(PRIVACY_PROVENANCE.PUBLIC)
     record.publicEvidence.set(state.epoch, {
       peerIdentity32: b4a.from(state.peerIdentity32),
@@ -231,12 +288,15 @@ export class PrivacyDomainRegistry {
       role: state.role,
       capabilities: state.capabilities,
       epoch: state.epoch,
-      expiresAt: state.expiresAt
+      expiresAt:
+        existingPublic !== undefined && existingPublic.expiresAt > state.expiresAt
+          ? existingPublic.expiresAt
+          : state.expiresAt
     })
   }
 
   learnRoute(identity, material) {
-    const record = this.#record(identity)
+    identityHex(identity)
     const current = currentTime(this.#now)
     if (!isObject(material)) invalidRoute()
 
@@ -244,8 +304,13 @@ export class PrivacyDomainRegistry {
       if (!exactKeys(material, ['provenance', 'epoch', 'expiresAt'])) invalidRoute()
       if (!u64(material.epoch) || !u64(material.expiresAt) || material.expiresAt <= current)
         invalidRoute()
-      record.provenance.add(PRIVACY_PROVENANCE.PRIVATE_ONLY)
+      this.#prune(current)
+      const record = this.#record(identity)
       const existing = record.routeEpochs.get(material.epoch)
+      if (!existing && record.routeEpochs.size >= this.#limits.maxRouteEpochsPerIdentity) {
+        throw PrivateRouteError.CIRCUIT_LIMIT()
+      }
+      record.provenance.add(PRIVACY_PROVENANCE.PRIVATE_ONLY)
       if (existing) {
         if (
           existing.privateOnlyExpiresAt === undefined ||
@@ -285,6 +350,8 @@ export class PrivacyDomainRegistry {
       unauthorized()
     }
 
+    this.#prune(current)
+    const record = this.#record(identity)
     const routeClaim = {
       epoch: descriptor.entry.epoch,
       dial: descriptor.entry.dial,
@@ -301,8 +368,21 @@ export class PrivacyDomainRegistry {
       return
     }
 
-    record.provenance.add(PRIVACY_PROVENANCE.ROUTE_ENTRY)
+    if (!existing && record.routeEpochs.size >= this.#limits.maxRouteEpochsPerIdentity) {
+      throw PrivateRouteError.CIRCUIT_LIMIT()
+    }
+
     let route = existing
+    const binding = copyCircuit(circuit)
+    const bindingKey = circuitKey(binding)
+    if (
+      route?.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY &&
+      !route.circuits.has(bindingKey) &&
+      route.circuits.size >= this.#limits.maxCircuitsPerEpoch
+    ) {
+      throw PrivateRouteError.CIRCUIT_LIMIT()
+    }
+    record.provenance.add(PRIVACY_PROVENANCE.ROUTE_ENTRY)
     if (!route || route.provenance !== PRIVACY_PROVENANCE.ROUTE_ENTRY) {
       route = {
         provenance: PRIVACY_PROVENANCE.ROUTE_ENTRY,
@@ -319,21 +399,20 @@ export class PrivacyDomainRegistry {
     } else if (descriptor.expiresAt > route.expiresAt) {
       route.expiresAt = descriptor.expiresAt
     }
-    const binding = copyCircuit(circuit)
-    route.circuits.set(circuitKey(binding), binding)
-    record.caps.set(circuitKey(binding), binding)
+    route.circuits.set(bindingKey, binding)
   }
 
   allows(identity, operation, context) {
     if (!fixed(identity, 32)) return false
+    const current = currentTime(this.#now)
+    this.#prune(current)
     const record = this.#records.get(b4a.toString(identity, 'hex'))
     if (!record || record.quarantined) return false
-    const current = currentTime(this.#now)
 
     switch (operation) {
       case PRIVACY_OPERATION.GUARD_DIAL:
         return (
-          context?.selectedGuard === true &&
+          exactContextValue(context, 'selectedGuard') === true &&
           this.#hasLivePublic(record, current, ROLE.SAFETY) &&
           roleForIdentity(record.identity) === ROLE.SAFETY
         )
@@ -345,7 +424,10 @@ export class PrivacyDomainRegistry {
       case PRIVACY_OPERATION.DIRECT_PING:
         return false
       case PRIVACY_OPERATION.PUBLIC_RETURN:
-        return context?.consumer === 'relay-discovery' && this.#hasLivePublic(record, current)
+        return (
+          exactContextValue(context, 'consumer') === 'relay-discovery' &&
+          this.#hasLivePublic(record, current)
+        )
       default:
         return false
     }
@@ -383,10 +465,39 @@ export class PrivacyDomainRegistry {
     return false
   }
 
+  #prune(current) {
+    for (const [identity, record] of this.#records) {
+      if (record.quarantined) continue
+
+      for (const [epoch, evidence] of record.publicEvidence) {
+        if (evidence.expiresAt <= current) record.publicEvidence.delete(epoch)
+      }
+
+      for (const [epoch, route] of record.routeEpochs) {
+        if (route.circuits) {
+          for (const [key, circuit] of route.circuits) {
+            if (circuit.expiresAt <= current) route.circuits.delete(key)
+          }
+        }
+        const liveDescriptor =
+          route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY && route.expiresAt > current
+        const livePrivateOnly =
+          route.privateOnlyExpiresAt !== undefined && route.privateOnlyExpiresAt > current
+        const liveCircuit = route.circuits?.size > 0
+        if (!liveDescriptor && !livePrivateOnly && !liveCircuit) record.routeEpochs.delete(epoch)
+      }
+
+      if (record.publicEvidence.size === 0 && record.routeEpochs.size === 0) {
+        this.#records.delete(identity)
+      }
+    }
+  }
+
   #allowsRouteForward(record, context, current) {
-    if (!exactKeys(context, ['epoch']) || !u64(context.epoch)) return false
+    const epoch = exactContextValue(context, 'epoch')
+    if (!u64(epoch)) return false
     for (const route of record.routeEpochs.values()) {
-      if (context !== undefined && context.epoch !== route.epoch) continue
+      if (epoch !== route.epoch) continue
       const liveRouteEntry =
         route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY && route.expiresAt > current
       const livePrivateOnly =

@@ -7,6 +7,10 @@ export {
 } from './lib/discovery-evidence.js'
 export { createCircuitAuthority } from './lib/circuit-authority.js'
 export {
+  MAX_CIRCUITS_PER_EPOCH,
+  MAX_IDENTITIES,
+  MAX_PUBLIC_EPOCHS_PER_IDENTITY,
+  MAX_ROUTE_EPOCHS_PER_IDENTITY,
   PRIVACY_OPERATION,
   PRIVACY_PROVENANCE,
   PrivacyDomainRegistry

@@ -4,9 +4,18 @@ import b4a from 'b4a'
 import * as publicRoutes from '../index.js'
 import { PrivateRouteError, VirtualNetwork } from '../index.js'
 import {
+  MAX_EDGES,
   MAX_FAULT_OUTPUTS,
+  MAX_NODE_ID_BYTES,
+  MAX_NODE_ID_CHARACTERS,
+  MAX_NODES,
+  MAX_PACKET_BYTES,
+  MAX_PENDING_BYTES,
   MAX_PENDING_PACKETS,
+  MAX_TRACE_EVENTS,
   MAX_VIRTUAL_DELAY,
+  TEST_ONLY_INSERTION_HOOK,
+  TEST_ONLY_LIMITS,
   TEST_ONLY_PACKET_OBSERVER
 } from '../lib/virtual-network.js'
 import { expectCode } from './helpers.js'
@@ -20,8 +29,19 @@ test('virtual network is supported without exposing its internal limits', (t) =>
   t.is('MAX_FAULT_OUTPUTS' in publicRoutes, false)
   t.is('MAX_PENDING_PACKETS' in publicRoutes, false)
   t.is('MAX_VIRTUAL_DELAY' in publicRoutes, false)
+  t.is('MAX_PACKET_BYTES' in publicRoutes, false)
+  t.is('MAX_PENDING_BYTES' in publicRoutes, false)
+  t.is('MAX_NODES' in publicRoutes, false)
+  t.is('MAX_EDGES' in publicRoutes, false)
+  t.is('MAX_TRACE_EVENTS' in publicRoutes, false)
+  t.is('TEST_ONLY_LIMITS' in publicRoutes, false)
+  t.is('TEST_ONLY_INSERTION_HOOK' in publicRoutes, false)
   t.is('TEST_ONLY_PACKET_OBSERVER' in publicRoutes, false)
 })
+
+function limited(limits, options = {}) {
+  return new VirtualNetwork({ ...options, [TEST_ONLY_LIMITS]: limits })
+}
 
 test('virtual link exposes only sender and receiver for each delivery', (t) => {
   const network = new VirtualNetwork({ now: 0 })
@@ -283,6 +303,11 @@ test('constructor and flush options reject hostile values without raw exceptions
   for (const fault of [null, 1, {}]) {
     expectCode(t, () => new VirtualNetwork({ now: 0, fault }), 'VIRTUAL_LIMIT')
   }
+  for (const limits of [null, [], revoked.proxy, { maxPendingBytes: 0 }]) {
+    expectCode(t, () => new VirtualNetwork({ [TEST_ONLY_LIMITS]: limits }), 'VIRTUAL_LIMIT')
+  }
+  expectCode(t, () => new VirtualNetwork({ [TEST_ONLY_INSERTION_HOOK]: null }), 'VIRTUAL_LIMIT')
+  expectCode(t, () => new VirtualNetwork({ [TEST_ONLY_PACKET_OBSERVER]: null }), 'VIRTUAL_LIMIT')
 
   const network = new VirtualNetwork({ now: 0 })
   network.register('a', () => {})
@@ -367,7 +392,51 @@ test('nested flush is a sticky fail-closed violation even when caught by a handl
 
   expectCode(t, () => network.flush(), 'VIRTUAL_LIMIT')
   t.ok(nested instanceof PrivateRouteError)
+  if (nested) t.is(nested.code, 'VIRTUAL_LIMIT')
+  t.is(network.flush(), 0)
+})
+
+test('handlers cannot consume trace evidence during delivery', (t) => {
+  let nested = null
+  const network = new VirtualNetwork({ now: 0 })
+  network.register('a', () => {})
+  network.register('b', () => {
+    try {
+      network.consumeView('b')
+    } catch (error) {
+      nested = error
+    }
+  })
+  network.send('a', 'b', b4a.from('cell'))
+
+  expectCode(t, () => network.flush(), 'VIRTUAL_LIMIT')
+  t.ok(nested instanceof PrivateRouteError)
   t.is(nested.code, 'VIRTUAL_LIMIT')
+  t.is(network.view('b').length, 1, 'the recorded event cannot be erased by its handler')
+})
+
+test('packet observers are passive guarded hooks', (t) => {
+  let nested = null
+  let handled = 0
+  let network = null
+  network = new VirtualNetwork({
+    now: 0,
+    [TEST_ONLY_PACKET_OBSERVER]() {
+      try {
+        network.send('a', 'b', b4a.from('nested'))
+      } catch (error) {
+        nested = error
+      }
+    }
+  })
+  network.register('a', () => {})
+  network.register('b', () => handled++)
+  network.send('a', 'b', b4a.from('outer'))
+
+  expectCode(t, () => network.flush(), 'VIRTUAL_LIMIT')
+  t.ok(nested instanceof PrivateRouteError)
+  if (nested) t.is(nested.code, 'VIRTUAL_LIMIT')
+  t.is(handled, 0)
   t.is(network.flush(), 0)
 })
 
@@ -397,6 +466,361 @@ test('fault hooks cannot recursively mutate the virtual network', (t) => {
     t.is(nested.code, 'VIRTUAL_LIMIT')
     t.is(network.flush(), 0)
   }
+})
+
+test('fault result getters remain inside the sticky mutation guard', (t) => {
+  for (const shape of ['packet', 'delay', 'element']) {
+    let attack = false
+    let nested = null
+    let network = null
+    network = new VirtualNetwork({
+      now: 0,
+      fault({ packet }) {
+        if (!attack) return { packet, delay: 5 }
+        const trigger = () => {
+          try {
+            network.send('a', 'b', b4a.from('nested'))
+          } catch (error) {
+            nested = error
+          }
+        }
+        if (shape === 'packet') {
+          return {
+            get packet() {
+              trigger()
+              return packet
+            }
+          }
+        }
+        if (shape === 'delay') {
+          return {
+            packet,
+            get delay() {
+              trigger()
+              return 0
+            }
+          }
+        }
+        return new Proxy([{}], {
+          get(target, name, receiver) {
+            if (name === '0') trigger()
+            return Reflect.get(target, name, receiver)
+          }
+        })
+      }
+    })
+    network.register('a', () => {})
+    network.register('b', () => {})
+    network.send('a', 'b', b4a.from('preexisting'))
+    attack = true
+
+    expectCode(t, () => network.send('a', 'b', b4a.from('outer')), 'VIRTUAL_LIMIT')
+    t.ok(nested instanceof PrivateRouteError)
+    t.is(nested.code, 'VIRTUAL_LIMIT')
+    network.advance(5)
+    t.is(network.flush(), 0)
+  }
+})
+
+test('flush option getters cannot catch reentry and hide a sticky violation', (t) => {
+  for (const operation of ['send', 'flush', 'advance', 'register']) {
+    let nested = null
+    const network = new VirtualNetwork({ now: 0 })
+    network.register('a', () => {})
+    network.register('b', () => {})
+    network.send('a', 'b', b4a.from('must clear'))
+    const options = {
+      get maxDeliveries() {
+        try {
+          if (operation === 'send') network.send('a', 'b', b4a.from('nested'))
+          else if (operation === 'flush') network.flush()
+          else if (operation === 'advance') network.advance(1)
+          else network.register('c', () => {})
+        } catch (error) {
+          nested = error
+        }
+        return 10
+      }
+    }
+
+    expectCode(t, () => network.flush(options), 'VIRTUAL_LIMIT')
+    t.ok(nested instanceof PrivateRouteError)
+    t.is(nested.code, 'VIRTUAL_LIMIT')
+    t.is(network.flush(), 0)
+  }
+})
+
+test('packet and pending byte bounds use intrinsic exact accounting', (t) => {
+  t.is(MAX_PACKET_BYTES, 64 * 1024)
+  t.is(MAX_PENDING_BYTES, 16 * 1024 * 1024)
+  const queued = []
+  const network = limited(
+    { maxPacketBytes: 4, maxPendingBytes: 8, maxPendingPackets: 3 },
+    {
+      now: 0,
+      [TEST_ONLY_INSERTION_HOOK]({ packet }) {
+        queued.push(packet)
+      }
+    }
+  )
+  network.register('a', () => {})
+  network.register('b', () => {})
+  const exact = b4a.alloc(4, 0x61)
+  Object.defineProperty(exact, 'byteLength', { value: 999 })
+  network.send('a', 'b', exact)
+  network.send('a', 'b', b4a.alloc(4, 0x62))
+  expectCode(t, () => network.send('a', 'b', b4a.from('x')), 'VIRTUAL_LIMIT')
+  t.is(network.flush(), 0)
+  t.alike(queued[0], b4a.alloc(4))
+  t.alike(queued[1], b4a.alloc(4))
+
+  const delivered = []
+  const reusable = limited({ maxPacketBytes: 4, maxPendingBytes: 4 }, { now: 0 })
+  reusable.register('a', () => {})
+  reusable.register('b', (packet) => delivered.push(b4a.from(packet)))
+  reusable.send('a', 'b', b4a.from('four'))
+  t.is(reusable.flush(), 1)
+  reusable.send('a', 'b', b4a.from('next'))
+  t.is(reusable.flush(), 1)
+  t.alike(delivered, [b4a.from('four'), b4a.from('next')])
+  expectCode(t, () => reusable.send('a', 'b', b4a.from('large')), 'VIRTUAL_LIMIT')
+
+  const count = limited({ maxPendingPackets: 2, maxPendingBytes: 100 })
+  count.register('a', () => {})
+  count.register('b', () => {})
+  count.send('a', 'b', b4a.from('1'))
+  count.send('a', 'b', b4a.from('2'))
+  expectCode(t, () => count.send('a', 'b', b4a.from('3')), 'VIRTUAL_LIMIT')
+  t.is(count.flush(), 0)
+})
+
+test('fault drop and amplification preserve byte accounting', (t) => {
+  let mode = 'drop'
+  const network = limited(
+    { maxPacketBytes: 4, maxPendingBytes: 8, maxPendingPackets: 4 },
+    {
+      now: 0,
+      fault({ packet }) {
+        if (mode === 'drop') return 'drop'
+        return [{ packet }, { packet }, { packet }]
+      }
+    }
+  )
+  network.register('a', () => {})
+  network.register('b', () => {})
+  network.send('a', 'b', b4a.alloc(4))
+  t.is(network.flush(), 0)
+  mode = 'amplify'
+  expectCode(t, () => network.send('a', 'b', b4a.alloc(3)), 'VIRTUAL_LIMIT')
+  t.is(network.flush(), 0)
+
+  let output = b4a.alloc(4)
+  Object.defineProperty(output, 'byteLength', { value: 999 })
+  const shadowed = limited(
+    { maxPacketBytes: 4, maxPendingBytes: 4 },
+    { fault: () => ({ packet: output }) }
+  )
+  shadowed.register('a', () => {})
+  shadowed.register('b', () => {})
+  shadowed.send('a', 'b', b4a.from('x'))
+  t.is(shadowed.flush(), 1)
+  output = b4a.alloc(5)
+  Object.defineProperty(output, 'byteLength', { value: 1 })
+  expectCode(t, () => shadowed.send('a', 'b', b4a.from('x')), 'VIRTUAL_LIMIT')
+})
+
+test('node, identity, edge, and trace bounds reject before partial visibility', (t) => {
+  t.is(MAX_NODES, 256)
+  t.is(MAX_NODE_ID_CHARACTERS, 256)
+  t.is(MAX_NODE_ID_BYTES, 1024)
+  t.is(MAX_EDGES, 4096)
+  t.is(MAX_TRACE_EVENTS, 4096)
+
+  const nodeBound = limited({ maxNodes: 3, maxNodeIdCharacters: 3, maxNodeIdBytes: 4 })
+  nodeBound.register('a', () => {})
+  nodeBound.register('éé', () => {})
+  nodeBound.register('ccc', () => {})
+  expectCode(t, () => nodeBound.register('d', () => {}), 'VIRTUAL_LIMIT')
+  expectCode(
+    t,
+    () => limited({ maxNodeIdCharacters: 3 }).register('abcd', () => {}),
+    'INVALID_ROUTE'
+  )
+  expectCode(t, () => limited({ maxNodeIdBytes: 4 }).register('ééé', () => {}), 'INVALID_ROUTE')
+
+  const edges = limited({ maxEdges: 1, maxTraceEvents: 2 })
+  for (const name of ['a', 'b', 'c']) edges.register(name, () => {})
+  edges.send('a', 'b', b4a.from('1'))
+  edges.flush()
+  edges.send('a', 'c', b4a.from('2'))
+  expectCode(t, () => edges.flush(), 'VIRTUAL_LIMIT')
+  t.alike(edges.edges(), [['a', 'b']])
+  t.is(edges.view('a').length, 1)
+  t.is(edges.view('c').length, 0)
+
+  edges.send('a', 'b', b4a.from('2'))
+  edges.flush()
+  edges.send('a', 'b', b4a.from('3'))
+  expectCode(t, () => edges.flush(), 'VIRTUAL_LIMIT')
+  t.is(edges.view('a').length, 2)
+  t.is(edges.view('b').length, 2)
+  t.is(edges.consumeView('a').length, 2)
+  t.is(edges.view('a').length, 0)
+  expectCode(t, () => edges.send('a', 'b', b4a.from('4')) || edges.flush(), 'VIRTUAL_LIMIT')
+  t.is(edges.consumeView('b').length, 2)
+  edges.send('a', 'b', b4a.from('5'))
+  t.is(edges.flush(), 1)
+})
+
+test('fault arrays require a safe integer bounded length', (t) => {
+  for (const length of [Number.NaN, '1', 1n, 1.5]) {
+    const result = new Proxy([], {
+      get(target, name, receiver) {
+        if (name === 'length') return length
+        return Reflect.get(target, name, receiver)
+      }
+    })
+    const network = new VirtualNetwork({ now: 0, fault: () => result })
+    network.register('a', () => {})
+    network.register('b', () => {})
+    expectCode(t, () => network.send('a', 'b', b4a.from('x')), 'VIRTUAL_LIMIT')
+    t.is(network.flush(), 0)
+  }
+})
+
+test('opaque packet IDs are adjacency-local and match both endpoint views', (t) => {
+  const network = new VirtualNetwork({ now: 0 })
+  for (const name of ['a', 'b', 'c', 'd']) network.register(name, () => {})
+  network.send('a', 'b', b4a.from('first'))
+  network.send('c', 'd', b4a.from('unrelated'))
+  network.send('a', 'b', b4a.from('second'))
+  network.flush()
+
+  t.alike(
+    network.view('a').map(({ packetId }) => packetId),
+    ['packet-1', 'packet-2']
+  )
+  t.alike(
+    network.view('b').map(({ packetId }) => packetId),
+    ['packet-1', 'packet-2']
+  )
+  t.alike(
+    network.view('c').map(({ packetId }) => packetId),
+    ['packet-1']
+  )
+  t.alike(
+    network.view('d').map(({ packetId }) => packetId),
+    ['packet-1']
+  )
+})
+
+test('queue sequence and adjacency ID exhaustion fail safely', (t) => {
+  const sequence = limited({ maxSequence: 1, maxPacketId: 10 })
+  sequence.register('a', () => {})
+  sequence.register('b', () => {})
+  sequence.send('a', 'b', b4a.from('0'))
+  sequence.send('a', 'b', b4a.from('1'))
+  expectCode(t, () => sequence.send('a', 'b', b4a.from('2')), 'VIRTUAL_LIMIT')
+  t.is(sequence.flush(), 0)
+
+  const identifiers = limited({ maxSequence: 10, maxPacketId: 1 })
+  for (const name of ['a', 'b', 'c', 'd']) identifiers.register(name, () => {})
+  identifiers.send('a', 'b', b4a.from('first'))
+  identifiers.flush()
+  expectCode(t, () => identifiers.send('a', 'b', b4a.from('second')), 'VIRTUAL_LIMIT')
+  identifiers.send('c', 'd', b4a.from('independent'))
+  t.is(identifiers.flush(), 1)
+  t.is(identifiers.view('c')[0].packetId, 'packet-1')
+})
+
+test('multi-output insertion is transactional and does not burn IDs', (t) => {
+  let mode = 'preexisting'
+  let insertion = 0
+  const observed = []
+  const received = []
+  const network = new VirtualNetwork({
+    now: 0,
+    fault({ packet }) {
+      if (mode === 'preexisting') return { packet, delay: 5 }
+      if (mode === 'multi') return [{ packet }, { packet }, { packet }]
+      return undefined
+    },
+    [TEST_ONLY_INSERTION_HOOK]({ packet }) {
+      if (mode !== 'multi') return
+      insertion++
+      observed.push(packet)
+      if (insertion === 2) throw new Error('injected insertion failure')
+    }
+  })
+  network.register('a', () => {})
+  network.register('b', (packet) => received.push(text(packet)))
+  network.send('a', 'b', b4a.from('kept'))
+  mode = 'multi'
+  expectCode(t, () => network.send('a', 'b', b4a.from('failed')), 'VIRTUAL_LIMIT')
+  t.is(observed.length, 2)
+  for (const packet of observed) t.alike(packet, b4a.alloc(packet.byteLength))
+
+  mode = 'single'
+  network.advance(5)
+  t.is(network.flush(), 1)
+  network.send('a', 'b', b4a.from('next'))
+  t.is(network.flush(), 1)
+  t.alike(received, ['kept', 'next'])
+  t.alike(
+    network.view('a').map(({ packetId }) => packetId),
+    ['packet-1', 'packet-2']
+  )
+})
+
+test('native later-insertion failure rolls back only the current batch', (t) => {
+  let mode = 'preexisting'
+  const observed = []
+  const received = []
+  const network = new VirtualNetwork({
+    now: 0,
+    fault({ packet }) {
+      if (mode === 'preexisting') {
+        return { packet, delay: text(packet) === 'old-10' ? 10 : 20 }
+      }
+      return [
+        { packet: b4a.from('new-0'), delay: 0 },
+        { packet: b4a.from('new-5'), delay: 5 }
+      ]
+    },
+    [TEST_ONLY_INSERTION_HOOK]({ packet }) {
+      if (mode === 'multi') observed.push(packet)
+    }
+  })
+  network.register('a', () => {})
+  network.register('b', (packet) => received.push(text(packet)))
+  network.send('a', 'b', b4a.from('old-10'))
+  network.send('a', 'b', b4a.from('old-20'))
+
+  mode = 'multi'
+  const originalSplice = Array.prototype.splice
+  let calls = 0
+  Array.prototype.splice = function (...args) {
+    const result = originalSplice.apply(this, args)
+    calls++
+    if (calls === 2) throw new Error('injected native insertion failure')
+    return result
+  }
+  try {
+    expectCode(t, () => network.send('a', 'b', b4a.from('trigger')), 'VIRTUAL_LIMIT')
+  } finally {
+    Array.prototype.splice = originalSplice
+  }
+  t.ok(calls >= 2)
+  t.is(observed.length, 2)
+  for (const packet of observed) t.alike(packet, b4a.alloc(packet.byteLength))
+
+  network.advance(20)
+  t.is(network.flush(), 2)
+  t.alike(received, ['old-10', 'old-20'])
+  t.alike(
+    network.view('a').map(({ packetId }) => packetId),
+    ['packet-1', 'packet-2']
+  )
 })
 
 test('reentrant cycles hit the delivery guard and clear the adversarial batch', (t) => {

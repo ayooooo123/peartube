@@ -4,10 +4,31 @@ import { PrivateRouteError } from './errors.js'
 
 export const MAX_FAULT_OUTPUTS = 64
 export const MAX_PENDING_PACKETS = 100_000
+export const MAX_PENDING_BYTES = 16 * 1024 * 1024
+export const MAX_PACKET_BYTES = 64 * 1024
 export const MAX_VIRTUAL_DELAY = 24 * 60 * 60 * 1000
+export const MAX_NODES = 256
+export const MAX_NODE_ID_CHARACTERS = 256
+export const MAX_NODE_ID_BYTES = 1024
+export const MAX_EDGES = 4096
+export const MAX_TRACE_EVENTS = 4096
+export const TEST_ONLY_LIMITS = Symbol('test-only-limits')
+export const TEST_ONLY_INSERTION_HOOK = Symbol('test-only-insertion-hook')
 export const TEST_ONLY_PACKET_OBSERVER = Symbol('test-only-packet-observer')
 
 const DEFAULT_MAX_DELIVERIES = 100_000
+const DEFAULT_LIMITS = Object.freeze({
+  maxPendingPackets: MAX_PENDING_PACKETS,
+  maxPendingBytes: MAX_PENDING_BYTES,
+  maxPacketBytes: MAX_PACKET_BYTES,
+  maxNodes: MAX_NODES,
+  maxNodeIdCharacters: MAX_NODE_ID_CHARACTERS,
+  maxNodeIdBytes: MAX_NODE_ID_BYTES,
+  maxEdges: MAX_EDGES,
+  maxTraceEvents: MAX_TRACE_EVENTS,
+  maxSequence: Number.MAX_SAFE_INTEGER,
+  maxPacketId: Number.MAX_SAFE_INTEGER
+})
 const bufferByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength'
@@ -83,8 +104,39 @@ function copy(value) {
   }
 }
 
-function identity(value) {
-  if (typeof value !== 'string' || value.length === 0) invalid()
+function identity(value, limits) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > limits.maxNodeIdCharacters
+  ) {
+    invalid()
+  }
+  let bytes
+  try {
+    bytes = b4a.byteLength(value)
+  } catch {
+    invalid()
+  }
+  if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > limits.maxNodeIdBytes) invalid()
+  return value
+}
+
+function readLimits(options) {
+  const configured = option(options, TEST_ONLY_LIMITS)
+  if (configured === undefined) return DEFAULT_LIMITS
+  const values = optionsObject(configured)
+  const limits = {}
+  for (const [name, maximum] of Object.entries(DEFAULT_LIMITS)) {
+    const value = option(values, name)
+    const minimum = name === 'maxSequence' || name === 'maxPacketId' ? 0 : 1
+    limits[name] = value === undefined ? maximum : boundedLimit(value, minimum, maximum)
+  }
+  return Object.freeze(limits)
+}
+
+function boundedLimit(value, minimum, maximum) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) limit()
   return value
 }
 
@@ -110,16 +162,18 @@ function frozenArray(values) {
 export class VirtualNetwork {
   #now
   #fault
+  #limits
+  #insertionHook
   #packetObserver
-  #inFault = false
+  #guarded = false
   #flushing = false
   #violation = false
   #nodes = new Map()
   #queue = []
   #head = 0
-  #sequence = 0
-  #packetSequence = 0
-  #sendSequence = 0
+  #pendingBytes = 0
+  #sequence = -1
+  #packetIds = new Map()
   #edgeKeys = new Map()
   #edges = []
   #views = new Map()
@@ -128,12 +182,16 @@ export class VirtualNetwork {
     options = optionsObject(options)
     const now = option(options, 'now')
     const fault = option(options, 'fault')
+    const insertionHook = option(options, TEST_ONLY_INSERTION_HOOK)
     const packetObserver = option(options, TEST_ONLY_PACKET_OBSERVER)
 
     this.#now = safeTime(now === undefined ? 0 : now)
     if (fault !== undefined && typeof fault !== 'function') limit()
+    if (insertionHook !== undefined && typeof insertionHook !== 'function') limit()
     if (packetObserver !== undefined && typeof packetObserver !== 'function') limit()
+    this.#limits = readLimits(options)
     this.#fault = fault
+    this.#insertionHook = insertionHook
     this.#packetObserver = packetObserver
   }
 
@@ -142,70 +200,65 @@ export class VirtualNetwork {
   }
 
   register(name, handler) {
-    if (this.#inFault) this.#violate()
-    name = identity(name)
+    if (this.#guarded || this.#flushing) this.#violate()
+    name = identity(name, this.#limits)
     if (typeof handler !== 'function' || this.#nodes.has(name)) invalid()
+    if (this.#nodes.size >= this.#limits.maxNodes) limit()
     this.#nodes.set(name, handler)
     this.#views.set(name, [])
   }
 
   send(from, to, packet) {
-    if (this.#inFault) this.#violate()
+    if (this.#guarded) this.#violate()
     const ownsViolation = !this.#flushing
     if (ownsViolation) this.#violation = false
-    from = identity(from)
-    to = identity(to)
+    from = identity(from, this.#limits)
+    to = identity(to, this.#limits)
     if (from === to || !this.#nodes.has(from) || !this.#nodes.has(to)) invalid()
-    if (bufferLength(packet) < 0) invalid()
+    const packetBytes = bufferLength(packet)
+    if (packetBytes < 0) invalid()
+    if (packetBytes > this.#limits.maxPacketBytes) limit()
 
     let source = null
     const prepared = []
     try {
       source = copy(packet)
-      const sendId = `send-${++this.#sendSequence}`
       let result
       if (this.#fault === undefined) {
-        result = undefined
+        this.#prepareFaultResult(undefined, source, prepared)
       } else {
-        const event = Object.freeze({ from, to, packet: source, time: this.#now, packetId: sendId })
-        this.#inFault = true
+        const event = Object.freeze({
+          from,
+          to,
+          packet: source,
+          time: this.#now,
+          packetId: `packet-${this.#packetId(from, to) + 1}`
+        })
+        this.#guarded = true
         try {
           result = this.#fault(event)
+          this.#prepareFaultResult(result, source, prepared)
         } finally {
-          this.#inFault = false
+          this.#guarded = false
         }
         if (this.#violation) limit()
       }
-
-      this.#prepareFaultResult(result, source, prepared)
       clear(source)
       source = null
-
-      if (this.#pending() + prepared.length > MAX_PENDING_PACKETS) {
-        this.#clearQueue()
-        limit()
-      }
-
-      for (const value of prepared) {
-        value.from = from
-        value.to = to
-        value.sequence = this.#sequence++
-        value.packetId = `packet-${++this.#packetSequence}`
-        this.#insert(value)
-      }
+      this.#enqueue(from, to, prepared)
       prepared.length = 0
     } catch {
       clear(source)
       for (const value of prepared) clear(value.packet)
       limit()
     } finally {
-      this.#inFault = false
+      this.#guarded = false
       if (ownsViolation) this.#violation = false
     }
   }
 
   advance(ms) {
-    if (this.#inFault) this.#violate()
+    if (this.#guarded || this.#flushing) this.#violate()
     ms = safeTime(ms)
     if (ms > Number.MAX_SAFE_INTEGER - this.#now) limit()
     this.#now += ms
@@ -213,15 +266,22 @@ export class VirtualNetwork {
   }
 
   flush(options = {}) {
-    if (this.#inFault || this.#flushing) this.#violate()
+    if (this.#guarded || this.#flushing) this.#violate()
     this.#flushing = true
     this.#violation = false
     try {
-      options = optionsObject(options)
-      const configured = option(options, 'maxDeliveries')
-      const maxDeliveries = deliveryLimit(
-        configured === undefined ? DEFAULT_MAX_DELIVERIES : configured
-      )
+      let maxDeliveries
+      this.#guarded = true
+      try {
+        options = optionsObject(options)
+        const configured = option(options, 'maxDeliveries')
+        maxDeliveries = deliveryLimit(
+          configured === undefined ? DEFAULT_MAX_DELIVERIES : configured
+        )
+      } finally {
+        this.#guarded = false
+      }
+      if (this.#violation) limit()
       let deliveries = 0
 
       while (this.#pending() > 0) {
@@ -233,9 +293,16 @@ export class VirtualNetwork {
         }
 
         this.#head++
+        this.#pendingBytes -= next.byteLength
         deliveries++
         const packet = this.#takePacket(next)
-        this.#record(next)
+        try {
+          this.#record(next)
+        } catch {
+          clear(packet)
+          this.#clearQueue()
+          limit()
+        }
         this.#deliver(next, packet)
         if (this.#violation) limit()
         this.#compact()
@@ -243,6 +310,7 @@ export class VirtualNetwork {
 
       return deliveries
     } finally {
+      this.#guarded = false
       this.#flushing = false
       this.#violation = false
     }
@@ -253,7 +321,7 @@ export class VirtualNetwork {
   }
 
   directPeers(name) {
-    name = identity(name)
+    name = identity(name, this.#limits)
     if (!this.#nodes.has(name)) invalid()
     const seen = new Set()
     const peers = []
@@ -268,10 +336,20 @@ export class VirtualNetwork {
   }
 
   view(name) {
-    name = identity(name)
+    name = identity(name, this.#limits)
     const events = this.#views.get(name)
     if (events === undefined) invalid()
     return frozenArray(events.slice())
+  }
+
+  consumeView(name) {
+    if (this.#guarded || this.#flushing) this.#violate()
+    name = identity(name, this.#limits)
+    const events = this.#views.get(name)
+    if (events === undefined) invalid()
+    const snapshot = frozenArray(events.slice())
+    events.length = 0
+    return snapshot
   }
 
   #prepareFaultResult(result, source, prepared) {
@@ -294,7 +372,7 @@ export class VirtualNetwork {
       } catch {
         limit()
       }
-      if (length < 1 || length > MAX_FAULT_OUTPUTS) limit()
+      if (!Number.isSafeInteger(length) || length < 1 || length > MAX_FAULT_OUTPUTS) limit()
       for (let i = 0; i < length; i++) {
         let value
         try {
@@ -345,20 +423,86 @@ export class VirtualNetwork {
 
   #preparePacket(packet, delay) {
     if (delay > Number.MAX_SAFE_INTEGER - this.#now) limit()
+    const byteLength = bufferLength(packet)
+    if (byteLength < 0 || byteLength > this.#limits.maxPacketBytes) limit()
     const owned = copy(packet)
     return {
       from: null,
       to: null,
       packet: owned,
-      byteLength: bufferLength(owned),
+      byteLength,
       deliverAt: this.#now + delay,
       sequence: -1,
       packetId: null
     }
   }
 
+  #enqueue(from, to, prepared) {
+    const count = prepared.length
+    if (count === 0) return
+
+    let bytes = 0
+    for (const value of prepared) {
+      if (value.byteLength > Number.MAX_SAFE_INTEGER - bytes) {
+        this.#clearQueue()
+        limit()
+      }
+      bytes += value.byteLength
+    }
+    if (
+      count > this.#limits.maxPendingPackets - this.#pending() ||
+      bytes > this.#limits.maxPendingBytes - this.#pendingBytes
+    ) {
+      this.#clearQueue()
+      limit()
+    }
+
+    const sequenceExhausted =
+      this.#sequence === -1
+        ? count - 1 > this.#limits.maxSequence
+        : count > this.#limits.maxSequence - this.#sequence
+    const packetId = this.#packetId(from, to)
+    if (sequenceExhausted || count > this.#limits.maxPacketId - packetId) {
+      this.#clearQueue()
+      limit()
+    }
+
+    for (let i = 0; i < count; i++) {
+      const value = prepared[i]
+      value.from = from
+      value.to = to
+      value.sequence = this.#sequence + i + 1
+      value.packetId = `packet-${packetId + i + 1}`
+    }
+    prepared.sort(compare)
+    this.#guarded = true
+    try {
+      if (this.#insertionHook !== undefined) {
+        for (let index = 0; index < prepared.length; index++) {
+          this.#insertionHook(Object.freeze({ index, packet: prepared[index].packet }))
+        }
+      }
+    } finally {
+      this.#guarded = false
+    }
+    if (this.#violation) limit()
+
+    this.#compact(true)
+    try {
+      for (const value of prepared) this.#insert(value)
+    } catch {
+      const inserted = new Set(prepared)
+      for (let i = this.#queue.length - 1; i >= 0; i--) {
+        if (inserted.has(this.#queue[i])) this.#queue.splice(i, 1)
+      }
+      throw PrivateRouteError.VIRTUAL_LIMIT()
+    }
+    this.#pendingBytes += bytes
+    this.#sequence = this.#sequence === -1 ? count - 1 : this.#sequence + count
+    this.#setPacketId(from, to, packetId + count)
+  }
+
   #insert(value) {
-    if (this.#head > 0) this.#compact(true)
     const queue = this.#queue
     const last = queue[queue.length - 1]
     if (last === undefined || compare(last, value) <= 0) {
@@ -374,6 +518,20 @@ export class VirtualNetwork {
       else upper = middle
     }
     queue.splice(lower, 0, value)
+  }
+
+  #packetId(from, to) {
+    const destinations = this.#packetIds.get(from)
+    return destinations === undefined ? 0 : destinations.get(to) || 0
+  }
+
+  #setPacketId(from, to, value) {
+    let destinations = this.#packetIds.get(from)
+    if (destinations === undefined) {
+      destinations = new Map()
+      this.#packetIds.set(from, destinations)
+    }
+    destinations.set(to, value)
   }
 
   #takePacket(value) {
@@ -392,9 +550,16 @@ export class VirtualNetwork {
 
   #deliver(value, packet) {
     if (this.#packetObserver !== undefined) {
+      let failed = false
+      this.#guarded = true
       try {
         this.#packetObserver(packet)
       } catch {
+        failed = true
+      } finally {
+        this.#guarded = false
+      }
+      if (failed || this.#violation) {
         clear(packet)
         this.#clearQueue()
         limit()
@@ -419,11 +584,22 @@ export class VirtualNetwork {
 
   #record(value) {
     let destinations = this.#edgeKeys.get(value.from)
+    const newEdge = destinations === undefined || !destinations.has(value.to)
+    const outgoingEvents = this.#views.get(value.from)
+    const incomingEvents = this.#views.get(value.to)
+    if (
+      (newEdge && this.#edges.length >= this.#limits.maxEdges) ||
+      outgoingEvents.length >= this.#limits.maxTraceEvents ||
+      incomingEvents.length >= this.#limits.maxTraceEvents
+    ) {
+      limit()
+    }
+
     if (destinations === undefined) {
       destinations = new Set()
       this.#edgeKeys.set(value.from, destinations)
     }
-    if (!destinations.has(value.to)) {
+    if (newEdge) {
       destinations.add(value.to)
       this.#edges.push([value.from, value.to])
     }
@@ -445,8 +621,8 @@ export class VirtualNetwork {
       time: this.#now,
       packetId: value.packetId
     })
-    this.#views.get(value.from).push(outgoing)
-    this.#views.get(value.to).push(incoming)
+    outgoingEvents.push(outgoing)
+    incomingEvents.push(incoming)
   }
 
   #pending() {
@@ -464,6 +640,7 @@ export class VirtualNetwork {
     for (let i = this.#head; i < this.#queue.length; i++) clear(this.#queue[i].packet)
     this.#queue = []
     this.#head = 0
+    this.#pendingBytes = 0
   }
 
   #violate() {

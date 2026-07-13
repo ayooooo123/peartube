@@ -245,11 +245,21 @@ export class PrivacyDomainRegistry {
       if (!u64(material.epoch) || !u64(material.expiresAt) || material.expiresAt <= current)
         invalidRoute()
       record.provenance.add(PRIVACY_PROVENANCE.PRIVATE_ONLY)
-      record.routeEpochs.set(material.epoch, {
-        provenance: PRIVACY_PROVENANCE.PRIVATE_ONLY,
-        epoch: material.epoch,
-        expiresAt: material.expiresAt
-      })
+      const existing = record.routeEpochs.get(material.epoch)
+      if (existing) {
+        if (
+          existing.privateOnlyExpiresAt === undefined ||
+          material.expiresAt > existing.privateOnlyExpiresAt
+        ) {
+          existing.privateOnlyExpiresAt = material.expiresAt
+        }
+      } else {
+        record.routeEpochs.set(material.epoch, {
+          provenance: PRIVACY_PROVENANCE.PRIVATE_ONLY,
+          epoch: material.epoch,
+          privateOnlyExpiresAt: material.expiresAt
+        })
+      }
       return
     }
 
@@ -302,6 +312,7 @@ export class PrivacyDomainRegistry {
         routeEncryptionKey: b4a.from(descriptor.entry.routeEncryptionKey),
         capabilities: descriptor.entry.capabilities,
         role: descriptor.entry.role,
+        privateOnlyExpiresAt: existing?.privateOnlyExpiresAt,
         circuits: new Map()
       }
       record.routeEpochs.set(descriptor.entry.epoch, route)
@@ -375,14 +386,12 @@ export class PrivacyDomainRegistry {
   #allowsRouteForward(record, context, current) {
     if (!exactKeys(context, ['epoch']) || !u64(context.epoch)) return false
     for (const route of record.routeEpochs.values()) {
-      if (route.expiresAt <= current) continue
       if (context !== undefined && context.epoch !== route.epoch) continue
-      if (
-        route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY ||
-        route.provenance === PRIVACY_PROVENANCE.PRIVATE_ONLY
-      ) {
-        return true
-      }
+      const liveRouteEntry =
+        route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY && route.expiresAt > current
+      const livePrivateOnly =
+        route.privateOnlyExpiresAt !== undefined && route.privateOnlyExpiresAt > current
+      if (liveRouteEntry || livePrivateOnly) return true
     }
     return false
   }

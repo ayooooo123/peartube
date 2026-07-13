@@ -660,6 +660,189 @@ test('route destroy clears buffered ordered payloads and rejects later operation
   expectCode(t, () => open(destination, later), 'CIRCUIT_STATE')
 })
 
+test('destroy requested by padding or seal crypto aborts the active operation', (t) => {
+  for (const trigger of ['padding', 'crypto']) {
+    let codec = null
+    const overrides =
+      trigger === 'padding'
+        ? {
+            padding(size) {
+              codec.destroy()
+              return b4a.alloc(size)
+            }
+          }
+        : {
+            crypto: {
+              ...cryptoSuite,
+              seal(options) {
+                codec.destroy()
+                return cryptoSuite.seal(options)
+              }
+            }
+          }
+    codec = route(overrides)
+
+    expectCode(t, () => seal(codec), 'CIRCUIT_STATE')
+    t.is(codec.stats.destroyed, true)
+    t.is(codec.stats.forward.senderNext, 0n)
+    t.is(codec.stats.forward.datagramSenderNext, 0n)
+  }
+})
+
+test('destroy requested by clock, open crypto, or receiver clears buffered work', (t) => {
+  for (const trigger of ['clock', 'crypto', 'receiver']) {
+    const owned = []
+    let destination = null
+    let pair
+    const destinationOverrides = {}
+    if (trigger === 'clock') {
+      destinationOverrides.now = () => {
+        destination.destroy()
+        return 0
+      }
+      destinationOverrides.receivers = undefined
+    } else if (trigger === 'crypto') {
+      destinationOverrides.crypto = {
+        ...cryptoSuite,
+        open(options) {
+          const plaintext = cryptoSuite.open(options)
+          destination.destroy()
+          return plaintext
+        }
+      }
+    } else {
+      destinationOverrides.receivers = {
+        forwardOrdered: {
+          next: 0n,
+          buffered: 0,
+          needsRotation: false,
+          pushAuthenticated(counter, value) {
+            destination.destroy()
+            owned.push(value)
+            return [value]
+          },
+          destroy() {
+            this.buffered = 0
+          }
+        },
+        forwardDatagram: new DatagramReplayWindow({ window: 8 }),
+        reverseOrdered: new OrderedReceiver({ window: 8, gapTimeout: 100, now: () => 0 }),
+        reverseDatagram: new DatagramReplayWindow({ window: 8 })
+      }
+    }
+    pair = routePair({}, destinationOverrides)
+    destination = pair.destination
+    if (trigger === 'clock') seal(pair.source)
+    const frame = seal(pair.source, { payload: b4a.from(`destroy from ${trigger}`) })
+
+    expectCode(t, () => open(destination, frame), 'CIRCUIT_STATE')
+    t.is(destination.stats.destroyed, true)
+    t.is(destination.stats.forward.orderedBuffered, 0)
+    for (const value of owned) t.alike(value, b4a.alloc(value.byteLength))
+  }
+})
+
+test('reentrant seal and open fail closed even when the callback catches the nested error', (t) => {
+  let sealing = false
+  let sealNested = null
+  let source = null
+  source = route({
+    padding(size) {
+      if (!sealing) {
+        sealing = true
+        try {
+          seal(source)
+        } catch (err) {
+          sealNested = err
+        }
+      }
+      return b4a.alloc(size)
+    }
+  })
+  expectCode(t, () => seal(source), 'CIRCUIT_STATE')
+  t.is(sealNested.code, 'INVALID_ROUTE')
+  t.is(source.stats.destroyed, true)
+
+  let opening = false
+  let openNested = null
+  let destination = null
+  let frame = null
+  const pair = routePair(
+    {},
+    {
+      crypto: {
+        ...cryptoSuite,
+        open(options) {
+          if (!opening) {
+            opening = true
+            try {
+              open(destination, frame)
+            } catch (err) {
+              openNested = err
+            }
+          }
+          return cryptoSuite.open(options)
+        }
+      }
+    }
+  )
+  destination = pair.destination
+  frame = seal(pair.source)
+  expectCode(t, () => open(destination, frame), 'CIRCUIT_STATE')
+  t.is(openNested.code, 'INVALID_ROUTE')
+  t.is(destination.stats.destroyed, true)
+})
+
+test('destroy resets every sender and replay state and tears receivers down once', (t) => {
+  let destroys = 0
+  function ordered() {
+    return {
+      next: 7n,
+      buffered: 1,
+      needsRotation: false,
+      pushAuthenticated: () => [],
+      destroy() {
+        destroys++
+        this.next = 0n
+        this.buffered = 0
+      }
+    }
+  }
+  function datagram() {
+    return {
+      highest: 4n,
+      needsRotation: false,
+      acceptAuthenticated: () => true,
+      destroy() {
+        destroys++
+        this.highest = null
+      }
+    }
+  }
+  const codec = route({
+    receivers: {
+      forwardOrdered: ordered(),
+      forwardDatagram: datagram(),
+      reverseOrdered: ordered(),
+      reverseDatagram: datagram()
+    }
+  })
+  seal(codec)
+  seal(codec, { class: CELL_CLASS.DATAGRAM })
+
+  codec.destroy()
+  codec.destroy()
+
+  t.is(destroys, 4)
+  t.is(codec.stats.forward.senderNext, 0n)
+  t.is(codec.stats.forward.senderClosed, true)
+  t.is(codec.stats.forward.datagramSenderNext, 0n)
+  t.is(codec.stats.forward.datagramSenderClosed, true)
+  t.is(codec.stats.forward.orderedNext, 0n)
+  t.is(codec.stats.forward.orderedBuffered, 0)
+  t.is(codec.stats.forward.datagramHighest, null)
+})
+
 test('constructor failure zeroes every key and identifier copy it allocated', (t) => {
   const allocations = []
   const keys = routeKeys()

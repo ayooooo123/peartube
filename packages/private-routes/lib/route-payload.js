@@ -193,11 +193,10 @@ function optionalMethod(target, name) {
 }
 
 function directionState(receivers, name, defaults) {
-  if (receivers === undefined) return defaults
-  optionsObject(receivers)
-
-  const ordered = option(receivers, `${name}Ordered`)
-  const datagram = option(receivers, `${name}Datagram`)
+  if (receivers !== undefined) optionsObject(receivers)
+  const ordered = receivers === undefined ? defaults.ordered : option(receivers, `${name}Ordered`)
+  const datagram =
+    receivers === undefined ? defaults.datagram : option(receivers, `${name}Datagram`)
   return Object.freeze({
     key: defaults.key,
     noncePrefix: defaults.noncePrefix,
@@ -207,8 +206,27 @@ function directionState(receivers, name, defaults) {
     datagram,
     pushAuthenticated: method(ordered, 'pushAuthenticated'),
     acceptAuthenticated: method(datagram, 'acceptAuthenticated'),
-    destroyOrdered: optionalMethod(ordered, 'destroy')
+    destroyStreamSender: optionalMethod(defaults.streamSender, 'destroy'),
+    destroyDatagramSender: optionalMethod(defaults.datagramSender, 'destroy'),
+    destroyOrdered: optionalMethod(ordered, 'destroy'),
+    destroyDatagram: optionalMethod(datagram, 'destroy')
   })
+}
+
+function clearOperationResult(result) {
+  try {
+    if (b4a.isBuffer(result)) {
+      clear(result)
+      return
+    }
+    if (Array.isArray(result)) {
+      for (const value of result) clear(value && value.payload)
+      return
+    }
+    clear(result && result.payload)
+  } catch {
+    // Result cleanup is best-effort; route teardown still continues.
+  }
 }
 
 function decodeDelivery(value) {
@@ -386,6 +404,8 @@ export class RoutePayloadCodec {
   #receiveDirection
   #nonceDomainClaim
   #destroyed
+  #mutating
+  #destroyRequested
 
   constructor(options) {
     options = optionsObject(options)
@@ -471,24 +491,10 @@ export class RoutePayloadCodec {
         this.#sendDirection === DIRECTION.FORWARD ? DIRECTION.REVERSE : DIRECTION.FORWARD
       this.#forward = directionState(receivers, 'forward', forwardDefaults)
       this.#reverse = directionState(receivers, 'reverse', reverseDefaults)
-      if (!this.#forward.pushAuthenticated) {
-        this.#forward = Object.freeze({
-          ...this.#forward,
-          pushAuthenticated: method(this.#forward.ordered, 'pushAuthenticated'),
-          acceptAuthenticated: method(this.#forward.datagram, 'acceptAuthenticated'),
-          destroyOrdered: optionalMethod(this.#forward.ordered, 'destroy')
-        })
-      }
-      if (!this.#reverse.pushAuthenticated) {
-        this.#reverse = Object.freeze({
-          ...this.#reverse,
-          pushAuthenticated: method(this.#reverse.ordered, 'pushAuthenticated'),
-          acceptAuthenticated: method(this.#reverse.datagram, 'acceptAuthenticated'),
-          destroyOrdered: optionalMethod(this.#reverse.ordered, 'destroy')
-        })
-      }
       this.#nonceDomainClaim = activateClaim(created)
       this.#destroyed = false
+      this.#mutating = false
+      this.#destroyRequested = false
     } catch (err) {
       releasePendingClaim(created)
       clear(ownedForwardKey)
@@ -535,7 +541,10 @@ export class RoutePayloadCodec {
   }
 
   seal(options) {
-    if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
+    return this.#mutate(() => this.#seal(options))
+  }
+
+  #seal(options) {
     options = optionsObject(options)
     const direction = directionValue(option(options, 'direction'))
     if (direction !== this.#sendDirection) invalid()
@@ -595,7 +604,10 @@ export class RoutePayloadCodec {
   }
 
   open(options, frame) {
-    if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
+    return this.#mutate(() => this.#open(options, frame))
+  }
+
+  #open(options, frame) {
     if (!isBuffer(frame, ROUTE_FRAME_SIZE)) invalid()
     options = optionsObject(options)
     const direction = directionValue(option(options, 'direction'))
@@ -645,13 +657,52 @@ export class RoutePayloadCodec {
   }
 
   destroy() {
+    if (this.#destroyed || this.#destroyRequested) return
+    if (this.#mutating) {
+      this.#destroyRequested = true
+      return
+    }
+    this.#destroyNow()
+  }
+
+  #mutate(operation) {
+    if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
+    if (this.#mutating) {
+      this.#destroyRequested = true
+      invalid()
+    }
+    this.#mutating = true
+    let result = null
+    try {
+      result = operation()
+      if (this.#destroyRequested || this.#destroyed) {
+        clearOperationResult(result)
+        result = null
+        throw PrivateRouteError.CIRCUIT_STATE()
+      }
+      return result
+    } finally {
+      this.#mutating = false
+      if (this.#destroyRequested) this.#destroyNow()
+    }
+  }
+
+  #destroyNow() {
     if (this.#destroyed) return
     this.#destroyed = true
+    this.#destroyRequested = false
     for (const state of [this.#forward, this.#reverse]) {
-      try {
-        if (state.destroyOrdered) state.destroyOrdered()
-      } catch {
-        // Key and identifier cleanup must continue even for hostile injected receivers.
+      for (const destroy of [
+        state.destroyStreamSender,
+        state.destroyDatagramSender,
+        state.destroyOrdered,
+        state.destroyDatagram
+      ]) {
+        try {
+          if (destroy) destroy()
+        } catch {
+          // Key and identifier cleanup must continue even for hostile injected state.
+        }
       }
     }
     clear(this.#forward.key)

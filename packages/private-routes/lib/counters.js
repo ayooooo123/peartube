@@ -107,6 +107,11 @@ export class SenderCounter {
 
     return counter
   }
+
+  destroy() {
+    this.#value = 0n
+    this.#closed = true
+  }
 }
 
 export class OrderedReceiver {
@@ -181,6 +186,7 @@ export class OrderedReceiver {
   destroy() {
     return this.#mutate(() => {
       this.#clearBuffered()
+      this.#next = 0n
       this.#closed = true
     })
   }
@@ -425,5 +431,11 @@ export class DatagramReplayWindow {
 
     this.#bitmap |= bit
     return true
+  }
+
+  destroy() {
+    this.#highest = null
+    this.#bitmap = 0n
+    this.#closed = true
   }
 }

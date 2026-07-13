@@ -72,6 +72,8 @@ Each direction has cryptographically disjoint STREAM and DATAGRAM counter namesp
 
 Implementations MUST NOT skip or reverse transitions. Any failed confirmation, invalid transition, authentication failure, transport close, setup timeout, circuit timeout, expiry, quota failure requiring teardown, or counter exhaustion MUST fail closed. Teardown MUST send an authenticated close when the adjacent transport remains available, remove both forward and reverse bindings, erase route keys and intermediate secrets, and enter `DESTROYED`. Timeout and expiry decisions MUST be locally enforced even if an authenticated close cannot be delivered.
 
+Payload-codec teardown is idempotent and covers all sender counters, ordered receive buffers, and datagram replay windows in both directions. If teardown is requested reentrantly from an injected clock, padding source, cryptographic adapter, or replay receiver, the codec defers destructive cleanup until the active operation unwinds, discards any result produced by that operation, and returns a circuit-state failure. A reentrant seal or open request likewise fails closed and tears the codec down so no partially advanced state can be reused.
+
 Failure, including exhausted route candidates, MUST NOT enable direct endpoint dialing, an ordinary public endpoint DHT socket, or hole punching.
 
 ## Counters and replay protection

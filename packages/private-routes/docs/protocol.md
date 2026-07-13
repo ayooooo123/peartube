@@ -49,7 +49,10 @@ Implementations MUST validate field bounds, version and capabilities, time and e
 
 ## Circuit establishment and lifecycle
 
-Circuit setup is authenticated independently of the later end-to-end Hyperswarm Noise handshake. Each adjacency uses fresh X25519 key agreement and transcript-bound, direction-specific keys. `CREATE` and `CREATED` messages MUST bind protocol version, route identifier, epoch, endpoint and relay identities appropriate to that hop, role, direction, negotiated parameters, and both compiled-route segment transcripts.
+Circuit setup is authenticated independently of the later end-to-end Hyperswarm Noise handshake. It has two distinct transcript scopes:
+
+1. An adjacency-local `LinkCreate`/`LinkCreated` exchange uses fresh X25519 key agreement to derive transcript-bound, direction-specific link keys. Its authenticated transcript MUST bind only that adjacency's two relay or endpoint identities, adjacency-local incoming and outgoing identifiers, epoch, protocol version, cell-class parameters, and link transcript. It MUST NOT claim to authenticate either complete route segment or reveal identities beyond that adjacency.
+2. End-to-end `CREATE`/`CREATED` activation authenticates the compiled circuit between the source and destination. Its transcript MUST bind hashes of the Safety Route segment transcript, Private Route segment transcript, verified descriptor, requested endpoint identity, route epoch, and negotiated circuit parameters. Segment hashes commit to the route construction without disclosing hidden relay identities or the complete path to either endpoint or any individual relay. `CREATED` MUST confirm the same activation transcript before the source opens the circuit.
 
 The circuit state machine is:
 

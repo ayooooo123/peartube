@@ -6,7 +6,7 @@ For an authenticated compiled route with independently operated, non-colluding r
 
 - The destination does not learn the source IP; it sees only its final private relay.
 - The source does not learn the destination IP; it receives only authenticated descriptor and route material without destination dial information.
-- A forwarding relay learns only its adjacent circuit hops and cannot read or modify authenticated application plaintext.
+- A forwarding relay learns only its adjacent circuit hops. It cannot read end-to-end plaintext or cause modified authenticated plaintext to be accepted, but it can drop, delay, reorder, replay, or corrupt traffic to cause denial of service.
 - Existing end-to-end Hyperswarm Noise encryption remains inside the routed transport.
 - Replayed, duplicated, reordered outside the allowed datagram window, truncated, or mutated cells are rejected.
 - Private-only node information cannot authorize direct probes, public routing-table promotion, or direct dialing.

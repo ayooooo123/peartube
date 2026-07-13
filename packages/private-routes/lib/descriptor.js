@@ -388,18 +388,14 @@ function signedMessage(domain, encoding) {
 
 export function signRelayAdvertisement(value, secretKey) {
   const unsigned = encodeUnsignedRelayAdvertisement(value)
-  return copyValue({
-    ...value,
-    relaySignature: cryptoSuite.sign(signedMessage(DOMAIN.RELAY_ADVERTISEMENT, unsigned), secretKey)
-  })
+  const signature = cryptoSuite.sign(signedMessage(DOMAIN.RELAY_ADVERTISEMENT, unsigned), secretKey)
+  return decodeRelayAdvertisement(b4a.concat([unsigned, signature]))
 }
 
 export function signDelegation(value, secretKey) {
   const unsigned = encodeUnsignedDelegation(value)
-  return copyValue({
-    ...value,
-    endpointSignature: cryptoSuite.sign(signedMessage(DOMAIN.DELEGATION, unsigned), secretKey)
-  })
+  const signature = cryptoSuite.sign(signedMessage(DOMAIN.DELEGATION, unsigned), secretKey)
+  return decodeDelegation(b4a.concat([unsigned, signature]))
 }
 
 export function signDescriptor(value, secretKey) {
@@ -408,10 +404,8 @@ export function signDescriptor(value, secretKey) {
     value.authorizationMode === AUTHORIZATION_MODE.DIRECT
       ? DOMAIN.DESCRIPTOR_DIRECT
       : DOMAIN.DESCRIPTOR_DELEGATED
-  return copyValue({
-    ...value,
-    signature: cryptoSuite.sign(signedMessage(domain, unsigned), secretKey)
-  })
+  const signature = cryptoSuite.sign(signedMessage(domain, unsigned), secretKey)
+  return decodeDescriptor(b4a.concat([unsigned, signature]))
 }
 
 function copyValue(value) {

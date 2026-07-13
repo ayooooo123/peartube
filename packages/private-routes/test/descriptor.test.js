@@ -685,3 +685,217 @@ test('relay and destination route encryption keys may be equal in either authori
     )
   )
 })
+
+test('relay advertisement signer ignores cyclic metadata and returns only canonical fields', (t) => {
+  const identity = privateRoleIdentity(80)
+  const input = advertisement({ identityKey: identity.publicKey })
+  delete input.relaySignature
+  input.unknown = 'ignored'
+  input.extra = input
+  let signed = null
+  let error = null
+
+  try {
+    signed = routes.signRelayAdvertisement(input, identity.secretKey)
+  } catch (err) {
+    error = err
+  }
+
+  t.absent(error)
+  if (!signed) return
+  t.alike(Object.keys(signed), [
+    'version',
+    'identityKey',
+    'routeEncryptionKey',
+    'dial',
+    'role',
+    'capabilities',
+    'epoch',
+    'expiresAt',
+    'relaySignature'
+  ])
+  t.absent('relaySignature' in input)
+  t.is(input.extra, input)
+  t.ok(
+    routes.cryptoSuite.verify(
+      b4a.concat([DOMAIN.RELAY_ADVERTISEMENT, routes.encodeUnsignedRelayAdvertisement(input)]),
+      signed.relaySignature,
+      identity.publicKey
+    )
+  )
+})
+
+test('delegation signer ignores cyclic metadata and returns only canonical fields', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(81))
+  const routeSigner = routes.cryptoSuite.keyPair(seed(82))
+  const input = delegation({
+    endpointKey: endpoint.publicKey,
+    routeSigningKey: routeSigner.publicKey
+  })
+  delete input.endpointSignature
+  input.unknown = 'ignored'
+  input.extra = input
+  let signed = null
+  let error = null
+
+  try {
+    signed = routes.signDelegation(input, endpoint.secretKey)
+  } catch (err) {
+    error = err
+  }
+
+  t.absent(error)
+  if (!signed) return
+  t.alike(Object.keys(signed), [
+    'version',
+    'endpointKey',
+    'routeSigningKey',
+    'notBefore',
+    'expiresAt',
+    'minEpoch',
+    'maxEpoch',
+    'capabilities',
+    'endpointSignature'
+  ])
+  t.absent('endpointSignature' in input)
+  t.is(input.extra, input)
+  t.ok(
+    routes.cryptoSuite.verify(
+      b4a.concat([DOMAIN.DELEGATION, routes.encodeUnsignedDelegation(input)]),
+      signed.endpointSignature,
+      endpoint.publicKey
+    )
+  )
+})
+
+test('descriptor signer ignores cyclic metadata and returns only canonical fields', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(83))
+  const identity = privateRoleIdentity(84)
+  const input = descriptor({
+    endpointKey: endpoint.publicKey,
+    routeSigningKey: endpoint.publicKey,
+    entryAdvertisement: encodeRelayAdvertisement(signedAdvertisement(identity))
+  })
+  delete input.signature
+  input.unknown = 'ignored'
+  input.extra = input
+  let signed = null
+  let error = null
+
+  try {
+    signed = routes.signDescriptor(input, endpoint.secretKey)
+  } catch (err) {
+    error = err
+  }
+
+  t.absent(error)
+  if (!signed) return
+  t.alike(Object.keys(signed), [
+    'version',
+    'authorizationMode',
+    'descriptorId',
+    'endpointKey',
+    'routeSigningKey',
+    'routeEncryptionKey',
+    'entryAdvertisement',
+    'epoch',
+    'expiresAt',
+    'capabilities',
+    'cellSize',
+    'encryptedHops',
+    'signature'
+  ])
+  t.absent('signature' in input)
+  t.is(input.extra, input)
+  t.ok(
+    routes.cryptoSuite.verify(
+      b4a.concat([DOMAIN.DESCRIPTOR_DIRECT, routes.encodeUnsignedDescriptor(input)]),
+      signed.signature,
+      endpoint.publicKey
+    )
+  )
+})
+
+test('accepted direct and delegated descriptors canonically decode and re-encode', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(85))
+  const routeSigner = routes.cryptoSuite.keyPair(seed(86))
+  const identity = privateRoleIdentity(87)
+  const entry = routes.signRelayAdvertisement(
+    {
+      ...advertisement(),
+      identityKey: identity.publicKey,
+      relaySignature: undefined
+    },
+    identity.secretKey
+  )
+  const authorization = routes.signDelegation(
+    {
+      ...delegation(),
+      endpointKey: endpoint.publicKey,
+      routeSigningKey: routeSigner.publicKey,
+      endpointSignature: undefined
+    },
+    endpoint.secretKey
+  )
+  const direct = routes.signDescriptor(
+    {
+      ...descriptor(),
+      endpointKey: endpoint.publicKey,
+      routeSigningKey: endpoint.publicKey,
+      entryAdvertisement: encodeRelayAdvertisement(entry),
+      signature: undefined
+    },
+    endpoint.secretKey
+  )
+  const delegated = routes.signDescriptor(
+    {
+      ...descriptor(),
+      authorizationMode: AUTHORIZATION_MODE.DELEGATED,
+      endpointKey: endpoint.publicKey,
+      routeSigningKey: routeSigner.publicKey,
+      entryAdvertisement: encodeRelayAdvertisement(entry),
+      delegation: authorization,
+      signature: undefined
+    },
+    routeSigner.secretKey
+  )
+
+  for (const value of [direct, delegated]) {
+    const encoded = encodeDescriptor(value)
+    t.ok(
+      routes.isVerifiedDescriptor(
+        routes.verifyDescriptor(encoded, {
+          requestedEndpointKey: endpoint.publicKey,
+          now: 10n
+        })
+      )
+    )
+    t.alike(encodeDescriptor(decodeDescriptor(encoded)), encoded)
+  }
+})
+
+test('endpoint signature covers every delegation field', (t) => {
+  const endpoint = routes.cryptoSuite.keyPair(seed(50))
+  const routeSigner = routes.cryptoSuite.keyPair(seed(51))
+  const identity = privateRoleIdentity(52)
+  const entry = signedAdvertisement(identity)
+  const authorization = signedDelegation(endpoint, routeSigner)
+  const verify = (changed) =>
+    routes.verifyDescriptor(
+      encodeDescriptor(signedDelegatedDescriptor(endpoint, routeSigner, entry, changed)),
+      { requestedEndpointKey: endpoint.publicKey, now: 10n }
+    )
+
+  for (const [changed, code] of [
+    [{ ...authorization, version: 1 }, 'INVALID_DESCRIPTOR'],
+    [{ ...authorization, endpointKey: seed(99) }, 'UNAUTHORIZED'],
+    [{ ...authorization, routeSigningKey: seed(99) }, 'UNAUTHORIZED'],
+    [{ ...authorization, notBefore: 2n }, 'UNAUTHORIZED'],
+    [{ ...authorization, expiresAt: 99n }, 'UNAUTHORIZED'],
+    [{ ...authorization, minEpoch: 1n }, 'UNAUTHORIZED'],
+    [{ ...authorization, maxEpoch: 21n }, 'UNAUTHORIZED'],
+    [{ ...authorization, capabilities: CAPABILITY.FORWARD }, 'UNAUTHORIZED']
+  ]) {
+    expectCode(t, () => verify(changed), code)
+  }
+})

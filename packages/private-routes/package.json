@@ -1,0 +1,38 @@
+{
+  "name": "hyperdht-private-routes",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental private-route overlay for the Holepunch stack",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "brittle test/*.test.js",
+    "test:node": "brittle-node test/*.test.js",
+    "test:one": "brittle-node",
+    "test:bare": "brittle-bare test/*.test.js",
+    "fuzz:cell": "node fuzz/cell.js"
+  },
+  "dependencies": {
+    "b4a": "^1.8.0",
+    "compact-encoding": "^2.19.2",
+    "hypercore-crypto": "^3.6.1",
+    "sodium-universal": "^5.0.0"
+  },
+  "devDependencies": {
+    "bare-runtime": "1.30.3",
+    "brittle": "^3.19.1",
+    "prettier": "^3.6.2",
+    "prettier-config-holepunch": "^2.0.0"
+  }
+}

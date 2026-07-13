@@ -41,6 +41,15 @@ export {
   createDiscoveryEvidenceAuthority
 } from './lib/discovery-evidence.js'
 export { createCircuitAuthority } from './lib/circuit-authority.js'
+export { createLinkSetupAuthority, isLinkTicketChecker } from './lib/link-setup.js'
+export {
+  DEFAULT_HALF_OPEN_TIMEOUT,
+  DEFAULT_MAX_CIRCUITS,
+  DEFAULT_MAX_CIRCUITS_PER_SOURCE,
+  DEFAULT_MAX_CIRCUIT_QUEUED_BYTES,
+  DEFAULT_MAX_QUEUED_BYTES,
+  RelayService
+} from './lib/relay-service.js'
 export {
   MAX_CIRCUITS_PER_EPOCH,
   MAX_IDENTITIES,

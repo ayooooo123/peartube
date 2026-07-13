@@ -739,6 +739,50 @@ test('registry bounds identities and prunes expired nonquarantined records', (t)
   t.is(registry.size, 1)
 })
 
+test('registry hot paths prune only the requested identity', (t) => {
+  let current = 100_000n
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => current,
+    smallLimits()
+  )
+  const expiredIdentity = numericIdentity(1)
+  const existingIdentity = numericIdentity(2)
+  const admittedIdentity = numericIdentity(3)
+
+  registry.learnRoute(expiredIdentity, {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 110_000n
+  })
+  registry.learnRoute(existingIdentity, {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 200_000n
+  })
+
+  current = 110_000n
+  t.is(registry.allows(existingIdentity, 'route-forward', { epoch: 7n }), true)
+  t.is(registry.size, 2)
+
+  registry.learnRoute(existingIdentity, {
+    provenance: 'private-only',
+    epoch: 8n,
+    expiresAt: 200_000n
+  })
+  t.is(registry.size, 2)
+
+  registry.learnRoute(admittedIdentity, {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 200_000n
+  })
+  t.is(registry.size, 2)
+})
+
 test('quarantine tombstones are sticky and count against the identity bound', (t) => {
   const safety = safetyRoleIdentity(100)
   const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
@@ -1069,6 +1113,96 @@ test('same-epoch descriptor conflicts quarantine while identical claims are idem
   t.is(registry.allows(entry.publicKey, 'route-forward', { epoch: 7n }), false)
 })
 
+test('quarantine compacts claims and ignores all later valid learns', (t) => {
+  const safety = safetyRoleIdentity(100)
+  const entry = privateRoleIdentity(120)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const limits = smallLimits({
+    maxPublicEpochsPerIdentity: 1,
+    maxRouteEpochsPerIdentity: 1,
+    maxCircuitsPerEpoch: 1
+  })
+  const publicRegistry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => 100_000n,
+    limits
+  )
+
+  publicRegistry.learnPublic(issueEvidence(evidenceAuthority, safety, { epoch: 7n }))
+  publicRegistry.learnPublic(
+    issueEvidence(evidenceAuthority, safety, {
+      epoch: 7n,
+      dial: b4a.from('quarantine-public.example:49737')
+    })
+  )
+  for (const epoch of [8n, 9n]) {
+    publicRegistry.learnPublic(issueEvidence(evidenceAuthority, safety, { epoch }))
+    publicRegistry.learnRoute(safety.publicKey, {
+      provenance: 'private-only',
+      epoch,
+      expiresAt: 900_000n
+    })
+  }
+  t.is(publicRegistry.size, 1)
+  t.is(publicRegistry.allows(safety.publicKey, 'guard-dial', { selectedGuard: true }), false)
+  t.is(publicRegistry.allows(safety.publicKey, 'route-forward', { epoch: 9n }), false)
+
+  const routeRegistry = registryFor(
+    evidenceAuthority.checker,
+    circuitAuthority.checker,
+    () => 100_000n,
+    limits
+  )
+  const context = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 31),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 900_000n
+  })
+  routeRegistry.learnRoute(entry.publicKey, {
+    provenance: 'route-entry',
+    descriptor: verifiedRouteDescriptor(entry),
+    circuitContext: context
+  })
+  routeRegistry.learnRoute(entry.publicKey, {
+    provenance: 'route-entry',
+    descriptor: verifiedRouteDescriptor(entry, {
+      entry: { dial: b4a.from('quarantine-entry.example:49737') }
+    }),
+    circuitContext: context
+  })
+
+  for (const epoch of [8n, 9n]) {
+    const laterContext = circuitAuthority.issuer.issueFinalSafety({
+      circuitId: b4a.alloc(16, Number(epoch)),
+      epoch,
+      finalSafetyIdentity32: safety.publicKey,
+      entryIdentity32: entry.publicKey,
+      expiresAt: 900_000n
+    })
+    routeRegistry.learnRoute(entry.publicKey, {
+      provenance: 'private-only',
+      epoch,
+      expiresAt: 900_000n
+    })
+    routeRegistry.learnRoute(entry.publicKey, {
+      provenance: 'route-entry',
+      descriptor: verifiedRouteDescriptor(entry, {
+        entry: { epoch },
+        descriptor: { descriptorId: b4a.alloc(32, Number(epoch)) }
+      }),
+      circuitContext: laterContext
+    })
+    t.is(routeRegistry.allows(entry.publicKey, 'route-entry-dial', laterContext), false)
+  }
+  t.is(routeRegistry.size, 1)
+  t.is(routeRegistry.allows(entry.publicKey, 'route-entry-dial', context), false)
+  t.is(routeRegistry.allows(entry.publicKey, 'route-forward', { epoch: 9n }), false)
+})
+
 test('private-only imports never erase same-epoch descriptor conflict claims', (t) => {
   const safety = safetyRoleIdentity(100)
   const entry = privateRoleIdentity(120)
@@ -1178,6 +1312,91 @@ test('same-epoch descriptor and private-only lifetimes remain independent', (t) 
     true
   )
   t.is(descriptorOutlives.registry.allows(entry.publicKey, 'route-forward', { epoch: 7n }), true)
+})
+
+test('descriptor expiry strips its claim and circuits while preserving private-only lifetime', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const entry = privateRoleIdentity(120)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(evidenceAuthority.checker, circuitAuthority.checker, () => current)
+  const oldContext = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 24),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 300_000n
+  })
+  registry.learnRoute(entry.publicKey, {
+    provenance: 'route-entry',
+    descriptor: verifiedRouteDescriptor(entry, {
+      entry: { expiresAt: 300_000n },
+      descriptor: { expiresAt: 150_000n }
+    }),
+    circuitContext: oldContext
+  })
+  registry.learnRoute(entry.publicKey, {
+    provenance: 'private-only',
+    epoch: 7n,
+    expiresAt: 250_000n
+  })
+  current = 150_000n
+
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', oldContext), false)
+  t.is(registry.allows(entry.publicKey, 'route-forward', { epoch: 7n }), true)
+
+  const newContext = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 25),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 300_000n
+  })
+  registry.learnRoute(entry.publicKey, {
+    provenance: 'route-entry',
+    descriptor: verifiedRouteDescriptor(entry, {
+      entry: {
+        expiresAt: 300_000n,
+        dial: b4a.from('replacement-claim.example:49737'),
+        routeEncryptionKey: seed(211)
+      },
+      descriptor: { expiresAt: 300_000n }
+    }),
+    circuitContext: newContext
+  })
+
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', oldContext), false)
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', newContext), true)
+  t.is(registry.allows(entry.publicKey, 'route-forward', { epoch: 7n }), true)
+})
+
+test('descriptor expiry removes an otherwise empty identity despite a longer circuit', (t) => {
+  let current = 100_000n
+  const safety = safetyRoleIdentity(100)
+  const entry = privateRoleIdentity(120)
+  const evidenceAuthority = routes.createDiscoveryEvidenceAuthority({ now: () => 100_000n })
+  const circuitAuthority = routes.createCircuitAuthority()
+  const registry = registryFor(evidenceAuthority.checker, circuitAuthority.checker, () => current)
+  const context = circuitAuthority.issuer.issueFinalSafety({
+    circuitId: b4a.alloc(16, 26),
+    epoch: 7n,
+    finalSafetyIdentity32: safety.publicKey,
+    entryIdentity32: entry.publicKey,
+    expiresAt: 300_000n
+  })
+  registry.learnRoute(entry.publicKey, {
+    provenance: 'route-entry',
+    descriptor: verifiedRouteDescriptor(entry, {
+      entry: { expiresAt: 300_000n },
+      descriptor: { expiresAt: 150_000n }
+    }),
+    circuitContext: context
+  })
+  current = 150_000n
+
+  t.is(registry.allows(entry.publicKey, 'route-entry-dial', context), false)
+  t.is(registry.size, 0)
 })
 
 test('adjacent route epochs rotate independently and retain unrelated public provenance', (t) => {

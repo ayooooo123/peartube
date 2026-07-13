@@ -225,23 +225,26 @@ export class PrivacyDomainRegistry {
     return this.#records.size
   }
 
-  #record(identity) {
+  #record(identity, current) {
     const key = identityHex(identity)
-    let record = this.#records.get(key)
-    if (!record) {
-      if (this.#records.size >= this.#limits.maxIdentities) {
-        throw PrivateRouteError.CIRCUIT_LIMIT()
-      }
-      record = {
-        identity: b4a.from(identity),
-        provenance: new Set(),
-        publicEvidence: new Map(),
-        routeEpochs: new Map(),
-        quarantined: false
-      }
-      this.#records.set(key, record)
+    const record = this.#records.get(key)
+    if (record) {
+      if (!record.quarantined) this.#pruneRecord(record, current)
+      return record
     }
-    return record
+    if (this.#records.size >= this.#limits.maxIdentities) this.#prune(current)
+    if (this.#records.size >= this.#limits.maxIdentities) {
+      throw PrivateRouteError.CIRCUIT_LIMIT()
+    }
+    const created = {
+      identity: b4a.from(identity),
+      provenance: new Set(),
+      publicEvidence: new Map(),
+      routeEpochs: new Map(),
+      quarantined: false
+    }
+    this.#records.set(key, created)
+    return created
   }
 
   learnPublic(evidence) {
@@ -254,9 +257,8 @@ export class PrivacyDomainRegistry {
     }
     const current = currentTime(this.#now)
     if (!validEvidence(state) || state.expiresAt <= current) unauthorized()
-    this.#prune(current)
-
-    const record = this.#record(state.peerIdentity32)
+    const record = this.#record(state.peerIdentity32, current)
+    if (record.quarantined) return
     const claim = {
       dial: b4a.from(state.observedDial),
       routeEncryptionKey: b4a.from(state.routeEncryptionKey),
@@ -270,7 +272,7 @@ export class PrivacyDomainRegistry {
         (route) => route.dial !== undefined && claimsConflict(route, claim)
       )
     ) {
-      record.quarantined = true
+      this.#quarantine(record)
       return
     }
     if (
@@ -304,8 +306,8 @@ export class PrivacyDomainRegistry {
       if (!exactKeys(material, ['provenance', 'epoch', 'expiresAt'])) invalidRoute()
       if (!u64(material.epoch) || !u64(material.expiresAt) || material.expiresAt <= current)
         invalidRoute()
-      this.#prune(current)
-      const record = this.#record(identity)
+      const record = this.#record(identity, current)
+      if (record.quarantined) return
       const existing = record.routeEpochs.get(material.epoch)
       if (!existing && record.routeEpochs.size >= this.#limits.maxRouteEpochsPerIdentity) {
         throw PrivateRouteError.CIRCUIT_LIMIT()
@@ -350,8 +352,8 @@ export class PrivacyDomainRegistry {
       unauthorized()
     }
 
-    this.#prune(current)
-    const record = this.#record(identity)
+    const record = this.#record(identity, current)
+    if (record.quarantined) return
     const routeClaim = {
       epoch: descriptor.entry.epoch,
       dial: descriptor.entry.dial,
@@ -364,7 +366,7 @@ export class PrivacyDomainRegistry {
         claimsConflict(record.publicEvidence.get(routeClaim.epoch), routeClaim)) ||
       (existing?.dial !== undefined && claimsConflict(existing, routeClaim))
     ) {
-      record.quarantined = true
+      this.#quarantine(record)
       return
     }
 
@@ -405,9 +407,14 @@ export class PrivacyDomainRegistry {
   allows(identity, operation, context) {
     if (!fixed(identity, 32)) return false
     const current = currentTime(this.#now)
-    this.#prune(current)
-    const record = this.#records.get(b4a.toString(identity, 'hex'))
+    const key = b4a.toString(identity, 'hex')
+    const record = this.#records.get(key)
     if (!record || record.quarantined) return false
+    this.#pruneRecord(record, current)
+    if (this.#isEmpty(record)) {
+      this.#records.delete(key)
+      return false
+    }
 
     switch (operation) {
       case PRIVACY_OPERATION.GUARD_DIAL:
@@ -468,29 +475,57 @@ export class PrivacyDomainRegistry {
   #prune(current) {
     for (const [identity, record] of this.#records) {
       if (record.quarantined) continue
+      this.#pruneRecord(record, current)
+      if (this.#isEmpty(record)) this.#records.delete(identity)
+    }
+  }
 
-      for (const [epoch, evidence] of record.publicEvidence) {
-        if (evidence.expiresAt <= current) record.publicEvidence.delete(epoch)
-      }
+  #pruneRecord(record, current) {
+    for (const [epoch, evidence] of record.publicEvidence) {
+      if (evidence.expiresAt <= current) record.publicEvidence.delete(epoch)
+    }
 
-      for (const [epoch, route] of record.routeEpochs) {
-        if (route.circuits) {
-          for (const [key, circuit] of route.circuits) {
-            if (circuit.expiresAt <= current) route.circuits.delete(key)
-          }
+    for (const [epoch, route] of record.routeEpochs) {
+      if (route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY && route.expiresAt <= current) {
+        if (route.privateOnlyExpiresAt !== undefined && route.privateOnlyExpiresAt > current) {
+          record.routeEpochs.set(epoch, {
+            provenance: PRIVACY_PROVENANCE.PRIVATE_ONLY,
+            epoch,
+            privateOnlyExpiresAt: route.privateOnlyExpiresAt
+          })
+        } else {
+          record.routeEpochs.delete(epoch)
         }
-        const liveDescriptor =
-          route.provenance === PRIVACY_PROVENANCE.ROUTE_ENTRY && route.expiresAt > current
-        const livePrivateOnly =
-          route.privateOnlyExpiresAt !== undefined && route.privateOnlyExpiresAt > current
-        const liveCircuit = route.circuits?.size > 0
-        if (!liveDescriptor && !livePrivateOnly && !liveCircuit) record.routeEpochs.delete(epoch)
+        continue
       }
 
-      if (record.publicEvidence.size === 0 && record.routeEpochs.size === 0) {
-        this.#records.delete(identity)
+      if (route.circuits) {
+        for (const [key, circuit] of route.circuits) {
+          if (circuit.expiresAt <= current) route.circuits.delete(key)
+        }
+      }
+      if (
+        route.provenance === PRIVACY_PROVENANCE.PRIVATE_ONLY &&
+        route.privateOnlyExpiresAt <= current
+      ) {
+        record.routeEpochs.delete(epoch)
       }
     }
+  }
+
+  #quarantine(record) {
+    record.provenance.clear()
+    record.publicEvidence.clear()
+    for (const route of record.routeEpochs.values()) route.circuits?.clear()
+    record.routeEpochs.clear()
+    delete record.provenance
+    delete record.publicEvidence
+    delete record.routeEpochs
+    record.quarantined = true
+  }
+
+  #isEmpty(record) {
+    return record.publicEvidence.size === 0 && record.routeEpochs.size === 0
   }
 
   #allowsRouteForward(record, context, current) {

@@ -257,26 +257,14 @@ export class CellCodec {
     options = optionsObject(options)
     const key = option(options, 'key')
     const noncePrefix = option(options, 'noncePrefix')
-    const receiver = option(options, 'receiver')
     const expectedClass = option(options, 'expectedClass')
     const expectedDirection = option(options, 'expectedDirection')
     const expectedEpoch = option(options, 'expectedEpoch')
     const expectedCircuitId = option(options, 'expectedCircuitId')
 
-    let receive
-    try {
-      receive =
-        cellClass === CELL_CLASS.DATAGRAM
-          ? receiver && receiver.acceptAuthenticated
-          : receiver && receiver.pushAuthenticated
-    } catch {
-      invalid()
-    }
-
     if (
       !isBuffer(key, KEY_BYTES) ||
       !isBuffer(noncePrefix, NONCE_PREFIX_BYTES) ||
-      typeof receive !== 'function' ||
       !knownClass(expectedClass) ||
       !knownDirection(expectedDirection) ||
       !uint64(expectedEpoch) ||
@@ -314,6 +302,18 @@ export class CellCodec {
       } catch {
         invalid()
       }
+
+      const receiver = option(options, 'receiver')
+      let receive
+      try {
+        receive =
+          cellClass === CELL_CLASS.DATAGRAM
+            ? receiver && receiver.acceptAuthenticated
+            : receiver && receiver.pushAuthenticated
+      } catch {
+        invalid()
+      }
+      if (typeof receive !== 'function') invalid()
 
       if (cellClass === CELL_CLASS.DATAGRAM) {
         receive.call(receiver, counter)

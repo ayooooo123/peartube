@@ -319,6 +319,101 @@ test('mutated ciphertext and header never advance a real receiver', (t) => {
   t.is(receiver.highest, 0n)
 })
 
+test('forged cells never consult receiver properties before authentication', (t) => {
+  const cell = codec()
+  for (const { cellClass, method } of [
+    { cellClass: CELL_CLASS.STREAM, method: 'pushAuthenticated' },
+    { cellClass: CELL_CLASS.DATAGRAM, method: 'acceptAuthenticated' }
+  ]) {
+    const packet = cell.seal(sealOptions({ class: cellClass }))
+
+    for (const mutate of [
+      (forged) => {
+        forged[35] ^= 1
+      },
+      (forged) => {
+        forged[CELL_HEADER_SIZE + 10] ^= 1
+      }
+    ]) {
+      let accesses = 0
+      let calls = 0
+      const receiver = {}
+      Object.defineProperty(receiver, method, {
+        get() {
+          accesses++
+          return () => calls++
+        }
+      })
+      const forged = b4a.from(packet)
+      mutate(forged)
+
+      expectCode(
+        t,
+        () => cell.open(openOptions(receiver, { expectedClass: cellClass }), forged),
+        'CELL_INVALID'
+      )
+      t.is(accesses, 0)
+      t.is(calls, 0)
+    }
+  }
+})
+
+test('hostile or invalid post-auth receiver lookup clears all temporaries', (t) => {
+  const scratches = []
+  const payloadCopies = []
+  const crypto = {
+    ...cryptoSuite,
+    open() {
+      const body = b4a.alloc(CELL_BODY_SIZE, 0x7a)
+      body[0] = 0
+      body[1] = 5
+      body.set([104, 101, 108, 108, 111], 2)
+      scratches.push(body)
+      return body
+    }
+  }
+  const originalFrom = b4a.from
+  b4a.from = (value, ...args) => {
+    const copy = originalFrom(value, ...args)
+    if (value && value.byteLength === 5) payloadCopies.push(copy)
+    return copy
+  }
+
+  try {
+    for (const { cellClass, method } of [
+      { cellClass: CELL_CLASS.STREAM, method: 'pushAuthenticated' },
+      { cellClass: CELL_CLASS.DATAGRAM, method: 'acceptAuthenticated' }
+    ]) {
+      const packet = codec().seal(sealOptions({ class: cellClass }))
+      for (const hostile of [true, false]) {
+        let accesses = 0
+        const receiver = {}
+        Object.defineProperty(receiver, method, {
+          get() {
+            accesses++
+            if (hostile) throw new Error('hostile getter')
+            return null
+          }
+        })
+
+        expectCode(
+          t,
+          () => codec({ crypto }).open(openOptions(receiver, { expectedClass: cellClass }), packet),
+          'CELL_INVALID'
+        )
+        t.is(accesses, 1)
+      }
+    }
+  } finally {
+    b4a.from = originalFrom
+  }
+
+  t.is(scratches.length, 4)
+  for (const scratch of scratches) t.alike(scratch, b4a.alloc(CELL_BODY_SIZE))
+  t.is(payloadCopies.length, 4)
+  for (const payload of payloadCopies) t.alike(payload, b4a.alloc(5))
+})
+
 test('packet size and public structure reject cheaply before crypto or allocation', (t) => {
   let opens = 0
   const crypto = {

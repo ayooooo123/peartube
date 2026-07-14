@@ -147,9 +147,16 @@ export async function createProcessCoordinator(options = {}) {
   if (roles.length !== 7 || !(fixture.projections instanceof Map)) invalid()
   const timeout = deadline(options.timeout)
   const command = options.command || process.execPath
+  const expectedRuntime = options.expectedRuntime || 'node'
   const args = options.args || []
   const cwd = options.cwd
-  if (typeof command !== 'string' || !Array.isArray(args) || typeof cwd !== 'string') invalid()
+  if (
+    typeof command !== 'string' ||
+    (expectedRuntime !== 'node' && expectedRuntime !== 'bare') ||
+    !Array.isArray(args) ||
+    typeof cwd !== 'string'
+  )
+    invalid()
   const auditor = createConfigurationAuditor(fixture)
   const records = new Map()
   let closed = false
@@ -189,7 +196,9 @@ export async function createProcessCoordinator(options = {}) {
     const configured = await Promise.all(
       roles.map((role) => waitFor(records.get(role), 'configured', timeout))
     )
-    for (const event of configured) if (event.runtime !== 'node') invalid('unexpected runtime')
+    for (const event of configured) {
+      if (event.runtime !== expectedRuntime) invalid('unexpected runtime')
+    }
   } catch (err) {
     await cleanup()
     throw err

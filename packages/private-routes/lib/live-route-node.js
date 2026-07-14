@@ -36,6 +36,8 @@ import { UdxCellEndpoint } from './udx-cell-endpoint.js'
 export const LIVE_ROUTE_CREATE_CONTROL = Symbol('live-route-create-control')
 export const LIVE_ROUTE_ACTIVATE_ENDPOINT = Symbol('live-route-activate-endpoint')
 export const LIVE_ROUTE_REGISTER_ACTOR = Symbol('live-route-register-actor')
+export const LIVE_ROUTE_REVOKE_GRANT = Symbol('live-route-revoke-grant')
+export const LIVE_ROUTE_CLOSE_SOCKET = Symbol('live-route-close-socket')
 
 const ROLE_BINDINGS = Object.freeze({
   source: TOPOLOGY_ROLE.SOURCE,
@@ -602,6 +604,32 @@ export function createLiveRouteNode(roleProjection, adapters) {
       const record = links.find((value) => value.actorEndpoint?.kind === 'server')
       if (!record) throw PrivateRouteError.UNAUTHORIZED()
       return record.actorEndpoint.host.register(actorId, actor)
+    },
+    [LIVE_ROUTE_REVOKE_GRANT](digest32) {
+      if (state !== 'OPEN' || !directory) throw stateError()
+      directory.revoke({ digest32, epoch: projection.epoch, runId32: projection.runId32 })
+      if (compiledDuplex) {
+        try {
+          failCompiledRouteDuplex(compiledDuplex)
+        } catch {}
+      }
+      state = 'FAILED'
+      emit()
+      return true
+    },
+    async [LIVE_ROUTE_CLOSE_SOCKET]() {
+      if (state !== 'OPEN' || !endpoint) throw stateError()
+      if (compiledDuplex) {
+        try {
+          failCompiledRouteDuplex(compiledDuplex)
+        } catch {}
+      }
+      state = 'FAILED'
+      emit()
+      await endpoint.close()
+      bound = false
+      emit()
+      return true
     },
     snapshot,
     stop() {

@@ -8,6 +8,12 @@
   "exports": {
     ".": "./index.js"
   },
+  "imports": {
+    "#private-route-process": {
+      "bare": "./test/process/runtime-bare.js",
+      "default": "./test/process/runtime-node.js"
+    }
+  },
   "files": [
     "index.js",
     "lib",

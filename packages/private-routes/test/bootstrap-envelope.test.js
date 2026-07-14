@@ -3,6 +3,7 @@ import b4a from 'b4a'
 
 import {
   BOOTSTRAP_CLASS,
+  BOOTSTRAP_DEADLINE,
   BOOTSTRAP_HEADER_SIZE,
   BOOTSTRAP_MAX_BODY,
   BOOTSTRAP_REJECT_CODE,
@@ -74,17 +75,17 @@ function deterministicRandom(values) {
   }
 }
 
-function fixture() {
+function fixture(overrides = {}) {
   const authority = cryptoSuite.keyPair(seed(201))
   const initiator = cryptoSuite.keyPair(seed(202))
-  const responder = safetyRoleIdentity(203)
+  const responder = safetyRoleIdentity(overrides.responderSeed ?? 203)
   const responderStatic = cryptoSuite.encryptionKeyPair(seed(204))
   const runId32 = seed(205)
-  const epoch = 7n
+  const epoch = overrides.epoch ?? 7n
   const grant = {
     version: PROTOCOL_VERSION,
     format: 0,
-    grantId32: seed(206),
+    grantId32: overrides.grantId32 || seed(206),
     endpointA: {
       identity32: initiator.publicKey,
       role: TOPOLOGY_ROLE.SOURCE,
@@ -187,6 +188,7 @@ function fixture() {
     authority,
     initiator,
     responder,
+    responderStatic,
     clock,
     left,
     right,
@@ -199,6 +201,40 @@ function fixture() {
     leftSource: { host: '127.0.0.1', port: 43001 },
     rightSource: { host: '127.0.0.2', port: 43002 }
   }
+}
+
+function writeU64(buffer, value, offset) {
+  for (let index = offset + 7; index >= offset; index--) {
+    buffer[index] = Number(value & 0xffn)
+    value >>= 8n
+  }
+}
+
+function resignEnvelope(packet, secretKey, mutate) {
+  const signed = b4a.from(packet)
+  mutate(signed)
+  const digest = cryptoSuite.hash([DOMAIN.UDX_BOOTSTRAP, signed.subarray(0, 1136)])
+  signed.set(cryptoSuite.sign(digest, secretKey), 1136)
+  return signed
+}
+
+function alternateCreated(f, overrides) {
+  const setup = createLinkSetupAuthority({
+    crypto: cryptoSuite,
+    now: () => f.clock.now(),
+    randomBytes: deterministicRandom([seed(220), seed(221), seed(222), seed(223)])
+  })
+  const common = { ...f.common, ...overrides }
+  const started = setup.initiate({
+    ...common,
+    responderStaticKey: f.responderStatic.publicKey,
+    initiatorIdentitySecretKey: f.initiator.secretKey
+  })
+  return setup.respond(started.message, {
+    ...common,
+    responderStaticSecretKey: f.responderStatic.secretKey,
+    responderIdentitySecretKey: f.responder.secretKey
+  }).message
 }
 
 function encodeCreate(f, overrides = {}) {
@@ -598,24 +634,25 @@ test('request table caches byte-identical responder replies and rejects ID/body 
 
 test('request table is bounded, exception safe, cancel-safe, and releases all timers', (t) => {
   const f = fixture()
+  const otherFixture = fixture({ responderSeed: 240, grantId32: seed(242) })
   const { table, clock, observations } = tableFixture({
     maxPending: 2,
     maxPendingPerPeer: 1,
     maxCache: 1,
     maxTombstones: 4
   })
-  const begin = (peer = f.responder.publicKey, overrides = {}) =>
+  const begin = (peerFixture = f, overrides = {}) =>
     table.begin({
-      peerIdentity32: peer,
+      peerIdentity32: peerFixture.responder.publicKey,
       epoch: 7n,
-      encode: (requestId) => encodeCreate(f, { requestId }),
+      encode: (requestId) => encodeCreate(peerFixture, { requestId }),
       onResponse() {},
       ...overrides
     })
   const first = begin()
   expectCode(t, () => begin(), 'CIRCUIT_LIMIT')
-  const other = begin(seed(240))
-  expectCode(t, () => begin(seed(241)), 'CIRCUIT_LIMIT')
+  const other = begin(otherFixture)
+  expectCode(t, () => begin(fixture({ responderSeed: 250, grantId32: seed(252) })), 'CIRCUIT_LIMIT')
   t.is(table.cancel(first.token), true)
   t.is(table.cancel(first.token), false)
   t.is(table.cancel(other.token), true)
@@ -623,14 +660,14 @@ test('request table is bounded, exception safe, cancel-safe, and releases all ti
   expectCode(
     t,
     () =>
-      begin(f.responder.publicKey, {
+      begin(f, {
         encode() {
           throw new Error('secret')
         }
       }),
     'ROUTE_UNAVAILABLE'
   )
-  expectCode(t, () => begin(f.responder.publicKey, { onResponse: null }), 'INVALID_ROUTE')
+  expectCode(t, () => begin(f, { onResponse: null }), 'INVALID_ROUTE')
   t.is(observations.at(-1).pending, 0)
   table.destroy()
   t.is(clock.pending(), 0)
@@ -845,6 +882,27 @@ test('request table accepts only opaque codec-verified provenance, never caller-
   const f = fixture()
   const { table } = tableFixture()
   let callbacks = 0
+  for (const forge of [
+    (packet) => b4a.from(packet),
+    (packet) => {
+      packet[BOOTSTRAP_HEADER_SIZE] ^= 1
+      return packet
+    }
+  ]) {
+    expectCode(
+      t,
+      () =>
+        table.begin({
+          peerIdentity32: f.responder.publicKey,
+          epoch: 7n,
+          encode(requestId) {
+            return forge(encodeCreate(f, { requestId }))
+          },
+          onResponse() {}
+        }),
+      'UNAUTHORIZED'
+    )
+  }
   const pending = table.begin({
     peerIdentity32: f.responder.publicKey,
     epoch: 7n,
@@ -895,7 +953,7 @@ test('cancel exceptions remove token authority and clear late timer callbacks', 
     }
   })
   expectCode(t, () => table.cancel(pending.token), 'ROUTE_UNAVAILABLE')
-  t.is(table.cancel(pending.token), false)
+  expectCode(t, () => table.cancel(pending.token), 'CIRCUIT_STATE')
   for (const callback of scheduled) callback()
   t.alike(callbacks, [])
   table.destroy()
@@ -909,4 +967,421 @@ test('codec cannot outlive revocation of its opaque LinkDirectory capability', (
   expectCode(t, () => encodeCreate(f), 'UNAUTHORIZED')
   t.is(f.leftCodec.receive(packet, f.rightSource), null)
   f.leftCodec.destroy()
+})
+
+test('request table rejects signed LINK_CREATED with mismatched inner circuit, local IDs, or expiry', (t) => {
+  const variants = [
+    { circuitId: b4a.alloc(16, 0x31) },
+    { initiatorLocalId: b4a.alloc(16, 0x32), responderLocalId: b4a.alloc(16, 0x33) },
+    { expiresAt: 2_100n }
+  ]
+
+  for (const overrides of variants) {
+    const f = fixture()
+    const { table } = tableFixture()
+    let callbacks = 0
+    const pending = table.begin({
+      peerIdentity32: f.responder.publicKey,
+      epoch: 7n,
+      encode: (requestId) => encodeCreate(f, { requestId }),
+      onResponse() {
+        callbacks++
+      }
+    })
+    const valid = f.rightCodec.encode({
+      type: BOOTSTRAP_TYPE.LINK_CREATED,
+      requestId: pending.requestId,
+      epoch: 7n,
+      body: f.accepted.message,
+      requestPacket: pending.packet
+    })
+    const otherBody = alternateCreated(f, overrides)
+    const substituted = resignEnvelope(valid, f.responder.secretKey, (packet) => {
+      packet.set(otherBody, BOOTSTRAP_HEADER_SIZE)
+    })
+    const verified = f.leftCodec.decode(substituted, f.rightSource)
+
+    expectCode(
+      t,
+      () => table.acceptResponse(f.responder.publicKey, verified, substituted),
+      'INVALID_ROUTE'
+    )
+    t.is(callbacks, 0)
+    table.destroy()
+  }
+})
+
+test('request table rejects a valid branded response from a different bilateral grant', (t) => {
+  const first = fixture({ grantId32: seed(230) })
+  const second = fixture({ grantId32: seed(231) })
+  const { table } = tableFixture()
+  let callbacks = 0
+  const pending = table.begin({
+    peerIdentity32: first.responder.publicKey,
+    epoch: 7n,
+    encode: (requestId) => encodeCreate(first, { requestId }),
+    onResponse() {
+      callbacks++
+    }
+  })
+  const otherRequest = encodeCreate(second, { requestId: pending.requestId })
+  const otherResponse = second.rightCodec.encode({
+    type: BOOTSTRAP_TYPE.LINK_CREATED,
+    requestId: pending.requestId,
+    epoch: 7n,
+    body: second.accepted.message,
+    requestPacket: otherRequest
+  })
+  const substituted = resignEnvelope(otherResponse, second.responder.secretKey, (packet) => {
+    packet.set(pending.digest32, 118)
+  })
+  const verified = second.leftCodec.decode(substituted, second.rightSource)
+
+  expectCode(
+    t,
+    () => table.acceptResponse(first.responder.publicKey, verified, substituted),
+    'UNAUTHORIZED'
+  )
+  t.is(callbacks, 0)
+  table.destroy()
+})
+
+test('scheduler, monotonic clock, and completion callback faults permanently close the table', (t) => {
+  const f = fixture()
+  const begin = (table) =>
+    table.begin({
+      peerIdentity32: f.responder.publicKey,
+      epoch: 7n,
+      encode: (requestId) => encodeCreate(f, { requestId }),
+      onResponse() {}
+    })
+
+  {
+    const table = new BootstrapRequestTable({
+      crypto: cryptoSuite,
+      now: () => 1_000,
+      schedule(callback) {
+        callback()
+        return callback
+      },
+      cancel() {},
+      randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 5])
+    })
+    expectCode(t, () => begin(table), 'ROUTE_UNAVAILABLE')
+    expectCode(t, () => begin(table), 'CIRCUIT_STATE')
+  }
+
+  for (const values of [[1_000, 999], [Number.MAX_SAFE_INTEGER]]) {
+    let index = 0
+    const table = new BootstrapRequestTable({
+      crypto: cryptoSuite,
+      now: () => values[Math.min(index++, values.length - 1)],
+      schedule: () => Object.freeze({}),
+      cancel() {},
+      randomBytes: deterministicRandom([
+        b4a.from([0, 0, 0, 0, 0, 0, 0, 6]),
+        b4a.from([0, 0, 0, 0, 0, 0, 0, 7])
+      ])
+    })
+    if (values.length > 1) begin(table)
+    expectCode(t, () => begin(table), 'ROUTE_UNAVAILABLE')
+    expectCode(t, () => begin(table), 'CIRCUIT_STATE')
+  }
+
+  {
+    const { table } = tableFixture()
+    const pending = table.begin({
+      peerIdentity32: f.responder.publicKey,
+      epoch: 7n,
+      encode: (requestId) => encodeCreate(f, { requestId }),
+      onResponse() {
+        throw new Error('injected callback failure')
+      }
+    })
+    const response = f.rightCodec.encode({
+      type: BOOTSTRAP_TYPE.LINK_CREATED,
+      requestId: pending.requestId,
+      epoch: 7n,
+      body: f.accepted.message,
+      requestPacket: pending.packet
+    })
+    const verified = f.leftCodec.decode(response, f.rightSource)
+    expectCode(
+      t,
+      () => table.acceptResponse(f.responder.publicKey, verified, response),
+      'ROUTE_UNAVAILABLE'
+    )
+    expectCode(t, () => begin(table), 'CIRCUIT_STATE')
+  }
+})
+
+test('an early timer callback rechecks the monotonic deadline instead of expiring authority', (t) => {
+  const f = fixture()
+  const callbacks = []
+  const clock = fakeClock()
+  const table = new BootstrapRequestTable({
+    crypto: cryptoSuite,
+    now: clock.now,
+    schedule(callback) {
+      callbacks.push(callback)
+      return callback
+    },
+    cancel() {},
+    randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 8])
+  })
+  const pending = table.begin({
+    peerIdentity32: f.responder.publicKey,
+    epoch: 7n,
+    encode: (requestId) => encodeCreate(f, { requestId }),
+    onResponse() {}
+  })
+  callbacks.shift()()
+  const response = f.rightCodec.encode({
+    type: BOOTSTRAP_TYPE.LINK_CREATED,
+    requestId: pending.requestId,
+    epoch: 7n,
+    body: f.accepted.message,
+    requestPacket: pending.packet
+  })
+  const verified = f.leftCodec.decode(response, f.rightSource)
+  t.is(table.acceptResponse(f.responder.publicKey, verified, response), true)
+  table.destroy()
+})
+
+test('expiry tombstone scheduling failure closes all request authority', (t) => {
+  const f = fixture()
+  const callbacks = []
+  let current = 1_000
+  let schedules = 0
+  const table = new BootstrapRequestTable({
+    crypto: cryptoSuite,
+    now: () => current,
+    schedule(callback) {
+      if (++schedules === 2) throw new Error('injected tombstone scheduler failure')
+      callbacks.push(callback)
+      return callback
+    },
+    cancel() {},
+    randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 9])
+  })
+  table.begin({
+    peerIdentity32: f.responder.publicKey,
+    epoch: 7n,
+    encode: (requestId) => encodeCreate(f, { requestId }),
+    onResponse() {}
+  })
+  current += BOOTSTRAP_DEADLINE
+  callbacks.shift()()
+  expectCode(
+    t,
+    () =>
+      table.begin({
+        peerIdentity32: f.responder.publicKey,
+        epoch: 7n,
+        encode: (requestId) => encodeCreate(f, { requestId }),
+        onResponse() {}
+      }),
+    'CIRCUIT_STATE'
+  )
+})
+
+test('responder cache and tombstone reservations enforce per-peer as well as global bounds', (t) => {
+  const f = fixture()
+  const { table } = tableFixture({
+    maxPending: 2,
+    maxPendingPerPeer: 2,
+    maxCache: 2,
+    maxCachePerPeer: 1,
+    maxTombstones: 4,
+    maxTombstonesPerPeer: 1
+  })
+  const respond = (requestId) => {
+    const request = encodeCreate(f, { requestId })
+    const decoded = f.rightCodec.decode(request, f.leftSource)
+    return table.respond(f.initiator.publicKey, decoded, request, () => {
+      const packet = f.rightCodec.encode({
+        type: BOOTSTRAP_TYPE.LINK_REJECT,
+        requestId,
+        epoch: 7n,
+        rejectedType: BOOTSTRAP_TYPE.LINK_CREATE,
+        rejectCode: BOOTSTRAP_REJECT_CODE.ROUTE_UNAVAILABLE,
+        requestPacket: request
+      })
+      return { packet, decoded: f.leftCodec.decode(packet, f.rightSource) }
+    })
+  }
+  t.is(respond(31n).byteLength, BOOTSTRAP_SIZE)
+  expectCode(t, () => respond(32n), 'CIRCUIT_LIMIT')
+  table.destroy()
+
+  const bounded = tableFixture({
+    maxPending: 2,
+    maxPendingPerPeer: 2,
+    maxCache: 1,
+    maxTombstones: 4,
+    maxTombstonesPerPeer: 1
+  }).table
+  const begin = () =>
+    bounded.begin({
+      peerIdentity32: f.responder.publicKey,
+      epoch: 7n,
+      encode: (requestId) => encodeCreate(f, { requestId }),
+      onResponse() {}
+    })
+  const pending = begin()
+  expectCode(t, () => begin(), 'CIRCUIT_LIMIT')
+  bounded.cancel(pending.token)
+  expectCode(t, () => begin(), 'CIRCUIT_LIMIT')
+  bounded.destroy()
+
+  const nextEpoch = fixture({ epoch: 8n, grantId32: seed(253) })
+  const crossEpoch = tableFixture({
+    maxPending: 2,
+    maxPendingPerPeer: 1,
+    maxTombstones: 2
+  }).table
+  crossEpoch.begin({
+    peerIdentity32: f.responder.publicKey,
+    epoch: 7n,
+    encode: (requestId) => encodeCreate(f, { requestId }),
+    onResponse() {}
+  })
+  expectCode(
+    t,
+    () =>
+      crossEpoch.begin({
+        peerIdentity32: nextEpoch.responder.publicKey,
+        epoch: 8n,
+        encode: (requestId) => encodeCreate(nextEpoch, { requestId, epoch: 8n }),
+        onResponse() {}
+      }),
+    'CIRCUIT_LIMIT'
+  )
+  crossEpoch.destroy()
+})
+
+test('controller callback reentrancy cannot bypass pending or responder cache bounds', (t) => {
+  const f = fixture()
+
+  {
+    const { table } = tableFixture({ maxPending: 1, maxTombstones: 2 })
+    let reentered = false
+    const begin = () =>
+      table.begin({
+        peerIdentity32: f.responder.publicKey,
+        epoch: 7n,
+        encode(requestId) {
+          if (!reentered) {
+            reentered = true
+            begin()
+          }
+          return encodeCreate(f, { requestId })
+        },
+        onResponse() {}
+      })
+    expectCode(t, begin, 'ROUTE_UNAVAILABLE')
+    expectCode(t, begin, 'CIRCUIT_STATE')
+  }
+
+  {
+    const { table } = tableFixture({ maxCache: 1, maxTombstones: 2 })
+    const outerPacket = encodeCreate(f, { requestId: 61n })
+    const innerPacket = encodeCreate(f, { requestId: 62n })
+    const outer = f.rightCodec.decode(outerPacket, f.leftSource)
+    const inner = f.rightCodec.decode(innerPacket, f.leftSource)
+    const response = (requestId, requestPacket) => {
+      const packet = f.rightCodec.encode({
+        type: BOOTSTRAP_TYPE.LINK_REJECT,
+        requestId,
+        epoch: 7n,
+        rejectedType: BOOTSTRAP_TYPE.LINK_CREATE,
+        rejectCode: BOOTSTRAP_REJECT_CODE.ROUTE_UNAVAILABLE,
+        requestPacket
+      })
+      return { packet, decoded: f.leftCodec.decode(packet, f.rightSource) }
+    }
+    expectCode(
+      t,
+      () =>
+        table.respond(f.initiator.publicKey, outer, outerPacket, () => {
+          table.respond(f.initiator.publicKey, inner, innerPacket, () => response(62n, innerPacket))
+          return response(61n, outerPacket)
+        }),
+      'ROUTE_UNAVAILABLE'
+    )
+    expectCode(
+      t,
+      () => table.respond(f.initiator.publicKey, outer, outerPacket, () => null),
+      'CIRCUIT_STATE'
+    )
+  }
+})
+
+test('random and timer adapters cannot reenter table mutation windows', (t) => {
+  const f = fixture()
+
+  {
+    let table
+    let reentered = false
+    let nextId = 1
+    const begin = () =>
+      table.begin({
+        peerIdentity32: f.responder.publicKey,
+        epoch: 7n,
+        encode: (requestId) => encodeCreate(f, { requestId }),
+        onResponse() {}
+      })
+    table = new BootstrapRequestTable({
+      crypto: cryptoSuite,
+      now: () => 1_000,
+      schedule: () => Object.freeze({}),
+      cancel() {},
+      randomBytes() {
+        if (!reentered) {
+          reentered = true
+          begin()
+        }
+        const id = b4a.alloc(8)
+        id[7] = nextId++
+        return id
+      },
+      maxPending: 1,
+      maxTombstones: 2
+    })
+    expectCode(t, begin, 'CIRCUIT_STATE')
+    expectCode(t, begin, 'CIRCUIT_STATE')
+  }
+
+  {
+    let table
+    let reentered = false
+    let nextId = 10
+    const begin = () =>
+      table.begin({
+        peerIdentity32: f.responder.publicKey,
+        epoch: 7n,
+        encode: (requestId) => encodeCreate(f, { requestId }),
+        onResponse() {}
+      })
+    table = new BootstrapRequestTable({
+      crypto: cryptoSuite,
+      now: () => 1_000,
+      schedule: (callback) => callback,
+      cancel() {
+        if (reentered) return
+        reentered = true
+        begin()
+      },
+      randomBytes() {
+        const id = b4a.alloc(8)
+        id[7] = nextId++
+        return id
+      },
+      maxPending: 1,
+      maxTombstones: 1
+    })
+    const pending = begin()
+    expectCode(t, () => table.cancel(pending.token), 'ROUTE_UNAVAILABLE')
+    expectCode(t, begin, 'CIRCUIT_STATE')
+  }
 })

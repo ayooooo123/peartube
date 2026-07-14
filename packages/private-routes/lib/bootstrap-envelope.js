@@ -26,7 +26,9 @@ export const BOOTSTRAP_DEADLINE = 5_000
 export const DEFAULT_MAX_BOOTSTRAP_PENDING = 64
 export const DEFAULT_MAX_BOOTSTRAP_PENDING_PER_PEER = 8
 export const DEFAULT_MAX_BOOTSTRAP_CACHE = 64
+export const DEFAULT_MAX_BOOTSTRAP_CACHE_PER_PEER = 8
 export const DEFAULT_MAX_BOOTSTRAP_TOMBSTONES = 128
+export const DEFAULT_MAX_BOOTSTRAP_TOMBSTONES_PER_PEER = 16
 export const TEST_ONLY_BOOTSTRAP_REQUEST_TABLE_OBSERVER = Symbol(
   'test-only-bootstrap-request-table-observer'
 )
@@ -36,6 +38,7 @@ const ZERO_DIGEST = b4a.alloc(32)
 const CODECS = new WeakMap()
 const TABLES = new WeakMap()
 const VERIFIED_ENVELOPES = new WeakMap()
+const VERIFIED_PACKETS = new WeakMap()
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferSet = Uint8Array.prototype.set
@@ -247,6 +250,7 @@ function validateCreated(body, sender, recipient, epoch, requestBody = null, cry
         !same(decoded.initiatorLocalId, request.initiatorLocalId) ||
         !same(decoded.responderLocalId, request.responderLocalId) ||
         !same(decoded.initiatorEphemeralKey, request.initiatorEphemeralKey) ||
+        decoded.expiresAt !== request.expiresAt ||
         !same(decoded.createHash, createHash)
       ) {
         invalidRoute()
@@ -522,6 +526,19 @@ export class BootstrapEnvelopeCodec {
       ])
       signature = safeSign(state.crypto, signedDigest, state.localIdentitySecretKey)
       bufferSet.call(packet, signature, 1136)
+      const packetDigest32 = safeHash(state.crypto, packet)
+      VERIFIED_PACKETS.set(packet, {
+        type,
+        requestId,
+        epoch,
+        senderIdentity32: copy(state.link.localIdentity32),
+        recipientIdentity32: copy(state.link.peerIdentity32),
+        grantDigest32: copy(state.link.digest32),
+        requestDigest32: copy(requestDigest32),
+        body: copy(body),
+        packetDigest32: copy(packetDigest32)
+      })
+      clear(packetDigest32)
       return packet
     } catch (err) {
       clear(packet)
@@ -612,9 +629,9 @@ function tableKey(peerIdentity32, epoch, requestId) {
   return `${b4a.toString(peerIdentity32, 'hex')}:${epoch}:${requestId}`
 }
 
-function peerKey(peerIdentity32, epoch) {
-  if (!fixed(peerIdentity32, 32) || !u64(epoch)) invalidRoute()
-  return `${b4a.toString(peerIdentity32, 'hex')}:${epoch}`
+function peerKey(peerIdentity32) {
+  if (!fixed(peerIdentity32, 32)) invalidRoute()
+  return b4a.toString(peerIdentity32, 'hex')
 }
 
 function tableSnapshot(state) {
@@ -648,6 +665,7 @@ function cancelTableTimer(state, key) {
   try {
     state.cancel(timer)
   } catch {
+    failTable(state)
     unavailable()
   }
 }
@@ -655,9 +673,17 @@ function cancelTableTimer(state, key) {
 function clearRecord(record) {
   if (!record) return
   clear(record.peerIdentity32)
+  clear(record.senderIdentity32)
+  clear(record.recipientIdentity32)
+  clear(record.grantDigest32)
+  clear(record.body)
   clear(record.packet)
   clear(record.digest32)
   record.peerIdentity32 = null
+  record.senderIdentity32 = null
+  record.recipientIdentity32 = null
+  record.grantDigest32 = null
+  record.body = null
   record.packet = null
   record.digest32 = null
   record.callback = null
@@ -679,77 +705,182 @@ function removeRecord(state, collection, key) {
   return record
 }
 
+function countPeer(collection, peer) {
+  let count = 0
+  for (const record of collection.values()) if (record.peerKey === peer) count++
+  return count
+}
+
+function failTable(state) {
+  if (state.destroyed) return
+  state.destroyed = true
+  const timers = Array.from(state.timers.values())
+  state.timers.clear()
+  for (const timer of timers) {
+    try {
+      state.cancel(timer)
+    } catch {
+      // Authority is already closed; cancellation is best effort.
+    }
+  }
+  for (const record of state.pending.values()) clearRecord(record)
+  for (const record of state.cache.values()) clearRecord(record)
+  for (const record of state.tombstones.values()) clearRecord(record)
+  state.pending.clear()
+  state.cache.clear()
+  state.tombstones.clear()
+  state.tokens = new WeakMap()
+  state.released = true
+  observeTable(state)
+  state.now = null
+  state.schedule = null
+  state.cancel = null
+  state.randomBytes = null
+  state.observer = null
+}
+
+function deadlineAt(state, current) {
+  if (current > Number.MAX_SAFE_INTEGER - state.deadline) {
+    failTable(state)
+    unavailable()
+  }
+  return current + state.deadline
+}
+
+function scheduleTableTimer(state, key, deadline, expire) {
+  let arming = true
+  let synchronous = false
+  let fired = false
+  let timer
+  const callback = () => {
+    if (arming) {
+      synchronous = true
+      return
+    }
+    if (state.destroyed) return
+    if (fired) {
+      failTable(state)
+      return
+    }
+    fired = true
+    state.timers.delete(key)
+    let current
+    try {
+      current = tableTime(state)
+      if (current < deadline) {
+        scheduleTableTimer(state, key, deadline, expire)
+        return
+      }
+      expire()
+    } catch {
+      failTable(state)
+    }
+  }
+  try {
+    timer = state.schedule(callback, Math.max(0, deadline - state.lastNow))
+  } catch {
+    arming = false
+    failTable(state)
+    unavailable()
+  }
+  arming = false
+  if (synchronous) {
+    try {
+      state.cancel(timer)
+    } catch {
+      // The table is closed below regardless.
+    }
+    failTable(state)
+    unavailable()
+  }
+  state.timers.set(key, timer)
+}
+
 function addTombstone(state, key, record) {
   if (state.tombstones.size >= state.maxTombstones) circuitLimit()
+  if (countPeer(state.tombstones, record.peerKey) >= state.maxTombstonesPerPeer) circuitLimit()
+  const current = tableTime(state)
   const tombstone = {
     peerIdentity32: copy(record.peerIdentity32),
+    peerKey: record.peerKey,
     epoch: record.epoch,
     requestId: record.requestId,
     digest32: copy(record.digest32),
     packet: null,
     callback: null,
-    deadlineAt: tableTime(state) + state.deadline
+    deadlineAt: deadlineAt(state, current)
   }
   state.tombstones.set(key, tombstone)
-  let timer
   try {
-    timer = state.schedule(() => {
-      state.timers.delete(`t:${key}`)
+    scheduleTableTimer(state, `t:${key}`, tombstone.deadlineAt, () => {
       const removed = state.tombstones.get(key)
       state.tombstones.delete(key)
       clearRecord(removed)
       observeTable(state)
-    }, state.deadline)
+    })
   } catch {
     state.tombstones.delete(key)
     clearRecord(tombstone)
+    failTable(state)
     unavailable()
   }
-  state.timers.set(`t:${key}`, timer)
 }
 
 function scheduleRecord(state, collection, prefix, key, record) {
-  let timer
   try {
-    timer = state.schedule(() => {
-      state.timers.delete(`${prefix}:${key}`)
+    scheduleTableTimer(state, `${prefix}:${key}`, record.deadlineAt, () => {
       if (!collection.has(key)) {
         clearRecord(record)
         return
       }
       collection.delete(key)
-      if (collection === state.pending) {
-        state.tokens.delete(record.token)
-        try {
-          addTombstone(state, key, record)
-        } catch {}
-      }
+      if (collection === state.pending) state.tokens.delete(record.token)
+      addTombstone(state, key, record)
       clearRecord(record)
       observeTable(state)
-    }, state.deadline)
+    })
   } catch {
+    failTable(state)
     unavailable()
   }
-  state.timers.set(`${prefix}:${key}`, timer)
 }
 
-function ensureTableOpen(state) {
+function enterTableMutation(state) {
   if (state.destroyed) circuitState()
+  if (state.controllerBusy) {
+    failTable(state)
+    circuitState()
+  }
+  state.controllerBusy = true
 }
 
-function ensureTombstoneReservation(state) {
+function leaveTableMutation(state) {
+  state.controllerBusy = false
+}
+
+function ensureTombstoneReservation(state, peer) {
   if (state.pending.size + state.cache.size + state.tombstones.size >= state.maxTombstones) {
     circuitLimit()
   }
+  const peerReservations =
+    countPeer(state.pending, peer) +
+    countPeer(state.cache, peer) +
+    countPeer(state.tombstones, peer)
+  if (peerReservations >= state.maxTombstonesPerPeer) circuitLimit()
 }
 
 function tableTime(state) {
   try {
     const value = state.now()
-    if (!Number.isSafeInteger(value) || value < 0) unavailable()
+    if (!Number.isSafeInteger(value) || value < 0 || value < state.lastNow) {
+      failTable(state)
+      unavailable()
+    }
+    state.lastNow = value
     return value
   } catch (err) {
     if (err instanceof PrivateRouteError) throw err
+    failTable(state)
     unavailable()
   }
 }
@@ -780,6 +911,16 @@ function validateDecoded(value) {
   const decoded = safeObject(value) ? VERIFIED_ENVELOPES.get(value) : null
   if (!decoded) unauthorized()
   return decoded
+}
+
+function validateEncoded(state, packet) {
+  const encoded = fixed(packet, BOOTSTRAP_SIZE) ? VERIFIED_PACKETS.get(packet) : null
+  if (!encoded) unauthorized()
+  const digest32 = safeHash(state.crypto, packet)
+  const matches = same(digest32, encoded.packetDigest32)
+  clear(digest32)
+  if (!matches) unauthorized()
+  return encoded
 }
 
 export class BootstrapRequestTable {
@@ -819,12 +960,22 @@ export class BootstrapRequestTable {
         DEFAULT_MAX_BOOTSTRAP_PENDING_PER_PEER
       ),
       maxCache: tableBound(option(options, 'maxCache'), DEFAULT_MAX_BOOTSTRAP_CACHE),
+      maxCachePerPeer: tableBound(
+        option(options, 'maxCachePerPeer'),
+        DEFAULT_MAX_BOOTSTRAP_CACHE_PER_PEER
+      ),
       maxTombstones: tableBound(option(options, 'maxTombstones'), DEFAULT_MAX_BOOTSTRAP_TOMBSTONES),
+      maxTombstonesPerPeer: tableBound(
+        option(options, 'maxTombstonesPerPeer'),
+        DEFAULT_MAX_BOOTSTRAP_TOMBSTONES_PER_PEER
+      ),
       pending: new Map(),
       cache: new Map(),
       tombstones: new Map(),
       timers: new Map(),
       tokens: new WeakMap(),
+      lastNow: -1,
+      controllerBusy: false,
       destroyed: false,
       released: false
     })
@@ -832,324 +983,426 @@ export class BootstrapRequestTable {
 
   begin(value) {
     const state = TABLES.get(this)
-    ensureTableOpen(state)
-    const startedAt = tableTime(state)
-    if (!safeObject(value)) invalidRoute()
-    const peerIdentity32 = option(value, 'peerIdentity32')
-    const epoch = option(value, 'epoch')
-    const encode = option(value, 'encode')
-    const onResponse = option(value, 'onResponse')
-    if (
-      !fixed(peerIdentity32, 32) ||
-      !u64(epoch) ||
-      typeof encode !== 'function' ||
-      typeof onResponse !== 'function'
-    ) {
-      invalidRoute()
-    }
-    if (state.pending.size >= state.maxPending) circuitLimit()
-    ensureTombstoneReservation(state)
-    const peer = peerKey(peerIdentity32, epoch)
-    let peerCount = 0
-    for (const record of state.pending.values()) if (record.peerKey === peer) peerCount++
-    if (peerCount >= state.maxPendingPerPeer) circuitLimit()
-
-    const requestId = randomRequestId(state, peerIdentity32, epoch)
-    const key = tableKey(peerIdentity32, epoch, requestId)
-    let packet = null
-    let digest32 = null
-    let record = null
+    enterTableMutation(state)
     try {
+      const startedAt = tableTime(state)
+      if (!safeObject(value)) invalidRoute()
+      const peerIdentity32 = option(value, 'peerIdentity32')
+      const epoch = option(value, 'epoch')
+      const encode = option(value, 'encode')
+      const onResponse = option(value, 'onResponse')
+      if (
+        !fixed(peerIdentity32, 32) ||
+        !u64(epoch) ||
+        typeof encode !== 'function' ||
+        typeof onResponse !== 'function'
+      ) {
+        invalidRoute()
+      }
+      if (state.pending.size >= state.maxPending) circuitLimit()
+      const peer = peerKey(peerIdentity32)
+      ensureTombstoneReservation(state, peer)
+      let peerCount = 0
+      for (const record of state.pending.values()) if (record.peerKey === peer) peerCount++
+      if (peerCount >= state.maxPendingPerPeer) circuitLimit()
+
+      const requestId = randomRequestId(state, peerIdentity32, epoch)
+      const key = tableKey(peerIdentity32, epoch, requestId)
+      let packet = null
+      let digest32 = null
+      let record = null
       try {
-        packet = encode(requestId)
-      } catch {
-        unavailable()
+        try {
+          packet = encode(requestId)
+        } catch {
+          unavailable()
+        }
+        if (state.destroyed) unavailable()
+        const encoded = validateEncoded(state, packet)
+        if (
+          encoded.type !== BOOTSTRAP_TYPE.LINK_CREATE ||
+          encoded.requestId !== requestId ||
+          encoded.epoch !== epoch ||
+          !same(encoded.recipientIdentity32, peerIdentity32)
+        ) {
+          unauthorized()
+        }
+        digest32 = copy(encoded.packetDigest32)
+        const token = Object.freeze({})
+        record = {
+          peerIdentity32: copy(peerIdentity32),
+          peerKey: peer,
+          senderIdentity32: copy(encoded.senderIdentity32),
+          recipientIdentity32: copy(encoded.recipientIdentity32),
+          grantDigest32: copy(encoded.grantDigest32),
+          body: copy(encoded.body),
+          epoch,
+          requestId,
+          packet: copy(packet),
+          digest32: copy(digest32),
+          callback: onResponse,
+          token,
+          deadlineAt: deadlineAt(state, startedAt)
+        }
+        state.pending.set(key, record)
+        state.tokens.set(token, key)
+        try {
+          scheduleRecord(state, state.pending, 'p', key, record)
+        } catch {
+          state.pending.delete(key)
+          state.tokens.delete(token)
+          clearRecord(record)
+          throw PrivateRouteError.ROUTE_UNAVAILABLE()
+        }
+        observeTable(state)
+        return Object.freeze({
+          token,
+          requestId,
+          packet: copy(packet),
+          digest32: copy(digest32)
+        })
+      } finally {
+        clear(digest32)
       }
-      if (!fixed(packet, BOOTSTRAP_SIZE)) invalidRoute()
-      digest32 = safeHash(state.crypto, packet)
-      const token = Object.freeze({})
-      record = {
-        peerIdentity32: copy(peerIdentity32),
-        peerKey: peer,
-        epoch,
-        requestId,
-        packet: copy(packet),
-        digest32: copy(digest32),
-        callback: onResponse,
-        token,
-        deadlineAt: startedAt + state.deadline
-      }
-      state.pending.set(key, record)
-      state.tokens.set(token, key)
-      try {
-        scheduleRecord(state, state.pending, 'p', key, record)
-      } catch {
-        state.pending.delete(key)
-        state.tokens.delete(token)
-        clearRecord(record)
-        throw PrivateRouteError.ROUTE_UNAVAILABLE()
-      }
-      observeTable(state)
-      return Object.freeze({
-        token,
-        requestId,
-        packet: copy(packet),
-        digest32: copy(digest32)
-      })
     } finally {
-      clear(digest32)
+      leaveTableMutation(state)
     }
   }
 
   acceptResponse(peerIdentity32, value, packet) {
     const state = TABLES.get(this)
-    ensureTableOpen(state)
-    const current = tableTime(state)
-    const decoded = validateDecoded(value)
-    if (
-      (decoded.type !== BOOTSTRAP_TYPE.LINK_CREATED &&
-        decoded.type !== BOOTSTRAP_TYPE.LINK_REJECT) ||
-      !fixed(packet, BOOTSTRAP_SIZE) ||
-      !same(peerIdentity32, decoded.senderIdentity32)
-    ) {
-      return false
-    }
-    const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
-    const record = state.pending.get(key)
-    if (!record) return false
-    if (current >= record.deadlineAt) {
+    enterTableMutation(state)
+    try {
+      const current = tableTime(state)
+      const decoded = validateDecoded(value)
+      if (
+        (decoded.type !== BOOTSTRAP_TYPE.LINK_CREATED &&
+          decoded.type !== BOOTSTRAP_TYPE.LINK_REJECT) ||
+        !fixed(packet, BOOTSTRAP_SIZE) ||
+        !same(peerIdentity32, decoded.senderIdentity32)
+      ) {
+        return false
+      }
+      const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
+      const record = state.pending.get(key)
+      if (!record) return false
+      if (current >= record.deadlineAt) {
+        removeRecord(state, state.pending, key)
+        state.tokens.delete(record.token)
+        try {
+          addTombstone(state, key, record)
+        } finally {
+          clearRecord(record)
+        }
+        observeTable(state)
+        return false
+      }
+      if (
+        !same(decoded.senderIdentity32, record.recipientIdentity32) ||
+        !same(decoded.recipientIdentity32, record.senderIdentity32) ||
+        !same(decoded.grantDigest32, record.grantDigest32)
+      ) {
+        unauthorized()
+      }
+      if (!same(decoded.requestDigest32, record.digest32)) return false
+      const packetDigest32 = safeHash(state.crypto, packet)
+      const packetMatches = same(packetDigest32, decoded.packetDigest32)
+      clear(packetDigest32)
+      if (!packetMatches) return false
+      if (decoded.type === BOOTSTRAP_TYPE.LINK_CREATED) {
+        validateCreated(
+          decoded.body,
+          decoded.senderIdentity32,
+          decoded.recipientIdentity32,
+          decoded.epoch,
+          record.body,
+          state.crypto
+        )
+      }
+
       removeRecord(state, state.pending, key)
       state.tokens.delete(record.token)
+      try {
+        addTombstone(state, key, record)
+      } catch {
+        clearRecord(record)
+        unavailable()
+      }
+      const callback = record.callback
+      record.callback = null
+      try {
+        callback(copy(packet), value)
+      } catch {
+        clearRecord(record)
+        failTable(state)
+        unavailable()
+      }
+      clearRecord(record)
+      observeTable(state)
+      return true
+    } finally {
+      leaveTableMutation(state)
+    }
+  }
+
+  cancel(token) {
+    const state = TABLES.get(this)
+    enterTableMutation(state)
+    try {
+      const key = safeObject(token) ? state.tokens.get(token) : null
+      if (!key) return false
+      const record = removeRecord(state, state.pending, key)
+      if (!record) return false
+      state.tokens.delete(token)
       try {
         addTombstone(state, key, record)
       } finally {
         clearRecord(record)
       }
       observeTable(state)
-      return false
-    }
-    if (!same(decoded.requestDigest32, record.digest32)) return false
-    const packetDigest32 = safeHash(state.crypto, packet)
-    const packetMatches = same(packetDigest32, decoded.packetDigest32)
-    clear(packetDigest32)
-    if (!packetMatches) return false
-
-    removeRecord(state, state.pending, key)
-    state.tokens.delete(record.token)
-    try {
-      addTombstone(state, key, record)
-    } catch {
-      clearRecord(record)
-      unavailable()
-    }
-    const callback = record.callback
-    record.callback = null
-    try {
-      callback(copy(packet), value)
-    } catch {
-      clearRecord(record)
-      unavailable()
-    }
-    clearRecord(record)
-    observeTable(state)
-    return true
-  }
-
-  cancel(token) {
-    const state = TABLES.get(this)
-    ensureTableOpen(state)
-    const key = safeObject(token) ? state.tokens.get(token) : null
-    if (!key) return false
-    const record = removeRecord(state, state.pending, key)
-    if (!record) return false
-    state.tokens.delete(token)
-    try {
-      addTombstone(state, key, record)
+      return true
     } finally {
-      clearRecord(record)
+      leaveTableMutation(state)
     }
-    observeTable(state)
-    return true
   }
 
   respond(peerIdentity32, value, requestPacket, createResponse) {
     const state = TABLES.get(this)
-    ensureTableOpen(state)
-    const current = tableTime(state)
-    const decoded = validateDecoded(value)
-    if (
-      decoded.type !== BOOTSTRAP_TYPE.LINK_CREATE ||
-      !same(peerIdentity32, decoded.senderIdentity32) ||
-      !fixed(requestPacket, BOOTSTRAP_SIZE) ||
-      typeof createResponse !== 'function'
-    ) {
-      invalidRoute()
-    }
-    const digest32 = safeHash(state.crypto, requestPacket)
-    const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
-    let previous = state.cache.get(key)
-    if (previous && current >= previous.deadlineAt) {
-      removeRecord(state, state.cache, key)
-      clearRecord(previous)
-      previous = null
-    }
-    if (previous) {
-      const identical = same(previous.digest32, digest32)
-      clear(digest32)
-      if (!identical) replay()
-      return copy(previous.packet)
-    }
-    if (!same(digest32, decoded.packetDigest32)) {
-      clear(digest32)
-      unauthorized()
-    }
-    if (state.cache.size >= state.maxCache) {
-      clear(digest32)
-      circuitLimit()
-    }
+    enterTableMutation(state)
     try {
-      ensureTombstoneReservation(state)
-    } catch (err) {
-      clear(digest32)
-      throw err
-    }
+      const current = tableTime(state)
+      const decoded = validateDecoded(value)
+      if (
+        decoded.type !== BOOTSTRAP_TYPE.LINK_CREATE ||
+        !same(peerIdentity32, decoded.senderIdentity32) ||
+        !fixed(requestPacket, BOOTSTRAP_SIZE) ||
+        typeof createResponse !== 'function'
+      ) {
+        invalidRoute()
+      }
+      const digest32 = safeHash(state.crypto, requestPacket)
+      const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
+      const peer = peerKey(peerIdentity32)
+      if (state.tombstones.has(key)) {
+        clear(digest32)
+        replay()
+      }
+      let previous = state.cache.get(key)
+      if (previous && current >= previous.deadlineAt) {
+        removeRecord(state, state.cache, key)
+        try {
+          addTombstone(state, key, previous)
+        } finally {
+          clearRecord(previous)
+        }
+        clear(digest32)
+        replay()
+      }
+      if (previous) {
+        const identical = same(previous.digest32, digest32)
+        clear(digest32)
+        if (!identical) replay()
+        return copy(previous.packet)
+      }
+      if (!same(digest32, decoded.packetDigest32)) {
+        clear(digest32)
+        unauthorized()
+      }
+      if (state.cache.size >= state.maxCache) {
+        clear(digest32)
+        circuitLimit()
+      }
+      if (countPeer(state.cache, peer) >= state.maxCachePerPeer) {
+        clear(digest32)
+        circuitLimit()
+      }
+      try {
+        ensureTombstoneReservation(state, peer)
+      } catch (err) {
+        clear(digest32)
+        throw err
+      }
 
-    let result
-    try {
-      result = createResponse()
-    } catch {
-      clear(digest32)
-      unavailable()
+      let result
+      try {
+        result = createResponse()
+      } catch {
+        clear(digest32)
+        unavailable()
+      }
+      if (state.destroyed) {
+        clear(digest32)
+        unavailable()
+      }
+      if (!safeObject(result)) {
+        clear(digest32)
+        invalidRoute()
+      }
+      const packet = option(result, 'packet')
+      const response = validateDecoded(option(result, 'decoded'))
+      if (
+        !fixed(packet, BOOTSTRAP_SIZE) ||
+        (response.type !== BOOTSTRAP_TYPE.LINK_CREATED &&
+          response.type !== BOOTSTRAP_TYPE.LINK_REJECT) ||
+        response.requestId !== decoded.requestId ||
+        response.epoch !== decoded.epoch ||
+        !same(response.senderIdentity32, decoded.recipientIdentity32) ||
+        !same(response.recipientIdentity32, decoded.senderIdentity32) ||
+        !same(response.grantDigest32, decoded.grantDigest32) ||
+        !same(response.requestDigest32, digest32)
+      ) {
+        clear(digest32)
+        invalidRoute()
+      }
+      const packetDigest32 = safeHash(state.crypto, packet)
+      const responseMatches = same(packetDigest32, response.packetDigest32)
+      clear(packetDigest32)
+      if (!responseMatches) {
+        clear(digest32)
+        unauthorized()
+      }
+      if (response.type === BOOTSTRAP_TYPE.LINK_CREATED) {
+        validateCreated(
+          response.body,
+          response.senderIdentity32,
+          response.recipientIdentity32,
+          response.epoch,
+          decoded.body,
+          state.crypto
+        )
+      }
+      const record = {
+        peerIdentity32: copy(peerIdentity32),
+        peerKey: peer,
+        senderIdentity32: copy(decoded.senderIdentity32),
+        recipientIdentity32: copy(decoded.recipientIdentity32),
+        grantDigest32: copy(decoded.grantDigest32),
+        body: copy(decoded.body),
+        epoch: decoded.epoch,
+        requestId: decoded.requestId,
+        packet: copy(packet),
+        digest32,
+        callback: null,
+        deadlineAt: deadlineAt(state, current)
+      }
+      state.cache.set(key, record)
+      try {
+        scheduleRecord(state, state.cache, 'c', key, record)
+      } catch {
+        state.cache.delete(key)
+        clearRecord(record)
+        unavailable()
+      }
+      observeTable(state)
+      return copy(packet)
+    } finally {
+      leaveTableMutation(state)
     }
-    if (!safeObject(result)) {
-      clear(digest32)
-      invalidRoute()
-    }
-    const packet = option(result, 'packet')
-    const response = validateDecoded(option(result, 'decoded'))
-    if (
-      !fixed(packet, BOOTSTRAP_SIZE) ||
-      (response.type !== BOOTSTRAP_TYPE.LINK_CREATED &&
-        response.type !== BOOTSTRAP_TYPE.LINK_REJECT) ||
-      response.requestId !== decoded.requestId ||
-      response.epoch !== decoded.epoch ||
-      !same(response.senderIdentity32, decoded.recipientIdentity32) ||
-      !same(response.recipientIdentity32, decoded.senderIdentity32) ||
-      !same(response.requestDigest32, digest32)
-    ) {
-      clear(digest32)
-      invalidRoute()
-    }
-    const packetDigest32 = safeHash(state.crypto, packet)
-    const responseMatches = same(packetDigest32, response.packetDigest32)
-    clear(packetDigest32)
-    if (!responseMatches) {
-      clear(digest32)
-      unauthorized()
-    }
-    const record = {
-      peerIdentity32: copy(peerIdentity32),
-      epoch: decoded.epoch,
-      requestId: decoded.requestId,
-      packet: copy(packet),
-      digest32,
-      callback: null,
-      deadlineAt: current + state.deadline
-    }
-    state.cache.set(key, record)
-    try {
-      scheduleRecord(state, state.cache, 'c', key, record)
-    } catch {
-      state.cache.delete(key)
-      clearRecord(record)
-      unavailable()
-    }
-    observeTable(state)
-    return copy(packet)
   }
 
   acceptCancel(peerIdentity32, value) {
     const state = TABLES.get(this)
-    ensureTableOpen(state)
-    const current = tableTime(state)
-    const decoded = validateDecoded(value)
-    if (
-      decoded.type !== BOOTSTRAP_TYPE.LINK_CANCEL ||
-      !same(peerIdentity32, decoded.senderIdentity32)
-    ) {
-      return false
-    }
-    const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
-    const record = state.cache.get(key)
-    if (record && current >= record.deadlineAt) {
-      removeRecord(state, state.cache, key)
-      clearRecord(record)
-      return false
-    }
-    if (!record || !same(record.digest32, decoded.requestDigest32)) return false
-    removeRecord(state, state.cache, key)
+    enterTableMutation(state)
     try {
-      addTombstone(state, key, record)
+      const current = tableTime(state)
+      const decoded = validateDecoded(value)
+      if (
+        decoded.type !== BOOTSTRAP_TYPE.LINK_CANCEL ||
+        !same(peerIdentity32, decoded.senderIdentity32)
+      ) {
+        return false
+      }
+      const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
+      const record = state.cache.get(key)
+      if (record && current >= record.deadlineAt) {
+        removeRecord(state, state.cache, key)
+        try {
+          addTombstone(state, key, record)
+        } finally {
+          clearRecord(record)
+        }
+        return false
+      }
+      if (
+        !record ||
+        !same(record.digest32, decoded.requestDigest32) ||
+        !same(decoded.senderIdentity32, record.senderIdentity32) ||
+        !same(decoded.recipientIdentity32, record.recipientIdentity32) ||
+        !same(decoded.grantDigest32, record.grantDigest32)
+      ) {
+        return false
+      }
+      removeRecord(state, state.cache, key)
+      try {
+        addTombstone(state, key, record)
+      } finally {
+        clearRecord(record)
+      }
+      observeTable(state)
+      return true
     } finally {
-      clearRecord(record)
+      leaveTableMutation(state)
     }
-    observeTable(state)
-    return true
   }
 
   destroy() {
     const state = TABLES.get(this)
     if (state.destroyed) return
-    state.destroyed = true
-    const observer = state.observer
-    let failed = false
-    for (const [key, record] of state.pending) {
-      try {
-        cancelTableTimer(state, `p:${key}`)
-      } catch {
-        failed = true
+    enterTableMutation(state)
+    try {
+      state.destroyed = true
+      const observer = state.observer
+      let failed = false
+      for (const [key, record] of state.pending) {
+        try {
+          cancelTableTimer(state, `p:${key}`)
+        } catch {
+          failed = true
+        }
+        clearRecord(record)
       }
-      clearRecord(record)
-    }
-    for (const [key, record] of state.cache) {
-      try {
-        cancelTableTimer(state, `c:${key}`)
-      } catch {
-        failed = true
+      for (const [key, record] of state.cache) {
+        try {
+          cancelTableTimer(state, `c:${key}`)
+        } catch {
+          failed = true
+        }
+        clearRecord(record)
       }
-      clearRecord(record)
-    }
-    for (const [key, record] of state.tombstones) {
-      try {
-        cancelTableTimer(state, `t:${key}`)
-      } catch {
-        failed = true
+      for (const [key, record] of state.tombstones) {
+        try {
+          cancelTableTimer(state, `t:${key}`)
+        } catch {
+          failed = true
+        }
+        clearRecord(record)
       }
-      clearRecord(record)
-    }
-    for (const key of Array.from(state.timers.keys())) {
-      try {
-        cancelTableTimer(state, key)
-      } catch {
-        failed = true
+      for (const key of Array.from(state.timers.keys())) {
+        try {
+          cancelTableTimer(state, key)
+        } catch {
+          failed = true
+        }
       }
-    }
-    state.pending.clear()
-    state.cache.clear()
-    state.tombstones.clear()
-    state.now = null
-    state.schedule = null
-    state.cancel = null
-    state.randomBytes = null
-    state.observer = null
-    state.released = true
-    if (observer) {
-      try {
-        observer(tableSnapshot(state))
-      } catch {
-        failed = true
+      state.pending.clear()
+      state.cache.clear()
+      state.tombstones.clear()
+      state.now = null
+      state.schedule = null
+      state.cancel = null
+      state.randomBytes = null
+      state.observer = null
+      state.released = true
+      if (observer) {
+        try {
+          observer(tableSnapshot(state))
+        } catch {
+          failed = true
+        }
       }
+      if (failed) unavailable()
+    } finally {
+      leaveTableMutation(state)
     }
-    if (failed) unavailable()
   }
 }

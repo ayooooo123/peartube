@@ -51,6 +51,20 @@ export {
   isSafetyRouteChecker
 } from './lib/circuit-authority.js'
 export { createLinkSetupAuthority, isLinkTicketChecker } from './lib/link-setup.js'
+export {
+  BOOTSTRAP_CLASS,
+  BOOTSTRAP_DEADLINE,
+  BOOTSTRAP_HEADER_SIZE,
+  BOOTSTRAP_MAX_BODY,
+  BOOTSTRAP_SIGNATURE_SIZE,
+  BOOTSTRAP_SIZE,
+  DEFAULT_MAX_BOOTSTRAP_CACHE,
+  DEFAULT_MAX_BOOTSTRAP_PENDING,
+  DEFAULT_MAX_BOOTSTRAP_PENDING_PER_PEER,
+  DEFAULT_MAX_BOOTSTRAP_TOMBSTONES,
+  BootstrapEnvelopeCodec,
+  BootstrapRequestTable
+} from './lib/bootstrap-envelope.js'
 export { RouteManager } from './lib/route-manager.js'
 export {
   DEFAULT_MAX_LINK_HANDLES,
@@ -177,6 +191,8 @@ export {
   verifyDescriptor
 } from './lib/descriptor.js'
 export {
+  BOOTSTRAP_REJECT_CODE,
+  BOOTSTRAP_TYPE,
   CAPABILITY,
   CELL_CLASS,
   CIRCUIT_STATE,

@@ -32,6 +32,19 @@ export const CELL_CLASS = Object.freeze({
   DATAGRAM: 2
 })
 
+export const BOOTSTRAP_TYPE = Object.freeze({
+  LINK_CREATE: 0,
+  LINK_CREATED: 1,
+  LINK_REJECT: 2,
+  LINK_CANCEL: 3
+})
+
+export const BOOTSTRAP_REJECT_CODE = Object.freeze({
+  UNAUTHORIZED: 0,
+  CIRCUIT_LIMIT: 1,
+  ROUTE_UNAVAILABLE: 2
+})
+
 export const DIRECTION = Object.freeze({
   FORWARD: 0,
   REVERSE: 1
@@ -54,6 +67,7 @@ export const CAPABILITY = Object.freeze({
 
 const DOMAIN_VALUES = Object.freeze({
   ROLE: b4a.from('hyperdht-private-routes/role/v0'),
+  UDX_BOOTSTRAP: b4a.from('hyperdht-private-routes/udx-bootstrap/v0'),
   TOPOLOGY_GRANT: b4a.from('hyperdht-private-routes/topology-grant/v0'),
   RELAY_ADVERTISEMENT: b4a.from('hyperdht-private-routes/relay-advertisement/v0'),
   DESCRIPTOR_DIRECT: b4a.from('hyperdht-private-routes/descriptor/direct/v0'),

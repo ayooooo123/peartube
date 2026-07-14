@@ -2,6 +2,8 @@ import test from 'brittle'
 import b4a from 'b4a'
 
 import {
+  BOOTSTRAP_REJECT_CODE,
+  BOOTSTRAP_TYPE,
   CAPABILITY,
   CELL_CLASS,
   CIRCUIT_STATE,
@@ -50,6 +52,8 @@ test('roleForIdentity rejects every invalid identity shape', (t) => {
 
 test('protocol enumerations are exact and frozen', (t) => {
   const expected = [
+    [BOOTSTRAP_TYPE, { LINK_CREATE: 0, LINK_CREATED: 1, LINK_REJECT: 2, LINK_CANCEL: 3 }],
+    [BOOTSTRAP_REJECT_CODE, { UNAUTHORIZED: 0, CIRCUIT_LIMIT: 1, ROUTE_UNAVAILABLE: 2 }],
     [ROLE, { SAFETY: 0, PRIVATE: 1 }],
     [CELL_CLASS, { CONTROL: 0, STREAM: 1, DATAGRAM: 2 }],
     [DIRECTION, { FORWARD: 0, REVERSE: 1 }],
@@ -66,6 +70,7 @@ test('protocol enumerations are exact and frozen', (t) => {
 test('protocol domains are exact buffers in a frozen map', (t) => {
   const expected = {
     ROLE: 'hyperdht-private-routes/role/v0',
+    UDX_BOOTSTRAP: 'hyperdht-private-routes/udx-bootstrap/v0',
     TOPOLOGY_GRANT: 'hyperdht-private-routes/topology-grant/v0',
     RELAY_ADVERTISEMENT: 'hyperdht-private-routes/relay-advertisement/v0',
     DESCRIPTOR_DIRECT: 'hyperdht-private-routes/descriptor/direct/v0',

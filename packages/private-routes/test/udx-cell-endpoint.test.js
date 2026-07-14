@@ -8,12 +8,14 @@ import {
   PROTOCOL_VERSION,
   TOPOLOGY_ROLE,
   UdxCellEndpoint,
+  BootstrapEnvelopeCodec,
+  createLinkSetupAuthority,
   cryptoSuite,
   signTopologyGrant
 } from '../index.js'
 import { FakeUdxAdapter } from './fake-udx.js'
 import { expectCode, safetyRoleIdentity, seed } from './helpers.js'
-import { UDX_LINK_CLOSE, UDX_LINK_OPEN } from '../lib/udx-adapter.js'
+import { UDX_LINK_CLOSE, UDX_LINK_OPEN, selectUdxLoopbackHosts } from '../lib/udx-adapter.js'
 
 function clock() {
   let id = 0
@@ -87,6 +89,11 @@ function fixture(options = {}) {
     port: 45111,
     maxQueuedPackets: options.maxQueuedPackets || 2,
     maxQueuedBytes: options.maxQueuedBytes || 2400,
+    maxInboundPackets: options.maxInboundPackets,
+    maxInboundBytes: options.maxInboundBytes,
+    maxInboundPacketsPerPeer: options.maxInboundPacketsPerPeer,
+    maxInboundBytesPerPeer: options.maxInboundBytesPerPeer,
+    receiveCloseTimeout: options.receiveCloseTimeout,
     onBootstrap:
       options.onBootstrap || ((packet, handle) => received.push(['bootstrap', packet, handle])),
     onCell: options.onCell || ((packet, handle) => received.push(['cell', packet, handle]))
@@ -176,6 +183,15 @@ test('endpoint owns one socket, binds explicitly, and exposes no dialing surface
   await f.endpoint.close()
 })
 
+test('loopback selection requires distinct IPv4 aliases off explicit macOS fallback', (t) => {
+  t.alike(selectUdxLoopbackHosts({ platform: 'linux' }), ['127.0.0.1', '127.0.0.2'])
+  t.alike(selectUdxLoopbackHosts({ platform: 'darwin' }), ['127.0.0.1', '127.0.0.1'])
+  t.alike(selectUdxLoopbackHosts({ platform: 'darwin', forceDistinct: true }), [
+    '127.0.0.1',
+    '127.0.0.2'
+  ])
+})
+
 test('established packets cannot send or dispatch until authenticated OPEN', async (t) => {
   const f = fixture()
   await f.endpoint.bind()
@@ -205,6 +221,70 @@ test('failed session construction publishes no pending source authority', async 
     t.is(f.received.length, 0)
     await f.endpoint.close()
   }
+})
+
+test('endpoint rejects a bootstrap codec authorized by a different grant capability', async (t) => {
+  const f = fixture()
+  await f.endpoint.bind()
+  const alternateGrant = signTopologyGrant(
+    {
+      version: PROTOCOL_VERSION,
+      format: 0,
+      grantId32: seed(246),
+      endpointA: {
+        identity32: f.local.publicKey,
+        role: TOPOLOGY_ROLE.SOURCE,
+        host: '127.0.0.11',
+        port: 45111,
+        operations: LINK_OPERATION.INITIATE
+      },
+      endpointB: {
+        identity32: f.peer.publicKey,
+        role: TOPOLOGY_ROLE.SAFETY_GUARD,
+        host: '127.0.0.12',
+        port: 45112,
+        operations: LINK_OPERATION.ACCEPT
+      },
+      epoch: f.epoch,
+      notBefore: 900n,
+      expiresAt: 10_000n,
+      runId32: f.runId32
+    },
+    f.authority.secretKey
+  )
+  const alternateDigest = f.directory.add(alternateGrant)
+  const alternateHandle = f.directory.authorize({
+    digest32: alternateDigest,
+    operation: LINK_OPERATION.INITIATE,
+    localIdentity32: f.local.publicKey,
+    localRole: TOPOLOGY_ROLE.SOURCE,
+    peerIdentity32: f.peer.publicKey,
+    peerRole: TOPOLOGY_ROLE.SAFETY_GUARD,
+    epoch: f.epoch,
+    runId32: f.runId32
+  })
+  const codec = new BootstrapEnvelopeCodec({
+    linkHandle: alternateHandle,
+    localIdentitySecretKey: f.local.secretKey,
+    padding: (size) => b4a.alloc(size)
+  })
+  expectCode(
+    t,
+    () =>
+      f.endpoint.openLink(f.linkHandle, {
+        mode: 'initiate',
+        codec,
+        linkSetup: createLinkSetupAuthority({ now: () => 1_000, randomBytes: seed }),
+        setup: {},
+        now: () => 1_000,
+        schedule: () => 1,
+        cancel() {},
+        randomBytes: seed
+      }),
+    'UNAUTHORIZED'
+  )
+  codec.destroy()
+  await f.endpoint.close()
 })
 
 test('endpoint rejects DNS names, wildcards, and invalid numeric addresses before binding', (t) => {
@@ -293,6 +373,34 @@ test('all non-true native results fail and close waits for in-flight before sock
   await closing
   t.alike(events, ['send', 'close'])
   t.is(await errorCode(f.endpoint.send(handle, b4a.alloc(1200))), 'CIRCUIT_STATE')
+})
+
+test('reentrant socket error cannot close before native send wait is registered', async (t) => {
+  let finish
+  const events = []
+  const f = fixture({
+    adapterOptions: {
+      send(call, socket) {
+        events.push('send')
+        socket.emitError(new Error('reentrant'))
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      },
+      close() {
+        events.push('close')
+      }
+    }
+  })
+  await f.endpoint.bind()
+  const handle = openHandle(f.endpoint, f.linkHandle)
+  const sending = errorCode(f.endpoint.send(handle, b4a.alloc(1200, 1)))
+  await Promise.resolve()
+  t.alike(events, ['send'])
+  finish(true)
+  t.is(await sending, 'ROUTE_UNAVAILABLE')
+  await f.endpoint.close()
+  t.alike(events, ['send', 'close'])
 })
 
 test('in-flight cancellation tombstones native completion and reentrant sends stay ordered', async (t) => {
@@ -494,11 +602,87 @@ test('received packet copy is cleared after an async handler settles', async (t)
   await f.endpoint.close()
 })
 
-test('close clears callback-owned packets without awaiting receive promises', async (t) => {
+test('close waits bounded receive ownership and preserves bytes until slow handler settles', async (t) => {
+  let captured
+  let settle
+  const f = fixture({
+    onCell(packet) {
+      captured = packet
+      return new Promise((resolve) => {
+        settle = resolve
+      })
+    }
+  })
+  await f.endpoint.bind()
+  openHandle(f.endpoint, f.linkHandle)
+  const packet = b4a.alloc(1200, 0x55)
+  packet[0] = 0
+  packet[1] = 1
+  f.adapter.sockets[0].emitMessage(packet, '127.0.0.12', 45112)
+  let closed = false
+  const closing = f.endpoint.close().then(() => {
+    closed = true
+  })
+  await Promise.resolve()
+  t.is(closed, false)
+  t.is(captured[2], 0x55)
+  settle()
+  await closing
+  t.alike(captured, b4a.alloc(1200))
+})
+
+test('inbound packet and byte ownership bounds drop excess until settlement', async (t) => {
+  const variants = [
+    { maxInboundPackets: 2, maxInboundBytes: 3600 },
+    { maxInboundPackets: 3, maxInboundBytes: 2400 },
+    {
+      maxInboundPackets: 3,
+      maxInboundBytes: 3600,
+      maxInboundPacketsPerPeer: 2,
+      maxInboundBytesPerPeer: 3600
+    },
+    {
+      maxInboundPackets: 3,
+      maxInboundBytes: 3600,
+      maxInboundPacketsPerPeer: 3,
+      maxInboundBytesPerPeer: 2400
+    }
+  ]
+  for (const limits of variants) {
+    const releases = []
+    let calls = 0
+    const f = fixture({
+      ...limits,
+      onCell() {
+        calls++
+        return new Promise((resolve) => releases.push(resolve))
+      }
+    })
+    await f.endpoint.bind()
+    openHandle(f.endpoint, f.linkHandle)
+    const packet = b4a.alloc(1200)
+    packet[1] = 1
+    const socket = f.adapter.sockets[0]
+    socket.emitMessage(packet, '127.0.0.12', 45112)
+    socket.emitMessage(packet, '127.0.0.12', 45112)
+    socket.emitMessage(packet, '127.0.0.12', 45112)
+    t.is(calls, 2)
+    releases.shift()()
+    await Promise.resolve()
+    await Promise.resolve()
+    socket.emitMessage(packet, '127.0.0.12', 45112)
+    t.is(calls, 3)
+    for (const release of releases) release()
+    await f.endpoint.close()
+  }
+})
+
+test('bounded close breaks a receive handler self-await after preserving ownership', async (t) => {
   let endpoint
   let captured
   let handlerClosed = false
   const f = fixture({
+    receiveCloseTimeout: 10,
     async onCell(packet) {
       captured = packet
       await Promise.resolve()

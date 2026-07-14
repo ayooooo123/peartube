@@ -91,7 +91,7 @@ function makeDirectory({
     epoch,
     runId32
   })
-  return { directory, linkHandle }
+  return { directory, linkHandle, digest32 }
 }
 
 async function fixture(options = {}) {
@@ -162,13 +162,18 @@ async function fixture(options = {}) {
   const leftAdapter = new FakeUdxAdapter({
     send(call) {
       leftCalls++
+      if (options.reentrantBootstrap) {
+        rightAdapter.sockets[0].emitMessage(call.packet, '127.0.0.31', 46331)
+      }
       if (options.holdLeft && leftCalls === 1) {
         return new Promise((resolve) => {
           heldLeft.resolve = resolve
         })
       }
       if (options.dropLeft) return true
-      queueMicrotask(() => rightAdapter.sockets[0].emitMessage(call.packet, '127.0.0.31', 46331))
+      if (!options.reentrantBootstrap) {
+        queueMicrotask(() => rightAdapter.sockets[0].emitMessage(call.packet, '127.0.0.31', 46331))
+      }
       return true
     }
   })
@@ -180,7 +185,11 @@ async function fixture(options = {}) {
         })
       }
       if (options.dropRight) return true
-      queueMicrotask(() => leftAdapter.sockets[0].emitMessage(call.packet, '127.0.0.32', 46332))
+      if (options.reentrantBootstrap) {
+        leftAdapter.sockets[0].emitMessage(call.packet, '127.0.0.32', 46332)
+      } else {
+        queueMicrotask(() => leftAdapter.sockets[0].emitMessage(call.packet, '127.0.0.32', 46332))
+      }
       return true
     }
   })
@@ -264,6 +273,10 @@ async function fixture(options = {}) {
     right,
     heldLeft,
     initiator,
+    responder,
+    authority,
+    runId32,
+    epoch,
     responderStatic,
     common,
     leftSetup
@@ -331,6 +344,82 @@ test('async bootstrap transitions IDLE to CREATING to OPEN and installs opaque l
   f.right.directory.destroy()
   t.is(f.leftSession.state, 'TOMBSTONE')
   t.is(f.leftSession.pending, 0)
+})
+
+test('endpoint close tombstones tracked OPEN session and revokes established authority', async (t) => {
+  const f = await fixture()
+  const established = await f.leftSession.open()
+  t.is(f.leftSession.state, 'OPEN')
+  await f.leftEndpoint.close()
+  t.is(f.leftSession.state, 'TOMBSTONE')
+  let code = null
+  try {
+    readEstablishedLink(established)
+  } catch (err) {
+    code = err && err.code
+  }
+  t.is(code, 'UNAUTHORIZED')
+  await f.rightSession.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
+})
+
+test('revoked codec grant closes OPEN session on established authority read', async (t) => {
+  const f = await fixture()
+  const established = await f.leftSession.open()
+  f.left.directory.revoke({
+    digest32: f.left.digest32,
+    epoch: f.epoch,
+    runId32: f.runId32
+  })
+  let code = null
+  try {
+    readEstablishedLink(established)
+  } catch (err) {
+    code = err && err.code
+  }
+  t.is(code, 'UNAUTHORIZED')
+  t.is(f.leftSession.state, 'TOMBSTONE')
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
+})
+
+test('initiator stages reentrant valid response until create send resolves exact true', async (t) => {
+  const successful = await fixture({ reentrantBootstrap: true, holdLeft: true })
+  const successfulOpen = successful.leftSession.open()
+  await Promise.resolve()
+  await Promise.resolve()
+  t.is(successful.leftSession.state, 'CREATING')
+  successful.heldLeft.resolve(true)
+  await successfulOpen
+  t.is(successful.leftSession.state, 'OPEN')
+  await successful.leftSession.close()
+  await successful.rightSession.close()
+  await successful.leftEndpoint.close()
+  await successful.rightEndpoint.close()
+  successful.left.directory.destroy()
+  successful.right.directory.destroy()
+
+  const f = await fixture({ reentrantBootstrap: true, holdLeft: true })
+  const opening = f.leftSession.open()
+  await Promise.resolve()
+  await Promise.resolve()
+  t.is(f.leftSession.state, 'CREATING')
+  t.is(f.leftSession.established, null)
+  f.heldLeft.resolve(false)
+  t.is(await code(opening), 'ROUTE_UNAVAILABLE')
+  t.is(f.leftSession.state, 'TOMBSTONE')
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
 })
 
 test('cancellation after dispatch sends an authenticated LINK_CANCEL and tombstones setup', async (t) => {

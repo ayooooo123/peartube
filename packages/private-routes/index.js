@@ -53,8 +53,13 @@ export {
 export { createLinkSetupAuthority, isLinkTicketChecker } from './lib/link-setup.js'
 export { LinkBootstrapSession } from './lib/link-bootstrap-session.js'
 export {
+  DEFAULT_MAX_UDX_INBOUND_BYTES,
+  DEFAULT_MAX_UDX_INBOUND_BYTES_PER_PEER,
+  DEFAULT_MAX_UDX_INBOUND_PACKETS,
+  DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER,
   DEFAULT_MAX_UDX_QUEUED_BYTES,
   DEFAULT_MAX_UDX_QUEUED_PACKETS,
+  DEFAULT_UDX_RECEIVE_CLOSE_TIMEOUT,
   UdxCellEndpoint
 } from './lib/udx-cell-endpoint.js'
 export {

@@ -2,12 +2,21 @@ import b4a from 'b4a'
 
 import { BOOTSTRAP_CLASS, BOOTSTRAP_SIZE } from './bootstrap-envelope.js'
 import { PrivateRouteError } from './errors.js'
-import { LinkBootstrapSession } from './link-bootstrap-session.js'
+import {
+  LINK_BOOTSTRAP_SESSION_INVALIDATE,
+  LinkBootstrapSession
+} from './link-bootstrap-session.js'
 import { readLinkHandle } from './topology-grant.js'
 import { UDX_LINK_CLOSE, UDX_LINK_OPEN, UDX_SEND_DISPATCH, UdxAdapter } from './udx-adapter.js'
 
 export const DEFAULT_MAX_UDX_QUEUED_PACKETS = 64
 export const DEFAULT_MAX_UDX_QUEUED_BYTES = BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_QUEUED_PACKETS
+export const DEFAULT_MAX_UDX_INBOUND_PACKETS = 64
+export const DEFAULT_MAX_UDX_INBOUND_BYTES = BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_INBOUND_PACKETS
+export const DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER = 8
+export const DEFAULT_MAX_UDX_INBOUND_BYTES_PER_PEER =
+  BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER
+export const DEFAULT_UDX_RECEIVE_CLOSE_TIMEOUT = 5_000
 
 const ENDPOINTS = new WeakMap()
 const SEND_HANDLES = new WeakMap()
@@ -106,6 +115,10 @@ function rejectQueue(state, error) {
 function invalidateRecord(state, record) {
   if (!record || record.phase === 'CLOSED') return
   record.phase = 'CLOSED'
+  if (record.session) {
+    record.session[LINK_BOOTSTRAP_SESSION_INVALIDATE]()
+    record.session = null
+  }
   for (let index = state.queue.length - 1; index >= 0; index--) {
     const queued = state.queue[index]
     if (queued.authority !== record) continue
@@ -124,6 +137,7 @@ function invalidateRecord(state, record) {
   SEND_HANDLES.delete(record.handle)
   record.endpoint = null
   record.peer = null
+  record.peerKey = null
   record.linkHandle = null
 }
 
@@ -155,15 +169,12 @@ function pump(state) {
   }
   state.dispatching = record
   state.inFlight++
-
-  let native
-  try {
-    if (record.onDispatch) record.onDispatch()
-    native = state.socket.send(record.packet, record.peer.port, record.peer.host)
-  } catch {
-    native = Promise.resolve(false)
-  }
-  const completion = Promise.resolve(native)
+  let releaseNative
+  const native = new Promise((resolve) => {
+    releaseNative = resolve
+  })
+  const completion = native
+    .then((result) => result)
     .then(
       (sent) => {
         if (record.cancelled || sent !== true) rejectRecord(record, unavailable())
@@ -180,6 +191,42 @@ function pump(state) {
       if (!state.closing) pump(state)
     })
   state.nativeWaits.add(completion)
+  try {
+    if (record.onDispatch) record.onDispatch()
+    releaseNative(state.socket.send(record.packet, record.peer.port, record.peer.host))
+  } catch {
+    releaseNative(false)
+  }
+}
+
+function releaseReceive(state, record) {
+  if (!record.active) return
+  record.active = false
+  state.receiveRecords.delete(record)
+  state.inboundPackets--
+  state.inboundBytes -= BOOTSTRAP_SIZE
+  const peer = state.inboundPeers.get(record.peerKey)
+  if (peer) {
+    peer.packets--
+    peer.bytes -= BOOTSTRAP_SIZE
+    if (peer.packets === 0) state.inboundPeers.delete(record.peerKey)
+  }
+  clear(record.packet)
+  record.packet = null
+}
+
+async function waitForReceives(state) {
+  const completions = Array.from(state.receiveRecords, (record) => record.completion).filter(
+    Boolean
+  )
+  if (completions.length === 0) return
+  let timer = null
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(resolve, state.receiveCloseTimeout)
+  })
+  await Promise.race([Promise.allSettled(completions), timeout])
+  if (timer !== null) clearTimeout(timer)
+  for (const record of Array.from(state.receiveRecords)) releaseReceive(state, record)
 }
 
 function receive(state, packet, from) {
@@ -197,22 +244,34 @@ function receive(state, packet, from) {
   if (packet[0] !== 0) return
   if (packet[1] !== BOOTSTRAP_CLASS && packet[1] > 2) return
   if (packet[1] !== BOOTSTRAP_CLASS && authority.phase !== 'OPEN') return
+  const peerKey = authority.peerKey
+  const peer = state.inboundPeers.get(peerKey) || { packets: 0, bytes: 0 }
+  if (
+    state.inboundPackets >= state.maxInboundPackets ||
+    state.inboundBytes + BOOTSTRAP_SIZE > state.maxInboundBytes ||
+    peer.packets >= state.maxInboundPacketsPerPeer ||
+    peer.bytes + BOOTSTRAP_SIZE > state.maxInboundBytesPerPeer
+  ) {
+    return
+  }
   const owned = b4a.from(packet)
-  state.receivePackets.add(owned)
+  const record = { packet: owned, peerKey, completion: null, active: true }
+  state.receiveRecords.add(record)
+  state.inboundPackets++
+  state.inboundBytes += BOOTSTRAP_SIZE
+  peer.packets++
+  peer.bytes += BOOTSTRAP_SIZE
+  state.inboundPeers.set(peerKey, peer)
   try {
     const result =
       owned[1] === BOOTSTRAP_CLASS
         ? state.onBootstrap(owned, sendHandle)
         : state.onCell(owned, sendHandle)
-    void Promise.resolve(result)
+    record.completion = Promise.resolve(result)
       .catch(() => {})
-      .finally(() => {
-        state.receivePackets.delete(owned)
-        clear(owned)
-      })
+      .finally(() => releaseReceive(state, record))
   } catch {
-    state.receivePackets.delete(owned)
-    clear(owned)
+    releaseReceive(state, record)
   }
 }
 
@@ -260,6 +319,17 @@ export class UdxCellEndpoint {
       onCell,
       maxQueuedPackets: bound(options.maxQueuedPackets, DEFAULT_MAX_UDX_QUEUED_PACKETS),
       maxQueuedBytes: bound(options.maxQueuedBytes, DEFAULT_MAX_UDX_QUEUED_BYTES),
+      maxInboundPackets: bound(options.maxInboundPackets, DEFAULT_MAX_UDX_INBOUND_PACKETS),
+      maxInboundBytes: bound(options.maxInboundBytes, DEFAULT_MAX_UDX_INBOUND_BYTES),
+      maxInboundPacketsPerPeer: bound(
+        options.maxInboundPacketsPerPeer,
+        DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER
+      ),
+      maxInboundBytesPerPeer: bound(
+        options.maxInboundBytesPerPeer,
+        DEFAULT_MAX_UDX_INBOUND_BYTES_PER_PEER
+      ),
+      receiveCloseTimeout: bound(options.receiveCloseTimeout, DEFAULT_UDX_RECEIVE_CLOSE_TIMEOUT),
       handles: new WeakMap(),
       records: new Set(),
       sources: new Map(),
@@ -270,7 +340,10 @@ export class UdxCellEndpoint {
       dispatching: null,
       inFlight: 0,
       nativeWaits: new Set(),
-      receivePackets: new Set(),
+      receiveRecords: new Set(),
+      inboundPackets: 0,
+      inboundBytes: 0,
+      inboundPeers: new Map(),
       bound: false,
       closing: false,
       closePromise: null
@@ -317,13 +390,16 @@ export class UdxCellEndpoint {
       const record = SEND_HANDLES.get(sendHandle)
       if (validateRecord(state, record)) {
         if (sessionOptions === undefined) return sendHandle
+        if (record.session) throw stateError()
         try {
-          return new LinkBootstrapSession({
+          const session = new LinkBootstrapSession({
             ...sessionOptions,
             endpoint: this,
             sendHandle,
             linkHandle
           })
+          record.session = session
+          return session
         } catch (err) {
           invalidateRecord(state, record)
           throw err
@@ -351,8 +427,10 @@ export class UdxCellEndpoint {
       handle: sendHandle,
       linkHandle,
       peer: { host: link.peerAddress.host, port: link.peerAddress.port },
+      peerKey: b4a.toString(link.peerIdentity32, 'hex'),
       source,
-      phase: 'PENDING'
+      phase: 'PENDING',
+      session: null
     }
     SEND_HANDLES.set(sendHandle, record)
     state.handles.set(linkHandle, sendHandle)
@@ -360,12 +438,14 @@ export class UdxCellEndpoint {
     state.records.add(record)
     if (sessionOptions === undefined) return sendHandle
     try {
-      return new LinkBootstrapSession({
+      const session = new LinkBootstrapSession({
         ...sessionOptions,
         endpoint: this,
         sendHandle,
         linkHandle
       })
+      record.session = session
+      return session
     } catch (err) {
       invalidateRecord(state, record)
       throw err
@@ -462,11 +542,10 @@ export class UdxCellEndpoint {
     state.closing = true
     rejectQueue(state, stateError())
     for (const record of Array.from(state.records)) invalidateRecord(state, record)
-    for (const packet of state.receivePackets) clear(packet)
-    state.receivePackets.clear()
     const nativeWaits = Array.from(state.nativeWaits)
     state.closePromise = (async () => {
       await Promise.allSettled(nativeWaits)
+      await waitForReceives(state)
       try {
         await state.socket.close()
       } catch {

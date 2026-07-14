@@ -599,6 +599,11 @@ export class BootstrapEnvelopeCodec {
   }
 }
 
+export function isBootstrapEnvelopeCodecForLink(codec, linkHandle) {
+  const state = safeObject(codec) ? CODECS.get(codec) : null
+  return !!state && !state.destroyed && state.linkHandle === linkHandle
+}
+
 function requireLiveLink(state) {
   let live
   try {

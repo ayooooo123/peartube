@@ -3,7 +3,8 @@ import b4a from 'b4a'
 import {
   BOOTSTRAP_DEADLINE,
   BootstrapEnvelopeCodec,
-  BootstrapRequestTable
+  BootstrapRequestTable,
+  isBootstrapEnvelopeCodecForLink
 } from './bootstrap-envelope.js'
 import { PrivateRouteError } from './errors.js'
 import { isLinkTicketChecker } from './link-setup.js'
@@ -16,6 +17,7 @@ const ESTABLISHED = new WeakMap()
 const MODES = new Set(['initiate', 'accept'])
 const MAX_TIMER_DELAY = 0x7fff_ffff
 const ZERO_DIGEST = b4a.alloc(32)
+export const LINK_BOOTSTRAP_SESSION_INVALIDATE = Symbol('link-bootstrap-session-invalidate')
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -99,6 +101,15 @@ function closeSendHandle(state) {
   } catch {}
 }
 
+function refreshAuthority(state) {
+  if (state.state === 'TOMBSTONE' || state.closed || !state.linkHandle) return
+  try {
+    readLinkHandle(state.linkHandle)
+  } catch {
+    state.session[LINK_BOOTSTRAP_SESSION_INVALIDATE]()
+  }
+}
+
 function armTimer(state) {
   const current = currentTime(state)
   const remaining = state.deadlineAt - current
@@ -152,7 +163,7 @@ function install(state, ticket) {
     throw unavailable()
   }
   const established = Object.freeze({})
-  ESTABLISHED.set(established, linkState)
+  ESTABLISHED.set(established, { linkState, state })
   state.established = established
   state.state = 'OPEN'
   return established
@@ -160,9 +171,9 @@ function install(state, ticket) {
 
 function clearEstablished(state) {
   if (!state.established) return
-  const value = ESTABLISHED.get(state.established)
+  const record = ESTABLISHED.get(state.established)
   ESTABLISHED.delete(state.established)
-  deepClear(value)
+  if (record) deepClear(record.linkState)
   state.established = null
 }
 
@@ -234,8 +245,15 @@ function fail(state, error, notify) {
       state.linkSetup.revoke(state.responderTicket)
     } catch {}
   }
+  if (state.stagedTicket) {
+    try {
+      state.linkSetup.revoke(state.stagedTicket)
+    } catch {}
+  }
   state.pendingSetup = null
   state.responderTicket = null
+  state.stagedTicket = null
+  state.stagedReject = false
   clearRequest(state)
   state.pending = 0
   deepClear(state.setup)
@@ -254,15 +272,21 @@ function fail(state, error, notify) {
 function acceptCreated(state, packet, decoded) {
   if (state.state !== 'CREATING' || !state.pendingSetup) return
   if (decoded.type === BOOTSTRAP_TYPE.LINK_REJECT) {
-    fail(state, unavailable(), false)
+    if (state.createSent) fail(state, unavailable(), false)
+    else state.stagedReject = true
     return
   }
   let ticket
   try {
     ticket = state.linkSetup.complete(state.pendingSetup, decoded.body)
     state.pendingSetup = null
-    const established = install(state, ticket)
-    finishOpen(state, established)
+    if (state.createSent) {
+      const established = install(state, ticket)
+      finishOpen(state, established)
+    } else {
+      state.stagedTicket = ticket
+      ticket = null
+    }
   } catch {
     if (ticket) {
       try {
@@ -340,6 +364,9 @@ export class LinkBootstrapSession {
     ) {
       invalid()
     }
+    if (!isBootstrapEnvelopeCodecForLink(codec, linkHandle)) {
+      throw PrivateRouteError.UNAUTHORIZED()
+    }
     let link
     try {
       link = readLinkHandle(linkHandle)
@@ -347,9 +374,11 @@ export class LinkBootstrapSession {
       throw PrivateRouteError.UNAUTHORIZED()
     }
     const state = {
+      session: this,
       mode,
       endpoint,
       sendHandle,
+      linkHandle,
       codec,
       linkSetup,
       setup: Object.fromEntries(Object.entries(setup).map(([key, value]) => [key, copy(value)])),
@@ -362,6 +391,9 @@ export class LinkBootstrapSession {
       pending: 0,
       pendingSetup: null,
       responderTicket: null,
+      stagedTicket: null,
+      stagedReject: false,
+      createSent: false,
       established: null,
       request: null,
       dispatched: false,
@@ -380,15 +412,21 @@ export class LinkBootstrapSession {
   }
 
   get state() {
-    return SESSIONS.get(this).state
+    const state = SESSIONS.get(this)
+    refreshAuthority(state)
+    return state.state
   }
 
   get pending() {
-    return SESSIONS.get(this).pending
+    const state = SESSIONS.get(this)
+    refreshAuthority(state)
+    return state.pending
   }
 
   get established() {
-    return SESSIONS.get(this).established
+    const state = SESSIONS.get(this)
+    refreshAuthority(state)
+    return state.established
   }
 
   open(options = {}) {
@@ -463,8 +501,21 @@ export class LinkBootstrapSession {
         })
         .then(
           () => {
-            if (state.state === 'CREATING' && signal && signal.aborted) {
-              fail(state, unavailable(), true)
+            if (state.state !== 'CREATING') return
+            state.createSent = true
+            if (signal && signal.aborted) return fail(state, unavailable(), true)
+            if (state.stagedReject) return fail(state, unavailable(), false)
+            if (!state.stagedTicket) return
+            const ticket = state.stagedTicket
+            state.stagedTicket = null
+            try {
+              const established = install(state, ticket)
+              finishOpen(state, established)
+            } catch {
+              try {
+                state.linkSetup.revoke(ticket)
+              } catch {}
+              fail(state, unavailable(), false)
             }
           },
           () => {
@@ -559,6 +610,7 @@ export class LinkBootstrapSession {
       state.setup = null
       deepClear(state.link)
       state.link = null
+      state.linkHandle = null
       state.endpoint = null
       state.sendHandle = null
       state.linkSetup = null
@@ -568,10 +620,45 @@ export class LinkBootstrapSession {
     })()
     return state.closePromise
   }
+
+  [LINK_BOOTSTRAP_SESSION_INVALIDATE]() {
+    const state = SESSIONS.get(this)
+    if (!state.closed && state.state !== 'TOMBSTONE') fail(state, unavailable(), false)
+    state.closed = true
+    try {
+      state.table.destroy()
+    } catch {}
+    try {
+      state.codec.destroy()
+    } catch {}
+    deepClear(state.setup)
+    state.setup = null
+    deepClear(state.link)
+    state.link = null
+    state.linkHandle = null
+    state.session = null
+    state.endpoint = null
+    state.sendHandle = null
+    state.codec = null
+    state.table = null
+    state.linkSetup = null
+    state.now = null
+    state.schedule = null
+    state.cancel = null
+    state.cancelSends.clear()
+    if (!state.closePromise) state.closePromise = Promise.resolve()
+  }
 }
 
 export function readEstablishedLink(value) {
-  const state = isObject(value) ? ESTABLISHED.get(value) : null
-  if (!state) throw PrivateRouteError.UNAUTHORIZED()
-  return state
+  const record = isObject(value) ? ESTABLISHED.get(value) : null
+  if (!record) throw PrivateRouteError.UNAUTHORIZED()
+  try {
+    readLinkHandle(record.state.linkHandle)
+  } catch {
+    const session = record.state.session
+    if (session) session[LINK_BOOTSTRAP_SESSION_INVALIDATE]()
+    throw PrivateRouteError.UNAUTHORIZED()
+  }
+  return record.linkState
 }

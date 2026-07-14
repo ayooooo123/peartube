@@ -16,6 +16,7 @@ import {
   signTopologyGrant
 } from '../index.js'
 import { readEstablishedLink } from '../lib/link-bootstrap-session.js'
+import { selectUdxLoopbackHosts } from '../lib/udx-adapter.js'
 import { safetyRoleIdentity, seed } from './helpers.js'
 
 function random(first) {
@@ -62,10 +63,12 @@ test('real UDX numeric loopback authenticates bootstrap and one established cell
   const leftPort = 40_000 + ((portSeed[0] * 256 + portSeed[1]) % 10_000)
   const rightPort = leftPort + 1
   portSeed.fill(0)
-  // This macOS host has no additional 127/8 aliases. The signed host+port pair still
-  // gives each adjacent endpoint an exact, distinct address on the same socket family.
-  const leftHost = '127.0.0.1'
-  const rightHost = '127.0.0.1'
+  const platform = typeof Bare === 'undefined' ? process.platform : Bare.platform
+  const forceDistinct =
+    typeof process !== 'undefined' && process.env.PRIVATE_ROUTES_DISTINCT_LOOPBACK === '1'
+  // macOS fallback is explicit because this host probes extra 127/8 aliases as
+  // EADDRNOTAVAIL. Linux/CI and the env gate prove distinct-IP source pinning.
+  const [leftHost, rightHost] = selectUdxLoopbackHosts({ platform, forceDistinct })
   t.not(leftPort, rightPort)
   const grant = signTopologyGrant(
     {

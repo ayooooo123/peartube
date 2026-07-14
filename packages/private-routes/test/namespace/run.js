@@ -17,7 +17,6 @@ import {
   namespaceExecLaunch,
   namespaceLaunch
 } from './netns.js'
-import { NegativeControlListener } from './negative-control.js'
 import { parsePcap } from './pcap.js'
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -259,20 +258,20 @@ function member(layout, role) {
   return value
 }
 
-function startNegativeControlListener(layout, payload) {
-  const source = member(layout, 'source')
-  const decoy = member(layout, 'decoy')
+function startNamespaceListener(layout, payload, sourceRole, sourcePort, targetRole, targetPort) {
+  const source = member(layout, sourceRole)
+  const target = member(layout, targetRole)
   const child = spawn(
     'ip',
     [
       'netns',
       'exec',
-      decoy.namespace,
+      target.namespace,
       process.execPath,
       NEGATIVE_CONTROL_RUNNER,
       'listen',
-      decoy.address,
-      String(decoy.port),
+      target.address,
+      String(targetPort),
       source.address,
       b4a.toString(payload, 'hex')
     ],
@@ -352,7 +351,7 @@ function startNegativeControlListener(layout, payload) {
       else if (
         record.event === 'received' &&
         record.bytes === payload.byteLength &&
-        record.sourcePort === layout.portBase + 50 &&
+        record.sourcePort === sourcePort &&
         Object.keys(record).length === 3
       ) {
         receivedResolve(record)
@@ -371,6 +370,18 @@ function startNegativeControlListener(layout, payload) {
       return child.kill('SIGTERM')
     }
   })
+}
+
+function startNegativeControlListener(layout, payload) {
+  const decoy = member(layout, 'decoy')
+  return startNamespaceListener(
+    layout,
+    payload,
+    'source',
+    layout.portBase + 50,
+    'decoy',
+    decoy.port
+  )
 }
 
 async function sendNamespaceProbe(layout, role, bindPort, target, payload) {
@@ -517,23 +528,33 @@ export async function calibrateNegativeControl(options = {}) {
 
 async function sendCaptureSentinel(layout, payload) {
   const decoy = member(layout, 'decoy')
-  const auditor = { host: layout.bridge.address, port: layout.portBase + 101 }
-  const listener = new NegativeControlListener({
-    bind: auditor,
-    expectedSourceHost: decoy.address,
+  const auditor = member(layout, 'auditor')
+  const listener = startNamespaceListener(
+    layout,
     payload,
-    schedule: setTimeout,
-    cancel: clearTimeout,
-    timeout: 5_000
-  })
+    'decoy',
+    decoy.port,
+    'auditor',
+    auditor.port
+  )
   try {
-    await listener.start()
+    await listener.ready
     const sentAtNs = wallNowNs()
-    const sending = sendNamespaceProbe(layout, 'decoy', decoy.port, auditor, payload)
-    const [, received] = await Promise.all([sending, listener.wait()])
+    const sending = sendNamespaceProbe(
+      layout,
+      'decoy',
+      decoy.port,
+      { host: auditor.address, port: auditor.port },
+      payload
+    )
+    const [, received] = await Promise.all([sending, listener.received])
     const receivedAtNs = wallNowNs()
     if (received.bytes !== payload.byteLength || received.sourcePort !== decoy.port) {
       throw new Error('capture sentinel mismatch')
+    }
+    const exit = await listener.exited
+    if (exit.code !== 0 || exit.signal !== null || exit.stderr !== '') {
+      throw new Error('capture sentinel failed')
     }
     return Object.freeze({
       source: 'decoy',
@@ -545,7 +566,7 @@ async function sendCaptureSentinel(layout, payload) {
       receivedAtNs
     })
   } finally {
-    await listener.close()
+    listener.close()
   }
 }
 

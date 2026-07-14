@@ -6,7 +6,8 @@ export const NAMESPACE_ROLES = Object.freeze([
   'private-middle',
   'private-final',
   'destination',
-  'decoy'
+  'decoy',
+  'auditor'
 ])
 
 const SHORT_ROLE = Object.freeze({
@@ -17,7 +18,8 @@ const SHORT_ROLE = Object.freeze({
   'private-middle': 'pm',
   'private-final': 'pf',
   destination: 'd',
-  decoy: 'x'
+  decoy: 'x',
+  auditor: 'a'
 })
 
 function invalid() {
@@ -55,8 +57,9 @@ export function createNamespaceLayout(options = {}) {
       peerVeth: `pn${index}${suffix}`,
       address: `${subnet}.${index + 2}`,
       prefix: 24,
-      port: role === 'decoy' ? portBase + 100 : portBase + index,
-      route: role !== 'decoy'
+      port:
+        role === 'decoy' ? portBase + 100 : role === 'auditor' ? portBase + 101 : portBase + index,
+      route: role !== 'decoy' && role !== 'auditor'
     })
   )
   return Object.freeze({
@@ -85,14 +88,10 @@ export function createCaptureMatrix(layout, contacts, phases, sentinels = null) 
       route: member.route
     })
   }
-  roles.auditor = Object.freeze({
-    addresses: Object.freeze([layout.bridge.address]),
-    port: layout.portBase + 101,
-    route: false
-  })
   const copiedContacts = {}
   const requiredEdges = []
-  for (const role of NAMESPACE_ROLES.slice(0, -1)) {
+  for (const { role, route } of layout.members) {
+    if (!route) continue
     if (!Array.isArray(contacts[role])) invalid()
     copiedContacts[role] = Object.freeze([...contacts[role]])
     for (const peer of contacts[role]) requiredEdges.push(Object.freeze([role, peer]))

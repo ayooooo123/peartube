@@ -25,12 +25,12 @@ function command(value) {
   return [value.command, ...value.args].join(' ')
 }
 
-test('namespace layout locks eight fully reachable synthetic bridge members', (t) => {
+test('namespace layout locks nine fully reachable synthetic bridge members', (t) => {
   const layout = createNamespaceLayout({ suffix: 'abc123', subnetId: 77, portBase: 48_100 })
   t.alike(layout.roles, NAMESPACE_ROLES)
   t.is(layout.bridge.name, 'pbabc123')
   t.is(layout.bridge.address, '10.203.77.1')
-  t.is(layout.members.length, 8)
+  t.is(layout.members.length, 9)
   t.alike(
     layout.members.map((value) => [value.role, value.namespace, value.address, value.port]),
     [
@@ -41,7 +41,8 @@ test('namespace layout locks eight fully reachable synthetic bridge members', (t
       ['private-middle', 'prpmabc123', '10.203.77.6', 48_104],
       ['private-final', 'prpfabc123', '10.203.77.7', 48_105],
       ['destination', 'prdabc123', '10.203.77.8', 48_106],
-      ['decoy', 'prxabc123', '10.203.77.9', 48_200]
+      ['decoy', 'prxabc123', '10.203.77.9', 48_200],
+      ['auditor', 'praabc123', '10.203.77.10', 48_201]
     ]
   )
   for (const member of layout.members) {
@@ -55,7 +56,7 @@ test('namespace layout locks eight fully reachable synthetic bridge members', (t
   })
   t.is(matrix.roles.decoy.route, false)
   t.alike(matrix.roles.auditor, {
-    addresses: ['10.203.77.1'],
+    addresses: ['10.203.77.10'],
     port: 48_201,
     route: false
   })
@@ -162,13 +163,18 @@ test('namespace launches each role through ip netns exec without a shell', async
     args: ['netns', 'exec', 'prpmabc123', '/usr/bin/node', '--no-warnings']
   })
   await t.exception.all(() => namespaceLaunch(layout, 'decoy', '/usr/bin/node', []), /route role/)
+  await t.exception.all(() => namespaceLaunch(layout, 'auditor', '/usr/bin/node', []), /route role/)
 })
 
-test('namespace launches an explicit auxiliary command in the decoy without widening route launch', async (t) => {
+test('namespace launches explicit auxiliary commands without widening route launch', async (t) => {
   const layout = createNamespaceLayout({ suffix: 'abc123', subnetId: 77, portBase: 48_100 })
   t.alike(namespaceExecLaunch(layout, 'decoy', '/usr/bin/node', ['probe.js']), {
     command: 'ip',
     args: ['netns', 'exec', 'prxabc123', '/usr/bin/node', 'probe.js']
+  })
+  t.alike(namespaceExecLaunch(layout, 'auditor', '/usr/bin/node', ['probe.js']), {
+    command: 'ip',
+    args: ['netns', 'exec', 'praabc123', '/usr/bin/node', 'probe.js']
   })
   await t.exception.all(
     () => namespaceExecLaunch(layout, 'external', '/usr/bin/node', []),

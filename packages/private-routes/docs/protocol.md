@@ -8,6 +8,89 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 
 All constants in this document, including domain labels, cell sizes, field encodings, key schedules, nonce construction, padding, replay-window sizes, timeouts, and limits, are testable prototype parameters, not an audited stable wire format.
 
+## Milestone 2 live UDX profile
+
+Milestone 2 implements the protocol on a controlled, static seven-role graph over real UDX sockets.
+It does not implement routed DHT-RPC, HyperDHT, Hyperswarm, public discovery, NAT traversal, or an
+application privacy switch.
+
+Each role runs in its own Node or Bare process. A test coordinator creates the complete synthetic
+topology, then sends each process an exact, audited role projection. The coordinator is the only
+component permitted to know the whole test graph; route processes emit only redacted local or
+adjacent state.
+
+### Role knowledge and direct authority
+
+Identity knowledge is not dialing authority. The implemented configuration auditor enforces both
+matrices independently:
+
+| Process        | May know identities/advertisements for                         | May receive grants and send directly to |
+| -------------- | -------------------------------------------------------------- | --------------------------------------- |
+| source         | source, both safety relays, and the descriptor's private entry | safety guard only                       |
+| safety guard   | source, safety guard, safety final                             | source and safety final                 |
+| safety final   | safety guard, safety final, private entry                      | safety guard and private entry          |
+| private entry  | safety final, private entry, private middle                    | safety final and private middle         |
+| private middle | private entry, private middle, private final                   | private entry and private final         |
+| private final  | private middle, private final, destination                     | private middle and destination          |
+| destination    | destination and all three selected private relays              | private final only                      |
+
+The source never receives the destination address or complete private chain. The destination never
+receives the source address or complete safety chain. Non-adjacent advertisements used to construct
+an endpoint's own segment are never supplied to `UdxCellEndpoint` and do not authorize a send.
+
+One ephemeral topology authority signs an exact bilateral grant for every adjacent pair. The grant
+binds both identities, roles, numeric addresses, ports, operation bits, epoch, validity interval,
+and test-run ID. Both peers receive identical signed bytes. Bootstrap and receive authorization
+require the same verified grant digest; expiry or revocation closes the link and every circuit that
+uses it. These controlled-test grants are not a public discovery system.
+
+### Fixed-size datagrams and bootstrap
+
+Every private-routing UDP payload is exactly 1,200 bytes. The first class byte separates two
+non-interchangeable formats:
+
+- class `0x80` is a signed, padded bootstrap envelope carrying `LINK_CREATE`, `LINK_CREATED`,
+  `LINK_REJECT`, or `LINK_CANCEL`;
+- established classes `0`, `1`, and `2` carry authenticated CONTROL, STREAM, and DATAGRAM cells.
+
+An established cell has a 36-byte authenticated header and a 1,148-byte padded body area. The
+opaque end-to-end route frame is 1,100 bytes. A bootstrap envelope has a 150-byte fixed header, at
+most 986 canonical body bytes, random padding through byte 1135, and a 64-byte Ed25519 signature.
+Its signature covers every preceding byte, including padding.
+
+`LINK_CREATE` is retried only by resending the exact same authenticated 1,200-byte envelope inside
+the fixed 5,000 ms setup deadline. The recipient correlates replies to the digest of that exact
+request and caches a byte-identical response. Retries cannot mint a new request, extend the
+deadline, or create duplicate link state.
+
+### Distributed control, flow control, and liveness
+
+Authenticated CONTROL cells multiplex link control and fragmented remote-actor messages under
+distinct namespaces. Remote actors implement bounded staged registration, prepare/finalize or
+abort, activation, and idempotent destruction. Request IDs, expected reply kinds, deadlines,
+cancellation, late-reply tombstones, and exact body schemas are checked before state mutation.
+Inputs are defensively copied; owned request, reply, fragment, packet, key, and queue storage is
+cleared when its ownership ends.
+
+STREAM acknowledgement is hop-by-hop, not an end-to-end receipt. A relay acknowledges an incoming
+fragment only after its entire plaintext has entered the bounded next-hop queue, then reseals it in
+that link's independent counter/key space. The destination acknowledges only after admission to
+its bounded read queue. Acknowledgement regression, gaps beyond a sent counter, wrong direction,
+circuit, or generation fail closed. An unacknowledged record expires after 5,000 ms. DATAGRAM cells
+remain atomic, bounded, unordered within their replay window, and best effort.
+
+UDX send completion does not establish peer health. After 500 ms without qualifying authenticated
+inbound traffic, a link sends an authenticated ping. At 1,500 ms it closes if no fresh qualifying
+cell arrived. A valid replay cannot refresh liveness. Link failure tombstones the link, rejects
+queued sends and requests, destroys affected route state on surviving segments, and never requests
+a direct-network fallback.
+
+The portable runner launches seven independent processes, communicates through a bounded canonical
+stdio protocol, and requires zero surviving processes, sockets, circuits, queues, and owned secrets
+after teardown. The Linux namespace gate additionally assigns one namespace to each role, plus
+isolated decoy and auditor namespaces, and validates the resulting PCAP against the exact six-edge
+bilateral graph.
+
 ## Vocabulary
 
 - **Endpoint identity:** the long-term Ed25519 public key that identifies a source or destination endpoint and authorizes private-route descriptors directly or through delegation.

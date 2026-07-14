@@ -2,63 +2,91 @@
 
 An experimental, runtime-agnostic private-route protocol core for the Holepunch stack.
 
-This package currently runs only against deterministic virtual transports. It provides protocol primitives and a compiled-route actor model, but it does not put UDX, DHT-RPC, HyperDHT, Hyperswarm, Hypercore, or PearTube traffic on a private route. It is **not production anonymity** and must not be presented as doing so.
+Milestone 2 runs a fixed seven-role route over real UDX sockets in seven independent Node or Bare
+processes. Its authoritative Linux gate places every role in a separate network namespace and
+checks the captured packets against the exact allowed adjacency graph.
+
+This is a controlled static relay graph. It is **not** routed DHT-RPC or HyperDHT, Hyperswarm,
+Hypercore replication, PearTube traffic routing, mobile privacy, NAT traversal, public relay
+discovery, or production anonymity. It has no direct-network fallback, but applications must not
+describe or expose it as private mode until those later integration and packet-capture gates pass.
 
 ## Status
 
-Protocol version 0 is **EXPERIMENTAL**. It has no compatibility promise, has not received an external protocol or cryptographic audit, and remains `private: true`. Its constants, cryptographic construction, observer claims, and wire format may change.
+Protocol version 0 is **EXPERIMENTAL**. It has no compatibility promise, has not received an
+external protocol or cryptographic audit, and remains `private: true`. Its constants,
+cryptographic construction, observer claims, and wire format may change.
 
-The tested compiled topology is:
+The tested topology is exactly:
 
 ```text
 source -> safety guard -> safety final -> private entry -> private middle -> private final -> destination
 ```
 
-The source chooses the Safety Route and the destination chooses the Private Route. Relay roles are deterministically separated by identity. The public compiled-route facade exposes only `sendDatagram()`, `sendStreamFrame()`, `drain()`, and `destroy()`; it exposes no direct-dial or fallback capability.
+The source chooses the Safety Route and the destination chooses the Private Route. Relay roles are
+deterministically separated by identity. The public compiled-route facade exposes only
+`sendDatagram()`, `sendStreamFrame()`, `drain()`, and `destroy()`; it exposes no address, direct
+dial, hole-punch, public DHT socket, or fallback capability.
 
-## What the virtual tests establish
+## What Milestone 2 establishes
 
-The deterministic actor fixture exchanges stream and datagram payloads in both directions using fixed-size link cells and opaque, fixed-size route frames. Its deep, test-only observers establish this exact model:
+- Every private-routing UDP payload is exactly 1,200 bytes. Bootstrap envelopes use reserved class
+  `0x80`; established CONTROL, STREAM, and DATAGRAM cells use classes `0..2`. They cannot be
+  decoded as one another.
+- One signed, expiring bilateral topology grant authorizes each adjacent pair. A verified grant
+  digest is required before a role can bootstrap a link or send to that peer.
+- Authenticated remote-actor requests perform distributed registration, activation, and teardown
+  over UDX. Requests have bounded correlation, cancellation, replay/tombstone, and cleanup state.
+- STREAM backpressure is hop-by-hop. An upstream acknowledgement is sent only after the complete
+  plaintext fragment enters the bounded next-hop queue. DATAGRAM delivery remains atomic and best
+  effort.
+- Established links use authenticated ping/pong liveness. A silent peer closes the link and its
+  route state instead of falling back to a direct connection.
+- The portable integration suite launches seven separate Node processes or seven separate Bare
+  processes. Each receives an audited role-scoped configuration, and teardown requires zero
+  remaining processes, sockets, circuits, queues, and owned secret state.
+- The authoritative Linux namespace gate captures the synthetic test subnet and requires exactly
+  the six adjacent bilateral edges. A separately isolated decoy-to-auditor packet proves the
+  capture can observe a forbidden-capability packet; the private route never uses the source's
+  test-only decoy capability.
 
-- The source's only adjacent virtual peer is its safety guard.
-- The destination's only adjacent virtual peer is its private final relay.
-- Setup and payload transmissions use only installed adjacent edges; the trace contains no source-to-destination edge.
-- A normal virtual-network observer sees only its peer, direction, byte length, virtual time, and an opaque packet ID. It receives neither packet bytes nor a complete path.
-- A deep relay test hook observes the same opaque 1,100-byte route frame at each of the five relays for one direction/class. Tests reject application plaintext, fixture secrets, and route-key fields in that hook.
-- Authentication, replay, counter, expiry, queue, cancellation, rotation, drain, and teardown cases are exercised with deterministic clocks and faults. Failure removes route-owned virtual state and never asks for a direct fallback.
-- Remote-actor tests traverse the Task 5 established-control mux and fragment reassembler and require an opaque authenticated-event capability. They are still same-process tests: the capability is not yet minted by a live UDX cell endpoint. That handoff belongs to Task 7, so these tests do not establish network transport or peer separation.
+The virtual suites additionally exercise authentication, replay, counter, expiry, queue,
+cancellation, rotation, drain, and teardown faults with deterministic clocks. Deep test-only hooks
+can inspect opaque route frames and owned state; those hooks are not application APIs.
 
-These are executable protocol invariants in a socket-free model, not measurements from a real network and not evidence against traffic analysis.
-
-Async remote registration and activation require a source-side verifier capability. Create it with
-`createRemoteRegistrationVerifier()` or `createRemoteActivationVerifier()` from the package root
-and pass it to the matching `AsyncRouteControlSession` operation. Each factory defensively copies
-the canonical request and verification records or source secrets into a frozen, opaque, one-shot
-capability. A host consumes and clears it when the authenticated reply arrives. If an operation is
-never started, call the matching `destroyRemoteRegistrationVerifier()` or
-`destroyRemoteActivationVerifier()` to clear the retained copies.
+These results prove properties of the implemented static test graph, not resistance to traffic
+analysis or behavior on the public Internet.
 
 ## Threat model and limitations
 
-For independently operated, non-colluding relays in the tested model, the destination does not receive the source address, the source does not receive the destination address, and one forwarding relay has only adjacent-hop visibility. Authenticated cells reject modification and disallowed replay, while private-only provenance cannot authorize a direct probe, public routing-table promotion, or direct dial.
+For independently operated, non-colluding relays in the tested graph, the destination process is
+not configured with the source address, the source process is not configured with the destination
+address, and each forwarding process receives direct grants only for adjacent peers. The guard
+still sees the source address, the private final still sees the destination address, and every
+adjacent hop sees timing, packet counts, and volume.
 
-The following remain visible or out of scope:
+The coordinator is a test-orchestration exception: it constructs the full synthetic topology, but
+an independent configuration auditor rejects any role projection, event, or diagnostic that
+contains disallowed identities, addresses, grants, paths, keys, or payloads. Relay collusion,
+Sybil operators, a global observer, endpoint compromise, application logging, and traffic
+correlation remain out of scope.
 
-- The guard sees the source address and its next relay.
-- The private final relay sees the destination address and its previous relay.
-- Adjacent hops see timing, packet counts, and approximate volume.
-- Relay collusion, Sybil operators, and a global passive observer are not defeated.
-- The model does not anonymize HTTP/HTTPS, DNS, external media, telemetry, casting, mDNS, or LAN discovery.
-- It is not Tor and does not hide a source from its guard.
-- Endpoint compromise, malicious application code, and endpoint logging are out of scope.
+The Linux capture covers the isolated synthetic IPv4 subnet, not arbitrary host traffic or a real
+mobile/desktop deployment. The oracle fails on unexpected IPv4 protocols, IPv6, alternate UDP
+ports, direct/decoy/external edges, post-close packets, malformed or missing capture data, and
+missing negative-control evidence. It does not prove NAT traversal, public discovery, Internet
+relay diversity, DNS/HTTP/media privacy, or protection from a global passive observer.
 
-Private routing is fail closed. Invalid or expired descriptors, unavailable routes, authentication or replay failures, transport loss, setup timeout, queue exhaustion, route expiry, and counter exhaustion may replace the route or report it unavailable; they never enable direct dialing, hole punching, or an ordinary public endpoint DHT socket.
+Private routing is fail closed. Invalid or expired descriptors or grants, unavailable routes,
+authentication or replay failures, transport loss, setup timeout, queue exhaustion, liveness
+failure, route expiry, and counter exhaustion may replace the route or report it unavailable; they
+never enable direct dialing, hole punching, or an ordinary public endpoint DHT socket.
 
-See the approved local [private-routing design](../../docs/superpowers/specs/2026-07-12-holepunch-private-routing-design.md), the package [protocol specification](docs/protocol.md), and the detailed [threat model](docs/threat-model.md).
+See the approved local [Milestone 2 design](../../docs/superpowers/specs/2026-07-13-holepunch-private-routing-m2-udx-design.md), the package [protocol specification](docs/protocol.md), and the detailed [threat model](docs/threat-model.md).
 
 ## Local development
 
-Run the package independently from the repository root:
+Install and run every independent package gate from the repository root:
 
 ```bash
 npm ci --prefix packages/private-routes
@@ -66,8 +94,19 @@ npm run format:check --prefix packages/private-routes
 npm run test:node --prefix packages/private-routes
 npm exec --prefix packages/private-routes -- bare --version
 npm run test:bare --prefix packages/private-routes
+npm run test:portable:node --prefix packages/private-routes
+npm run test:portable:bare --prefix packages/private-routes
 npm run fuzz:cell --prefix packages/private-routes -- --seed 1 --iterations 10000
 ```
+
+The namespace gate requires Linux, root, `iproute2`, `tcpdump`, and `iptables`:
+
+```bash
+sudo npm run test:namespace --prefix packages/private-routes
+```
+
+On non-Linux hosts, the namespace command construction, PCAP parser, and capture oracle are unit
+tested, but only the privileged GitHub Actions Linux job is authoritative.
 
 To format changes, run:
 
@@ -75,11 +114,13 @@ To format changes, run:
 npm run format --prefix packages/private-routes
 ```
 
-The standalone fuzz command uses a reproducible seed. Its memory high-water mark measures the
-explicitly owned header, body, and associated-data scratch buffers inside `CellCodec`; returned
-packets and payloads are caller-owned and are outside that metric. Keep the reported seed and
-iteration count when filing a failure.
+The fuzz command uses a reproducible seed. Its memory high-water mark measures explicitly owned
+header, body, and associated-data scratch buffers inside `CellCodec`; returned packets and payloads
+are caller-owned. Keep the reported seed and iteration count when filing a failure.
 
 ## Next milestone
 
-The next milestone is real integration at the UDX/DHT-RPC/HyperDHT/Hyperswarm/Hypercore boundary, followed by real socket and packet-capture tests. None of that integration is implemented or claimed here. PearTube's private-mode switch must remain disabled until routed discovery, connection setup, replication, failure behavior, and mobile/desktop packet-capture gates pass without a direct-network downgrade.
+Milestone 3 is a routed DHT-RPC/HyperDHT transport adapter that preserves endpoint key custody and
+the fail-closed boundary. Hyperswarm and Hypercore integration follows only after that layer passes
+its own live socket, process-isolation, and capture gates. PearTube and mobile/desktop integration
+remain later milestones; no private-mode switch should be enabled yet.

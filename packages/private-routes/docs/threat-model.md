@@ -1,49 +1,115 @@
 # Threat Model
 
-## Security claims
+## Milestone 2 evidence boundary
 
-For an authenticated compiled route with independently operated, non-colluding relays:
+Milestone 2 tests a controlled, static seven-process UDX route:
 
-- The destination does not learn the source IP; it sees only its final private relay.
-- The source does not learn the destination IP; it receives only authenticated descriptor and route material without destination dial information.
-- A forwarding relay learns only its adjacent circuit hops. It cannot read end-to-end plaintext or cause modified authenticated plaintext to be accepted, but it can drop, delay, reorder, replay, or corrupt traffic to cause denial of service.
-- Existing end-to-end Hyperswarm Noise encryption remains inside the routed transport.
-- Replayed, duplicated, reordered outside the allowed datagram window, truncated, or mutated cells are rejected.
-- Private-only node information cannot authorize direct probes, public routing-table promotion, or direct dialing.
-- Relay or route failure fails closed: failure never enables direct dialing or hole punching.
+```text
+source -> safety guard -> safety final -> private entry -> private middle -> private final -> destination
+```
 
-These claims require descriptor authorization, deterministic role validation, fresh circuit keys, hop authentication, bounded replay state, correct key erasure, and enforcement of the allowed flow matrix below.
+It does **not** yet carry DHT-RPC, HyperDHT, Hyperswarm, Hypercore, PearTube, HTTP, DNS, or media
+traffic. It does not prove public discovery, NAT traversal, mobile behavior, relay diversity, or
+production anonymity. The wire format and cryptographic construction are experimental and
+unaudited.
 
-## Explicit observer visibility
+For the tested graph, independently operated non-colluding relays, authenticated setup, and honest
+endpoints, the implementation establishes:
 
-- The guard sees the source IP, its next relay, timing, packet counts, and approximate volume.
-- The final private relay sees the destination IP, its previous relay, timing, packet counts, and approximate volume.
-- Intermediate relays see their previous and next circuit hops, timing, packet counts, and approximate volume.
-- A DHT gateway sees DHT keys/topics, operation type, timing, and size. It does not receive endpoint application plaintext through this role.
-- Public relay nodes expose their own dial information and may independently participate in ordinary HyperDHT.
+- The destination process is not configured with the source address; it directly contacts only
+  its private final relay.
+- The source process is not configured with the destination address; it directly contacts only its
+  safety guard.
+- A forwarding process receives address and grant material only for adjacent circuit peers.
+- Modified cells, disallowed replays, invalid counters, expired/revoked grants, and malformed
+  control messages cannot mutate route state or deliver application plaintext.
+- Route or relay failure closes or replaces the route and never enables direct endpoint dialing,
+  hole punching, or an ordinary endpoint public-DHT socket.
 
-No claim applies across identities operated in concert. Separate identities controlled by one operator count as collusion/Sybil behavior, including identities placed in both deterministic role domains.
+These claims are executable properties of this fixture, not claims against traffic analysis or a
+global observer.
 
-## Allowed network flows by role and phase
+## Exact knowledge and contact policy
 
-| Role                 | Bootstrap phase                                     | Established private operation                                                               | Forbidden endpoint flow                                               |
-| -------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Source endpoint      | Signed bootstrap candidates until a guard is pinned | Current guard only                                                                          | Destination, private relays, public DHT peers                         |
-| Destination endpoint | Signed bootstrap candidates until a guard is pinned | Its source-side guard for outbound control and its final private relay for inbound circuits | Sources, private entries, public DHT peers                            |
-| Safety/guard relay   | Public relay discovery and DHT participation        | Previous and next circuit hops plus public control-plane peers                              | Using learned private-only endpoint data for direct probes            |
-| Private relay        | Public relay discovery and DHT participation        | Previous and next circuit hops plus public control-plane peers                              | Using learned source/destination data outside installed circuit state |
-| DHT gateway          | Public HyperDHT peers                               | Final safety hop plus public HyperDHT peers                                                 | Direct source contact or returning its address to the public DHT      |
+The test coordinator knows the complete synthetic topology because it constructs, launches, and
+audits the fixture. No route process receives that view. Before launch, an independent
+configuration auditor checks the semantic object and serialized bytes for exact fields, allowed
+identities and advertisements, adjacent grants, and absence of hidden paths or addresses. It also
+checks every emitted event and diagnostic for disallowed configuration, keys, payload, and path
+data.
 
-Circuit packet tests distinguish installed circuit edges from a relay's independently permitted public control-plane traffic. Every endpoint packet MUST follow its endpoint row, and every circuit data packet MUST follow an installed adjacent edge. Private endpoints MUST NOT create an ordinary public DHT socket.
+| Process        | May know identities/advertisements for                         | May receive grants and send directly to |
+| -------------- | -------------------------------------------------------------- | --------------------------------------- |
+| source         | source, both safety relays, and the descriptor's private entry | safety guard only                       |
+| safety guard   | source, safety guard, safety final                             | source and safety final                 |
+| safety final   | safety guard, safety final, private entry                      | safety guard and private entry          |
+| private entry  | safety final, private entry, private middle                    | safety final and private middle         |
+| private middle | private entry, private middle, private final                   | private entry and private final         |
+| private final  | private middle, private final, destination                     | private middle and destination          |
+| destination    | destination and all three selected private relays              | private final only                      |
 
-## Out of scope
+Knowledge does not grant network authority. Only an exact, verified, bilateral signed grant can
+create a UDX link handle or authorize a send. A route advertisement or descriptor field is never a
+direct-dial capability.
 
-- Global timing correlation and a global passive observer are out of scope.
-- Ordinary HTTP/HTTPS, DNS, external media, telemetry, casting, mDNS, and LAN discovery are out of scope.
-- Tor-level anonymity is out of scope; the protocol is not Tor and does not hide a source from its guard.
-- Endpoint compromise, malicious application code, endpoint logging, post-quantum security, relay incentives, payments, and abuse adjudication are out of scope.
-- Sybil resistance beyond identity diversity rules, guard stability, local reputation, and signed identity is out of scope.
+## Observer visibility
+
+- The safety guard sees the source IP, its safety-final peer, timing, packet counts, and volume.
+- The private final sees the destination IP, its private-middle peer, timing, packet counts, and
+  volume.
+- Each intermediate relay sees its previous and next circuit peers, timing, packet counts, and
+  volume.
+- Link peers see fixed 1,200-byte UDP payloads, but IP/UDP headers, direction, timing, loss, and
+  total traffic volume remain visible.
+- The test coordinator sees the whole synthetic graph. That trusted orchestration exception is not
+  part of the proposed production protocol.
+
+No claim applies across identities operated in concert. Separate identities controlled by one
+operator count as collusion/Sybil behavior, including identities in both deterministic role
+domains.
+
+## Packet-capture gate and limits
+
+The authoritative gate runs on Linux with seven isolated role namespaces and separate decoy and
+auditor namespaces. It captures ingress for the synthetic IPv4 subnet and requires packets on all
+six adjacent bilateral route edges. A decoy-to-auditor sentinel is a negative control proving that
+the capture could observe a forbidden-capability packet; the private route must record zero use of
+the source's separately named test-only decoy capability.
+
+The oracle fails closed on:
+
+- an empty, truncated, malformed, or missing capture;
+- a missing required edge or unexpected direct, decoy, external, or non-adjacent edge;
+- DNS, TCP, ICMP, IPv6, or UDP on an alternate port;
+- any role packet after the authenticated route has closed;
+- absent or reordered capture sentinels;
+- leaked addresses, grants, paths, secrets, or payloads in role configuration or diagnostics;
+- disabled or unobserved negative-control evidence.
+
+This is a synthetic IPv4 namespace measurement. It does not observe arbitrary host interfaces,
+the public Internet, DNS/HTTP/media initiated by an application, mobile OS networking, or a global
+passive observer. Timing correlation remains possible even though payload sizes are fixed.
 
 ## Fail-closed boundary
 
-Private mode treats route provenance as a restriction, never as public-dial authorization. Invalid or expired descriptors, unavailable relays or gateways, authentication failures, replay violations, queue exhaustion, setup timeout, transport loss, route expiry, and counter exhaustion result in route replacement or structured offline state. Failure never enables direct dialing or hole punching. No descriptor field, private-only address, or route material may be returned to ordinary HyperDHT or Hyperswarm as a direct destination.
+Private provenance is a restriction, never public-dial authorization. Invalid or expired
+descriptors or grants, unavailable relays, authentication failures, replay violations, queue
+exhaustion, setup timeout, transport loss, liveness failure, route expiry, counter exhaustion, and
+process death result in authenticated teardown, cleanup, replacement, or structured offline state.
+Failure never enables direct dialing, hole punching, an ordinary public endpoint DHT socket, or a
+clear-network application retry.
+
+The public compiled-route interface intentionally has no address or fallback method. Process
+teardown requires all routes, links, queues, requests, sockets, and owned secret buffers to reach
+zero. This boundary must remain intact when later DHT-RPC, HyperDHT, and Hyperswarm adapters are
+introduced.
+
+## Out of scope
+
+- A global passive observer, cross-link timing correlation, relay collusion, and robust Sybil
+  resistance.
+- Ordinary HTTP/HTTPS, DNS, external media, telemetry, casting, mDNS, and LAN discovery.
+- Tor-level anonymity; this protocol is not Tor and does not hide a source from its guard.
+- Endpoint compromise, malicious application code, endpoint logging, post-quantum security, relay
+  incentives, payments, and abuse adjudication.
+- Public routing, NAT traversal, mobile lifecycle behavior, and any PearTube privacy guarantee.

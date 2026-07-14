@@ -1031,6 +1031,10 @@ export function createTemplateRegistry(options) {
         (!transactionId || !same(existing.stagedTransactionId, transactionId))
       )
         replay()
+      if (existing && existing.committed && transactionId) {
+        clear(existing.stagedTransactionId)
+        existing.stagedTransactionId = null
+      }
       if (!existing) {
         if (records.size >= MAX_TEMPLATE_RECORDS) throw PrivateRouteError.CIRCUIT_LIMIT()
         records.set(key, {
@@ -1146,15 +1150,14 @@ export function createTemplateRegistry(options) {
         invalid()
       let changed = 0
       for (const [key, record] of records) {
-        if (record.committed || !same(record.stagedTransactionId, transactionId)) continue
+        if (!same(record.stagedTransactionId, transactionId)) continue
+        if (record.committed && action !== 'abort') continue
         changed++
         if (action === 'prepare') {
           record.prepared = true
         } else if (action === 'finalize') {
           if (record.prepared !== true) unauthorized()
           record.committed = true
-          clear(record.stagedTransactionId)
-          record.stagedTransactionId = null
         } else {
           clearRecord(record)
           records.delete(key)
@@ -2741,6 +2744,87 @@ export function validateActorCommandReplyBody(kind, body) {
     return true
   } finally {
     clearTree(decoded)
+  }
+}
+
+// Package-internal, one-shot verifier for remote staged-registration replies.
+// Expected records are canonical TemplateRegister messages from the builder and
+// are bound to the exact sealed stage capsule before it can leave the host.
+const REMOTE_REGISTRATION_VERIFIERS = new WeakMap()
+
+export function createRemoteRegistrationVerifier(options) {
+  if (
+    !safeObject(options) ||
+    length(option(options, 'request')) < 0 ||
+    !Array.isArray(option(options, 'registrations')) ||
+    options.registrations.length < 1 ||
+    options.registrations.length > MAX_PRIVATE_HOPS
+  )
+    invalid()
+  const expected = []
+  let accepted = false
+  try {
+    for (const registration of options.registrations) {
+      const message = safeObject(registration) ? option(registration, 'message') : registration
+      expected.push(decodeTemplateRegister(message))
+    }
+    const capability = Object.freeze({})
+    REMOTE_REGISTRATION_VERIFIERS.set(capability, {
+      request: copy(options.request),
+      expected,
+      bound: false
+    })
+    accepted = true
+    return capability
+  } finally {
+    if (!accepted) clearTree(expected)
+  }
+}
+
+function clearRemoteRegistrationVerifier(state) {
+  if (!state) return
+  clear(state.request)
+  clearTree(state.expected)
+}
+
+export function destroyRemoteRegistrationVerifier(capability) {
+  const state = safeObject(capability) ? REMOTE_REGISTRATION_VERIFIERS.get(capability) : null
+  if (!state) return false
+  REMOTE_REGISTRATION_VERIFIERS.delete(capability)
+  clearRemoteRegistrationVerifier(state)
+  return true
+}
+
+export function isRemoteRegistrationVerifier(capability) {
+  try {
+    return REMOTE_REGISTRATION_VERIFIERS.has(capability)
+  } catch {
+    return false
+  }
+}
+
+export function bindRemoteRegistrationVerifier(capability, request) {
+  const state = safeObject(capability) ? REMOTE_REGISTRATION_VERIFIERS.get(capability) : null
+  if (!state || state.bound || !same(request, state.request)) unauthorized()
+  state.bound = true
+  return true
+}
+
+export function verifyRemoteRegistrationReply(capability, request, response) {
+  const state = safeObject(capability) ? REMOTE_REGISTRATION_VERIFIERS.get(capability) : null
+  if (!state) unauthorized()
+  REMOTE_REGISTRATION_VERIFIERS.delete(capability)
+  let acknowledgements = null
+  try {
+    if (!state.bound || !same(request, state.request)) unauthorized()
+    acknowledgements = decodeRegistrationAcknowledgements(response)
+    if (acknowledgements.length !== state.expected.length) unauthorized()
+    for (let index = 0; index < acknowledgements.length; index++)
+      clearTree(verifyRegistrationAck(acknowledgements[index], state.expected[index]))
+    return true
+  } finally {
+    clearTree(acknowledgements)
+    clearRemoteRegistrationVerifier(state)
   }
 }
 

@@ -4,7 +4,9 @@ import {
   ASYNC_CIRCUIT_STATE,
   ASYNC_REGISTRATION_STATE,
   destroyRemoteActivationVerifier,
+  destroyRemoteRegistrationVerifier,
   isRemoteActivationVerifier,
+  isRemoteRegistrationVerifier,
   transitionAsyncControlState
 } from './activation.js'
 import { PrivateRouteError } from './errors.js'
@@ -13,7 +15,11 @@ import {
   ACTOR_CONTROL_KIND,
   CIRCUIT_DESTROY_REASON
 } from './remote-control.js'
-import { isRemoteActorHost, requestRemoteActorHost } from './remote-actor-host.js'
+import {
+  isRemoteActorHost,
+  isRemoteActorHostTestDouble,
+  requestRemoteActorHost
+} from './remote-actor-host.js'
 
 export const ASYNC_ROUTE_CONTROL_DEADLINE = 5_000
 
@@ -129,6 +135,7 @@ export class AsyncRouteControlSession {
   #actorId
   #now
   #timeout
+  #testRemote
   #lastNow = null
   #registrationDeadline = null
   #circuitDeadline = null
@@ -158,6 +165,7 @@ export class AsyncRouteControlSession {
     if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > ASYNC_ROUTE_CONTROL_DEADLINE)
       invalid()
     this.#remote = remote
+    this.#testRemote = isRemoteActorHostTestDouble(remote)
     this.#actorId = copy(actorId)
     this.#ownedBytes = length(this.#actorId)
     this.#now = now
@@ -191,14 +199,17 @@ export class AsyncRouteControlSession {
     let finalize = null
     let abort = null
     let context = null
+    let registrationVerifier = null
     try {
       stage = body(options.stage)
       prepare = body(options.prepare)
       finalize = body(options.finalize)
       abort = body(options.abort)
+      registrationVerifier = options.registrationVerifier
+      if (!this.#testRemote && !isRemoteRegistrationVerifier(registrationVerifier)) invalid()
       context = this.#begin(options.signal)
       this.#registrationDeadline = context.deadline
-      const acknowledgements = await this.#stage(stage, abort, context)
+      const acknowledgements = await this.#stage(stage, abort, context, registrationVerifier)
       try {
         await this.#prepare(prepare, context)
         await this.#finalize(finalize, context)
@@ -215,6 +226,7 @@ export class AsyncRouteControlSession {
       clear(prepare)
       clear(finalize)
       clear(abort)
+      if (registrationVerifier) destroyRemoteRegistrationVerifier(registrationVerifier)
       if (this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING) this.#clearAbortBody()
     }
   }
@@ -224,12 +236,15 @@ export class AsyncRouteControlSession {
     let stage = null
     let abort = null
     let context = null
+    let registrationVerifier = null
     try {
       stage = body(stageValue)
       abort = body(options.abort)
+      registrationVerifier = options.registrationVerifier
+      if (!this.#testRemote && !isRemoteRegistrationVerifier(registrationVerifier)) invalid()
       context = this.#begin(options.signal)
       this.#registrationDeadline = context.deadline
-      return await this.#stage(stage, abort, context)
+      return await this.#stage(stage, abort, context, registrationVerifier)
     } catch (err) {
       if (context) await this.#rollbackRegistration(context)
       throw stable(err)
@@ -237,6 +252,7 @@ export class AsyncRouteControlSession {
       if (context) this.#finish(context)
       clear(stage)
       clear(abort)
+      if (registrationVerifier) destroyRemoteRegistrationVerifier(registrationVerifier)
       if (
         this.#registrationState !== ASYNC_REGISTRATION_STATE.STAGED &&
         this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING
@@ -309,6 +325,18 @@ export class AsyncRouteControlSession {
     let context = null
     try {
       supplied = abortValue === undefined ? null : body(abortValue)
+      const active = this.#current
+      if (active) {
+        if (
+          this.#registrationState !== ASYNC_REGISTRATION_STATE.STAGED &&
+          this.#registrationState !== ASYNC_REGISTRATION_STATE.PREPARED &&
+          this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING
+        )
+          circuitState()
+        active.signal.abort()
+        await active.finished
+        if (this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTED) return true
+      }
       context = this.#begin(options.signal, false, this.#registrationDeadline)
       const value = supplied || this.#abortBody
       if (!value) invalid()
@@ -489,7 +517,7 @@ export class AsyncRouteControlSession {
       await this.destroy(reason, options)
   }
 
-  async #stage(stage, abort, context) {
+  async #stage(stage, abort, context, registrationVerifier) {
     const next = transitionAsyncControlState('registration', this.#registrationState, 'stage')
     this.#replaceAbortBody(abort)
     const response = await this.#request(
@@ -497,7 +525,8 @@ export class AsyncRouteControlSession {
       ACTOR_CONTROL_KIND.REGISTER_STAGE,
       b4a.alloc(16),
       0n,
-      stage
+      stage,
+      { registrationVerifier }
     )
     this.#registrationState = next
     return response

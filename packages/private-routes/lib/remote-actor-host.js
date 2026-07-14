@@ -1,10 +1,13 @@
 import b4a from 'b4a'
 
 import {
+  bindRemoteRegistrationVerifier,
   bindRemoteActivationVerifier,
   createActorCommandAdapter,
+  destroyRemoteRegistrationVerifier,
   destroyRemoteActivationVerifier,
   validateActorCommandReplyBody,
+  verifyRemoteRegistrationReply,
   verifyRemoteActivationReply
 } from './activation.js'
 import { cryptoSuite } from './crypto-suite.js'
@@ -29,6 +32,7 @@ const MAX_UINT64 = (1n << 64n) - 1n
 const ACTOR_HANDLES = new WeakMap()
 const REMOTE_ACTOR_HOSTS = new WeakSet()
 const REMOTE_ACTOR_DISPATCH = new WeakMap()
+const REMOTE_ACTOR_TEST_DOUBLES = new WeakSet()
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferFill = Uint8Array.prototype.fill
@@ -182,6 +186,11 @@ function clearMessage(value) {
   clear(value.actorId)
   clear(value.circuitId)
   clear(value.body)
+}
+
+function destroyVerifier(value) {
+  destroyRemoteRegistrationVerifier(value)
+  destroyRemoteActivationVerifier(value)
 }
 
 export class RemoteActorHost {
@@ -356,15 +365,22 @@ export class RemoteActorHost {
       ) {
         invalid()
       }
-      verifier = options.activationVerifier
+      const registrationVerifier = options.registrationVerifier
+      const activationVerifier = options.activationVerifier
       if (
-        (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE && !isObject(verifier)) ||
-        (kind !== ACTOR_CONTROL_KIND.ACTIVATE_CREATE && verifier !== undefined)
+        (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE && !isObject(registrationVerifier)) ||
+        (kind !== ACTOR_CONTROL_KIND.REGISTER_STAGE && registrationVerifier !== undefined) ||
+        (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE && !isObject(activationVerifier)) ||
+        (kind !== ACTOR_CONTROL_KIND.ACTIVATE_CREATE && activationVerifier !== undefined)
       )
         invalid()
+      verifier = registrationVerifier || activationVerifier
       const requestId = this.#requestId()
       if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
-      if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) {
+      if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) {
+        bindRemoteRegistrationVerifier(verifier, body)
+        verifierBound = true
+      } else if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) {
         bindRemoteActivationVerifier(verifier, body, circuitId, generation)
         verifierBound = true
       }
@@ -417,7 +433,7 @@ export class RemoteActorHost {
         }
         return promise
       }
-      if (verifierBound) destroyRemoteActivationVerifier(verifier)
+      if (verifierBound) destroyVerifier(verifier)
       return Promise.reject(err instanceof PrivateRouteError ? err : unavailable())
     } finally {
       clearMessage(request)
@@ -562,7 +578,10 @@ export class RemoteActorHost {
       verified = validateActorReply(expected.request, reply, expected.digest)
       if (verified.kind !== ACTOR_CONTROL_KIND.ERROR) {
         validateActorCommandReplyBody(verified.kind, verified.body)
-        if (record && verified.kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATED) {
+        if (record && verified.kind === ACTOR_CONTROL_KIND.REGISTER_STAGED) {
+          verifyRemoteRegistrationReply(expected.verifier, expected.request.body, verified.body)
+          expected.verifier = null
+        } else if (record && verified.kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATED) {
           verifyRemoteActivationReply(
             expected.verifier,
             expected.request.body,
@@ -790,7 +809,7 @@ export class RemoteActorHost {
       digest: record.digest,
       responseDigest: responseDigest ? copy(responseDigest) : null
     }
-    destroyRemoteActivationVerifier(record.verifier)
+    destroyVerifier(record.verifier)
     record.verifier = null
     record.request = null
     record.digest = null
@@ -808,7 +827,7 @@ export class RemoteActorHost {
     const timerCancelled = !cancelTimer || this.#cancelTimer(record)
     const signalDetached = this.#detachSignal(record)
     this.#ownedBytes -= this.#recordBytes(record)
-    destroyRemoteActivationVerifier(record.verifier)
+    destroyVerifier(record.verifier)
     record.verifier = null
     clearMessage(record.request)
     clear(record.digest)
@@ -873,6 +892,10 @@ export function requestRemoteActorHost(host, ...args) {
   return dispatch(...args)
 }
 
+export function isRemoteActorHostTestDouble(host) {
+  return REMOTE_ACTOR_TEST_DOUBLES.has(host)
+}
+
 // Test-only seam, deliberately absent from the package root export map. It
 // preserves unit fault injection without weakening production dispatch.
 export function createRemoteActorHostTestDouble(request) {
@@ -890,5 +913,6 @@ export function createRemoteActorHostTestDouble(request) {
     cancel() {}
   })
   REMOTE_ACTOR_DISPATCH.set(host, request)
+  REMOTE_ACTOR_TEST_DOUBLES.add(host)
   return host
 }

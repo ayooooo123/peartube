@@ -32,7 +32,11 @@ import {
   RemoteControlMux,
   createRemoteActorControlBoundary
 } from '../lib/remote-control.js'
-import { createDestinationReplayCache, createRemoteActivationVerifier } from '../lib/activation.js'
+import {
+  createDestinationReplayCache,
+  createRemoteActivationVerifier,
+  createRemoteRegistrationVerifier
+} from '../lib/activation.js'
 import { DIRECTION } from '../lib/protocol.js'
 import { expectCode, privateRoleIdentity, seed } from './helpers.js'
 
@@ -162,6 +166,15 @@ function activationOptions(body, circuitId, generation) {
     context.sourceEphemeralSecretKey.fill(0)
     context.entryChallenge.fill(0)
     context.destinationChallenge.fill(0)
+  }
+}
+
+function registrationOptions(fixture) {
+  return {
+    registrationVerifier: createRemoteRegistrationVerifier({
+      request: fixture.built.registrationCapsule,
+      registrations: fixture.built.registrations
+    })
   }
 }
 
@@ -513,7 +526,7 @@ test('remote errors preserve only the allowlist and unknown actors are unavailab
   )
   await transfer(pair.toServer, pair.server)
   await transfer(pair.toClient, pair.client)
-  t.is(await rejectionCode(stateFailure), 'UNAUTHORIZED')
+  t.is(await rejectionCode(stateFailure), 'INVALID_ROUTE')
 
   const missing = pair.client.request(
     ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
@@ -680,6 +693,7 @@ test('actor, pending, replay, and tombstone bounds fail without eviction', async
 
 test('every canonical actor command is byte-only and unknown actors map unavailable', async (t) => {
   const pair = hostPair()
+  const fixture = registrationFixture(101)
   const secret = bytes(64, 0xa1)
   const route = [bytes(32, 0xa2), bytes(32, 0xa3)]
   const destinationAddress = b4a.from('203.0.113.7:49737')
@@ -699,7 +713,10 @@ test('every canonical actor command is byte-only and unknown actors map unavaila
       registration ? 0n : 1n,
       kind === ACTOR_CONTROL_KIND.CIRCUIT_DESTROY
         ? b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
-        : b4a.from([kind])
+        : kind === ACTOR_CONTROL_KIND.REGISTER_STAGE
+          ? fixture.built.registrationCapsule
+          : b4a.from([kind]),
+      kind === ACTOR_CONTROL_KIND.REGISTER_STAGE ? registrationOptions(fixture) : undefined
     )
     const wire = pair.toServer[0]
     t.is(wire.includes(secret), false)
@@ -716,6 +733,7 @@ test('every canonical actor command is byte-only and unknown actors map unavaila
   destinationAddress.fill(0)
   pair.client.destroy()
   pair.server.destroy()
+  fixture.destroy()
 })
 
 test('relay adapter executes canonical stage, prepare, finalize, and abort bytes', async (t) => {
@@ -1293,7 +1311,14 @@ test('relay activation returns the canonical authenticated CREATED proof', async
     [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
     [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
   ]) {
-    const pending = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+    const pending = pair.client.request(
+      kind,
+      actorId,
+      b4a.alloc(16),
+      0n,
+      body,
+      kind === ACTOR_CONTROL_KIND.REGISTER_STAGE ? registrationOptions(fixture) : undefined
+    )
     await transfer(pair.toServer, pair.server)
     await transfer(pair.toClient, pair.client)
     t.is((await pending).byteLength > 0, true)
@@ -1543,7 +1568,14 @@ test('failed verifier reuse cannot consume the owning activation verifier', asyn
     [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
     [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
   ]) {
-    const registration = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+    const registration = pair.client.request(
+      kind,
+      actorId,
+      b4a.alloc(16),
+      0n,
+      body,
+      kind === ACTOR_CONTROL_KIND.REGISTER_STAGE ? registrationOptions(fixture) : undefined
+    )
     await transfer(pair.toServer, pair.server)
     await transfer(pair.toClient, pair.client)
     await registration
@@ -1755,7 +1787,14 @@ test('activation proof circuit signature descriptor and expiry tampering fail cl
       [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
       [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
     ]) {
-      const registration = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+      const registration = pair.client.request(
+        kind,
+        actorId,
+        b4a.alloc(16),
+        0n,
+        body,
+        kind === ACTOR_CONTROL_KIND.REGISTER_STAGE ? registrationOptions(fixture) : undefined
+      )
       await transfer(pair.toServer, pair.server)
       await transfer(pair.toClient, pair.client)
       await registration
@@ -1798,7 +1837,14 @@ test('activation proof substitution across correlated requests fails closed', as
     [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
     [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
   ]) {
-    const registration = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+    const registration = pair.client.request(
+      kind,
+      actorId,
+      b4a.alloc(16),
+      0n,
+      body,
+      kind === ACTOR_CONTROL_KIND.REGISTER_STAGE ? registrationOptions(fixture) : undefined
+    )
     await transfer(pair.toServer, pair.server)
     await transfer(pair.toClient, pair.client)
     await registration

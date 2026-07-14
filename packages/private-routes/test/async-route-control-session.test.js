@@ -6,6 +6,7 @@ import {
   ACTOR_CONTROL_KIND,
   ASYNC_CIRCUIT_STATE,
   ASYNC_REGISTRATION_STATE,
+  ActorControlCodec,
   CAPABILITY,
   PROTOCOL_VERSION,
   ROLE,
@@ -29,8 +30,11 @@ import {
 } from '../index.js'
 import {
   createRemoteActivationVerifier,
+  createRemoteRegistrationVerifier,
   destroyRemoteActivationVerifier,
-  isRemoteActivationVerifier
+  destroyRemoteRegistrationVerifier,
+  isRemoteActivationVerifier,
+  isRemoteRegistrationVerifier
 } from '../lib/activation.js'
 import {
   RemoteControlFragmentCodec,
@@ -43,6 +47,17 @@ import { privateRoleIdentity, seed } from './helpers.js'
 
 function bytes(size, value) {
   return b4a.alloc(size, value)
+}
+
+function clearBuffers(value, seen = new Set()) {
+  if (!value || seen.has(value)) return
+  if (b4a.isBuffer(value)) {
+    value.fill(0)
+    return
+  }
+  if (typeof value !== 'object') return
+  seen.add(value)
+  for (const item of Object.values(value)) clearBuffers(item, seen)
 }
 
 function sequenceBytes(start) {
@@ -342,6 +357,10 @@ function activationFixture(
     replayCache: createDestinationReplayCache({ now }),
     now
   })
+  const registrationVerifier = createRemoteRegistrationVerifier({
+    request: built.registrationCapsule,
+    registrations: built.registrations
+  })
   for (const value of [
     owner.secretKey,
     relayIdentity.secretKey,
@@ -364,10 +383,12 @@ function activationFixture(
     circuitId,
     generation,
     verifier,
+    registrationVerifier,
     built,
     relay,
     destroy() {
       destroyRemoteActivationVerifier(verifier)
+      destroyRemoteRegistrationVerifier(registrationVerifier)
       destroyPrivateRelayActor(relay)
       destroyPrivateDestinationActor(destination)
       body.fill(0)
@@ -528,7 +549,8 @@ test('session uses the branded host boundary and authenticated activation proof 
       stage: fixture.built.registrationCapsule,
       prepare: fixture.built.prepareCapsule,
       finalize: fixture.built.finalizeCapsule,
-      abort: fixture.built.abortCapsule
+      abort: fixture.built.abortCapsule,
+      registrationVerifier: fixture.registrationVerifier
     }),
     pair
   )
@@ -562,6 +584,111 @@ test('session uses the branded host boundary and authenticated activation proof 
   t.is(pair.serverTimers.records.size, 0)
 })
 
+test('real host requires the registration verifier before stage can leave', async (t) => {
+  const pair = authenticatedPair()
+  const fixture = activationFixture(75)
+  const actorId = bytes(16, 0x76)
+  pair.server.register(actorId, fixture.relay)
+  const control = new AsyncRouteControlSession({
+    remote: pair.client,
+    actorId,
+    now: () => 1_000
+  })
+  t.is(
+    await rejectionCode(
+      control.stage(fixture.built.registrationCapsule, {
+        abort: fixture.built.abortCapsule
+      })
+    ),
+    'INVALID_ROUTE'
+  )
+  t.is(pair.toServer.length, 0)
+  t.is(control.registrationState, ASYNC_REGISTRATION_STATE.NEW)
+  await control.stop()
+  pair.client.destroy()
+  pair.server.destroy()
+  fixture.destroy()
+})
+
+test('tampered registration signature fails closed and consumes the verifier', async (t) => {
+  const pair = authenticatedPair()
+  const fixture = activationFixture(77)
+  const actorId = bytes(16, 0x78)
+  pair.server.register(actorId, fixture.relay)
+  const control = new AsyncRouteControlSession({
+    remote: pair.client,
+    actorId,
+    now: () => 1_000
+  })
+  const pending = control.stage(fixture.built.registrationCapsule, {
+    abort: fixture.built.abortCapsule,
+    registrationVerifier: fixture.registrationVerifier
+  })
+  await transferAuthenticated(pair.toServer, pair.server)
+  const forged = pair.toClient.shift()
+  forged[forged.byteLength - 1] ^= 1
+  t.is(await rejectionCode(pair.client.receiveAuthenticated(forged)), 'ROUTE_UNAVAILABLE')
+  forged.fill(0)
+  t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+  t.is(control.registrationState, ASYNC_REGISTRATION_STATE.NEW)
+  t.is(isRemoteRegistrationVerifier(fixture.registrationVerifier), false)
+  t.is(pair.client.stats.pending, 0)
+  t.is(pair.client.stats.timers, 0)
+  t.is(pair.client.stats.ownedBytes, 0)
+  await control.stop()
+  pair.client.destroy()
+  pair.server.destroy()
+  fixture.destroy()
+})
+
+test('correlated acknowledgement substitution from another registration fails closed', async (t) => {
+  const firstPair = authenticatedPair()
+  const secondPair = authenticatedPair()
+  const first = activationFixture(79)
+  const second = activationFixture(82)
+  const firstActorId = bytes(16, 0x80)
+  const secondActorId = bytes(16, 0x83)
+  firstPair.server.register(firstActorId, first.relay)
+  secondPair.server.register(secondActorId, second.relay)
+  const control = new AsyncRouteControlSession({
+    remote: firstPair.client,
+    actorId: firstActorId,
+    now: () => 1_000
+  })
+  const pending = control.stage(first.built.registrationCapsule, {
+    abort: first.built.abortCapsule,
+    registrationVerifier: first.registrationVerifier
+  })
+  const unrelated = secondPair.client.request(
+    ACTOR_CONTROL_KIND.REGISTER_STAGE,
+    secondActorId,
+    b4a.alloc(16),
+    0n,
+    second.built.registrationCapsule,
+    { registrationVerifier: second.registrationVerifier }
+  )
+  await transferAuthenticated(firstPair.toServer, firstPair.server)
+  await transferAuthenticated(secondPair.toServer, secondPair.server)
+  const codec = new ActorControlCodec()
+  const expectedReply = codec.decode(firstPair.toClient.shift())
+  const unrelatedReply = codec.decode(secondPair.toClient.shift())
+  const substituted = codec.encode({ ...expectedReply, body: unrelatedReply.body })
+  t.is(await rejectionCode(firstPair.client.receiveAuthenticated(substituted)), 'ROUTE_UNAVAILABLE')
+  t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+  t.is(control.registrationState, ASYNC_REGISTRATION_STATE.NEW)
+  t.is(isRemoteRegistrationVerifier(first.registrationVerifier), false)
+  firstPair.client.destroy()
+  secondPair.client.destroy()
+  t.is(await rejectionCode(unrelated), 'ROUTE_UNAVAILABLE')
+  firstPair.server.destroy()
+  secondPair.server.destroy()
+  first.destroy()
+  second.destroy()
+  clearBuffers(expectedReply)
+  clearBuffers(unrelatedReply)
+  substituted.fill(0)
+})
+
 test('real host registration replies dropped at or after the deadline stay tombstoned', async (t) => {
   const cases = [
     { name: 'stage', after: 0 },
@@ -584,7 +711,8 @@ test('real host registration replies dropped at or after the deadline stay tombs
     if (item.name !== 'stage') {
       const staged = await settleAuthenticated(
         control.stage(fixture.built.registrationCapsule, {
-          abort: fixture.built.abortCapsule
+          abort: fixture.built.abortCapsule,
+          registrationVerifier: fixture.registrationVerifier
         }),
         pair
       )
@@ -597,7 +725,8 @@ test('real host registration replies dropped at or after the deadline stay tombs
     const pending =
       item.name === 'stage'
         ? control.stage(fixture.built.registrationCapsule, {
-            abort: fixture.built.abortCapsule
+            abort: fixture.built.abortCapsule,
+            registrationVerifier: fixture.registrationVerifier
           })
         : item.name === 'prepare'
           ? control.prepare(fixture.built.prepareCapsule)
@@ -656,7 +785,8 @@ test('real host activation and destroy replies cannot revive timed-out circuit s
         stage: fixture.built.registrationCapsule,
         prepare: fixture.built.prepareCapsule,
         finalize: fixture.built.finalizeCapsule,
-        abort: fixture.built.abortCapsule
+        abort: fixture.built.abortCapsule,
+        registrationVerifier: fixture.registrationVerifier
       }),
       pair
     )
@@ -736,7 +866,8 @@ test('real host queue refusal fails before ownership escapes and leaves zero res
   t.is(
     await rejectionCode(
       control.stage(fixture.built.registrationCapsule, {
-        abort: fixture.built.abortCapsule
+        abort: fixture.built.abortCapsule,
+        registrationVerifier: fixture.registrationVerifier
       })
     ),
     'ROUTE_UNAVAILABLE'
@@ -770,7 +901,8 @@ test('real actor expiry is the final backstop for a staged request whose reply w
     now: () => clock.now
   })
   const pending = control.stage(fixture.built.registrationCapsule, {
-    abort: fixture.built.abortCapsule
+    abort: fixture.built.abortCapsule,
+    registrationVerifier: fixture.registrationVerifier
   })
   await transferAuthenticated(pair.toServer, pair.server)
   t.is(pair.toClient.length, 1)
@@ -1108,6 +1240,73 @@ test('cancellation after authenticated stage attempts abort with the original de
   t.is(control.stats.ownedBytes, 0)
 })
 
+test('explicit abort cancels in-flight prepare or finalize and late success stays inert', async (t) => {
+  for (const [index, operation] of ['prepare', 'finalize'].entries()) {
+    const pair = authenticatedPair()
+    const observed = []
+    const fixture = activationFixture(210 + index * 10, undefined, 1n, {
+      observe(event) {
+        observed.push(event)
+      }
+    })
+    const actorId = bytes(16, 0xe8 + index)
+    pair.server.register(actorId, fixture.relay)
+    const control = new AsyncRouteControlSession({
+      remote: pair.client,
+      actorId,
+      now: () => 1_000
+    })
+    const staged = await settleAuthenticated(
+      control.stage(fixture.built.registrationCapsule, {
+        abort: fixture.built.abortCapsule,
+        registrationVerifier: fixture.registrationVerifier
+      }),
+      pair
+    )
+    staged.fill(0)
+    if (operation === 'finalize')
+      await settleAuthenticated(control.prepare(fixture.built.prepareCapsule), pair)
+
+    const pending =
+      operation === 'prepare'
+        ? control.prepare(fixture.built.prepareCapsule)
+        : control.finalize(fixture.built.finalizeCapsule)
+    const aborting = control.abort()
+    const repeated = control.abort()
+    for (let attempt = 0; attempt < 16 && pair.toServer.length < 2; attempt++)
+      await Promise.resolve()
+    t.is(pair.toServer.length, 2, `${operation} and its abort are both correlated`)
+    await transferAuthenticated(pair.toServer, pair.server)
+    t.is(pair.toClient.length, 2)
+    const late = pair.toClient.shift()
+    const duplicate = b4a.from(late)
+    await pair.client.receiveAuthenticated(late)
+    await pair.client.receiveAuthenticated(duplicate)
+    await pair.client.receiveAuthenticated(pair.toClient.shift())
+    late.fill(0)
+    duplicate.fill(0)
+
+    t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+    t.is(await aborting, true)
+    t.is(await repeated, true)
+    t.is(control.registrationState, ASYNC_REGISTRATION_STATE.ABORTED)
+    t.is(control.stats.waits, 0)
+    t.is(control.stats.ownedBytes, 0)
+    t.is(pair.client.stats.pending, 0)
+    t.is(pair.client.stats.timers, 0)
+
+    await control.stop()
+    pair.client.destroy()
+    pair.server.destroy()
+    fixture.destroy()
+    const destroying = observed.find((event) => event.type === 'private-relay-destroying')
+    t.is(destroying && destroying.records, 0, `${operation} abort leaves no remote record`)
+    t.is(pair.client.stats.ownedBytes, 0)
+    t.is(pair.clientTimers.records.size, 0)
+    t.is(pair.serverTimers.records.size, 0)
+  }
+})
+
 test('stop from staged state sends the retained abort before clearing resources', async (t) => {
   const peer = remote()
   const control = session(peer)
@@ -1215,7 +1414,8 @@ test('separate registration steps started at or after their deadline fail before
     })
     const staged = await settleAuthenticated(
       control.stage(fixture.built.registrationCapsule, {
-        abort: fixture.built.abortCapsule
+        abort: fixture.built.abortCapsule,
+        registrationVerifier: fixture.registrationVerifier
       }),
       pair
     )

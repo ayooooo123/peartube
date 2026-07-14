@@ -21,6 +21,7 @@ const MAX_TIMER_DELAY = 0x7fff_ffff
 const SIGNATURE_SIZE = 64
 const MIN_UNSIGNED_SIZE = 175
 const MAX_UNSIGNED_SIZE = 199
+const ADJACENT_TOPOLOGY_ROLES = new Set(['0:1', '1:2', '2:3', '3:4', '4:5', '5:6'])
 const VERIFIED_GRANTS = new WeakMap()
 const LINK_HANDLES = new WeakMap()
 const DIRECTORIES = new WeakMap()
@@ -114,6 +115,12 @@ function validateRoleBinding(identity32, role) {
   ) {
     if (roleForIdentity(identity32) !== ROLE.PRIVATE) unauthorized()
   }
+}
+
+function validateAdjacency(leftRole, rightRole) {
+  const first = Math.min(leftRole, rightRole)
+  const second = Math.max(leftRole, rightRole)
+  if (!ADJACENT_TOPOLOGY_ROLES.has(`${first}:${second}`)) unauthorized()
 }
 
 function parseIPv4(host) {
@@ -260,6 +267,7 @@ function normalizeGrant(value, signed) {
 
   let endpointA = normalizeEndpoint(value.endpointA)
   let endpointB = normalizeEndpoint(value.endpointB)
+  validateAdjacency(endpointA.role, endpointB.role)
   const ordering = b4a.compare(endpointA.identity32, endpointB.identity32)
   if (ordering === 0) invalidRoute()
   if (ordering > 0) [endpointA, endpointB] = [endpointB, endpointA]
@@ -549,6 +557,13 @@ function observe(state) {
   if (state.observer) state.observer(snapshot(state))
 }
 
+function reportSafeError(state) {
+  if (typeof state.onError !== 'function') return
+  try {
+    state.onError(PrivateRouteError.ROUTE_UNAVAILABLE())
+  } catch {}
+}
+
 function currentTime(state) {
   const value = state.now()
   if (!validU64(value)) invalidRoute()
@@ -606,8 +621,15 @@ function scheduleExpiry(state, key) {
   const timer = state.schedule(() => {
     state.timers.delete(key)
     if (state.destroyed || !state.grants.has(key)) return
-    if (currentTime(state) >= record.expiresAt) closeRecord(state, key, 'expired', true)
-    else scheduleExpiry(state, key)
+    try {
+      if (currentTime(state) >= record.expiresAt) closeRecord(state, key, 'expired', true)
+      else scheduleExpiry(state, key)
+    } catch {
+      try {
+        closeRecord(state, key, 'expired', true)
+      } catch {}
+      reportSafeError(state)
+    }
   }, delay)
   state.timers.set(key, timer)
 }
@@ -629,6 +651,7 @@ export class LinkDirectory {
       schedule,
       cancel,
       onClose,
+      onError,
       maxGrants,
       maxHandles
     } = options
@@ -641,7 +664,8 @@ export class LinkDirectory {
       typeof now !== 'function' ||
       typeof schedule !== 'function' ||
       typeof cancel !== 'function' ||
-      typeof onClose !== 'function'
+      typeof onClose !== 'function' ||
+      (onError !== undefined && typeof onError !== 'function')
     ) {
       invalidRoute()
     }
@@ -658,6 +682,7 @@ export class LinkDirectory {
       schedule,
       cancel,
       onClose,
+      onError: onError || (() => {}),
       observer,
       maxGrants: validateBound(maxGrants, DEFAULT_MAX_TOPOLOGY_GRANTS),
       maxHandles: validateBound(maxHandles, DEFAULT_MAX_LINK_HANDLES),
@@ -689,13 +714,13 @@ export class LinkDirectory {
       unauthorized()
     }
     if (state.grants.has(key)) return b4a.from(grant.digest32)
-    if (state.grants.size >= state.maxGrants) circuitLimit()
+    if (state.grants.size + state.tombstones.size >= state.maxGrants) circuitLimit()
     state.grants.set(key, grant)
     try {
       scheduleExpiry(state, key)
-    } catch (error) {
+    } catch {
       state.grants.delete(key)
-      throw error
+      throw PrivateRouteError.ROUTE_UNAVAILABLE()
     }
     observe(state)
     return b4a.from(grant.digest32)
@@ -819,6 +844,7 @@ export class LinkDirectory {
     state.schedule = null
     state.cancel = null
     state.onClose = null
+    state.onError = null
     state.observer = null
     state.released = true
 

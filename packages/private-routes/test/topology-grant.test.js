@@ -24,11 +24,14 @@ const {
 } = routes
 
 const KNOWN_UNSIGNED_HEX =
-  '0000000000111111111111111111111111111111111111111111111111111111111111111143046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de00047f000001a029014ed32f63bf35f0eeefcb25f28a2e1fbdc873ae2835671b0c9460f5f12e4556a80604c0000209a02a020102030405060708000000000000100000000000000020002222222222222222222222222222222222222222222222222222222222222222'
-const KNOWN_SIGNED_HASH_HEX = 'ec3aa1bf7443d5a39c5a176b16de6a75f9f95dbb8b804ff2b30d45ff28ef58c7'
+  '0000000000111111111111111111111111111111111111111111111111111111111111111143046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de00047f000001a029014ed32f63bf35f0eeefcb25f28a2e1fbdc873ae2835671b0c9460f5f12e4556a80104c0000209a02a020102030405060708000000000000100000000000000020002222222222222222222222222222222222222222222222222222222222222222'
+const KNOWN_SIGNED_HASH_HEX = '2553e6ea2546ee6a7935fc1f9b212aa5de4c90de4334d0c3bc5466c60a2f7fe8'
 const KNOWN_SIGNATURE_HEX =
-  '379dfdef88eaa663db808df8e9a8a09ab0d958a297b9d4047e053c5de7ae4aaa2b19081773f3e8e509c3fdc9d1dd2b26e813c263ecd0a05d899d71796fa40e03'
-const KNOWN_DIGEST_HEX = 'fde042bf733d003aac6d9f9e8d9d8830a0a6036a7758e65a881f6dca4d9cb5c3'
+  '7ec8de683cb14a07ba46946efe31f31932f8c50ba866ba8a01bbf5e164eef310f1fd6ca5c2ab54feb005e29e3e32bbe2522f8acf524bdc8e14db49a7587af50a'
+const KNOWN_DIGEST_HEX = '0b8667ec50bf9088b93718bc0a1486e14a9697d78f576eba9f61db061ce68019'
+const INVALID_SOURCE_DESTINATION_HEX =
+  '0000000000111111111111111111111111111111111111111111111111111111111111111143046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb8e0efb8bdca5de00047f000001a029014ed32f63bf35f0eeefcb25f28a2e1fbdc873ae2835671b0c9460f5f12e4556a80604c0000209a02a020102030405060708000000000000100000000000000020002222222222222222222222222222222222222222222222222222222222222222379dfdef88eaa663db808df8e9a8a09ab0d958a297b9d4047e053c5de7ae4aaa2b19081773f3e8e509c3fdc9d1dd2b26e813c263ecd0a05d899d71796fa40e03'
+const MAX_TIMER_DELAY = 0x7fff_ffff
 
 function endpoint(identity32, role, host, port, operations) {
   return { identity32, role, host, port, operations }
@@ -51,7 +54,7 @@ function knownFixture(overrides = {}) {
     ),
     endpointB: endpoint(
       b.publicKey,
-      TOPOLOGY_ROLE.DESTINATION,
+      TOPOLOGY_ROLE.SAFETY_GUARD,
       '192.0.2.9',
       41002,
       LINK_OPERATION.ACCEPT
@@ -164,6 +167,7 @@ function directoryOptions(fixture, clock, overrides = {}) {
     schedule: clock.schedule,
     cancel: clock.cancel,
     onClose() {},
+    onError() {},
     ...overrides
   }
 }
@@ -357,6 +361,99 @@ test('topology participant roles bind safety/private relay classification withou
 
   const endpoints = knownFixture()
   t.ok(signTopologyGrant(endpoints.grant, endpoints.authority.secretKey))
+})
+
+test('topology grants accept only the six undirected adjacent role pairs', (t) => {
+  const authority = cryptoSuite.keyPair(seed(90))
+  const identities = [
+    cryptoSuite.keyPair(seed(201)),
+    cryptoSuite.keyPair(seed(31)),
+    cryptoSuite.keyPair(seed(32)),
+    cryptoSuite.keyPair(seed(34)),
+    cryptoSuite.keyPair(seed(37)),
+    cryptoSuite.keyPair(seed(41)),
+    cryptoSuite.keyPair(seed(202))
+  ]
+  const alternates = [
+    cryptoSuite.keyPair(seed(203)),
+    cryptoSuite.keyPair(seed(35)),
+    cryptoSuite.keyPair(seed(36)),
+    cryptoSuite.keyPair(seed(42)),
+    cryptoSuite.keyPair(seed(43)),
+    cryptoSuite.keyPair(seed(34)),
+    cryptoSuite.keyPair(seed(204))
+  ]
+  const allowed = new Set(['0:1', '1:2', '2:3', '3:4', '4:5', '5:6'])
+
+  for (let left = TOPOLOGY_ROLE.SOURCE; left <= TOPOLOGY_ROLE.DESTINATION; left++) {
+    for (let right = left; right <= TOPOLOGY_ROLE.DESTINATION; right++) {
+      const grant = {
+        version: PROTOCOL_VERSION,
+        format: 0,
+        grantId32: b4a.alloc(32, left * 8 + right),
+        endpointA: endpoint(
+          identities[left].publicKey,
+          left,
+          '127.0.0.1',
+          43000 + left,
+          LINK_OPERATION.KNOWN
+        ),
+        endpointB: endpoint(
+          left === right ? alternates[right].publicKey : identities[right].publicKey,
+          right,
+          '127.0.0.2',
+          43100 + right,
+          LINK_OPERATION.KNOWN
+        ),
+        epoch: 9n,
+        notBefore: 10n,
+        expiresAt: 20n,
+        runId32: seed(45)
+      }
+      const pair = `${left}:${right}`
+      if (allowed.has(pair)) t.ok(signTopologyGrant(grant, authority.secretKey), pair)
+      else expectCode(t, () => signTopologyGrant(grant, authority.secretKey), 'UNAUTHORIZED')
+    }
+  }
+
+  const self = knownFixture()
+  expectCode(
+    t,
+    () =>
+      signTopologyGrant(
+        {
+          ...self.grant,
+          endpointB: { ...self.grant.endpointB, identity32: self.grant.endpointA.identity32 }
+        },
+        self.authority.secretKey
+      ),
+    'INVALID_ROUTE'
+  )
+})
+
+test('a correctly authority-signed nonadjacent grant is rejected during decode and verification', (t) => {
+  const fixture = knownFixture()
+  const encoding = b4a.from(INVALID_SOURCE_DESTINATION_HEX, 'hex')
+  const unsigned = encoding.subarray(0, encoding.byteLength - 64)
+  const signature = encoding.subarray(encoding.byteLength - 64)
+
+  t.ok(
+    cryptoSuite.verify(
+      cryptoSuite.hash([DOMAIN.TOPOLOGY_GRANT, unsigned]),
+      signature,
+      fixture.authority.publicKey
+    )
+  )
+  expectCode(t, () => decodeTopologyGrant(encoding), 'UNAUTHORIZED')
+  expectCode(
+    t,
+    () =>
+      verifyTopologyGrant(encoding, fixture.authority.publicKey, {
+        localIdentity32: fixture.a.publicKey,
+        now: 0x1000n
+      }),
+    'UNAUTHORIZED'
+  )
 })
 
 test('every one-byte mutation of a signed topology grant is rejected', (t) => {
@@ -629,6 +726,271 @@ test('LinkDirectory bounds grants and handles without exposing partial authority
       ),
     'CIRCUIT_LIMIT'
   )
+})
+
+test('revocation tombstones share the configured grant bound and block distinct churn', (t) => {
+  const { first, second } = twoSignedFixtures()
+  const clock = fakeClock()
+  const snapshots = []
+  const directory = new LinkDirectory(
+    directoryOptions(first, clock, {
+      maxGrants: 1,
+      maxHandles: 1,
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  const digest32 = directory.add(first.signed)
+  directory.revoke({ digest32, epoch: first.grant.epoch, runId32: first.grant.runId32 })
+
+  const tombstoned = snapshots.at(-1)
+  t.is(tombstoned.grants + tombstoned.tombstones, 1)
+  expectCode(t, () => directory.add(first.signed), 'UNAUTHORIZED')
+  expectCode(t, () => directory.add(second.signed), 'CIRCUIT_LIMIT')
+  const bounded = snapshots.at(-1)
+  t.is(bounded.grants + bounded.tombstones, 1)
+  t.alike(bounded, {
+    grants: 0,
+    handles: 0,
+    tombstones: 1,
+    timers: 0,
+    destroyed: false
+  })
+})
+
+test('expiry tombstones share the configured grant bound and block distinct churn', (t) => {
+  const first = signedFixture()
+  const base = classifiedFixture()
+  const second = signedFixture(
+    classifiedFixture({
+      grantId32: seed(20),
+      endpointB: { ...base.grant.endpointB, host: '2001:db8::4', port: 42004 },
+      expiresAt: 300n
+    })
+  )
+  const clock = fakeClock()
+  const snapshots = []
+  const directory = new LinkDirectory(
+    directoryOptions(first, clock, {
+      maxGrants: 1,
+      maxHandles: 1,
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  directory.add(first.signed)
+  clock.advance(100)
+
+  const tombstoned = snapshots.at(-1)
+  t.is(tombstoned.grants + tombstoned.tombstones, 1)
+  expectCode(t, () => directory.add(first.signed), 'UNAUTHORIZED')
+  expectCode(t, () => directory.add(second.signed), 'CIRCUIT_LIMIT')
+  const bounded = snapshots.at(-1)
+  t.is(bounded.grants + bounded.tombstones, 1)
+})
+
+test('a synchronous schedule failure rolls add back and returns a sanitized route error', (t) => {
+  const { first, second } = twoSignedFixtures()
+  const clock = fakeClock()
+  const snapshots = []
+  let scheduleCalls = 0
+  const directory = new LinkDirectory(
+    directoryOptions(first, clock, {
+      maxGrants: 1,
+      maxHandles: 1,
+      schedule(callback, delay) {
+        scheduleCalls++
+        if (scheduleCalls === 1) throw new Error('sensitive schedule failure')
+        return clock.schedule(callback, delay)
+      },
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+
+  let error = null
+  try {
+    directory.add(first.signed)
+  } catch (err) {
+    error = err
+  }
+  t.ok(error instanceof routes.PrivateRouteError)
+  if (error) {
+    t.is(error.code, 'ROUTE_UNAVAILABLE')
+    t.is(error.message.includes('sensitive'), false)
+  }
+
+  t.ok(directory.add(second.signed))
+  t.alike(snapshots.at(-1), {
+    grants: 1,
+    handles: 0,
+    tombstones: 0,
+    timers: 1,
+    destroyed: false
+  })
+  directory.destroy()
+})
+
+test('a throwing expiry clock fail-closes the grant and reports only a safe asynchronous error', (t) => {
+  const fixture = signedFixture()
+  const clock = fakeClock()
+  const errors = []
+  const snapshots = []
+  let nowCalls = 0
+  const directory = new LinkDirectory(
+    directoryOptions(fixture, clock, {
+      now() {
+        nowCalls++
+        if (nowCalls === 4) throw new Error('sensitive clock failure')
+        return clock.now()
+      },
+      onError: (error) => errors.push(error),
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  const digest32 = directory.add(fixture.signed)
+  const handle = directory.authorize(authorization(fixture, digest32))
+
+  let escaped = null
+  try {
+    clock.advance(100)
+  } catch (error) {
+    escaped = error
+  }
+
+  t.absent(escaped)
+  t.is(errors.length, 1)
+  t.ok(errors[0] instanceof routes.PrivateRouteError)
+  if (errors[0]) {
+    t.is(errors[0].code, 'ROUTE_UNAVAILABLE')
+    t.is(errors[0].message.includes('sensitive'), false)
+  }
+  expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+  t.is(clock.pending(), 0)
+  t.alike(snapshots.at(-1), {
+    grants: 0,
+    handles: 0,
+    tombstones: 1,
+    timers: 0,
+    destroyed: false
+  })
+})
+
+test('a throwing long-horizon reschedule fail-closes instead of leaving an untimed grant', (t) => {
+  const fixture = signedFixture(
+    classifiedFixture({ expiresAt: 100n + BigInt(MAX_TIMER_DELAY) + 50n })
+  )
+  const clock = fakeClock()
+  const errors = []
+  const snapshots = []
+  let scheduleCalls = 0
+  const directory = new LinkDirectory(
+    directoryOptions(fixture, clock, {
+      schedule(callback, delay) {
+        scheduleCalls++
+        if (scheduleCalls === 2) throw new Error('sensitive reschedule failure')
+        return clock.schedule(callback, delay)
+      },
+      onError: (error) => errors.push(error),
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  const digest32 = directory.add(fixture.signed)
+  const handle = directory.authorize(authorization(fixture, digest32))
+
+  let escaped = null
+  try {
+    clock.advance(MAX_TIMER_DELAY)
+  } catch (error) {
+    escaped = error
+  }
+
+  t.absent(escaped)
+  t.is(scheduleCalls, 2)
+  t.is(errors.length, 1)
+  t.ok(errors[0] instanceof routes.PrivateRouteError)
+  if (errors[0]) t.is(errors[0].code, 'ROUTE_UNAVAILABLE')
+  expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+  t.is(clock.pending(), 0)
+  t.alike(snapshots.at(-1), {
+    grants: 0,
+    handles: 0,
+    tombstones: 1,
+    timers: 0,
+    destroyed: false
+  })
+})
+
+test('a throwing expiry close callback cannot escape the timer or retain link state', (t) => {
+  const fixture = signedFixture()
+  const clock = fakeClock()
+  const errors = []
+  const snapshots = []
+  let closes = 0
+  const directory = new LinkDirectory(
+    directoryOptions(fixture, clock, {
+      onClose() {
+        closes++
+        throw new Error('sensitive expiry close failure')
+      },
+      onError: (error) => errors.push(error),
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  const digest32 = directory.add(fixture.signed)
+  const handle = directory.authorize(authorization(fixture, digest32))
+
+  let escaped = null
+  try {
+    clock.advance(100)
+  } catch (error) {
+    escaped = error
+  }
+
+  t.absent(escaped)
+  t.is(closes, 1)
+  t.is(errors.length, 1)
+  t.ok(errors[0] instanceof routes.PrivateRouteError)
+  if (errors[0]) {
+    t.is(errors[0].code, 'ROUTE_UNAVAILABLE')
+    t.is(errors[0].message.includes('sensitive'), false)
+  }
+  expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+  t.is(clock.pending(), 0)
+  t.is(snapshots.at(-1).grants + snapshots.at(-1).tombstones, 1)
+})
+
+test('the safe asynchronous error observer is sanitized and its own throw is swallowed', (t) => {
+  const fixture = signedFixture()
+  const clock = fakeClock()
+  const received = []
+  const directory = new LinkDirectory(
+    directoryOptions(fixture, clock, {
+      onClose() {
+        throw new Error('sensitive source failure')
+      },
+      onError(error) {
+        received.push(error)
+        throw new Error('sensitive observer failure')
+      }
+    })
+  )
+  const digest32 = directory.add(fixture.signed)
+  const handle = directory.authorize(authorization(fixture, digest32))
+
+  let escaped = null
+  try {
+    clock.advance(100)
+  } catch (error) {
+    escaped = error
+  }
+
+  t.absent(escaped)
+  t.is(received.length, 1)
+  t.ok(received[0] instanceof routes.PrivateRouteError)
+  if (received[0]) {
+    t.is(received[0].code, 'ROUTE_UNAVAILABLE')
+    t.is(received[0].message.includes('sensitive'), false)
+  }
+  expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+  t.is(clock.pending(), 0)
 })
 
 test('destroy closes active links, cancels expiry, and leaves zero retained directory state', (t) => {

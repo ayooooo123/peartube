@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 
 import {
+  failCompiledRouteDuplex,
   isCompiledRouteDuplex,
   isCompiledRouteDuplexFor,
   replaceCompiledRouteDuplex
@@ -400,6 +401,11 @@ export class RouteManager {
         )
           invalid()
       } catch (err) {
+        if (isCompiledRouteDuplex(circuit)) {
+          try {
+            failCompiledRouteDuplex(circuit)
+          } catch {}
+        }
         // A missing or timed-out circuit is an availability failure. Preserve
         // authenticated protocol rejections so callers cannot mistake forged
         // route material for a transient outage.

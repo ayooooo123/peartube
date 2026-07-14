@@ -541,6 +541,36 @@ test('drain ignores unrelated generation accounting and requires its exact cumul
   await close(f)
 })
 
+test('equivalent drain calls share one bounded retained barrier', async (t) => {
+  const f = await fixture({ marker: 57 })
+  t.is(f.duplex.write(b4a.from('one-captured-counter')), true)
+  const first = f.duplex.drain()
+  const duplicates = Array.from({ length: 64 }, () => f.duplex.drain())
+  t.ok(duplicates.every((value) => value === first))
+  t.is(readCompiledRouteDuplexStats(f.duplex).drains, 1)
+  acknowledge(f, 1n, 0n)
+  await f.timers.advance(1)
+  await Promise.all([first, ...duplicates])
+  await close(f)
+})
+
+test('distinct captured drain barriers have a strict retained cap', async (t) => {
+  const f = await fixture({ marker: 58 })
+  const drains = []
+  for (let index = 0; index < 8; index++) {
+    t.is(f.duplex.write(b4a.from([index])), true)
+    drains.push(f.duplex.drain())
+    await settle()
+  }
+  t.is(readCompiledRouteDuplexStats(f.duplex).drains, 8)
+  t.is(f.duplex.write(b4a.from('ninth')), true)
+  await t.exception(f.duplex.drain(), /Circuit limit was reached/)
+  const rejected = drains.map((value) => t.exception(value, /Route is unavailable/))
+  failCompiledRouteDuplex(f.duplex)
+  await Promise.all(rejected)
+  await close(f)
+})
+
 test('authenticated reverse stream and datagram cells preserve type and ordering', async (t) => {
   const f = await fixture({ marker: 60 })
   for (const value of ['reverse-one', 'reverse-two']) {
@@ -797,6 +827,7 @@ test('RouteManager returns only an already authenticated live duplex and rejects
   const { descriptorId, verified: descriptor } = managerDescriptor()
   const substituted = managerFor(() => f.duplex)
   expectCode(t, () => substituted.open({ safety, descriptor }), 'INVALID_ROUTE')
+  t.is(readCompiledRouteDuplexStats(f.duplex).closed, true)
   const circuitId = b4a.alloc(16, 0xf2)
   const circuitContext = Object.freeze({})
   const correct = await fixture({

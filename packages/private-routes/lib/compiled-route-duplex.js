@@ -27,6 +27,7 @@ export const DEFAULT_MAX_COMPILED_DATAGRAMS = MAX_COMPILED_STREAM_FRAGMENTS
 export const DEFAULT_COMPILED_LOW_WATER_MARK = 1
 
 const MAX_UINT64 = (1n << 64n) - 1n
+const MAX_COMPILED_DRAINS = MAX_COMPILED_STREAM_FRAGMENTS
 const DUPLEXES = new WeakMap()
 const READY_CAPABILITIES = new WeakMap()
 const CLAIMED_CREATED_ROUTES = new WeakSet()
@@ -179,6 +180,7 @@ function readyFor(value) {
 function rejectDrains(state, error) {
   for (const record of state.drains) record.reject(error)
   state.drains.clear()
+  state.drainByCounter.clear()
 }
 
 function clearInbound(state) {
@@ -355,6 +357,7 @@ function checkDrains(state) {
         (progress.highestAck !== null && progress.highestAck >= record.counter)
       if (!acknowledged || state.queuedBytes >= state.lowWaterMark) continue
       state.drains.delete(record)
+      state.drainByCounter.delete(record.key)
       record.resolve(true)
     }
   } finally {
@@ -422,6 +425,17 @@ function drain(state) {
   } catch (err) {
     return Promise.reject(err)
   }
+  const counter = progress.highestSent
+  const key = counter === null ? 'none' : counter.toString()
+  const existing = state.drainByCounter.get(key)
+  if (existing) {
+    clear(progress.circuitId)
+    return existing.promise
+  }
+  if (state.drains.size >= MAX_COMPILED_DRAINS) {
+    clear(progress.circuitId)
+    return Promise.reject(PrivateRouteError.CIRCUIT_LIMIT())
+  }
   let resolve
   let reject
   const promise = new Promise((onResolve, onReject) => {
@@ -429,13 +443,16 @@ function drain(state) {
     reject = onReject
   })
   const record = {
+    key,
     generation: state.generation,
-    counter: progress.highestSent,
+    counter,
+    promise,
     resolve,
     reject
   }
   clear(progress.circuitId)
   state.drains.add(record)
+  state.drainByCounter.set(key, record)
   checkDrains(state)
   return promise
 }
@@ -631,6 +648,7 @@ export function createCompiledRouteDuplex(options = {}) {
     datagrams: [],
     sends: new Set(),
     drains: new Set(),
+    drainByCounter: new Map(),
     pollTimer: null,
     closed: false,
     reason: null,

@@ -796,7 +796,8 @@ export class UdxCellEndpoint {
     ) {
       return Promise.reject(PrivateRouteError.CIRCUIT_LIMIT())
     }
-    return new Promise((resolve, reject) => {
+    let dispatch = false
+    const sending = new Promise((resolve, reject) => {
       const record = {
         packet: b4a.from(packet),
         peer: authority.peer,
@@ -853,8 +854,14 @@ export class UdxCellEndpoint {
       state.queuedBytes += BOOTSTRAP_SIZE
       state.reservedPackets++
       state.reservedBytes += BOOTSTRAP_SIZE
-      pump(state)
+      dispatch = true
     })
+    // Bare's native UDX send may re-enter teardown before this call returns.
+    // Own the rejection before crossing that boundary while returning the
+    // original promise so callers still observe the exact send outcome.
+    void sending.catch(() => {})
+    if (dispatch) pump(state)
+    return sending
   }
 
   [UDX_LINK_OPEN](handle, established) {

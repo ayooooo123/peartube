@@ -159,8 +159,12 @@ export function transitionAsyncControlState(scope, state, operation) {
         : null
   if (!table || typeof state !== 'string' || typeof operation !== 'string') invalid()
   if (
-    (scope === 'registration' && operation === 'abort' && state === 'ABORTED') ||
-    (scope === 'circuit' && operation === 'destroy' && state === 'DESTROYED')
+    (scope === 'registration' &&
+      operation === 'abort' &&
+      (state === 'ABORTING' || state === 'ABORTED')) ||
+    (scope === 'circuit' &&
+      operation === 'destroy' &&
+      (state === 'DESTROYING' || state === 'DESTROYED'))
   )
     return state
   const next = table[state] && table[state][operation]
@@ -2817,6 +2821,14 @@ export function destroyRemoteActivationVerifier(capability) {
   REMOTE_ACTIVATION_VERIFIERS.delete(capability)
   clearRemoteActivationVerifier(state)
   return true
+}
+
+export function isRemoteActivationVerifier(capability) {
+  try {
+    return REMOTE_ACTIVATION_VERIFIERS.has(capability)
+  } catch {
+    return false
+  }
 }
 
 export function bindRemoteActivationVerifier(capability, request, circuitId, generation) {

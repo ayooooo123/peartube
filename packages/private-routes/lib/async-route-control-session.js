@@ -3,6 +3,8 @@ import b4a from 'b4a'
 import {
   ASYNC_CIRCUIT_STATE,
   ASYNC_REGISTRATION_STATE,
+  destroyRemoteActivationVerifier,
+  isRemoteActivationVerifier,
   transitionAsyncControlState
 } from './activation.js'
 import { PrivateRouteError } from './errors.js'
@@ -11,6 +13,7 @@ import {
   ACTOR_CONTROL_KIND,
   CIRCUIT_DESTROY_REASON
 } from './remote-control.js'
+import { isRemoteActorHost } from './remote-actor-host.js'
 
 export const ASYNC_ROUTE_CONTROL_DEADLINE = 5_000
 
@@ -127,6 +130,8 @@ export class AsyncRouteControlSession {
   #now
   #timeout
   #lastNow = null
+  #registrationDeadline = null
+  #circuitDeadline = null
   #registrationState = ASYNC_REGISTRATION_STATE.NEW
   #circuitState = ASYNC_CIRCUIT_STATE.NEW
   #abortBody = null
@@ -141,9 +146,7 @@ export class AsyncRouteControlSession {
     object(options)
     const { remote, actorId, now } = options
     if (
-      !remote ||
-      typeof remote !== 'object' ||
-      typeof remote.request !== 'function' ||
+      !isRemoteActorHost(remote) ||
       !fixed(actorId, 16) ||
       allZero(actorId) ||
       typeof now !== 'function'
@@ -192,6 +195,7 @@ export class AsyncRouteControlSession {
       finalize = body(options.finalize)
       abort = body(options.abort)
       context = this.#begin(options.signal)
+      this.#registrationDeadline = context.deadline
       const acknowledgements = await this.#stage(stage, abort, context)
       try {
         await this.#prepare(prepare, context)
@@ -209,7 +213,7 @@ export class AsyncRouteControlSession {
       clear(prepare)
       clear(finalize)
       clear(abort)
-      this.#clearAbortBody()
+      if (this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING) this.#clearAbortBody()
     }
   }
 
@@ -222,6 +226,7 @@ export class AsyncRouteControlSession {
       stage = body(stageValue)
       abort = body(options.abort)
       context = this.#begin(options.signal)
+      this.#registrationDeadline = context.deadline
       return await this.#stage(stage, abort, context)
     } catch (err) {
       if (context) await this.#rollbackRegistration(context)
@@ -230,7 +235,11 @@ export class AsyncRouteControlSession {
       if (context) this.#finish(context)
       clear(stage)
       clear(abort)
-      if (this.#registrationState !== ASYNC_REGISTRATION_STATE.STAGED) this.#clearAbortBody()
+      if (
+        this.#registrationState !== ASYNC_REGISTRATION_STATE.STAGED &&
+        this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING
+      )
+        this.#clearAbortBody()
     }
   }
 
@@ -240,7 +249,7 @@ export class AsyncRouteControlSession {
     let context = null
     try {
       prepare = body(prepareValue)
-      context = this.#begin(options.signal)
+      context = this.#begin(options.signal, false, this.#registrationDeadline)
       return await this.#prepare(prepare, context)
     } catch (err) {
       if (context) await this.#rollbackRegistration(context)
@@ -258,7 +267,7 @@ export class AsyncRouteControlSession {
     let context = null
     try {
       finalize = body(finalizeValue)
-      context = this.#begin(options.signal)
+      context = this.#begin(options.signal, false, this.#registrationDeadline)
       return await this.#finalize(finalize, context)
     } catch (err) {
       if (context) await this.#rollbackRegistration(context)
@@ -266,23 +275,29 @@ export class AsyncRouteControlSession {
     } finally {
       if (context) this.#finish(context)
       clear(finalize)
-      if (this.#registrationState !== ASYNC_REGISTRATION_STATE.PREPARED) this.#clearAbortBody()
+      if (
+        this.#registrationState !== ASYNC_REGISTRATION_STATE.PREPARED &&
+        this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING
+      )
+        this.#clearAbortBody()
     }
   }
 
   async abort(abortValue, options = {}) {
     object(options)
     if (this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTED) return true
-    const supplied = abortValue === undefined ? null : body(abortValue)
-    const context = this.#begin(options.signal)
+    let supplied = null
+    let context = null
     try {
+      supplied = abortValue === undefined ? null : body(abortValue)
+      context = this.#begin(options.signal, false, this.#registrationDeadline)
       const value = supplied || this.#abortBody
       if (!value) invalid()
       return await this.#abortRegistration(value, context)
     } finally {
-      this.#finish(context)
+      if (context) this.#finish(context)
       clear(supplied)
-      this.#clearAbortBody()
+      if (this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTED) this.#clearAbortBody()
     }
   }
 
@@ -292,13 +307,16 @@ export class AsyncRouteControlSession {
     let activationBody = null
     let circuitId = null
     let context = null
+    let activationVerifier = null
     try {
       activationBody = body(options.body)
       circuitId = copy(options.circuitId)
       if (!fixed(circuitId, 16) || allZero(circuitId)) invalid()
       const nextGeneration = generation(options.generation)
-      if (!options.activationVerifier || typeof options.activationVerifier !== 'object') invalid()
+      activationVerifier = options.activationVerifier
+      if (!isRemoteActivationVerifier(activationVerifier)) invalid()
       context = this.#begin(options.signal)
+      this.#circuitDeadline = context.deadline
       this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'activate')
       this.#replaceCircuit(circuitId, nextGeneration)
       const response = await this.#request(
@@ -307,9 +325,10 @@ export class AsyncRouteControlSession {
         circuitId,
         nextGeneration,
         activationBody,
-        { activationVerifier: options.activationVerifier }
+        { activationVerifier }
       )
       this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'opened')
+      this.#circuitDeadline = null
       return response
     } catch (err) {
       if (context) await this.#destroyAfterFailure(context, CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
@@ -318,18 +337,28 @@ export class AsyncRouteControlSession {
       if (context) this.#finish(context)
       clear(activationBody)
       clear(circuitId)
+      if (activationVerifier) destroyRemoteActivationVerifier(activationVerifier)
     }
   }
 
   async destroy(reason = CIRCUIT_DESTROY_REASON.REQUESTED, options = {}) {
     object(options)
     if (this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYED) return true
+    if (
+      this.#circuitState !== ASYNC_CIRCUIT_STATE.ACTIVATING &&
+      this.#circuitState !== ASYNC_CIRCUIT_STATE.OPEN &&
+      this.#circuitState !== ASYNC_CIRCUIT_STATE.DESTROYING
+    )
+      circuitState()
     if (this.#current) {
+      if (this.#circuitState !== ASYNC_CIRCUIT_STATE.ACTIVATING) circuitState()
       this.#current.signal.abort()
       await this.#current.finished
       if (this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYED) return true
     }
-    const context = this.#begin(options.signal)
+    const retrying = this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYING
+    const context = this.#begin(options.signal, false, retrying ? this.#circuitDeadline : null)
+    if (!retrying) this.#circuitDeadline = context.deadline
     try {
       return await this.#destroyCircuit(reason, context)
     } finally {
@@ -344,8 +373,7 @@ export class AsyncRouteControlSession {
       this.#registrationState,
       'expire'
     )
-    if (this.#circuitState === ASYNC_CIRCUIT_STATE.OPEN)
-      await this.destroy(CIRCUIT_DESTROY_REASON.EXPIRED, options)
+    await this.#destroyTerminalCircuit(CIRCUIT_DESTROY_REASON.EXPIRED, options)
     return true
   }
 
@@ -356,8 +384,7 @@ export class AsyncRouteControlSession {
       this.#registrationState,
       'revoke'
     )
-    if (this.#circuitState === ASYNC_CIRCUIT_STATE.OPEN)
-      await this.destroy(CIRCUIT_DESTROY_REASON.REVOKED, options)
+    await this.#destroyTerminalCircuit(CIRCUIT_DESTROY_REASON.REVOKED, options)
     return true
   }
 
@@ -369,34 +396,61 @@ export class AsyncRouteControlSession {
   }
 
   async #stop() {
+    try {
+      const active = this.#current
+      if (active) {
+        active.signal.abort()
+        await active.finished
+      }
+      if (
+        this.#abortBody &&
+        (this.#registrationState === ASYNC_REGISTRATION_STATE.STAGED ||
+          this.#registrationState === ASYNC_REGISTRATION_STATE.PREPARED ||
+          this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTING)
+      ) {
+        let context = null
+        try {
+          context = this.#begin(undefined, true, this.#registrationDeadline)
+          await this.#abortRegistration(this.#abortBody, context)
+        } catch {}
+        if (context) this.#finish(context)
+      }
+      if (
+        this.#circuitState === ASYNC_CIRCUIT_STATE.OPEN ||
+        this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYING
+      ) {
+        let context = null
+        try {
+          context = this.#begin(
+            undefined,
+            true,
+            this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYING ? this.#circuitDeadline : null
+          )
+          await this.#destroyCircuit(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST, context)
+        } catch {}
+        if (context) this.#finish(context)
+      }
+      return true
+    } finally {
+      this.#clearAbortBody()
+      this.#clearCircuit()
+      clear(this.#actorId)
+      this.#actorId = b4a.alloc(0)
+      this.#ownedBytes = 0
+    }
+  }
+
+  async #destroyTerminalCircuit(reason, options) {
     const active = this.#current
-    if (active) {
+    if (active && this.#circuitState === ASYNC_CIRCUIT_STATE.ACTIVATING) {
       active.signal.abort()
       await active.finished
     }
     if (
-      this.#abortBody &&
-      (this.#registrationState === ASYNC_REGISTRATION_STATE.STAGED ||
-        this.#registrationState === ASYNC_REGISTRATION_STATE.PREPARED)
-    ) {
-      const context = this.#begin(undefined, true)
-      try {
-        await this.#abortRegistration(this.#abortBody, context)
-      } catch {}
-      this.#finish(context)
-    }
-    if (this.#circuitState === ASYNC_CIRCUIT_STATE.OPEN) {
-      const context = this.#begin(undefined, true)
-      try {
-        await this.#destroyCircuit(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST, context)
-      } catch {}
-      this.#finish(context)
-    }
-    this.#clearAbortBody()
-    clear(this.#actorId)
-    this.#actorId = b4a.alloc(0)
-    this.#ownedBytes = 0
-    return true
+      this.#circuitState === ASYNC_CIRCUIT_STATE.OPEN ||
+      this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYING
+    )
+      await this.destroy(reason, options)
   }
 
   async #stage(stage, abort, context) {
@@ -475,12 +529,6 @@ export class AsyncRouteControlSession {
     try {
       return await this.#abortRegistration(this.#abortBody, context, true)
     } catch {
-      if (this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTING)
-        this.#registrationState = transitionAsyncControlState(
-          'registration',
-          this.#registrationState,
-          'aborted'
-        )
       return false
     }
   }
@@ -492,24 +540,21 @@ export class AsyncRouteControlSession {
       this.#registrationState,
       'abort'
     )
-    try {
-      if (cleanup)
-        await this.#cleanupRequest(
-          context,
-          ACTOR_CONTROL_KIND.REGISTER_ABORT,
-          b4a.alloc(16),
-          0n,
-          abort
-        )
-      else await this.#request(context, ACTOR_CONTROL_KIND.REGISTER_ABORT, b4a.alloc(16), 0n, abort)
-      return true
-    } finally {
-      this.#registrationState = transitionAsyncControlState(
-        'registration',
-        this.#registrationState,
-        'aborted'
+    if (cleanup)
+      await this.#cleanupRequest(
+        context,
+        ACTOR_CONTROL_KIND.REGISTER_ABORT,
+        b4a.alloc(16),
+        0n,
+        abort
       )
-    }
+    else await this.#request(context, ACTOR_CONTROL_KIND.REGISTER_ABORT, b4a.alloc(16), 0n, abort)
+    this.#registrationState = transitionAsyncControlState(
+      'registration',
+      this.#registrationState,
+      'aborted'
+    )
+    return true
   }
 
   async #destroyAfterFailure(context, reason) {
@@ -519,6 +564,7 @@ export class AsyncRouteControlSession {
     )
       return
     this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'destroy')
+    let cleaned = false
     try {
       await this.#cleanupRequest(
         context,
@@ -527,36 +573,43 @@ export class AsyncRouteControlSession {
         this.#generation,
         b4a.from([reason])
       )
+      cleaned = true
     } catch {}
-    this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'destroyed')
-    this.#clearCircuit()
+    if (cleaned) {
+      this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'destroyed')
+      this.#clearCircuit()
+    }
   }
 
   async #destroyCircuit(reason, context) {
     if (!Number.isInteger(reason) || !Object.values(CIRCUIT_DESTROY_REASON).includes(reason))
       invalid()
     if (this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYED) return true
-    if (this.#circuitState !== ASYNC_CIRCUIT_STATE.OPEN) circuitState()
+    if (
+      this.#circuitState !== ASYNC_CIRCUIT_STATE.OPEN &&
+      this.#circuitState !== ASYNC_CIRCUIT_STATE.DESTROYING
+    )
+      circuitState()
     this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'destroy')
-    try {
-      await this.#request(
-        context,
-        ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
-        this.#circuitId,
-        this.#generation,
-        b4a.from([reason])
-      )
-      return true
-    } finally {
-      this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'destroyed')
-      this.#clearCircuit()
-    }
+    await this.#request(
+      context,
+      ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+      this.#circuitId,
+      this.#generation,
+      b4a.from([reason])
+    )
+    this.#circuitState = transitionAsyncControlState('circuit', this.#circuitState, 'destroyed')
+    this.#clearCircuit()
+    return true
   }
 
-  #begin(externalSignal, stopping = false) {
+  #begin(externalSignal, stopping = false, retainedDeadline = null) {
     if ((this.#stopped && !stopping) || this.#current) circuitState()
     const startedAt = this.#readNow()
     if (startedAt > Number.MAX_SAFE_INTEGER - this.#timeout) throw unavailable()
+    const deadline = retainedDeadline === null ? startedAt + this.#timeout : retainedDeadline
+    if (!Number.isSafeInteger(deadline) || deadline < 0 || deadline > startedAt + this.#timeout)
+      throw unavailable()
     const signal = new LocalAbortSignal()
     let removeExternal = null
     if (externalSignal !== undefined) {
@@ -589,7 +642,7 @@ export class AsyncRouteControlSession {
       finish = resolve
     })
     const context = {
-      deadline: startedAt + this.#timeout,
+      deadline,
       signal,
       removeExternal,
       dispatched: false,
@@ -712,6 +765,7 @@ export class AsyncRouteControlSession {
     clear(this.#circuitId)
     this.#circuitId = null
     this.#generation = null
+    this.#circuitDeadline = null
   }
 }
 

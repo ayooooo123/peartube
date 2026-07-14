@@ -27,6 +27,7 @@ export const DEFAULT_MAX_REMOTE_TOMBSTONES = 64
 
 const MAX_UINT64 = (1n << 64n) - 1n
 const ACTOR_HANDLES = new WeakMap()
+const REMOTE_ACTOR_HOSTS = new WeakSet()
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferFill = Uint8Array.prototype.fill
@@ -228,6 +229,7 @@ export class RemoteActorHost {
     this.#maxPending = bound(options.maxPending, DEFAULT_MAX_REMOTE_PENDING)
     this.#maxReplay = bound(options.maxReplay, DEFAULT_MAX_REMOTE_REPLAYS)
     this.#maxTombstones = bound(options.maxTombstones, DEFAULT_MAX_REMOTE_TOMBSTONES)
+    REMOTE_ACTOR_HOSTS.add(this)
   }
 
   get stats() {
@@ -846,5 +848,15 @@ export class RemoteActorHost {
   #failClosed() {
     if (this.#destroyed) return
     this.destroy()
+  }
+}
+
+// Package-internal brand consumed by AsyncRouteControlSession. A plain object
+// with a request-shaped method is not an authenticated actor boundary.
+export function isRemoteActorHost(value) {
+  try {
+    return REMOTE_ACTOR_HOSTS.has(value)
+  } catch {
+    return false
   }
 }

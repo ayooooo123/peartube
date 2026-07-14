@@ -1,7 +1,10 @@
 import test from 'brittle'
 import b4a from 'b4a'
 
-import { auditPrivateRouteCapture } from './namespace/capture-oracle.js'
+import {
+  auditNegativeControlCapture,
+  auditPrivateRouteCapture
+} from './namespace/capture-oracle.js'
 import { parsePcap } from './namespace/pcap.js'
 
 const NS_PER_SECOND = 1_000_000_000n
@@ -160,6 +163,11 @@ function roles() {
     port: 49_999,
     route: false
   })
+  result.auditor = Object.freeze({
+    addresses: Object.freeze(['10.77.0.10', 'fd00::10']),
+    port: 48_250,
+    route: false
+  })
   return Object.freeze(result)
 }
 
@@ -211,18 +219,86 @@ function validRecords() {
   )
 }
 
-function failure(t, records, pattern) {
+function failure(t, records, pattern, matrix = MATRIX) {
   let error = null
   try {
-    auditPrivateRouteCapture(parsePcap(pcap(records)), MATRIX)
+    auditPrivateRouteCapture(parsePcap(pcap(records)), matrix)
   } catch (cause) {
     error = cause
   }
   t.ok(error, pattern)
+  if (!error) return
   t.ok(pattern.test(error.message), error.message)
   t.absent(/\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(error.message), 'redacts IPv4 addresses')
   t.absent(/[0-9a-f]{0,4}:[0-9a-f:]+/i.test(error.message), 'redacts IPv6 addresses')
 }
+
+function sentinelPacket(kind, timestampNs) {
+  const payload = b4a.alloc(32, kind === 'start' ? 0xa1 : 0xa2)
+  const transport = udp(ROLES.decoy.port, ROLES.auditor.port, payload.byteLength)
+  payload.copy(transport, 8)
+  return routePacket('decoy', 'auditor', { transport, timestampNs })
+}
+
+const SENTINEL_MATRIX = Object.freeze({
+  ...MATRIX,
+  sentinels: Object.freeze({
+    start: Object.freeze({
+      source: 'decoy',
+      destination: 'auditor',
+      sourcePort: ROLES.decoy.port,
+      destinationPort: ROLES.auditor.port,
+      payload: b4a.alloc(32, 0xa1),
+      sentAtNs: 9n * NS_PER_SECOND,
+      receivedAtNs: 10n * NS_PER_SECOND
+    }),
+    stop: Object.freeze({
+      source: 'decoy',
+      destination: 'auditor',
+      sourcePort: ROLES.decoy.port,
+      destinationPort: ROLES.auditor.port,
+      payload: b4a.alloc(32, 0xa2),
+      sentAtNs: 29n * NS_PER_SECOND,
+      receivedAtNs: 30n * NS_PER_SECOND
+    })
+  })
+})
+
+test('negative-control preflight capture proves the exact source-to-decoy capability', async (t) => {
+  const payload = b4a.alloc(32, 0xa7)
+  const transport = udp(48_150, ROLES.decoy.port, payload.byteLength)
+  payload.copy(transport, 8)
+  const capture = parsePcap(
+    pcap([
+      routePacket('source', 'decoy', {
+        sourcePort: 48_150,
+        transport,
+        timestampNs: 10n * NS_PER_SECOND
+      })
+    ])
+  )
+  t.alike(
+    auditNegativeControlCapture(capture, {
+      source: ROLES.source.addresses[0],
+      sourcePort: 48_150,
+      destination: ROLES.decoy.addresses[0],
+      destinationPort: ROLES.decoy.port,
+      payload
+    }),
+    { packetIndex: 0 }
+  )
+  await t.exception.all(
+    () =>
+      auditNegativeControlCapture(parsePcap(pcap([])), {
+        source: ROLES.source.addresses[0],
+        sourcePort: 48_150,
+        destination: ROLES.decoy.addresses[0],
+        destinationPort: ROLES.decoy.port,
+        payload
+      }),
+    /negative-control packet is missing/
+  )
+})
 
 test('classic PCAP parser handles byte order, VLAN, IPv4, IPv6, and transports', (t) => {
   const little = parsePcap(
@@ -247,6 +323,7 @@ test('classic PCAP parser handles byte order, VLAN, IPv4, IPv6, and transports',
     destinationPort: 48_101,
     payloadLength: 1_200
   })
+  t.alike(little.records[0].transportPayload, b4a.alloc(1_200, 0x71))
   t.is(little.records[1].ip.protocol, 'tcp')
   t.is(little.records[1].ip.payloadLength, 3)
   t.is(little.records[2].ip.protocol, 'icmp')
@@ -392,4 +469,26 @@ test('capture oracle rejects role traffic outside the measured phase', (t) => {
     timestampNs: 8n * NS_PER_SECOND
   })
   failure(t, beforeStart, /packet 0 source -> safety-guard: before capture phase/)
+})
+
+test('capture oracle requires ordered flushed sentinels aligned to coordinator time', (t) => {
+  const records = [
+    sentinelPacket('start', 9_500_000_000n),
+    ...validRecords(),
+    sentinelPacket('stop', 29_500_000_000n)
+  ]
+  const result = auditPrivateRouteCapture(parsePcap(pcap(records)), SENTINEL_MATRIX)
+  t.alike(result.sentinels, { start: 0, stop: 13 })
+
+  failure(t, records.slice(1), /capture start sentinel is missing/, SENTINEL_MATRIX)
+  failure(t, records.slice(0, -1), /capture stop sentinel is missing/, SENTINEL_MATRIX)
+  failure(
+    t,
+    [records.at(-1), ...validRecords(), records[0]],
+    /capture sentinels are out of order/,
+    SENTINEL_MATRIX
+  )
+  const outsideWindow = [...records]
+  outsideWindow[0] = sentinelPacket('start', 8_500_000_000n)
+  failure(t, outsideWindow, /capture start sentinel is outside coordinator window/, SENTINEL_MATRIX)
 })

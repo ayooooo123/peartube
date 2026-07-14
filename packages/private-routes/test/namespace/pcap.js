@@ -69,11 +69,14 @@ function transport(protocolNumber, payload, version) {
     const length = payload.readUInt16BE(4)
     if (length < 8 || length !== payload.byteLength) malformed('invalid UDP length')
     return {
-      protocol: 'udp',
-      protocolNumber,
-      sourcePort: payload.readUInt16BE(0),
-      destinationPort: payload.readUInt16BE(2),
-      payloadLength: length - 8
+      fields: {
+        protocol: 'udp',
+        protocolNumber,
+        sourcePort: payload.readUInt16BE(0),
+        destinationPort: payload.readUInt16BE(2),
+        payloadLength: length - 8
+      },
+      payload: payload.subarray(8, length)
     }
   }
   if (protocolNumber === 6) {
@@ -81,22 +84,34 @@ function transport(protocolNumber, payload, version) {
     const headerLength = (payload[12] >> 4) << 2
     if (headerLength < 20 || headerLength > payload.byteLength) malformed('invalid TCP length')
     return {
-      protocol: 'tcp',
-      protocolNumber,
-      sourcePort: payload.readUInt16BE(0),
-      destinationPort: payload.readUInt16BE(2),
-      payloadLength: payload.byteLength - headerLength
+      fields: {
+        protocol: 'tcp',
+        protocolNumber,
+        sourcePort: payload.readUInt16BE(0),
+        destinationPort: payload.readUInt16BE(2),
+        payloadLength: payload.byteLength - headerLength
+      },
+      payload: payload.subarray(headerLength)
     }
   }
   if (protocolNumber === 1 && version === 4) {
     if (payload.byteLength < 4) malformed('truncated ICMP header')
-    return { protocol: 'icmp', protocolNumber, payloadLength: payload.byteLength - 4 }
+    return {
+      fields: { protocol: 'icmp', protocolNumber, payloadLength: payload.byteLength - 4 },
+      payload: payload.subarray(4)
+    }
   }
   if (protocolNumber === 58 && version === 6) {
     if (payload.byteLength < 4) malformed('truncated ICMPv6 header')
-    return { protocol: 'icmpv6', protocolNumber, payloadLength: payload.byteLength - 4 }
+    return {
+      fields: { protocol: 'icmpv6', protocolNumber, payloadLength: payload.byteLength - 4 },
+      payload: payload.subarray(4)
+    }
   }
-  return { protocol: `ip-${protocolNumber}`, protocolNumber, payloadLength: payload.byteLength }
+  return {
+    fields: { protocol: `ip-${protocolNumber}`, protocolNumber, payloadLength: payload.byteLength },
+    payload
+  }
 }
 
 function parseIpv4(buffer) {
@@ -109,11 +124,15 @@ function parseIpv4(buffer) {
     malformed('invalid IPv4 length')
   if ((buffer.readUInt16BE(6) & 0x3fff) !== 0) malformed('IPv4 fragment')
   const protocolNumber = buffer[9]
+  const decoded = transport(protocolNumber, buffer.subarray(headerLength, totalLength), 4)
   return {
-    version: 4,
-    source: ipv4Address(buffer, 12),
-    destination: ipv4Address(buffer, 16),
-    ...transport(protocolNumber, buffer.subarray(headerLength, totalLength), 4)
+    ip: {
+      version: 4,
+      source: ipv4Address(buffer, 12),
+      destination: ipv4Address(buffer, 16),
+      ...decoded.fields
+    },
+    transportPayload: decoded.payload
   }
 }
 
@@ -124,11 +143,15 @@ function parseIpv6(buffer) {
   const totalLength = 40 + payloadLength
   if (totalLength > buffer.byteLength) malformed('invalid IPv6 length')
   const protocolNumber = buffer[6]
+  const decoded = transport(protocolNumber, buffer.subarray(40, totalLength), 6)
   return {
-    version: 6,
-    source: ipv6Address(buffer, 8),
-    destination: ipv6Address(buffer, 24),
-    ...transport(protocolNumber, buffer.subarray(40, totalLength), 6)
+    ip: {
+      version: 6,
+      source: ipv6Address(buffer, 8),
+      destination: ipv6Address(buffer, 24),
+      ...decoded.fields
+    },
+    transportPayload: decoded.payload
   }
 }
 
@@ -144,10 +167,10 @@ function parseEthernet(buffer) {
     etherType = buffer.readUInt16BE(offset + 2)
     offset += 4
   }
-  let ip = null
-  if (etherType === ETHER_TYPE_IPV4) ip = parseIpv4(buffer.subarray(offset))
-  else if (etherType === ETHER_TYPE_IPV6) ip = parseIpv6(buffer.subarray(offset))
-  return { ethernet: { etherType, vlanTags }, ip }
+  let network = { ip: null, transportPayload: null }
+  if (etherType === ETHER_TYPE_IPV4) network = parseIpv4(buffer.subarray(offset))
+  else if (etherType === ETHER_TYPE_IPV6) network = parseIpv6(buffer.subarray(offset))
+  return { ethernet: { etherType, vlanTags }, ...network }
 }
 
 export function parsePcap(buffer) {

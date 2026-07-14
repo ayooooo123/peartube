@@ -91,7 +91,36 @@ function send(record, command) {
   return writeFrame(record, frame)
 }
 
-function launchRole(role, command, args, cwd, auditor) {
+export function resolveRoleLaunch(options, role) {
+  if (!object(options) || typeof role !== 'string' || role.length === 0) {
+    invalid('invalid process launch')
+  }
+  const value =
+    typeof options.launchRole === 'function'
+      ? options.launchRole(role)
+      : {
+          command: options.command || process.execPath,
+          args: options.args || [],
+          cwd: options.cwd
+        }
+  if (
+    !object(value) ||
+    typeof value.command !== 'string' ||
+    value.command.length === 0 ||
+    !Array.isArray(value.args) ||
+    value.args.some((entry) => typeof entry !== 'string') ||
+    (value.cwd !== undefined && typeof value.cwd !== 'string')
+  ) {
+    invalid('invalid process launch')
+  }
+  return Object.freeze({
+    command: value.command,
+    args: Object.freeze([...value.args]),
+    cwd: value.cwd === undefined ? options.cwd : value.cwd
+  })
+}
+
+function spawnRole(role, command, args, cwd, auditor) {
   const child = spawn(command, [...args, RUNNER], {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe']
@@ -146,15 +175,10 @@ export async function createProcessCoordinator(options = {}) {
   const roles = [...fixture.roles]
   if (roles.length !== 7 || !(fixture.projections instanceof Map)) invalid()
   const timeout = deadline(options.timeout)
-  const command = options.command || process.execPath
   const expectedRuntime = options.expectedRuntime || 'node'
-  const args = options.args || []
-  const cwd = options.cwd
   if (
-    typeof command !== 'string' ||
     (expectedRuntime !== 'node' && expectedRuntime !== 'bare') ||
-    !Array.isArray(args) ||
-    typeof cwd !== 'string'
+    (options.launchRole !== undefined && typeof options.launchRole !== 'function')
   )
     invalid()
   const auditor = createConfigurationAuditor(fixture)
@@ -180,7 +204,8 @@ export async function createProcessCoordinator(options = {}) {
 
   try {
     for (const role of roles) {
-      records.set(role, launchRole(role, command, args, cwd, auditor))
+      const launch = resolveRoleLaunch(options, role)
+      records.set(role, spawnRole(role, launch.command, launch.args, launch.cwd, auditor))
     }
     for (const role of roles) {
       const projection = fixture.projections.get(role)
@@ -249,6 +274,15 @@ export async function createProcessCoordinator(options = {}) {
     return true
   }
 
+  const retry = async (role = 'source') => {
+    const record = records.get(role)
+    if (!record || closed || record.child.exitCode !== null || record.child.signalCode !== null) {
+      invalid(`cannot retry process: ${role}`)
+    }
+    await send(record, { command: 'fault', fault: 'retry' })
+    return waitFor(record, 'retry', timeout)
+  }
+
   const stop = async () => {
     if (closed) return []
     closed = true
@@ -288,6 +322,7 @@ export async function createProcessCoordinator(options = {}) {
     snapshot,
     fault,
     revoke,
+    retry,
     kill,
     stop,
     destroy

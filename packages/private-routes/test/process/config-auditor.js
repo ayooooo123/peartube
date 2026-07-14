@@ -108,6 +108,9 @@ export function createConfigurationAuditor(fixture) {
     frames.set(role, encodeControlFrame({ command: CONTROL_COMMAND.CONFIGURE, projection }))
     fingerprints.set(role, projection.grants.map(grantFingerprint).sort())
     addresses.push(projection.bind.host)
+    if (projection.negativeControl) {
+      addresses.push(projection.negativeControl.bind.host, projection.negativeControl.target.host)
+    }
   }
 
   const auditConfiguration = (role, projection, serialized) => {
@@ -240,6 +243,17 @@ export function createConfigurationAuditor(fixture) {
       case CONTROL_EVENT.CLOSED:
         auditSnapshotShape(record, role, fingerprints.get(role), addresses)
         if (record.event === CONTROL_EVENT.CLOSED && record.state !== 'CLOSED') invalid()
+        break
+      case CONTROL_EVENT.RETRY:
+        exactKeys(record, ['event', 'role', 'code', 'negativeControlInvocations'])
+        if (
+          role !== 'source' ||
+          !expected.get(role).negativeControl ||
+          record.code !== 'ROUTE_UNAVAILABLE' ||
+          record.negativeControlInvocations !== 0
+        ) {
+          invalid()
+        }
         break
       case CONTROL_EVENT.ERROR:
         exactKeys(record, ['event', 'role', 'state', 'code'])

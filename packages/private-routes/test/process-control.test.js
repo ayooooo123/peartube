@@ -86,7 +86,14 @@ test('command vocabulary and lifecycle are exact and closed is terminal', (t) =>
     'snapshot',
     'stop'
   ])
-  t.alike(Object.values(CONTROL_EVENT), ['configured', 'ready', 'snapshot', 'closed', 'error'])
+  t.alike(Object.values(CONTROL_EVENT), [
+    'configured',
+    'ready',
+    'retry',
+    'snapshot',
+    'closed',
+    'error'
+  ])
   t.ok(code(() => validateControlCommand({ command: 'unknown' })))
   t.ok(code(() => validateControlCommand({ command: 'start', extra: true })))
 
@@ -341,6 +348,84 @@ test('role runner arms the one-packet endpoint limit for queue overflow', async 
   await runner.handle({ command: 'fault', fault: 'overflow-queue' })
   t.is(runtime.endpointLimits.maxQueuedPackets, 1)
   t.is(runtime.endpointLimits.maxQueuedBytes, 1_200)
+})
+
+test('role runner retry refuses fallback without invoking its negative control', async (t) => {
+  const events = []
+  const calls = []
+  let state = 'NEW'
+  const negativeControl = {
+    invocations: 0,
+    async dial() {
+      calls.push('dial')
+      this.invocations++
+    },
+    async close() {
+      calls.push('close-negative-control')
+    }
+  }
+  const runner = createRoleRunner({
+    emit: (event) => events.push(event),
+    createNegativeControlDialer(options) {
+      t.alike(options, {
+        bind: { host: '10.203.77.2', port: 48_300 },
+        target: { host: '10.203.77.9', port: 48_200 },
+        payload: b4a.alloc(32, 0xa7)
+      })
+      return negativeControl
+    },
+    createNode() {
+      return {
+        async start() {
+          state = 'READY'
+        },
+        async connect() {
+          state = 'OPEN'
+        },
+        snapshot() {
+          return {
+            role: 'source',
+            state,
+            links: state === 'OPEN' ? 1 : 0,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: {
+              bindings: state === 'CLOSED' ? 0 : 1,
+              waits: 0,
+              timers: 0,
+              openSockets: state === 'CLOSED' ? 0 : 1
+            }
+          }
+        },
+        async stop() {
+          state = 'CLOSED'
+        }
+      }
+    }
+  })
+  await runner.handle({
+    command: 'configure',
+    projection: {
+      role: 'source',
+      grants: [b4a.alloc(32, 1)],
+      local: { identity32: b4a.alloc(32, 2) },
+      negativeControl: {
+        bind: { host: '10.203.77.2', port: 48_300 },
+        target: { host: '10.203.77.9', port: 48_200 },
+        payload: b4a.alloc(32, 0xa7)
+      }
+    }
+  })
+  await runner.handle({ command: 'start' })
+  await runner.handle({ command: 'fault', fault: 'retry' })
+  t.alike(events.at(-1), {
+    event: 'retry',
+    role: 'source',
+    code: 'ROUTE_UNAVAILABLE',
+    negativeControlInvocations: 0
+  })
+  t.alike(calls, [])
+  await runner.handle({ command: 'stop' })
+  t.alike(calls, ['close-negative-control'])
 })
 
 test('role runner revokes an armed grant only after links open', async (t) => {

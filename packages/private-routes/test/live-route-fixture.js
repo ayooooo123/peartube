@@ -113,6 +113,15 @@ export function createLiveRouteFixture(options = {}) {
   const expiresAt = options.expiresAt === undefined ? 30_000n : options.expiresAt
   const portBase = options.portBase === undefined ? 48_100 : options.portBase
   const distinctHosts = options.distinctHosts === undefined ? true : options.distinctHosts
+  const hosts = options.hosts
+  if (
+    hosts !== undefined &&
+    (!Array.isArray(hosts) ||
+      hosts.length !== LIVE_ROUTE_ROLES.length ||
+      hosts.some((value) => typeof value !== 'string'))
+  ) {
+    throw new TypeError('invalid live route hosts')
+  }
   const topologyAuthority = cryptoSuite.keyPair(seed(20))
   const runId32 = seed(21)
   const routeCircuitDigest = cryptoSuite.hash([
@@ -142,7 +151,7 @@ export function createLiveRouteFixture(options = {}) {
     return {
       role,
       topologyRole: TOPOLOGY_ROLES[index],
-      host: distinctHosts ? `127.0.0.${51 + index}` : '127.0.0.1',
+      host: hosts ? hosts[index] : distinctHosts ? `127.0.0.${51 + index}` : '127.0.0.1',
       port: portBase + index,
       identity,
       encryption,

@@ -1,3 +1,5 @@
+import b4a from 'b4a'
+
 function invalidMatrix() {
   throw new Error('Invalid capture matrix')
 }
@@ -63,7 +65,58 @@ function validateMatrix(matrix) {
     if (!routeRoles.has(edge[0]) || !routeRoles.has(edge[1])) invalidMatrix()
     if (!matrix.contacts[edge[0]].includes(edge[1])) invalidMatrix()
   }
-  return { addresses, routeRoles }
+  let sentinels = null
+  if (matrix.sentinels !== undefined) {
+    if (!matrix.sentinels || typeof matrix.sentinels !== 'object') invalidMatrix()
+    sentinels = {}
+    for (const kind of ['start', 'stop']) {
+      const value = matrix.sentinels[kind]
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        !matrix.roles[value.source] ||
+        !matrix.roles[value.destination] ||
+        matrix.roles[value.source].route ||
+        matrix.roles[value.destination].route ||
+        value.sourcePort !== matrix.roles[value.source].port ||
+        value.destinationPort !== matrix.roles[value.destination].port ||
+        !b4a.isBuffer(value.payload) ||
+        value.payload.byteLength < 1 ||
+        value.payload.byteLength > 1_200 ||
+        typeof value.sentAtNs !== 'bigint' ||
+        typeof value.receivedAtNs !== 'bigint' ||
+        value.sentAtNs > value.receivedAtNs
+      ) {
+        invalidMatrix()
+      }
+      sentinels[kind] = value
+    }
+  }
+  return { addresses, routeRoles, sentinels }
+}
+
+function findSentinel(capture, addresses, kind, expected) {
+  const matches = []
+  for (const record of capture.records) {
+    if (
+      record?.ip?.protocol === 'udp' &&
+      addresses.get(record.ip.source) === expected.source &&
+      addresses.get(record.ip.destination) === expected.destination &&
+      record.ip.sourcePort === expected.sourcePort &&
+      record.ip.destinationPort === expected.destinationPort &&
+      b4a.isBuffer(record.transportPayload) &&
+      b4a.equals(record.transportPayload, expected.payload)
+    ) {
+      matches.push(record)
+    }
+  }
+  if (matches.length === 0) throw new Error(`capture ${kind} sentinel is missing`)
+  if (matches.length !== 1) throw new Error(`capture ${kind} sentinel is duplicated`)
+  const record = matches[0]
+  if (record.timestampNs < expected.sentAtNs || record.timestampNs > expected.receivedAtNs) {
+    throw new Error(`capture ${kind} sentinel is outside coordinator window`)
+  }
+  return record
 }
 
 function checkEdge(record, source, destination, matrix, routeRoles) {
@@ -102,9 +155,53 @@ function checkPort(record, source, destination, matrix) {
   }
 }
 
+export function auditNegativeControlCapture(capture, expected) {
+  if (
+    !capture ||
+    !Array.isArray(capture.records) ||
+    !expected ||
+    typeof expected !== 'object' ||
+    typeof expected.source !== 'string' ||
+    typeof expected.destination !== 'string' ||
+    !Number.isSafeInteger(expected.sourcePort) ||
+    expected.sourcePort < 1 ||
+    expected.sourcePort > 65_535 ||
+    !Number.isSafeInteger(expected.destinationPort) ||
+    expected.destinationPort < 1 ||
+    expected.destinationPort > 65_535 ||
+    !b4a.isBuffer(expected.payload) ||
+    expected.payload.byteLength < 1 ||
+    expected.payload.byteLength > 1_200
+  ) {
+    throw new Error('Invalid negative-control capture')
+  }
+  const matches = capture.records.filter(
+    (record) =>
+      record?.ip?.protocol === 'udp' &&
+      record.ip.source === expected.source &&
+      record.ip.destination === expected.destination &&
+      record.ip.sourcePort === expected.sourcePort &&
+      record.ip.destinationPort === expected.destinationPort &&
+      b4a.isBuffer(record.transportPayload) &&
+      b4a.equals(record.transportPayload, expected.payload)
+  )
+  if (matches.length === 0) throw new Error('negative-control packet is missing')
+  if (matches.length !== 1) throw new Error('negative-control packet is duplicated')
+  return Object.freeze({ packetIndex: matches[0].index })
+}
+
 export function auditPrivateRouteCapture(capture, matrix) {
   if (!capture || !Array.isArray(capture.records)) throw new Error('Malformed parsed capture')
-  const { addresses, routeRoles } = validateMatrix(matrix)
+  const { addresses, routeRoles, sentinels } = validateMatrix(matrix)
+  let sentinelResult = null
+  if (sentinels) {
+    const start = findSentinel(capture, addresses, 'start', sentinels.start)
+    const stop = findSentinel(capture, addresses, 'stop', sentinels.stop)
+    if (start.index >= stop.index || start.timestampNs >= stop.timestampNs) {
+      throw new Error('capture sentinels are out of order')
+    }
+    sentinelResult = Object.freeze({ start: start.index, stop: stop.index })
+  }
   const observed = new Set()
   let rolePacketCount = 0
   for (const record of capture.records) {
@@ -138,6 +235,7 @@ export function auditPrivateRouteCapture(capture, matrix) {
   return {
     packetCount: capture.records.length,
     rolePacketCount,
-    observedEdges: [...observed].sort()
+    observedEdges: [...observed].sort(),
+    ...(sentinelResult ? { sentinels: sentinelResult } : {})
   }
 }

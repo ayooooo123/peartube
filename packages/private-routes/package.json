@@ -30,6 +30,7 @@
     "test:bare": "brittle-bare test/*.test.js",
     "test:portable:node": "brittle-node test/integration/live-udx-node.test.js",
     "test:portable:bare": "brittle-node test/integration/live-udx-bare.test.js",
+    "test:namespace:unit": "brittle-node test/namespace/*.test.js",
     "test:namespace": "node test/namespace/run.js",
     "test:m2": "npm run test:node && npm run test:bare && npm run test:portable:node && npm run test:portable:bare",
     "fuzz:cell": "node fuzz/cell.js"

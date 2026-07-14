@@ -14,6 +14,7 @@ export const CONTROL_COMMAND = Object.freeze({
 export const CONTROL_EVENT = Object.freeze({
   CONFIGURED: 'configured',
   READY: 'ready',
+  RETRY: 'retry',
   SNAPSHOT: 'snapshot',
   CLOSED: 'closed',
   ERROR: 'error'
@@ -317,6 +318,7 @@ export class ControlLifecycle {
         this.#ready = true
         break
       case CONTROL_EVENT.SNAPSHOT:
+      case CONTROL_EVENT.RETRY:
         if (this.#state !== 'STARTED' || !this.#ready) throw invalid('unexpected snapshot event')
         break
       case CONTROL_EVENT.ERROR:

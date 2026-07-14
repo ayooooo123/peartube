@@ -25,6 +25,7 @@ import {
 } from '../../lib/live-route-node.js'
 import { UdxAdapter } from '../../lib/udx-adapter.js'
 import runtime from '#private-route-process'
+import { NegativeControlDialer } from '../namespace/negative-control.js'
 import { createProcessCodecVectors } from './codec-vectors.js'
 import {
   CONTROL_COMMAND,
@@ -136,6 +137,9 @@ export function createRoleRunner(options = {}) {
   if (!object(options) || typeof options.emit !== 'function') invalid()
   const makeNode = options.createNode || createLiveRouteNode
   if (typeof makeNode !== 'function') invalid()
+  const makeNegativeControl =
+    options.createNegativeControlDialer || ((value) => new NegativeControlDialer(value))
+  if (typeof makeNegativeControl !== 'function') invalid()
   const adapters = options.adapters || {
     now: Date.now,
     schedule: setTimeout,
@@ -151,6 +155,7 @@ export function createRoleRunner(options = {}) {
   let actor = null
   let destroyActor = null
   let codecVectors = null
+  let negativeControl = null
   let armedRevocation = null
   const armedFaults = new Set()
   const endpointLimits = Object.freeze({
@@ -173,6 +178,16 @@ export function createRoleRunner(options = {}) {
     try {
       destroy(owned)
     } catch {}
+  }
+
+  const releaseNegativeControl = async () => {
+    if (!negativeControl) return false
+    const owned = negativeControl
+    negativeControl = null
+    try {
+      await owned.close()
+    } catch {}
+    return true
   }
 
   const wait = (delay) =>
@@ -419,6 +434,19 @@ export function createRoleRunner(options = {}) {
     switch (kind) {
       case CONTROL_COMMAND.CONFIGURE:
         projection = command.projection
+        if (projection.negativeControl !== undefined) {
+          if (projection.role !== 'source') invalid()
+          negativeControl = makeNegativeControl(projection.negativeControl)
+          if (
+            !object(negativeControl) ||
+            !Number.isSafeInteger(negativeControl.invocations) ||
+            negativeControl.invocations !== 0 ||
+            typeof negativeControl.dial !== 'function' ||
+            typeof negativeControl.close !== 'function'
+          ) {
+            invalid()
+          }
+        }
         fingerprints = linkFingerprints(projection)
         codecVectors = createProcessCodecVectors()
         node = makeNode(projection, {
@@ -488,6 +516,15 @@ export function createRoleRunner(options = {}) {
         if (typeof onFault === 'function') await onFault(command.fault, node, projection)
         else if (command.fault === CONTROL_FAULT.CLOSE_SOCKET) {
           await node[LIVE_ROUTE_CLOSE_SOCKET]()
+        } else if (command.fault === CONTROL_FAULT.RETRY) {
+          if (projection.role !== 'source' || !negativeControl) invalid()
+          send({
+            event: CONTROL_EVENT.RETRY,
+            role: projection.role,
+            code: 'ROUTE_UNAVAILABLE',
+            negativeControlInvocations: negativeControl.invocations
+          })
+          return true
         } else {
           throw PrivateRouteError.ROUTE_UNAVAILABLE()
         }
@@ -495,6 +532,7 @@ export function createRoleRunner(options = {}) {
         return true
       case CONTROL_COMMAND.STOP:
         await node.stop()
+        await releaseNegativeControl()
         if (armedRevocation) armedRevocation.fill(0)
         armedRevocation = null
         releaseActor()
@@ -536,6 +574,7 @@ export function createRoleRunner(options = {}) {
         await node.stop()
       } catch {}
     }
+    await releaseNegativeControl()
     if (armedRevocation) armedRevocation.fill(0)
     armedRevocation = null
     releaseActor()

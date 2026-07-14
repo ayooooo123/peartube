@@ -67,3 +67,39 @@ test('seven Node role processes authenticate, report, and close independently', 
     await coordinator.destroy()
   }
 })
+
+test('killing the private middle during setup fails closed within the cleanup budget', async (t) => {
+  t.timeout(15_000)
+  const random = crypto.getRandomValues(new Uint16Array(1))[0]
+  const portBase = 51_000 + (random % 1_000)
+  const now = BigInt(Date.now())
+  const fixture = createLiveRouteFixture({
+    portBase,
+    distinctHosts: process.platform !== 'darwin',
+    now,
+    expiresAt: now + 30_000n
+  })
+  const coordinator = await createProcessCoordinator({
+    fixture,
+    cwd: PACKAGE_ROOT,
+    timeout: 6_500
+  })
+  const startedAt = Date.now()
+  let exits = null
+  try {
+    const starting = coordinator.start()
+    const outcome = starting.then(
+      () => null,
+      (err) => err
+    )
+    const killed = coordinator.kill('private-middle')
+    const failure = await outcome
+    t.ok(failure)
+    t.ok(Date.now() - startedAt < 6_500)
+    t.alike(await killed, { code: null, signal: 'SIGTERM' })
+  } finally {
+    exits = await coordinator.destroy()
+  }
+  t.is(exits.length, 7)
+  t.ok(exits.every((exit) => exit.status === 'fulfilled'))
+})

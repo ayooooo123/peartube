@@ -158,9 +158,10 @@ export async function createProcessCoordinator(options = {}) {
         } catch {}
       }
     }
-    await Promise.allSettled(Array.from(records.values(), (record) => record.exited))
+    const exits = await Promise.allSettled(Array.from(records.values(), (record) => record.exited))
     for (const record of records.values()) record.decoder.destroy()
     auditor.destroy()
+    return exits
   }
 
   try {
@@ -205,6 +206,15 @@ export async function createProcessCoordinator(options = {}) {
     return Promise.all(roles.map((role) => waitFor(records.get(role), 'snapshot', timeout)))
   }
 
+  const kill = (role) => {
+    const record = records.get(role)
+    if (!record || closed || record.child.exitCode !== null || record.child.signalCode !== null) {
+      invalid(`cannot kill process: ${role}`)
+    }
+    if (record.child.kill('SIGTERM') !== true) invalid(`cannot kill process: ${role}`)
+    return record.exited
+  }
+
   const stop = async () => {
     if (closed) return []
     closed = true
@@ -233,9 +243,10 @@ export async function createProcessCoordinator(options = {}) {
   const destroy = async () => {
     if (!closed) {
       closed = true
-      await cleanup()
+      return cleanup()
     }
+    return []
   }
 
-  return Object.freeze({ roles: Object.freeze(roles), start, snapshot, stop, destroy })
+  return Object.freeze({ roles: Object.freeze(roles), start, snapshot, kill, stop, destroy })
 }

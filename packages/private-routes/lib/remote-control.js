@@ -465,6 +465,8 @@ export class RemoteControlFragmentCodec {
       if (this.#destroyed || !this.#active) circuitState()
       if (now < this.#active.deadline) return false
       if (!this.#clearActive(true)) this.#failClosed()
+      if (this.#destroyed) circuitState()
+      if (this.#active) this.#failClosed()
       return true
     } finally {
       this.#busy = false

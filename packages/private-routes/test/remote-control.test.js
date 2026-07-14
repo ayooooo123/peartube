@@ -563,6 +563,31 @@ test('scheduled expiry clock reentrancy cannot complete or escape a logical body
   })
 })
 
+test('expiry cancellation reentrancy cannot report success after destroy', (t) => {
+  let now = 0
+  let codec = null
+  codec = new RemoteControlFragmentCodec({
+    now: () => now,
+    schedule() {
+      return 1
+    },
+    cancel() {
+      codec.destroy()
+    }
+  })
+  const frames = codec.fragment(bytes(1200, 0x95), { messageId: bytes(16, 0x96) })
+  t.is(codec.pushAuthenticated(frames[0]), null)
+  now = REMOTE_CONTROL_FRAGMENT_TIMEOUT
+  expectCode(t, () => codec.expire(), 'CIRCUIT_STATE')
+  t.alike(codec.stats, {
+    destroyed: true,
+    bufferedBytes: 0,
+    active: 0,
+    completedIds: 0,
+    timers: 0
+  })
+})
+
 test('completed fragment IDs are bounded without replay eviction', (t) => {
   const codec = new RemoteControlFragmentCodec({ now: () => 0 })
   const completed = []

@@ -349,7 +349,8 @@ export class RemoteControlFragmentCodec {
   }
 
   pushAuthenticated(frame) {
-    if (this.#destroyed || this.#busy) circuitState()
+    if (this.#destroyed) circuitState()
+    if (this.#busy) this.#rejectReentrancy()
     this.#busy = true
     try {
       return this.#push(frame)
@@ -456,12 +457,18 @@ export class RemoteControlFragmentCodec {
   }
 
   expire() {
+    if (this.#busy) this.#rejectReentrancy()
     if (this.#destroyed || !this.#active) return false
-    const now = this.#readNow()
-    if (this.#destroyed || !this.#active) circuitState()
-    if (now < this.#active.deadline) return false
-    if (!this.#clearActive(true)) this.#failClosed()
-    return true
+    this.#busy = true
+    try {
+      const now = this.#readNow()
+      if (this.#destroyed || !this.#active) circuitState()
+      if (now < this.#active.deadline) return false
+      if (!this.#clearActive(true)) this.#failClosed()
+      return true
+    } finally {
+      this.#busy = false
+    }
   }
 
   destroy() {
@@ -501,15 +508,25 @@ export class RemoteControlFragmentCodec {
         }
         if (this.#timer !== timer) return
         if (this.#destroyed || !this.#active) return
+        if (this.#busy) {
+          this.#destroyed = true
+          this.#clearActive(true)
+          this.#completed.clear()
+          return
+        }
+        this.#busy = true
         this.#timer = null
         try {
           const now = this.#readNow()
+          if (this.#destroyed || !this.#active) circuitState()
           if (now >= this.#active.deadline) this.#clearActive(false)
           else this.#startTimer()
         } catch {
           this.#destroyed = true
           this.#clearActive(true)
           this.#completed.clear()
+        } finally {
+          this.#busy = false
         }
       })
     } catch {
@@ -576,6 +593,13 @@ export class RemoteControlFragmentCodec {
     this.#clearActive(true)
     this.#completed.clear()
     invalid()
+  }
+
+  #rejectReentrancy() {
+    this.#destroyed = true
+    this.#clearActive(true)
+    this.#completed.clear()
+    circuitState()
   }
 }
 

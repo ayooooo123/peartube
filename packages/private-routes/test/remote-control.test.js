@@ -485,6 +485,84 @@ test('fragment clock, scheduler, cancel, and reentrancy faults fail closed', (t)
   })
 })
 
+test('expiry clock reentrancy cannot complete or escape a logical body', (t) => {
+  for (const operation of ['push', 'expire']) {
+    let now = 0
+    let reenter = false
+    let escaped = null
+    let reentryError = null
+    let codec = null
+    let frames = null
+    codec = new RemoteControlFragmentCodec({
+      now() {
+        if (reenter) {
+          try {
+            escaped = operation === 'push' ? codec.pushAuthenticated(frames[1]) : codec.expire()
+          } catch (err) {
+            reentryError = err
+          }
+        }
+        return now
+      }
+    })
+    frames = codec.fragment(bytes(1200, 0x91), { messageId: bytes(16, 0x92) })
+    t.is(codec.pushAuthenticated(frames[0]), null)
+    now = REMOTE_CONTROL_FRAGMENT_TIMEOUT
+    reenter = true
+    expectCode(t, () => codec.expire(), 'CIRCUIT_STATE')
+    t.is(escaped, null, `${operation} cannot escape a result`)
+    t.is(reentryError && reentryError.code, 'CIRCUIT_STATE')
+    t.alike(codec.stats, {
+      destroyed: true,
+      bufferedBytes: 0,
+      active: 0,
+      completedIds: 0,
+      timers: 0
+    })
+  }
+})
+
+test('scheduled expiry clock reentrancy cannot complete or escape a logical body', (t) => {
+  let now = 0
+  let reenter = false
+  let escaped = null
+  let reentryError = null
+  let scheduled = null
+  let codec = null
+  let frames = null
+  codec = new RemoteControlFragmentCodec({
+    now() {
+      if (reenter) {
+        try {
+          escaped = codec.pushAuthenticated(frames[1])
+        } catch (err) {
+          reentryError = err
+        }
+      }
+      return now
+    },
+    schedule(_delay, callback) {
+      scheduled = callback
+      return 1
+    },
+    cancel() {}
+  })
+  frames = codec.fragment(bytes(1200, 0x93), { messageId: bytes(16, 0x94) })
+  t.is(codec.pushAuthenticated(frames[0]), null)
+  now = REMOTE_CONTROL_FRAGMENT_TIMEOUT
+  reenter = true
+  scheduled()
+  t.is(escaped, null)
+  t.is(reentryError && reentryError.code, 'CIRCUIT_STATE')
+  t.alike(codec.stats, {
+    destroyed: true,
+    bufferedBytes: 0,
+    active: 0,
+    completedIds: 0,
+    timers: 0
+  })
+})
+
 test('completed fragment IDs are bounded without replay eviction', (t) => {
   const codec = new RemoteControlFragmentCodec({ now: () => 0 })
   const completed = []

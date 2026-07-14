@@ -21,6 +21,7 @@ import {
 import { PrivateRouteError } from './errors.js'
 import { TEST_ONLY_TICKET_OBSERVER, createLinkSetupAuthority } from './link-setup.js'
 import { RelayService, TEST_ONLY_RELAY_OBSERVER } from './relay-service.js'
+import { ACTOR_CONTROL_KIND, ActorControlCodec } from './remote-control.js'
 import {
   ROUTE_ENDPOINT,
   RoutePayloadCodec,
@@ -1308,7 +1309,7 @@ export function createPrivateRelayActor(options) {
       if (!commandAckMutator) return value
       return commandAckMutator(value)
     },
-    receiveRegistration(transport) {
+    receiveRegistration(transport, expectedKind = null) {
       if (destroyed) unauthorized()
       let plaintext = null
       let capsule = null
@@ -1325,6 +1326,8 @@ export function createPrivateRelayActor(options) {
           registryState.routeEncryptionSecretKey
         )
         capsule = decodeRegistrationCapsule(plaintext)
+        if (expectedKind !== null && !registrationOperationMatches(expectedKind, capsule.operation))
+          unauthorized()
         const commandPrepare =
           capsule.operation === REGISTRATION_CAPSULE_PREPARE_FINAL ||
           capsule.operation === REGISTRATION_CAPSULE_PREPARE_FORWARD
@@ -1437,9 +1440,12 @@ export function createPrivateRelayActor(options) {
       }
     },
     receiveActivation(request) {
-      return state.receiveActivationRequest(request, true)
+      return state.receiveActivationRequest(request, true, false)
     },
-    receiveActivationRequest(request, expectedEntry) {
+    receiveActivationForReply(request) {
+      return state.receiveActivationRequest(request, true, true)
+    },
+    receiveActivationRequest(request, expectedEntry, returnProof) {
       let decodedRequest = null
       let decodedCreate = null
       try {
@@ -1456,7 +1462,8 @@ export function createPrivateRelayActor(options) {
             expiresAt: decodedRequest.expiresAt,
             parameters: decodedRequest.parameters,
             startedAt: decodedRequest.startedAt,
-            entryProof: decodedRequest.entry ? null : decodedRequest.entryProof
+            entryProof: decodedRequest.entry ? null : decodedRequest.entryProof,
+            returnProof
           }
         )
       } finally {
@@ -1560,7 +1567,7 @@ export function createPrivateRelayActor(options) {
               parameters: context.parameters,
               entryProof
             })
-            return actorActivationTransport(state, next, nextRequest)
+            return actorActivationTransport(state, next, nextRequest, context.returnProof)
           } finally {
             clear(nextRequest)
             clearTree(nextPublic)
@@ -1582,7 +1589,12 @@ export function createPrivateRelayActor(options) {
         })
         let complete
         try {
-          complete = actorDestinationActivationTransport(state, destination, destinationRequest)
+          complete = actorDestinationActivationTransport(
+            state,
+            destination,
+            destinationRequest,
+            context.returnProof
+          )
         } finally {
           clear(destinationRequest)
         }
@@ -1916,7 +1928,7 @@ export function createPrivateRelayActor(options) {
         }
       })
     },
-    openActivationBinding(authority, inboundTicket, common) {
+    openActivationBinding(authority, inboundTicket, common, returnProof = false) {
       if (destroyed) throw PrivateRouteError.CIRCUIT_STATE()
       const terminalIdentity = cryptoSuite.keyPair(options.randomBytes(32))
       const terminalEncryption = cryptoSuite.encryptionKeyPair(options.randomBytes(32))
@@ -1997,7 +2009,7 @@ export function createPrivateRelayActor(options) {
           pendingRequest = null
           try {
             service.created(common.initiatorIdentity, common.responderLocalId)
-            result = state.receiveActivationRequest(request, false)
+            result = state.receiveActivationRequest(request, false, returnProof)
           } finally {
             clear(request)
           }
@@ -2387,6 +2399,210 @@ export function destroyPrivateDestinationActor(actor) {
   const state = safeObject(actor) ? DESTINATION_ACTOR_STATES.get(actor) : null
   if (!state) unauthorized()
   state.destroy()
+}
+
+// Package-internal boundary used by RemoteActorHost. The public actor capability
+// remains frozen and methodless; only canonical ActorControl bytes enter or
+// leave this adapter.
+export function createActorCommandAdapter(actor) {
+  const relayState = safeObject(actor) ? RELAY_ACTOR_STATES.get(actor) : null
+  const destinationState = safeObject(actor) ? DESTINATION_ACTOR_STATES.get(actor) : null
+  if (!relayState && !destinationState) unauthorized()
+  const codec = new ActorControlCodec()
+  const circuitGenerations = new Map()
+
+  return Object.freeze({
+    execute(message) {
+      const request = codec.decode(message)
+      let body = null
+      let response = null
+      try {
+        switch (request.kind) {
+          case ACTOR_CONTROL_KIND.REGISTER_STAGE: {
+            if (!relayState) unauthorized()
+            const acknowledgements = relayState.receiveRegistration(request.body, request.kind)
+            try {
+              body = encodeRegistrationAcknowledgements(acknowledgements)
+            } finally {
+              clearTree(acknowledgements)
+            }
+            break
+          }
+          case ACTOR_CONTROL_KIND.REGISTER_PREPARE:
+          case ACTOR_CONTROL_KIND.REGISTER_FINALIZE:
+          case ACTOR_CONTROL_KIND.REGISTER_ABORT:
+            if (!relayState || relayState.receiveRegistration(request.body, request.kind) !== true)
+              unauthorized()
+            body = b4a.from([PROTOCOL_VERSION, REGISTRATION_COMMAND_ACK])
+            break
+          case ACTOR_CONTROL_KIND.ACTIVATE_CREATE:
+            if (relayState) {
+              let decodedActivation = null
+              let decodedCreate = null
+              let result = null
+              let activated = false
+              let attempted = false
+              let generationKey = null
+              let hadGeneration = false
+              try {
+                decodedActivation = decodeActivationRequest(request.body)
+                decodedCreate = decodeCreate(decodedActivation.create)
+                generationKey = b4a.toString(decodedCreate.circuitId, 'hex')
+                hadGeneration = circuitGenerations.has(generationKey)
+                if (
+                  !decodedActivation.entry ||
+                  !same(decodedCreate.circuitId, request.circuitId) ||
+                  (hadGeneration && circuitGenerations.get(generationKey) !== request.generation)
+                )
+                  unauthorized()
+                attempted = true
+                result = relayState.receiveActivationForReply(request.body)
+                validateActorCommandReplyBody(ACTOR_CONTROL_KIND.ACTIVATE_CREATED, result)
+                body = copy(result)
+                circuitGenerations.set(generationKey, request.generation)
+                activated = true
+              } finally {
+                if (attempted && !hadGeneration && !activated)
+                  relayState.destroyCircuit(decodedCreate.circuitId)
+                clear(result)
+                clearTree(decodedActivation)
+                clearTree(decodedCreate)
+              }
+            } else {
+              let decodedActivation = null
+              let decodedCreate = null
+              const receiver = destinationState.createActivationReceiver()
+              try {
+                decodedActivation = decodeDestinationActivationRequest(request.body)
+                decodedCreate = decodeCreate(decodedActivation.create)
+                const generationKey = b4a.toString(decodedCreate.circuitId, 'hex')
+                if (
+                  !same(decodedCreate.circuitId, request.circuitId) ||
+                  (circuitGenerations.has(generationKey) &&
+                    circuitGenerations.get(generationKey) !== request.generation)
+                )
+                  unauthorized()
+                const fragments = fragmentActivation(request.body, {
+                  messageId: b4a.alloc(16, 1)
+                })
+                for (const fragment of fragments) {
+                  try {
+                    const result = receiver.receive(fragment)
+                    if (result) body = result
+                  } finally {
+                    clear(fragment)
+                  }
+                }
+                if (body) circuitGenerations.set(generationKey, request.generation)
+              } finally {
+                receiver.destroy()
+                clearTree(decodedActivation)
+                clearTree(decodedCreate)
+              }
+              if (!body) throw PrivateRouteError.ROUTE_UNAVAILABLE()
+            }
+            break
+          case ACTOR_CONTROL_KIND.CIRCUIT_DESTROY: {
+            const generationKey = b4a.toString(request.circuitId, 'hex')
+            if (
+              circuitGenerations.has(generationKey) &&
+              circuitGenerations.get(generationKey) !== request.generation
+            )
+              unauthorized()
+            if (relayState) relayState.destroyCircuit(request.circuitId)
+            else destinationState.destroyCircuit(request.circuitId)
+            circuitGenerations.delete(generationKey)
+            body = b4a.alloc(0)
+            break
+          }
+          default:
+            invalid()
+        }
+        response = codec.encode({
+          version: PROTOCOL_VERSION,
+          kind: request.kind + 1,
+          flags: 0,
+          requestId: request.requestId,
+          actorId: request.actorId,
+          circuitId: request.circuitId,
+          generation: request.generation,
+          body
+        })
+        return response
+      } finally {
+        clear(body)
+        clearTree(request)
+      }
+    }
+  })
+}
+
+function registrationOperationMatches(kind, operation) {
+  switch (kind) {
+    case ACTOR_CONTROL_KIND.REGISTER_STAGE:
+      return operation === REGISTRATION_CAPSULE_FINAL || operation === REGISTRATION_CAPSULE_FORWARD
+    case ACTOR_CONTROL_KIND.REGISTER_PREPARE:
+      return (
+        operation === REGISTRATION_CAPSULE_PREPARE_FINAL ||
+        operation === REGISTRATION_CAPSULE_PREPARE_FORWARD
+      )
+    case ACTOR_CONTROL_KIND.REGISTER_FINALIZE:
+      return (
+        operation === REGISTRATION_CAPSULE_FINALIZE_FINAL ||
+        operation === REGISTRATION_CAPSULE_FINALIZE_FORWARD
+      )
+    case ACTOR_CONTROL_KIND.REGISTER_ABORT:
+      return (
+        operation === REGISTRATION_CAPSULE_ABORT_FINAL ||
+        operation === REGISTRATION_CAPSULE_ABORT_FORWARD
+      )
+    default:
+      return false
+  }
+}
+
+// Package-internal reply validation shared by the byte-only host and adapter.
+export function validateActorCommandReplyBody(kind, body) {
+  let decoded = null
+  try {
+    switch (kind) {
+      case ACTOR_CONTROL_KIND.REGISTER_STAGED:
+        decoded = decodeRegistrationAcknowledgements(body)
+        for (const acknowledgement of decoded) {
+          const registered = decodeTemplateRegistered(acknowledgement)
+          clearTree(registered)
+        }
+        break
+      case ACTOR_CONTROL_KIND.REGISTER_PREPARED:
+      case ACTOR_CONTROL_KIND.REGISTER_FINALIZED:
+      case ACTOR_CONTROL_KIND.REGISTER_ABORTED:
+        if (
+          length(body) !== 2 ||
+          body[0] !== PROTOCOL_VERSION ||
+          body[1] !== REGISTRATION_COMMAND_ACK
+        )
+          invalid()
+        break
+      case ACTOR_CONTROL_KIND.ACTIVATE_CREATED:
+        if (length(body) === CREATED_SIZE) decoded = decodeCreated(body)
+        else {
+          decoded = decodeActivationResponse(body)
+          const entryProof = decodeEntryProof(decoded.entryProof)
+          const created = decodeCreated(decoded.created)
+          clearTree(entryProof)
+          clearTree(created)
+        }
+        break
+      case ACTOR_CONTROL_KIND.CIRCUIT_DESTROYED:
+        if (length(body) !== 0) invalid()
+        break
+      default:
+        invalid()
+    }
+    return true
+  } finally {
+    clearTree(decoded)
+  }
 }
 
 const DEFAULT_ACTIVATION_PARAMETERS = Object.freeze({
@@ -4238,7 +4454,7 @@ function cancelPendingTransmissions(pending) {
   pending.clear()
 }
 
-function actorDestinationActivationTransport(fromState, destinationActor, request) {
+function actorDestinationActivationTransport(fromState, destinationActor, request, returnProof) {
   const decodedRequest = decodeDestinationActivationRequest(request)
   const decodedCreate = decodeCreate(decodedRequest.create)
   const now = fromState.now()
@@ -4417,22 +4633,24 @@ function actorDestinationActivationTransport(fromState, destinationActor, reques
     destinationState.bindTransport(decodedCreate.circuitId, transport)
     retained = true
     response = encodeActivationResponse({ entryProof: decodedRequest.entryProof, created })
-    const createdFragments = fragmentActivation(response, {
-      messageId: fromState.randomBytes(16)
-    })
-    for (const fragment of createdFragments) {
-      try {
-        destinationState.observeState({
-          type: 'private-created-control',
-          direction: DIRECTION.REVERSE,
-          packetBytes: CELL_SIZE
-        })
-        transport.reverse(CELL_CLASS.CONTROL, fragment)
-      } finally {
-        clear(fragment)
+    if (!returnProof) {
+      const createdFragments = fragmentActivation(response, {
+        messageId: fromState.randomBytes(16)
+      })
+      for (const fragment of createdFragments) {
+        try {
+          destinationState.observeState({
+            type: 'private-created-control',
+            direction: DIRECTION.REVERSE,
+            packetBytes: CELL_SIZE
+          })
+          transport.reverse(CELL_CLASS.CONTROL, fragment)
+        } finally {
+          clear(fragment)
+        }
       }
     }
-    return true
+    return returnProof ? copy(response) : true
   } finally {
     destinationReceiver.destroy()
     if (!retained) {
@@ -4454,7 +4672,7 @@ function actorDestinationActivationTransport(fromState, destinationActor, reques
   }
 }
 
-function actorActivationTransport(fromState, toActor, request) {
+function actorActivationTransport(fromState, toActor, request, returnProof) {
   const decodedRequest = decodeActivationRequest(request)
   const decodedCreate = decodeCreate(decodedRequest.create)
   if (decodedRequest.entry) unauthorized()
@@ -4480,7 +4698,12 @@ function actorActivationTransport(fromState, toActor, request) {
   const toState = link.receiver
   if (!toState || toState.isDestroyed()) unauthorized()
   const initiator = link.initiator
-  const binding = toState.openActivationBinding(authority, link.accepted.ticket, common)
+  const binding = toState.openActivationBinding(
+    authority,
+    link.accepted.ticket,
+    common,
+    returnProof
+  )
   const routeId = copy(decodedCreate.circuitId)
   const fromIdentity = copy(fromPublic.identity)
   const toIdentity = copy(toPublic.identity)
@@ -4635,7 +4858,8 @@ function actorActivationTransport(fromState, toActor, request) {
       }
     }
     result = binding.result()
-    if (result !== true) throw PrivateRouteError.ROUTE_UNAVAILABLE()
+    if (returnProof ? length(result) < 0 : result !== true)
+      throw PrivateRouteError.ROUTE_UNAVAILABLE()
     const completedAt = fromState.now()
     if (
       !Number.isSafeInteger(completedAt) ||

@@ -186,6 +186,14 @@ export {
   validateActorReply
 } from './lib/remote-control.js'
 export {
+  DEFAULT_MAX_REMOTE_ACTORS,
+  DEFAULT_MAX_REMOTE_PENDING,
+  DEFAULT_MAX_REMOTE_REPLAYS,
+  DEFAULT_MAX_REMOTE_TOMBSTONES,
+  REMOTE_ACTOR_DEADLINE,
+  RemoteActorHost
+} from './lib/remote-actor-host.js'
+export {
   DEFAULT_HALF_OPEN_TIMEOUT,
   DEFAULT_MAX_CIRCUITS,
   DEFAULT_MAX_CIRCUITS_PER_SOURCE,

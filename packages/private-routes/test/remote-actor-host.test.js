@@ -128,6 +128,20 @@ class RemoteActorHost extends PublicRemoteActorHost {
     return super.receiveAuthenticated(event)
   }
 
+  failBoundary() {
+    return this.#boundary.pushAuthenticated(b4a.from([0xff]), {
+      link: this.#link,
+      epoch: 1n,
+      direction: DIRECTION.FORWARD,
+      circuitId: b4a.alloc(16),
+      generation: 0n
+    })
+  }
+
+  destroyBoundary() {
+    this.#boundary.destroy()
+  }
+
   destroy() {
     super.destroy()
     this.#sender.destroy()
@@ -1659,6 +1673,71 @@ test('authenticated actor context pins link epoch direction circuit and generati
   const event = host.authenticate(raw)
   t.is(await rejectionCode(host.receiveEvent({ ...event })), 'INVALID_ROUTE', 'plain event clone')
   host.destroy()
+})
+
+test('terminal control-boundary failure revokes retained events and clears exactly', async (t) => {
+  const sent = []
+  const host = new RemoteActorHost({
+    sendControl(message) {
+      sent.push(b4a.from(message))
+      return true
+    },
+    now: () => 0,
+    randomBytes: sequenceBytes(1),
+    schedule() {
+      return 1
+    },
+    cancel() {}
+  })
+  const actor = destinationActor()
+  const actorId = bytes(16, 0x9b)
+  host.register(actorId, actor)
+  const raw = new ActorControlCodec().encode({
+    version: 0,
+    kind: ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+    flags: 0,
+    requestId: 1n,
+    actorId,
+    circuitId: bytes(16, 0x9c),
+    generation: 1n,
+    body: b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
+  })
+  const retained = host.authenticate(raw)
+  expectCode(t, () => host.failBoundary(), 'INVALID_ROUTE')
+  t.is(await rejectionCode(host.receiveEvent(retained)), 'INVALID_ROUTE')
+  t.is(sent.length, 0)
+  host.destroyBoundary()
+  host.destroyBoundary()
+  host.destroy()
+  t.alike(host.stats, {
+    actors: 0,
+    pending: 0,
+    inbound: 0,
+    replay: 0,
+    tombstones: 0,
+    ownedBytes: 0,
+    timers: 0,
+    destroyed: true
+  })
+  destroyPrivateDestinationActor(actor)
+
+  const normal = new RemoteActorHost({
+    sendControl() {
+      return true
+    },
+    now: () => 0,
+    randomBytes: sequenceBytes(1),
+    schedule() {
+      return 1
+    },
+    cancel() {}
+  })
+  const normalEvent = normal.authenticate(raw)
+  normal.destroyBoundary()
+  normal.destroyBoundary()
+  t.is(await rejectionCode(normal.receiveEvent(normalEvent)), 'INVALID_ROUTE')
+  normal.destroy()
+  t.is(normal.stats.ownedBytes, 0)
 })
 
 test('activation proof circuit signature descriptor and expiry tampering fail closed', async (t) => {

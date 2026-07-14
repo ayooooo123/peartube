@@ -990,17 +990,38 @@ export function createRemoteActorControlBoundary(options) {
   const fragments = new RemoteControlFragmentCodec({ now, schedule, cancel })
   const expected = { link, epoch }
   const consumer = Object.freeze({})
-  const consumerState = { link, epoch }
+  const consumerState = { link, epoch, events: new Set() }
   REMOTE_ACTOR_CONTROL_CONSUMERS.set(consumer, consumerState)
   let active = null
   let destroyed = false
 
+  function terminate() {
+    destroyed = true
+    try {
+      fragments.destroy()
+    } finally {
+      if (active) clear(active.circuitId)
+      active = null
+      for (const event of consumerState.events) {
+        const state = AUTHENTICATED_REMOTE_ACTOR_EVENTS.get(event)
+        if (!state) continue
+        state.consumed = true
+        clear(state.message)
+        clear(state.context.circuitId)
+        AUTHENTICATED_REMOTE_ACTOR_EVENTS.delete(event)
+      }
+      consumerState.events.clear()
+      REMOTE_ACTOR_CONTROL_CONSUMERS.delete(consumer)
+    }
+  }
+
   function pushAuthenticated(payload, context) {
     if (destroyed) circuitState()
-    const authenticated = actorContext(context, expected)
+    let authenticated = null
     let decoded = null
     let message = null
     try {
+      authenticated = actorContext(context, expected)
       decoded = mux.decode(payload, {
         class: CELL_CLASS.CONTROL,
         direction: authenticated.direction,
@@ -1019,14 +1040,12 @@ export function createRemoteActorControlBoundary(options) {
         context: active,
         consumed: false
       })
+      consumerState.events.add(event)
       active = null
       return event
     } catch (err) {
-      clear(authenticated.circuitId)
-      if (active) clear(active.circuitId)
-      active = null
-      destroyed = true
-      fragments.destroy()
+      if (authenticated) clear(authenticated.circuitId)
+      terminate()
       throw err
     } finally {
       if (decoded && decoded.fragment) clear(decoded.fragment)
@@ -1038,12 +1057,7 @@ export function createRemoteActorControlBoundary(options) {
     consumer,
     pushAuthenticated,
     destroy() {
-      if (destroyed) return
-      destroyed = true
-      fragments.destroy()
-      if (active) clear(active.circuitId)
-      active = null
-      REMOTE_ACTOR_CONTROL_CONSUMERS.delete(consumer)
+      terminate()
     }
   })
 }
@@ -1057,6 +1071,7 @@ export function readAuthenticatedRemoteActorEvent(event, consumer) {
   if (!consumerState || !state || state.consumer !== consumer || state.consumed) invalid()
   state.consumed = true
   AUTHENTICATED_REMOTE_ACTOR_EVENTS.delete(event)
+  consumerState.events.delete(event)
   return Object.freeze({
     message: state.message,
     link: state.context.link,

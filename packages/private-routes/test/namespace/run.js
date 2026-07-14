@@ -45,6 +45,7 @@ export function tcpdumpLaunch(network, path) {
   return Object.freeze({
     command: 'tcpdump',
     args: Object.freeze([
+      '--immediate-mode',
       '-U',
       '-Q',
       'in',
@@ -213,7 +214,21 @@ export function createTcpdumpCapture(options = {}) {
     return true
   }
 
-  return Object.freeze({ start, stop })
+  const observe = async () => {
+    if (state !== 'open') throw new Error('capture is not open')
+    const started = Date.now()
+    for (;;) {
+      try {
+        const info = await statFile(options.path)
+        if (info && Number.isSafeInteger(info.size) && info.size > 24) return true
+      } catch {}
+      if (state !== 'open') throw new Error('capture closed before packet observation')
+      if (Date.now() - started >= deadline) throw new Error('tcpdump packet deadline')
+      await new Promise((resolve) => schedule(resolve, 5))
+    }
+  }
+
+  return Object.freeze({ start, observe, stop })
 }
 
 function executeFile(command, args, timeout = 10_000) {
@@ -436,7 +451,12 @@ export async function calibrateNegativeControl(options = {}) {
     network: `${layout.subnet}.0/24`,
     path: options.capturePath
   })
-  if (!capture || typeof capture.start !== 'function' || typeof capture.stop !== 'function') {
+  if (
+    !capture ||
+    typeof capture.start !== 'function' ||
+    typeof capture.observe !== 'function' ||
+    typeof capture.stop !== 'function'
+  ) {
     invalid('invalid negative-control calibration')
   }
   let captureOpen = false
@@ -470,6 +490,7 @@ export async function calibrateNegativeControl(options = {}) {
     }
     listener.close()
     listener = null
+    await capture.observe()
     await capture.stop()
     captureOpen = false
     captureBytes = await readCapture(options.capturePath)
@@ -633,6 +654,7 @@ export async function runNamespaceGate(options = {}) {
     await capture.start()
     captureOpen = true
     const startSentinel = await sendCaptureSentinel(layout, startPayload)
+    await capture.observe()
 
     const now = BigInt(Date.now())
     const fixture = createNamespaceFixture(layout, preflightPayload, now)

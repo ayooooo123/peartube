@@ -31,6 +31,7 @@ test('tcpdump launch captures synthetic ingress across every namespace veth', (t
   t.alike(tcpdumpLaunch('10.203.77.0/24', '/tmp/private-route.pcap'), {
     command: 'tcpdump',
     args: [
+      '--immediate-mode',
       '-U',
       '-Q',
       'in',
@@ -67,6 +68,7 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
     {
       command: 'tcpdump',
       args: [
+        '--immediate-mode',
         '-U',
         '-Q',
         'in',
@@ -84,6 +86,43 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
   t.is(await capture.stop(), true)
   t.alike(child.kills, ['SIGINT'])
   t.is(await capture.stop(), false)
+})
+
+test('tcpdump capture observes a packet record before shutdown', async (t) => {
+  const child = new FakeChild()
+  let stats = 0
+  const capture = createTcpdumpCapture({
+    network: '10.203.77.0/24',
+    path: '/tmp/private-route.pcap',
+    spawnProcess: () => child,
+    async statFile() {
+      stats++
+      return { size: stats < 3 ? 24 : 96 }
+    },
+    deadline: 100
+  })
+  const starting = capture.start()
+  child.stderr.emit('data', 'tcpdump: listening on any, link-type LINUX_SLL2\n')
+  await starting
+  t.is(await capture.observe(), true)
+  t.ok(stats >= 3)
+  t.is(await capture.stop(), true)
+})
+
+test('tcpdump capture fails bounded when no packet record becomes visible', async (t) => {
+  const child = new FakeChild()
+  const capture = createTcpdumpCapture({
+    network: '10.203.77.0/24',
+    path: '/tmp/private-route.pcap',
+    spawnProcess: () => child,
+    statFile: async () => ({ size: 24 }),
+    deadline: 10
+  })
+  const starting = capture.start()
+  child.stderr.emit('data', 'tcpdump: listening on any, link-type LINUX_SLL2\n')
+  await starting
+  await t.exception(capture.observe(), /packet deadline/)
+  t.is(await capture.stop(), true)
 })
 
 test('tcpdump capture fails bounded on missing readiness or header', async (t) => {
@@ -165,6 +204,9 @@ test('negative-control calibration owns a separate capture and removes it only a
           async start() {
             sequence.push('capture-start')
           },
+          async observe() {
+            sequence.push('capture-observe')
+          },
           async stop() {
             sequence.push('capture-stop')
           }
@@ -214,6 +256,7 @@ test('negative-control calibration owns a separate capture and removes it only a
     'listener-create',
     'probe',
     'listener-close',
+    'capture-observe',
     'capture-stop',
     'capture-read',
     'capture-parse',

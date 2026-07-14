@@ -1,6 +1,12 @@
 import b4a from 'b4a'
 
-import { createActorCommandAdapter, validateActorCommandReplyBody } from './activation.js'
+import {
+  bindRemoteActivationVerifier,
+  createActorCommandAdapter,
+  destroyRemoteActivationVerifier,
+  validateActorCommandReplyBody,
+  verifyRemoteActivationReply
+} from './activation.js'
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
 import {
@@ -8,8 +14,10 @@ import {
   ACTOR_CONTROL_KIND,
   ACTOR_ERROR_CODE,
   ActorControlCodec,
+  readAuthenticatedRemoteActorEvent,
   validateActorReply
 } from './remote-control.js'
+import { DIRECTION } from './protocol.js'
 
 export const REMOTE_ACTOR_DEADLINE = 5_000
 export const DEFAULT_MAX_REMOTE_ACTORS = 128
@@ -176,6 +184,7 @@ function clearMessage(value) {
 
 export class RemoteActorHost {
   #sendControl
+  #control
   #now
   #randomBytes
   #schedule
@@ -198,8 +207,9 @@ export class RemoteActorHost {
 
   constructor(options = {}) {
     if (!isObject(options)) invalid()
-    const { sendControl, now, randomBytes, schedule, cancel } = options
+    const { control, sendControl, now, randomBytes, schedule, cancel } = options
     if (
+      !isObject(control) ||
       typeof sendControl !== 'function' ||
       typeof now !== 'function' ||
       typeof randomBytes !== 'function' ||
@@ -208,6 +218,7 @@ export class RemoteActorHost {
     ) {
       invalid()
     }
+    this.#control = control
     this.#sendControl = sendControl
     this.#now = now
     this.#randomBytes = randomBytes
@@ -264,7 +275,7 @@ export class RemoteActorHost {
     }
   }
 
-  receiveAuthenticated(message) {
+  receiveAuthenticated(event) {
     if (this.#destroyed) return Promise.reject(PrivateRouteError.CIRCUIT_STATE())
     if (this.#busy) {
       this.#failClosed()
@@ -272,8 +283,20 @@ export class RemoteActorHost {
     }
     this.#busy = true
     let decoded = null
+    let authenticated = null
     try {
+      authenticated = readAuthenticatedRemoteActorEvent(event, this.#control)
+      const message = authenticated.message
       decoded = this.#codec.decode(message)
+      const expectedDirection = REQUEST_KINDS.has(decoded.kind)
+        ? DIRECTION.FORWARD
+        : DIRECTION.REVERSE
+      if (
+        authenticated.direction !== expectedDirection ||
+        authenticated.generation !== decoded.generation ||
+        !same(authenticated.circuitId, decoded.circuitId)
+      )
+        invalid()
       if (REQUEST_KINDS.has(decoded.kind)) return this.#receiveRequest(message, decoded)
       if (REPLY_KINDS.has(decoded.kind)) return this.#receiveReply(message, decoded)
       invalid()
@@ -283,6 +306,10 @@ export class RemoteActorHost {
       return Promise.reject(hadPending ? unavailable() : err)
     } finally {
       clearMessage(decoded)
+      if (authenticated) {
+        clear(authenticated.message)
+        clear(authenticated.circuitId)
+      }
       this.#busy = false
     }
   }
@@ -316,6 +343,8 @@ export class RemoteActorHost {
     let requestDigest = null
     let record = null
     let promise = null
+    let verifier = null
+    let verifierBound = false
     try {
       const now = this.#readNow()
       if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
@@ -328,8 +357,18 @@ export class RemoteActorHost {
       ) {
         invalid()
       }
+      verifier = options.activationVerifier
+      if (
+        (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE && !isObject(verifier)) ||
+        (kind !== ACTOR_CONTROL_KIND.ACTIVATE_CREATE && verifier !== undefined)
+      )
+        invalid()
       const requestId = this.#requestId()
       if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
+      if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) {
+        bindRemoteActivationVerifier(verifier, body, circuitId, generation)
+        verifierBound = true
+      }
       request = {
         version: 0,
         kind,
@@ -357,6 +396,7 @@ export class RemoteActorHost {
         signal: null,
         removeAbort: null,
         abort: null,
+        verifier,
         resolve,
         reject,
         settled: false
@@ -378,6 +418,7 @@ export class RemoteActorHost {
         }
         return promise
       }
+      if (verifierBound) destroyRemoteActivationVerifier(verifier)
       return Promise.reject(err instanceof PrivateRouteError ? err : unavailable())
     } finally {
       clearMessage(request)
@@ -401,6 +442,9 @@ export class RemoteActorHost {
       this.#dropPending(record, unavailable())
     }
     for (const record of this.#actors.values()) {
+      try {
+        record.adapter.destroy()
+      } catch {}
       clear(record.id)
       ACTOR_HANDLES.delete(record.handle)
     }
@@ -519,6 +563,16 @@ export class RemoteActorHost {
       verified = validateActorReply(expected.request, reply, expected.digest)
       if (verified.kind !== ACTOR_CONTROL_KIND.ERROR) {
         validateActorCommandReplyBody(verified.kind, verified.body)
+        if (record && verified.kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATED) {
+          verifyRemoteActivationReply(
+            expected.verifier,
+            expected.request.body,
+            expected.request.circuitId,
+            expected.request.generation,
+            verified.body
+          )
+          expected.verifier = null
+        }
       }
       responseDigest = digest(message)
       if (tombstone) {
@@ -737,6 +791,8 @@ export class RemoteActorHost {
       digest: record.digest,
       responseDigest: responseDigest ? copy(responseDigest) : null
     }
+    destroyRemoteActivationVerifier(record.verifier)
+    record.verifier = null
     record.request = null
     record.digest = null
     this.#tombstones.set(record.key, tombstone)
@@ -753,6 +809,8 @@ export class RemoteActorHost {
     const timerCancelled = !cancelTimer || this.#cancelTimer(record)
     const signalDetached = this.#detachSignal(record)
     this.#ownedBytes -= this.#recordBytes(record)
+    destroyRemoteActivationVerifier(record.verifier)
+    record.verifier = null
     clearMessage(record.request)
     clear(record.digest)
     record.request = null

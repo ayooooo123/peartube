@@ -26,6 +26,7 @@ The deterministic actor fixture exchanges stream and datagram payloads in both d
 - A normal virtual-network observer sees only its peer, direction, byte length, virtual time, and an opaque packet ID. It receives neither packet bytes nor a complete path.
 - A deep relay test hook observes the same opaque 1,100-byte route frame at each of the five relays for one direction/class. Tests reject application plaintext, fixture secrets, and route-key fields in that hook.
 - Authentication, replay, counter, expiry, queue, cancellation, rotation, drain, and teardown cases are exercised with deterministic clocks and faults. Failure removes route-owned virtual state and never asks for a direct fallback.
+- Remote-actor tests traverse the Task 5 established-control mux and fragment reassembler and require an opaque authenticated-event capability. They are still same-process tests: the capability is not yet minted by a live UDX cell endpoint. That handoff belongs to Task 7, so these tests do not establish network transport or peer separation.
 
 These are executable protocol invariants in a socket-free model, not measurements from a real network and not evidence against traffic analysis.
 

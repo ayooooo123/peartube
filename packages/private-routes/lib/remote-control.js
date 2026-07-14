@@ -940,3 +940,129 @@ export class RemoteControlMux {
     invalid()
   }
 }
+
+// Package-internal authenticated established-control boundary. The package
+// root exports the codecs but not this authority constructor or its reader, so
+// application bytes cannot manufacture the capability accepted by the actor
+// host. Task 7 will connect pushAuthenticated directly to the established UDX
+// cell delivery; Task 6 tests exercise the same mux and fragment path in one
+// process.
+const REMOTE_ACTOR_CONTROL_CONSUMERS = new WeakMap()
+const AUTHENTICATED_REMOTE_ACTOR_EVENTS = new WeakMap()
+
+function actorContext(value, expected) {
+  object(value)
+  const link = option(value, 'link')
+  const epoch = option(value, 'epoch')
+  const direction = option(value, 'direction')
+  const circuitId = option(value, 'circuitId')
+  const generation = option(value, 'generation')
+  if (
+    link !== expected.link ||
+    epoch !== expected.epoch ||
+    !knownDirection(direction) ||
+    !fixed(circuitId, 16) ||
+    !u64(generation)
+  )
+    invalid()
+  return { link, epoch, direction, circuitId: copy(circuitId), generation }
+}
+
+function sameActorContext(left, right) {
+  return (
+    left.link === right.link &&
+    left.epoch === right.epoch &&
+    left.direction === right.direction &&
+    left.generation === right.generation &&
+    b4a.equals(left.circuitId, right.circuitId)
+  )
+}
+
+export function createRemoteActorControlBoundary(options) {
+  object(options)
+  const link = option(options, 'link')
+  const epoch = option(options, 'epoch')
+  const now = option(options, 'now')
+  const schedule = option(options, 'schedule')
+  const cancel = option(options, 'cancel')
+  if (!object(link) || !u64(epoch) || typeof now !== 'function') invalid()
+  const mux = new RemoteControlMux()
+  const fragments = new RemoteControlFragmentCodec({ now, schedule, cancel })
+  const expected = { link, epoch }
+  const consumer = Object.freeze({})
+  const consumerState = { link, epoch }
+  REMOTE_ACTOR_CONTROL_CONSUMERS.set(consumer, consumerState)
+  let active = null
+  let destroyed = false
+
+  function pushAuthenticated(payload, context) {
+    if (destroyed) circuitState()
+    const authenticated = actorContext(context, expected)
+    let decoded = null
+    let message = null
+    try {
+      decoded = mux.decode(payload, {
+        class: CELL_CLASS.CONTROL,
+        direction: authenticated.direction,
+        circuitId: authenticated.circuitId
+      })
+      if (decoded.namespace !== CONTROL_NAMESPACE.ACTOR) invalid()
+      if (active && !sameActorContext(active, authenticated)) invalid()
+      if (!active) active = authenticated
+      else clear(authenticated.circuitId)
+      message = fragments.pushAuthenticated(decoded.fragment)
+      if (!message) return null
+      const event = Object.freeze({})
+      AUTHENTICATED_REMOTE_ACTOR_EVENTS.set(event, {
+        consumer,
+        message: copy(message),
+        context: active,
+        consumed: false
+      })
+      active = null
+      return event
+    } catch (err) {
+      clear(authenticated.circuitId)
+      if (active) clear(active.circuitId)
+      active = null
+      destroyed = true
+      fragments.destroy()
+      throw err
+    } finally {
+      if (decoded && decoded.fragment) clear(decoded.fragment)
+      clear(message)
+    }
+  }
+
+  return Object.freeze({
+    consumer,
+    pushAuthenticated,
+    destroy() {
+      if (destroyed) return
+      destroyed = true
+      fragments.destroy()
+      if (active) clear(active.circuitId)
+      active = null
+      REMOTE_ACTOR_CONTROL_CONSUMERS.delete(consumer)
+    }
+  })
+}
+
+export function readAuthenticatedRemoteActorEvent(event, consumer) {
+  const consumerState = REMOTE_ACTOR_CONTROL_CONSUMERS.get(consumer)
+  const state =
+    event !== null && typeof event === 'object'
+      ? AUTHENTICATED_REMOTE_ACTOR_EVENTS.get(event)
+      : null
+  if (!consumerState || !state || state.consumer !== consumer || state.consumed) invalid()
+  state.consumed = true
+  AUTHENTICATED_REMOTE_ACTOR_EVENTS.delete(event)
+  return Object.freeze({
+    message: state.message,
+    link: state.context.link,
+    epoch: state.context.epoch,
+    direction: state.context.direction,
+    circuitId: state.context.circuitId,
+    generation: state.context.generation
+  })
+}

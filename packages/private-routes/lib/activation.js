@@ -2401,6 +2401,22 @@ export function destroyPrivateDestinationActor(actor) {
   state.destroy()
 }
 
+// Remote circuit ownership follows the actor capability, not an individual
+// host registration. One actor may legitimately be reachable through several
+// adjacent links, but only the adapter which reserved a generation may mutate
+// that circuit. Records remain as tombstones so stale generations cannot be
+// rebound after teardown.
+const REMOTE_ACTOR_AUTHORITIES = new WeakMap()
+
+function remoteActorAuthority(actor) {
+  let authority = REMOTE_ACTOR_AUTHORITIES.get(actor)
+  if (!authority) {
+    authority = { circuits: new Map() }
+    REMOTE_ACTOR_AUTHORITIES.set(actor, authority)
+  }
+  return authority
+}
+
 // Package-internal boundary used by RemoteActorHost. The public actor capability
 // remains frozen and methodless; only canonical ActorControl bytes enter or
 // leave this adapter.
@@ -2409,7 +2425,44 @@ export function createActorCommandAdapter(actor) {
   const destinationState = safeObject(actor) ? DESTINATION_ACTOR_STATES.get(actor) : null
   if (!relayState && !destinationState) unauthorized()
   const codec = new ActorControlCodec()
-  const circuitGenerations = new Map()
+  const authority = remoteActorAuthority(actor)
+  const owner = Object.freeze({})
+
+  function reserve(circuitId, generation) {
+    const key = b4a.toString(circuitId, 'hex')
+    const current = authority.circuits.get(key)
+    if (!current && authority.circuits.size >= DEFAULT_MAX_ACTOR_CIRCUITS)
+      throw PrivateRouteError.CIRCUIT_LIMIT()
+    if (current) {
+      if (current.owner !== owner) unauthorized()
+      if (current.state !== 'destroyed' || generation <= current.generation) unauthorized()
+    }
+    const record = { owner, generation, state: 'activating', circuitId: copy(circuitId) }
+    authority.circuits.set(key, record)
+    return { key, record, previous: current || null }
+  }
+
+  function releaseReservation(reservation, destroy) {
+    const { key, record, previous } = reservation
+    if (authority.circuits.get(key) !== record) return false
+    if (destroy) {
+      try {
+        if (relayState) relayState.destroyCircuit(record.circuitId)
+        else destinationState.destroyCircuit(record.circuitId)
+      } catch {}
+    }
+    if (previous) authority.circuits.set(key, previous)
+    else authority.circuits.delete(key)
+    clear(record.circuitId)
+    return true
+  }
+
+  function commitReservation(reservation) {
+    const { key, record, previous } = reservation
+    if (authority.circuits.get(key) !== record || record.state !== 'activating') unauthorized()
+    record.state = 'open'
+    if (previous) clear(previous.circuitId)
+  }
 
   return Object.freeze({
     execute(message) {
@@ -2442,28 +2495,21 @@ export function createActorCommandAdapter(actor) {
               let result = null
               let activated = false
               let attempted = false
-              let generationKey = null
-              let hadGeneration = false
+              let reservation = null
               try {
                 decodedActivation = decodeActivationRequest(request.body)
                 decodedCreate = decodeCreate(decodedActivation.create)
-                generationKey = b4a.toString(decodedCreate.circuitId, 'hex')
-                hadGeneration = circuitGenerations.has(generationKey)
-                if (
-                  !decodedActivation.entry ||
-                  !same(decodedCreate.circuitId, request.circuitId) ||
-                  (hadGeneration && circuitGenerations.get(generationKey) !== request.generation)
-                )
+                if (!decodedActivation.entry || !same(decodedCreate.circuitId, request.circuitId))
                   unauthorized()
+                reservation = reserve(decodedCreate.circuitId, request.generation)
                 attempted = true
                 result = relayState.receiveActivationForReply(request.body)
                 validateActorCommandReplyBody(ACTOR_CONTROL_KIND.ACTIVATE_CREATED, result)
                 body = copy(result)
-                circuitGenerations.set(generationKey, request.generation)
+                commitReservation(reservation)
                 activated = true
               } finally {
-                if (attempted && !hadGeneration && !activated)
-                  relayState.destroyCircuit(decodedCreate.circuitId)
+                if (reservation && !activated) releaseReservation(reservation, attempted)
                 clear(result)
                 clearTree(decodedActivation)
                 clearTree(decodedCreate)
@@ -2471,17 +2517,16 @@ export function createActorCommandAdapter(actor) {
             } else {
               let decodedActivation = null
               let decodedCreate = null
+              let reservation = null
+              let attempted = false
+              let activated = false
               const receiver = destinationState.createActivationReceiver()
               try {
                 decodedActivation = decodeDestinationActivationRequest(request.body)
                 decodedCreate = decodeCreate(decodedActivation.create)
-                const generationKey = b4a.toString(decodedCreate.circuitId, 'hex')
-                if (
-                  !same(decodedCreate.circuitId, request.circuitId) ||
-                  (circuitGenerations.has(generationKey) &&
-                    circuitGenerations.get(generationKey) !== request.generation)
-                )
-                  unauthorized()
+                if (!same(decodedCreate.circuitId, request.circuitId)) unauthorized()
+                reservation = reserve(decodedCreate.circuitId, request.generation)
+                attempted = true
                 const fragments = fragmentActivation(request.body, {
                   messageId: b4a.alloc(16, 1)
                 })
@@ -2493,8 +2538,12 @@ export function createActorCommandAdapter(actor) {
                     clear(fragment)
                   }
                 }
-                if (body) circuitGenerations.set(generationKey, request.generation)
+                if (body) {
+                  commitReservation(reservation)
+                  activated = true
+                }
               } finally {
+                if (reservation && !activated) releaseReservation(reservation, attempted)
                 receiver.destroy()
                 clearTree(decodedActivation)
                 clearTree(decodedCreate)
@@ -2504,14 +2553,22 @@ export function createActorCommandAdapter(actor) {
             break
           case ACTOR_CONTROL_KIND.CIRCUIT_DESTROY: {
             const generationKey = b4a.toString(request.circuitId, 'hex')
+            const record = authority.circuits.get(generationKey)
+            if (!record) {
+              body = b4a.alloc(0)
+              break
+            }
             if (
-              circuitGenerations.has(generationKey) &&
-              circuitGenerations.get(generationKey) !== request.generation
+              record.owner !== owner ||
+              record.generation !== request.generation ||
+              record.state === 'activating'
             )
               unauthorized()
-            if (relayState) relayState.destroyCircuit(request.circuitId)
-            else destinationState.destroyCircuit(request.circuitId)
-            circuitGenerations.delete(generationKey)
+            if (record.state === 'open') {
+              if (relayState) relayState.destroyCircuit(request.circuitId)
+              else destinationState.destroyCircuit(request.circuitId)
+              record.state = 'destroyed'
+            }
             body = b4a.alloc(0)
             break
           }
@@ -2532,6 +2589,17 @@ export function createActorCommandAdapter(actor) {
       } finally {
         clear(body)
         clearTree(request)
+      }
+    },
+    destroy() {
+      for (const [key, record] of authority.circuits) {
+        if (record.owner !== owner || record.state === 'destroyed') continue
+        try {
+          if (relayState) relayState.destroyCircuit(record.circuitId)
+          else destinationState.destroyCircuit(record.circuitId)
+        } catch {}
+        record.state = 'destroyed'
+        authority.circuits.set(key, record)
       }
     }
   })
@@ -2602,6 +2670,152 @@ export function validateActorCommandReplyBody(kind, body) {
     return true
   } finally {
     clearTree(decoded)
+  }
+}
+
+// Package-internal, one-shot verifier capability. It deliberately retains the
+// source-only material which cannot be reconstructed from ActorControl bytes.
+// The package root does not export its constructor.
+const REMOTE_ACTIVATION_VERIFIERS = new WeakMap()
+
+export function createRemoteActivationVerifier(options) {
+  if (
+    !safeObject(options) ||
+    length(option(options, 'request')) < 0 ||
+    !fixed(option(options, 'circuitId'), 16) ||
+    !u64(option(options, 'generation')) ||
+    !fixed(option(options, 'entryIdentity'), 32) ||
+    !fixed(option(options, 'entryRouteEncryptionKey'), 32) ||
+    !fixed(option(options, 'endpointIdentity'), 32) ||
+    !fixed(option(options, 'routeSigningKey'), 32) ||
+    !fixed(option(options, 'destinationRouteEncryptionKey'), 32) ||
+    !fixed(option(options, 'sourceEphemeralSecretKey'), 32) ||
+    !fixed(option(options, 'entryChallenge'), 32) ||
+    !fixed(option(options, 'destinationChallenge'), 32) ||
+    !DESTINATION_REPLAY_STATES.has(option(options, 'replayCache')) ||
+    typeof option(options, 'now') !== 'function'
+  )
+    invalid()
+  const activation = decodeActivationRequest(options.request)
+  const create = decodeCreate(activation.create)
+  let state = null
+  let accepted = false
+  try {
+    if (!activation.entry || !same(create.circuitId, options.circuitId)) unauthorized()
+    const capability = Object.freeze({})
+    state = {}
+    state.request = copy(options.request)
+    state.circuitId = copy(options.circuitId)
+    state.generation = options.generation
+    state.entryIdentity = copy(options.entryIdentity)
+    state.entryRouteEncryptionKey = copy(options.entryRouteEncryptionKey)
+    state.endpointIdentity = copy(options.endpointIdentity)
+    state.routeSigningKey = copy(options.routeSigningKey)
+    state.destinationRouteEncryptionKey = copy(options.destinationRouteEncryptionKey)
+    state.sourceEphemeralSecretKey = copy(options.sourceEphemeralSecretKey)
+    state.entryChallenge = copy(options.entryChallenge)
+    state.destinationChallenge = copy(options.destinationChallenge)
+    state.replayCache = options.replayCache
+    state.now = options.now
+    REMOTE_ACTIVATION_VERIFIERS.set(capability, state)
+    accepted = true
+    return capability
+  } finally {
+    if (!accepted) clearRemoteActivationVerifier(state)
+    clearTree(activation)
+    clearTree(create)
+  }
+}
+
+function clearRemoteActivationVerifier(state) {
+  if (!state) return
+  for (const name of [
+    'request',
+    'circuitId',
+    'entryIdentity',
+    'entryRouteEncryptionKey',
+    'endpointIdentity',
+    'routeSigningKey',
+    'destinationRouteEncryptionKey',
+    'sourceEphemeralSecretKey',
+    'entryChallenge',
+    'destinationChallenge'
+  ])
+    clear(state[name])
+}
+
+export function destroyRemoteActivationVerifier(capability) {
+  const state = safeObject(capability) ? REMOTE_ACTIVATION_VERIFIERS.get(capability) : null
+  if (!state) return false
+  REMOTE_ACTIVATION_VERIFIERS.delete(capability)
+  clearRemoteActivationVerifier(state)
+  return true
+}
+
+export function bindRemoteActivationVerifier(capability, request, circuitId, generation) {
+  const state = safeObject(capability) ? REMOTE_ACTIVATION_VERIFIERS.get(capability) : null
+  if (
+    !state ||
+    state.bound === true ||
+    !same(request, state.request) ||
+    !same(circuitId, state.circuitId) ||
+    generation !== state.generation
+  )
+    unauthorized()
+  state.bound = true
+  return true
+}
+
+export function verifyRemoteActivationReply(capability, request, circuitId, generation, response) {
+  const state = safeObject(capability) ? REMOTE_ACTIVATION_VERIFIERS.get(capability) : null
+  if (!state) unauthorized()
+  REMOTE_ACTIVATION_VERIFIERS.delete(capability)
+  let activation = null
+  let decodedResponse = null
+  let entry = null
+  let destination = null
+  try {
+    if (
+      !same(request, state.request) ||
+      !same(circuitId, state.circuitId) ||
+      generation !== state.generation
+    )
+      unauthorized()
+    activation = decodeActivationRequest(request)
+    decodedResponse = decodeActivationResponse(response)
+    entry = verifyEntryProof({
+      create: activation.create,
+      proof: decodedResponse.entryProof,
+      entryIdentity: state.entryIdentity,
+      entryRouteEncryptionKey: state.entryRouteEncryptionKey,
+      sourceEphemeralSecretKey: state.sourceEphemeralSecretKey,
+      entryChallenge: state.entryChallenge,
+      expiresAt: activation.expiresAt,
+      startedAt: activation.startedAt,
+      now: state.now
+    })
+    destination = verifyDestinationProof({
+      create: activation.create,
+      entryProof: decodedResponse.entryProof,
+      created: decodedResponse.created,
+      endpointIdentity: state.endpointIdentity,
+      routeSigningKey: state.routeSigningKey,
+      destinationRouteEncryptionKey: state.destinationRouteEncryptionKey,
+      sourceEphemeralSecretKey: state.sourceEphemeralSecretKey,
+      destinationChallenge: state.destinationChallenge,
+      parameters: activation.parameters,
+      expiresAt: activation.expiresAt,
+      startedAt: activation.startedAt,
+      now: state.now,
+      replayCache: state.replayCache
+    })
+    return true
+  } finally {
+    clearRemoteActivationVerifier(state)
+    clearTree(activation)
+    clearTree(decodedResponse)
+    clearTree(entry)
+    clearTree(destination)
   }
 }
 

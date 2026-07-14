@@ -12,7 +12,7 @@ import {
   PROTOCOL_VERSION,
   ROLE,
   ActorControlCodec,
-  RemoteActorHost,
+  RemoteActorHost as PublicRemoteActorHost,
   activationChallengeCipher,
   buildPrivateTemplates,
   createPrivateDestinationActor,
@@ -26,7 +26,134 @@ import {
   hashCreateBase,
   signRelayAdvertisement
 } from '../index.js'
+import * as publicApi from '../index.js'
+import {
+  RemoteControlFragmentCodec,
+  RemoteControlMux,
+  createRemoteActorControlBoundary
+} from '../lib/remote-control.js'
+import { createDestinationReplayCache, createRemoteActivationVerifier } from '../lib/activation.js'
+import { DIRECTION } from '../lib/protocol.js'
 import { expectCode, privateRoleIdentity, seed } from './helpers.js'
+
+const REQUEST_ACTOR_KINDS = new Set([
+  ACTOR_CONTROL_KIND.REGISTER_STAGE,
+  ACTOR_CONTROL_KIND.REGISTER_PREPARE,
+  ACTOR_CONTROL_KIND.REGISTER_FINALIZE,
+  ACTOR_CONTROL_KIND.REGISTER_ABORT,
+  ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+  ACTOR_CONTROL_KIND.CIRCUIT_DESTROY
+])
+const TEST_ACTIVATION_CONTEXTS = new WeakMap()
+
+// Same-process Task 6 harness: messages still traverse the real Task 5 mux and
+// fragment reassembler, but the UDX cell/link handoff itself remains Task 7.
+class RemoteActorHost extends PublicRemoteActorHost {
+  #boundary
+  #link
+  #messageId = 1
+  #mux = new RemoteControlMux()
+  #sender
+
+  constructor(options) {
+    const link = Object.freeze({})
+    const boundary = createRemoteActorControlBoundary({
+      link,
+      epoch: 1n,
+      now: options.now
+    })
+    super({ ...options, control: boundary.consumer })
+    this.#boundary = boundary
+    this.#link = link
+    this.#sender = new RemoteControlFragmentCodec({ now: options.now })
+  }
+
+  authenticate(message, overrides = {}) {
+    const kind = message.byteLength > 1 ? message[1] : 0xff
+    const circuitId = message.byteLength >= 44 ? b4a.from(message.subarray(28, 44)) : b4a.alloc(16)
+    let generation = 0n
+    if (message.byteLength >= 52) {
+      for (let index = 44; index < 52; index++)
+        generation = (generation << 8n) | BigInt(message[index])
+    }
+    const context = {
+      link: overrides.link || this.link,
+      epoch: overrides.epoch === undefined ? 1n : overrides.epoch,
+      direction:
+        overrides.direction === undefined
+          ? REQUEST_ACTOR_KINDS.has(kind)
+            ? DIRECTION.FORWARD
+            : DIRECTION.REVERSE
+          : overrides.direction,
+      circuitId: overrides.circuitId || circuitId,
+      generation: overrides.generation === undefined ? generation : overrides.generation
+    }
+    const messageId = b4a.alloc(16)
+    let id = this.#messageId++
+    for (let index = 15; index >= 12; index--) {
+      messageId[index] = id & 0xff
+      id = Math.floor(id / 256)
+    }
+    const frames = this.#sender.fragment(message, { messageId })
+    let event = null
+    try {
+      for (const frame of frames) {
+        const payload = this.#mux.encodeActorFragment(frame)
+        try {
+          event = this.#boundary.pushAuthenticated(payload, context)
+        } finally {
+          payload.fill(0)
+        }
+      }
+      return event
+    } finally {
+      messageId.fill(0)
+      for (const frame of frames) frame.fill(0)
+    }
+  }
+
+  get link() {
+    return this.#link
+  }
+
+  receiveAuthenticated(message, overrides) {
+    try {
+      return super.receiveAuthenticated(this.authenticate(message, overrides))
+    } catch (err) {
+      return Promise.reject(err)
+    }
+  }
+
+  receiveEvent(event) {
+    return super.receiveAuthenticated(event)
+  }
+
+  destroy() {
+    super.destroy()
+    this.#sender.destroy()
+    this.#boundary.destroy()
+  }
+}
+
+function activationOptions(body, circuitId, generation) {
+  const context = TEST_ACTIVATION_CONTEXTS.get(body)
+  if (!context) throw new Error('missing test activation context')
+  try {
+    return {
+      activationVerifier: createRemoteActivationVerifier({
+        ...context,
+        request: body,
+        circuitId,
+        generation
+      })
+    }
+  } finally {
+    TEST_ACTIVATION_CONTEXTS.delete(body)
+    context.sourceEphemeralSecretKey.fill(0)
+    context.entryChallenge.fill(0)
+    context.destinationChallenge.fill(0)
+  }
+}
 
 function bytes(size, value) {
   return b4a.alloc(size, value)
@@ -117,6 +244,8 @@ function registrationFixture(start = 1, actorNow = () => 1_000, observe = undefi
     destination,
     activationRequest(circuitId) {
       const source = cryptoSuite.encryptionKeyPair(seed(start + 203))
+      const entryChallenge = seed(start + 205)
+      const destinationChallenge = seed(start + 206)
       const createValue = {
         version: PROTOCOL_VERSION,
         circuitId,
@@ -139,17 +268,17 @@ function registrationFixture(start = 1, actorNow = () => 1_000, observe = undefi
         createValue.entryChallengeCipher = activationChallengeCipher(
           entryShared,
           base,
-          seed(start + 205),
+          entryChallenge,
           0
         )
         createValue.destinationChallengeCipher = activationChallengeCipher(
           destinationShared,
           base,
-          seed(start + 206),
+          destinationChallenge,
           1
         )
         create = encodeCreate(createValue)
-        return encodeActivationRequest({
+        const request = encodeActivationRequest({
           entry: true,
           create,
           layer: b4a.alloc(0),
@@ -170,11 +299,26 @@ function registrationFixture(start = 1, actorNow = () => 1_000, observe = undefi
           },
           entryProof: b4a.alloc(0)
         })
+        TEST_ACTIVATION_CONTEXTS.set(request, {
+          entryIdentity: relayIdentity.publicKey,
+          entryRouteEncryptionKey: relayEncryption.publicKey,
+          endpointIdentity: owner.publicKey,
+          routeSigningKey: owner.publicKey,
+          destinationRouteEncryptionKey: destinationEncryption.publicKey,
+          sourceEphemeralSecretKey: b4a.from(source.secretKey),
+          entryChallenge: b4a.from(entryChallenge),
+          destinationChallenge: b4a.from(destinationChallenge),
+          replayCache: createDestinationReplayCache({ now: () => 1_000 }),
+          now: () => 1_000
+        })
+        return request
       } finally {
         source.secretKey.fill(0)
         base.fill(0)
         entryShared.fill(0)
         destinationShared.fill(0)
+        entryChallenge.fill(0)
+        destinationChallenge.fill(0)
         createValue.entryChallengeCipher.fill(0)
         createValue.destinationChallengeCipher.fill(0)
         if (create) create.fill(0)
@@ -351,15 +495,15 @@ test('remote errors preserve only the allowlist and unknown actors are unavailab
   destroyPrivateDestinationActor(actor)
 
   const stateFailure = pair.client.request(
-    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    ACTOR_CONTROL_KIND.REGISTER_STAGE,
     actorId,
-    bytes(16, 0x52),
-    1n,
+    b4a.alloc(16),
+    0n,
     b4a.from('invalid but privately owned')
   )
   await transfer(pair.toServer, pair.server)
   await transfer(pair.toClient, pair.client)
-  t.is(await rejectionCode(stateFailure), 'CIRCUIT_STATE')
+  t.is(await rejectionCode(stateFailure), 'UNAUTHORIZED')
 
   const missing = pair.client.request(
     ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
@@ -436,9 +580,9 @@ test('queue refusal and deadline expiry leave no pending body or timer', async (
     schedule: refusedTimers.schedule,
     cancel: refusedTimers.cancel
   })
-  const input = bytes(100, 0x81)
+  const input = b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
   const refusal = refused.request(
-    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
     bytes(16, 0x82),
     bytes(16, 0x83),
     1n,
@@ -534,7 +678,6 @@ test('every canonical actor command is byte-only and unknown actors map unavaila
     ACTOR_CONTROL_KIND.REGISTER_PREPARE,
     ACTOR_CONTROL_KIND.REGISTER_FINALIZE,
     ACTOR_CONTROL_KIND.REGISTER_ABORT,
-    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
     ACTOR_CONTROL_KIND.CIRCUIT_DESTROY
   ]
   for (const kind of operations) {
@@ -1152,23 +1295,21 @@ test('relay activation returns the canonical authenticated CREATED proof', async
     actorId,
     circuitId,
     99n,
-    body
+    body,
+    activationOptions(body, circuitId, 99n)
   )
   await transfer(pair.toServer, pair.server)
   await transfer(pair.toClient, pair.client)
   const proof = await pending
   t.is(proof.byteLength, ENTRY_PROOF_SIZE + CREATED_SIZE)
   const mismatchedBody = fixture.activationRequest(bytes(16, 0xed))
-  const mismatched = pair.client.request(
-    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
-    actorId,
-    circuitId,
-    99n,
-    mismatchedBody
-  )
-  await transfer(pair.toServer, pair.server)
-  await transfer(pair.toClient, pair.client)
-  t.is(await rejectionCode(mismatched), 'UNAUTHORIZED')
+  let mismatchCode = null
+  try {
+    activationOptions(mismatchedBody, circuitId, 99n)
+  } catch (err) {
+    mismatchCode = err && err.code
+  }
+  t.is(mismatchCode, 'UNAUTHORIZED')
   t.is(
     events.filter((event) => event.type === 'private-circuit-destroyed').length,
     0,
@@ -1219,6 +1360,409 @@ test('one host cannot alias an actor across independent generation maps', (t) =>
   expectCode(t, () => host.register(bytes(16, 0xf7), actor), 'CIRCUIT_STATE')
   host.destroy()
   destroyPrivateDestinationActor(actor)
+})
+
+test('actor circuit ownership is global across hosts and foreign commands are inert', async (t) => {
+  const events = []
+  const fixture = registrationFixture(
+    91,
+    () => 1_000,
+    (event) => events.push(event)
+  )
+  const timers = scheduler()
+  const sentA = []
+  const sentB = []
+  const makeHost = (sent) =>
+    new RemoteActorHost({
+      sendControl(message) {
+        sent.push(b4a.from(message))
+        return true
+      },
+      now: () => 1_000,
+      randomBytes: sequenceBytes(sent === sentA ? 1 : 40),
+      schedule: timers.schedule,
+      cancel: timers.cancel
+    })
+  const hostA = makeHost(sentA)
+  const hostB = makeHost(sentB)
+  const actorIdA = bytes(16, 0x91)
+  const actorIdB = bytes(16, 0x92)
+  const circuitId = bytes(16, 0x93)
+  const codec = new ActorControlCodec()
+  let requestId = 1n
+  hostA.register(actorIdA, fixture.relay)
+  hostB.register(actorIdB, fixture.relay)
+  const command = async (host, sent, actorId, kind, body, generation = 0n) => {
+    const request = codec.encode({
+      version: 0,
+      kind,
+      flags: 0,
+      requestId: requestId++,
+      actorId,
+      circuitId: kind < ACTOR_CONTROL_KIND.ACTIVATE_CREATE ? b4a.alloc(16) : circuitId,
+      generation,
+      body
+    })
+    t.is(await host.receiveAuthenticated(request), true)
+    return codec.decode(sent.pop())
+  }
+  for (const [kind, body] of [
+    [ACTOR_CONTROL_KIND.REGISTER_STAGE, fixture.built.registrationCapsule],
+    [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
+    [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
+  ]) {
+    const reply = await command(hostA, sentA, actorIdA, kind, body)
+    t.is(reply.kind, kind + 1)
+  }
+  const activation = fixture.activationRequest(circuitId)
+  const created = await command(
+    hostA,
+    sentA,
+    actorIdA,
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    activation,
+    7n
+  )
+  t.is(created.kind, ACTOR_CONTROL_KIND.ACTIVATE_CREATED)
+
+  const foreignDestroy = await command(
+    hostB,
+    sentB,
+    actorIdB,
+    ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+    b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED]),
+    7n
+  )
+  t.is(foreignDestroy.kind, ACTOR_CONTROL_KIND.ERROR)
+  t.is(foreignDestroy.body[0], ACTOR_ERROR_CODE.UNAUTHORIZED)
+  const foreignActivate = await command(
+    hostB,
+    sentB,
+    actorIdB,
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    activation,
+    7n
+  )
+  t.is(foreignActivate.kind, ACTOR_CONTROL_KIND.ERROR)
+  t.is(foreignActivate.body[0], ACTOR_ERROR_CODE.UNAUTHORIZED)
+  t.is(
+    events.filter((event) => event.type === 'private-circuit-destroyed').length,
+    0,
+    'foreign host cannot tear down the owning host circuit'
+  )
+
+  const ownedDestroy = await command(
+    hostA,
+    sentA,
+    actorIdA,
+    ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+    b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED]),
+    7n
+  )
+  t.is(ownedDestroy.kind, ACTOR_CONTROL_KIND.CIRCUIT_DESTROYED)
+  t.is(
+    events.filter((event) => event.type === 'private-circuit-destroyed').length,
+    1,
+    'owner tears down exactly once'
+  )
+  const failedAdvance = await command(
+    hostA,
+    sentA,
+    actorIdA,
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    activation,
+    8n
+  )
+  t.is(failedAdvance.kind, ACTOR_CONTROL_KIND.ERROR)
+  const staleOwner = await command(
+    hostA,
+    sentA,
+    actorIdA,
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    activation,
+    7n
+  )
+  t.is(staleOwner.kind, ACTOR_CONTROL_KIND.ERROR)
+  t.is(staleOwner.body[0], ACTOR_ERROR_CODE.UNAUTHORIZED)
+  const staleForeign = await command(
+    hostB,
+    sentB,
+    actorIdB,
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    activation,
+    7n
+  )
+  t.is(staleForeign.kind, ACTOR_CONTROL_KIND.ERROR)
+  t.is(staleForeign.body[0], ACTOR_ERROR_CODE.UNAUTHORIZED)
+  t.is(
+    events.filter((event) => event.type === 'private-circuit-destroyed').length,
+    1,
+    'failed generation advance restores the prior tombstone without actor mutation'
+  )
+  activation.fill(0)
+  hostA.destroy()
+  hostB.destroy()
+  fixture.destroy()
+})
+
+test('activation without an exact verifier fails locally before transmission', async (t) => {
+  const pair = hostPair({ now: () => 1_000 })
+  const pending = pair.client.request(
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    bytes(16, 0xc1),
+    bytes(16, 0xc2),
+    1n,
+    b4a.from('unverified activation')
+  )
+  t.is(await rejectionCode(pending), 'INVALID_ROUTE')
+  t.is(pair.toServer.length, 0)
+  t.is(pair.client.stats.pending, 0)
+  t.is(pair.client.stats.ownedBytes, 0)
+  pair.client.destroy()
+  pair.server.destroy()
+})
+
+test('failed verifier reuse cannot consume the owning activation verifier', async (t) => {
+  const fixture = registrationFixture(98)
+  const pair = hostPair({ now: () => 1_000 })
+  const actorId = bytes(16, 0xc3)
+  const circuitId = bytes(16, 0xc4)
+  pair.server.register(actorId, fixture.relay)
+  for (const [kind, body] of [
+    [ACTOR_CONTROL_KIND.REGISTER_STAGE, fixture.built.registrationCapsule],
+    [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
+    [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
+  ]) {
+    const registration = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+    await transfer(pair.toServer, pair.server)
+    await transfer(pair.toClient, pair.client)
+    await registration
+  }
+  const body = fixture.activationRequest(circuitId)
+  const options = activationOptions(body, circuitId, 31n)
+  const owning = pair.client.request(
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    actorId,
+    circuitId,
+    31n,
+    body,
+    options
+  )
+  const queued = pair.toServer.length
+  const reuse = pair.client.request(
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    actorId,
+    circuitId,
+    32n,
+    body,
+    options
+  )
+  t.is(await rejectionCode(reuse), 'UNAUTHORIZED')
+  t.is(pair.toServer.length, queued, 'failed reuse transmits nothing')
+  await transfer(pair.toServer, pair.server)
+  await transfer(pair.toClient, pair.client)
+  t.is((await owning).byteLength, ENTRY_PROOF_SIZE + CREATED_SIZE)
+  body.fill(0)
+  pair.client.destroy()
+  pair.server.destroy()
+  fixture.destroy()
+})
+
+test('raw ActorControl bytes are not an authenticated host capability', async (t) => {
+  t.is(publicApi.createRemoteActorControlBoundary, undefined)
+  t.is(publicApi.readAuthenticatedRemoteActorEvent, undefined)
+  t.is(publicApi.createRemoteActivationVerifier, undefined)
+  const sent = []
+  const timers = scheduler()
+  const host = new RemoteActorHost({
+    sendControl(message) {
+      sent.push(b4a.from(message))
+      return true
+    },
+    now: () => 0,
+    randomBytes: sequenceBytes(1),
+    schedule: timers.schedule,
+    cancel: timers.cancel
+  })
+  const actor = destinationActor()
+  const actorId = bytes(16, 0x94)
+  host.register(actorId, actor)
+  const raw = new ActorControlCodec().encode({
+    version: 0,
+    kind: ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+    flags: 0,
+    requestId: 1n,
+    actorId,
+    circuitId: bytes(16, 0x95),
+    generation: 1n,
+    body: b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
+  })
+  t.is(await rejectionCode(host.receiveEvent(raw)), 'INVALID_ROUTE')
+  t.is(await rejectionCode(host.receiveEvent(b4a.from(raw))), 'INVALID_ROUTE')
+  t.is(sent.length, 0)
+  host.destroy()
+  destroyPrivateDestinationActor(actor)
+})
+
+test('authenticated actor context pins link epoch direction circuit and generation', async (t) => {
+  const actorId = bytes(16, 0x98)
+  const circuitId = bytes(16, 0x99)
+  const raw = new ActorControlCodec().encode({
+    version: 0,
+    kind: ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+    flags: 0,
+    requestId: 1n,
+    actorId,
+    circuitId,
+    generation: 4n,
+    body: b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
+  })
+  for (const [name, overrides] of [
+    ['link', { link: Object.freeze({}) }],
+    ['epoch', { epoch: 2n }],
+    ['direction', { direction: DIRECTION.REVERSE }],
+    ['circuit', { circuitId: bytes(16, 0x9a) }],
+    ['generation', { generation: 5n }]
+  ]) {
+    const sent = []
+    const host = new RemoteActorHost({
+      sendControl(message) {
+        sent.push(b4a.from(message))
+        return true
+      },
+      now: () => 0,
+      randomBytes: sequenceBytes(1),
+      schedule() {
+        return 1
+      },
+      cancel() {}
+    })
+    const actor = destinationActor()
+    host.register(actorId, actor)
+    t.is(await rejectionCode(host.receiveAuthenticated(raw, overrides)), 'INVALID_ROUTE', name)
+    t.is(sent.length, 0, name)
+    host.destroy()
+    destroyPrivateDestinationActor(actor)
+  }
+
+  const host = new RemoteActorHost({
+    sendControl() {
+      return true
+    },
+    now: () => 0,
+    randomBytes: sequenceBytes(1),
+    schedule() {
+      return 1
+    },
+    cancel() {}
+  })
+  const event = host.authenticate(raw)
+  t.is(await rejectionCode(host.receiveEvent({ ...event })), 'INVALID_ROUTE', 'plain event clone')
+  host.destroy()
+})
+
+test('activation proof circuit signature descriptor and expiry tampering fail closed', async (t) => {
+  const createdStart = ENTRY_PROOF_SIZE
+  const cases = [
+    ['circuit', createdStart + 1],
+    ['descriptor', createdStart + 1 + 16 + 8],
+    ['expiry', createdStart + 1 + 16 + 8 + 6 * 32],
+    ['signature', ENTRY_PROOF_SIZE + CREATED_SIZE - 1]
+  ]
+  for (let index = 0; index < cases.length; index++) {
+    const [name, offset] = cases[index]
+    const fixture = registrationFixture(92 + index)
+    const pair = hostPair({ now: () => 1_000 })
+    const actorId = bytes(16, 0x96 + index)
+    const circuitId = bytes(16, 0xa0 + index)
+    pair.server.register(actorId, fixture.relay)
+    for (const [kind, body] of [
+      [ACTOR_CONTROL_KIND.REGISTER_STAGE, fixture.built.registrationCapsule],
+      [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
+      [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
+    ]) {
+      const registration = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+      await transfer(pair.toServer, pair.server)
+      await transfer(pair.toClient, pair.client)
+      await registration
+    }
+    const body = fixture.activationRequest(circuitId)
+    const pending = pair.client.request(
+      ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+      actorId,
+      circuitId,
+      11n,
+      body,
+      activationOptions(body, circuitId, 11n)
+    )
+    await transfer(pair.toServer, pair.server)
+    const codec = new ActorControlCodec()
+    const reply = codec.decode(pair.toClient.shift())
+    reply.body[offset] ^= 1
+    const tampered = codec.encode(reply)
+    t.is(await rejectionCode(pair.client.receiveAuthenticated(tampered)), 'ROUTE_UNAVAILABLE', name)
+    t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE', name)
+    t.is(pair.client.stats.ownedBytes, 0, name)
+    body.fill(0)
+    reply.actorId.fill(0)
+    reply.circuitId.fill(0)
+    reply.body.fill(0)
+    tampered.fill(0)
+    pair.client.destroy()
+    pair.server.destroy()
+    fixture.destroy()
+  }
+})
+
+test('activation proof substitution across correlated requests fails closed', async (t) => {
+  const fixture = registrationFixture(97)
+  const pair = hostPair({ now: () => 1_000 })
+  const actorId = bytes(16, 0xb0)
+  pair.server.register(actorId, fixture.relay)
+  for (const [kind, body] of [
+    [ACTOR_CONTROL_KIND.REGISTER_STAGE, fixture.built.registrationCapsule],
+    [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
+    [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
+  ]) {
+    const registration = pair.client.request(kind, actorId, b4a.alloc(16), 0n, body)
+    await transfer(pair.toServer, pair.server)
+    await transfer(pair.toClient, pair.client)
+    await registration
+  }
+  const circuitA = bytes(16, 0xb1)
+  const circuitB = bytes(16, 0xb2)
+  const bodyA = fixture.activationRequest(circuitA)
+  const bodyB = fixture.activationRequest(circuitB)
+  const pendingA = pair.client.request(
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    actorId,
+    circuitA,
+    21n,
+    bodyA,
+    activationOptions(bodyA, circuitA, 21n)
+  )
+  const pendingB = pair.client.request(
+    ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+    actorId,
+    circuitB,
+    22n,
+    bodyB,
+    activationOptions(bodyB, circuitB, 22n)
+  )
+  await transfer(pair.toServer, pair.server)
+  const codec = new ActorControlCodec()
+  const replyA = codec.decode(pair.toClient.shift())
+  const replyB = codec.decode(pair.toClient.shift())
+  const substituted = codec.encode({ ...replyB, body: replyA.body })
+  t.is(await rejectionCode(pair.client.receiveAuthenticated(substituted)), 'ROUTE_UNAVAILABLE')
+  t.is(await rejectionCode(pendingA), 'ROUTE_UNAVAILABLE')
+  t.is(await rejectionCode(pendingB), 'ROUTE_UNAVAILABLE')
+  t.is(pair.client.stats.ownedBytes, 0)
+  for (const value of [bodyA, bodyB, replyA.actorId, replyA.circuitId, replyA.body]) value.fill(0)
+  for (const value of [replyB.actorId, replyB.circuitId, replyB.body, substituted]) value.fill(0)
+  pair.client.destroy()
+  pair.server.destroy()
+  fixture.destroy()
 })
 
 test('send refusal cancellation failure and signal reentry fail exact-zero', async (t) => {

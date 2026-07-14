@@ -27,7 +27,7 @@
     "test": "brittle test/*.test.js",
     "test:node": "brittle-node test/*.test.js",
     "test:one": "brittle-node",
-    "test:bare": "brittle-bare test/*.test.js",
+    "test:bare": "node node_modules/bare-runtime/bin/bare node_modules/brittle/cmd.js test/*.test.js",
     "test:portable:node": "brittle-node test/integration/live-udx-node.test.js",
     "test:portable:bare": "brittle-node test/integration/live-udx-bare.test.js",
     "test:namespace:unit": "brittle-node test/namespace/*.test.js",

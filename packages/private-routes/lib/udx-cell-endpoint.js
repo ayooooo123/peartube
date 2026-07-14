@@ -68,11 +68,13 @@ function clear(value) {
 function detachAbort(record) {
   const signal = record.signal
   const abort = record.abort
+  const removeAbort = record.removeAbort
   record.signal = null
   record.abort = null
-  if (!signal || !abort) return
+  record.removeAbort = null
+  if (!signal || !abort || !removeAbort) return
   try {
-    signal.removeEventListener('abort', abort)
+    removeAbort.call(signal, 'abort', abort)
   } catch {}
 }
 
@@ -199,6 +201,10 @@ function pump(state) {
   state.nativeWaits.add(completion)
   try {
     if (record.onDispatch) record.onDispatch()
+    if (state.closing || record.cancelled || !validateRecord(state, record.authority)) {
+      releaseNative(false)
+      return
+    }
     releaseNative(state.socket.send(record.packet, record.peer.port, record.peer.host))
   } catch {
     releaseNative(false)
@@ -266,13 +272,15 @@ function receive(state, packet, from) {
   peer.packets++
   peer.bytes += BOOTSTRAP_SIZE
   state.inboundPeers.set(peerKey, peer)
-  // A handler promise owns its packet until settlement. A handler may trigger
-  // close, but must not await or return that same close promise.
+  // A handler promise owns its packet until settlement. The exact endpoint
+  // close promise is recognized below; another handler promise must not await
+  // that close because an indirect promise cycle cannot be identified safely.
   try {
     const result =
       owned[1] === BOOTSTRAP_CLASS
         ? state.onBootstrap(owned, sendHandle)
         : state.onCell(owned, sendHandle)
+    if (result === state.closePromise) settleOwnership()
     Promise.resolve(result).then(settleOwnership, settleOwnership)
   } catch {
     settleOwnership()
@@ -481,20 +489,41 @@ export class UdxCellEndpoint {
     if (packet[1] !== BOOTSTRAP_CLASS && authority.phase !== 'OPEN') {
       return Promise.reject(stateError())
     }
-    const signal = options.signal
-    const onDispatch = options[UDX_SEND_DISPATCH]
+    let signal
+    let onDispatch
+    let addAbort = null
+    let removeAbort = null
+    let aborted = false
+    try {
+      signal = options.signal
+      onDispatch = options[UDX_SEND_DISPATCH]
+      if (signal !== undefined) {
+        if (!isObject(signal)) throw PrivateRouteError.INVALID_ROUTE()
+        addAbort = signal.addEventListener
+        removeAbort = signal.removeEventListener
+        aborted = signal.aborted
+      }
+    } catch {
+      if (state.closing) return Promise.reject(stateError())
+      if (!validateRecord(state, authority)) {
+        return Promise.reject(PrivateRouteError.UNAUTHORIZED())
+      }
+      return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+    }
+    if (state.closing) return Promise.reject(stateError())
+    if (!validateRecord(state, authority)) {
+      return Promise.reject(PrivateRouteError.UNAUTHORIZED())
+    }
     if (
       signal !== undefined &&
-      (!isObject(signal) ||
-        typeof signal.addEventListener !== 'function' ||
-        typeof signal.removeEventListener !== 'function')
+      (typeof addAbort !== 'function' || typeof removeAbort !== 'function')
     ) {
       return Promise.reject(PrivateRouteError.INVALID_ROUTE())
     }
     if (onDispatch !== undefined && typeof onDispatch !== 'function') {
       return Promise.reject(PrivateRouteError.INVALID_ROUTE())
     }
-    if (signal && signal.aborted) return Promise.reject(unavailable())
+    if (aborted) return Promise.reject(unavailable())
     if (
       state.reservedPackets >= state.maxQueuedPackets ||
       state.reservedBytes + BOOTSTRAP_SIZE > state.maxQueuedBytes
@@ -507,8 +536,10 @@ export class UdxCellEndpoint {
         peer: authority.peer,
         authority,
         signal,
+        removeAbort,
         onDispatch,
         abort: null,
+        admitted: false,
         resolve,
         reject,
         settled: false,
@@ -516,21 +547,45 @@ export class UdxCellEndpoint {
       }
       record.abort = () => {
         record.cancelled = true
-        if (removeQueued(state, record)) rejectRecord(record, unavailable())
+        if (removeQueued(state, record) || !record.admitted) rejectRecord(record, unavailable())
       }
+      if (signal) {
+        let abortedAfter = false
+        try {
+          addAbort.call(signal, 'abort', record.abort, { once: true })
+          abortedAfter = signal.aborted
+        } catch {
+          const error = state.closing
+            ? stateError()
+            : validateRecord(state, authority)
+              ? unavailable()
+              : PrivateRouteError.UNAUTHORIZED()
+          rejectRecord(record, error)
+          return
+        }
+        if (abortedAfter && !record.settled) record.abort()
+      }
+      if (record.settled) return
+      if (state.closing) {
+        rejectRecord(record, stateError())
+        return
+      }
+      if (!validateRecord(state, authority)) {
+        rejectRecord(record, PrivateRouteError.UNAUTHORIZED())
+        return
+      }
+      if (
+        state.reservedPackets >= state.maxQueuedPackets ||
+        state.reservedBytes + BOOTSTRAP_SIZE > state.maxQueuedBytes
+      ) {
+        rejectRecord(record, PrivateRouteError.CIRCUIT_LIMIT())
+        return
+      }
+      record.admitted = true
       state.queue.push(record)
       state.queuedBytes += BOOTSTRAP_SIZE
       state.reservedPackets++
       state.reservedBytes += BOOTSTRAP_SIZE
-      if (signal) {
-        try {
-          signal.addEventListener('abort', record.abort, { once: true })
-        } catch {
-          if (removeQueued(state, record)) rejectRecord(record, unavailable())
-          return
-        }
-        if (signal.aborted && !record.settled) record.abort()
-      }
       pump(state)
     })
   }

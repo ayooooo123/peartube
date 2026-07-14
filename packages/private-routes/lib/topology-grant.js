@@ -601,16 +601,19 @@ function closeRecord(state, key, reason, tombstone, notify = true) {
   if (!record && !handle && !state.timers.has(key)) return
 
   let failed = false
-  try {
-    cancelTimer(state, key)
-  } catch {
-    failed = true
-  }
+  const hasTimer = state.timers.has(key)
+  const timer = hasTimer ? state.timers.get(key) : null
+  if (hasTimer) state.timers.delete(key)
   state.grants.delete(key)
   state.handles.delete(key)
   if (record && tombstone) state.tombstones.add(key)
   if (handle) LINK_HANDLES.delete(handle)
   if (handle) notifyLinkClose(handle, reason)
+  try {
+    if (hasTimer) state.cancel(timer)
+  } catch {
+    failed = true
+  }
   try {
     if (handle) state.onClose(handle, reason)
   } catch {
@@ -793,6 +796,8 @@ export class LinkDirectory {
 
     const handle = Object.freeze({})
     LINK_HANDLES.set(handle, {
+      directory: state,
+      key,
       digest32: b4a.from(grant.digest32),
       localIdentity32: b4a.from(grant.local.identity32),
       localRole: grant.local.role,
@@ -801,6 +806,7 @@ export class LinkDirectory {
       peerRole: grant.peer.role,
       peerAddress: { ...grant.peer.address },
       epoch: grant.epoch,
+      expiresAt: grant.expiresAt,
       runId32: b4a.from(grant.runId32),
       operations: grant.local.operations
     })
@@ -880,6 +886,19 @@ export class LinkDirectory {
 export function readLinkHandle(value) {
   const state = isObject(value) ? LINK_HANDLES.get(value) : null
   if (!state) unauthorized()
+  let expired = false
+  try {
+    expired = currentTime(state.directory) >= state.expiresAt
+  } catch {
+    expired = true
+  }
+  if (LINK_HANDLES.get(value) !== state) unauthorized()
+  if (expired) {
+    try {
+      closeRecord(state.directory, state.key, 'expired', true)
+    } catch {}
+    unauthorized()
+  }
   return {
     digest32: b4a.from(state.digest32),
     localIdentity32: b4a.from(state.localIdentity32),

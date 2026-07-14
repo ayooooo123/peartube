@@ -156,6 +156,27 @@ function fakeClock(start = 100n) {
   })
 }
 
+function inertClock(start = 100n) {
+  let now = start
+  let nextId = 1
+  const timers = new Set()
+  return Object.freeze({
+    now: () => now,
+    schedule() {
+      const id = nextId++
+      timers.add(id)
+      return id
+    },
+    cancel(id) {
+      timers.delete(id)
+    },
+    advance(delta) {
+      now += BigInt(delta)
+    },
+    pending: () => timers.size
+  })
+}
+
 function directoryOptions(fixture, clock, overrides = {}) {
   return {
     localIdentity32: fixture.safety.publicKey,
@@ -658,6 +679,56 @@ test('LinkDirectory expiry closes the active handle, tombstones it, and prevents
     timers: 0,
     destroyed: false
   })
+})
+
+test('handle reads synchronously enforce exact expiry with an inert scheduler', (t) => {
+  for (const delta of [100, 101]) {
+    const fixture = signedFixture()
+    const clock = inertClock()
+    const closes = []
+    const directory = new LinkDirectory(
+      directoryOptions(fixture, clock, {
+        onClose: (handle, reason) => closes.push({ handle, reason })
+      })
+    )
+    const digest32 = directory.add(fixture.signed)
+    const handle = directory.authorize(authorization(fixture, digest32))
+    clock.advance(delta)
+    expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+    t.alike(closes, [{ handle, reason: 'expired' }], `${delta}`)
+    t.is(clock.pending(), 0, `${delta}`)
+    expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+    t.is(closes.length, 1, `${delta}`)
+  }
+})
+
+test('reentrant timer cancellation cannot close or notify the same handle twice', (t) => {
+  const fixture = signedFixture()
+  let now = 100n
+  let directory
+  let digest32
+  let reentered = false
+  const closes = []
+  const clock = {
+    now: () => now,
+    schedule: () => 1,
+    cancel() {
+      if (reentered) return
+      reentered = true
+      directory.revoke({ digest32, epoch: 7n, runId32: fixture.grant.runId32 })
+    }
+  }
+  directory = new LinkDirectory(
+    directoryOptions(fixture, clock, {
+      onClose: (handle, reason) => closes.push({ handle, reason })
+    })
+  )
+  digest32 = directory.add(fixture.signed)
+  const handle = directory.authorize(authorization(fixture, digest32))
+  now = 200n
+  expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+  t.alike(closes, [{ handle, reason: 'expired' }])
+  t.is(reentered, true)
 })
 
 test('same-epoch revocation is bound to the configured run and permanently tombstones the grant', (t) => {

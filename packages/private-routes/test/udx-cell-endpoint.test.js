@@ -15,14 +15,23 @@ import {
 } from '../index.js'
 import { FakeUdxAdapter } from './fake-udx.js'
 import { expectCode, safetyRoleIdentity, seed } from './helpers.js'
-import { UDX_LINK_CLOSE, UDX_LINK_OPEN, selectUdxLoopbackHosts } from '../lib/udx-adapter.js'
+import {
+  UDX_LINK_CLOSE,
+  UDX_LINK_OPEN,
+  UDX_SEND_DISPATCH,
+  selectUdxLoopbackHosts
+} from '../lib/udx-adapter.js'
 
-function clock() {
+function clock(start = 1_000n) {
+  let now = start
   let id = 0
   return {
-    now: () => 1_000n,
+    now: () => now,
     schedule: () => ++id,
-    cancel() {}
+    cancel() {},
+    advance(delta) {
+      now += BigInt(delta)
+    }
   }
 }
 
@@ -58,7 +67,7 @@ function fixture(options = {}) {
     },
     authority.secretKey
   )
-  const c = clock()
+  const c = options.clock || clock()
   const directory = new LinkDirectory({
     localIdentity32: local.publicKey,
     localRole: TOPOLOGY_ROLE.SOURCE,
@@ -108,7 +117,8 @@ function fixture(options = {}) {
     peer,
     runId32,
     epoch,
-    digest32
+    digest32,
+    clock: c
   }
 }
 
@@ -332,6 +342,81 @@ test('send queue copies ownership, bounds packets/bytes, and handles cancellatio
   t.is(f.endpoint.inFlightSends, 0)
 })
 
+test('reentrant signal access cannot admit a send after endpoint close begins', async (t) => {
+  for (const variant of ['options-signal', 'listener-getter', 'listener-call']) {
+    const f = fixture()
+    await f.endpoint.bind()
+    const handle = openHandle(f.endpoint, f.linkHandle)
+    let closing = null
+    const close = () => {
+      if (!closing) closing = f.endpoint.close()
+    }
+    let options
+    if (variant === 'options-signal') {
+      options = {}
+      Object.defineProperty(options, 'signal', {
+        get() {
+          close()
+          return undefined
+        }
+      })
+    } else if (variant === 'listener-getter') {
+      const signal = {
+        aborted: false,
+        get addEventListener() {
+          close()
+          return () => {}
+        },
+        removeEventListener() {}
+      }
+      options = { signal }
+    } else {
+      options = {
+        signal: {
+          aborted: false,
+          addEventListener() {
+            close()
+          },
+          removeEventListener() {}
+        }
+      }
+    }
+    const packet = b4a.alloc(1200)
+    packet[1] = 1
+    const result = await Promise.race([
+      errorCode(f.endpoint.send(handle, packet, options)),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 25))
+    ])
+    t.is(result, 'CIRCUIT_STATE', variant)
+    t.is(f.endpoint.queuedPackets, 0, variant)
+    t.is(f.endpoint.queuedBytes, 0, variant)
+    t.is(f.endpoint.inFlightSends, 0, variant)
+    await closing
+  }
+})
+
+test('a dispatch hook cannot send a native packet after closing the endpoint', async (t) => {
+  const f = fixture()
+  await f.endpoint.bind()
+  const handle = openHandle(f.endpoint, f.linkHandle)
+  let closing
+  const packet = b4a.alloc(1200)
+  packet[1] = 1
+  const result = await errorCode(
+    f.endpoint.send(handle, packet, {
+      [UDX_SEND_DISPATCH]() {
+        closing = f.endpoint.close()
+      }
+    })
+  )
+  t.is(result, 'ROUTE_UNAVAILABLE')
+  await closing
+  t.is(f.adapter.sockets[0].sends.length, 0)
+  t.is(f.endpoint.queuedPackets, 0)
+  t.is(f.endpoint.inFlightSends, 0)
+  t.is(f.adapter.sockets[0].closeCalls, 1)
+})
+
 test('all non-true native results fail and close waits for in-flight before socket close', async (t) => {
   for (const send of [
     () => false,
@@ -498,6 +583,23 @@ test('revoked link handles cannot send or receive', async (t) => {
   f.adapter.sockets[0].emitMessage(before, '127.0.0.12', 45112)
   t.is(f.received.length, 1)
   await f.endpoint.close()
+})
+
+test('open and send synchronously enforce exact expiry with an inert scheduler', async (t) => {
+  for (const delta of [9_000, 9_001]) {
+    const c = clock()
+    const f = fixture({ clock: c })
+    await f.endpoint.bind()
+    const handle = openHandle(f.endpoint, f.linkHandle)
+    c.advance(delta)
+    expectCode(t, () => f.endpoint.openLink(f.linkHandle), 'UNAUTHORIZED')
+    const packet = b4a.alloc(1200)
+    packet[1] = 1
+    t.is(await errorCode(f.endpoint.send(handle, packet)), 'UNAUTHORIZED', `${delta}`)
+    t.is(f.adapter.sockets[0].sends.length, 0, `${delta}`)
+    await f.endpoint.close()
+    f.directory.destroy()
+  }
 })
 
 test('revoked source mapping cannot block a replacement grant for the same address', async (t) => {
@@ -708,4 +810,34 @@ test('synchronous handler-triggered close awaits its pre-registered receive owne
   await closing
   t.alike(captured, b4a.alloc(1200))
   t.is(f.adapter.sockets[0].closeCalls, 1)
+})
+
+test('a handler may directly return endpoint close without creating an ownership cycle', async (t) => {
+  for (const type of ['cell', 'bootstrap']) {
+    let endpoint
+    let captured
+    const handler = (packet) => {
+      captured = packet
+      return endpoint.close()
+    }
+    const f = fixture({
+      onBootstrap: type === 'bootstrap' ? handler : undefined,
+      onCell: type === 'cell' ? handler : undefined
+    })
+    endpoint = f.endpoint
+    await endpoint.bind()
+    openHandle(endpoint, f.linkHandle)
+    const packet = b4a.alloc(1200)
+    packet[1] = type === 'bootstrap' ? 0x80 : 1
+    f.adapter.sockets[0].emitMessage(packet, '127.0.0.12', 45112)
+    const result = await Promise.race([
+      endpoint.close().then(() => 'closed'),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 25))
+    ])
+    t.is(result, 'closed', type)
+    t.alike(captured, b4a.alloc(1200), type)
+    t.is(endpoint.queuedPackets, 0, type)
+    t.is(endpoint.inFlightSends, 0, type)
+    t.is(f.adapter.sockets[0].closeCalls, 1, type)
+  }
 })

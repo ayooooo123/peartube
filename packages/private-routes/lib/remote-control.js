@@ -956,16 +956,15 @@ function actorContext(value, expected) {
   const epoch = option(value, 'epoch')
   const direction = option(value, 'direction')
   const circuitId = option(value, 'circuitId')
-  const generation = option(value, 'generation')
   if (
     link !== expected.link ||
     epoch !== expected.epoch ||
     !knownDirection(direction) ||
     !fixed(circuitId, 16) ||
-    !u64(generation)
+    !same(circuitId, expected.circuitId)
   )
     invalid()
-  return { link, epoch, direction, circuitId: copy(circuitId), generation }
+  return { link, epoch, direction, circuitId: copy(circuitId) }
 }
 
 function sameActorContext(left, right) {
@@ -973,7 +972,6 @@ function sameActorContext(left, right) {
     left.link === right.link &&
     left.epoch === right.epoch &&
     left.direction === right.direction &&
-    left.generation === right.generation &&
     b4a.equals(left.circuitId, right.circuitId)
   )
 }
@@ -982,13 +980,21 @@ export function createRemoteActorControlBoundary(options) {
   object(options)
   const link = option(options, 'link')
   const epoch = option(options, 'epoch')
+  const circuitId = option(options, 'circuitId')
   const now = option(options, 'now')
   const schedule = option(options, 'schedule')
   const cancel = option(options, 'cancel')
-  if (!object(link) || !u64(epoch) || typeof now !== 'function') invalid()
+  if (
+    !object(link) ||
+    !u64(epoch) ||
+    !fixed(circuitId, 16) ||
+    allZero(circuitId) ||
+    typeof now !== 'function'
+  )
+    invalid()
   const mux = new RemoteControlMux()
   const fragments = new RemoteControlFragmentCodec({ now, schedule, cancel })
-  const expected = { link, epoch }
+  const expected = { link, epoch, circuitId: copy(circuitId) }
   const consumer = Object.freeze({})
   const consumerState = { link, epoch, events: new Set() }
   REMOTE_ACTOR_CONTROL_CONSUMERS.set(consumer, consumerState)
@@ -1012,6 +1018,7 @@ export function createRemoteActorControlBoundary(options) {
       }
       consumerState.events.clear()
       REMOTE_ACTOR_CONTROL_CONSUMERS.delete(consumer)
+      clear(expected.circuitId)
     }
   }
 
@@ -1077,7 +1084,6 @@ export function readAuthenticatedRemoteActorEvent(event, consumer) {
     link: state.context.link,
     epoch: state.context.epoch,
     direction: state.context.direction,
-    circuitId: state.context.circuitId,
-    generation: state.context.generation
+    circuitId: state.context.circuitId
   })
 }

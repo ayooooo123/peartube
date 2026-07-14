@@ -2,8 +2,11 @@ import test from 'brittle'
 import b4a from 'b4a'
 
 import {
+  ACTOR_CONTROL_KIND,
   BOOTSTRAP_TYPE,
   CELL_CLASS,
+  CIRCUIT_DESTROY_REASON,
+  DIRECTION,
   LINK_OPERATION,
   LinkBootstrapSession,
   LinkDirectory,
@@ -11,11 +14,16 @@ import {
   TOPOLOGY_ROLE,
   UdxCellEndpoint,
   BootstrapEnvelopeCodec,
+  ActorControlCodec,
+  RemoteActorHost,
+  RemoteControlFragmentCodec,
+  RemoteControlMux,
   createLinkSetupAuthority,
   cryptoSuite,
   signTopologyGrant
 } from '../index.js'
 import { readEstablishedLink } from '../lib/link-bootstrap-session.js'
+import { createRemoteActorControlBoundary } from '../lib/remote-control.js'
 import { FakeUdxAdapter } from './fake-udx.js'
 import { safetyRoleIdentity, seed } from './helpers.js'
 
@@ -354,6 +362,166 @@ test('async bootstrap transitions IDLE to CREATING to OPEN and installs opaque l
   f.right.directory.destroy()
   t.is(f.leftSession.state, 'TOMBSTONE')
   t.is(f.leftSession.pending, 0)
+})
+
+test('actor control authenticates the established link independently of inner route IDs', async (t) => {
+  const f = await fixture()
+  const established = await f.leftSession.open()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const link = readEstablishedLink(established)
+  t.is(b4a.equals(link.circuitId, b4a.alloc(16)), false, 'real link circuit is nonzero')
+
+  const actorId = b4a.alloc(16, 0xa1)
+  const codec = new ActorControlCodec()
+  const registration = codec.encode({
+    version: 0,
+    kind: ACTOR_CONTROL_KIND.REGISTER_STAGE,
+    flags: 0,
+    requestId: 1n,
+    actorId,
+    circuitId: b4a.alloc(16),
+    generation: 0n,
+    body: b4a.from([1])
+  })
+  const sender = new RemoteControlFragmentCodec({ now: () => 1_000 })
+  const mux = new RemoteControlMux()
+  const [frame] = sender.fragment(registration, { messageId: b4a.alloc(16, 0xa2) })
+  const payload = mux.encodeActorFragment(frame)
+
+  function hostAndBoundary() {
+    const sent = []
+    const boundary = createRemoteActorControlBoundary({
+      link: established,
+      epoch: link.epoch,
+      circuitId: link.circuitId,
+      now: () => 1_000
+    })
+    const host = new RemoteActorHost({
+      control: boundary.consumer,
+      sendControl(message) {
+        sent.push(b4a.from(message))
+        return true
+      },
+      now: () => 1_000,
+      randomBytes: sequence(1),
+      schedule() {
+        return 1
+      },
+      cancel() {}
+    })
+    return { boundary, host, sent }
+  }
+
+  const accepted = hostAndBoundary()
+  const event = accepted.boundary.pushAuthenticated(payload, {
+    link: established,
+    epoch: link.epoch,
+    direction: DIRECTION.FORWARD,
+    circuitId: link.circuitId
+  })
+  t.is(await accepted.host.receiveAuthenticated(event), true)
+  t.is(accepted.sent.length, 1)
+  accepted.host.destroy()
+  accepted.boundary.destroy()
+
+  for (const [name, kind, body] of [
+    ['activation', ACTOR_CONTROL_KIND.ACTIVATE_CREATE, b4a.alloc(1_200, 0xb1)],
+    ['destroy', ACTOR_CONTROL_KIND.CIRCUIT_DESTROY, b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])]
+  ]) {
+    const innerCircuitId = b4a.alloc(16, kind + 1)
+    t.is(b4a.equals(innerCircuitId, link.circuitId), false, `${name} uses an inner route ID`)
+    const command = codec.encode({
+      version: 0,
+      kind,
+      flags: 0,
+      requestId: BigInt(kind + 2),
+      actorId,
+      circuitId: innerCircuitId,
+      generation: 7n,
+      body
+    })
+    const frames = sender.fragment(command, { messageId: b4a.alloc(16, kind + 2) })
+    const routed = hostAndBoundary()
+    let routedEvent = null
+    for (const routedFrame of frames) {
+      const routedPayload = mux.encodeActorFragment(routedFrame)
+      routedEvent = routed.boundary.pushAuthenticated(routedPayload, {
+        link: established,
+        epoch: link.epoch,
+        direction: DIRECTION.FORWARD,
+        circuitId: link.circuitId
+      })
+      routedPayload.fill(0)
+      routedFrame.fill(0)
+    }
+    t.is(await routed.host.receiveAuthenticated(routedEvent), true, name)
+    t.is(routed.sent.length, 1, name)
+    const reply = codec.decode(routed.sent[0])
+    t.is(b4a.equals(reply.circuitId, innerCircuitId), true, `${name} reply keeps inner route`)
+    t.is(reply.generation, 7n, `${name} reply keeps inner generation`)
+    reply.actorId.fill(0)
+    reply.circuitId.fill(0)
+    reply.body.fill(0)
+    command.fill(0)
+    innerCircuitId.fill(0)
+    body.fill(0)
+    routed.host.destroy()
+    routed.boundary.destroy()
+  }
+
+  for (const [name, mutation] of [
+    ['link', { link: Object.freeze({}) }],
+    ['epoch', { epoch: link.epoch + 1n }],
+    ['direction', { direction: DIRECTION.REVERSE }],
+    ['circuit', { circuitId: b4a.alloc(16, 0xa3) }]
+  ]) {
+    const rejected = hostAndBoundary()
+    let failure = null
+    try {
+      const rejectedEvent = rejected.boundary.pushAuthenticated(payload, {
+        link: established,
+        epoch: link.epoch,
+        direction: DIRECTION.FORWARD,
+        circuitId: link.circuitId,
+        ...mutation
+      })
+      await rejected.host.receiveAuthenticated(rejectedEvent)
+    } catch (err) {
+      failure = err && err.code
+    }
+    t.is(failure, 'INVALID_ROUTE', name)
+    t.is(rejected.sent.length, 0, name)
+    rejected.host.destroy()
+    rejected.boundary.destroy()
+  }
+
+  let innerFailure = null
+  try {
+    codec.encode({
+      version: 0,
+      kind: ACTOR_CONTROL_KIND.REGISTER_STAGE,
+      flags: 0,
+      requestId: 2n,
+      actorId,
+      circuitId: b4a.alloc(16, 1),
+      generation: 1n,
+      body: b4a.from([1])
+    })
+  } catch (err) {
+    innerFailure = err && err.code
+  }
+  t.is(innerFailure, 'INVALID_ROUTE', 'inner registration remains zero/zero only')
+
+  frame.fill(0)
+  payload.fill(0)
+  registration.fill(0)
+  sender.destroy()
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
 })
 
 test('endpoint close tombstones tracked OPEN session and revokes established authority', async (t) => {

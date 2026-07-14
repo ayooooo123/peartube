@@ -291,12 +291,7 @@ export class RemoteActorHost {
       const expectedDirection = REQUEST_KINDS.has(decoded.kind)
         ? DIRECTION.FORWARD
         : DIRECTION.REVERSE
-      if (
-        authenticated.direction !== expectedDirection ||
-        authenticated.generation !== decoded.generation ||
-        !same(authenticated.circuitId, decoded.circuitId)
-      )
-        invalid()
+      if (authenticated.direction !== expectedDirection) invalid()
       if (REQUEST_KINDS.has(decoded.kind)) return this.#receiveRequest(message, decoded)
       if (REPLY_KINDS.has(decoded.kind)) return this.#receiveReply(message, decoded)
       invalid()

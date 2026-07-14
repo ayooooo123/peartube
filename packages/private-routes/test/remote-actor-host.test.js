@@ -51,31 +51,29 @@ const TEST_ACTIVATION_CONTEXTS = new WeakMap()
 class RemoteActorHost extends PublicRemoteActorHost {
   #boundary
   #link
+  #outerCircuitId
   #messageId = 1
   #mux = new RemoteControlMux()
   #sender
 
   constructor(options) {
     const link = Object.freeze({})
+    const outerCircuitId = b4a.alloc(16, 0x7e)
     const boundary = createRemoteActorControlBoundary({
       link,
       epoch: 1n,
+      circuitId: outerCircuitId,
       now: options.now
     })
     super({ ...options, control: boundary.consumer })
     this.#boundary = boundary
     this.#link = link
+    this.#outerCircuitId = outerCircuitId
     this.#sender = new RemoteControlFragmentCodec({ now: options.now })
   }
 
   authenticate(message, overrides = {}) {
     const kind = message.byteLength > 1 ? message[1] : 0xff
-    const circuitId = message.byteLength >= 44 ? b4a.from(message.subarray(28, 44)) : b4a.alloc(16)
-    let generation = 0n
-    if (message.byteLength >= 52) {
-      for (let index = 44; index < 52; index++)
-        generation = (generation << 8n) | BigInt(message[index])
-    }
     const context = {
       link: overrides.link || this.link,
       epoch: overrides.epoch === undefined ? 1n : overrides.epoch,
@@ -85,8 +83,7 @@ class RemoteActorHost extends PublicRemoteActorHost {
             ? DIRECTION.FORWARD
             : DIRECTION.REVERSE
           : overrides.direction,
-      circuitId: overrides.circuitId || circuitId,
-      generation: overrides.generation === undefined ? generation : overrides.generation
+      circuitId: overrides.circuitId || this.#outerCircuitId
     }
     const messageId = b4a.alloc(16)
     let id = this.#messageId++
@@ -133,8 +130,7 @@ class RemoteActorHost extends PublicRemoteActorHost {
       link: this.#link,
       epoch: 1n,
       direction: DIRECTION.FORWARD,
-      circuitId: b4a.alloc(16),
-      generation: 0n
+      circuitId: this.#outerCircuitId
     })
   }
 
@@ -1618,7 +1614,7 @@ test('raw ActorControl bytes are not an authenticated host capability', async (t
   destroyPrivateDestinationActor(actor)
 })
 
-test('authenticated actor context pins link epoch direction circuit and generation', async (t) => {
+test('authenticated actor context pins established link epoch direction and circuit', async (t) => {
   const actorId = bytes(16, 0x98)
   const circuitId = bytes(16, 0x99)
   const raw = new ActorControlCodec().encode({
@@ -1635,8 +1631,7 @@ test('authenticated actor context pins link epoch direction circuit and generati
     ['link', { link: Object.freeze({}) }],
     ['epoch', { epoch: 2n }],
     ['direction', { direction: DIRECTION.REVERSE }],
-    ['circuit', { circuitId: bytes(16, 0x9a) }],
-    ['generation', { generation: 5n }]
+    ['circuit', { circuitId: bytes(16, 0x9a) }]
   ]) {
     const sent = []
     const host = new RemoteActorHost({

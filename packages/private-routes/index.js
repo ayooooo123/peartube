@@ -51,6 +51,12 @@ export {
   isSafetyRouteChecker
 } from './lib/circuit-authority.js'
 export { createLinkSetupAuthority, isLinkTicketChecker } from './lib/link-setup.js'
+export { LinkBootstrapSession } from './lib/link-bootstrap-session.js'
+export {
+  DEFAULT_MAX_UDX_QUEUED_BYTES,
+  DEFAULT_MAX_UDX_QUEUED_PACKETS,
+  UdxCellEndpoint
+} from './lib/udx-cell-endpoint.js'
 export {
   BOOTSTRAP_CLASS,
   BOOTSTRAP_DEADLINE,

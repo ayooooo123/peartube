@@ -8,7 +8,13 @@ import {
   decodeLinkCreate,
   decodeLinkCreated
 } from './link-setup.js'
-import { BOOTSTRAP_REJECT_CODE, BOOTSTRAP_TYPE, DOMAIN, PROTOCOL_VERSION } from './protocol.js'
+import {
+  BOOTSTRAP_REJECT_CODE,
+  BOOTSTRAP_TYPE,
+  DOMAIN,
+  LINK_OPERATION,
+  PROTOCOL_VERSION
+} from './protocol.js'
 import { readLinkHandle } from './topology-grant.js'
 
 export const BOOTSTRAP_SIZE = 1200
@@ -29,6 +35,7 @@ const MAX_U64 = 0xffff_ffff_ffff_ffffn
 const ZERO_DIGEST = b4a.alloc(32)
 const CODECS = new WeakMap()
 const TABLES = new WeakMap()
+const VERIFIED_ENVELOPES = new WeakMap()
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferSet = Uint8Array.prototype.set
@@ -109,6 +116,10 @@ function same(left, right) {
   }
 }
 
+function sameAddress(left, right) {
+  return left.family === right.family && left.host === right.host && left.port === right.port
+}
+
 function u64(value, nonzero = false) {
   return typeof value === 'bigint' && value >= (nonzero ? 1n : 0n) && value <= MAX_U64
 }
@@ -128,6 +139,17 @@ function knownRejectCode(value) {
     value === BOOTSTRAP_REJECT_CODE.CIRCUIT_LIMIT ||
     value === BOOTSTRAP_REJECT_CODE.ROUTE_UNAVAILABLE
   )
+}
+
+function operationFor(type, sender) {
+  const initiatorMessage =
+    type === BOOTSTRAP_TYPE.LINK_CREATE || type === BOOTSTRAP_TYPE.LINK_CANCEL
+  if (sender) return initiatorMessage ? LINK_OPERATION.INITIATE : LINK_OPERATION.ACCEPT
+  return initiatorMessage ? LINK_OPERATION.ACCEPT : LINK_OPERATION.INITIATE
+}
+
+function requireOperation(operations, operation) {
+  if ((operations & operation) !== operation) unauthorized()
 }
 
 function writeU16(buffer, value, offset) {
@@ -251,7 +273,14 @@ function validateRejectedBody(body) {
   if (body[0] !== BOOTSTRAP_TYPE.LINK_CREATE) invalidRoute()
 }
 
-function parsePacket(state, packet, source, expectedSender = null, validateAddress = true) {
+function parsePacket(
+  state,
+  packet,
+  source,
+  expectedSender = null,
+  validateAddress = true,
+  validateOperation = true
+) {
   if (!fixed(packet, BOOTSTRAP_SIZE)) invalidRoute()
   if (
     packet[0] !== PROTOCOL_VERSION ||
@@ -282,6 +311,8 @@ function parsePacket(state, packet, source, expectedSender = null, validateAddre
   const unsigned = bufferSubarray.call(packet, 0, 1136)
   const signature = bufferSubarray.call(packet, 1136, 1200)
   const sender = expectedSender || state.link.peerIdentity32
+
+  if (validateOperation) requireOperation(state.link.operations, operationFor(type, false))
 
   if (
     !same(senderIdentity32, sender) ||
@@ -323,7 +354,7 @@ function parsePacket(state, packet, source, expectedSender = null, validateAddre
     }
   }
 
-  return {
+  const decoded = {
     type,
     requestId,
     epoch,
@@ -334,6 +365,18 @@ function parsePacket(state, packet, source, expectedSender = null, validateAddre
     body: copy(bodyView),
     packetDigest32: safeHash(state.crypto, packet)
   }
+  VERIFIED_ENVELOPES.set(decoded, {
+    type,
+    requestId,
+    epoch,
+    senderIdentity32: copy(senderIdentity32),
+    recipientIdentity32: copy(recipientIdentity32),
+    grantDigest32: copy(grantDigest32),
+    requestDigest32: copy(requestDigest32),
+    body: copy(bodyView),
+    packetDigest32: copy(decoded.packetDigest32)
+  })
+  return Object.freeze(decoded)
 }
 
 function validateOriginalRequest(state, packet, localSender) {
@@ -346,7 +389,7 @@ function validateOriginalRequest(state, packet, localSender) {
       peerIdentity32: sender
     }
   }
-  const decoded = parsePacket(temporary, packet, null, sender, false)
+  const decoded = parsePacket(temporary, packet, null, sender, false, false)
   if (decoded.type !== BOOTSTRAP_TYPE.LINK_CREATE) invalidRoute()
   return decoded
 }
@@ -388,6 +431,7 @@ export class BootstrapEnvelopeCodec {
     CODECS.set(this, {
       crypto,
       link,
+      linkHandle,
       localIdentitySecretKey: copy(localIdentitySecretKey),
       padding,
       destroyed: false
@@ -397,11 +441,13 @@ export class BootstrapEnvelopeCodec {
   encode(value) {
     const state = CODECS.get(this)
     if (state.destroyed) circuitState()
+    requireLiveLink(state)
     if (!safeObject(value)) invalidRoute()
     const type = option(value, 'type')
     const requestId = option(value, 'requestId')
     const epoch = option(value, 'epoch')
     if (!knownType(type) || !u64(requestId, true) || epoch !== state.link.epoch) invalidRoute()
+    requireOperation(state.link.operations, operationFor(type, true))
 
     let body = null
     let requestDigest32 = null
@@ -498,6 +544,7 @@ export class BootstrapEnvelopeCodec {
   decode(packet, source) {
     const state = CODECS.get(this)
     if (state.destroyed) circuitState()
+    requireLiveLink(state)
     try {
       return parsePacket(state, packet, source)
     } catch (err) {
@@ -524,9 +571,33 @@ export class BootstrapEnvelopeCodec {
     clear(state.link.digest32)
     clear(state.link.runId32)
     state.localIdentitySecretKey = null
+    state.linkHandle = null
     state.crypto = null
     state.padding = null
     state.link = null
+  }
+}
+
+function requireLiveLink(state) {
+  let live
+  try {
+    live = readLinkHandle(state.linkHandle)
+  } catch {
+    unauthorized()
+  }
+  if (
+    !same(live.digest32, state.link.digest32) ||
+    !same(live.localIdentity32, state.link.localIdentity32) ||
+    live.localRole !== state.link.localRole ||
+    !sameAddress(live.localAddress, state.link.localAddress) ||
+    !same(live.peerIdentity32, state.link.peerIdentity32) ||
+    live.peerRole !== state.link.peerRole ||
+    !sameAddress(live.peerAddress, state.link.peerAddress) ||
+    live.epoch !== state.link.epoch ||
+    !same(live.runId32, state.link.runId32) ||
+    live.operations !== state.link.operations
+  ) {
+    unauthorized()
   }
 }
 
@@ -598,18 +669,18 @@ function removeRecord(state, collection, key) {
   const record = collection.get(key)
   if (!record) return null
   collection.delete(key)
-  cancelTableTimer(state, `${collection === state.pending ? 'p' : 'c'}:${key}`)
+  if (collection === state.pending) state.tokens.delete(record.token)
+  try {
+    cancelTableTimer(state, `${collection === state.pending ? 'p' : 'c'}:${key}`)
+  } catch (err) {
+    clearRecord(record)
+    throw err
+  }
   return record
 }
 
 function addTombstone(state, key, record) {
-  while (state.tombstones.size >= state.maxTombstones) {
-    const oldest = state.tombstones.keys().next().value
-    const removed = state.tombstones.get(oldest)
-    state.tombstones.delete(oldest)
-    cancelTableTimer(state, `t:${oldest}`)
-    clearRecord(removed)
-  }
+  if (state.tombstones.size >= state.maxTombstones) circuitLimit()
   const tombstone = {
     peerIdentity32: copy(record.peerIdentity32),
     epoch: record.epoch,
@@ -642,7 +713,10 @@ function scheduleRecord(state, collection, prefix, key, record) {
   try {
     timer = state.schedule(() => {
       state.timers.delete(`${prefix}:${key}`)
-      if (!collection.has(key)) return
+      if (!collection.has(key)) {
+        clearRecord(record)
+        return
+      }
       collection.delete(key)
       if (collection === state.pending) {
         state.tokens.delete(record.token)
@@ -661,6 +735,12 @@ function scheduleRecord(state, collection, prefix, key, record) {
 
 function ensureTableOpen(state) {
   if (state.destroyed) circuitState()
+}
+
+function ensureTombstoneReservation(state) {
+  if (state.pending.size + state.cache.size + state.tombstones.size >= state.maxTombstones) {
+    circuitLimit()
+  }
 }
 
 function tableTime(state) {
@@ -697,34 +777,9 @@ function randomRequestId(state, peerIdentity32, epoch) {
 }
 
 function validateDecoded(value) {
-  if (!safeObject(value)) invalidRoute()
-  const type = option(value, 'type')
-  const requestId = option(value, 'requestId')
-  const epoch = option(value, 'epoch')
-  const senderIdentity32 = option(value, 'senderIdentity32')
-  const recipientIdentity32 = option(value, 'recipientIdentity32')
-  const requestDigest32 = option(value, 'requestDigest32')
-  const packetDigest32 = option(value, 'packetDigest32')
-  if (
-    !knownType(type) ||
-    !u64(requestId, true) ||
-    !u64(epoch) ||
-    !fixed(senderIdentity32, 32) ||
-    !fixed(recipientIdentity32, 32) ||
-    !fixed(requestDigest32, 32) ||
-    !fixed(packetDigest32, 32)
-  ) {
-    invalidRoute()
-  }
-  return {
-    type,
-    requestId,
-    epoch,
-    senderIdentity32,
-    recipientIdentity32,
-    requestDigest32,
-    packetDigest32
-  }
+  const decoded = safeObject(value) ? VERIFIED_ENVELOPES.get(value) : null
+  if (!decoded) unauthorized()
+  return decoded
 }
 
 export class BootstrapRequestTable {
@@ -793,6 +848,7 @@ export class BootstrapRequestTable {
       invalidRoute()
     }
     if (state.pending.size >= state.maxPending) circuitLimit()
+    ensureTombstoneReservation(state)
     const peer = peerKey(peerIdentity32, epoch)
     let peerCount = 0
     for (const record of state.pending.values()) if (record.peerKey === peer) peerCount++
@@ -950,6 +1006,12 @@ export class BootstrapRequestTable {
     if (state.cache.size >= state.maxCache) {
       clear(digest32)
       circuitLimit()
+    }
+    try {
+      ensureTombstoneReservation(state)
+    } catch (err) {
+      clear(digest32)
+      throw err
     }
 
     let result

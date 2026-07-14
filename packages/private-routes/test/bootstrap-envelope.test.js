@@ -791,3 +791,122 @@ test('monotonic deadlines reject late responses even when a scheduler never fire
   t.is(callbacks, 0)
   table.destroy()
 })
+
+test('bootstrap direction is constrained by the opaque bilateral grant operation', (t) => {
+  const f = fixture()
+  expectCode(
+    t,
+    () =>
+      f.rightCodec.encode({
+        type: BOOTSTRAP_TYPE.LINK_CREATE,
+        requestId: 1n,
+        epoch: 7n,
+        body: f.started.message,
+        requestDigest32: ZERO_DIGEST
+      }),
+    'UNAUTHORIZED'
+  )
+
+  const request = encodeCreate(f)
+  const response = encodeCreated(f, request)
+  t.ok(f.rightCodec.decode(request, f.leftSource))
+  t.ok(f.leftCodec.decode(response, f.rightSource))
+})
+
+test('live tombstones reserve capacity and are never evicted before 5,000ms', (t) => {
+  const f = fixture()
+  const { table, clock } = tableFixture({
+    maxPending: 2,
+    maxPendingPerPeer: 2,
+    maxCache: 1,
+    maxTombstones: 1
+  })
+  const begin = () =>
+    table.begin({
+      peerIdentity32: f.responder.publicKey,
+      epoch: 7n,
+      encode: (requestId) => encodeCreate(f, { requestId }),
+      onResponse() {}
+    })
+
+  const first = begin()
+  expectCode(t, () => begin(), 'CIRCUIT_LIMIT')
+  t.is(table.cancel(first.token), true)
+  expectCode(t, () => begin(), 'CIRCUIT_LIMIT')
+  clock.advance(4_999)
+  expectCode(t, () => begin(), 'CIRCUIT_LIMIT')
+  clock.advance(1)
+  const afterExpiry = begin()
+  t.ok(afterExpiry)
+  table.destroy()
+})
+
+test('request table accepts only opaque codec-verified provenance, never caller-shaped clones', (t) => {
+  const f = fixture()
+  const { table } = tableFixture()
+  let callbacks = 0
+  const pending = table.begin({
+    peerIdentity32: f.responder.publicKey,
+    epoch: 7n,
+    encode: (requestId) => encodeCreate(f, { requestId }),
+    onResponse() {
+      callbacks++
+    }
+  })
+  const response = f.rightCodec.encode({
+    type: BOOTSTRAP_TYPE.LINK_CREATED,
+    requestId: pending.requestId,
+    epoch: 7n,
+    body: f.accepted.message,
+    requestPacket: pending.packet
+  })
+  const verified = f.leftCodec.decode(response, f.rightSource)
+  const forged = { ...verified }
+
+  expectCode(t, () => table.acceptResponse(f.responder.publicKey, forged, response), 'UNAUTHORIZED')
+  t.is(callbacks, 0)
+  t.is(table.acceptResponse(f.responder.publicKey, verified, response), true)
+  t.is(callbacks, 1)
+  table.destroy()
+})
+
+test('cancel exceptions remove token authority and clear late timer callbacks', (t) => {
+  const f = fixture()
+  const callbacks = []
+  const scheduled = []
+  const table = new BootstrapRequestTable({
+    crypto: cryptoSuite,
+    now: () => 1_000,
+    schedule(callback) {
+      scheduled.push(callback)
+      return callback
+    },
+    cancel() {
+      throw new Error('injected cancel failure')
+    },
+    randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 4])
+  })
+  const pending = table.begin({
+    peerIdentity32: f.responder.publicKey,
+    epoch: 7n,
+    encode: (requestId) => encodeCreate(f, { requestId }),
+    onResponse() {
+      callbacks.push('response')
+    }
+  })
+  expectCode(t, () => table.cancel(pending.token), 'ROUTE_UNAVAILABLE')
+  t.is(table.cancel(pending.token), false)
+  for (const callback of scheduled) callback()
+  t.alike(callbacks, [])
+  table.destroy()
+})
+
+test('codec cannot outlive revocation of its opaque LinkDirectory capability', (t) => {
+  const f = fixture()
+  const packet = encodeCreate(f)
+  f.left.value.revoke({ digest32: f.left.digest32, epoch: 7n, runId32: seed(205) })
+
+  expectCode(t, () => encodeCreate(f), 'UNAUTHORIZED')
+  t.is(f.leftCodec.receive(packet, f.rightSource), null)
+  f.leftCodec.destroy()
+})

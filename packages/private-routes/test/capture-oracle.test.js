@@ -121,6 +121,17 @@ function ethernet(network, etherType, vlan = null) {
   return result
 }
 
+function linuxCookedV2(network, protocol) {
+  const result = b4a.alloc(20 + network.byteLength)
+  result.writeUInt16BE(protocol, 0)
+  result.writeUInt32BE(2, 4)
+  result.writeUInt16BE(1, 8)
+  result[11] = 6
+  b4a.alloc(6, 0x22).copy(result, 12)
+  network.copy(result, 20)
+  return result
+}
+
 function record(bytes, timestampNs, originalLength = bytes.byteLength) {
   return { bytes, timestampNs, originalLength }
 }
@@ -356,6 +367,28 @@ test('classic PCAP parser handles byte order, VLAN, IPv4, IPv6, and transports',
   )
   t.is(big.records[0].ip.source, 'fd00::2')
   t.is(big.records[0].ip.destination, 'fd00::3')
+})
+
+test('classic PCAP parser handles Linux SLL2 records from the any interface', (t) => {
+  const packet = routePacket('source', 'safety-guard')
+  const capture = parsePcap(
+    pcap([record(linuxCookedV2(packet.bytes.subarray(14), 0x0800), packet.timestampNs)], {
+      linkType: 276
+    })
+  )
+  t.is(capture.linkType, 276)
+  t.is(capture.records.length, 1)
+  t.alike(capture.records[0].linuxCooked, { protocol: 0x0800, interfaceIndex: 2 })
+  t.alike(capture.records[0].ip, {
+    version: 4,
+    source: '10.77.0.2',
+    destination: '10.77.0.3',
+    protocol: 'udp',
+    protocolNumber: 17,
+    sourcePort: 48_100,
+    destinationPort: 48_101,
+    payloadLength: 1_200
+  })
 })
 
 test('classic PCAP parser rejects unknown links, truncation, fragments, and malformed lengths', (t) => {

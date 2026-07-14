@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 
 const LINKTYPE_ETHERNET = 1
+const LINKTYPE_LINUX_SLL2 = 276
 const ETHER_TYPE_IPV4 = 0x0800
 const ETHER_TYPE_IPV6 = 0x86dd
 const VLAN_TYPES = new Set([0x8100, 0x88a8])
@@ -173,6 +174,17 @@ function parseEthernet(buffer) {
   return { ethernet: { etherType, vlanTags }, ...network }
 }
 
+function parseLinuxCookedV2(buffer) {
+  if (buffer.byteLength < 20) malformed('truncated Linux SLL2 header')
+  const protocol = buffer.readUInt16BE(0)
+  const interfaceIndex = buffer.readUInt32BE(4)
+  if (buffer[11] > 8) malformed('invalid Linux SLL2 address length')
+  let network = { ip: null, transportPayload: null }
+  if (protocol === ETHER_TYPE_IPV4) network = parseIpv4(buffer.subarray(20))
+  else if (protocol === ETHER_TYPE_IPV6) network = parseIpv6(buffer.subarray(20))
+  return { linuxCooked: { protocol, interfaceIndex }, ...network }
+}
+
 export function parsePcap(buffer) {
   if (!b4a.isBuffer(buffer)) malformed('capture must be a buffer')
   if (buffer.byteLength < 24) malformed('truncated global header')
@@ -183,7 +195,9 @@ export function parsePcap(buffer) {
   const snaplen = readUInt32(buffer, 16, byteOrder)
   if (snaplen === 0) malformed('invalid snap length')
   const linkType = readUInt32(buffer, 20, byteOrder)
-  if (linkType !== LINKTYPE_ETHERNET) malformed('unsupported link type')
+  if (linkType !== LINKTYPE_ETHERNET && linkType !== LINKTYPE_LINUX_SLL2) {
+    malformed('unsupported link type')
+  }
   const records = []
   let offset = 24
   while (offset < buffer.byteLength) {
@@ -200,7 +214,7 @@ export function parsePcap(buffer) {
     offset += 16
     if (buffer.byteLength - offset < capturedLength) malformed('truncated record payload')
     const bytes = buffer.subarray(offset, offset + capturedLength)
-    const parsed = parseEthernet(bytes)
+    const parsed = linkType === LINKTYPE_ETHERNET ? parseEthernet(bytes) : parseLinuxCookedV2(bytes)
     const multiplier = timestampResolution === 'microseconds' ? 1_000n : 1n
     records.push({
       index: records.length,

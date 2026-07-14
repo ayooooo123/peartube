@@ -27,10 +27,21 @@ class FakeChild extends EventEmitter {
   }
 }
 
-test('tcpdump launch captures all bridge IPv4 and IPv6 without a shell', (t) => {
-  t.alike(tcpdumpLaunch('pbabc123', '/tmp/private-route.pcap'), {
+test('tcpdump launch captures synthetic ingress across every namespace veth', (t) => {
+  t.alike(tcpdumpLaunch('10.203.77.0/24', '/tmp/private-route.pcap'), {
     command: 'tcpdump',
-    args: ['-U', '-s', '0', '-w', '/tmp/private-route.pcap', '-i', 'pbabc123', 'ip or ip6']
+    args: [
+      '-U',
+      '-Q',
+      'in',
+      '-s',
+      '0',
+      '-w',
+      '/tmp/private-route.pcap',
+      '-i',
+      'any',
+      'ip and net 10.203.77.0/24'
+    ]
   })
 })
 
@@ -38,7 +49,7 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
   const child = new FakeChild()
   const launches = []
   const capture = createTcpdumpCapture({
-    bridge: 'pbabc123',
+    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess(command, args, options) {
       launches.push({ command, args, options })
@@ -50,12 +61,23 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
     deadline: 100
   })
   const starting = capture.start()
-  child.stderr.emit('data', 'tcpdump: listening on pbabc123, link-type EN10MB\n')
+  child.stderr.emit('data', 'tcpdump: listening on any, link-type LINUX_SLL2\n')
   t.is(await starting, true)
   t.alike(launches, [
     {
       command: 'tcpdump',
-      args: ['-U', '-s', '0', '-w', '/tmp/private-route.pcap', '-i', 'pbabc123', 'ip or ip6'],
+      args: [
+        '-U',
+        '-Q',
+        'in',
+        '-s',
+        '0',
+        '-w',
+        '/tmp/private-route.pcap',
+        '-i',
+        'any',
+        'ip and net 10.203.77.0/24'
+      ],
       options: { stdio: ['ignore', 'ignore', 'pipe'] }
     }
   ])
@@ -67,7 +89,7 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
 test('tcpdump capture fails bounded on missing readiness or header', async (t) => {
   const silent = new FakeChild()
   const missingReady = createTcpdumpCapture({
-    bridge: 'pbabc123',
+    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => silent,
     statFile: async () => ({ size: 24 }),
@@ -78,14 +100,14 @@ test('tcpdump capture fails bounded on missing readiness or header', async (t) =
 
   const noHeader = new FakeChild()
   const missingHeader = createTcpdumpCapture({
-    bridge: 'pbabc123',
+    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => noHeader,
     statFile: async () => ({ size: 0 }),
     deadline: 20
   })
   const starting = missingHeader.start()
-  noHeader.stderr.emit('data', 'listening on pbabc123\n')
+  noHeader.stderr.emit('data', 'listening on any\n')
   await t.exception(starting, /PCAP header deadline/)
   t.alike(noHeader.kills, ['SIGINT'])
 })
@@ -93,7 +115,7 @@ test('tcpdump capture fails bounded on missing readiness or header', async (t) =
 test('tcpdump capture rejects an early process exit', async (t) => {
   const child = new FakeChild({ closeOnKill: false })
   const capture = createTcpdumpCapture({
-    bridge: 'pbabc123',
+    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => child,
     statFile: async () => ({ size: 24 }),
@@ -138,7 +160,7 @@ test('negative-control calibration owns a separate capture and removes it only a
       payload,
       capturePath: '/tmp/preflight.pcap',
       createCapture(options) {
-        t.alike(options, { bridge: 'pbabc123', path: '/tmp/preflight.pcap' })
+        t.alike(options, { network: '10.203.77.0/24', path: '/tmp/preflight.pcap' })
         return {
           async start() {
             sequence.push('capture-start')

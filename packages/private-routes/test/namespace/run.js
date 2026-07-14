@@ -28,10 +28,15 @@ function invalid(message = 'invalid namespace capture') {
   throw new Error(message)
 }
 
-export function tcpdumpLaunch(bridge, path) {
+export function tcpdumpLaunch(network, path) {
   if (
-    typeof bridge !== 'string' ||
-    !/^[a-zA-Z0-9_.-]{1,15}$/.test(bridge) ||
+    typeof network !== 'string' ||
+    !/^\d{1,3}(?:\.\d{1,3}){3}\/24$/.test(network) ||
+    network
+      .slice(0, -3)
+      .split('.')
+      .some((part) => Number(part) > 255) ||
+    !network.endsWith('.0/24') ||
     typeof path !== 'string' ||
     path.length === 0
   ) {
@@ -39,7 +44,18 @@ export function tcpdumpLaunch(bridge, path) {
   }
   return Object.freeze({
     command: 'tcpdump',
-    args: Object.freeze(['-U', '-s', '0', '-w', path, '-i', bridge, 'ip or ip6'])
+    args: Object.freeze([
+      '-U',
+      '-Q',
+      'in',
+      '-s',
+      '0',
+      '-w',
+      path,
+      '-i',
+      'any',
+      `ip and net ${network}`
+    ])
   })
 }
 
@@ -83,7 +99,7 @@ export function createNamespaceFixture(layout, negativeControlPayload, now) {
 
 export function createTcpdumpCapture(options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) invalid()
-  const launch = tcpdumpLaunch(options.bridge, options.path)
+  const launch = tcpdumpLaunch(options.network, options.path)
   const spawnProcess = options.spawnProcess || spawn
   const statFile = options.statFile || stat
   const schedule = options.schedule || setTimeout
@@ -417,7 +433,7 @@ export async function calibrateNegativeControl(options = {}) {
   const source = member(layout, 'source')
   const decoy = member(layout, 'decoy')
   const capture = createCapture({
-    bridge: layout.bridge.name,
+    network: `${layout.subnet}.0/24`,
     path: options.capturePath
   })
   if (!capture || typeof capture.start !== 'function' || typeof capture.stop !== 'function') {
@@ -611,7 +627,7 @@ export async function runNamespaceGate(options = {}) {
     })
 
     capture = createTcpdumpCapture({
-      bridge: layout.bridge.name,
+      network: `${layout.subnet}.0/24`,
       path: capturePath
     })
     await capture.start()

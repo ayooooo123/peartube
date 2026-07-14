@@ -58,7 +58,9 @@ function waitFor(record, event, timeout) {
 function emit(record, value) {
   record.events.push(value)
   if (value.event === 'error') {
-    record.failure = new Error(`process error: ${record.role}:${value.code}`)
+    record.failure = new Error(
+      `process error: ${record.role}:${value.state}:${value.phase}:${value.code}`
+    )
     for (const waiter of Array.from(record.waiters)) waiter.reject(record.failure)
     return
   }

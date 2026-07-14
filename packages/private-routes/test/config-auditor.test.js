@@ -86,6 +86,27 @@ test('auditor locks event schemas and rejects address-bearing output', (t) => {
     codecVectors: createProcessCodecVectors()
   }
   t.is(auditor.auditEvent(role, configured), true)
+  t.is(
+    auditor.auditEvent(role, {
+      event: 'error',
+      role,
+      state: 'OPEN',
+      phase: 'source-register',
+      code: 'ROUTE_UNAVAILABLE'
+    }),
+    true
+  )
+  t.ok(
+    fails(() =>
+      auditor.auditEvent(role, {
+        event: 'error',
+        role,
+        state: 'OPEN',
+        phase: '10.203.77.3',
+        code: 'ROUTE_UNAVAILABLE'
+      })
+    )
+  )
   const leaked = { ...configured, address: projection.bind.host }
   t.ok(fails(() => auditor.auditEvent(role, leaked)))
   t.is(auditor.auditDiagnostic(role, { role, code: 'ROUTE_UNAVAILABLE' }), true)

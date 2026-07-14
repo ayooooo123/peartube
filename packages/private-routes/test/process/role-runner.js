@@ -36,6 +36,8 @@ import {
   encodeControlFrame
 } from './control-channel.js'
 
+const REGISTRATION_ATTEMPT_TIMEOUT = 1_000
+
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
 }
@@ -157,6 +159,7 @@ export function createRoleRunner(options = {}) {
   let codecVectors = null
   let negativeControl = null
   let armedRevocation = null
+  let phase = 'configured'
   const armedFaults = new Set()
   const endpointLimits = Object.freeze({
     get maxQueuedPackets() {
@@ -263,6 +266,7 @@ export function createRoleRunner(options = {}) {
   }
 
   const registerPrivateActor = () => {
+    phase = 'private-register'
     const nextRole =
       projection.role === 'private-entry'
         ? 'private-middle'
@@ -308,6 +312,7 @@ export function createRoleRunner(options = {}) {
   }
 
   const registerDestinationActor = async () => {
+    phase = 'destination-register'
     const route = projection.route
     if (!object(route)) invalid()
     let resolveCreated
@@ -338,9 +343,11 @@ export function createRoleRunner(options = {}) {
     })
     destroyActor = destroyPrivateDestinationActor
     node[LIVE_ROUTE_REGISTER_ACTOR](route.actorId, actor)
+    phase = 'destination-receive'
     const duplex = await created
     const value = routeTraffic()
     await receiveTraffic(duplex, value)
+    phase = 'destination-send'
     await sendTraffic(duplex, value)
     return 'traffic-exchanged'
   }
@@ -349,8 +356,10 @@ export function createRoleRunner(options = {}) {
     const route = projection.route
     if (!object(route)) return 'transport-open'
     const deadline = Number(adapters.now()) + 5_000
+    phase = 'source-register'
     let control = null
     let registered = null
+    const registrationTimeout = armedFaults.size === 0 ? REGISTRATION_ATTEMPT_TIMEOUT : undefined
     for (;;) {
       control = node[LIVE_ROUTE_CREATE_CONTROL](route.entryActorId)
       try {
@@ -359,6 +368,7 @@ export function createRoleRunner(options = {}) {
           prepare: route.prepareCapsule,
           finalize: route.finalizeCapsule,
           abort: route.abortCapsule,
+          timeout: registrationTimeout,
           registrationVerifier: createRemoteRegistrationVerifier({
             request: route.registrationCapsule,
             registrations: route.registrations
@@ -376,6 +386,7 @@ export function createRoleRunner(options = {}) {
       }
     }
     const activation = route.activation
+    phase = 'source-activate'
     const proof = await control.activate({
       body: activation.body,
       circuitId: activation.circuitId,
@@ -399,7 +410,9 @@ export function createRoleRunner(options = {}) {
     proof.fill(0)
     const duplex = node[LIVE_ROUTE_ACTIVATE_ENDPOINT]()
     const value = routeTraffic()
+    phase = 'source-send'
     await sendTraffic(duplex, value)
+    phase = 'source-receive'
     await receiveTraffic(duplex, value)
     return 'created-and-traffic-verified'
   }
@@ -463,7 +476,9 @@ export function createRoleRunner(options = {}) {
         })
         return true
       case CONTROL_COMMAND.START:
+        phase = 'transport-start'
         await node.start()
+        phase = 'transport-connect'
         await node.connect()
         if (armedRevocation) {
           const digest32 = armedRevocation
@@ -560,7 +575,8 @@ export function createRoleRunner(options = {}) {
       event: CONTROL_EVENT.ERROR,
       role: projection.role,
       state: node ? node.snapshot().state : 'NEW',
-      code: errorCode(error)
+      code: errorCode(error),
+      phase
     })
     return true
   }

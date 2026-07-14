@@ -476,6 +476,39 @@ test('async registration follows the exact linear state table', async (t) => {
   })
 })
 
+test('registration can use a bounded retry-attempt deadline', async (t) => {
+  const peer = remote()
+  const session = new AsyncRouteControlSession({
+    remote: peer,
+    actorId: bytes(16, 1),
+    now: () => 1_000
+  })
+  const registered = await session.register({
+    stage: bytes(64, 2),
+    prepare: bytes(64, 3),
+    finalize: bytes(64, 4),
+    abort: bytes(64, 5),
+    timeout: 1_000
+  })
+  registered.acknowledgements.fill(0)
+  t.alike(
+    peer.calls.map((call) => call.options.deadline),
+    [2_000, 2_000, 2_000]
+  )
+  t.is(session.registrationState, ASYNC_REGISTRATION_STATE.FINALIZED)
+})
+
+test('registration retry-attempt deadline cannot widen the session bound', async (t) => {
+  for (const timeout of [0, 5_001, 1.5]) {
+    const session = new AsyncRouteControlSession({
+      remote: remote(),
+      actorId: bytes(16, 1),
+      now: () => 1_000
+    })
+    t.is(await rejectionCode(session.register({ ...registration(), timeout })), 'INVALID_ROUTE')
+  }
+})
+
 test('plain request-shaped objects are not an authenticated remote boundary', (t) => {
   let failure = null
   try {

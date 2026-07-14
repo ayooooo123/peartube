@@ -20,6 +20,19 @@ const SNAPSHOT_STATES = new Set([
   'CLOSING',
   'CLOSED'
 ])
+const ERROR_PHASES = new Set([
+  'configured',
+  'transport-start',
+  'transport-connect',
+  'private-register',
+  'destination-register',
+  'destination-receive',
+  'destination-send',
+  'source-register',
+  'source-activate',
+  'source-send',
+  'source-receive'
+])
 
 function invalid(message = 'configuration audit failed') {
   throw new Error(message)
@@ -256,8 +269,13 @@ export function createConfigurationAuditor(fixture) {
         }
         break
       case CONTROL_EVENT.ERROR:
-        exactKeys(record, ['event', 'role', 'state', 'code'])
-        if (!SNAPSHOT_STATES.has(record.state) || !ERROR_CODES.includes(record.code)) invalid()
+        exactKeys(record, ['event', 'role', 'state', 'code', 'phase'])
+        if (
+          !SNAPSHOT_STATES.has(record.state) ||
+          !ERROR_CODES.includes(record.code) ||
+          !ERROR_PHASES.has(record.phase)
+        )
+          invalid()
         break
       default:
         invalid()

@@ -209,7 +209,9 @@ export class AsyncRouteControlSession {
       abort = body(options.abort)
       registrationVerifier = options.registrationVerifier
       if (!this.#testRemote && !isRemoteRegistrationVerifier(registrationVerifier)) invalid()
-      context = this.#begin(options.signal)
+      const timeout = options.timeout === undefined ? this.#timeout : options.timeout
+      if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > this.#timeout) invalid()
+      context = this.#begin(options.signal, false, null, timeout)
       this.#registrationDeadline = context.deadline
       const acknowledgements = await this.#stage(stage, abort, context, registrationVerifier)
       try {
@@ -669,12 +671,13 @@ export class AsyncRouteControlSession {
     return true
   }
 
-  #begin(externalSignal, stopping = false, retainedDeadline = null) {
+  #begin(externalSignal, stopping = false, retainedDeadline = null, timeout = this.#timeout) {
     if ((this.#stopped && !stopping) || this.#current) circuitState()
     const startedAt = this.#readNow()
-    if (startedAt > Number.MAX_SAFE_INTEGER - this.#timeout) throw unavailable()
-    const deadline = retainedDeadline === null ? startedAt + this.#timeout : retainedDeadline
-    if (!Number.isSafeInteger(deadline) || deadline < 0 || deadline > startedAt + this.#timeout)
+    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > this.#timeout) invalid()
+    if (startedAt > Number.MAX_SAFE_INTEGER - timeout) throw unavailable()
+    const deadline = retainedDeadline === null ? startedAt + timeout : retainedDeadline
+    if (!Number.isSafeInteger(deadline) || deadline < 0 || deadline > startedAt + timeout)
       throw unavailable()
     const signal = new LocalAbortSignal()
     let removeExternal = null

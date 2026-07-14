@@ -585,6 +585,27 @@ function assertClosed(events) {
   }
 }
 
+export function formatNamespaceAuditSummary(result) {
+  if (
+    !result ||
+    !Number.isSafeInteger(result.packetCount) ||
+    !Number.isSafeInteger(result.rolePacketCount) ||
+    result.packetCount < 1 ||
+    result.rolePacketCount < 1 ||
+    result.rolePacketCount > result.packetCount ||
+    !Array.isArray(result.observedEdges) ||
+    result.observedEdges.length < 1
+  ) {
+    throw new Error('invalid namespace audit summary')
+  }
+  return `${JSON.stringify({
+    event: 'namespace-private-route-pass',
+    packetCount: result.packetCount,
+    rolePacketCount: result.rolePacketCount,
+    edgeCount: result.observedEdges.length
+  })}\n`
+}
+
 export function assertRelayFailure(events) {
   if (!Array.isArray(events) || events.length !== 7) {
     throw new Error('relay failure did not propagate')
@@ -633,6 +654,7 @@ export async function runNamespaceGate(options = {}) {
   let captureOpen = false
   let managerOpen = false
   let succeeded = false
+  let auditSummary = null
 
   const cleanup = async () => {
     if (coordinator) {
@@ -718,7 +740,7 @@ export async function runNamespaceGate(options = {}) {
         },
         Object.freeze({ start: startSentinel, stop: stopSentinel })
       )
-      auditPrivateRouteCapture(parsePcap(captureBytes), matrix)
+      auditSummary = auditPrivateRouteCapture(parsePcap(captureBytes), matrix)
     } finally {
       captureBytes.fill(0)
       startSentinel.payload.fill(0)
@@ -726,6 +748,7 @@ export async function runNamespaceGate(options = {}) {
     }
     succeeded = true
     await unlink(capturePath)
+    process.stdout.write(formatNamespaceAuditSummary(auditSummary))
     return true
   } finally {
     process.removeListener('SIGINT', onSignal)

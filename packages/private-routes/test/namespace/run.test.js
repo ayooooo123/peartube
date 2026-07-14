@@ -8,6 +8,7 @@ import {
   assertRelayFailure,
   createNamespaceFixture,
   createTcpdumpCapture,
+  formatNamespaceAuditSummary,
   tcpdumpLaunch
 } from './run.js'
 import { createNamespaceLayout } from './netns.js'
@@ -44,6 +45,26 @@ test('tcpdump launch captures synthetic ingress across every namespace veth', (t
       'ip and net 10.203.77.0/24'
     ]
   })
+})
+
+test('namespace success summary exposes only aggregate capture evidence', async (t) => {
+  t.is(
+    formatNamespaceAuditSummary({
+      packetCount: 94,
+      rolePacketCount: 92,
+      observedEdges: [
+        'destination->private-final',
+        'private-final->destination',
+        'private-final->private-middle'
+      ],
+      sentinels: { start: 0, stop: 93 }
+    }),
+    '{"event":"namespace-private-route-pass","packetCount":94,"rolePacketCount":92,"edgeCount":3}\n'
+  )
+  await t.exception.all(
+    () => formatNamespaceAuditSummary({ packetCount: 1, rolePacketCount: 1, observedEdges: [] }),
+    /invalid namespace audit summary/
+  )
 })
 
 test('tcpdump capture requires listening output and a valid PCAP header before ready', async (t) => {

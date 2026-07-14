@@ -56,7 +56,7 @@ jobs:
       - name: Verify pinned runtime dependencies
         run: |
           test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
-          test "$(npm exec -- bare --version)" = "v1.30.3"
+          test "$(./node_modules/.bin/bare --version)" = "v1.30.3"
           test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
       - run: npm run test:bare
 
@@ -99,7 +99,7 @@ jobs:
       - name: Verify pinned runtime dependencies
         run: |
           test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
-          test "$(npm exec -- bare --version)" = "v1.30.3"
+          test "$(./node_modules/.bin/bare --version)" = "v1.30.3"
           test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
       - run: npm run test:portable:bare
 
@@ -123,7 +123,7 @@ jobs:
       - name: Verify pinned runtime dependencies
         run: |
           test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
-          test "$(npm exec -- bare --version)" = "v1.30.3"
+          test "$(./node_modules/.bin/bare --version)" = "v1.30.3"
           test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
       - name: Install packet-capture and namespace tools
         run: |

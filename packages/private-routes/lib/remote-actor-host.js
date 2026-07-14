@@ -32,7 +32,10 @@ const MAX_UINT64 = (1n << 64n) - 1n
 const ACTOR_HANDLES = new WeakMap()
 const REMOTE_ACTOR_HOSTS = new WeakSet()
 const REMOTE_ACTOR_DISPATCH = new WeakMap()
+const REMOTE_ACTOR_FORWARD_DISPATCH = new WeakMap()
 const REMOTE_ACTOR_TEST_DOUBLES = new WeakSet()
+const FORWARDED_REQUEST = Symbol('forwarded-remote-actor-request')
+const FORWARDED_AUTHORITY = Object.freeze({})
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferFill = Uint8Array.prototype.fill
@@ -241,6 +244,11 @@ export class RemoteActorHost {
     this.#maxTombstones = bound(options.maxTombstones, DEFAULT_MAX_REMOTE_TOMBSTONES)
     REMOTE_ACTOR_HOSTS.add(this)
     REMOTE_ACTOR_DISPATCH.set(this, (...args) => genuineRemoteActorRequest.call(this, ...args))
+    REMOTE_ACTOR_FORWARD_DISPATCH.set(this, (kind, actorId, circuitId, generation, body) =>
+      genuineRemoteActorRequest.call(this, kind, actorId, circuitId, generation, body, {
+        [FORWARDED_REQUEST]: FORWARDED_AUTHORITY
+      })
+    )
   }
 
   get stats() {
@@ -365,22 +373,27 @@ export class RemoteActorHost {
       ) {
         invalid()
       }
+      const forwarded = options[FORWARDED_REQUEST] === FORWARDED_AUTHORITY
       const registrationVerifier = options.registrationVerifier
       const activationVerifier = options.activationVerifier
       if (
-        (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE && !isObject(registrationVerifier)) ||
+        (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE &&
+          !forwarded &&
+          !isObject(registrationVerifier)) ||
         (kind !== ACTOR_CONTROL_KIND.REGISTER_STAGE && registrationVerifier !== undefined) ||
-        (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE && !isObject(activationVerifier)) ||
+        (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE &&
+          !forwarded &&
+          !isObject(activationVerifier)) ||
         (kind !== ACTOR_CONTROL_KIND.ACTIVATE_CREATE && activationVerifier !== undefined)
       )
         invalid()
       verifier = registrationVerifier || activationVerifier
       const requestId = this.#requestId()
       if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
-      if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) {
+      if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE && !forwarded) {
         bindRemoteRegistrationVerifier(verifier, body)
         verifierBound = true
-      } else if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) {
+      } else if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE && !forwarded) {
         bindRemoteActivationVerifier(verifier, body, circuitId, generation)
         verifierBound = true
       }
@@ -478,7 +491,7 @@ export class RemoteActorHost {
     this.#ownedBytes = 0
   }
 
-  #receiveRequest(message, request) {
+  async #receiveRequest(message, request) {
     let requestDigest = null
     let reply = null
     let errorBody = null
@@ -507,7 +520,7 @@ export class RemoteActorHost {
       this.#ownedBytes += length(record.digest) + record.bytes
       try {
         if (!actor) throw unavailable()
-        reply = actor.adapter.execute(message)
+        reply = await actor.adapter.execute(message)
       } catch (err) {
         if (this.#destroyed || this.#inbound.get(key) !== record) throw unavailable()
         errorBody = b4a.allocUnsafeSlow(33)
@@ -537,9 +550,9 @@ export class RemoteActorHost {
       record = null
       queue(this.#sendControl, reply)
       if (this.#destroyed || this.#replay.get(key)?.reply !== retainedReply) throw unavailable()
-      return Promise.resolve(true)
+      return true
     } catch (err) {
-      return Promise.reject(err instanceof PrivateRouteError ? err : unavailable())
+      throw err instanceof PrivateRouteError ? err : unavailable()
     } finally {
       if (record && key !== null && this.#inbound.get(key) === record) {
         this.#inbound.delete(key)
@@ -578,10 +591,14 @@ export class RemoteActorHost {
       verified = validateActorReply(expected.request, reply, expected.digest)
       if (verified.kind !== ACTOR_CONTROL_KIND.ERROR) {
         validateActorCommandReplyBody(verified.kind, verified.body)
-        if (record && verified.kind === ACTOR_CONTROL_KIND.REGISTER_STAGED) {
+        if (record && verified.kind === ACTOR_CONTROL_KIND.REGISTER_STAGED && expected.verifier) {
           verifyRemoteRegistrationReply(expected.verifier, expected.request.body, verified.body)
           expected.verifier = null
-        } else if (record && verified.kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATED) {
+        } else if (
+          record &&
+          verified.kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATED &&
+          expected.verifier
+        ) {
           verifyRemoteActivationReply(
             expected.verifier,
             expected.request.body,
@@ -890,6 +907,15 @@ export function requestRemoteActorHost(host, ...args) {
   const dispatch = REMOTE_ACTOR_DISPATCH.get(host)
   if (!dispatch) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
   return dispatch(...args)
+}
+
+// Package-internal relay-to-next-hop dispatch. It preserves authenticated
+// request/reply framing and structural reply validation while deliberately
+// leaving the full registration/CREATED transcript verifier at the source.
+export function forwardRemoteActorHost(host, kind, actorId, circuitId, generation, body) {
+  const dispatch = REMOTE_ACTOR_FORWARD_DISPATCH.get(host)
+  if (!dispatch) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+  return dispatch(kind, actorId, circuitId, generation, body)
 }
 
 export function isRemoteActorHostTestDouble(host) {

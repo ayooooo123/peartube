@@ -34,6 +34,7 @@ import {
 } from '../lib/remote-control.js'
 import { createDestinationReplayCache } from '../lib/activation.js'
 import { DIRECTION } from '../lib/protocol.js'
+import { forwardRemoteActorHost } from '../lib/remote-actor-host.js'
 import { expectCode, privateRoleIdentity, seed } from './helpers.js'
 
 const REQUEST_ACTOR_KINDS = new Set([
@@ -504,6 +505,32 @@ test('request owns private copies and completes one exactly correlated reply', a
   pair.client.destroy()
   pair.server.destroy()
   destroyPrivateDestinationActor(actor)
+})
+
+test('authenticated relay forwarding keeps the source-only verifier at the source', async (t) => {
+  const pair = hostPair({ now: () => 1_000 })
+  const fixture = registrationFixture(61)
+  const actorId = bytes(16, 0x4f)
+  pair.server.register(actorId, fixture.relay)
+  const pending = forwardRemoteActorHost(
+    pair.client,
+    ACTOR_CONTROL_KIND.REGISTER_STAGE,
+    actorId,
+    b4a.alloc(16),
+    0n,
+    fixture.built.registrationCapsule
+  )
+  await transfer(pair.toServer, pair.server)
+  await transfer(pair.toClient, pair.client)
+  const acknowledgements = await pending
+  t.is(acknowledgements[0], PROTOCOL_VERSION)
+  t.is(acknowledgements[1], 1)
+  t.is(pair.client.stats.pending, 0)
+  t.is(pair.server.stats.replay, 1)
+  acknowledgements.fill(0)
+  pair.client.destroy()
+  pair.server.destroy()
+  fixture.destroy()
 })
 
 test('remote errors preserve only the allowlist and unknown actors are unavailable', async (t) => {

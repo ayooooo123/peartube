@@ -689,6 +689,7 @@ export function receiveCompiledRouteCell(duplex, handle, frame, metadata = {}) {
   if (
     handle !== state.handle ||
     !isObject(metadata) ||
+    (metadata.class !== CELL_CLASS.STREAM && metadata.class !== CELL_CLASS.DATAGRAM) ||
     metadata.direction !== state.receiveDirection ||
     metadata.generation !== state.generation ||
     !u64(metadata.counter) ||
@@ -696,10 +697,13 @@ export function receiveCompiledRouteCell(duplex, handle, frame, metadata = {}) {
   ) {
     throw fail(state, PrivateRouteError.UNAUTHORIZED())
   }
-  if (
-    state.readQueue.length >= state.maxReadFragments ||
-    state.readBytes + MAX_ROUTE_PAYLOAD > state.maxReadBytes
-  ) {
+  const atCapacity =
+    metadata.class === CELL_CLASS.STREAM
+      ? state.readQueue.length >= state.maxReadFragments ||
+        state.readBytes + MAX_ROUTE_PAYLOAD > state.maxReadBytes
+      : state.datagrams.length >= state.maxDatagrams ||
+        state.datagramBytes + MAX_ROUTE_PAYLOAD > state.maxDatagramBytes
+  if (atCapacity) {
     return false
   }
   let opened = null
@@ -707,7 +711,7 @@ export function receiveCompiledRouteCell(duplex, handle, frame, metadata = {}) {
   try {
     opened = routeOpen.call(state.routePayload, { direction: state.receiveDirection }, frame)
     if (Array.isArray(opened)) {
-      if (opened.length !== 1) throw unavailable()
+      if (metadata.class !== CELL_CLASS.STREAM || opened.length !== 1) throw unavailable()
       let bytes = 0
       for (const value of opened) {
         if (!value || value.class !== CELL_CLASS.STREAM || bufferLength(value.payload) < 0)
@@ -727,7 +731,12 @@ export function receiveCompiledRouteCell(duplex, handle, frame, metadata = {}) {
       accepted = true
       return true
     }
-    if (!opened || opened.class !== CELL_CLASS.DATAGRAM || bufferLength(opened.payload) < 0)
+    if (
+      metadata.class !== CELL_CLASS.DATAGRAM ||
+      !opened ||
+      opened.class !== CELL_CLASS.DATAGRAM ||
+      bufferLength(opened.payload) < 0
+    )
       invalid()
     if (
       state.datagrams.length >= state.maxDatagrams ||

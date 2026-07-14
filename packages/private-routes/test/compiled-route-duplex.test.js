@@ -605,6 +605,53 @@ test('authenticated reverse stream and datagram cells preserve type and ordering
   await close(f)
 })
 
+test('stream and datagram ingress limits remain independent', async (t) => {
+  const f = await fixture({ marker: 62, limits: { maxReadFragments: 1 } })
+  const stream = f.destination.seal({
+    class: CELL_CLASS.STREAM,
+    direction: DIRECTION.REVERSE,
+    payload: b4a.from('stream-full')
+  })
+  f.adapter.sockets[0].emitMessage(
+    remoteCell(f, CELL_CLASS.STREAM, stream, 1n, f.remoteLogical.stream++),
+    '127.0.0.42',
+    47442
+  )
+  stream.fill(0)
+  const datagram = f.destination.seal({
+    class: CELL_CLASS.DATAGRAM,
+    direction: DIRECTION.REVERSE,
+    payload: b4a.from('datagram-independent')
+  })
+  f.adapter.sockets[0].emitMessage(
+    remoteCell(f, CELL_CLASS.DATAGRAM, datagram, 1n),
+    '127.0.0.42',
+    47442
+  )
+  datagram.fill(0)
+  t.alike(f.duplex.read(), b4a.from('stream-full'))
+  t.alike(f.duplex.receiveDatagram(), b4a.from('datagram-independent'))
+  await close(f)
+})
+
+test('authenticated outer cell class must match the decrypted route class', async (t) => {
+  const f = await fixture({ marker: 63 })
+  const innerDatagram = f.destination.seal({
+    class: CELL_CLASS.DATAGRAM,
+    direction: DIRECTION.REVERSE,
+    payload: b4a.from('class-confusion')
+  })
+  f.adapter.sockets[0].emitMessage(
+    remoteCell(f, CELL_CLASS.STREAM, innerDatagram, 1n, f.remoteLogical.stream++),
+    '127.0.0.42',
+    47442
+  )
+  innerDatagram.fill(0)
+  t.is(readCompiledRouteDuplexStats(f.duplex).closed, true)
+  expectCode(t, () => f.duplex.receiveDatagram(), 'CIRCUIT_STATE')
+  await close(f)
+})
+
 test('out-of-order inner route data is never hop-ACKed or retained outside duplex accounting', async (t) => {
   const f = await fixture({ marker: 65 })
   const zero = f.destination.seal({

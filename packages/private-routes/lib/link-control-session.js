@@ -885,6 +885,7 @@ export class LinkControlSession {
         try {
           accepted =
             handlers.enqueueStream(owned, {
+              class: CELL_CLASS.STREAM,
               direction: value.direction,
               generation: value.generation,
               counter: value.counter
@@ -916,6 +917,7 @@ export class LinkControlSession {
       try {
         accepted =
           handlers.enqueueDatagram(owned, {
+            class: CELL_CLASS.DATAGRAM,
             direction: value.direction,
             generation: value.generation,
             counter: value.counter

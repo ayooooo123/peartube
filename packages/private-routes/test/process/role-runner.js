@@ -84,6 +84,15 @@ export function createProcessFaultAdapter(adapter, faults) {
               return socket.bind(...args)
             },
             send(...args) {
+              const packet = args[0]
+              if (
+                faults.has(CONTROL_FAULT.OVERFLOW_QUEUE) &&
+                b4a.isBuffer(packet) &&
+                packet.byteLength === 1_200 &&
+                packet[1] !== 0x80
+              ) {
+                return Promise.resolve().then(() => socket.send(...args))
+              }
               return socket.send(...args)
             },
             close(...args) {
@@ -140,7 +149,16 @@ export function createRoleRunner(options = {}) {
   let node = null
   let actor = null
   let destroyActor = null
+  let armedRevocation = null
   const armedFaults = new Set()
+  const endpointLimits = Object.freeze({
+    get maxQueuedPackets() {
+      return armedFaults.has(CONTROL_FAULT.OVERFLOW_QUEUE) ? 1 : undefined
+    },
+    get maxQueuedBytes() {
+      return armedFaults.has(CONTROL_FAULT.OVERFLOW_QUEUE) ? 1_200 : undefined
+    }
+  })
   const traffic = { streamBytes: 0, datagramBytes: 0 }
   let queue = Promise.resolve()
 
@@ -402,7 +420,8 @@ export function createRoleRunner(options = {}) {
         fingerprints = linkFingerprints(projection)
         node = makeNode(projection, {
           ...adapters,
-          adapter: createProcessFaultAdapter(adapters.adapter || new UdxAdapter(), armedFaults)
+          adapter: createProcessFaultAdapter(adapters.adapter || new UdxAdapter(), armedFaults),
+          endpointLimits
         })
         send({
           event: CONTROL_EVENT.CONFIGURED,
@@ -414,6 +433,16 @@ export function createRoleRunner(options = {}) {
       case CONTROL_COMMAND.START:
         await node.start()
         await node.connect()
+        if (armedRevocation) {
+          const digest32 = armedRevocation
+          armedRevocation = null
+          try {
+            node[LIVE_ROUTE_REVOKE_GRANT](digest32)
+          } finally {
+            digest32.fill(0)
+          }
+          throw PrivateRouteError.ROUTE_UNAVAILABLE()
+        }
         if (armedFaults.delete(CONTROL_FAULT.CLOSE_SOCKET)) {
           await node[LIVE_ROUTE_CLOSE_SOCKET]()
           throw PrivateRouteError.ROUTE_UNAVAILABLE()
@@ -429,6 +458,11 @@ export function createRoleRunner(options = {}) {
         send(snapshotEvent(CONTROL_EVENT.SNAPSHOT))
         return true
       case CONTROL_COMMAND.REVOKE:
+        if (lifecycle.state === 'CONFIGURED') {
+          if (armedRevocation) throw PrivateRouteError.CIRCUIT_STATE()
+          armedRevocation = b4a.from(command.grantDigest32)
+          return true
+        }
         node[LIVE_ROUTE_REVOKE_GRANT](command.grantDigest32)
         send(snapshotEvent(CONTROL_EVENT.SNAPSHOT))
         return true
@@ -438,7 +472,8 @@ export function createRoleRunner(options = {}) {
             command.fault !== CONTROL_FAULT.DELAY_CREATED &&
             command.fault !== CONTROL_FAULT.CLOSE_SOCKET &&
             command.fault !== CONTROL_FAULT.SPOOF_SOURCE &&
-            command.fault !== CONTROL_FAULT.REPLAY
+            command.fault !== CONTROL_FAULT.REPLAY &&
+            command.fault !== CONTROL_FAULT.OVERFLOW_QUEUE
           ) {
             throw PrivateRouteError.ROUTE_UNAVAILABLE()
           }
@@ -455,6 +490,8 @@ export function createRoleRunner(options = {}) {
         return true
       case CONTROL_COMMAND.STOP:
         await node.stop()
+        if (armedRevocation) armedRevocation.fill(0)
+        armedRevocation = null
         releaseActor()
         send(snapshotEvent(CONTROL_EVENT.CLOSED))
         return true
@@ -464,6 +501,11 @@ export function createRoleRunner(options = {}) {
   }
 
   const handle = (command) => {
+    if (command?.command === CONTROL_COMMAND.STOP) {
+      const stopping = Promise.resolve().then(() => execute(command))
+      void stopping.catch(() => {})
+      return stopping
+    }
     const result = queue.then(() => execute(command))
     queue = result.catch(() => {})
     return result
@@ -489,6 +531,8 @@ export function createRoleRunner(options = {}) {
         await node.stop()
       } catch {}
     }
+    if (armedRevocation) armedRevocation.fill(0)
+    armedRevocation = null
     releaseActor()
     return true
   }

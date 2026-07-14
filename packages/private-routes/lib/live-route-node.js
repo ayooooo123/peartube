@@ -102,6 +102,7 @@ function validateAdapters(value) {
     typeof value.schedule !== 'function' ||
     typeof value.cancel !== 'function' ||
     typeof value.randomBytes !== 'function' ||
+    (value.endpointLimits !== undefined && !isObject(value.endpointLimits)) ||
     (value.observe !== undefined && typeof value.observe !== 'function')
   ) {
     invalid()
@@ -351,6 +352,12 @@ export function createLiveRouteNode(roleProjection, adapters) {
         })
         endpoint = new UdxCellEndpoint({
           ...(runtime.adapter === undefined ? {} : { adapter: runtime.adapter }),
+          ...(runtime.endpointLimits === undefined
+            ? {}
+            : {
+                maxQueuedPackets: runtime.endpointLimits.maxQueuedPackets,
+                maxQueuedBytes: runtime.endpointLimits.maxQueuedBytes
+              }),
           host: projection.bind.host,
           port: projection.bind.port,
           onBootstrap(packet, sendHandle) {

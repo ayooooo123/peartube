@@ -96,6 +96,7 @@ test('command vocabulary and lifecycle are exact and closed is terminal', (t) =>
   t.is(lifecycle.emit({ event: 'configured' }), 'configured')
   t.ok(code(() => lifecycle.accept({ command: 'configure', projection: {} })))
   t.is(lifecycle.accept({ command: 'fault', fault: 'delay-created' }), 'fault')
+  t.is(lifecycle.accept({ command: 'revoke', grantDigest32: b4a.alloc(32) }), 'revoke')
   t.is(lifecycle.state, 'CONFIGURED')
   t.is(lifecycle.accept({ command: 'start' }), 'start')
   t.is(lifecycle.emit({ event: 'ready' }), 'ready')
@@ -258,8 +259,10 @@ test('role runner arms socket closure until after the transport opens', async (t
 test('process fault adapter spoofs source tuples and replays authenticated cells', async (t) => {
   const listeners = new Map()
   const socket = {
+    sends: 0,
     bind() {},
     send() {
+      this.sends++
       return Promise.resolve(true)
     },
     close() {
@@ -292,5 +295,164 @@ test('process fault adapter spoofs source tuples and replays authenticated cells
   listeners.get('message')(second, { host: '127.0.0.1', port: 45_001, family: 4 })
   t.alike(observed[1][0], first)
   t.alike(observed[2][0], first)
+
+  faults.delete('replay')
+  faults.add('overflow-queue')
+  const established = b4a.alloc(1_200, 0x33)
+  established[1] = 1
+  const delayed = wrapped.send(established, 45_002, '127.0.0.2')
+  t.is(socket.sends, 0)
+  t.is(await delayed, true)
+  t.is(socket.sends, 1)
   await wrapped.close()
+})
+
+test('role runner arms the one-packet endpoint limit for queue overflow', async (t) => {
+  let runtime = null
+  const runner = createRoleRunner({
+    emit() {},
+    createNode(_projection, adapters) {
+      runtime = adapters
+      return {
+        async start() {},
+        async connect() {},
+        snapshot() {
+          return {
+            role: 'safety-guard',
+            state: 'OPEN',
+            links: 1,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: { bindings: 1, waits: 0, timers: 0, openSockets: 1 }
+          }
+        }
+      }
+    }
+  })
+  await runner.handle({
+    command: 'configure',
+    projection: {
+      role: 'safety-guard',
+      grants: [b4a.alloc(32, 1)],
+      local: { identity32: b4a.alloc(32, 2) }
+    }
+  })
+  t.is(runtime.endpointLimits.maxQueuedPackets, undefined)
+  t.is(runtime.endpointLimits.maxQueuedBytes, undefined)
+  await runner.handle({ command: 'fault', fault: 'overflow-queue' })
+  t.is(runtime.endpointLimits.maxQueuedPackets, 1)
+  t.is(runtime.endpointLimits.maxQueuedBytes, 1_200)
+})
+
+test('role runner revokes an armed grant only after links open', async (t) => {
+  const calls = []
+  let state = 'NEW'
+  const runner = createRoleRunner({
+    emit() {},
+    createNode() {
+      return {
+        async start() {
+          calls.push('start')
+          state = 'READY'
+        },
+        async connect() {
+          calls.push('connect')
+          state = 'OPEN'
+        },
+        snapshot() {
+          return {
+            role: 'safety-guard',
+            state,
+            links: state === 'OPEN' ? 1 : 0,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: { bindings: 1, waits: 0, timers: 0, openSockets: 1 }
+          }
+        },
+        [LIVE_ROUTE_REVOKE_GRANT](digest32) {
+          calls.push(`revoke:${digest32[0]}`)
+          state = 'FAILED'
+        }
+      }
+    }
+  })
+  await runner.handle({
+    command: 'configure',
+    projection: {
+      role: 'safety-guard',
+      grants: [b4a.alloc(32, 1)],
+      local: { identity32: b4a.alloc(32, 2) }
+    }
+  })
+  await runner.handle({ command: 'revoke', grantDigest32: b4a.alloc(32, 7) })
+  t.alike(calls, [])
+  const failure = await runner.handle({ command: 'start' }).then(
+    () => null,
+    (err) => err
+  )
+  t.is(failure?.code, 'ROUTE_UNAVAILABLE')
+  t.alike(calls, ['start', 'connect', 'revoke:7'])
+})
+
+test('role runner stop interrupts pending setup instead of waiting behind it', async (t) => {
+  const calls = []
+  const events = []
+  let releaseStart
+  let state = 'NEW'
+  const runner = createRoleRunner({
+    emit: (event) => events.push(event),
+    createNode() {
+      return {
+        async start() {
+          calls.push('start')
+          state = 'STARTING'
+          await new Promise((resolve) => {
+            releaseStart = resolve
+          })
+        },
+        async connect() {
+          calls.push('connect')
+          throw new Error('stopped')
+        },
+        snapshot() {
+          return {
+            role: 'source',
+            state,
+            links: 0,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: {
+              bindings: state === 'CLOSED' ? 0 : 1,
+              waits: 0,
+              timers: 0,
+              openSockets: state === 'CLOSED' ? 0 : 1
+            }
+          }
+        },
+        async stop() {
+          calls.push('stop')
+          state = 'CLOSED'
+        }
+      }
+    }
+  })
+  await runner.handle({
+    command: 'configure',
+    projection: {
+      role: 'source',
+      grants: [b4a.alloc(32, 1)],
+      local: { identity32: b4a.alloc(32, 2) }
+    }
+  })
+  const starting = runner.handle({ command: 'start' })
+  await Promise.resolve()
+  const stopping = runner.handle({ command: 'stop' })
+  await Promise.resolve()
+  await Promise.resolve()
+  t.alike(calls, ['start', 'stop'])
+  releaseStart()
+  const outcomes = await Promise.allSettled([starting, stopping])
+  t.is(outcomes[0].status, 'rejected')
+  t.is(outcomes[1].status, 'fulfilled')
+  t.alike(
+    events.map((event) => event.event),
+    ['configured', 'closed']
+  )
 })

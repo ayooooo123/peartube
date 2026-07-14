@@ -231,6 +231,15 @@ export async function createProcessCoordinator(options = {}) {
     return true
   }
 
+  const revoke = async (role, grantDigest32) => {
+    const record = records.get(role)
+    if (!record || closed || record.child.exitCode !== null || record.child.signalCode !== null) {
+      invalid(`cannot revoke process: ${role}`)
+    }
+    await send(record, { command: 'revoke', grantDigest32 })
+    return true
+  }
+
   const stop = async () => {
     if (closed) return []
     closed = true
@@ -264,5 +273,14 @@ export async function createProcessCoordinator(options = {}) {
     return []
   }
 
-  return Object.freeze({ roles: Object.freeze(roles), start, snapshot, fault, kill, stop, destroy })
+  return Object.freeze({
+    roles: Object.freeze(roles),
+    start,
+    snapshot,
+    fault,
+    revoke,
+    kill,
+    stop,
+    destroy
+  })
 }

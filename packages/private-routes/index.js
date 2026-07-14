@@ -53,6 +53,18 @@ export {
 export { createLinkSetupAuthority, isLinkTicketChecker } from './lib/link-setup.js'
 export { RouteManager } from './lib/route-manager.js'
 export {
+  DEFAULT_MAX_LINK_HANDLES,
+  DEFAULT_MAX_TOPOLOGY_GRANTS,
+  TOPOLOGY_GRANT_FORMAT,
+  LinkDirectory,
+  decodeTopologyGrant,
+  decodeUnsignedTopologyGrant,
+  encodeTopologyGrant,
+  encodeUnsignedTopologyGrant,
+  signTopologyGrant,
+  verifyTopologyGrant
+} from './lib/topology-grant.js'
+export {
   MAX_ENCRYPTED_HOPS,
   MAX_PRIVATE_ADVERTISEMENT,
   MAX_PRIVATE_HOPS,
@@ -170,7 +182,9 @@ export {
   CIRCUIT_STATE,
   DIRECTION,
   DOMAIN,
+  LINK_OPERATION,
   PROTOCOL_VERSION,
   ROLE,
+  TOPOLOGY_ROLE,
   roleForIdentity
 } from './lib/protocol.js'

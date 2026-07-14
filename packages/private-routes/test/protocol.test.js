@@ -66,6 +66,7 @@ test('protocol enumerations are exact and frozen', (t) => {
 test('protocol domains are exact buffers in a frozen map', (t) => {
   const expected = {
     ROLE: 'hyperdht-private-routes/role/v0',
+    TOPOLOGY_GRANT: 'hyperdht-private-routes/topology-grant/v0',
     RELAY_ADVERTISEMENT: 'hyperdht-private-routes/relay-advertisement/v0',
     DESCRIPTOR_DIRECT: 'hyperdht-private-routes/descriptor/direct/v0',
     DELEGATION: 'hyperdht-private-routes/delegation/v0',

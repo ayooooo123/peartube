@@ -10,6 +10,22 @@ export const ROLE = Object.freeze({
   PRIVATE: 1
 })
 
+export const TOPOLOGY_ROLE = Object.freeze({
+  SOURCE: 0,
+  SAFETY_GUARD: 1,
+  SAFETY_FINAL: 2,
+  PRIVATE_ENTRY: 3,
+  PRIVATE_MIDDLE: 4,
+  PRIVATE_FINAL: 5,
+  DESTINATION: 6
+})
+
+export const LINK_OPERATION = Object.freeze({
+  INITIATE: 1,
+  ACCEPT: 2,
+  KNOWN: 3
+})
+
 export const CELL_CLASS = Object.freeze({
   CONTROL: 0,
   STREAM: 1,
@@ -38,6 +54,7 @@ export const CAPABILITY = Object.freeze({
 
 const DOMAIN_VALUES = Object.freeze({
   ROLE: b4a.from('hyperdht-private-routes/role/v0'),
+  TOPOLOGY_GRANT: b4a.from('hyperdht-private-routes/topology-grant/v0'),
   RELAY_ADVERTISEMENT: b4a.from('hyperdht-private-routes/relay-advertisement/v0'),
   DESCRIPTOR_DIRECT: b4a.from('hyperdht-private-routes/descriptor/direct/v0'),
   DELEGATION: b4a.from('hyperdht-private-routes/delegation/v0'),

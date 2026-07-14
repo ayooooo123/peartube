@@ -62,6 +62,52 @@ export const TEST_ONLY_REGISTRATION_COMMAND_ACK_MUTATOR = Symbol(
 export const TEST_ONLY_ROUTE_PAYLOAD_COUNTERS = Symbol('test-only-route-payload-counters')
 export const TEST_ONLY_ROUTE_FRAME_OBSERVER = Symbol('test-only-route-frame-observer')
 
+export const ASYNC_REGISTRATION_STATE = Object.freeze({
+  NEW: 'NEW',
+  STAGED: 'STAGED',
+  PREPARED: 'PREPARED',
+  FINALIZED: 'FINALIZED',
+  ABORTING: 'ABORTING',
+  ABORTED: 'ABORTED',
+  EXPIRED: 'EXPIRED',
+  REVOKED: 'REVOKED'
+})
+
+export const ASYNC_CIRCUIT_STATE = Object.freeze({
+  NEW: 'NEW',
+  ACTIVATING: 'ACTIVATING',
+  OPEN: 'OPEN',
+  DESTROYING: 'DESTROYING',
+  DESTROYED: 'DESTROYED'
+})
+
+const ASYNC_REGISTRATION_TRANSITIONS = Object.freeze({
+  NEW: Object.freeze({ stage: ASYNC_REGISTRATION_STATE.STAGED }),
+  STAGED: Object.freeze({
+    prepare: ASYNC_REGISTRATION_STATE.PREPARED,
+    abort: ASYNC_REGISTRATION_STATE.ABORTING
+  }),
+  PREPARED: Object.freeze({
+    finalize: ASYNC_REGISTRATION_STATE.FINALIZED,
+    abort: ASYNC_REGISTRATION_STATE.ABORTING
+  }),
+  FINALIZED: Object.freeze({
+    expire: ASYNC_REGISTRATION_STATE.EXPIRED,
+    revoke: ASYNC_REGISTRATION_STATE.REVOKED
+  }),
+  ABORTING: Object.freeze({ aborted: ASYNC_REGISTRATION_STATE.ABORTED })
+})
+
+const ASYNC_CIRCUIT_TRANSITIONS = Object.freeze({
+  NEW: Object.freeze({ activate: ASYNC_CIRCUIT_STATE.ACTIVATING }),
+  ACTIVATING: Object.freeze({
+    opened: ASYNC_CIRCUIT_STATE.OPEN,
+    destroy: ASYNC_CIRCUIT_STATE.DESTROYING
+  }),
+  OPEN: Object.freeze({ destroy: ASYNC_CIRCUIT_STATE.DESTROYING }),
+  DESTROYING: Object.freeze({ destroyed: ASYNC_CIRCUIT_STATE.DESTROYED })
+})
+
 const MAX_U64 = 0xffff_ffff_ffff_ffffn
 const DELEGATION_SIZE = 168
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
@@ -99,6 +145,27 @@ const DESTINATION_ACTIVATION_REQUEST_HEADER = 19
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
+}
+
+// Shared by the synchronous fixture and the real asynchronous executor. This
+// is the single allowlist for setup state changes; callers cannot skip a step
+// by assigning state directly.
+export function transitionAsyncControlState(scope, state, operation) {
+  const table =
+    scope === 'registration'
+      ? ASYNC_REGISTRATION_TRANSITIONS
+      : scope === 'circuit'
+        ? ASYNC_CIRCUIT_TRANSITIONS
+        : null
+  if (!table || typeof state !== 'string' || typeof operation !== 'string') invalid()
+  if (
+    (scope === 'registration' && operation === 'abort' && state === 'ABORTED') ||
+    (scope === 'circuit' && operation === 'destroy' && state === 'DESTROYED')
+  )
+    return state
+  const next = table[state] && table[state][operation]
+  if (!next) throw PrivateRouteError.CIRCUIT_STATE()
+  return next
 }
 
 function unauthorized() {
@@ -4179,6 +4246,7 @@ function registerPrivateRouteActors(options) {
   let acknowledgements = null
   let abortable = false
   let committed = false
+  let controlState = ASYNC_REGISTRATION_STATE.NEW
   const entryPublic = actorPublicInfo(options.entryActor)
   function sendCommand(capsule, requireAcknowledgement) {
     const commandReceiver = new ActivationReassembler({ now: options.now })
@@ -4286,11 +4354,14 @@ function registerPrivateRouteActors(options) {
         clearTree(expected)
       }
     }
+    controlState = transitionAsyncControlState('registration', controlState, 'stage')
     if (!sendCommand(options.built.prepareCapsule, true))
       throw PrivateRouteError.ROUTE_UNAVAILABLE()
+    controlState = transitionAsyncControlState('registration', controlState, 'prepare')
     enforceRegistrationAttachmentDeadline(startedAt, options.now)
     if (!sendCommand(options.built.finalizeCapsule, false))
       throw PrivateRouteError.ROUTE_UNAVAILABLE()
+    controlState = transitionAsyncControlState('registration', controlState, 'finalize')
     committed = true
     return Object.freeze({
       registered: true,
@@ -4299,9 +4370,16 @@ function registerPrivateRouteActors(options) {
     })
   } catch (err) {
     if (abortable && !committed) {
+      if (
+        controlState === ASYNC_REGISTRATION_STATE.STAGED ||
+        controlState === ASYNC_REGISTRATION_STATE.PREPARED
+      )
+        controlState = transitionAsyncControlState('registration', controlState, 'abort')
       try {
         sendCommand(options.built.abortCapsule, false)
       } catch {}
+      if (controlState === ASYNC_REGISTRATION_STATE.ABORTING)
+        controlState = transitionAsyncControlState('registration', controlState, 'aborted')
     }
     return Object.freeze({
       registered: false,

@@ -194,6 +194,12 @@ export {
   RemoteActorHost
 } from './lib/remote-actor-host.js'
 export {
+  ASYNC_CIRCUIT_STATE,
+  ASYNC_REGISTRATION_STATE,
+  ASYNC_ROUTE_CONTROL_DEADLINE,
+  AsyncRouteControlSession
+} from './lib/async-route-control-session.js'
+export {
   DEFAULT_HALF_OPEN_TIMEOUT,
   DEFAULT_MAX_CIRCUITS,
   DEFAULT_MAX_CIRCUITS_PER_SOURCE,

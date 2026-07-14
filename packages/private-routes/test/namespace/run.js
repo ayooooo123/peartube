@@ -440,7 +440,13 @@ export async function calibrateNegativeControl(options = {}) {
       invalid('invalid negative-control calibration')
     }
     await listener.ready
-    await sendProbe(layout, 'source', layout.portBase + 50, decoy, payload)
+    await sendProbe(
+      layout,
+      'source',
+      layout.portBase + 50,
+      { host: decoy.address, port: decoy.port },
+      payload
+    )
     await listener.received
     const exit = await listener.exited
     if (exit.code !== 0 || exit.signal !== null || exit.stderr !== '') {

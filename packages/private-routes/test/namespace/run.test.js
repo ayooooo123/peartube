@@ -156,7 +156,7 @@ test('negative-control calibration owns a separate capture and removes it only a
         sequence.push('probe')
         t.is(role, 'source')
         t.is(bindPort, 48_150)
-        t.is(target.role, 'decoy')
+        t.alike(target, { host: '10.203.77.9', port: 48_200 })
         t.alike(sentPayload, payload)
       },
       async readCapture(path) {

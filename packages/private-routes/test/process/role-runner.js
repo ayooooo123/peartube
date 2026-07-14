@@ -23,6 +23,7 @@ import {
   LIVE_ROUTE_REGISTER_ACTOR,
   LIVE_ROUTE_REVOKE_GRANT
 } from '../../lib/live-route-node.js'
+import { UdxAdapter } from '../../lib/udx-adapter.js'
 import runtime from '#private-route-process'
 import {
   CONTROL_COMMAND,
@@ -66,6 +67,59 @@ function linkFingerprints(projection) {
 
 function errorCode(error) {
   return error instanceof PrivateRouteError ? error.code : 'ROUTE_UNAVAILABLE'
+}
+
+export function createProcessFaultAdapter(adapter, faults) {
+  if (!object(adapter) || typeof adapter.create !== 'function' || !(faults instanceof Set))
+    invalid()
+  return Object.freeze({
+    create() {
+      const udx = adapter.create()
+      return {
+        createSocket() {
+          const socket = udx.createSocket()
+          let replay = null
+          return {
+            bind(...args) {
+              return socket.bind(...args)
+            },
+            send(...args) {
+              return socket.send(...args)
+            },
+            close(...args) {
+              if (replay) replay.fill(0)
+              replay = null
+              return socket.close(...args)
+            },
+            on(event, listener) {
+              if (event !== 'message') return socket.on(event, listener)
+              return socket.on(event, (packet, from) => {
+                if (faults.has(CONTROL_FAULT.SPOOF_SOURCE)) {
+                  listener(packet, {
+                    host: from.host,
+                    port: from.port === 65_535 ? 1 : from.port + 1,
+                    family: from.family
+                  })
+                  return
+                }
+                if (
+                  faults.has(CONTROL_FAULT.REPLAY) &&
+                  b4a.isBuffer(packet) &&
+                  packet.byteLength === 1_200 &&
+                  packet[1] !== 0x80
+                ) {
+                  if (!replay) replay = b4a.from(packet)
+                  listener(replay, from)
+                  return
+                }
+                listener(packet, from)
+              })
+            }
+          }
+        }
+      }
+    }
+  })
 }
 
 export function createRoleRunner(options = {}) {
@@ -346,7 +400,10 @@ export function createRoleRunner(options = {}) {
       case CONTROL_COMMAND.CONFIGURE:
         projection = command.projection
         fingerprints = linkFingerprints(projection)
-        node = makeNode(projection, adapters)
+        node = makeNode(projection, {
+          ...adapters,
+          adapter: createProcessFaultAdapter(adapters.adapter || new UdxAdapter(), armedFaults)
+        })
         send({
           event: CONTROL_EVENT.CONFIGURED,
           role: projection.role,
@@ -379,7 +436,9 @@ export function createRoleRunner(options = {}) {
         if (lifecycle.state === 'CONFIGURED') {
           if (
             command.fault !== CONTROL_FAULT.DELAY_CREATED &&
-            command.fault !== CONTROL_FAULT.CLOSE_SOCKET
+            command.fault !== CONTROL_FAULT.CLOSE_SOCKET &&
+            command.fault !== CONTROL_FAULT.SPOOF_SOURCE &&
+            command.fault !== CONTROL_FAULT.REPLAY
           ) {
             throw PrivateRouteError.ROUTE_UNAVAILABLE()
           }

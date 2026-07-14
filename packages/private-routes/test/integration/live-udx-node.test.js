@@ -169,3 +169,69 @@ test('closing the private middle UDX socket after connect fails setup closed', a
   t.is(exits.length, 7)
   t.ok(exits.every((exit) => exit.status === 'fulfilled'))
 })
+
+test('spoofing the source tuple prevents UDX bootstrap from authenticating', async (t) => {
+  t.timeout(15_000)
+  const random = crypto.getRandomValues(new Uint16Array(1))[0]
+  const portBase = 54_000 + (random % 1_000)
+  const now = BigInt(Date.now())
+  const fixture = createLiveRouteFixture({
+    portBase,
+    distinctHosts: process.platform !== 'darwin',
+    now,
+    expiresAt: now + 30_000n
+  })
+  const coordinator = await createProcessCoordinator({
+    fixture,
+    cwd: PACKAGE_ROOT,
+    timeout: 6_500
+  })
+  const startedAt = Date.now()
+  let exits = null
+  try {
+    await coordinator.fault('source', 'spoof-source')
+    const failure = await coordinator.start().then(
+      () => null,
+      (err) => err
+    )
+    t.ok(failure)
+    t.ok(Date.now() - startedAt < 6_500)
+  } finally {
+    exits = await coordinator.destroy()
+  }
+  t.is(exits.length, 7)
+  t.ok(exits.every((exit) => exit.status === 'fulfilled'))
+})
+
+test('replayed authenticated UDX cells cannot keep setup alive', async (t) => {
+  t.timeout(15_000)
+  const random = crypto.getRandomValues(new Uint16Array(1))[0]
+  const portBase = 55_000 + (random % 1_000)
+  const now = BigInt(Date.now())
+  const fixture = createLiveRouteFixture({
+    portBase,
+    distinctHosts: process.platform !== 'darwin',
+    now,
+    expiresAt: now + 30_000n
+  })
+  const coordinator = await createProcessCoordinator({
+    fixture,
+    cwd: PACKAGE_ROOT,
+    timeout: 6_500
+  })
+  const startedAt = Date.now()
+  let exits = null
+  try {
+    await coordinator.fault('source', 'replay')
+    const failure = await coordinator.start().then(
+      () => null,
+      (err) => err
+    )
+    t.ok(failure)
+    t.ok(Date.now() - startedAt < 6_500)
+  } finally {
+    exits = await coordinator.destroy()
+  }
+  t.is(exits.length, 7)
+  t.ok(exits.every((exit) => exit.status === 'fulfilled'))
+})

@@ -12,7 +12,7 @@ import {
   encodeControlFrame,
   validateControlCommand
 } from './process/control-channel.js'
-import { createRoleRunner } from './process/role-runner.js'
+import { createProcessFaultAdapter, createRoleRunner } from './process/role-runner.js'
 import processRuntime from '#private-route-process'
 import { LIVE_ROUTE_CLOSE_SOCKET, LIVE_ROUTE_REVOKE_GRANT } from '../lib/live-route-node.js'
 
@@ -253,4 +253,44 @@ test('role runner arms socket closure until after the transport opens', async (t
     events.map((event) => event.event),
     ['configured']
   )
+})
+
+test('process fault adapter spoofs source tuples and replays authenticated cells', async (t) => {
+  const listeners = new Map()
+  const socket = {
+    bind() {},
+    send() {
+      return Promise.resolve(true)
+    },
+    close() {
+      return Promise.resolve(true)
+    },
+    on(event, listener) {
+      listeners.set(event, listener)
+    }
+  }
+  const base = {
+    create() {
+      return { createSocket: () => socket }
+    }
+  }
+  const observed = []
+  const faults = new Set(['spoof-source'])
+  const adapter = createProcessFaultAdapter(base, faults)
+  const wrapped = adapter.create().createSocket()
+  wrapped.on('message', (packet, from) => observed.push([b4a.from(packet), { ...from }]))
+  listeners.get('message')(b4a.alloc(1_200), { host: '127.0.0.1', port: 45_001, family: 4 })
+  t.alike(observed[0][1], { host: '127.0.0.1', port: 45_002, family: 4 })
+
+  faults.delete('spoof-source')
+  faults.add('replay')
+  const first = b4a.alloc(1_200, 0x31)
+  first[1] = 0
+  const second = b4a.alloc(1_200, 0x32)
+  second[1] = 1
+  listeners.get('message')(first, { host: '127.0.0.1', port: 45_001, family: 4 })
+  listeners.get('message')(second, { host: '127.0.0.1', port: 45_001, family: 4 })
+  t.alike(observed[1][0], first)
+  t.alike(observed[2][0], first)
+  await wrapped.close()
 })

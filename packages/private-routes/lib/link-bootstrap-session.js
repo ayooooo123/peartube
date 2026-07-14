@@ -157,7 +157,14 @@ function install(state, ticket) {
   let linkState
   try {
     linkState = state.linkSetup.checker.take(ticket)
-    state.endpoint[UDX_LINK_OPEN](state.sendHandle)
+    state.endpoint[UDX_LINK_OPEN](state.sendHandle, {
+      linkState,
+      mode: state.mode,
+      now: state.now,
+      schedule: state.schedule,
+      cancel: state.cancel,
+      randomBytes: state.randomBytes
+    })
   } catch {
     destroyEstablishedLinkState(linkState)
     throw unavailable()
@@ -386,6 +393,7 @@ export class LinkBootstrapSession {
       now,
       schedule,
       cancel,
+      randomBytes,
       table: new BootstrapRequestTable({ now, schedule, cancel, randomBytes }),
       state: 'IDLE',
       pending: 0,
@@ -645,6 +653,7 @@ export class LinkBootstrapSession {
     state.now = null
     state.schedule = null
     state.cancel = null
+    state.randomBytes = null
     state.cancelSends.clear()
     if (!state.closePromise) state.closePromise = Promise.resolve()
   }

@@ -3,6 +3,8 @@ import UDX from 'udx-native'
 export const UDX_SEND_DISPATCH = Symbol('udx-send-dispatch')
 export const UDX_LINK_OPEN = Symbol('udx-link-open')
 export const UDX_LINK_CLOSE = Symbol('udx-link-close')
+export const UDX_SEND_CELL = Symbol('udx-send-cell')
+export const UDX_LINK_STATS = Symbol('udx-link-stats')
 
 export function selectUdxLoopbackHosts({ platform, forceDistinct = false } = {}) {
   if (platform !== 'linux' && platform !== 'darwin' && platform !== 'win32') {

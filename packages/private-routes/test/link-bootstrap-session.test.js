@@ -216,14 +216,16 @@ async function fixture(options = {}) {
     host: '127.0.0.31',
     port: 46331,
     onBootstrap: (packet) => void leftSession.receive(packet),
-    onCell() {}
+    onCell() {},
+    onLinkFailure() {}
   })
   const rightEndpoint = new UdxCellEndpoint({
     adapter: rightAdapter,
     host: '127.0.0.32',
     port: 46332,
     onBootstrap: (packet) => void rightSession.receive(packet),
-    onCell() {}
+    onCell() {},
+    onLinkFailure() {}
   })
   await leftEndpoint.bind()
   await rightEndpoint.bind()

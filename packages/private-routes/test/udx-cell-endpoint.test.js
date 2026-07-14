@@ -104,7 +104,8 @@ function fixture(options = {}) {
     maxInboundBytesPerPeer: options.maxInboundBytesPerPeer,
     onBootstrap:
       options.onBootstrap || ((packet, handle) => received.push(['bootstrap', packet, handle])),
-    onCell: options.onCell || ((packet, handle) => received.push(['cell', packet, handle]))
+    onCell: options.onCell || ((packet, handle) => received.push(['cell', packet, handle])),
+    onLinkFailure: options.onLinkFailure || (() => {})
   })
   return {
     adapter,
@@ -538,6 +539,8 @@ test('link invalidation drains queued sends and tombstones native completion', a
   t.is(await errorCode(queued), 'UNAUTHORIZED')
   finish(true)
   t.is(await errorCode(first), 'ROUTE_UNAVAILABLE')
+  await Promise.resolve()
+  await Promise.resolve()
   t.is(f.endpoint.inFlightSends, 0)
   await f.endpoint.close()
 })

@@ -28,6 +28,7 @@ const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferFill = Uint8Array.prototype.fill
 const bufferSet = Uint8Array.prototype.set
+const ASYNC_ROUTE_CONTROL_SESSIONS = new WeakSet()
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -170,6 +171,7 @@ export class AsyncRouteControlSession {
     this.#ownedBytes = length(this.#actorId)
     this.#now = now
     this.#timeout = timeout
+    ASYNC_ROUTE_CONTROL_SESSIONS.add(this)
   }
 
   get registrationState() {
@@ -836,6 +838,38 @@ export class AsyncRouteControlSession {
     this.#generation = null
     this.#circuitDeadline = null
   }
+}
+
+const genuineDestroy = AsyncRouteControlSession.prototype.destroy
+const genuineStop = AsyncRouteControlSession.prototype.stop
+const genuineCircuitState = Object.getOwnPropertyDescriptor(
+  AsyncRouteControlSession.prototype,
+  'circuitState'
+).get
+
+// Package-internal brand and non-virtual dispatch used by link failure
+// teardown. Mutable instance properties cannot substitute circuit authority.
+export function isAsyncRouteControlSession(value) {
+  try {
+    return ASYNC_ROUTE_CONTROL_SESSIONS.has(value)
+  } catch {
+    return false
+  }
+}
+
+export function readAsyncRouteControlCircuitState(session) {
+  if (!isAsyncRouteControlSession(session)) invalid()
+  return genuineCircuitState.call(session)
+}
+
+export function destroyAsyncRouteControlSession(session, reason, options) {
+  if (!isAsyncRouteControlSession(session)) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+  return genuineDestroy.call(session, reason, options)
+}
+
+export function stopAsyncRouteControlSession(session) {
+  if (!isAsyncRouteControlSession(session)) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+  return genuineStop.call(session)
 }
 
 export { ASYNC_CIRCUIT_STATE, ASYNC_REGISTRATION_STATE }

@@ -10,13 +10,12 @@ import {
   TOPOLOGY_ROLE,
   UdxCellEndpoint,
   BootstrapEnvelopeCodec,
-  CellCodec,
   createLinkSetupAuthority,
   cryptoSuite,
   signTopologyGrant
 } from '../index.js'
 import { readEstablishedLink } from '../lib/link-bootstrap-session.js'
-import { selectUdxLoopbackHosts } from '../lib/udx-adapter.js'
+import { UDX_SEND_CELL, selectUdxLoopbackHosts } from '../lib/udx-adapter.js'
 import { safetyRoleIdentity, seed } from './helpers.js'
 
 function random(first) {
@@ -137,12 +136,12 @@ test('real UDX numeric loopback authenticates bootstrap and one established cell
     finish = resolve
     fail = reject
   })
-  const cell = new CellCodec({ crypto: cryptoSuite, cellSize: 1200, padding: random(0x51) })
   const leftEndpoint = new UdxCellEndpoint({
     host: leftHost,
     port: leftPort,
     onBootstrap: (packet) => leftSession.receive(packet),
-    onCell() {}
+    onCell() {},
+    onLinkFailure() {}
   })
   const rightEndpoint = new UdxCellEndpoint({
     host: rightHost,
@@ -150,25 +149,14 @@ test('real UDX numeric loopback authenticates bootstrap and one established cell
     onBootstrap: (packet) => rightSession.receive(packet),
     onCell(packet) {
       try {
-        const state = readEstablishedLink(rightSession.established)
-        const context = state.contexts[CELL_CLASS.STREAM].rx
-        received = cell.open(
-          {
-            key: context.key,
-            noncePrefix: context.noncePrefix,
-            receiver: context.counter,
-            expectedClass: CELL_CLASS.STREAM,
-            expectedDirection: DIRECTION.FORWARD,
-            expectedEpoch: epoch,
-            expectedCircuitId: common.circuitId
-          },
-          packet
-        )
+        received = [b4a.from(packet)]
         finish()
       } catch (err) {
         fail(err)
       }
-    }
+      return true
+    },
+    onLinkFailure() {}
   })
   try {
     await leftEndpoint.bind()
@@ -216,19 +204,16 @@ test('real UDX numeric loopback authenticates bootstrap and one established cell
       await new Promise((resolve) => setTimeout(resolve, 0))
     }
     const state = readEstablishedLink(established)
-    const context = state.contexts[CELL_CLASS.STREAM].tx
-    const packet = cell.seal({
-      key: context.key,
-      noncePrefix: context.noncePrefix,
-      senderCounter: context.counter,
-      class: CELL_CLASS.STREAM,
-      direction: DIRECTION.FORWARD,
-      epoch,
-      circuitId: common.circuitId,
-      payload: b4a.from('loopback-private-cell')
-    })
     const sendHandle = leftEndpoint.openLink(leftDirectory.handle)
-    t.is(await leftEndpoint.send(sendHandle, packet), true)
+    t.is(
+      await leftEndpoint[UDX_SEND_CELL](sendHandle, {
+        class: CELL_CLASS.STREAM,
+        direction: DIRECTION.FORWARD,
+        generation: 1n,
+        payload: b4a.from('loopback-private-cell')
+      }),
+      true
+    )
     const bounded = new Promise((resolve, reject) => {
       timeout = setTimeout(() => reject(new Error('UDX loopback deadline exceeded')), 5_000)
       completed.then(resolve, reject)

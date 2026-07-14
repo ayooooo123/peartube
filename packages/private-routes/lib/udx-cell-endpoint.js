@@ -1,7 +1,10 @@
 import b4a from 'b4a'
 
 import { BOOTSTRAP_CLASS, BOOTSTRAP_SIZE } from './bootstrap-envelope.js'
+import { MAX_CELL_PAYLOAD, CellCodec } from './cell-codec.js'
+import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
+import { createLinkControlBoundary, LinkControlSession } from './link-control-session.js'
 import {
   LINK_BOOTSTRAP_SESSION_INVALIDATE,
   LinkBootstrapSession
@@ -11,7 +14,15 @@ import {
   subscribeLinkHandleClose,
   unsubscribeLinkHandleClose
 } from './topology-grant.js'
-import { UDX_LINK_CLOSE, UDX_LINK_OPEN, UDX_SEND_DISPATCH, UdxAdapter } from './udx-adapter.js'
+import {
+  UDX_LINK_CLOSE,
+  UDX_LINK_OPEN,
+  UDX_LINK_STATS,
+  UDX_SEND_CELL,
+  UDX_SEND_DISPATCH,
+  UdxAdapter
+} from './udx-adapter.js'
+import { CELL_CLASS, DIRECTION } from './protocol.js'
 
 export const DEFAULT_MAX_UDX_QUEUED_PACKETS = 64
 export const DEFAULT_MAX_UDX_QUEUED_BYTES = BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_QUEUED_PACKETS
@@ -22,6 +33,11 @@ export const DEFAULT_MAX_UDX_INBOUND_BYTES_PER_PEER =
   BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER
 const ENDPOINTS = new WeakMap()
 const SEND_HANDLES = new WeakMap()
+const ROUTE_GENERATION_BYTES = 8
+const STREAM_LOGICAL_COUNTER_BYTES = 8
+const MAX_DATAGRAM_PAYLOAD = MAX_CELL_PAYLOAD - ROUTE_GENERATION_BYTES
+const MAX_STREAM_PAYLOAD = MAX_CELL_PAYLOAD - ROUTE_GENERATION_BYTES - STREAM_LOGICAL_COUNTER_BYTES
+const MAX_UINT64 = (1n << 64n) - 1n
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -65,6 +81,219 @@ function clear(value) {
   } catch {}
 }
 
+function readUint64BE(buffer, offset) {
+  let value = 0n
+  for (let index = offset; index < offset + 8; index++) {
+    value = (value << 8n) | BigInt(buffer[index])
+  }
+  return value
+}
+
+function writeUint64BE(buffer, value, offset) {
+  for (let index = offset + 7; index >= offset; index--) {
+    buffer[index] = Number(value & 0xffn)
+    value >>= 8n
+  }
+}
+
+function frameEstablished(cellClass, generation, logicalCounter, payload) {
+  const prefix =
+    ROUTE_GENERATION_BYTES + (cellClass === CELL_CLASS.STREAM ? STREAM_LOGICAL_COUNTER_BYTES : 0)
+  const framed = b4a.allocUnsafeSlow(prefix + payload.byteLength)
+  writeUint64BE(framed, generation, 0)
+  if (cellClass === CELL_CLASS.STREAM) {
+    writeUint64BE(framed, logicalCounter, ROUTE_GENERATION_BYTES)
+  }
+  framed.set(payload, prefix)
+  return framed
+}
+
+function opposite(direction) {
+  return direction === DIRECTION.FORWARD ? DIRECTION.REVERSE : DIRECTION.FORWARD
+}
+
+function establishedOptions(value) {
+  if (!isObject(value) || !isObject(value.linkState)) invalid()
+  const { linkState, mode, now, schedule, cancel, randomBytes } = value
+  if (
+    (mode !== 'initiate' && mode !== 'accept') ||
+    !b4a.isBuffer(linkState.circuitId) ||
+    linkState.circuitId.byteLength !== 16 ||
+    typeof linkState.epoch !== 'bigint' ||
+    !isObject(linkState.contexts) ||
+    typeof now !== 'function' ||
+    typeof schedule !== 'function' ||
+    typeof cancel !== 'function' ||
+    typeof randomBytes !== 'function'
+  ) {
+    invalid()
+  }
+  for (const cellClass of [CELL_CLASS.CONTROL, CELL_CLASS.STREAM, CELL_CLASS.DATAGRAM]) {
+    const pair = linkState.contexts[cellClass]
+    if (!isObject(pair) || !isObject(pair.tx) || !isObject(pair.rx)) invalid()
+  }
+  return { linkState, mode, now, schedule, cancel, randomBytes }
+}
+
+function receiveEstablished(state, authority, packet) {
+  const cellClass = packet[1]
+  const direction = packet[2]
+  const counter = readUint64BE(packet, 28)
+  const expectedDirection = opposite(authority.heartbeatDirection)
+  const context = authority.linkState.contexts[cellClass]
+  if (!context || direction !== expectedDirection) throw PrivateRouteError.CELL_INVALID()
+  const before = cellClass === CELL_CLASS.DATAGRAM ? null : context.rx.counter.next
+  const delivery = authority.cellCodec.open(
+    {
+      key: context.rx.key,
+      noncePrefix: context.rx.noncePrefix,
+      receiver: context.rx.counter,
+      expectedClass: cellClass,
+      expectedDirection,
+      expectedEpoch: authority.linkState.epoch,
+      expectedCircuitId: authority.linkState.circuitId
+    },
+    packet
+  )
+  const values = cellClass === CELL_CLASS.DATAGRAM ? [delivery] : delivery
+  if (values.length === 0) {
+    const event = authority.linkBoundary.pushAuthenticated({
+      link: authority,
+      epoch: authority.linkState.epoch,
+      circuitId: authority.linkState.circuitId,
+      class: cellClass,
+      direction,
+      generation: cellClass === CELL_CLASS.CONTROL ? 0n : 1n,
+      counter,
+      deliver: false,
+      payload: b4a.alloc(0)
+    })
+    return authority.linkControl.receiveAuthenticated(event)
+  }
+  let accepted = true
+  try {
+    for (let index = 0; index < values.length; index++) {
+      const payload = values[index]
+      if (cellClass !== CELL_CLASS.CONTROL && payload.byteLength < ROUTE_GENERATION_BYTES) invalid()
+      const generation = cellClass === CELL_CLASS.CONTROL ? 0n : readUint64BE(payload, 0)
+      if (cellClass !== CELL_CLASS.CONTROL && generation === 0n) invalid()
+      if (
+        cellClass === CELL_CLASS.STREAM &&
+        payload.byteLength < ROUTE_GENERATION_BYTES + STREAM_LOGICAL_COUNTER_BYTES
+      ) {
+        invalid()
+      }
+      const logicalCounter =
+        cellClass === CELL_CLASS.STREAM ? readUint64BE(payload, ROUTE_GENERATION_BYTES) : counter
+      const prefix =
+        cellClass === CELL_CLASS.CONTROL
+          ? 0
+          : ROUTE_GENERATION_BYTES +
+            (cellClass === CELL_CLASS.STREAM ? STREAM_LOGICAL_COUNTER_BYTES : 0)
+      const applicationPayload =
+        cellClass === CELL_CLASS.CONTROL ? payload : payload.subarray(prefix)
+      const deliveredCounter =
+        cellClass === CELL_CLASS.STREAM
+          ? logicalCounter
+          : cellClass === CELL_CLASS.DATAGRAM
+            ? counter
+            : before + BigInt(index)
+      const event = authority.linkBoundary.pushAuthenticated({
+        link: authority,
+        epoch: authority.linkState.epoch,
+        circuitId: authority.linkState.circuitId,
+        class: cellClass,
+        direction,
+        generation,
+        counter: deliveredCounter,
+        payload: applicationPayload
+      })
+      const current = authority.linkControl.receiveAuthenticated(event, {
+        dispatchActor(fragment, metadata) {
+          return state.onCell(fragment, authority.handle, metadata) === true
+        },
+        enqueueStream(owned, metadata) {
+          return state.onCell(owned, authority.handle, metadata) === true
+        },
+        enqueueDatagram(owned, metadata) {
+          return state.onCell(owned, authority.handle, metadata) === true
+        }
+      })
+      if (!current) accepted = false
+    }
+  } finally {
+    for (const payload of values) clear(payload)
+  }
+  return accepted
+}
+
+function installLinkControl(state, record, value) {
+  const options = establishedOptions(value)
+  const heartbeatDirection = options.mode === 'initiate' ? DIRECTION.FORWARD : DIRECTION.REVERSE
+  const boundary = createLinkControlBoundary({
+    link: record,
+    epoch: options.linkState.epoch,
+    circuitId: options.linkState.circuitId
+  })
+  const codec = new CellCodec({ crypto: cryptoSuite, cellSize: BOOTSTRAP_SIZE })
+  record.linkState = options.linkState
+  record.cellCodec = codec
+  record.linkBoundary = boundary
+  record.heartbeatDirection = heartbeatDirection
+  record.streamCounters = new Map()
+  const linkControl = new LinkControlSession({
+    control: boundary.consumer,
+    circuitId: options.linkState.circuitId,
+    epoch: options.linkState.epoch,
+    heartbeatDirection,
+    now: options.now,
+    schedule: options.schedule,
+    cancel: options.cancel,
+    randomBytes: options.randomBytes,
+    sendControl(payload) {
+      const context = options.linkState.contexts[CELL_CLASS.CONTROL].tx
+      const direction = payload[4]
+      if (direction !== heartbeatDirection && direction !== opposite(heartbeatDirection)) invalid()
+      let packet = null
+      try {
+        packet = codec.seal({
+          key: context.key,
+          noncePrefix: context.noncePrefix,
+          senderCounter: context.counter,
+          class: CELL_CLASS.CONTROL,
+          direction,
+          epoch: options.linkState.epoch,
+          circuitId: options.linkState.circuitId,
+          payload
+        })
+        return state.endpoint.send(record.handle, packet)
+      } finally {
+        clear(packet)
+      }
+    },
+    cancelPending() {
+      if (record.phase === 'OPEN') record.phase = 'CLOSING'
+      for (const queued of state.queue) {
+        if (queued.authority === record) queued.cancelled = true
+      }
+      if (state.dispatching && state.dispatching.authority === record) {
+        state.dispatching.cancelled = true
+      }
+    },
+    notifyCircuit(direction, reason) {
+      state.onLinkFailure(record.handle, direction, reason)
+    },
+    closeLink() {
+      state.endpoint[UDX_LINK_CLOSE](record.handle)
+    }
+  })
+  if (state.closing || record.phase !== 'OPEN' || record.endpoint !== state.endpoint) {
+    linkControl.close()
+    throw unavailable()
+  }
+  record.linkControl = linkControl
+}
+
 function detachAbort(record) {
   const signal = record.signal
   const abort = record.abort
@@ -78,20 +307,28 @@ function detachAbort(record) {
   } catch {}
 }
 
-function rejectRecord(record, error) {
-  if (record.settled) return
-  record.settled = true
+function releasePacket(record) {
   clear(record.packet)
   record.packet = null
+}
+
+function rejectCaller(record, error) {
+  if (record.settled) return
+  record.settled = true
   detachAbort(record)
   record.reject(error)
+  return true
+}
+
+function rejectRecord(record, error) {
+  if (!rejectCaller(record, error)) return
+  releasePacket(record)
 }
 
 function settleRecord(record, value) {
   if (record.settled) return
   record.settled = true
-  clear(record.packet)
-  record.packet = null
+  releasePacket(record)
   detachAbort(record)
   record.resolve(value)
 }
@@ -119,6 +356,13 @@ function rejectQueue(state, error) {
 function invalidateRecord(state, record) {
   if (!record || record.phase === 'CLOSED') return
   record.phase = 'CLOSED'
+  const linkControl = record.linkControl
+  record.linkControl = null
+  if (linkControl) {
+    try {
+      linkControl.close()
+    } catch {}
+  }
   if (record.closeSubscription) {
     unsubscribeLinkHandleClose(record.closeSubscription)
     record.closeSubscription = null
@@ -138,6 +382,7 @@ function invalidateRecord(state, record) {
   }
   if (state.dispatching && state.dispatching.authority === record) {
     state.dispatching.cancelled = true
+    rejectCaller(state.dispatching, unavailable())
   }
   if (state.sources.get(record.source) === record.handle) state.sources.delete(record.source)
   state.handles.delete(record.linkHandle)
@@ -147,6 +392,10 @@ function invalidateRecord(state, record) {
   record.peer = null
   record.peerKey = null
   record.linkHandle = null
+  record.linkState = null
+  record.cellCodec = null
+  record.linkBoundary = null
+  record.streamCounters = null
 }
 
 function validateRecord(state, record) {
@@ -191,6 +440,7 @@ function pump(state) {
       () => rejectRecord(record, unavailable())
     )
     .finally(() => {
+      releasePacket(record)
       state.nativeWaits.delete(completion)
       state.inFlight--
       state.reservedPackets--
@@ -279,7 +529,9 @@ function receive(state, packet, from) {
     const result =
       owned[1] === BOOTSTRAP_CLASS
         ? state.onBootstrap(owned, sendHandle)
-        : state.onCell(owned, sendHandle)
+        : authority.linkControl
+          ? receiveEstablished(state, authority, owned)
+          : state.onCell(owned, sendHandle)
     if (result === state.closePromise) settleOwnership()
     Promise.resolve(result).then(settleOwnership, settleOwnership)
   } catch {
@@ -291,7 +543,7 @@ export class UdxCellEndpoint {
   constructor(options = {}) {
     if (!isObject(options)) invalid()
     const adapter = options.adapter || new UdxAdapter()
-    const { host, port, onBootstrap, onCell } = options
+    const { host, port, onBootstrap, onCell, onLinkFailure } = options
     if (
       !adapter ||
       typeof adapter.create !== 'function' ||
@@ -300,7 +552,8 @@ export class UdxCellEndpoint {
       port < 1 ||
       port > 0xffff ||
       typeof onBootstrap !== 'function' ||
-      typeof onCell !== 'function'
+      typeof onCell !== 'function' ||
+      typeof onLinkFailure !== 'function'
     ) {
       invalid()
     }
@@ -329,6 +582,7 @@ export class UdxCellEndpoint {
       port,
       onBootstrap,
       onCell,
+      onLinkFailure,
       maxQueuedPackets: bound(options.maxQueuedPackets, DEFAULT_MAX_UDX_QUEUED_PACKETS),
       maxQueuedBytes: bound(options.maxQueuedBytes, DEFAULT_MAX_UDX_QUEUED_BYTES),
       maxInboundPackets: bound(options.maxInboundPackets, DEFAULT_MAX_UDX_INBOUND_PACKETS),
@@ -442,6 +696,12 @@ export class UdxCellEndpoint {
       source,
       phase: 'PENDING',
       session: null,
+      linkControl: null,
+      linkBoundary: null,
+      linkState: null,
+      cellCodec: null,
+      heartbeatDirection: null,
+      streamCounters: null,
       closeSubscription: null
     }
     SEND_HANDLES.set(sendHandle, record)
@@ -483,6 +743,7 @@ export class UdxCellEndpoint {
     if (!validateRecord(state, authority)) {
       return Promise.reject(PrivateRouteError.UNAUTHORIZED())
     }
+    if (authority.phase === 'CLOSING') return Promise.reject(stateError())
     if (!b4a.isBuffer(packet) || packet.byteLength !== BOOTSTRAP_SIZE || !isObject(options)) {
       return Promise.reject(PrivateRouteError.INVALID_ROUTE())
     }
@@ -548,6 +809,7 @@ export class UdxCellEndpoint {
       record.abort = () => {
         record.cancelled = true
         if (removeQueued(state, record) || !record.admitted) rejectRecord(record, unavailable())
+        else rejectCaller(record, unavailable())
       }
       if (signal) {
         let abortedAfter = false
@@ -590,17 +852,112 @@ export class UdxCellEndpoint {
     })
   }
 
-  [UDX_LINK_OPEN](handle) {
+  [UDX_LINK_OPEN](handle, established) {
     const state = ENDPOINTS.get(this)
     const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
     if (state.closing || !validateRecord(state, record)) throw PrivateRouteError.UNAUTHORIZED()
+    if (record.phase === 'OPEN' || record.linkControl) throw stateError()
     record.phase = 'OPEN'
+    if (established !== undefined) {
+      try {
+        installLinkControl(state, record, established)
+      } catch (err) {
+        invalidateRecord(state, record)
+        throw err
+      }
+    }
   }
 
   [UDX_LINK_CLOSE](handle) {
     const state = ENDPOINTS.get(this)
     const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
     if (record && record.endpoint === this) invalidateRecord(state, record)
+  }
+
+  [UDX_SEND_CELL](handle, value) {
+    const state = ENDPOINTS.get(this)
+    const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
+    if (
+      state.closing ||
+      !validateRecord(state, record) ||
+      record.phase !== 'OPEN' ||
+      !record.linkControl ||
+      !isObject(value)
+    ) {
+      return Promise.reject(PrivateRouteError.UNAUTHORIZED())
+    }
+    const cellClass = value.class
+    const direction = value.direction
+    const generation = value.generation
+    const payload = value.payload
+    if (
+      (cellClass !== CELL_CLASS.STREAM && cellClass !== CELL_CLASS.DATAGRAM) ||
+      direction !== record.heartbeatDirection ||
+      typeof generation !== 'bigint' ||
+      generation < 1n ||
+      generation > MAX_UINT64 ||
+      !b4a.isBuffer(payload) ||
+      payload.byteLength >
+        (cellClass === CELL_CLASS.STREAM ? MAX_STREAM_PAYLOAD : MAX_DATAGRAM_PAYLOAD)
+    ) {
+      return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+    }
+    const context = record.linkState.contexts[cellClass].tx
+    let logical = null
+    let logicalKey = null
+    let logicalState = null
+    if (cellClass === CELL_CLASS.STREAM) {
+      logicalKey = `${direction}:${generation}`
+      logicalState = record.streamCounters.get(logicalKey) || { next: 0n, closed: false }
+      if (logicalState.closed) return Promise.reject(PrivateRouteError.COUNTER_EXHAUSTED())
+      logical = logicalState.next
+    }
+    let packet = null
+    let framed = null
+    try {
+      framed = frameEstablished(cellClass, generation, logical, payload)
+      packet = record.cellCodec.seal({
+        key: context.key,
+        noncePrefix: context.noncePrefix,
+        senderCounter: context.counter,
+        class: cellClass,
+        direction,
+        epoch: record.linkState.epoch,
+        circuitId: record.linkState.circuitId,
+        payload: framed
+      })
+      if (cellClass === CELL_CLASS.STREAM) {
+        record.linkControl.trackStream(direction, generation, logical, payload.byteLength)
+        if (logical === MAX_UINT64) logicalState.closed = true
+        else logicalState.next = logical + 1n
+        record.streamCounters.set(logicalKey, logicalState)
+      }
+      const sending = this.send(handle, packet)
+      return sending.catch((err) => {
+        if (record.linkControl) record.linkControl.close()
+        throw err
+      })
+    } catch (err) {
+      if (record.linkControl) record.linkControl.close()
+      return Promise.reject(err instanceof PrivateRouteError ? err : unavailable())
+    } finally {
+      clear(packet)
+      clear(framed)
+    }
+  }
+
+  [UDX_LINK_STATS](handle) {
+    const state = ENDPOINTS.get(this)
+    const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
+    if (!validateRecord(state, record) || !record.linkControl) {
+      throw PrivateRouteError.UNAUTHORIZED()
+    }
+    return {
+      pendingStreams: record.linkControl.pendingStreams,
+      pendingBytes: record.linkControl.pendingBytes,
+      pendingSends: record.linkControl.pendingSends,
+      closed: record.linkControl.closed
+    }
   }
 
   close() {
@@ -622,6 +979,7 @@ export class UdxCellEndpoint {
         state.handles = new WeakMap()
         state.onBootstrap = null
         state.onCell = null
+        state.onLinkFailure = null
         state.udx = null
       }
     })()

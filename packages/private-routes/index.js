@@ -204,6 +204,19 @@ export {
   AsyncRouteControlSession
 } from './lib/async-route-control-session.js'
 export {
+  DEFAULT_MAX_UNACKNOWLEDGED_BYTES,
+  DEFAULT_MAX_UNACKNOWLEDGED_STREAMS,
+  DEFAULT_MAX_STREAM_SPACES,
+  DEFAULT_MAX_CONTROL_SENDS,
+  LINK_CIRCUIT_TEARDOWN_TIMEOUT,
+  LINK_PING_AFTER,
+  LINK_UNRESPONSIVE_AFTER,
+  STREAM_ACK_TIMEOUT,
+  LinkCircuitTeardown,
+  createOpenCircuitDirectionCapability,
+  LinkControlSession
+} from './lib/link-control-session.js'
+export {
   DEFAULT_HALF_OPEN_TIMEOUT,
   DEFAULT_MAX_CIRCUITS,
   DEFAULT_MAX_CIRCUITS_PER_SOURCE,

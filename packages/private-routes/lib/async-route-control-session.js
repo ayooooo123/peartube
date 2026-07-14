@@ -13,7 +13,7 @@ import {
   ACTOR_CONTROL_KIND,
   CIRCUIT_DESTROY_REASON
 } from './remote-control.js'
-import { isRemoteActorHost } from './remote-actor-host.js'
+import { isRemoteActorHost, requestRemoteActorHost } from './remote-actor-host.js'
 
 export const ASYNC_ROUTE_CONTROL_DEADLINE = 5_000
 
@@ -138,6 +138,8 @@ export class AsyncRouteControlSession {
   #circuitId = null
   #generation = null
   #current = null
+  #abortPromise = null
+  #destroyPromise = null
   #stopped = false
   #stopPromise = null
   #ownedBytes = 0
@@ -286,6 +288,17 @@ export class AsyncRouteControlSession {
   async abort(abortValue, options = {}) {
     object(options)
     if (this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTED) return true
+    if (this.#abortPromise) return this.#abortPromise
+    const operation = this.#runAbort(abortValue, options)
+    this.#abortPromise = operation
+    try {
+      return await operation
+    } finally {
+      if (this.#abortPromise === operation) this.#abortPromise = null
+    }
+  }
+
+  async #runAbort(abortValue, options) {
     let supplied = null
     let context = null
     try {
@@ -350,6 +363,17 @@ export class AsyncRouteControlSession {
       this.#circuitState !== ASYNC_CIRCUIT_STATE.DESTROYING
     )
       circuitState()
+    if (this.#destroyPromise) return this.#destroyPromise
+    const operation = this.#runDestroy(reason, options)
+    this.#destroyPromise = operation
+    try {
+      return await operation
+    } finally {
+      if (this.#destroyPromise === operation) this.#destroyPromise = null
+    }
+  }
+
+  async #runDestroy(reason, options) {
     if (this.#current) {
       if (this.#circuitState !== ASYNC_CIRCUIT_STATE.ACTIVATING) circuitState()
       this.#current.signal.abort()
@@ -673,7 +697,8 @@ export class AsyncRouteControlSession {
     let result
     try {
       if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) context.dispatched = true
-      result = await this.#remote.request(
+      result = await requestRemoteActorHost(
+        this.#remote,
         kind,
         this.#actorId,
         circuitId,
@@ -704,7 +729,8 @@ export class AsyncRouteControlSession {
   async #cleanupRequest(context, kind, circuitId, generationValue, requestBody) {
     let response = null
     try {
-      response = await this.#remote.request(
+      response = await requestRemoteActorHost(
+        this.#remote,
         kind,
         this.#actorId,
         circuitId,

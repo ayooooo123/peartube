@@ -28,6 +28,7 @@ export const DEFAULT_MAX_REMOTE_TOMBSTONES = 64
 const MAX_UINT64 = (1n << 64n) - 1n
 const ACTOR_HANDLES = new WeakMap()
 const REMOTE_ACTOR_HOSTS = new WeakSet()
+const REMOTE_ACTOR_DISPATCH = new WeakMap()
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const bufferFill = Uint8Array.prototype.fill
@@ -230,6 +231,9 @@ export class RemoteActorHost {
     this.#maxReplay = bound(options.maxReplay, DEFAULT_MAX_REMOTE_REPLAYS)
     this.#maxTombstones = bound(options.maxTombstones, DEFAULT_MAX_REMOTE_TOMBSTONES)
     REMOTE_ACTOR_HOSTS.add(this)
+    REMOTE_ACTOR_DISPATCH.set(this, (...args) =>
+      RemoteActorHost.prototype.request.call(this, ...args)
+    )
   }
 
   get stats() {
@@ -859,4 +863,32 @@ export function isRemoteActorHost(value) {
   } catch {
     return false
   }
+}
+
+// Package-internal non-virtual dispatch. Async control never calls a mutable
+// instance property at its authentication boundary.
+export function requestRemoteActorHost(host, ...args) {
+  const dispatch = REMOTE_ACTOR_DISPATCH.get(host)
+  if (!dispatch) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+  return dispatch(...args)
+}
+
+// Test-only seam, deliberately absent from the package root export map. It
+// preserves unit fault injection without weakening production dispatch.
+export function createRemoteActorHostTestDouble(request) {
+  if (typeof request !== 'function') invalid()
+  const host = new RemoteActorHost({
+    control: {},
+    sendControl() {
+      return true
+    },
+    now: () => 0,
+    randomBytes: () => b4a.alloc(8, 1),
+    schedule() {
+      return Object.freeze({})
+    },
+    cancel() {}
+  })
+  REMOTE_ACTOR_DISPATCH.set(host, request)
+  return host
 }

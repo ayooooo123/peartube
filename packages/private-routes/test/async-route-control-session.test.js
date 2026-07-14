@@ -37,6 +37,7 @@ import {
   RemoteControlMux,
   createRemoteActorControlBoundary
 } from '../lib/remote-control.js'
+import { createRemoteActorHostTestDouble } from '../lib/remote-actor-host.js'
 import { DIRECTION } from '../lib/protocol.js'
 import { privateRoleIdentity, seed } from './helpers.js'
 
@@ -49,30 +50,8 @@ function sequenceBytes(start) {
   return (size) => b4a.alloc(size, value++)
 }
 
-class ControlledRemoteActorHost extends RemoteActorHost {
-  constructor(request) {
-    super({
-      control: {},
-      sendControl() {
-        return true
-      },
-      now: () => 1_000,
-      randomBytes: sequenceBytes(1),
-      schedule() {
-        return Object.freeze({})
-      },
-      cancel() {}
-    })
-    this.handler = request
-  }
-
-  request(...args) {
-    return this.handler(...args)
-  }
-}
-
 function controlledRemote(request) {
-  return new ControlledRemoteActorHost(request)
+  return createRemoteActorHostTestDouble(request)
 }
 
 function scheduler() {
@@ -493,6 +472,40 @@ test('plain request-shaped objects are not an authenticated remote boundary', (t
   t.is(failure && failure.code, 'INVALID_ROUTE')
 })
 
+test('monkey-patching a branded host cannot bypass genuine activation dispatch', async (t) => {
+  const timers = scheduler()
+  const host = new RemoteActorHost({
+    control: {},
+    sendControl() {
+      return false
+    },
+    now: () => 1_000,
+    randomBytes: sequenceBytes(1),
+    schedule: timers.schedule,
+    cancel: timers.cancel
+  })
+  host.request = () => Promise.resolve(bytes(305, 1))
+  const control = session(host)
+  const fixture = activationFixture(69)
+  t.is(
+    await rejectionCode(
+      control.activate({
+        body: fixture.body,
+        circuitId: fixture.circuitId,
+        generation: fixture.generation,
+        activationVerifier: fixture.verifier
+      })
+    ),
+    'ROUTE_UNAVAILABLE'
+  )
+  t.is(control.circuitState, ASYNC_CIRCUIT_STATE.DESTROYING)
+  t.is(host.stats.pending, 0)
+  t.is(timers.records.size, 0)
+  await control.stop()
+  host.destroy()
+  fixture.destroy()
+})
+
 test('session uses the branded host boundary and authenticated activation proof end to end', async (t) => {
   const pair = authenticatedPair()
   const fixture = activationFixture(71, bytes(16, 0x72), 9n)
@@ -795,6 +808,30 @@ test('registration abort is allowed only from staged or prepared and repeats ide
   t.is(await rejectionCode(prepared.prepare(bytes(64, 7))), 'CIRCUIT_STATE')
 })
 
+test('concurrent repeated abort joins the one in-flight cleanup', async (t) => {
+  let resolveAbort = null
+  let abortCalls = 0
+  const peer = controlledRemote(function request(kind) {
+    if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) return Promise.resolve(bytes(195, 1))
+    if (kind === ACTOR_CONTROL_KIND.REGISTER_ABORT) {
+      abortCalls++
+      return new Promise((resolve) => {
+        resolveAbort = resolve
+      })
+    }
+    return Promise.resolve(b4a.alloc(0))
+  })
+  const control = session(peer)
+  await control.stage(bytes(64, 1), { abort: bytes(64, 2) })
+  const first = control.abort()
+  const second = control.abort()
+  t.is(abortCalls, 1)
+  resolveAbort(b4a.alloc(0))
+  t.is(await first, true)
+  t.is(await second, true)
+  t.is(control.registrationState, ASYNC_REGISTRATION_STATE.ABORTED)
+})
+
 test('finalized registration expires or revokes once without skipped transitions', async (t) => {
   const expired = session(remote())
   await expired.register(registration())
@@ -834,6 +871,43 @@ test('activation opens only after reply and destroy is the sole idempotent repea
     [ACTOR_CONTROL_KIND.ACTIVATE_CREATE, ACTOR_CONTROL_KIND.CIRCUIT_DESTROY]
   )
   proof.fill(0)
+  activation.destroy()
+})
+
+test('concurrent destroy and expiry join the one in-flight circuit cleanup', async (t) => {
+  let resolveDestroy = null
+  let destroyCalls = 0
+  const peer = controlledRemote(function request(kind) {
+    if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) return Promise.resolve(bytes(195, 1))
+    if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) return Promise.resolve(bytes(305, 2))
+    if (kind === ACTOR_CONTROL_KIND.CIRCUIT_DESTROY) {
+      destroyCalls++
+      return new Promise((resolve) => {
+        resolveDestroy = resolve
+      })
+    }
+    return Promise.resolve(b4a.alloc(0))
+  })
+  const control = session(peer)
+  await control.register(registration())
+  const activation = activationFixture(43)
+  const proof = await control.activate({
+    body: activation.body,
+    circuitId: activation.circuitId,
+    generation: activation.generation,
+    activationVerifier: activation.verifier
+  })
+  proof.fill(0)
+  const first = control.destroy()
+  const repeated = control.destroy()
+  const expiring = control.expire()
+  t.is(destroyCalls, 1)
+  resolveDestroy(b4a.alloc(0))
+  t.is(await first, true)
+  t.is(await repeated, true)
+  t.is(await expiring, true)
+  t.is(control.registrationState, ASYNC_REGISTRATION_STATE.EXPIRED)
+  t.is(control.circuitState, ASYNC_CIRCUIT_STATE.DESTROYED)
   activation.destroy()
 })
 
@@ -1020,17 +1094,14 @@ test('cancellation after authenticated stage attempts abort with the original de
 })
 
 test('stop from staged state sends the retained abort before clearing resources', async (t) => {
-  const calls = []
   const peer = remote()
-  const request = peer.request
-  peer.request = function (...args) {
-    calls.push(args[0])
-    return request.apply(this, args)
-  }
   const control = session(peer)
   await control.stage(bytes(64, 1), { abort: bytes(64, 2) })
   t.is(await control.stop(), true)
-  t.alike(calls, [ACTOR_CONTROL_KIND.REGISTER_STAGE, ACTOR_CONTROL_KIND.REGISTER_ABORT])
+  t.alike(
+    peer.calls.map((call) => call.kind),
+    [ACTOR_CONTROL_KIND.REGISTER_STAGE, ACTOR_CONTROL_KIND.REGISTER_ABORT]
+  )
   t.is(control.registrationState, ASYNC_REGISTRATION_STATE.ABORTED)
   t.is(control.stats.ownedBytes, 0)
 })

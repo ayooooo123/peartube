@@ -238,6 +238,28 @@ function alternateCreated(f, overrides) {
   }).message
 }
 
+function triggeredCrypto(method, action) {
+  let armed = false
+  let fired = false
+  const original = cryptoSuite[method]
+  const crypto = {
+    ...cryptoSuite,
+    [method](...args) {
+      if (armed && !fired) {
+        fired = true
+        action()
+      }
+      return original(...args)
+    }
+  }
+  return {
+    crypto,
+    arm() {
+      armed = true
+    }
+  }
+}
+
 function encodeCreate(f, overrides = {}) {
   return f.leftCodec.encode({
     type: BOOTSTRAP_TYPE.LINK_CREATE,
@@ -617,7 +639,7 @@ test('request table caches byte-identical responder replies and rejects ID/body 
   expectCode(
     t,
     () => table.respond(f.initiator.publicKey, decodedRequest, changed, respond),
-    'REPLAY'
+    'UNAUTHORIZED'
   )
 
   const cancel = f.leftCodec.encode({
@@ -630,6 +652,41 @@ test('request table caches byte-identical responder replies and rejects ID/body 
   const decodedCancel = f.rightCodec.decode(cancel, f.leftSource)
   t.is(table.acceptCancel(f.initiator.publicKey, decodedCancel), true)
   t.is(table.acceptCancel(f.initiator.publicKey, decodedCancel), false)
+  table.destroy()
+})
+
+test('responder cache correlates the decoded request with the exact raw packet before lookup', (t) => {
+  const f = fixture()
+  const firstRequest = encodeCreate(f, { requestId: 13n })
+  const secondRequest = encodeCreate(f, { requestId: 13n })
+  const firstDecoded = f.rightCodec.decode(firstRequest, f.leftSource)
+  const secondDecoded = f.rightCodec.decode(secondRequest, f.leftSource)
+  const { table } = tableFixture()
+  let responses = 0
+  const respond = (requestPacket) => {
+    responses++
+    return {
+      packet: f.rightCodec.encode({
+        type: BOOTSTRAP_TYPE.LINK_REJECT,
+        requestId: 13n,
+        epoch: 7n,
+        rejectedType: BOOTSTRAP_TYPE.LINK_CREATE,
+        rejectCode: BOOTSTRAP_REJECT_CODE.ROUTE_UNAVAILABLE,
+        requestPacket
+      })
+    }
+  }
+
+  table.respond(f.initiator.publicKey, firstDecoded, firstRequest, () => respond(firstRequest))
+  expectCode(
+    t,
+    () =>
+      table.respond(f.initiator.publicKey, secondDecoded, firstRequest, () =>
+        respond(secondRequest)
+      ),
+    'UNAUTHORIZED'
+  )
+  t.is(responses, 1)
   table.destroy()
 })
 
@@ -991,6 +1048,89 @@ test('codec cannot outlive revocation of its opaque LinkDirectory capability', (
   expectCode(t, () => encodeCreate(f), 'UNAUTHORIZED')
   t.is(f.leftCodec.receive(packet, f.rightSource), null)
   f.leftCodec.destroy()
+})
+
+test('codec never publishes encode output after mid-operation revocation or expiry', (t) => {
+  {
+    const f = fixture()
+    const codec = new BootstrapEnvelopeCodec({
+      crypto: cryptoSuite,
+      linkHandle: f.left.handle,
+      localIdentitySecretKey: f.initiator.secretKey,
+      padding(size) {
+        f.left.value.revoke({ digest32: f.left.digest32, epoch: 7n, runId32: seed(205) })
+        return b4a.alloc(size, 0xc1)
+      }
+    })
+    expectCode(
+      t,
+      () =>
+        codec.encode({
+          type: BOOTSTRAP_TYPE.LINK_CREATE,
+          requestId: 71n,
+          epoch: 7n,
+          body: f.started.message,
+          requestDigest32: ZERO_DIGEST
+        }),
+      'UNAUTHORIZED'
+    )
+  }
+
+  {
+    const f = fixture()
+    const triggered = triggeredCrypto('hash', () => f.clock.advance(9_000))
+    const codec = new BootstrapEnvelopeCodec({
+      crypto: triggered.crypto,
+      linkHandle: f.left.handle,
+      localIdentitySecretKey: f.initiator.secretKey,
+      padding: (size) => b4a.alloc(size, 0xc2)
+    })
+    triggered.arm()
+    expectCode(
+      t,
+      () =>
+        codec.encode({
+          type: BOOTSTRAP_TYPE.LINK_CREATE,
+          requestId: 72n,
+          epoch: 7n,
+          body: f.started.message,
+          requestDigest32: ZERO_DIGEST
+        }),
+      'UNAUTHORIZED'
+    )
+  }
+})
+
+test('codec never publishes decode output after mid-operation revocation or expiry', (t) => {
+  {
+    const f = fixture()
+    const packet = encodeCreate(f, { requestId: 73n })
+    const triggered = triggeredCrypto('verify', () =>
+      f.right.value.revoke({ digest32: f.right.digest32, epoch: 7n, runId32: seed(205) })
+    )
+    const codec = new BootstrapEnvelopeCodec({
+      crypto: triggered.crypto,
+      linkHandle: f.right.handle,
+      localIdentitySecretKey: f.responder.secretKey,
+      padding: (size) => b4a.alloc(size)
+    })
+    triggered.arm()
+    expectCode(t, () => codec.decode(packet, f.leftSource), 'UNAUTHORIZED')
+  }
+
+  {
+    const f = fixture()
+    const packet = encodeCreate(f, { requestId: 74n })
+    const triggered = triggeredCrypto('hash', () => f.clock.advance(9_000))
+    const codec = new BootstrapEnvelopeCodec({
+      crypto: triggered.crypto,
+      linkHandle: f.right.handle,
+      localIdentitySecretKey: f.responder.secretKey,
+      padding: (size) => b4a.alloc(size)
+    })
+    triggered.arm()
+    expectCode(t, () => codec.decode(packet, f.leftSource), 'UNAUTHORIZED')
+  }
 })
 
 test('request table rejects signed LINK_CREATED with mismatched inner circuit, local IDs, or expiry', (t) => {
@@ -1463,5 +1603,94 @@ test('random and timer adapters cannot reenter table mutation windows', (t) => {
     })
     expectCode(t, begin, 'ROUTE_UNAVAILABLE')
     expectCode(t, begin, 'CIRCUIT_STATE')
+  }
+})
+
+test('caught random and hash reentrancy cannot reach authority-producing callbacks', (t) => {
+  const f = fixture()
+
+  {
+    let table
+    let attempted = false
+    let encodes = 0
+    const begin = () =>
+      table.begin({
+        peerIdentity32: f.responder.publicKey,
+        epoch: 7n,
+        encode(requestId) {
+          encodes++
+          return encodeCreate(f, { requestId })
+        },
+        onResponse() {}
+      })
+    table = new BootstrapRequestTable({
+      crypto: cryptoSuite,
+      now: () => 1_000,
+      schedule: () => Object.freeze({}),
+      cancel() {},
+      randomBytes() {
+        if (!attempted) {
+          attempted = true
+          try {
+            begin()
+          } catch (err) {
+            if (!(err instanceof PrivateRouteError) || err.code !== 'CIRCUIT_STATE') throw err
+          }
+        }
+        return b4a.from([0, 0, 0, 0, 0, 0, 0, 21])
+      }
+    })
+    expectCode(t, begin, 'ROUTE_UNAVAILABLE')
+    t.is(encodes, 0)
+    expectCode(t, begin, 'CIRCUIT_STATE')
+  }
+
+  {
+    const request = encodeCreate(f, { requestId: 75n })
+    const decoded = f.rightCodec.decode(request, f.leftSource)
+    let table
+    let attempted = false
+    let responses = 0
+    const crypto = {
+      ...cryptoSuite,
+      hash(...args) {
+        if (!attempted) {
+          attempted = true
+          try {
+            table.cancel(Object.freeze({}))
+          } catch (err) {
+            if (!(err instanceof PrivateRouteError) || err.code !== 'CIRCUIT_STATE') throw err
+          }
+        }
+        return cryptoSuite.hash(...args)
+      }
+    }
+    table = new BootstrapRequestTable({
+      crypto,
+      now: () => 1_000,
+      schedule: () => Object.freeze({}),
+      cancel() {},
+      randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 22])
+    })
+    expectCode(
+      t,
+      () =>
+        table.respond(f.initiator.publicKey, decoded, request, () => {
+          responses++
+          return {
+            packet: f.rightCodec.encode({
+              type: BOOTSTRAP_TYPE.LINK_REJECT,
+              requestId: 75n,
+              epoch: 7n,
+              rejectedType: BOOTSTRAP_TYPE.LINK_CREATE,
+              rejectCode: BOOTSTRAP_REJECT_CODE.ROUTE_UNAVAILABLE,
+              requestPacket: request
+            })
+          }
+        }),
+      'ROUTE_UNAVAILABLE'
+    )
+    t.is(responses, 0)
+    expectCode(t, () => table.cancel(Object.freeze({})), 'CIRCUIT_STATE')
   }
 })

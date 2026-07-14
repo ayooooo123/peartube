@@ -496,6 +496,7 @@ export class BootstrapEnvelopeCodec {
     let padding = null
     let signedDigest = null
     let signature = null
+    let packetDigest32 = null
     try {
       packet = b4a.allocUnsafeSlow(BOOTSTRAP_SIZE)
       packet[0] = PROTOCOL_VERSION
@@ -526,7 +527,8 @@ export class BootstrapEnvelopeCodec {
       ])
       signature = safeSign(state.crypto, signedDigest, state.localIdentitySecretKey)
       bufferSet.call(packet, signature, 1136)
-      const packetDigest32 = safeHash(state.crypto, packet)
+      packetDigest32 = safeHash(state.crypto, packet)
+      requireLiveLink(state)
       VERIFIED_PACKETS.set(packet, {
         type,
         requestId,
@@ -538,7 +540,6 @@ export class BootstrapEnvelopeCodec {
         body: copy(body),
         packetDigest32: copy(packetDigest32)
       })
-      clear(packetDigest32)
       return packet
     } catch (err) {
       clear(packet)
@@ -547,6 +548,7 @@ export class BootstrapEnvelopeCodec {
     } finally {
       clear(signedDigest)
       clear(signature)
+      clear(packetDigest32)
       if (original) {
         clear(original.senderIdentity32)
         clear(original.recipientIdentity32)
@@ -563,7 +565,9 @@ export class BootstrapEnvelopeCodec {
     if (state.destroyed) circuitState()
     requireLiveLink(state)
     try {
-      return parsePacket(state, packet, source)
+      const decoded = parsePacket(state, packet, source)
+      requireLiveLink(state)
+      return decoded
     } catch (err) {
       if (err instanceof PrivateRouteError) throw err
       invalidRoute()
@@ -649,18 +653,20 @@ function tableSnapshot(state) {
   return value
 }
 
-function observeTable(state, record = null) {
+function observeTable(state, record = null, allowDestroyed = false) {
   if (!state.observer) return
   try {
     state.observer(tableSnapshot(state), record)
   } catch {
     // Test diagnostics are passive.
   }
+  if (state.destroyed && !allowDestroyed) unavailable()
 }
 
 function cancelTableTimer(state, key) {
   if (!state.timers.has(key)) return
   const timer = state.timers.get(key)
+  const wasDestroyed = state.destroyed
   state.timers.delete(key)
   try {
     state.cancel(timer)
@@ -668,6 +674,7 @@ function cancelTableTimer(state, key) {
     failTable(state)
     unavailable()
   }
+  if (!wasDestroyed && state.destroyed) unavailable()
 }
 
 function clearRecord(record) {
@@ -731,7 +738,7 @@ function failTable(state) {
   state.tombstones.clear()
   state.tokens = new WeakMap()
   state.released = true
-  observeTable(state)
+  observeTable(state, null, true)
   state.now = null
   state.schedule = null
   state.cancel = null
@@ -884,6 +891,7 @@ function ensureTombstoneReservation(state, peer) {
 function tableTime(state) {
   try {
     const value = state.now()
+    if (state.destroyed) unavailable()
     if (!Number.isSafeInteger(value) || value < 0 || value < state.lastNow) {
       failTable(state)
       unavailable()
@@ -902,6 +910,7 @@ function randomRequestId(state, peerIdentity32, epoch) {
     let bytes = null
     try {
       bytes = state.randomBytes(8)
+      if (state.destroyed) unavailable()
       if (!fixed(bytes, 8)) invalidRoute()
       const requestId = readU64(bytes, 0)
       if (requestId === 0n) continue
@@ -925,10 +934,19 @@ function validateDecoded(value) {
   return decoded
 }
 
+function tableHash(state, parts) {
+  const digest32 = safeHash(state.crypto, parts)
+  if (state.destroyed) {
+    clear(digest32)
+    unavailable()
+  }
+  return digest32
+}
+
 function validateEncoded(state, packet) {
   const encoded = fixed(packet, BOOTSTRAP_SIZE) ? VERIFIED_PACKETS.get(packet) : null
   if (!encoded) unauthorized()
-  const digest32 = safeHash(state.crypto, packet)
+  const digest32 = tableHash(state, packet)
   const matches = same(digest32, encoded.packetDigest32)
   clear(digest32)
   if (!matches) unauthorized()
@@ -1117,7 +1135,7 @@ export class BootstrapRequestTable {
         unauthorized()
       }
       if (!same(decoded.requestDigest32, record.digest32)) return false
-      const packetDigest32 = safeHash(state.crypto, packet)
+      const packetDigest32 = tableHash(state, packet)
       const packetMatches = same(packetDigest32, decoded.packetDigest32)
       clear(packetDigest32)
       if (!packetMatches) return false
@@ -1147,6 +1165,10 @@ export class BootstrapRequestTable {
       } catch {
         clearRecord(record)
         failTable(state)
+        unavailable()
+      }
+      if (state.destroyed) {
+        clearRecord(record)
         unavailable()
       }
       clearRecord(record)
@@ -1192,7 +1214,11 @@ export class BootstrapRequestTable {
       ) {
         invalidRoute()
       }
-      const digest32 = safeHash(state.crypto, requestPacket)
+      const digest32 = tableHash(state, requestPacket)
+      if (!same(digest32, decoded.packetDigest32)) {
+        clear(digest32)
+        unauthorized()
+      }
       const key = tableKey(peerIdentity32, decoded.epoch, decoded.requestId)
       const peer = peerKey(peerIdentity32)
       if (state.tombstones.has(key)) {
@@ -1215,10 +1241,6 @@ export class BootstrapRequestTable {
         clear(digest32)
         if (!identical) replay()
         return copy(previous.packet)
-      }
-      if (!same(digest32, decoded.packetDigest32)) {
-        clear(digest32)
-        unauthorized()
       }
       if (state.cache.size >= state.maxCache) {
         clear(digest32)
@@ -1266,7 +1288,7 @@ export class BootstrapRequestTable {
         clear(digest32)
         invalidRoute()
       }
-      const packetDigest32 = safeHash(state.crypto, packet)
+      const packetDigest32 = tableHash(state, packet)
       const responseMatches = same(packetDigest32, response.packetDigest32)
       clear(packetDigest32)
       if (!responseMatches) {

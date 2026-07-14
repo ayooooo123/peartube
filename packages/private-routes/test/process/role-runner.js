@@ -25,6 +25,7 @@ import {
 } from '../../lib/live-route-node.js'
 import { UdxAdapter } from '../../lib/udx-adapter.js'
 import runtime from '#private-route-process'
+import { createProcessCodecVectors } from './codec-vectors.js'
 import {
   CONTROL_COMMAND,
   CONTROL_EVENT,
@@ -149,6 +150,7 @@ export function createRoleRunner(options = {}) {
   let node = null
   let actor = null
   let destroyActor = null
+  let codecVectors = null
   let armedRevocation = null
   const armedFaults = new Set()
   const endpointLimits = Object.freeze({
@@ -418,6 +420,7 @@ export function createRoleRunner(options = {}) {
       case CONTROL_COMMAND.CONFIGURE:
         projection = command.projection
         fingerprints = linkFingerprints(projection)
+        codecVectors = createProcessCodecVectors()
         node = makeNode(projection, {
           ...adapters,
           adapter: createProcessFaultAdapter(adapters.adapter || new UdxAdapter(), armedFaults),
@@ -427,6 +430,7 @@ export function createRoleRunner(options = {}) {
           event: CONTROL_EVENT.CONFIGURED,
           role: projection.role,
           state: 'CONFIGURED',
+          codecVectors,
           ...runtimeRecord()
         })
         return true
@@ -450,6 +454,7 @@ export function createRoleRunner(options = {}) {
         send({
           ...snapshotEvent(CONTROL_EVENT.READY),
           ...runtimeRecord(),
+          codecVectors,
           milestone: await establishRole(),
           traffic: { ...traffic }
         })

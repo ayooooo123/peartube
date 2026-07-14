@@ -8,6 +8,7 @@ import {
   encodeCanonical,
   encodeControlFrame
 } from './control-channel.js'
+import { createProcessCodecVectors } from './codec-vectors.js'
 
 const SNAPSHOT_STATES = new Set([
   'NEW',
@@ -98,6 +99,7 @@ export function createConfigurationAuditor(fixture) {
   const expected = new Map()
   const frames = new Map()
   const fingerprints = new Map()
+  const codecVectors = createProcessCodecVectors()
   const addresses = []
   for (const role of roles) {
     const projection = fixture.projections.get(role)
@@ -164,7 +166,8 @@ export function createConfigurationAuditor(fixture) {
           'runtime',
           'runtimeVersion',
           'adapter',
-          'udxVersion'
+          'udxVersion',
+          'codecVectors'
         ])
         if (
           record.state !== 'CONFIGURED' ||
@@ -172,7 +175,8 @@ export function createConfigurationAuditor(fixture) {
           typeof record.runtimeVersion !== 'string' ||
           !record.runtimeVersion.startsWith('v') ||
           (record.adapter !== 'node-process' && record.adapter !== 'bare-process') ||
-          record.udxVersion !== '1.20.7'
+          record.udxVersion !== '1.20.7' ||
+          !sameCanonical(record.codecVectors, codecVectors)
         ) {
           invalid()
         }
@@ -183,6 +187,7 @@ export function createConfigurationAuditor(fixture) {
         delete snapshot.runtimeVersion
         delete snapshot.adapter
         delete snapshot.udxVersion
+        delete snapshot.codecVectors
         delete snapshot.milestone
         delete snapshot.traffic
         exactKeys(record, [
@@ -197,6 +202,7 @@ export function createConfigurationAuditor(fixture) {
           'runtimeVersion',
           'adapter',
           'udxVersion',
+          'codecVectors',
           'milestone',
           'traffic'
         ])
@@ -207,6 +213,7 @@ export function createConfigurationAuditor(fixture) {
           !record.runtimeVersion.startsWith('v') ||
           (record.adapter !== 'node-process' && record.adapter !== 'bare-process') ||
           record.udxVersion !== '1.20.7' ||
+          !sameCanonical(record.codecVectors, codecVectors) ||
           record.milestone !==
             (role === 'source'
               ? 'created-and-traffic-verified'

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { cryptoSuite } from '../../index.js'
 import { createLiveRouteFixture, LIVE_ROUTE_CONTACTS } from '../live-route-fixture.js'
 import { createProcessCoordinator as createCoordinator } from '../process/coordinator.js'
+import { createProcessCodecVectors } from '../process/codec-vectors.js'
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -11,6 +12,7 @@ export function registerLiveUdxProcessSuite(options) {
   const { label, runtime, runtimeVersion, adapter, command } = options
   const createProcessCoordinator = (value) =>
     createCoordinator({ ...value, command, expectedRuntime: runtime })
+  const codecVectors = createProcessCodecVectors()
 
   test(`seven ${label} role processes authenticate, report, and close independently`, async (t) => {
     t.timeout(15_000)
@@ -36,6 +38,7 @@ export function registerLiveUdxProcessSuite(options) {
         t.is(event.runtimeVersion, runtimeVersion, event.role)
         t.is(event.adapter, adapter, event.role)
         t.is(event.udxVersion, '1.20.7', event.role)
+        t.alike(event.codecVectors, codecVectors, event.role)
         t.is(event.state, 'OPEN', event.role)
         t.is(event.links, LIVE_ROUTE_CONTACTS[event.role].length, event.role)
         t.is(event.resources.openSockets, 1, event.role)

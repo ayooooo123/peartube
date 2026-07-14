@@ -2,6 +2,7 @@ import test from 'brittle'
 import b4a from 'b4a'
 
 import { createConfigurationAuditor } from './process/config-auditor.js'
+import { createProcessCodecVectors } from './process/codec-vectors.js'
 import { CONTROL_COMMAND, encodeControlFrame } from './process/control-channel.js'
 import { LIVE_ROUTE_ROLES, createLiveRouteFixture } from './live-route-fixture.js'
 
@@ -81,7 +82,8 @@ test('auditor locks event schemas and rejects address-bearing output', (t) => {
     runtime: 'node',
     runtimeVersion: 'v22.19.0',
     adapter: 'node-process',
-    udxVersion: '1.20.7'
+    udxVersion: '1.20.7',
+    codecVectors: createProcessCodecVectors()
   }
   t.is(auditor.auditEvent(role, configured), true)
   const leaked = { ...configured, address: projection.bind.host }

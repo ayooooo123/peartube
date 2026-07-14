@@ -1,6 +1,10 @@
 import b4a from 'b4a'
 
-import { isCompiledRouteDuplex, replaceCompiledRouteDuplex } from './compiled-route-duplex.js'
+import {
+  isCompiledRouteDuplex,
+  isCompiledRouteDuplexFor,
+  replaceCompiledRouteDuplex
+} from './compiled-route-duplex.js'
 import {
   activationChallengeCipher,
   createDestinationProof,
@@ -374,7 +378,16 @@ export class RouteManager {
             requestReplacement
           })
         )
-        const live = isCompiledRouteDuplex(circuit)
+        const branded = isCompiledRouteDuplex(circuit)
+        const live =
+          branded &&
+          isCompiledRouteDuplexFor(circuit, {
+            circuitContext,
+            descriptorId: descriptor.descriptorId,
+            circuitId,
+            epoch: descriptor.epoch
+          })
+        if (branded && !live) invalid()
         if (
           !live &&
           (!safeObject(circuit) ||
@@ -396,7 +409,12 @@ export class RouteManager {
       return Object.freeze({
         circuit,
         epoch: descriptor.epoch,
-        live: isCompiledRouteDuplex(circuit)
+        live: isCompiledRouteDuplexFor(circuit, {
+          circuitContext,
+          descriptorId: descriptor.descriptorId,
+          circuitId,
+          epoch: descriptor.epoch
+        })
       })
     } catch (err) {
       if (safetyRouteCapability) {

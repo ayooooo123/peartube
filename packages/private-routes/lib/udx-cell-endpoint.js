@@ -4,7 +4,11 @@ import { BOOTSTRAP_CLASS, BOOTSTRAP_SIZE } from './bootstrap-envelope.js'
 import { MAX_CELL_PAYLOAD, CellCodec } from './cell-codec.js'
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
-import { createLinkControlBoundary, LinkControlSession } from './link-control-session.js'
+import {
+  createLinkControlBoundary,
+  LinkControlSession,
+  readLinkControlStreamProgress
+} from './link-control-session.js'
 import {
   LINK_BOOTSTRAP_SESSION_INVALIDATE,
   LinkBootstrapSession
@@ -18,6 +22,7 @@ import {
   UDX_LINK_CLOSE,
   UDX_LINK_OPEN,
   UDX_LINK_STATS,
+  UDX_LINK_STREAM_PROGRESS,
   UDX_SEND_CELL,
   UDX_SEND_DISPATCH,
   UdxAdapter
@@ -958,6 +963,25 @@ export class UdxCellEndpoint {
       pendingSends: record.linkControl.pendingSends,
       closed: record.linkControl.closed
     }
+  }
+
+  [UDX_LINK_STREAM_PROGRESS](handle, direction, generation) {
+    const state = ENDPOINTS.get(this)
+    const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
+    if (!validateRecord(state, record) || !record.linkControl || !record.linkState) {
+      throw PrivateRouteError.UNAUTHORIZED()
+    }
+    const progress = readLinkControlStreamProgress(record.linkControl, direction, generation)
+    return Object.freeze({
+      epoch: record.linkState.epoch,
+      circuitId: b4a.from(record.linkState.circuitId),
+      direction,
+      generation,
+      highestSent: progress.highestSent,
+      highestAck: progress.highestAck,
+      pendingStreams: progress.pendingStreams,
+      pendingBytes: progress.pendingBytes
+    })
   }
 
   close() {

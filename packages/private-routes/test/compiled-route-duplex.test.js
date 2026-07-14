@@ -36,12 +36,13 @@ import {
 } from '../index.js'
 import {
   failCompiledRouteDuplex,
+  mintCompiledRouteReady,
   readCompiledRouteDuplexStats,
   receiveCompiledRouteCell,
   replaceCompiledRouteDuplex
 } from '../lib/compiled-route-duplex.js'
 import { mintCreatedRoutePayloadContext, ROUTE_ENDPOINT } from '../lib/route-payload.js'
-import { UDX_LINK_OPEN } from '../lib/udx-adapter.js'
+import { UDX_LINK_OPEN, UDX_SEND_CELL } from '../lib/udx-adapter.js'
 import { FakeUdxAdapter } from './fake-udx.js'
 import {
   descriptorChecker,
@@ -83,8 +84,8 @@ function scheduler(clock) {
 function routePair(marker, options = {}) {
   const keys = cryptoSuite.deriveKeys(seed(marker), b4a.from(`compiled-duplex-${marker}`))
   const common = {
-    descriptorId: seed(marker + 1),
-    circuitId: b4a.alloc(16, marker + 2),
+    descriptorId: options.descriptorId || seed(marker + 1),
+    circuitId: options.circuitId || b4a.alloc(16, marker + 2),
     ...keys
   }
   function create(endpointRole) {
@@ -112,8 +113,8 @@ function endpointFixture(options = {}) {
   const local = cryptoSuite.keyPair(seed(marker + 11))
   const peer = safetyRoleIdentity(marker + 12)
   const runId32 = seed(marker + 13)
-  const epoch = 17n
-  const circuitId = b4a.alloc(16, marker + 14)
+  const epoch = options.epoch || 17n
+  const circuitId = options.circuitId || b4a.alloc(16, marker + 14)
   const grant = signTopologyGrant(
     {
       version: PROTOCOL_VERSION,
@@ -303,7 +304,11 @@ function decodeOutbound(f, packet, cellClass) {
 
 async function fixture(options = {}) {
   const f = endpointFixture(options)
-  const routes = routePair((options.marker || 20) + 40, options.routeOptions)
+  const routes = routePair((options.marker || 20) + 40, {
+    ...options.routeOptions,
+    circuitId: f.circuitId,
+    ...(options.descriptorId === undefined ? {} : { descriptorId: options.descriptorId })
+  })
   await f.endpoint.bind()
   const handle = f.endpoint.openLink(f.linkHandle)
   f.endpoint[UDX_LINK_OPEN](handle, {
@@ -314,18 +319,23 @@ async function fixture(options = {}) {
     cancel: f.timers.cancel,
     randomBytes: (size) => b4a.alloc(size, 0xe2)
   })
-  const duplex = createCompiledRouteDuplex({
+  const circuitContext = options.circuitContext || Object.freeze({})
+  const ready = mintCompiledRouteReady({
     endpoint: f.endpoint,
     handle,
     routePayload: routes.source,
     generation: options.generation || 1n,
     direction: DIRECTION.FORWARD,
+    circuitContext
+  })
+  const duplex = createCompiledRouteDuplex({
+    ready,
     schedule: f.timers.schedule,
     cancel: f.timers.cancel,
     ...options.limits
   })
   f.setDuplex(duplex)
-  return { ...f, ...routes, duplex, handle }
+  return { ...f, ...routes, circuitContext, duplex, handle, ready }
 }
 
 async function close(f) {
@@ -367,13 +377,19 @@ test('compiled live route exposes only the bounded duplex surface', async (t) =>
     t,
     () =>
       createCompiledRouteDuplex({
-        endpoint: Object.create(UdxCellEndpoint.prototype),
-        handle: {},
-        routePayload: {},
-        generation: 1n,
-        direction: DIRECTION.FORWARD,
+        ready: Object.freeze(Object.create(null)),
         schedule() {},
         cancel() {}
+      }),
+    'INVALID_ROUTE'
+  )
+  expectCode(
+    t,
+    () =>
+      createCompiledRouteDuplex({
+        ready: f.ready,
+        schedule: f.timers.schedule,
+        cancel: f.timers.cancel
       }),
     'INVALID_ROUTE'
   )
@@ -464,6 +480,36 @@ test('local queue high water rejects without partial admission and drain waits b
   await close(f)
 })
 
+test('drain ignores unrelated generation accounting and requires its exact cumulative ACK', async (t) => {
+  const f = await fixture({ marker: 55 })
+  t.is(f.duplex.write(b4a.from('owned-generation')), true)
+  t.is(
+    await f.endpoint[UDX_SEND_CELL](f.handle, {
+      class: CELL_CLASS.STREAM,
+      direction: DIRECTION.FORWARD,
+      generation: 99n,
+      payload: b4a.alloc(ROUTE_FRAME_SIZE)
+    }),
+    true
+  )
+  const drained = f.duplex.drain()
+  acknowledge(f, 1n, 0n)
+  await f.timers.advance(1)
+  let resolved = false
+  drained.then(() => {
+    resolved = true
+  })
+  await settle()
+  t.is(resolved, true, 'another generation cannot block the captured generation ACK')
+  if (resolved) await drained
+  else {
+    const rejected = t.exception(drained, /Route is unavailable/)
+    failCompiledRouteDuplex(f.duplex)
+    await rejected
+  }
+  await close(f)
+})
+
 test('authenticated reverse stream and datagram cells preserve type and ordering', async (t) => {
   const f = await fixture({ marker: 60 })
   for (const value of ['reverse-one', 'reverse-two']) {
@@ -495,6 +541,43 @@ test('authenticated reverse stream and datagram cells preserve type and ordering
   t.is(f.duplex.read(), null)
   t.alike(f.duplex.receiveDatagram(), b4a.from('atomic-reverse'))
   t.is(f.duplex.receiveDatagram(), null)
+  await close(f)
+})
+
+test('out-of-order inner route data is never hop-ACKed or retained outside duplex accounting', async (t) => {
+  const f = await fixture({ marker: 65 })
+  const zero = f.destination.seal({
+    class: CELL_CLASS.STREAM,
+    direction: DIRECTION.REVERSE,
+    payload: b4a.from('zero')
+  })
+  const one = f.destination.seal({
+    class: CELL_CLASS.STREAM,
+    direction: DIRECTION.REVERSE,
+    payload: b4a.from('one')
+  })
+  const before = f.adapter.sockets[0].sends.length
+  f.adapter.sockets[0].emitMessage(
+    remoteCell(f, CELL_CLASS.STREAM, one, 1n, 0n),
+    '127.0.0.42',
+    47442
+  )
+  await settle()
+  t.is(f.adapter.sockets[0].sends.length, before, 'no STREAM_ACK precedes read-queue admission')
+  t.alike(readCompiledRouteDuplexStats(f.duplex), {
+    generation: 1n,
+    closed: true,
+    queuedBytes: 0,
+    queuedFragments: 0,
+    readBytes: 0,
+    readFragments: 0,
+    datagramBytes: 0,
+    datagrams: 0,
+    drains: 0,
+    timers: 0
+  })
+  zero.fill(0)
+  one.fill(0)
   await close(f)
 })
 
@@ -604,13 +687,14 @@ function managerAdvertisement(pair, dial, overrides = {}) {
 
 function managerDescriptor() {
   const endpoint = cryptoSuite.keyPair(seed(220))
+  const descriptorId = seed(222)
   const entry = privateRoleIdentity(1)
   const entryAdvertisement = managerAdvertisement(entry, 'entry', { role: ROLE.PRIVATE })
   const signed = signDescriptor(
     {
       version: PROTOCOL_VERSION,
       authorizationMode: AUTHORIZATION_MODE.DIRECT,
-      descriptorId: seed(222),
+      descriptorId,
       endpointKey: endpoint.publicKey,
       routeSigningKey: endpoint.publicKey,
       routeEncryptionKey: cryptoSuite.encryptionKeyPair(seed(223)).publicKey,
@@ -623,13 +707,18 @@ function managerDescriptor() {
     },
     endpoint.secretKey
   )
-  return verifyDescriptor(encodeDescriptor(signed), {
-    requestedEndpointKey: endpoint.publicKey,
-    now: 1_000n
-  })
+  return {
+    descriptorId,
+    verified: verifyDescriptor(encodeDescriptor(signed), {
+      requestedEndpointKey: endpoint.publicKey,
+      now: 1_000n
+    })
+  }
 }
 
-function managerFor(compile) {
+function managerFor(compile, options = {}) {
+  const circuitContext = options.circuitContext || Object.freeze({})
+  const circuitId = options.circuitId || b4a.alloc(16, 0xf1)
   const installed = {
     authenticate() {},
     install() {},
@@ -647,13 +736,19 @@ function managerFor(compile) {
   }
   const installer = createSafetyInstallerAuthority()
   const compiler = createRouteCompilerAuthority()
+  const crypto = Object.freeze({
+    verify: cryptoSuite.verify,
+    randomBytes(size) {
+      return size === 16 ? b4a.from(circuitId) : cryptoSuite.randomBytes(size)
+    }
+  })
   return new RouteManager({
     network: new VirtualNetwork({ now: 1_000 }),
     registry: { allows: () => true },
-    crypto: cryptoSuite,
+    crypto,
     clock: () => 1_000,
     descriptorChecker: descriptorChecker(),
-    circuitIssuer: { issueFinalSafety: () => Object.freeze({}) },
+    circuitIssuer: { issueFinalSafety: () => circuitContext },
     safetyInstaller: installer.issuer.issue(installed),
     safetyInstallerChecker: installer.checker,
     safetyRouteChecker: installer.routeChecker,
@@ -668,11 +763,26 @@ test('RouteManager returns only an already authenticated live duplex and rejects
   const safety = [
     encodeRelayAdvertisement(managerAdvertisement(safetyRoleIdentity(1), 'guard-live'))
   ]
-  const descriptor = managerDescriptor()
-  const halfOpen = managerFor(() => Promise.resolve(f.duplex))
+  const { descriptorId, verified: descriptor } = managerDescriptor()
+  const substituted = managerFor(() => f.duplex)
+  expectCode(t, () => substituted.open({ safety, descriptor }), 'INVALID_ROUTE')
+  const circuitId = b4a.alloc(16, 0xf2)
+  const circuitContext = Object.freeze({})
+  const correct = await fixture({
+    marker: 120,
+    circuitId,
+    circuitContext,
+    descriptorId,
+    epoch: 7n
+  })
+  const halfOpen = managerFor(() => Promise.resolve(correct.duplex), {
+    circuitId,
+    circuitContext
+  })
   expectCode(t, () => halfOpen.open({ safety, descriptor }), 'INVALID_ROUTE')
-  const manager = managerFor(() => f.duplex)
-  t.is(manager.open({ safety, descriptor }), f.duplex)
-  t.is(f.duplex.write(b4a.from('post-created-only')), true)
+  const manager = managerFor(() => correct.duplex, { circuitId, circuitContext })
+  t.is(manager.open({ safety, descriptor }), correct.duplex)
+  t.is(correct.duplex.write(b4a.from('post-created-only')), true)
   await close(f)
+  await close(correct)
 })

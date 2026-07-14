@@ -12,6 +12,7 @@ export const ROUTE_PLAINTEXT_SIZE = 1076
 export const MAX_ROUTE_PAYLOAD = 1073
 
 export const TEST_ONLY_RECEIVERS = Symbol('test-only-route-payload-receivers')
+export const ROUTE_PAYLOAD_BINDING = Symbol('route-payload-binding')
 export const ROUTE_ENDPOINT = Object.freeze({ SOURCE: 0, DESTINATION: 1 })
 
 const CREATED_CONTEXTS = new WeakMap()
@@ -577,6 +578,17 @@ export class RoutePayloadCodec {
         datagramHighest: this.#reverse.datagram.highest,
         datagramNeedsRotation: this.#reverse.datagram.needsRotation
       })
+    })
+  }
+
+  [ROUTE_PAYLOAD_BINDING]() {
+    if (this.#destroyed || this.#destroyRequested) throw PrivateRouteError.CIRCUIT_STATE()
+    return Object.freeze({
+      endpointRole: this.#endpointRole,
+      descriptorId: copy(this.#descriptorId),
+      circuitId: copy(this.#circuitId),
+      sendDirection: this.#sendDirection,
+      receiveDirection: this.#receiveDirection
     })
   }
 

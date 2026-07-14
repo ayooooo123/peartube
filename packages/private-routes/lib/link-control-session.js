@@ -943,3 +943,27 @@ export class LinkControlSession {
     return closeState(SESSIONS.get(this), reason)
   }
 }
+
+// Package-internal provenance read for CompiledRouteDuplex. Aggregate link
+// counters cannot prove a generation-scoped drain.
+export function readLinkControlStreamProgress(session, direction, generation) {
+  const state = SESSIONS.get(session)
+  if (!state || state.closed || !knownDirection(direction) || !u64(generation, true)) invalid()
+  const space = state.streams.get(streamKey(direction, generation))
+  if (!space) {
+    return Object.freeze({
+      highestSent: null,
+      highestAck: null,
+      pendingStreams: 0,
+      pendingBytes: 0
+    })
+  }
+  let pendingBytes = 0
+  for (const record of space.records) pendingBytes += record.bytes
+  return Object.freeze({
+    highestSent: space.highestSent,
+    highestAck: space.highestAck,
+    pendingStreams: space.records.length,
+    pendingBytes
+  })
+}

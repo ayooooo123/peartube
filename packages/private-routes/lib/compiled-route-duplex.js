@@ -2,8 +2,18 @@ import b4a from 'b4a'
 
 import { PrivateRouteError } from './errors.js'
 import { CELL_CLASS, DIRECTION } from './protocol.js'
-import { MAX_ROUTE_PAYLOAD, ROUTE_FRAME_SIZE, RoutePayloadCodec } from './route-payload.js'
-import { UDX_LINK_CLOSE, UDX_LINK_STATS, UDX_SEND_CELL } from './udx-adapter.js'
+import {
+  MAX_ROUTE_PAYLOAD,
+  ROUTE_FRAME_SIZE,
+  ROUTE_PAYLOAD_BINDING,
+  RoutePayloadCodec
+} from './route-payload.js'
+import {
+  UDX_LINK_CLOSE,
+  UDX_LINK_STATS,
+  UDX_LINK_STREAM_PROGRESS,
+  UDX_SEND_CELL
+} from './udx-adapter.js'
 import { UdxCellEndpoint } from './udx-cell-endpoint.js'
 
 export const MAX_COMPILED_STREAM_FRAGMENTS = 8
@@ -18,14 +28,17 @@ export const DEFAULT_COMPILED_LOW_WATER_MARK = 1
 
 const MAX_UINT64 = (1n << 64n) - 1n
 const DUPLEXES = new WeakMap()
+const READY_CAPABILITIES = new WeakMap()
 const CLAIMED_GENERATIONS = new WeakMap()
 const routeStats = Object.getOwnPropertyDescriptor(RoutePayloadCodec.prototype, 'stats').get
 const routeSeal = RoutePayloadCodec.prototype.seal
 const routeOpen = RoutePayloadCodec.prototype.open
 const routeDestroy = RoutePayloadCodec.prototype.destroy
+const routeBinding = RoutePayloadCodec.prototype[ROUTE_PAYLOAD_BINDING]
 const linkStats = UdxCellEndpoint.prototype[UDX_LINK_STATS]
 const sendCell = UdxCellEndpoint.prototype[UDX_SEND_CELL]
 const closeLink = UdxCellEndpoint.prototype[UDX_LINK_CLOSE]
+const streamProgress = UdxCellEndpoint.prototype[UDX_LINK_STREAM_PROGRESS]
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const byteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
 const subarray = Uint8Array.prototype.subarray
@@ -62,6 +75,14 @@ function clear(value) {
   try {
     if (b4a.isBuffer(value)) b4a.fill(value, 0)
   } catch {}
+}
+
+function same(left, right) {
+  try {
+    return bufferLength(left) === bufferLength(right) && b4a.equals(left, right)
+  } catch {
+    return false
+  }
 }
 
 function u64(value, nonzero = false) {
@@ -102,12 +123,55 @@ function genuineRoutePayload(value) {
   }
 }
 
+function readRouteBinding(value) {
+  try {
+    return routeBinding.call(value)
+  } catch {
+    return null
+  }
+}
+
 function genuineLink(endpoint, handle) {
   try {
     const stats = linkStats.call(endpoint, handle)
     return stats && stats.closed === false
   } catch {
     return false
+  }
+}
+
+function readStreamProgress(endpoint, handle, direction, generation) {
+  let progress = null
+  try {
+    progress = streamProgress.call(endpoint, handle, direction, generation)
+    if (
+      !isObject(progress) ||
+      progress.direction !== direction ||
+      progress.generation !== generation ||
+      !u64(progress.epoch) ||
+      bufferLength(progress.circuitId) !== 16 ||
+      (progress.highestSent !== null && !u64(progress.highestSent)) ||
+      (progress.highestAck !== null && !u64(progress.highestAck)) ||
+      !Number.isSafeInteger(progress.pendingStreams) ||
+      progress.pendingStreams < 0 ||
+      !Number.isSafeInteger(progress.pendingBytes) ||
+      progress.pendingBytes < 0
+    ) {
+      clear(progress && progress.circuitId)
+      return null
+    }
+    return progress
+  } catch {
+    clear(progress && progress.circuitId)
+    return null
+  }
+}
+
+function readyFor(value) {
+  try {
+    return READY_CAPABILITIES.get(value) || null
+  } catch {
+    return null
   }
 }
 
@@ -152,6 +216,8 @@ function beginClose(state, error = unavailable()) {
   try {
     closeLink.call(state.endpoint, state.handle)
   } catch {}
+  clear(state.descriptorId)
+  clear(state.circuitId)
   state.destroyPromise = Promise.allSettled(waits).then(() => true)
   return state.destroyPromise
 }
@@ -217,7 +283,6 @@ function sealAndEnqueue(state, cellClass, payload) {
     })
     if (bufferLength(frame) !== ROUTE_FRAME_SIZE) invalid()
     enqueueOutbound(state, cellClass, frame, bufferLength(payload))
-    if (cellClass === CELL_CLASS.STREAM) state.streamCount++
     return true
   } catch (err) {
     const error = err instanceof PrivateRouteError ? err : PrivateRouteError.INVALID_ROUTE()
@@ -228,15 +293,18 @@ function sealAndEnqueue(state, cellClass, payload) {
   }
 }
 
-function linkState(state) {
-  let stats
-  try {
-    stats = linkStats.call(state.endpoint, state.handle)
-  } catch {
+function currentProgress(state) {
+  const progress = readStreamProgress(
+    state.endpoint,
+    state.handle,
+    state.direction,
+    state.generation
+  )
+  if (!progress || progress.epoch !== state.epoch || !same(progress.circuitId, state.circuitId)) {
+    clear(progress && progress.circuitId)
     throw fail(state)
   }
-  if (!stats || stats.closed) throw fail(state)
-  return stats
+  return progress
 }
 
 function armPoll(state) {
@@ -273,18 +341,23 @@ function armPoll(state) {
 
 function checkDrains(state) {
   if (state.closed || state.drains.size === 0) return
-  let stats
+  let progress
   try {
-    stats = linkState(state)
+    progress = currentProgress(state)
   } catch {
     return
   }
-  for (const record of Array.from(state.drains)) {
-    const newer = state.streamCount - record.sentCount
-    const acknowledged = record.counter === null || BigInt(stats.pendingStreams) <= newer
-    if (!acknowledged || state.queuedBytes >= state.lowWaterMark) continue
-    state.drains.delete(record)
-    record.resolve(true)
+  try {
+    for (const record of Array.from(state.drains)) {
+      const acknowledged =
+        record.counter === null ||
+        (progress.highestAck !== null && progress.highestAck >= record.counter)
+      if (!acknowledged || state.queuedBytes >= state.lowWaterMark) continue
+      state.drains.delete(record)
+      record.resolve(true)
+    }
+  } finally {
+    clear(progress.circuitId)
   }
   armPoll(state)
 }
@@ -342,6 +415,12 @@ function receiveDatagram(state) {
 
 function drain(state) {
   if (state.closed) return Promise.reject(stateError())
+  let progress
+  try {
+    progress = currentProgress(state)
+  } catch (err) {
+    return Promise.reject(err)
+  }
   let resolve
   let reject
   const promise = new Promise((onResolve, onReject) => {
@@ -350,48 +429,104 @@ function drain(state) {
   })
   const record = {
     generation: state.generation,
-    sentCount: state.streamCount,
-    counter: state.streamCount === 0n ? null : state.streamCount - 1n,
+    counter: progress.highestSent,
     resolve,
     reject
   }
+  clear(progress.circuitId)
   state.drains.add(record)
   checkDrains(state)
   return promise
 }
 
-export function createCompiledRouteDuplex(options = {}) {
+// Package-internal bridge from the authenticated CREATED path into the public
+// bounded duplex constructor. The opaque object is single-use and carries no
+// callable authority of its own.
+export function mintCompiledRouteReady(options = {}) {
   if (!isObject(options)) invalid()
   let endpoint
   let handle
   let routePayload
   let generation
   let sendDirection
-  let schedule
-  let cancel
+  let circuitContext
   try {
     endpoint = options.endpoint
     handle = options.handle
     routePayload = options.routePayload
     generation = options.generation
     sendDirection = options.direction
-    schedule = options.schedule
-    cancel = options.cancel
+    circuitContext = options.circuitContext
   } catch {
     invalid()
   }
   if (
     !isObject(endpoint) ||
     !isObject(handle) ||
+    !isObject(circuitContext) ||
     !genuineRoutePayload(routePayload) ||
     !u64(generation, true) ||
-    !genuineLink(endpoint, handle) ||
+    !genuineLink(endpoint, handle)
+  ) {
+    invalid()
+  }
+  sendDirection = direction(sendDirection)
+  const binding = readRouteBinding(routePayload)
+  const progress = readStreamProgress(endpoint, handle, sendDirection, generation)
+  try {
+    if (
+      !binding ||
+      !progress ||
+      bufferLength(binding.descriptorId) !== 32 ||
+      bufferLength(binding.circuitId) !== 16 ||
+      binding.sendDirection !== sendDirection ||
+      binding.receiveDirection !== opposite(sendDirection) ||
+      !same(binding.circuitId, progress.circuitId)
+    ) {
+      invalid()
+    }
+    const ready = Object.freeze(Object.create(null))
+    READY_CAPABILITIES.set(ready, {
+      endpoint,
+      handle,
+      routePayload,
+      generation,
+      direction: sendDirection,
+      circuitContext,
+      epoch: progress.epoch,
+      descriptorId: b4a.from(binding.descriptorId),
+      circuitId: b4a.from(binding.circuitId),
+      consumed: false
+    })
+    return ready
+  } finally {
+    clear(binding && binding.descriptorId)
+    clear(binding && binding.circuitId)
+    clear(progress && progress.circuitId)
+  }
+}
+
+export function createCompiledRouteDuplex(options = {}) {
+  if (!isObject(options)) invalid()
+  let ready
+  let schedule
+  let cancel
+  try {
+    ready = options.ready
+    schedule = options.schedule
+    cancel = options.cancel
+  } catch {
+    invalid()
+  }
+  const capability = readyFor(ready)
+  if (
+    !capability ||
+    capability.consumed ||
     typeof schedule !== 'function' ||
     typeof cancel !== 'function'
   ) {
     invalid()
   }
-  sendDirection = direction(sendDirection)
   const maxQueuedBytes = bound(
     options.maxQueuedBytes,
     DEFAULT_MAX_COMPILED_QUEUED_BYTES,
@@ -417,6 +552,35 @@ export function createCompiledRouteDuplex(options = {}) {
     MAX_ROUTE_PAYLOAD
   )
   const maxDatagrams = bound(options.maxDatagrams, DEFAULT_MAX_COMPILED_DATAGRAMS)
+  const binding = readRouteBinding(capability.routePayload)
+  const progress = readStreamProgress(
+    capability.endpoint,
+    capability.handle,
+    capability.direction,
+    capability.generation
+  )
+  try {
+    if (
+      !genuineRoutePayload(capability.routePayload) ||
+      !genuineLink(capability.endpoint, capability.handle) ||
+      !binding ||
+      !progress ||
+      binding.sendDirection !== capability.direction ||
+      binding.receiveDirection !== opposite(capability.direction) ||
+      progress.epoch !== capability.epoch ||
+      !same(binding.descriptorId, capability.descriptorId) ||
+      !same(binding.circuitId, capability.circuitId) ||
+      !same(progress.circuitId, capability.circuitId)
+    ) {
+      invalid()
+    }
+  } finally {
+    clear(binding && binding.descriptorId)
+    clear(binding && binding.circuitId)
+    clear(progress && progress.circuitId)
+  }
+  const { endpoint, handle, routePayload, generation } = capability
+  const sendDirection = capability.direction
   let generations = CLAIMED_GENERATIONS.get(handle)
   if (!generations) {
     generations = new Set()
@@ -425,6 +589,7 @@ export function createCompiledRouteDuplex(options = {}) {
   const claim = generation.toString()
   if (generations.has(claim)) throw PrivateRouteError.UNAUTHORIZED()
   generations.add(claim)
+  capability.consumed = true
   const state = {
     endpoint,
     handle,
@@ -432,6 +597,10 @@ export function createCompiledRouteDuplex(options = {}) {
     generation,
     direction: sendDirection,
     receiveDirection: opposite(sendDirection),
+    circuitContext: capability.circuitContext,
+    epoch: capability.epoch,
+    descriptorId: b4a.from(capability.descriptorId),
+    circuitId: b4a.from(capability.circuitId),
     schedule,
     cancel,
     maxQueuedBytes,
@@ -441,7 +610,6 @@ export function createCompiledRouteDuplex(options = {}) {
     maxReadFragments,
     maxDatagramBytes,
     maxDatagrams,
-    streamCount: 0n,
     queuedBytes: 0,
     queuedFragments: 0,
     readBytes: 0,
@@ -476,6 +644,12 @@ export function createCompiledRouteDuplex(options = {}) {
     }
   })
   DUPLEXES.set(duplex, state)
+  clear(capability.descriptorId)
+  clear(capability.circuitId)
+  capability.endpoint = null
+  capability.handle = null
+  capability.routePayload = null
+  capability.circuitContext = null
   return duplex
 }
 
@@ -502,6 +676,7 @@ export function receiveCompiledRouteCell(duplex, handle, frame, metadata = {}) {
   try {
     opened = routeOpen.call(state.routePayload, { direction: state.receiveDirection }, frame)
     if (Array.isArray(opened)) {
+      if (opened.length !== 1) throw unavailable()
       let bytes = 0
       for (const value of opened) {
         if (!value || value.class !== CELL_CLASS.STREAM || bufferLength(value.payload) < 0)
@@ -561,6 +736,23 @@ export function replaceCompiledRouteDuplex(duplex, nextGeneration) {
 export function isCompiledRouteDuplex(value) {
   try {
     return DUPLEXES.has(value)
+  } catch {
+    return false
+  }
+}
+
+export function isCompiledRouteDuplexFor(value, expected) {
+  try {
+    const state = DUPLEXES.get(value)
+    return (
+      !!state &&
+      !state.closed &&
+      isObject(expected) &&
+      state.circuitContext === expected.circuitContext &&
+      state.epoch === expected.epoch &&
+      same(state.descriptorId, expected.descriptorId) &&
+      same(state.circuitId, expected.circuitId)
+    )
   } catch {
     return false
   }

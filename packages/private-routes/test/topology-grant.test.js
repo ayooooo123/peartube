@@ -100,6 +100,22 @@ function signedFixture(fixture = classifiedFixture()) {
   return { ...fixture, signed: signTopologyGrant(fixture.grant, fixture.authority.secretKey) }
 }
 
+function twoSignedFixtures() {
+  const first = signedFixture()
+  const base = classifiedFixture()
+  const second = signedFixture(
+    classifiedFixture({
+      grantId32: seed(19),
+      endpointB: {
+        ...base.grant.endpointB,
+        host: '2001:db8::3',
+        port: 42003
+      }
+    })
+  )
+  return { first, second }
+}
+
 function fakeClock(start = 100n) {
   let now = start
   let nextId = 1
@@ -639,7 +655,9 @@ test('destroy closes active links, cancels expiry, and leaves zero retained dire
     handles: 0,
     tombstones: 0,
     timers: 0,
-    destroyed: true
+    destroyed: true,
+    ownedBytes: 0,
+    callbacks: 0
   })
   expectCode(t, () => directory.add(fixture.signed), 'CIRCUIT_STATE')
   expectCode(t, () => directory.authorize(authorization(fixture, digest32)), 'CIRCUIT_STATE')
@@ -649,4 +667,108 @@ test('destroy closes active links, cancels expiry, and leaves zero retained dire
     'CIRCUIT_STATE'
   )
   expectCode(t, () => readLinkHandle(handle), 'UNAUTHORIZED')
+})
+
+test('destroy cleans every handle and callback before mapping the first onClose failure', (t) => {
+  const { first, second } = twoSignedFixtures()
+  const clock = fakeClock()
+  const closes = []
+  const snapshots = []
+  let firstHandle = null
+  const directory = new LinkDirectory(
+    directoryOptions(first, clock, {
+      maxGrants: 2,
+      maxHandles: 2,
+      onClose(handle) {
+        closes.push(handle)
+        if (handle === firstHandle) throw new Error('sensitive onClose failure')
+      },
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  const firstDigest = directory.add(first.signed)
+  const secondDigest = directory.add(second.signed)
+  firstHandle = directory.authorize(authorization(first, firstDigest))
+  const secondHandle = directory.authorize(authorization(second, secondDigest))
+
+  let error = null
+  try {
+    directory.destroy()
+  } catch (err) {
+    error = err
+  }
+
+  t.ok(error instanceof routes.PrivateRouteError)
+  if (error) {
+    t.is(error.code, 'ROUTE_UNAVAILABLE')
+    t.is(error.message.includes('sensitive'), false)
+  }
+  t.alike(closes, [firstHandle, secondHandle])
+  expectCode(t, () => readLinkHandle(firstHandle), 'UNAUTHORIZED')
+  expectCode(t, () => readLinkHandle(secondHandle), 'UNAUTHORIZED')
+  t.is(clock.pending(), 0)
+  t.alike(snapshots.at(-1), {
+    grants: 0,
+    handles: 0,
+    tombstones: 0,
+    timers: 0,
+    destroyed: true,
+    ownedBytes: 0,
+    callbacks: 0
+  })
+
+  directory.destroy()
+  t.alike(closes, [firstHandle, secondHandle])
+})
+
+test('destroy attempts every timer cancellation and closes every handle after a cancel failure', (t) => {
+  const { first, second } = twoSignedFixtures()
+  const clock = fakeClock()
+  const closes = []
+  const snapshots = []
+  let cancelCalls = 0
+  const directory = new LinkDirectory(
+    directoryOptions(first, clock, {
+      maxGrants: 2,
+      maxHandles: 2,
+      cancel(id) {
+        clock.cancel(id)
+        cancelCalls++
+        if (cancelCalls === 1) throw new Error('sensitive cancel failure')
+      },
+      onClose: (handle) => closes.push(handle),
+      [TEST_ONLY_LINK_DIRECTORY_OBSERVER]: (snapshot) => snapshots.push(snapshot)
+    })
+  )
+  const firstDigest = directory.add(first.signed)
+  const secondDigest = directory.add(second.signed)
+  const firstHandle = directory.authorize(authorization(first, firstDigest))
+  const secondHandle = directory.authorize(authorization(second, secondDigest))
+
+  let error = null
+  try {
+    directory.destroy()
+  } catch (err) {
+    error = err
+  }
+
+  t.ok(error instanceof routes.PrivateRouteError)
+  if (error) {
+    t.is(error.code, 'ROUTE_UNAVAILABLE')
+    t.is(error.message.includes('sensitive'), false)
+  }
+  t.is(cancelCalls, 2)
+  t.alike(closes, [firstHandle, secondHandle])
+  expectCode(t, () => readLinkHandle(firstHandle), 'UNAUTHORIZED')
+  expectCode(t, () => readLinkHandle(secondHandle), 'UNAUTHORIZED')
+  t.is(clock.pending(), 0)
+  t.alike(snapshots.at(-1), {
+    grants: 0,
+    handles: 0,
+    tombstones: 0,
+    timers: 0,
+    destroyed: true,
+    ownedBytes: 0,
+    callbacks: 0
+  })
 })

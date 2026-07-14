@@ -531,13 +531,18 @@ function validateBound(value, fallback) {
 }
 
 function snapshot(state) {
-  return {
+  const value = {
     grants: state.grants.size,
     handles: state.handles.size,
     tombstones: state.tombstones.size,
     timers: state.timers.size,
     destroyed: state.destroyed
   }
+  if (state.released) {
+    value.ownedBytes = 0
+    value.callbacks = 0
+  }
+  return value
 }
 
 function observe(state) {
@@ -557,20 +562,35 @@ function cancelTimer(state, key) {
   state.cancel(timer)
 }
 
-function closeRecord(state, key, reason, tombstone) {
+function closeRecord(state, key, reason, tombstone, notify = true) {
   const record = state.grants.get(key)
-  if (!record) return
-  cancelTimer(state, key)
-  state.grants.delete(key)
   const handle = state.handles.get(key)
+  if (!record && !handle && !state.timers.has(key)) return
+
+  let failed = false
+  try {
+    cancelTimer(state, key)
+  } catch {
+    failed = true
+  }
+  state.grants.delete(key)
   state.handles.delete(key)
-  if (tombstone) state.tombstones.add(key)
+  if (record && tombstone) state.tombstones.add(key)
   try {
     if (handle) state.onClose(handle, reason)
+  } catch {
+    failed = true
   } finally {
     if (handle) LINK_HANDLES.delete(handle)
-    observe(state)
   }
+  if (notify) {
+    try {
+      observe(state)
+    } catch {
+      failed = true
+    }
+  }
+  if (failed) throw PrivateRouteError.ROUTE_UNAVAILABLE()
 }
 
 function scheduleExpiry(state, key) {
@@ -645,7 +665,8 @@ export class LinkDirectory {
       handles: new Map(),
       tombstones: new Set(),
       timers: new Map(),
-      destroyed: false
+      destroyed: false,
+      released: false
     })
   }
 
@@ -766,20 +787,49 @@ export class LinkDirectory {
     const state = DIRECTORIES.get(this)
     if (state.destroyed) return
     state.destroyed = true
-    for (const key of Array.from(state.grants.keys())) closeRecord(state, key, 'destroyed', false)
-    for (const key of Array.from(state.timers.keys())) cancelTimer(state, key)
+
+    let failed = false
+    const keys = new Set([...state.grants.keys(), ...state.handles.keys(), ...state.timers.keys()])
+    for (const key of keys) {
+      try {
+        closeRecord(state, key, 'destroyed', false, false)
+      } catch {
+        failed = true
+      }
+    }
+    for (const key of Array.from(state.timers.keys())) {
+      try {
+        cancelTimer(state, key)
+      } catch {
+        failed = true
+      }
+    }
     state.grants.clear()
     state.handles.clear()
     state.tombstones.clear()
-    observe(state)
+
+    const observer = state.observer
     b4a.fill(state.localIdentity32, 0)
     b4a.fill(state.authorityPublicKey, 0)
     b4a.fill(state.runId32, 0)
+    state.localIdentity32 = null
+    state.authorityPublicKey = null
+    state.runId32 = null
     state.now = null
     state.schedule = null
     state.cancel = null
     state.onClose = null
     state.observer = null
+    state.released = true
+
+    if (observer) {
+      try {
+        observer(snapshot(state))
+      } catch {
+        failed = true
+      }
+    }
+    if (failed) throw PrivateRouteError.ROUTE_UNAVAILABLE()
   }
 }
 

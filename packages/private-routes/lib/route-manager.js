@@ -1,5 +1,6 @@
 import b4a from 'b4a'
 
+import { isCompiledRouteDuplex, replaceCompiledRouteDuplex } from './compiled-route-duplex.js'
 import {
   activationChallengeCipher,
   createDestinationProof,
@@ -190,9 +191,10 @@ export class RouteManager {
         generations.add(next)
         if (draining) destroyGeneration(draining)
         if (reason === 'rotation') {
-          previous.circuit.drain()
+          if (previous.live) replaceCompiledRouteDuplex(previous.circuit, next.epoch)
+          else previous.circuit.drain()
           active = next
-          draining = previous
+          draining = previous.live ? null : previous
         } else {
           destroyGeneration(previous)
           active = next
@@ -207,6 +209,7 @@ export class RouteManager {
     }
     active = this.#openOne(options, replace, null)
     generations.add(active)
+    if (active.live) return active.circuit
     const send = (method, payload) => {
       if (destroyed || !active || forwardClosed) throw PrivateRouteError.CIRCUIT_STATE()
       try {
@@ -371,13 +374,16 @@ export class RouteManager {
             requestReplacement
           })
         )
+        const live = isCompiledRouteDuplex(circuit)
         if (
-          !safeObject(circuit) ||
-          Object.keys(circuit).sort().join(',') !== 'destroy,drain,sendDatagram,sendStreamFrame' ||
-          typeof circuit.sendDatagram !== 'function' ||
-          typeof circuit.sendStreamFrame !== 'function' ||
-          typeof circuit.drain !== 'function' ||
-          typeof circuit.destroy !== 'function'
+          !live &&
+          (!safeObject(circuit) ||
+            Object.keys(circuit).sort().join(',') !==
+              'destroy,drain,sendDatagram,sendStreamFrame' ||
+            typeof circuit.sendDatagram !== 'function' ||
+            typeof circuit.sendStreamFrame !== 'function' ||
+            typeof circuit.drain !== 'function' ||
+            typeof circuit.destroy !== 'function')
         )
           invalid()
       } catch (err) {
@@ -387,7 +393,11 @@ export class RouteManager {
         if (err instanceof PrivateRouteError && err.code !== 'CIRCUIT_STATE') throw err
         throw PrivateRouteError.ROUTE_UNAVAILABLE()
       }
-      return Object.freeze({ circuit, epoch: descriptor.epoch })
+      return Object.freeze({
+        circuit,
+        epoch: descriptor.epoch,
+        live: isCompiledRouteDuplex(circuit)
+      })
     } catch (err) {
       if (safetyRouteCapability) {
         try {

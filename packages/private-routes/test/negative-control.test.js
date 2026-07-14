@@ -136,7 +136,11 @@ test('negative control listener closes partial ownership and rejects wait on sta
     cancel: clearTimeout,
     timeout: 1_000
   })
-  await t.exception(listener.start(), /Route is unavailable/)
+  const failure = await listener.start().then(
+    () => null,
+    (error) => error
+  )
+  t.is(failure?.phase, 'socket-bind')
   await t.exception(listener.wait(), /Route is unavailable/)
   t.alike(calls, ['close'])
 })

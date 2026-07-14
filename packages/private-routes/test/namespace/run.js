@@ -265,6 +265,8 @@ function startNegativeControlListener(layout, payload) {
   const exited = new Promise((resolve) => {
     exitResolve = resolve
   })
+  void ready.catch(() => {})
+  void received.catch(() => {})
   const timer = setTimeout(() => {
     const error = new Error('negative control listener deadline')
     readyReject(error)
@@ -280,7 +282,13 @@ function startNegativeControlListener(layout, payload) {
     clearTimeout(timer)
     const result = Object.freeze({ code, signal, stderr })
     exitResolve(result)
-    if (code !== 0 || signal !== null) fail(new Error('negative control listener failed'))
+    if (code !== 0 || signal !== null) {
+      const detail = stderr.trim()
+      const diagnostic = /^negative control failed:[a-z-]{1,32}$/.test(detail)
+        ? detail
+        : 'negative control listener failed'
+      fail(new Error(diagnostic))
+    }
   })
   child.stderr.on('data', (chunk) => {
     stderr += String(chunk)

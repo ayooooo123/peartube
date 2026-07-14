@@ -7,6 +7,12 @@ function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
 }
 
+function unavailable(phase) {
+  const error = PrivateRouteError.ROUTE_UNAVAILABLE()
+  Object.defineProperty(error, 'phase', { value: phase })
+  return error
+}
+
 function endpoint(value) {
   if (
     !value ||
@@ -169,9 +175,11 @@ export class NegativeControlListener {
 
   async start() {
     if (this.#state !== 'new') throw PrivateRouteError.ROUTE_UNAVAILABLE()
+    let phase = 'adapter-create'
     try {
       const udx = this.#adapter.create()
       if (!udx || typeof udx.createSocket !== 'function') invalid()
+      phase = 'socket-create'
       const socket = udx.createSocket()
       if (
         !socket ||
@@ -183,6 +191,7 @@ export class NegativeControlListener {
       }
       this.#socket = socket
       this.#state = 'open'
+      phase = 'socket-listen'
       socket.on('message', (packet, from) => {
         if (
           !b4a.isBuffer(packet) ||
@@ -191,20 +200,22 @@ export class NegativeControlListener {
           from.host !== this.#expectedSourceHost ||
           !Number.isSafeInteger(from.port)
         ) {
-          this.#settle(PrivateRouteError.ROUTE_UNAVAILABLE())
+          this.#settle(unavailable('receive-invalid'))
           return
         }
         this.#settle(null, Object.freeze({ bytes: packet.byteLength, sourcePort: from.port }))
       })
+      phase = 'socket-bind'
       socket.bind(this.#bind.port, this.#bind.host)
+      phase = 'timer'
       this.#timer = this.#schedule(
-        () => this.#settle(PrivateRouteError.ROUTE_UNAVAILABLE()),
+        () => this.#settle(unavailable('receive-timeout')),
         this.#timeout
       )
       if (this.#timer === null || this.#timer === undefined) invalid()
       return true
     } catch {
-      const error = PrivateRouteError.ROUTE_UNAVAILABLE()
+      const error = unavailable(phase)
       if (this.#state === 'open') this.#settle(error)
       else {
         this.#state = 'failed'
@@ -312,8 +323,12 @@ export async function runNegativeControlCli(options = {}) {
 }
 
 if (import.meta.main) {
-  void runNegativeControlCli().catch(() => {
-    globalThis.process.stderr.write('negative control failed\n')
+  void runNegativeControlCli().catch((error) => {
+    const phase =
+      typeof error?.phase === 'string' && /^[a-z-]{1,32}$/.test(error.phase)
+        ? error.phase
+        : 'unknown'
+    globalThis.process.stderr.write(`negative control failed:${phase}\n`)
     globalThis.process.exitCode = 1
   })
 }

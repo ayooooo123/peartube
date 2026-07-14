@@ -669,6 +669,7 @@ export class AsyncRouteControlSession {
 
   async #request(context, kind, circuitId, generationValue, requestBody, extra = {}) {
     if (this.#current !== context || context.signal.aborted) throw unavailable()
+    if (this.#readNow() >= context.deadline) throw unavailable()
     let result
     try {
       if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) context.dispatched = true

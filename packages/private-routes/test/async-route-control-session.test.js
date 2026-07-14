@@ -1115,6 +1115,36 @@ test('separate registration steps retain the first absolute deadline', async (t)
   )
 })
 
+test('separate registration steps started at or after their deadline fail before send', async (t) => {
+  for (const now of [6_000, 6_001]) {
+    const clock = { now: 1_000 }
+    const pair = authenticatedPair(clock)
+    const fixture = activationFixture(180 + now - 6_000)
+    const actorId = bytes(16, 0xe1 + now - 6_000)
+    pair.server.register(actorId, fixture.relay)
+    const control = new AsyncRouteControlSession({
+      remote: pair.client,
+      actorId,
+      now: () => clock.now
+    })
+    const staged = await settleAuthenticated(
+      control.stage(fixture.built.registrationCapsule, {
+        abort: fixture.built.abortCapsule
+      }),
+      pair
+    )
+    staged.fill(0)
+    clock.now = now
+    t.is(await rejectionCode(control.prepare(fixture.built.prepareCapsule)), 'ROUTE_UNAVAILABLE')
+    t.is(pair.toServer.length, 0, `no prepare or abort is sent at ${now}`)
+    t.is(control.registrationState, ASYNC_REGISTRATION_STATE.ABORTING)
+    await control.stop()
+    pair.client.destroy()
+    pair.server.destroy()
+    fixture.destroy()
+  }
+})
+
 test('failed cleanup stays retryable until an authenticated abort or destroy reply', async (t) => {
   let abortAttempts = 0
   const registrationPeer = controlledRemote(function request(kind) {
@@ -1181,6 +1211,38 @@ test('destroy retries retain the destroy transaction deadline, not the activatio
   t.is(await control.destroy(), true)
   t.alike(deadlines, [6_000, 7_000, 7_000])
   activation.destroy()
+})
+
+test('destroy retries at or after their retained deadline fail unavailable before send', async (t) => {
+  for (const now of [7_000, 7_001]) {
+    let current = 1_000
+    let destroys = 0
+    const calls = []
+    const peer = controlledRemote(function request(kind) {
+      calls.push(kind)
+      if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) return Promise.resolve(bytes(305, 1))
+      if (kind === ACTOR_CONTROL_KIND.CIRCUIT_DESTROY && destroys++ === 0)
+        return Promise.reject(PrivateRouteError.ROUTE_UNAVAILABLE())
+      return Promise.resolve(b4a.alloc(0))
+    })
+    const control = session(peer, () => current)
+    const activation = activationFixture(190 + now - 7_000)
+    const proof = await control.activate({
+      body: activation.body,
+      circuitId: activation.circuitId,
+      generation: activation.generation,
+      activationVerifier: activation.verifier
+    })
+    proof.fill(0)
+    current = 2_000
+    t.is(await rejectionCode(control.destroy()), 'ROUTE_UNAVAILABLE')
+    current = now
+    t.is(await rejectionCode(control.destroy()), 'ROUTE_UNAVAILABLE')
+    t.alike(calls, [ACTOR_CONTROL_KIND.ACTIVATE_CREATE, ACTOR_CONTROL_KIND.CIRCUIT_DESTROY])
+    t.is(control.circuitState, ASYNC_CIRCUIT_STATE.DESTROYING)
+    await control.stop()
+    activation.destroy()
+  }
 })
 
 test('expiry during activation cancels the wait and a late reply cannot open the circuit', async (t) => {

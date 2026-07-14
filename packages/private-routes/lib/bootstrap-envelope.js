@@ -649,10 +649,10 @@ function tableSnapshot(state) {
   return value
 }
 
-function observeTable(state) {
+function observeTable(state, record = null) {
   if (!state.observer) return
   try {
-    state.observer(tableSnapshot(state))
+    state.observer(tableSnapshot(state), record)
   } catch {
     // Test diagnostics are passive.
   }
@@ -752,6 +752,7 @@ function scheduleTableTimer(state, key, deadline, expire) {
   let synchronous = false
   let fired = false
   let timer
+  const cancel = state.cancel
   const callback = () => {
     if (arming) {
       synchronous = true
@@ -784,6 +785,14 @@ function scheduleTableTimer(state, key, deadline, expire) {
     unavailable()
   }
   arming = false
+  if (state.destroyed) {
+    try {
+      cancel(timer)
+    } catch {
+      // Authority is already closed; cancellation is best effort.
+    }
+    unavailable()
+  }
   if (synchronous) {
     try {
       state.cancel(timer)
@@ -835,8 +844,11 @@ function scheduleRecord(state, collection, prefix, key, record) {
       }
       collection.delete(key)
       if (collection === state.pending) state.tokens.delete(record.token)
-      addTombstone(state, key, record)
-      clearRecord(record)
+      try {
+        addTombstone(state, key, record)
+      } finally {
+        clearRecord(record)
+      }
       observeTable(state)
     })
   } catch {
@@ -1054,7 +1066,7 @@ export class BootstrapRequestTable {
           clearRecord(record)
           throw PrivateRouteError.ROUTE_UNAVAILABLE()
         }
-        observeTable(state)
+        observeTable(state, record)
         return Object.freeze({
           token,
           requestId,
@@ -1239,7 +1251,7 @@ export class BootstrapRequestTable {
         invalidRoute()
       }
       const packet = option(result, 'packet')
-      const response = validateDecoded(option(result, 'decoded'))
+      const response = validateEncoded(state, packet)
       if (
         !fixed(packet, BOOTSTRAP_SIZE) ||
         (response.type !== BOOTSTRAP_TYPE.LINK_CREATED &&
@@ -1293,7 +1305,7 @@ export class BootstrapRequestTable {
         clearRecord(record)
         unavailable()
       }
-      observeTable(state)
+      observeTable(state, record)
       return copy(packet)
     } finally {
       leaveTableMutation(state)

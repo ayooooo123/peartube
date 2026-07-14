@@ -15,6 +15,7 @@ import {
   DOMAIN,
   LinkDirectory,
   LINK_OPERATION,
+  PrivateRouteError,
   PROTOCOL_VERSION,
   TOPOLOGY_ROLE,
   createLinkSetupAuthority,
@@ -632,6 +633,29 @@ test('request table caches byte-identical responder replies and rejects ID/body 
   table.destroy()
 })
 
+test('responder validates its own encoded reply without remote endpoint authority', (t) => {
+  const f = fixture()
+  const request = encodeCreate(f, { requestId: 12n })
+  const decodedRequest = f.rightCodec.decode(request, f.leftSource)
+  f.leftCodec.destroy()
+  f.left.value.destroy()
+  const { table } = tableFixture()
+
+  const response = table.respond(f.initiator.publicKey, decodedRequest, request, () => ({
+    packet: f.rightCodec.encode({
+      type: BOOTSTRAP_TYPE.LINK_REJECT,
+      requestId: 12n,
+      epoch: 7n,
+      rejectedType: BOOTSTRAP_TYPE.LINK_CREATE,
+      rejectCode: BOOTSTRAP_REJECT_CODE.ROUTE_UNAVAILABLE,
+      requestPacket: request
+    })
+  }))
+
+  t.is(response.byteLength, BOOTSTRAP_SIZE)
+  table.destroy()
+})
+
 test('request table is bounded, exception safe, cancel-safe, and releases all timers', (t) => {
   const f = fixture()
   const otherFixture = fixture({ responderSeed: 240, grantId32: seed(242) })
@@ -1151,6 +1175,9 @@ test('an early timer callback rechecks the monotonic deadline instead of expirin
 test('expiry tombstone scheduling failure closes all request authority', (t) => {
   const f = fixture()
   const callbacks = []
+  const owned = []
+  let captured = null
+  let responses = 0
   let current = 1_000
   let schedules = 0
   const table = new BootstrapRequestTable({
@@ -1162,16 +1189,38 @@ test('expiry tombstone scheduling failure closes all request authority', (t) => 
       return callback
     },
     cancel() {},
-    randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 9])
+    randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 9]),
+    [TEST_ONLY_BOOTSTRAP_REQUEST_TABLE_OBSERVER](snapshot, record) {
+      if (!record) return
+      captured = record
+      for (const value of [
+        record.peerIdentity32,
+        record.senderIdentity32,
+        record.recipientIdentity32,
+        record.grantDigest32,
+        record.body,
+        record.packet,
+        record.digest32
+      ]) {
+        owned.push(value)
+      }
+    }
   })
   table.begin({
     peerIdentity32: f.responder.publicKey,
     epoch: 7n,
     encode: (requestId) => encodeCreate(f, { requestId }),
-    onResponse() {}
+    onResponse() {
+      responses++
+    }
   })
   current += BOOTSTRAP_DEADLINE
   callbacks.shift()()
+  t.ok(captured)
+  t.is(captured.callback, null)
+  t.is(captured.packet, null)
+  for (const value of owned) t.alike(value, b4a.alloc(value.byteLength))
+  t.is(responses, 0)
   expectCode(
     t,
     () =>
@@ -1382,6 +1431,37 @@ test('random and timer adapters cannot reenter table mutation windows', (t) => {
     })
     const pending = begin()
     expectCode(t, () => table.cancel(pending.token), 'ROUTE_UNAVAILABLE')
+    expectCode(t, begin, 'CIRCUIT_STATE')
+  }
+
+  {
+    let table
+    let attempted = false
+    const begin = () =>
+      table.begin({
+        peerIdentity32: f.responder.publicKey,
+        epoch: 7n,
+        encode: (requestId) => encodeCreate(f, { requestId }),
+        onResponse() {}
+      })
+    table = new BootstrapRequestTable({
+      crypto: cryptoSuite,
+      now: () => 1_000,
+      schedule(callback) {
+        if (!attempted) {
+          attempted = true
+          try {
+            begin()
+          } catch (err) {
+            if (!(err instanceof PrivateRouteError) || err.code !== 'CIRCUIT_STATE') throw err
+          }
+        }
+        return callback
+      },
+      cancel() {},
+      randomBytes: () => b4a.from([0, 0, 0, 0, 0, 0, 0, 20])
+    })
+    expectCode(t, begin, 'ROUTE_UNAVAILABLE')
     expectCode(t, begin, 'CIRCUIT_STATE')
   }
 })

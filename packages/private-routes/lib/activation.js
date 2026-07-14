@@ -123,6 +123,7 @@ const REGISTRY_STATES = new WeakMap()
 const ENTRY_REPLAY_STATES = new WeakMap()
 const DESTINATION_REPLAY_STATES = new WeakMap()
 const RELAY_ACTOR_STATES = new WeakMap()
+const DISTRIBUTED_RELAY_ACTOR_STATES = new WeakMap()
 const DESTINATION_ACTOR_STATES = new WeakMap()
 const ACTOR_PUBLIC_INFOS = new WeakMap()
 const ACTOR_SESSIONS = new WeakMap()
@@ -2209,6 +2210,338 @@ export function destroyPrivateRelayActor(actor) {
   state.destroy()
 }
 
+// Package-internal actor used when each private hop lives behind a different
+// authenticated RemoteActorHost. It owns only the local relay keys and the
+// adjacent next-hop identity. Canonical nested capsules remain opaque until
+// they reach the relay whose route-encryption key can open them.
+export function createDistributedPrivateRelayActor(options) {
+  if (
+    !safeObject(options) ||
+    !fixed(options.identity, 32) ||
+    !fixed(options.identitySecretKey, 64) ||
+    !fixed(options.routeEncryptionSecretKey, 32) ||
+    !fixed(options.nextIdentity, 32) ||
+    !fixed(options.nextRouteEncryptionKey, 32) ||
+    typeof options.entry !== 'boolean' ||
+    typeof options.destination !== 'boolean' ||
+    (options.entry && options.destination) ||
+    typeof options.forward !== 'function' ||
+    typeof options.now !== 'function' ||
+    typeof options.randomBytes !== 'function' ||
+    (options.observe !== undefined && typeof options.observe !== 'function') ||
+    (options.maxCircuits !== undefined &&
+      (!Number.isSafeInteger(options.maxCircuits) ||
+        options.maxCircuits < 1 ||
+        options.maxCircuits > DEFAULT_MAX_ACTOR_CIRCUITS))
+  )
+    invalid()
+  const registry = createTemplateRegistry({
+    identity: options.identity,
+    identitySecretKey: options.identitySecretKey,
+    routeEncryptionSecretKey: options.routeEncryptionSecretKey,
+    now: options.now
+  })
+  const registryState = REGISTRY_STATES.get(registry)
+  const nextIdentity = copy(options.nextIdentity)
+  const nextRouteEncryptionKey = copy(options.nextRouteEncryptionKey)
+  const maxCircuits = options.maxCircuits || DEFAULT_MAX_ACTOR_CIRCUITS
+  const entryReplayCache = createEntryReplayCache({ now: options.now, maxEntries: maxCircuits })
+  const circuits = new Map()
+  const actor = Object.freeze({})
+  let destroyed = false
+
+  function observe(type) {
+    if (!options.observe) return
+    observePassively(options.observe, { type, records: registryState.records.size })
+  }
+
+  async function forward(kind, circuitId, generation, body) {
+    if (destroyed) throw PrivateRouteError.CIRCUIT_STATE()
+    const result = await options.forward(kind, circuitId, generation, body)
+    validateActorCommandReplyBody(kind + 1, result)
+    return result
+  }
+
+  async function receiveRegistration(body, kind, circuitId, generation) {
+    let plaintext = null
+    let capsule = null
+    let envelope = null
+    let registered = null
+    let advertisement = null
+    let register = null
+    let downstream = null
+    let inserted = false
+    let complete = false
+    try {
+      plaintext = openTemplate(
+        body,
+        registryState.routeEncryptionPublicKey,
+        registryState.routeEncryptionSecretKey
+      )
+      capsule = decodeRegistrationCapsule(plaintext)
+      if (!registrationOperationMatches(kind, capsule.operation)) unauthorized()
+      const command = kind !== ACTOR_CONTROL_KIND.REGISTER_STAGE
+      if (command) {
+        const forwarding =
+          capsule.operation === REGISTRATION_CAPSULE_PREPARE_FORWARD ||
+          capsule.operation === REGISTRATION_CAPSULE_FINALIZE_FORWARD ||
+          capsule.operation === REGISTRATION_CAPSULE_ABORT_FORWARD
+        if (forwarding) {
+          if (options.destination) unauthorized()
+          downstream = await forward(kind, circuitId, generation, capsule.nextCapsule)
+        } else if (!options.destination) {
+          unauthorized()
+        }
+        const action =
+          kind === ACTOR_CONTROL_KIND.REGISTER_PREPARE
+            ? 'prepare'
+            : kind === ACTOR_CONTROL_KIND.REGISTER_FINALIZE
+              ? 'finalize'
+              : 'abort'
+        registryState.finishTransaction(capsule.transactionId, action)
+        observe(
+          action === 'prepare'
+            ? 'private-registration-prepared'
+            : action === 'finalize'
+              ? 'private-registration-commit'
+              : 'private-registration-rollback'
+        )
+        return true
+      }
+      envelope = decodeRegistrationEnvelope(capsule.envelope)
+      registered = registryState.registerForTraversal(envelope, capsule.transactionId)
+      register = decodeTemplateRegister(envelope.message)
+      inserted = registered.inserted
+      if (register.epoch !== capsule.epoch || register.expiresAt !== capsule.expiresAt)
+        unauthorized()
+      verifyRegistrationAck(registered.ack, register)
+      if (capsule.operation === REGISTRATION_CAPSULE_FINAL) {
+        if (
+          !options.destination ||
+          length(registered.nextAdvertisement) !== 0 ||
+          !fixed(registered.nextLayer, PRIVATE_FINAL_TOKEN_SIZE)
+        )
+          unauthorized()
+        const destinationRegistration = b4a.concat([registered.nextLayer, registered.ack])
+        try {
+          downstream = await forward(
+            ACTOR_CONTROL_KIND.REGISTER_STAGE,
+            circuitId,
+            generation,
+            destinationRegistration
+          )
+          const echoed = decodeRegistrationAcknowledgements(downstream)
+          try {
+            if (echoed.length !== 1 || !same(echoed[0], registered.ack)) unauthorized()
+          } finally {
+            clearTree(echoed)
+          }
+        } finally {
+          clear(destinationRegistration)
+        }
+        complete = true
+        observe('private-registration-staged')
+        return [copy(registered.ack)]
+      }
+      if (options.destination) unauthorized()
+      advertisement = decodeRelayAdvertisement(registered.nextAdvertisement)
+      if (
+        !same(advertisement.identityKey, nextIdentity) ||
+        !same(advertisement.routeEncryptionKey, nextRouteEncryptionKey)
+      )
+        unauthorized()
+      downstream = await forward(kind, circuitId, generation, capsule.nextCapsule)
+      const acknowledgements = decodeRegistrationAcknowledgements(downstream)
+      try {
+        if (acknowledgements.length >= MAX_PRIVATE_HOPS) unauthorized()
+        complete = true
+        observe('private-registration-staged')
+        return [copy(registered.ack), ...acknowledgements.map(copy)]
+      } finally {
+        clearTree(acknowledgements)
+      }
+    } finally {
+      if (!complete && inserted && register) {
+        registryState.rollbackRegistration(register, capsule && capsule.transactionId)
+        observe('private-registration-rollback')
+      }
+      clear(plaintext)
+      clearTree(capsule)
+      clearTree(envelope)
+      clearTree(registered)
+      clearTree(advertisement)
+      clearTree(register)
+      clear(downstream)
+    }
+  }
+
+  async function receiveActivation(request, circuitId, generation) {
+    let decodedRequest = null
+    let decodedCreate = null
+    let plaintext = null
+    let template = null
+    let advertisement = null
+    let entryProof = null
+    let nextRequest = null
+    let downstream = null
+    try {
+      decodedRequest = decodeActivationRequest(request)
+      if (decodedRequest.entry !== options.entry) unauthorized()
+      decodedCreate = decodeCreate(decodedRequest.create)
+      if (!same(decodedCreate.circuitId, circuitId)) unauthorized()
+      const layer = decodedRequest.entry ? decodedCreate.encryptedHops : decodedRequest.layer
+      plaintext = openTemplate(
+        layer,
+        registryState.routeEncryptionPublicKey,
+        registryState.routeEncryptionSecretKey
+      )
+      template = decodePrivateTemplate(plaintext)
+      registryState.prune(BigInt(options.now()))
+      if (
+        !same(template.descriptorId, decodedCreate.descriptorId) ||
+        template.epoch !== decodedCreate.epoch ||
+        template.expiresAt !== decodedRequest.expiresAt ||
+        !same(template.relayIdentity, registryState.identity)
+      )
+        unauthorized()
+      const record = registryState.records.get(registrationKey(template))
+      if (
+        !record ||
+        record.committed !== true ||
+        !same(record.commitment, hash([layer])) ||
+        !same(record.nextCommitment, hash([template.nextLayer]))
+      )
+        unauthorized()
+      const replayKey = `${registrationKey(template)}:${b4a.toString(decodedCreate.sourceEphemeralKey, 'hex')}:${b4a.toString(circuitId, 'hex')}`
+      if (registryState.activations.has(replayKey)) replay()
+      if (registryState.activations.size >= maxCircuits || circuits.size >= maxCircuits)
+        throw PrivateRouteError.CIRCUIT_LIMIT()
+      registryState.activations.set(replayKey, template.expiresAt)
+      circuits.set(b4a.toString(circuitId, 'hex'), {
+        generation,
+        circuitId: copy(circuitId)
+      })
+      entryProof = decodedRequest.entry
+        ? createEntryProof({
+            create: decodedRequest.create,
+            entryIdentity: registryState.identity,
+            entryIdentitySecretKey: registryState.identitySecretKey,
+            entryRouteEncryptionSecretKey: registryState.routeEncryptionSecretKey,
+            expectedDescriptorId: decodedCreate.descriptorId,
+            expectedEpoch: decodedCreate.epoch,
+            expectedCircuitId: circuitId,
+            expiresAt: decodedRequest.expiresAt,
+            startedAt: decodedRequest.startedAt,
+            now: options.now,
+            replayCache: entryReplayCache
+          })
+        : copy(decodedRequest.entryProof)
+      if (options.destination) {
+        if (
+          length(template.nextAdvertisement) !== 0 ||
+          !fixed(template.nextLayer, PRIVATE_FINAL_TOKEN_SIZE)
+        )
+          unauthorized()
+        nextRequest = encodeDestinationActivationRequest({
+          finalToken: template.nextLayer,
+          create: decodedRequest.create,
+          entryProof,
+          parameters: decodedRequest.parameters,
+          expiresAt: decodedRequest.expiresAt,
+          startedAt: decodedRequest.startedAt
+        })
+        downstream = await forward(
+          ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+          circuitId,
+          generation,
+          nextRequest
+        )
+        if (!fixed(downstream, CREATED_SIZE)) unauthorized()
+        observePassively(options.observe, { type: 'private-activation-open' })
+        return encodeActivationResponse({ entryProof, created: downstream })
+      }
+      advertisement = decodeRelayAdvertisement(template.nextAdvertisement)
+      if (
+        !same(advertisement.identityKey, nextIdentity) ||
+        !same(advertisement.routeEncryptionKey, nextRouteEncryptionKey)
+      )
+        unauthorized()
+      nextRequest = encodeActivationRequest({
+        entry: false,
+        create: decodedRequest.create,
+        layer: template.nextLayer,
+        expiresAt: decodedRequest.expiresAt,
+        startedAt: decodedRequest.startedAt,
+        parameters: decodedRequest.parameters,
+        entryProof
+      })
+      downstream = await forward(
+        ACTOR_CONTROL_KIND.ACTIVATE_CREATE,
+        circuitId,
+        generation,
+        nextRequest
+      )
+      observePassively(options.observe, { type: 'private-activation-open' })
+      return copy(downstream)
+    } finally {
+      clearTree(decodedRequest)
+      clearTree(decodedCreate)
+      clear(plaintext)
+      clearTree(template)
+      clearTree(advertisement)
+      clear(entryProof)
+      clear(nextRequest)
+      clear(downstream)
+    }
+  }
+
+  const state = {
+    receiveRegistration,
+    receiveActivation,
+    async destroyCircuit(circuitId, generation, body) {
+      const key = b4a.toString(circuitId, 'hex')
+      const record = circuits.get(key)
+      if (!record) return false
+      if (record.generation !== generation) unauthorized()
+      await forward(ACTOR_CONTROL_KIND.CIRCUIT_DESTROY, circuitId, generation, body)
+      circuits.delete(key)
+      clear(record.circuitId)
+      return true
+    },
+    releaseCircuit(circuitId) {
+      const key = b4a.toString(circuitId, 'hex')
+      const record = circuits.get(key)
+      if (!record) return false
+      circuits.delete(key)
+      clear(record.circuitId)
+      return true
+    },
+    destroy() {
+      if (destroyed) return
+      destroyed = true
+      for (const record of circuits.values()) clear(record.circuitId)
+      circuits.clear()
+      registry.destroy()
+      clear(nextIdentity)
+      clear(nextRouteEncryptionKey)
+      ACTOR_PUBLIC_INFOS.delete(actor)
+      DISTRIBUTED_RELAY_ACTOR_STATES.delete(actor)
+    }
+  }
+  DISTRIBUTED_RELAY_ACTOR_STATES.set(actor, state)
+  ACTOR_PUBLIC_INFOS.set(actor, {
+    identity: registryState.identity,
+    routeEncryptionKey: registryState.routeEncryptionPublicKey
+  })
+  return actor
+}
+
+export function destroyDistributedPrivateRelayActor(actor) {
+  const state = safeObject(actor) ? DISTRIBUTED_RELAY_ACTOR_STATES.get(actor) : null
+  if (!state) unauthorized()
+  state.destroy()
+}
+
 export function createPrivateDestinationActor(options) {
   const proofMutator = safeObject(options)
     ? option(options, TEST_ONLY_DESTINATION_PROOF_MUTATOR)
@@ -2338,10 +2671,13 @@ export function createPrivateDestinationActor(options) {
               now: options.now,
               replayCache
             })
-            if (!proofMutator) return proof
-            const changed = proofMutator(copy(proof))
-            if (!fixed(changed, CREATED_SIZE)) invalid()
-            return changed
+            let result = proof
+            if (proofMutator) {
+              result = proofMutator(copy(proof))
+              if (!fixed(result, CREATED_SIZE)) invalid()
+            }
+            state.observeState({ type: 'private-destination-created' })
+            return result
           } finally {
             clear(request)
             clearTree(decoded)
@@ -2519,7 +2855,9 @@ function remoteActorAuthority(actor) {
 // remains frozen and methodless; only canonical ActorControl bytes enter or
 // leave this adapter.
 export function createActorCommandAdapter(actor) {
-  const relayState = safeObject(actor) ? RELAY_ACTOR_STATES.get(actor) : null
+  const localRelayState = safeObject(actor) ? RELAY_ACTOR_STATES.get(actor) : null
+  const distributedRelayState = safeObject(actor) ? DISTRIBUTED_RELAY_ACTOR_STATES.get(actor) : null
+  const relayState = localRelayState || distributedRelayState
   const destinationState = safeObject(actor) ? DESTINATION_ACTOR_STATES.get(actor) : null
   if (!relayState && !destinationState) unauthorized()
   const codec = new ActorControlCodec()
@@ -2545,7 +2883,8 @@ export function createActorCommandAdapter(actor) {
     if (authority.circuits.get(key) !== record) return false
     if (destroy) {
       try {
-        if (relayState) relayState.destroyCircuit(record.circuitId)
+        if (distributedRelayState) distributedRelayState.releaseCircuit(record.circuitId)
+        else if (relayState) relayState.destroyCircuit(record.circuitId)
         else destinationState.destroyCircuit(record.circuitId)
       } catch {}
     }
@@ -2563,15 +2902,41 @@ export function createActorCommandAdapter(actor) {
   }
 
   return Object.freeze({
-    execute(message) {
+    async execute(message) {
       const request = codec.decode(message)
       let body = null
       let response = null
       try {
         switch (request.kind) {
           case ACTOR_CONTROL_KIND.REGISTER_STAGE: {
+            if (destinationState) {
+              let token = null
+              let acknowledgement = null
+              let accepted = null
+              try {
+                if (length(request.body) !== PRIVATE_FINAL_TOKEN_SIZE + REGISTRATION_ACK_SIZE)
+                  unauthorized()
+                token = copy(slice(request.body, 0, PRIVATE_FINAL_TOKEN_SIZE))
+                acknowledgement = copy(slice(request.body, PRIVATE_FINAL_TOKEN_SIZE))
+                const decoded = decodeTemplateRegistered(acknowledgement)
+                clearTree(decoded)
+                accepted = destinationState.acceptRegistration(token, request.circuitId)
+                if (!fixed(accepted, 32)) unauthorized()
+                body = encodeRegistrationAcknowledgements([acknowledgement])
+              } finally {
+                clear(token)
+                clear(acknowledgement)
+                clear(accepted)
+              }
+              break
+            }
             if (!relayState) unauthorized()
-            const acknowledgements = relayState.receiveRegistration(request.body, request.kind)
+            const acknowledgements = await relayState.receiveRegistration(
+              request.body,
+              request.kind,
+              request.circuitId,
+              request.generation
+            )
             try {
               body = encodeRegistrationAcknowledgements(acknowledgements)
             } finally {
@@ -2582,7 +2947,15 @@ export function createActorCommandAdapter(actor) {
           case ACTOR_CONTROL_KIND.REGISTER_PREPARE:
           case ACTOR_CONTROL_KIND.REGISTER_FINALIZE:
           case ACTOR_CONTROL_KIND.REGISTER_ABORT:
-            if (!relayState || relayState.receiveRegistration(request.body, request.kind) !== true)
+            if (
+              !relayState ||
+              (await relayState.receiveRegistration(
+                request.body,
+                request.kind,
+                request.circuitId,
+                request.generation
+              )) !== true
+            )
               unauthorized()
             body = b4a.from([PROTOCOL_VERSION, REGISTRATION_COMMAND_ACK])
             break
@@ -2597,11 +2970,20 @@ export function createActorCommandAdapter(actor) {
               try {
                 decodedActivation = decodeActivationRequest(request.body)
                 decodedCreate = decodeCreate(decodedActivation.create)
-                if (!decodedActivation.entry || !same(decodedCreate.circuitId, request.circuitId))
+                if (
+                  (localRelayState && !decodedActivation.entry) ||
+                  !same(decodedCreate.circuitId, request.circuitId)
+                )
                   unauthorized()
                 reservation = reserve(decodedCreate.circuitId, request.generation)
                 attempted = true
-                result = relayState.receiveActivationForReply(request.body)
+                result = distributedRelayState
+                  ? await distributedRelayState.receiveActivation(
+                      request.body,
+                      request.circuitId,
+                      request.generation
+                    )
+                  : relayState.receiveActivationForReply(request.body)
                 validateActorCommandReplyBody(ACTOR_CONTROL_KIND.ACTIVATE_CREATED, result)
                 body = copy(result)
                 commitReservation(reservation)
@@ -2663,7 +3045,13 @@ export function createActorCommandAdapter(actor) {
             )
               unauthorized()
             if (record.state === 'open') {
-              if (relayState) relayState.destroyCircuit(request.circuitId)
+              if (distributedRelayState)
+                await distributedRelayState.destroyCircuit(
+                  request.circuitId,
+                  request.generation,
+                  request.body
+                )
+              else if (relayState) relayState.destroyCircuit(request.circuitId)
               else destinationState.destroyCircuit(request.circuitId)
               record.state = 'destroyed'
             }
@@ -2693,7 +3081,8 @@ export function createActorCommandAdapter(actor) {
       for (const [key, record] of authority.circuits) {
         if (record.owner !== owner || record.state === 'destroyed') continue
         try {
-          if (relayState) relayState.destroyCircuit(record.circuitId)
+          if (distributedRelayState) distributedRelayState.releaseCircuit(record.circuitId)
+          else if (relayState) relayState.destroyCircuit(record.circuitId)
           else destinationState.destroyCircuit(record.circuitId)
         } catch {}
         record.state = 'destroyed'

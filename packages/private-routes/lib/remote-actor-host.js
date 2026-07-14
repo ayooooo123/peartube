@@ -493,13 +493,20 @@ export class RemoteActorHost {
 
   async #receiveRequest(message, request) {
     let requestDigest = null
+    let correlation = null
     let reply = null
     let errorBody = null
     let key = null
     let record = null
     try {
       requestDigest = digest(message)
-      key = request.requestId.toString()
+      correlation = {
+        requestId: request.requestId,
+        actorId: copy(request.actorId),
+        circuitId: copy(request.circuitId),
+        generation: request.generation
+      }
+      key = correlation.requestId.toString()
       const active = this.#inbound.get(key)
       if (active) {
         if (!same(active.digest, requestDigest)) throw PrivateRouteError.REPLAY()
@@ -530,10 +537,10 @@ export class RemoteActorHost {
           version: 0,
           kind: ACTOR_CONTROL_KIND.ERROR,
           flags: 0,
-          requestId: request.requestId,
-          actorId: request.actorId,
-          circuitId: request.circuitId,
-          generation: request.generation,
+          requestId: correlation.requestId,
+          actorId: correlation.actorId,
+          circuitId: correlation.circuitId,
+          generation: correlation.generation,
           body: errorBody
         })
       }
@@ -560,6 +567,7 @@ export class RemoteActorHost {
         clear(record.digest)
       }
       clear(requestDigest)
+      clearMessage(correlation)
       clear(reply)
       clear(errorBody)
     }

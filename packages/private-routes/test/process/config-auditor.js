@@ -183,6 +183,8 @@ export function createConfigurationAuditor(fixture) {
         delete snapshot.runtimeVersion
         delete snapshot.adapter
         delete snapshot.udxVersion
+        delete snapshot.milestone
+        delete snapshot.traffic
         exactKeys(record, [
           'event',
           'role',
@@ -194,14 +196,32 @@ export function createConfigurationAuditor(fixture) {
           'runtime',
           'runtimeVersion',
           'adapter',
-          'udxVersion'
+          'udxVersion',
+          'milestone',
+          'traffic'
         ])
+        exactKeys(record.traffic, ['streamBytes', 'datagramBytes'])
         if (
           (record.runtime !== 'node' && record.runtime !== 'bare') ||
           typeof record.runtimeVersion !== 'string' ||
           !record.runtimeVersion.startsWith('v') ||
           (record.adapter !== 'node-process' && record.adapter !== 'bare-process') ||
-          record.udxVersion !== '1.20.7'
+          record.udxVersion !== '1.20.7' ||
+          record.milestone !==
+            (role === 'source'
+              ? 'created-and-traffic-verified'
+              : role === 'destination'
+                ? 'traffic-exchanged'
+                : role.startsWith('private-')
+                  ? 'actor-registered'
+                  : 'transport-open') ||
+          !nonnegative(record.traffic.streamBytes) ||
+          !nonnegative(record.traffic.datagramBytes) ||
+          ((role === 'source' || role === 'destination') &&
+            (record.traffic.streamBytes === 0 || record.traffic.datagramBytes === 0)) ||
+          (role !== 'source' &&
+            role !== 'destination' &&
+            (record.traffic.streamBytes !== 0 || record.traffic.datagramBytes !== 0))
         ) {
           invalid()
         }

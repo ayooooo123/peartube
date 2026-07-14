@@ -330,6 +330,12 @@ export function createLiveRouteFixture(options = {}) {
               forwardNoncePrefix: b4a.from(routePayloadKeys.forwardNoncePrefix),
               reverseKey: b4a.from(routePayloadKeys.reverseKey),
               reverseNoncePrefix: b4a.from(routePayloadKeys.reverseNoncePrefix)
+            }),
+            traffic: Object.freeze({
+              sendStream: b4a.from('process source stream over private UDX'),
+              sendDatagram: b4a.alloc(257, 0x71),
+              expectStream: b4a.from('process destination stream over private UDX'),
+              expectDatagram: b4a.alloc(263, 0x72)
             })
           })
         : record.role.startsWith('private-')
@@ -358,6 +364,12 @@ export function createLiveRouteFixture(options = {}) {
                   forwardNoncePrefix: b4a.from(routePayloadKeys.forwardNoncePrefix),
                   reverseKey: b4a.from(routePayloadKeys.reverseKey),
                   reverseNoncePrefix: b4a.from(routePayloadKeys.reverseNoncePrefix)
+                }),
+                traffic: Object.freeze({
+                  sendStream: b4a.from('process destination stream over private UDX'),
+                  sendDatagram: b4a.alloc(263, 0x72),
+                  expectStream: b4a.from('process source stream over private UDX'),
+                  expectDatagram: b4a.alloc(257, 0x71)
                 })
               })
             : Object.freeze({

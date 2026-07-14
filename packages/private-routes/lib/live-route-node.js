@@ -18,7 +18,7 @@ import {
   PROTOCOL_VERSION,
   TOPOLOGY_ROLE
 } from './protocol.js'
-import { RemoteActorHost } from './remote-actor-host.js'
+import { RemoteActorHost, forwardRemoteActorHost } from './remote-actor-host.js'
 import {
   RemoteControlFragmentCodec,
   RemoteControlMux,
@@ -36,6 +36,7 @@ import { UdxCellEndpoint } from './udx-cell-endpoint.js'
 export const LIVE_ROUTE_CREATE_CONTROL = Symbol('live-route-create-control')
 export const LIVE_ROUTE_ACTIVATE_ENDPOINT = Symbol('live-route-activate-endpoint')
 export const LIVE_ROUTE_REGISTER_ACTOR = Symbol('live-route-register-actor')
+export const LIVE_ROUTE_FORWARD_ACTOR = Symbol('live-route-forward-actor')
 export const LIVE_ROUTE_REVOKE_GRANT = Symbol('live-route-revoke-grant')
 export const LIVE_ROUTE_CLOSE_SOCKET = Symbol('live-route-close-socket')
 
@@ -604,6 +605,19 @@ export function createLiveRouteNode(roleProjection, adapters) {
       const record = links.find((value) => value.actorEndpoint?.kind === 'server')
       if (!record) throw PrivateRouteError.UNAUTHORIZED()
       return record.actorEndpoint.host.register(actorId, actor)
+    },
+    [LIVE_ROUTE_FORWARD_ACTOR](kind, actorId, circuitId, generation, body) {
+      if (state !== 'OPEN') return Promise.reject(stateError())
+      const record = links.find((value) => value.actorEndpoint?.kind === 'client')
+      if (!record) return Promise.reject(PrivateRouteError.UNAUTHORIZED())
+      return forwardRemoteActorHost(
+        record.actorEndpoint.host,
+        kind,
+        actorId,
+        circuitId,
+        generation,
+        body
+      )
     },
     [LIVE_ROUTE_REVOKE_GRANT](digest32) {
       if (state !== 'OPEN' || !directory) throw stateError()

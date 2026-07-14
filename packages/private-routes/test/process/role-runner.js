@@ -1,7 +1,27 @@
 import b4a from 'b4a'
 
-import { PrivateRouteError, createLiveRouteNode, cryptoSuite } from '../../index.js'
-import { LIVE_ROUTE_CLOSE_SOCKET, LIVE_ROUTE_REVOKE_GRANT } from '../../lib/live-route-node.js'
+import {
+  PrivateRouteError,
+  createDestinationReplayCache,
+  createLiveRouteNode,
+  createPrivateDestinationActor,
+  createRemoteActivationVerifier,
+  createRemoteRegistrationVerifier,
+  cryptoSuite,
+  destroyPrivateDestinationActor
+} from '../../index.js'
+import {
+  createDistributedPrivateRelayActor,
+  destroyDistributedPrivateRelayActor
+} from '../../lib/activation.js'
+import {
+  LIVE_ROUTE_ACTIVATE_ENDPOINT,
+  LIVE_ROUTE_CLOSE_SOCKET,
+  LIVE_ROUTE_CREATE_CONTROL,
+  LIVE_ROUTE_FORWARD_ACTOR,
+  LIVE_ROUTE_REGISTER_ACTOR,
+  LIVE_ROUTE_REVOKE_GRANT
+} from '../../lib/live-route-node.js'
 import runtime from '#private-route-process'
 import {
   CONTROL_COMMAND,
@@ -63,7 +83,225 @@ export function createRoleRunner(options = {}) {
   let projection = null
   let fingerprints = null
   let node = null
+  let actor = null
+  let destroyActor = null
+  const traffic = { streamBytes: 0, datagramBytes: 0 }
   let queue = Promise.resolve()
+
+  const releaseActor = () => {
+    if (!actor || !destroyActor) return
+    const owned = actor
+    actor = null
+    const destroy = destroyActor
+    destroyActor = null
+    try {
+      destroy(owned)
+    } catch {}
+  }
+
+  const wait = (delay) =>
+    new Promise((resolve, reject) => {
+      let handle
+      try {
+        handle = adapters.schedule(resolve, delay)
+      } catch (err) {
+        reject(err)
+        return
+      }
+      if (handle === null || handle === undefined) reject(PrivateRouteError.ROUTE_UNAVAILABLE())
+    })
+
+  const routeTraffic = () => {
+    const value = projection.route?.traffic
+    if (
+      !object(value) ||
+      !b4a.isBuffer(value.sendStream) ||
+      value.sendStream.byteLength < 1 ||
+      !b4a.isBuffer(value.sendDatagram) ||
+      value.sendDatagram.byteLength < 1 ||
+      !b4a.isBuffer(value.expectStream) ||
+      value.expectStream.byteLength < 1 ||
+      !b4a.isBuffer(value.expectDatagram) ||
+      value.expectDatagram.byteLength < 1
+    )
+      invalid()
+    return value
+  }
+
+  const receiveTraffic = async (duplex, expected) => {
+    const deadline = Number(adapters.now()) + 5_000
+    const chunks = []
+    let streamBytes = 0
+    let datagram = null
+    try {
+      while (streamBytes < expected.expectStream.byteLength || !datagram) {
+        let chunk
+        while ((chunk = duplex.read()) !== null) {
+          chunks.push(chunk)
+          streamBytes += chunk.byteLength
+        }
+        if (!datagram) datagram = duplex.receiveDatagram()
+        if (streamBytes >= expected.expectStream.byteLength && datagram) break
+        if (Number(adapters.now()) >= deadline) throw PrivateRouteError.ROUTE_UNAVAILABLE()
+        await wait(1)
+      }
+      const stream = b4a.concat(chunks)
+      try {
+        if (
+          !b4a.equals(stream, expected.expectStream) ||
+          !b4a.equals(datagram, expected.expectDatagram)
+        )
+          throw PrivateRouteError.UNAUTHORIZED()
+      } finally {
+        stream.fill(0)
+      }
+      traffic.streamBytes = streamBytes
+      traffic.datagramBytes = datagram.byteLength
+      return true
+    } finally {
+      for (const chunk of chunks) chunk.fill(0)
+      if (datagram) datagram.fill(0)
+    }
+  }
+
+  const sendTraffic = async (duplex, value) => {
+    if (!duplex.write(value.sendStream) || !duplex.sendDatagram(value.sendDatagram)) {
+      throw PrivateRouteError.ROUTE_UNAVAILABLE()
+    }
+    await duplex.drain()
+  }
+
+  const registerPrivateActor = () => {
+    const nextRole =
+      projection.role === 'private-entry'
+        ? 'private-middle'
+        : projection.role === 'private-middle'
+          ? 'private-final'
+          : 'destination'
+    const contact = projection.contacts.find((value) => value.role === nextRole)
+    if (!contact || !object(projection.route)) invalid()
+    actor = createDistributedPrivateRelayActor({
+      identity: projection.local.identity32,
+      identitySecretKey: projection.local.identitySecretKey,
+      routeEncryptionSecretKey: projection.local.routeEncryptionSecretKey,
+      nextIdentity: contact.identity32,
+      nextRouteEncryptionKey: contact.routeEncryptionKey,
+      entry: projection.role === 'private-entry',
+      destination: nextRole === 'destination',
+      now: adapters.now,
+      randomBytes: adapters.randomBytes,
+      forward(kind, circuitId, generation, body) {
+        return node[LIVE_ROUTE_FORWARD_ACTOR](kind, contact.actorId, circuitId, generation, body)
+      }
+    })
+    destroyActor = destroyDistributedPrivateRelayActor
+    node[LIVE_ROUTE_REGISTER_ACTOR](projection.route.actorId, actor)
+    return 'actor-registered'
+  }
+
+  const registerDestinationActor = async () => {
+    const route = projection.route
+    if (!object(route)) invalid()
+    let resolveCreated
+    let rejectCreated
+    const created = new Promise((resolve, reject) => {
+      resolveCreated = resolve
+      rejectCreated = reject
+    })
+    let destinationDuplex = null
+    actor = createPrivateDestinationActor({
+      identity: projection.local.identity32,
+      identitySecretKey: projection.local.identitySecretKey,
+      routeSigningKey: route.routeSigningKey,
+      routeSigningSecretKey: route.routeSigningSecretKey,
+      routeEncryptionSecretKey: route.routeEncryptionSecretKey,
+      finalToken: route.finalToken,
+      now: adapters.now,
+      randomBytes: adapters.randomBytes,
+      observe(event) {
+        if (event.type !== 'private-destination-created' || destinationDuplex) return
+        try {
+          destinationDuplex = node[LIVE_ROUTE_ACTIVATE_ENDPOINT]()
+          resolveCreated(destinationDuplex)
+        } catch (err) {
+          rejectCreated(err)
+        }
+      }
+    })
+    destroyActor = destroyPrivateDestinationActor
+    node[LIVE_ROUTE_REGISTER_ACTOR](route.actorId, actor)
+    const duplex = await created
+    const value = routeTraffic()
+    await receiveTraffic(duplex, value)
+    await sendTraffic(duplex, value)
+    return 'traffic-exchanged'
+  }
+
+  const establishSource = async () => {
+    const route = projection.route
+    if (!object(route)) return 'transport-open'
+    const deadline = Number(adapters.now()) + 5_000
+    let control = null
+    let registered = null
+    for (;;) {
+      control = node[LIVE_ROUTE_CREATE_CONTROL](route.entryActorId)
+      try {
+        registered = await control.register({
+          stage: route.registrationCapsule,
+          prepare: route.prepareCapsule,
+          finalize: route.finalizeCapsule,
+          abort: route.abortCapsule,
+          registrationVerifier: createRemoteRegistrationVerifier({
+            request: route.registrationCapsule,
+            registrations: route.registrations
+          })
+        })
+        registered.acknowledgements.fill(0)
+        break
+      } catch (err) {
+        try {
+          await control.stop()
+        } catch {}
+        control = null
+        if (err?.code !== 'ROUTE_UNAVAILABLE' || Number(adapters.now()) >= deadline) throw err
+        await wait(5)
+      }
+    }
+    const activation = route.activation
+    const proof = await control.activate({
+      body: activation.body,
+      circuitId: activation.circuitId,
+      generation: activation.generation,
+      activationVerifier: createRemoteActivationVerifier({
+        request: activation.body,
+        circuitId: activation.circuitId,
+        generation: activation.generation,
+        entryIdentity: activation.entryIdentity,
+        entryRouteEncryptionKey: activation.entryRouteEncryptionKey,
+        endpointIdentity: activation.endpointIdentity,
+        routeSigningKey: activation.routeSigningKey,
+        destinationRouteEncryptionKey: activation.destinationRouteEncryptionKey,
+        sourceEphemeralSecretKey: activation.sourceEphemeralSecretKey,
+        entryChallenge: activation.entryChallenge,
+        destinationChallenge: activation.destinationChallenge,
+        replayCache: createDestinationReplayCache({ now: adapters.now }),
+        now: adapters.now
+      })
+    })
+    proof.fill(0)
+    const duplex = node[LIVE_ROUTE_ACTIVATE_ENDPOINT]()
+    const value = routeTraffic()
+    await sendTraffic(duplex, value)
+    await receiveTraffic(duplex, value)
+    return 'created-and-traffic-verified'
+  }
+
+  const establishRole = async () => {
+    if (projection.role.startsWith('private-')) return registerPrivateActor()
+    if (projection.role === 'destination') return registerDestinationActor()
+    if (projection.role === 'source') return establishSource()
+    return 'transport-open'
+  }
 
   const send = (record) => {
     lifecycle.emit(record)
@@ -100,7 +338,12 @@ export function createRoleRunner(options = {}) {
       case CONTROL_COMMAND.START:
         await node.start()
         await node.connect()
-        send({ ...snapshotEvent(CONTROL_EVENT.READY), ...runtimeRecord() })
+        send({
+          ...snapshotEvent(CONTROL_EVENT.READY),
+          ...runtimeRecord(),
+          milestone: await establishRole(),
+          traffic: { ...traffic }
+        })
         return true
       case CONTROL_COMMAND.SNAPSHOT:
         send(snapshotEvent(CONTROL_EVENT.SNAPSHOT))
@@ -120,6 +363,7 @@ export function createRoleRunner(options = {}) {
         return true
       case CONTROL_COMMAND.STOP:
         await node.stop()
+        releaseActor()
         send(snapshotEvent(CONTROL_EVENT.CLOSED))
         return true
       default:
@@ -153,6 +397,7 @@ export function createRoleRunner(options = {}) {
         await node.stop()
       } catch {}
     }
+    releaseActor()
     return true
   }
 

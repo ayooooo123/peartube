@@ -32,6 +32,23 @@ test('seven Node role processes authenticate, report, and close independently', 
       t.is(event.state, 'OPEN', event.role)
       t.is(event.links, LIVE_ROUTE_CONTACTS[event.role].length, event.role)
       t.is(event.resources.openSockets, 1, event.role)
+      t.is(
+        event.milestone,
+        event.role === 'source'
+          ? 'created-and-traffic-verified'
+          : event.role === 'destination'
+            ? 'traffic-exchanged'
+            : event.role.startsWith('private-')
+              ? 'actor-registered'
+              : 'transport-open',
+        event.role
+      )
+      if (event.role === 'source' || event.role === 'destination') {
+        t.ok(event.traffic.streamBytes > 0, event.role)
+        t.ok(event.traffic.datagramBytes > 0, event.role)
+      } else {
+        t.alike(event.traffic, { streamBytes: 0, datagramBytes: 0 }, event.role)
+      }
     }
     const snapshots = await coordinator.snapshot()
     t.is(snapshots.length, 7)

@@ -29,6 +29,7 @@ export const DEFAULT_COMPILED_LOW_WATER_MARK = 1
 const MAX_UINT64 = (1n << 64n) - 1n
 const DUPLEXES = new WeakMap()
 const READY_CAPABILITIES = new WeakMap()
+const CLAIMED_CREATED_ROUTES = new WeakSet()
 const CLAIMED_GENERATIONS = new WeakMap()
 const routeStats = Object.getOwnPropertyDescriptor(RoutePayloadCodec.prototype, 'stats').get
 const routeSeal = RoutePayloadCodec.prototype.seal
@@ -473,6 +474,9 @@ export function mintCompiledRouteReady(options = {}) {
   sendDirection = direction(sendDirection)
   const binding = readRouteBinding(routePayload)
   const progress = readStreamProgress(endpoint, handle, sendDirection, generation)
+  let storedDescriptorId = null
+  let storedCircuitId = null
+  let stored = false
   try {
     if (
       !binding ||
@@ -485,7 +489,11 @@ export function mintCompiledRouteReady(options = {}) {
     ) {
       invalid()
     }
+    if (CLAIMED_CREATED_ROUTES.has(routePayload)) throw PrivateRouteError.UNAUTHORIZED()
     const ready = Object.freeze(Object.create(null))
+    storedDescriptorId = b4a.from(binding.descriptorId)
+    storedCircuitId = b4a.from(binding.circuitId)
+    CLAIMED_CREATED_ROUTES.add(routePayload)
     READY_CAPABILITIES.set(ready, {
       endpoint,
       handle,
@@ -494,12 +502,17 @@ export function mintCompiledRouteReady(options = {}) {
       direction: sendDirection,
       circuitContext,
       epoch: progress.epoch,
-      descriptorId: b4a.from(binding.descriptorId),
-      circuitId: b4a.from(binding.circuitId),
+      descriptorId: storedDescriptorId,
+      circuitId: storedCircuitId,
       consumed: false
     })
+    stored = true
     return ready
   } finally {
+    if (!stored) {
+      clear(storedDescriptorId)
+      clear(storedCircuitId)
+    }
     clear(binding && binding.descriptorId)
     clear(binding && binding.circuitId)
     clear(progress && progress.circuitId)

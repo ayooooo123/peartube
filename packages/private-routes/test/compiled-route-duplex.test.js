@@ -302,7 +302,7 @@ function decodeOutbound(f, packet, cellClass) {
   )
 }
 
-async function fixture(options = {}) {
+async function readyFixture(options = {}) {
   const f = endpointFixture(options)
   const routes = routePair((options.marker || 20) + 40, {
     ...options.routeOptions,
@@ -328,14 +328,19 @@ async function fixture(options = {}) {
     direction: DIRECTION.FORWARD,
     circuitContext
   })
+  return { ...f, ...routes, circuitContext, handle, ready }
+}
+
+async function fixture(options = {}) {
+  const f = await readyFixture(options)
   const duplex = createCompiledRouteDuplex({
-    ready,
+    ready: f.ready,
     schedule: f.timers.schedule,
     cancel: f.timers.cancel,
     ...options.limits
   })
   f.setDuplex(duplex)
-  return { ...f, ...routes, circuitContext, duplex, handle, ready }
+  return { ...f, duplex }
 }
 
 async function close(f) {
@@ -393,6 +398,32 @@ test('compiled live route exposes only the bounded duplex surface', async (t) =>
       }),
     'INVALID_ROUTE'
   )
+  await close(f)
+})
+
+test('authenticated CREATED route material can mint exactly one generation', async (t) => {
+  const f = await readyFixture({ marker: 25 })
+  expectCode(
+    t,
+    () =>
+      mintCompiledRouteReady({
+        endpoint: f.endpoint,
+        handle: f.handle,
+        routePayload: f.source,
+        generation: 2n,
+        direction: DIRECTION.FORWARD,
+        circuitContext: f.circuitContext
+      }),
+    'UNAUTHORIZED'
+  )
+  const duplex = createCompiledRouteDuplex({
+    ready: f.ready,
+    schedule: f.timers.schedule,
+    cancel: f.timers.cancel
+  })
+  f.setDuplex(duplex)
+  f.duplex = duplex
+  t.is(f.duplex.write(b4a.from('sole-generation')), true)
   await close(f)
 })
 

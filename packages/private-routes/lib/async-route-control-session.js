@@ -289,8 +289,14 @@ export class AsyncRouteControlSession {
     object(options)
     if (this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTED) return true
     if (this.#abortPromise) return this.#abortPromise
-    const operation = this.#runAbort(abortValue, options)
+    let resolveOperation
+    let rejectOperation
+    const operation = new Promise((resolve, reject) => {
+      resolveOperation = resolve
+      rejectOperation = reject
+    })
     this.#abortPromise = operation
+    this.#runAbort(abortValue, options).then(resolveOperation, rejectOperation)
     try {
       return await operation
     } finally {
@@ -364,8 +370,14 @@ export class AsyncRouteControlSession {
     )
       circuitState()
     if (this.#destroyPromise) return this.#destroyPromise
-    const operation = this.#runDestroy(reason, options)
+    let resolveOperation
+    let rejectOperation
+    const operation = new Promise((resolve, reject) => {
+      resolveOperation = resolve
+      rejectOperation = reject
+    })
     this.#destroyPromise = operation
+    this.#runDestroy(reason, options).then(resolveOperation, rejectOperation)
     try {
       return await operation
     } finally {

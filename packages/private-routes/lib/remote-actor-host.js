@@ -231,9 +231,7 @@ export class RemoteActorHost {
     this.#maxReplay = bound(options.maxReplay, DEFAULT_MAX_REMOTE_REPLAYS)
     this.#maxTombstones = bound(options.maxTombstones, DEFAULT_MAX_REMOTE_TOMBSTONES)
     REMOTE_ACTOR_HOSTS.add(this)
-    REMOTE_ACTOR_DISPATCH.set(this, (...args) =>
-      RemoteActorHost.prototype.request.call(this, ...args)
-    )
+    REMOTE_ACTOR_DISPATCH.set(this, (...args) => genuineRemoteActorRequest.call(this, ...args))
   }
 
   get stats() {
@@ -854,6 +852,8 @@ export class RemoteActorHost {
     this.destroy()
   }
 }
+
+const genuineRemoteActorRequest = RemoteActorHost.prototype.request
 
 // Package-internal brand consumed by AsyncRouteControlSession. A plain object
 // with a request-shaped method is not an authenticated actor boundary.

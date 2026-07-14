@@ -485,19 +485,25 @@ test('monkey-patching a branded host cannot bypass genuine activation dispatch',
     cancel: timers.cancel
   })
   host.request = () => Promise.resolve(bytes(305, 1))
+  const originalRequest = RemoteActorHost.prototype.request
+  RemoteActorHost.prototype.request = () => Promise.resolve(bytes(305, 2))
   const control = session(host)
   const fixture = activationFixture(69)
-  t.is(
-    await rejectionCode(
-      control.activate({
-        body: fixture.body,
-        circuitId: fixture.circuitId,
-        generation: fixture.generation,
-        activationVerifier: fixture.verifier
-      })
-    ),
-    'ROUTE_UNAVAILABLE'
-  )
+  try {
+    t.is(
+      await rejectionCode(
+        control.activate({
+          body: fixture.body,
+          circuitId: fixture.circuitId,
+          generation: fixture.generation,
+          activationVerifier: fixture.verifier
+        })
+      ),
+      'ROUTE_UNAVAILABLE'
+    )
+  } finally {
+    RemoteActorHost.prototype.request = originalRequest
+  }
   t.is(control.circuitState, ASYNC_CIRCUIT_STATE.DESTROYING)
   t.is(host.stats.pending, 0)
   t.is(timers.records.size, 0)
@@ -810,18 +816,21 @@ test('registration abort is allowed only from staged or prepared and repeats ide
 
 test('concurrent repeated abort joins the one in-flight cleanup', async (t) => {
   let resolveAbort = null
+  let reentered = null
   let abortCalls = 0
+  let control = null
   const peer = controlledRemote(function request(kind) {
     if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) return Promise.resolve(bytes(195, 1))
     if (kind === ACTOR_CONTROL_KIND.REGISTER_ABORT) {
       abortCalls++
+      reentered = control.abort()
       return new Promise((resolve) => {
         resolveAbort = resolve
       })
     }
     return Promise.resolve(b4a.alloc(0))
   })
-  const control = session(peer)
+  control = session(peer)
   await control.stage(bytes(64, 1), { abort: bytes(64, 2) })
   const first = control.abort()
   const second = control.abort()
@@ -829,6 +838,7 @@ test('concurrent repeated abort joins the one in-flight cleanup', async (t) => {
   resolveAbort(b4a.alloc(0))
   t.is(await first, true)
   t.is(await second, true)
+  t.is(await reentered, true)
   t.is(control.registrationState, ASYNC_REGISTRATION_STATE.ABORTED)
 })
 
@@ -876,19 +886,24 @@ test('activation opens only after reply and destroy is the sole idempotent repea
 
 test('concurrent destroy and expiry join the one in-flight circuit cleanup', async (t) => {
   let resolveDestroy = null
+  let reentered = null
+  let expiring = null
   let destroyCalls = 0
+  let control = null
   const peer = controlledRemote(function request(kind) {
     if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) return Promise.resolve(bytes(195, 1))
     if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) return Promise.resolve(bytes(305, 2))
     if (kind === ACTOR_CONTROL_KIND.CIRCUIT_DESTROY) {
       destroyCalls++
+      reentered = control.destroy()
+      expiring = control.expire()
       return new Promise((resolve) => {
         resolveDestroy = resolve
       })
     }
     return Promise.resolve(b4a.alloc(0))
   })
-  const control = session(peer)
+  control = session(peer)
   await control.register(registration())
   const activation = activationFixture(43)
   const proof = await control.activate({
@@ -900,11 +915,11 @@ test('concurrent destroy and expiry join the one in-flight circuit cleanup', asy
   proof.fill(0)
   const first = control.destroy()
   const repeated = control.destroy()
-  const expiring = control.expire()
   t.is(destroyCalls, 1)
   resolveDestroy(b4a.alloc(0))
   t.is(await first, true)
   t.is(await repeated, true)
+  t.is(await reentered, true)
   t.is(await expiring, true)
   t.is(control.registrationState, ASYNC_REGISTRATION_STATE.EXPIRED)
   t.is(control.circuitState, ASYNC_CIRCUIT_STATE.DESTROYED)

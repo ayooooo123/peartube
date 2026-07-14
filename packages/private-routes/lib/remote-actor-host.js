@@ -234,24 +234,33 @@ export class RemoteActorHost {
 
   register(actorId, actor) {
     if (this.#destroyed) throw PrivateRouteError.CIRCUIT_STATE()
-    if (!fixed(actorId, 16) || allZero(actorId)) invalid()
-    const key = hex(actorId)
-    if (this.#actors.has(key)) throw PrivateRouteError.CIRCUIT_STATE()
-    if (this.#actors.size >= this.#maxActors) throw PrivateRouteError.CIRCUIT_LIMIT()
-    if (isObject(actor) && this.#actorCapabilities.has(actor)) {
+    if (this.#busy) {
+      this.#failClosed()
       throw PrivateRouteError.CIRCUIT_STATE()
     }
-    const handle = Object.freeze({})
-    const id = copy(actorId)
+    this.#busy = true
     try {
-      const adapter = createActorCommandAdapter(actor)
-      this.#actors.set(key, { id, adapter, handle })
-      this.#actorCapabilities.add(actor)
-      ACTOR_HANDLES.set(handle, this)
-      return handle
-    } catch (err) {
-      clear(id)
-      throw err
+      if (!fixed(actorId, 16) || allZero(actorId)) invalid()
+      const key = hex(actorId)
+      if (this.#actors.has(key)) throw PrivateRouteError.CIRCUIT_STATE()
+      if (this.#actors.size >= this.#maxActors) throw PrivateRouteError.CIRCUIT_LIMIT()
+      if (isObject(actor) && this.#actorCapabilities.has(actor)) {
+        throw PrivateRouteError.CIRCUIT_STATE()
+      }
+      const handle = Object.freeze({})
+      const id = copy(actorId)
+      try {
+        const adapter = createActorCommandAdapter(actor)
+        this.#actors.set(key, { id, adapter, handle })
+        this.#actorCapabilities.add(actor)
+        ACTOR_HANDLES.set(handle, this)
+        return handle
+      } catch (err) {
+        clear(id)
+        throw err
+      }
+    } finally {
+      this.#busy = false
     }
   }
 
@@ -596,6 +605,10 @@ export class RemoteActorHost {
       throw unavailable()
     }
     timer.handle = handle
+    if (handle === undefined || handle === null) {
+      this.#failClosed()
+      throw unavailable()
+    }
     timer.armed = true
     if (this.#destroyed || record.settled || record.timer !== timer || !timer.active) {
       try {

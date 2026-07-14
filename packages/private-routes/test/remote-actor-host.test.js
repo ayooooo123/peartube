@@ -1383,3 +1383,158 @@ test('actor handler reentry cannot repopulate a destroyed host', async (t) => {
   t.is(sent.length, 0)
   fixture.destroy()
 })
+
+test('register reentry through send and actor hooks fails the whole mutation exact-zero', async (t) => {
+  for (const hook of ['send', 'actor']) {
+    let host = null
+    let nestedError = null
+    let request = null
+    let armed = false
+    const timers = scheduler()
+    const firstActor = destinationActor()
+    const nestedActor = destinationActor()
+    const fixture =
+      hook === 'actor'
+        ? registrationFixture(71, () => {
+            if (armed) {
+              armed = false
+              try {
+                host.register(bytes(16, 0xa9), nestedActor)
+              } catch (err) {
+                nestedError = err
+              }
+            }
+            return 1_000
+          })
+        : null
+    host = new RemoteActorHost({
+      sendControl() {
+        if (hook === 'send') {
+          try {
+            host.register(bytes(16, 0xaa), nestedActor)
+          } catch (err) {
+            nestedError = err
+          }
+        }
+        return true
+      },
+      now: () => (hook === 'actor' ? 1_000 : 0),
+      randomBytes: sequenceBytes(1),
+      schedule: timers.schedule,
+      cancel: timers.cancel
+    })
+    host.register(bytes(16, 0xab), hook === 'actor' ? fixture.relay : firstActor)
+    let outer
+    if (hook === 'send') {
+      outer = host.request(
+        ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+        bytes(16, 0xac),
+        bytes(16, 0xad),
+        1n,
+        b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
+      )
+    } else {
+      request = new ActorControlCodec().encode({
+        version: 0,
+        kind: ACTOR_CONTROL_KIND.REGISTER_STAGE,
+        flags: 0,
+        requestId: 1n,
+        actorId: bytes(16, 0xab),
+        circuitId: b4a.alloc(16),
+        generation: 0n,
+        body: fixture.built.registrationCapsule
+      })
+      armed = true
+      outer = host.receiveAuthenticated(request)
+    }
+    if (!host.stats.destroyed) host.destroy()
+    t.is(await rejectionCode(outer), 'ROUTE_UNAVAILABLE', hook)
+    t.is(nestedError && nestedError.code, 'CIRCUIT_STATE', hook)
+    t.alike(
+      host.stats,
+      {
+        actors: 0,
+        pending: 0,
+        inbound: 0,
+        replay: 0,
+        tombstones: 0,
+        ownedBytes: 0,
+        timers: 0,
+        destroyed: true
+      },
+      hook
+    )
+    t.is(timers.records.size, 0, hook)
+    if (fixture) fixture.destroy()
+    destroyPrivateDestinationActor(firstActor)
+    destroyPrivateDestinationActor(nestedActor)
+  }
+})
+
+test('nullish scheduler handles fail closed while zero remains a valid opaque handle', async (t) => {
+  for (const handle of [undefined, null]) {
+    const cancelled = []
+    const actor = destinationActor()
+    const host = new RemoteActorHost({
+      sendControl() {
+        return true
+      },
+      now: () => 0,
+      randomBytes: sequenceBytes(1),
+      schedule() {
+        return handle
+      },
+      cancel(value) {
+        cancelled.push(value)
+      }
+    })
+    host.register(bytes(16, handle === null ? 0xae : 0xaf), actor)
+    const pending = host.request(
+      ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+      bytes(16, 0xb0),
+      bytes(16, 0xb1),
+      1n,
+      b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
+    )
+    const failedClosed = host.stats.destroyed
+    if (!failedClosed) host.destroy()
+    t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+    t.is(failedClosed, true)
+    t.is(cancelled.length, 1, 'best-effort cancellation runs for the rejected token')
+    t.alike(host.stats, {
+      actors: 0,
+      pending: 0,
+      inbound: 0,
+      replay: 0,
+      tombstones: 0,
+      ownedBytes: 0,
+      timers: 0,
+      destroyed: true
+    })
+    destroyPrivateDestinationActor(actor)
+  }
+
+  const outbound = []
+  const zero = new RemoteActorHost({
+    sendControl(message) {
+      outbound.push(b4a.from(message))
+      return true
+    },
+    now: () => 0,
+    randomBytes: sequenceBytes(1),
+    schedule() {
+      return 0
+    },
+    cancel() {}
+  })
+  const pending = zero.request(
+    ACTOR_CONTROL_KIND.CIRCUIT_DESTROY,
+    bytes(16, 0xb2),
+    bytes(16, 0xb3),
+    1n,
+    b4a.from([CIRCUIT_DESTROY_REASON.REQUESTED])
+  )
+  t.is(outbound.length, 1)
+  zero.destroy()
+  t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+})

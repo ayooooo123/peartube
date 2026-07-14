@@ -3,9 +3,17 @@ import b4a from 'b4a'
 
 import * as routes from '../index.js'
 import {
+  CELL_CLASS,
+  DIRECTION,
+  CellCodec,
+  DatagramReplayWindow,
   LINK_OPERATION,
   LinkDirectory,
+  OrderedReceiver,
   PROTOCOL_VERSION,
+  RemoteControlFragmentCodec,
+  RemoteControlMux,
+  SenderCounter,
   TOPOLOGY_ROLE,
   UdxCellEndpoint,
   BootstrapEnvelopeCodec,
@@ -18,6 +26,7 @@ import { expectCode, safetyRoleIdentity, seed } from './helpers.js'
 import {
   UDX_LINK_CLOSE,
   UDX_LINK_OPEN,
+  UDX_SEND_ACTOR_CONTROL,
   UDX_SEND_DISPATCH,
   selectUdxLoopbackHosts
 } from '../lib/udx-adapter.js'
@@ -138,6 +147,28 @@ function openHandle(endpoint, linkHandle) {
   return handle
 }
 
+function establishedContexts() {
+  const contexts = {}
+  for (const cellClass of [CELL_CLASS.CONTROL, CELL_CLASS.STREAM, CELL_CLASS.DATAGRAM]) {
+    contexts[cellClass] = {
+      tx: {
+        key: b4a.alloc(32, 0x80 + cellClass),
+        noncePrefix: b4a.alloc(16, 0x90 + cellClass),
+        counter: new SenderCounter()
+      },
+      rx: {
+        key: b4a.alloc(32, 0xa0 + cellClass),
+        noncePrefix: b4a.alloc(16, 0xb0 + cellClass),
+        counter:
+          cellClass === CELL_CLASS.DATAGRAM
+            ? new DatagramReplayWindow({ window: 64 })
+            : new OrderedReceiver({ window: 64, gapTimeout: 5_000, now: () => 1_000 })
+      }
+    }
+  }
+  return contexts
+}
+
 function abortController() {
   const listeners = new Set()
   const signal = {
@@ -211,6 +242,56 @@ test('established packets cannot send or dispatch until authenticated OPEN', asy
   t.is(await errorCode(f.endpoint.send(handle, cell)), 'CIRCUIT_STATE')
   f.adapter.sockets[0].emitMessage(cell, '127.0.0.12', 45112)
   t.is(f.received.length, 0)
+  await f.endpoint.close()
+})
+
+test('established link emits actor fragments only through its authenticated control namespace', async (t) => {
+  const f = fixture()
+  const circuitId = b4a.alloc(16, 0x71)
+  const contexts = establishedContexts()
+  await f.endpoint.bind()
+  const handle = f.endpoint.openLink(f.linkHandle)
+  f.endpoint[UDX_LINK_OPEN](handle, {
+    linkState: { circuitId, epoch: f.epoch, contexts },
+    mode: 'initiate',
+    now: () => 1_000,
+    schedule: () => 1,
+    cancel() {},
+    randomBytes: (size) => b4a.alloc(size, 0x72)
+  })
+  const fragmentCodec = new RemoteControlFragmentCodec({ now: () => 1_000 })
+  const message = b4a.alloc(91, 0x73)
+  const messageId = b4a.alloc(16, 0x74)
+  const fragments = fragmentCodec.fragment(message, { messageId })
+  message.fill(0)
+  messageId.fill(0)
+  const fragment = fragments[0]
+  t.is(await f.endpoint[UDX_SEND_ACTOR_CONTROL](handle, fragment), true)
+  const packet = f.adapter.sockets[0].sends[0].packet
+  t.is(packet.byteLength, 1_200)
+  const opened = new CellCodec({ crypto: cryptoSuite, cellSize: 1_200 }).open(
+    {
+      key: contexts[CELL_CLASS.CONTROL].tx.key,
+      noncePrefix: contexts[CELL_CLASS.CONTROL].tx.noncePrefix,
+      receiver: new OrderedReceiver({ window: 64, gapTimeout: 5_000, now: () => 1_000 }),
+      expectedClass: CELL_CLASS.CONTROL,
+      expectedDirection: DIRECTION.FORWARD,
+      expectedEpoch: f.epoch,
+      expectedCircuitId: circuitId
+    },
+    packet
+  )
+  const payload = Array.isArray(opened) ? opened[0] : opened
+  const decoded = new RemoteControlMux().decode(payload, {
+    class: CELL_CLASS.CONTROL,
+    direction: DIRECTION.FORWARD,
+    circuitId
+  })
+  t.alike(decoded.fragment, fragment)
+  decoded.fragment.fill(0)
+  payload.fill(0)
+  fragment.fill(0)
+  fragmentCodec.destroy()
   await f.endpoint.close()
 })
 

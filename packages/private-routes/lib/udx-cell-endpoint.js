@@ -9,6 +9,7 @@ import {
   LinkControlSession,
   readLinkControlStreamProgress
 } from './link-control-session.js'
+import { RemoteControlMux } from './remote-control.js'
 import {
   LINK_BOOTSTRAP_SESSION_INVALIDATE,
   LinkBootstrapSession
@@ -23,6 +24,7 @@ import {
   UDX_LINK_OPEN,
   UDX_LINK_STATS,
   UDX_LINK_STREAM_PROGRESS,
+  UDX_SEND_ACTOR_CONTROL,
   UDX_SEND_CELL,
   UDX_SEND_DISPATCH,
   UdxAdapter
@@ -955,6 +957,43 @@ export class UdxCellEndpoint {
     } finally {
       clear(packet)
       clear(framed)
+    }
+  }
+
+  [UDX_SEND_ACTOR_CONTROL](handle, fragment) {
+    const state = ENDPOINTS.get(this)
+    const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
+    if (
+      state.closing ||
+      !validateRecord(state, record) ||
+      record.phase !== 'OPEN' ||
+      !record.linkControl ||
+      !record.linkState
+    ) {
+      return Promise.reject(PrivateRouteError.UNAUTHORIZED())
+    }
+    let payload = null
+    let packet = null
+    try {
+      payload = new RemoteControlMux().encodeActorFragment(fragment)
+      const context = record.linkState.contexts[CELL_CLASS.CONTROL].tx
+      packet = record.cellCodec.seal({
+        key: context.key,
+        noncePrefix: context.noncePrefix,
+        senderCounter: context.counter,
+        class: CELL_CLASS.CONTROL,
+        direction: record.heartbeatDirection,
+        epoch: record.linkState.epoch,
+        circuitId: record.linkState.circuitId,
+        payload
+      })
+      return this.send(handle, packet)
+    } catch (err) {
+      if (record.linkControl) record.linkControl.close()
+      return Promise.reject(err instanceof PrivateRouteError ? err : unavailable())
+    } finally {
+      clear(payload)
+      clear(packet)
     }
   }
 

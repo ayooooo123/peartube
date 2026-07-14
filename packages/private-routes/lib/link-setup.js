@@ -600,6 +600,10 @@ function clearTicketState(state) {
   clear(state.peerLocalId)
 }
 
+export function destroyEstablishedLinkState(state) {
+  clearTicketState(state)
+}
+
 export function createLinkSetupAuthority(options = {}) {
   if (!safeObject(options)) invalidRoute()
   const crypto = option(options, 'crypto') || cryptoSuite

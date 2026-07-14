@@ -6,7 +6,11 @@ import {
   LINK_BOOTSTRAP_SESSION_INVALIDATE,
   LinkBootstrapSession
 } from './link-bootstrap-session.js'
-import { readLinkHandle } from './topology-grant.js'
+import {
+  readLinkHandle,
+  subscribeLinkHandleClose,
+  unsubscribeLinkHandleClose
+} from './topology-grant.js'
 import { UDX_LINK_CLOSE, UDX_LINK_OPEN, UDX_SEND_DISPATCH, UdxAdapter } from './udx-adapter.js'
 
 export const DEFAULT_MAX_UDX_QUEUED_PACKETS = 64
@@ -16,8 +20,6 @@ export const DEFAULT_MAX_UDX_INBOUND_BYTES = BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_IN
 export const DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER = 8
 export const DEFAULT_MAX_UDX_INBOUND_BYTES_PER_PEER =
   BOOTSTRAP_SIZE * DEFAULT_MAX_UDX_INBOUND_PACKETS_PER_PEER
-export const DEFAULT_UDX_RECEIVE_CLOSE_TIMEOUT = 5_000
-
 const ENDPOINTS = new WeakMap()
 const SEND_HANDLES = new WeakMap()
 
@@ -115,6 +117,10 @@ function rejectQueue(state, error) {
 function invalidateRecord(state, record) {
   if (!record || record.phase === 'CLOSED') return
   record.phase = 'CLOSED'
+  if (record.closeSubscription) {
+    unsubscribeLinkHandleClose(record.closeSubscription)
+    record.closeSubscription = null
+  }
   if (record.session) {
     record.session[LINK_BOOTSTRAP_SESSION_INVALIDATE]()
     record.session = null
@@ -216,16 +222,9 @@ function releaseReceive(state, record) {
 }
 
 async function waitForReceives(state) {
-  const completions = Array.from(state.receiveRecords, (record) => record.completion).filter(
-    Boolean
-  )
+  const completions = Array.from(state.receiveRecords, (record) => record.completion)
   if (completions.length === 0) return
-  let timer = null
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(resolve, state.receiveCloseTimeout)
-  })
-  await Promise.race([Promise.allSettled(completions), timeout])
-  if (timer !== null) clearTimeout(timer)
+  await Promise.allSettled(completions)
   for (const record of Array.from(state.receiveRecords)) releaseReceive(state, record)
 }
 
@@ -255,23 +254,28 @@ function receive(state, packet, from) {
     return
   }
   const owned = b4a.from(packet)
+  let settleOwnership
+  const ownership = new Promise((resolve) => {
+    settleOwnership = resolve
+  })
   const record = { packet: owned, peerKey, completion: null, active: true }
+  record.completion = ownership.finally(() => releaseReceive(state, record))
   state.receiveRecords.add(record)
   state.inboundPackets++
   state.inboundBytes += BOOTSTRAP_SIZE
   peer.packets++
   peer.bytes += BOOTSTRAP_SIZE
   state.inboundPeers.set(peerKey, peer)
+  // A handler promise owns its packet until settlement. A handler may trigger
+  // close, but must not await or return that same close promise.
   try {
     const result =
       owned[1] === BOOTSTRAP_CLASS
         ? state.onBootstrap(owned, sendHandle)
         : state.onCell(owned, sendHandle)
-    record.completion = Promise.resolve(result)
-      .catch(() => {})
-      .finally(() => releaseReceive(state, record))
+    Promise.resolve(result).then(settleOwnership, settleOwnership)
   } catch {
-    releaseReceive(state, record)
+    settleOwnership()
   }
 }
 
@@ -329,7 +333,6 @@ export class UdxCellEndpoint {
         options.maxInboundBytesPerPeer,
         DEFAULT_MAX_UDX_INBOUND_BYTES_PER_PEER
       ),
-      receiveCloseTimeout: bound(options.receiveCloseTimeout, DEFAULT_UDX_RECEIVE_CLOSE_TIMEOUT),
       handles: new WeakMap(),
       records: new Set(),
       sources: new Map(),
@@ -430,12 +433,21 @@ export class UdxCellEndpoint {
       peerKey: b4a.toString(link.peerIdentity32, 'hex'),
       source,
       phase: 'PENDING',
-      session: null
+      session: null,
+      closeSubscription: null
     }
     SEND_HANDLES.set(sendHandle, record)
     state.handles.set(linkHandle, sendHandle)
     state.sources.set(source, sendHandle)
     state.records.add(record)
+    try {
+      record.closeSubscription = subscribeLinkHandleClose(linkHandle, () => {
+        invalidateRecord(state, record)
+      })
+    } catch (err) {
+      invalidateRecord(state, record)
+      throw err
+    }
     if (sessionOptions === undefined) return sendHandle
     try {
       const session = new LinkBootstrapSession({

@@ -24,6 +24,8 @@ const MAX_UNSIGNED_SIZE = 199
 const ADJACENT_TOPOLOGY_ROLES = new Set(['0:1', '1:2', '2:3', '3:4', '4:5', '5:6'])
 const VERIFIED_GRANTS = new WeakMap()
 const LINK_HANDLES = new WeakMap()
+const LINK_CLOSE_SUBSCRIPTIONS = new WeakMap()
+const LINK_CLOSE_LISTENERS = new WeakMap()
 const DIRECTORIES = new WeakMap()
 
 function invalidRoute() {
@@ -577,6 +579,22 @@ function cancelTimer(state, key) {
   state.cancel(timer)
 }
 
+function notifyLinkClose(handle, reason) {
+  const subscriptions = LINK_CLOSE_LISTENERS.get(handle)
+  if (!subscriptions) return
+  LINK_CLOSE_LISTENERS.delete(handle)
+  for (const subscription of subscriptions) {
+    const record = LINK_CLOSE_SUBSCRIPTIONS.get(subscription)
+    LINK_CLOSE_SUBSCRIPTIONS.delete(subscription)
+    if (!record) continue
+    try {
+      record.listener(reason)
+    } catch {
+      // Authority invalidation must not depend on subscriber behavior.
+    }
+  }
+}
+
 function closeRecord(state, key, reason, tombstone, notify = true) {
   const record = state.grants.get(key)
   const handle = state.handles.get(key)
@@ -591,12 +609,12 @@ function closeRecord(state, key, reason, tombstone, notify = true) {
   state.grants.delete(key)
   state.handles.delete(key)
   if (record && tombstone) state.tombstones.add(key)
+  if (handle) LINK_HANDLES.delete(handle)
+  if (handle) notifyLinkClose(handle, reason)
   try {
     if (handle) state.onClose(handle, reason)
   } catch {
     failed = true
-  } finally {
-    if (handle) LINK_HANDLES.delete(handle)
   }
   if (notify) {
     try {
@@ -874,4 +892,28 @@ export function readLinkHandle(value) {
     runId32: b4a.from(state.runId32),
     operations: state.operations
   }
+}
+
+export function subscribeLinkHandleClose(handle, listener) {
+  if (!isObject(handle) || !LINK_HANDLES.has(handle) || typeof listener !== 'function') {
+    unauthorized()
+  }
+  const subscription = Object.freeze({})
+  const subscriptions = LINK_CLOSE_LISTENERS.get(handle) || new Set()
+  subscriptions.add(subscription)
+  LINK_CLOSE_LISTENERS.set(handle, subscriptions)
+  LINK_CLOSE_SUBSCRIPTIONS.set(subscription, { handle, listener })
+  return subscription
+}
+
+export function unsubscribeLinkHandleClose(subscription) {
+  const record = isObject(subscription) ? LINK_CLOSE_SUBSCRIPTIONS.get(subscription) : null
+  if (!record) return false
+  LINK_CLOSE_SUBSCRIPTIONS.delete(subscription)
+  const subscriptions = LINK_CLOSE_LISTENERS.get(record.handle)
+  if (subscriptions) {
+    subscriptions.delete(subscription)
+    if (subscriptions.size === 0) LINK_CLOSE_LISTENERS.delete(record.handle)
+  }
+  return true
 }

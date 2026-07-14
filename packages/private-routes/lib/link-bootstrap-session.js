@@ -7,7 +7,7 @@ import {
   isBootstrapEnvelopeCodecForLink
 } from './bootstrap-envelope.js'
 import { PrivateRouteError } from './errors.js'
-import { isLinkTicketChecker } from './link-setup.js'
+import { destroyEstablishedLinkState, isLinkTicketChecker } from './link-setup.js'
 import { BOOTSTRAP_TYPE } from './protocol.js'
 import { readLinkHandle } from './topology-grant.js'
 import { UDX_LINK_CLOSE, UDX_LINK_OPEN, UDX_SEND_DISPATCH } from './udx-adapter.js'
@@ -159,7 +159,7 @@ function install(state, ticket) {
     linkState = state.linkSetup.checker.take(ticket)
     state.endpoint[UDX_LINK_OPEN](state.sendHandle)
   } catch {
-    deepClear(linkState)
+    destroyEstablishedLinkState(linkState)
     throw unavailable()
   }
   const established = Object.freeze({})
@@ -173,7 +173,7 @@ function clearEstablished(state) {
   if (!state.established) return
   const record = ESTABLISHED.get(state.established)
   ESTABLISHED.delete(state.established)
-  if (record) deepClear(record.linkState)
+  if (record) destroyEstablishedLinkState(record.linkState)
   state.established = null
 }
 

@@ -93,7 +93,6 @@ function fixture(options = {}) {
     maxInboundBytes: options.maxInboundBytes,
     maxInboundPacketsPerPeer: options.maxInboundPacketsPerPeer,
     maxInboundBytesPerPeer: options.maxInboundBytesPerPeer,
-    receiveCloseTimeout: options.receiveCloseTimeout,
     onBootstrap:
       options.onBootstrap || ((packet, handle) => received.push(['bootstrap', packet, handle])),
     onCell: options.onCell || ((packet, handle) => received.push(['cell', packet, handle]))
@@ -624,6 +623,7 @@ test('close waits bounded receive ownership and preserves bytes until slow handl
     closed = true
   })
   await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 5_025))
   t.is(closed, false)
   t.is(captured[2], 0x55)
   settle()
@@ -677,17 +677,21 @@ test('inbound packet and byte ownership bounds drop excess until settlement', as
   }
 })
 
-test('bounded close breaks a receive handler self-await after preserving ownership', async (t) => {
+test('synchronous handler-triggered close awaits its pre-registered receive ownership', async (t) => {
   let endpoint
   let captured
-  let handlerClosed = false
+  let settle
+  let closing
+  let closed = false
   const f = fixture({
-    receiveCloseTimeout: 10,
-    async onCell(packet) {
+    onCell(packet) {
       captured = packet
-      await Promise.resolve()
-      await endpoint.close()
-      handlerClosed = true
+      closing = endpoint.close().then(() => {
+        closed = true
+      })
+      return new Promise((resolve) => {
+        settle = resolve
+      })
     }
   })
   endpoint = f.endpoint
@@ -696,9 +700,12 @@ test('bounded close breaks a receive handler self-await after preserving ownersh
   const packet = b4a.alloc(1200)
   packet[1] = 1
   f.adapter.sockets[0].emitMessage(packet, '127.0.0.12', 45112)
-  await endpoint.close()
   await Promise.resolve()
+  t.is(closed, false)
+  t.is(captured[2], 0)
+  captured[2] = 0x55
+  settle()
+  await closing
   t.alike(captured, b4a.alloc(1200))
-  t.is(handlerClosed, true)
   t.is(f.adapter.sockets[0].closeCalls, 1)
 })

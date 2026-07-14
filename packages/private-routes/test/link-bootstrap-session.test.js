@@ -3,6 +3,7 @@ import b4a from 'b4a'
 
 import {
   BOOTSTRAP_TYPE,
+  CELL_CLASS,
   LINK_OPERATION,
   LinkBootstrapSession,
   LinkDirectory,
@@ -67,7 +68,8 @@ function makeDirectory({
   authority,
   grant,
   epoch,
-  runId32
+  runId32,
+  clock
 }) {
   const directory = new LinkDirectory({
     localIdentity32: local.publicKey,
@@ -75,9 +77,9 @@ function makeDirectory({
     authorityPublicKey: authority.publicKey,
     epoch,
     runId32,
-    now: () => BigInt(Date.now()),
-    schedule: setTimeout,
-    cancel: clearTimeout,
+    now: () => BigInt(clock.now()),
+    schedule: clock.schedule,
+    cancel: clock.cancel,
     onClose() {}
   })
   const digest32 = directory.add(grant)
@@ -100,13 +102,19 @@ async function fixture(options = {}) {
     schedule: setTimeout,
     cancel: clearTimeout
   }
+  const topologyClock = options.topologyClock || {
+    now: Date.now,
+    schedule: setTimeout,
+    cancel: clearTimeout
+  }
   const authority = cryptoSuite.keyPair(seed(250))
   const initiator = cryptoSuite.keyPair(seed(251))
   const responder = safetyRoleIdentity(252)
   const responderStatic = cryptoSuite.encryptionKeyPair(seed(253))
   const epoch = 9n
   const runId32 = seed(254)
-  const expiresAt = BigInt(Date.now() + 60_000)
+  const topologyNow = BigInt(topologyClock.now())
+  const expiresAt = topologyNow + BigInt(options.grantLifetime || 60_000)
   const grant = signTopologyGrant(
     {
       version: PROTOCOL_VERSION,
@@ -127,7 +135,7 @@ async function fixture(options = {}) {
         operations: LINK_OPERATION.ACCEPT
       },
       epoch,
-      notBefore: BigInt(Date.now() - 1_000),
+      notBefore: topologyNow > 1_000n ? topologyNow - 1_000n : 0n,
       expiresAt,
       runId32
     },
@@ -142,7 +150,8 @@ async function fixture(options = {}) {
     authority,
     grant,
     epoch,
-    runId32
+    runId32,
+    clock: topologyClock
   })
   const right = makeDirectory({
     local: responder,
@@ -153,7 +162,8 @@ async function fixture(options = {}) {
     authority,
     grant,
     epoch,
-    runId32
+    runId32,
+    clock: topologyClock
   })
   let leftSession
   let rightSession
@@ -219,11 +229,11 @@ async function fixture(options = {}) {
     expiresAt
   }
   const leftSetup = createLinkSetupAuthority({
-    now: Date.now,
+    now: sessionClock.now,
     randomBytes: sequence(0x61)
   })
   const rightSetup = createLinkSetupAuthority({
-    now: Date.now,
+    now: sessionClock.now,
     randomBytes: sequence(0x71)
   })
   leftSession = leftEndpoint.openLink(left.linkHandle, {
@@ -380,6 +390,49 @@ test('revoked codec grant closes OPEN session on established authority read', as
     code = err && err.code
   }
   t.is(code, 'UNAUTHORIZED')
+  t.is(f.leftSession.state, 'TOMBSTONE')
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
+})
+
+test('revocation immediately destroys retained established key and counter state', async (t) => {
+  const f = await fixture()
+  const established = await f.leftSession.open()
+  const retained = readEstablishedLink(established)
+  const context = retained.contexts[CELL_CLASS.STREAM].tx
+  t.ok(context.key.some((byte) => byte !== 0))
+  t.is(context.counter.closed, false)
+  f.left.directory.revoke({
+    digest32: f.left.digest32,
+    epoch: f.epoch,
+    runId32: f.runId32
+  })
+  t.alike(context.key, b4a.alloc(context.key.byteLength))
+  t.is(context.counter.closed, true)
+  t.is(f.leftSession.state, 'TOMBSTONE')
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
+})
+
+test('idle grant expiry immediately destroys retained established key and counter state', async (t) => {
+  const clock = fakeClock(1_000)
+  const f = await fixture({ clock, topologyClock: clock, grantLifetime: 100 })
+  const established = await f.leftSession.open()
+  const retained = readEstablishedLink(established)
+  const context = retained.contexts[CELL_CLASS.STREAM].tx
+  t.ok(context.key.some((byte) => byte !== 0))
+  t.is(context.counter.closed, false)
+  clock.advance(100)
+  t.alike(context.key, b4a.alloc(context.key.byteLength))
+  t.is(context.counter.closed, true)
   t.is(f.leftSession.state, 'TOMBSTONE')
   await f.leftSession.close()
   await f.rightSession.close()

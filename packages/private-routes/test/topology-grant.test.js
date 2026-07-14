@@ -691,6 +691,27 @@ test('same-epoch revocation is bound to the configured run and permanently tombs
   )
 })
 
+test('a closing handle is non-admissible before user onClose runs', (t) => {
+  const fixture = signedFixture()
+  const clock = fakeClock()
+  let callbackCode = null
+  const directory = new LinkDirectory(
+    directoryOptions(fixture, clock, {
+      onClose(handle) {
+        try {
+          readLinkHandle(handle)
+        } catch (err) {
+          callbackCode = err && err.code
+        }
+      }
+    })
+  )
+  const digest32 = directory.add(fixture.signed)
+  directory.authorize(authorization(fixture, digest32))
+  directory.revoke({ digest32, epoch: 7n, runId32: fixture.grant.runId32 })
+  t.is(callbackCode, 'UNAUTHORIZED')
+})
+
 test('LinkDirectory bounds grants and handles without exposing partial authority', (t) => {
   const first = signedFixture()
   const second = signedFixture(

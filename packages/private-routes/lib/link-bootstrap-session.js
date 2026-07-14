@@ -16,6 +16,7 @@ const SESSIONS = new WeakMap()
 const ESTABLISHED = new WeakMap()
 const MODES = new Set(['initiate', 'accept'])
 const MAX_TIMER_DELAY = 0x7fff_ffff
+const RETRY_INTERVAL = 250
 const ZERO_DIGEST = b4a.alloc(32)
 export const LINK_BOOTSTRAP_SESSION_INVALIDATE = Symbol('link-bootstrap-session-invalidate')
 
@@ -113,7 +114,11 @@ function refreshAuthority(state) {
 function armTimer(state) {
   const current = currentTime(state)
   const remaining = state.deadlineAt - current
-  const delay = Math.min(MAX_TIMER_DELAY, Math.max(0, remaining))
+  const delay = Math.min(
+    MAX_TIMER_DELAY,
+    state.mode === 'initiate' ? RETRY_INTERVAL : MAX_TIMER_DELAY,
+    Math.max(0, remaining)
+  )
   let arming = true
   let synchronous = false
   let fired = false
@@ -131,8 +136,10 @@ function armTimer(state) {
     state.timer = null
     if (state.state !== 'CREATING') return
     try {
-      if (currentTime(state) < state.deadlineAt) armTimer(state)
-      else fail(state, unavailable(), true)
+      if (currentTime(state) < state.deadlineAt) {
+        armTimer(state)
+        dispatchCreate(state)
+      } else fail(state, unavailable(), true)
     } catch {
       fail(state, unavailable(), true)
     }
@@ -151,6 +158,57 @@ function armTimer(state) {
     throw unavailable()
   }
   state.timer = timer
+}
+
+function dispatchCreate(state) {
+  if (
+    state.mode !== 'initiate' ||
+    state.state !== 'CREATING' ||
+    state.sendPending ||
+    !state.request
+  ) {
+    return false
+  }
+  state.sendPending = true
+  try {
+    state.endpoint
+      .send(state.sendHandle, state.request.packet, {
+        signal: state.signal || undefined,
+        [UDX_SEND_DISPATCH]: () => {
+          state.dispatched = true
+        }
+      })
+      .then(
+        () => {
+          state.sendPending = false
+          if (state.state !== 'CREATING') return
+          state.createSent = true
+          if (state.signal && state.signal.aborted) return fail(state, unavailable(), true)
+          if (state.stagedReject) return fail(state, unavailable(), false)
+          if (!state.stagedTicket) return
+          const ticket = state.stagedTicket
+          state.stagedTicket = null
+          try {
+            const established = install(state, ticket)
+            finishOpen(state, established)
+          } catch {
+            try {
+              state.linkSetup.revoke(ticket)
+            } catch {}
+            fail(state, unavailable(), false)
+          }
+        },
+        () => {
+          state.sendPending = false
+          if (state.state === 'CREATING') fail(state, unavailable(), false)
+        }
+      )
+  } catch {
+    state.sendPending = false
+    fail(state, unavailable(), false)
+    return false
+  }
+  return true
 }
 
 function install(state, ticket) {
@@ -193,6 +251,7 @@ function finishOpen(state, established) {
     return
   }
   state.pending = 0
+  state.sendPending = false
   state.pendingSetup = null
   clearRequest(state)
   deepClear(state.setup)
@@ -263,6 +322,7 @@ function fail(state, error, notify) {
   state.stagedReject = false
   clearRequest(state)
   state.pending = 0
+  state.sendPending = false
   deepClear(state.setup)
   state.setup = null
   clearEstablished(state)
@@ -397,6 +457,7 @@ export class LinkBootstrapSession {
       table: new BootstrapRequestTable({ now, schedule, cancel, randomBytes }),
       state: 'IDLE',
       pending: 0,
+      sendPending: false,
       pendingSetup: null,
       responderTicket: null,
       stagedTicket: null,
@@ -500,36 +561,7 @@ export class LinkBootstrapSession {
         }
       }
       armTimer(state)
-      state.endpoint
-        .send(state.sendHandle, request.packet, {
-          signal,
-          [UDX_SEND_DISPATCH]: () => {
-            state.dispatched = true
-          }
-        })
-        .then(
-          () => {
-            if (state.state !== 'CREATING') return
-            state.createSent = true
-            if (signal && signal.aborted) return fail(state, unavailable(), true)
-            if (state.stagedReject) return fail(state, unavailable(), false)
-            if (!state.stagedTicket) return
-            const ticket = state.stagedTicket
-            state.stagedTicket = null
-            try {
-              const established = install(state, ticket)
-              finishOpen(state, established)
-            } catch {
-              try {
-                state.linkSetup.revoke(ticket)
-              } catch {}
-              fail(state, unavailable(), false)
-            }
-          },
-          () => {
-            if (state.state === 'CREATING') fail(state, unavailable(), false)
-          }
-        )
+      dispatchCreate(state)
     } catch {
       fail(state, unavailable(), false)
     } finally {

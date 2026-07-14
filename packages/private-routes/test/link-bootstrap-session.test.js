@@ -177,6 +177,7 @@ async function fixture(options = {}) {
   let rightSession
   const heldLeft = {}
   let leftCalls = 0
+  let rightCalls = 0
   const leftAdapter = new FakeUdxAdapter({
     send(call) {
       leftCalls++
@@ -188,6 +189,7 @@ async function fixture(options = {}) {
           heldLeft.resolve = resolve
         })
       }
+      if (options.dropFirstLeft && leftCalls === 1) return true
       if (options.dropLeft) return true
       if (!options.reentrantBootstrap) {
         queueMicrotask(() => rightAdapter.sockets[0].emitMessage(call.packet, '127.0.0.31', 46331))
@@ -197,11 +199,13 @@ async function fixture(options = {}) {
   })
   const rightAdapter = new FakeUdxAdapter({
     send(call) {
+      rightCalls++
       if (options.holdRight) {
         return new Promise((resolve) => {
           heldLeft.resolveRight = resolve
         })
       }
+      if (options.dropFirstRight && rightCalls === 1) return true
       if (options.dropRight) return true
       if (options.reentrantBootstrap) {
         leftAdapter.sockets[0].emitMessage(call.packet, '127.0.0.32', 46332)
@@ -680,6 +684,61 @@ test('same request is answered from cache while different-body and late response
   await f.rightEndpoint.close()
   f.left.directory.destroy()
   f.right.directory.destroy()
+})
+
+test('a lost LINK_CREATE is retransmitted exactly and opens before the deadline', async (t) => {
+  const clock = fakeClock()
+  const f = await fixture({ dropFirstLeft: true, clock })
+  const opening = f.leftSession.open()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  t.is(f.leftAdapter.sockets[0].sends.length, 1)
+  const original = b4a.from(f.leftAdapter.sockets[0].sends[0].packet)
+  clock.advance(249)
+  t.is(f.leftAdapter.sockets[0].sends.length, 1)
+  clock.advance(1)
+  await opening
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  t.is(f.leftAdapter.sockets[0].sends.length, 2)
+  t.alike(f.leftAdapter.sockets[0].sends[1].packet, original)
+  t.is(f.leftSession.state, 'OPEN')
+  t.is(f.rightSession.state, 'OPEN')
+  original.fill(0)
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
+  t.is(clock.pending(), 0)
+})
+
+test('a lost LINK_CREATED is recovered from the authenticated response cache', async (t) => {
+  const clock = fakeClock()
+  const f = await fixture({ dropFirstRight: true, clock })
+  const opening = f.leftSession.open()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  t.is(f.leftAdapter.sockets[0].sends.length, 1)
+  t.is(f.rightAdapter.sockets[0].sends.length, 1)
+  const request = b4a.from(f.leftAdapter.sockets[0].sends[0].packet)
+  const response = b4a.from(f.rightAdapter.sockets[0].sends[0].packet)
+  clock.advance(250)
+  await opening
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  t.is(f.leftAdapter.sockets[0].sends.length, 2)
+  t.is(f.rightAdapter.sockets[0].sends.length, 2)
+  t.alike(f.leftAdapter.sockets[0].sends[1].packet, request)
+  t.alike(f.rightAdapter.sockets[0].sends[1].packet, response)
+  t.is(f.leftSession.state, 'OPEN')
+  t.is(f.rightSession.state, 'OPEN')
+  request.fill(0)
+  response.fill(0)
+  await f.leftSession.close()
+  await f.rightSession.close()
+  await f.leftEndpoint.close()
+  await f.rightEndpoint.close()
+  f.left.directory.destroy()
+  f.right.directory.destroy()
+  t.is(clock.pending(), 0)
 })
 
 test('same request id with another authenticated create body fails closed', async (t) => {

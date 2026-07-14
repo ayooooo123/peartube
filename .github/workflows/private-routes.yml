@@ -17,6 +17,7 @@ permissions:
 jobs:
   node:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: packages/private-routes
@@ -29,12 +30,17 @@ jobs:
           cache: npm
           cache-dependency-path: packages/private-routes/package-lock.json
       - run: npm ci
+      - name: Verify pinned runtime dependencies
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
+          test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
       - run: npm run format:check
       - run: npm run test:node
       - run: npm run fuzz:cell -- --seed 1 --iterations 10000
 
   bare:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: packages/private-routes
@@ -47,5 +53,102 @@ jobs:
           cache: npm
           cache-dependency-path: packages/private-routes/package-lock.json
       - run: npm ci
-      - run: test "$(npm exec -- bare --version)" = "v1.30.3"
+      - name: Verify pinned runtime dependencies
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
+          test "$(npm exec -- bare --version)" = "v1.30.3"
+          test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
       - run: npm run test:bare
+
+  portable-node:
+    needs: node
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: packages/private-routes
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/private-routes/package-lock.json
+      - run: npm ci
+      - name: Verify pinned runtime dependencies
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
+          test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
+      - run: npm run test:portable:node
+
+  portable-bare:
+    needs: bare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: packages/private-routes
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/private-routes/package-lock.json
+      - run: npm ci
+      - name: Verify pinned runtime dependencies
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
+          test "$(npm exec -- bare --version)" = "v1.30.3"
+          test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
+      - run: npm run test:portable:bare
+
+  namespace:
+    needs: [portable-node, portable-bare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PRIVATE_ROUTE_ARTIFACT_DIR: ${{ github.workspace }}/packages/private-routes/artifacts
+    defaults:
+      run:
+        working-directory: packages/private-routes
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/private-routes/package-lock.json
+      - run: npm ci
+      - name: Verify pinned runtime dependencies
+        run: |
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "22"
+          test "$(npm exec -- bare --version)" = "v1.30.3"
+          test "$(node -p 'require("./node_modules/udx-native/package.json").version')" = "1.20.7"
+      - name: Install packet-capture and namespace tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends iproute2 iptables tcpdump
+          ip -Version
+          iptables --version
+          tcpdump --version
+      - name: Verify network namespace capability
+        run: |
+          set -euo pipefail
+          probe="pr-capability-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() { sudo ip netns delete "$probe" 2>/dev/null || true; }
+          trap cleanup EXIT
+          sudo ip netns add "$probe"
+          sudo ip netns exec "$probe" ip link set lo up
+      - name: Run namespace oracle unit tests
+        run: npm run test:namespace:unit
+      - name: Run authoritative namespace privacy gate
+        run: sudo env "PATH=$PATH" "PRIVATE_ROUTE_ARTIFACT_DIR=$PRIVATE_ROUTE_ARTIFACT_DIR" "$(command -v npm)" run test:namespace
+      - name: Upload synthetic failure captures
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: private-route-namespace-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: packages/private-routes/artifacts/*.pcap
+          if-no-files-found: warn
+          retention-days: 3

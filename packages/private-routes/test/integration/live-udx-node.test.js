@@ -103,3 +103,69 @@ test('killing the private middle during setup fails closed within the cleanup bu
   t.is(exits.length, 7)
   t.ok(exits.every((exit) => exit.status === 'fulfilled'))
 })
+
+test('delaying authenticated CREATED at the private final fails setup closed', async (t) => {
+  t.timeout(15_000)
+  const random = crypto.getRandomValues(new Uint16Array(1))[0]
+  const portBase = 52_000 + (random % 1_000)
+  const now = BigInt(Date.now())
+  const fixture = createLiveRouteFixture({
+    portBase,
+    distinctHosts: process.platform !== 'darwin',
+    now,
+    expiresAt: now + 30_000n
+  })
+  const coordinator = await createProcessCoordinator({
+    fixture,
+    cwd: PACKAGE_ROOT,
+    timeout: 6_500
+  })
+  const startedAt = Date.now()
+  let exits = null
+  try {
+    await coordinator.fault('private-final', 'delay-created')
+    const failure = await coordinator.start().then(
+      () => null,
+      (err) => err
+    )
+    t.ok(failure)
+    t.ok(Date.now() - startedAt < 6_500)
+  } finally {
+    exits = await coordinator.destroy()
+  }
+  t.is(exits.length, 7)
+  t.ok(exits.every((exit) => exit.status === 'fulfilled'))
+})
+
+test('closing the private middle UDX socket after connect fails setup closed', async (t) => {
+  t.timeout(15_000)
+  const random = crypto.getRandomValues(new Uint16Array(1))[0]
+  const portBase = 53_000 + (random % 1_000)
+  const now = BigInt(Date.now())
+  const fixture = createLiveRouteFixture({
+    portBase,
+    distinctHosts: process.platform !== 'darwin',
+    now,
+    expiresAt: now + 30_000n
+  })
+  const coordinator = await createProcessCoordinator({
+    fixture,
+    cwd: PACKAGE_ROOT,
+    timeout: 6_500
+  })
+  const startedAt = Date.now()
+  let exits = null
+  try {
+    await coordinator.fault('private-middle', 'close-socket')
+    const failure = await coordinator.start().then(
+      () => null,
+      (err) => err
+    )
+    t.ok(failure)
+    t.ok(Date.now() - startedAt < 6_500)
+  } finally {
+    exits = await coordinator.destroy()
+  }
+  t.is(exits.length, 7)
+  t.ok(exits.every((exit) => exit.status === 'fulfilled'))
+})

@@ -95,6 +95,8 @@ test('command vocabulary and lifecycle are exact and closed is terminal', (t) =>
   t.is(lifecycle.accept({ command: 'configure', projection: { role: 'source' } }), 'configure')
   t.is(lifecycle.emit({ event: 'configured' }), 'configured')
   t.ok(code(() => lifecycle.accept({ command: 'configure', projection: {} })))
+  t.is(lifecycle.accept({ command: 'fault', fault: 'delay-created' }), 'fault')
+  t.is(lifecycle.state, 'CONFIGURED')
   t.is(lifecycle.accept({ command: 'start' }), 'start')
   t.is(lifecycle.emit({ event: 'ready' }), 'ready')
   t.is(lifecycle.accept({ command: 'snapshot' }), 'snapshot')
@@ -197,4 +199,58 @@ test('role runner configures once, serializes commands, and emits one terminal c
     timers: 0,
     openSockets: 0
   })
+})
+
+test('role runner arms socket closure until after the transport opens', async (t) => {
+  const events = []
+  const calls = []
+  let state = 'NEW'
+  const runner = createRoleRunner({
+    emit: (event) => events.push(event),
+    createNode() {
+      return {
+        async start() {
+          calls.push('start')
+          state = 'READY'
+        },
+        async connect() {
+          calls.push('connect')
+          state = 'OPEN'
+        },
+        snapshot() {
+          return {
+            role: 'safety-guard',
+            state,
+            links: state === 'OPEN' ? 1 : 0,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: { bindings: 1, waits: 0, timers: 0, openSockets: 1 }
+          }
+        },
+        async [LIVE_ROUTE_CLOSE_SOCKET]() {
+          calls.push('close-socket')
+          state = 'FAILED'
+        }
+      }
+    }
+  })
+  await runner.handle({
+    command: 'configure',
+    projection: {
+      role: 'safety-guard',
+      grants: [b4a.alloc(32, 1)],
+      local: { identity32: b4a.alloc(32, 2) }
+    }
+  })
+  await runner.handle({ command: 'fault', fault: 'close-socket' })
+  t.alike(calls, [])
+  const failure = await runner.handle({ command: 'start' }).then(
+    () => null,
+    (err) => err
+  )
+  t.is(failure?.code, 'ROUTE_UNAVAILABLE')
+  t.alike(calls, ['start', 'connect', 'close-socket'])
+  t.alike(
+    events.map((event) => event.event),
+    ['configured']
+  )
 })

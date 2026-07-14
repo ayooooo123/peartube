@@ -24,6 +24,7 @@ function deadline(value) {
 }
 
 function waitFor(record, event, timeout) {
+  if (record.failure) return Promise.reject(record.failure)
   const existing = record.events.find(
     (value) => value.event === event && !record.consumed.has(value)
   )
@@ -56,6 +57,11 @@ function waitFor(record, event, timeout) {
 
 function emit(record, value) {
   record.events.push(value)
+  if (value.event === 'error') {
+    record.failure = new Error(`process error: ${record.role}:${value.code}`)
+    for (const waiter of Array.from(record.waiters)) waiter.reject(record.failure)
+    return
+  }
   for (const waiter of record.waiters) {
     if (waiter.event === value.event) {
       waiter.resolve(value)
@@ -97,6 +103,7 @@ function launchRole(role, command, args, cwd, auditor) {
     events: [],
     consumed: new Set(),
     waiters: new Set(),
+    failure: null,
     stderr: '',
     exited: null
   }
@@ -215,6 +222,15 @@ export async function createProcessCoordinator(options = {}) {
     return record.exited
   }
 
+  const fault = async (role, value) => {
+    const record = records.get(role)
+    if (!record || closed || record.child.exitCode !== null || record.child.signalCode !== null) {
+      invalid(`cannot fault process: ${role}`)
+    }
+    await send(record, { command: 'fault', fault: value })
+    return true
+  }
+
   const stop = async () => {
     if (closed) return []
     closed = true
@@ -248,5 +264,5 @@ export async function createProcessCoordinator(options = {}) {
     return []
   }
 
-  return Object.freeze({ roles: Object.freeze(roles), start, snapshot, kill, stop, destroy })
+  return Object.freeze({ roles: Object.freeze(roles), start, snapshot, fault, kill, stop, destroy })
 }

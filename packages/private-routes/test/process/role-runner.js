@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 
 import {
+  ACTOR_CONTROL_KIND,
   PrivateRouteError,
   createDestinationReplayCache,
   createLiveRouteNode,
@@ -85,6 +86,7 @@ export function createRoleRunner(options = {}) {
   let node = null
   let actor = null
   let destroyActor = null
+  const armedFaults = new Set()
   const traffic = { streamBytes: 0, datagramBytes: 0 }
   let queue = Promise.resolve()
 
@@ -191,7 +193,24 @@ export function createRoleRunner(options = {}) {
       now: adapters.now,
       randomBytes: adapters.randomBytes,
       forward(kind, circuitId, generation, body) {
-        return node[LIVE_ROUTE_FORWARD_ACTOR](kind, contact.actorId, circuitId, generation, body)
+        const forwarded = node[LIVE_ROUTE_FORWARD_ACTOR](
+          kind,
+          contact.actorId,
+          circuitId,
+          generation,
+          body
+        )
+        if (
+          projection.role !== 'private-final' ||
+          kind !== ACTOR_CONTROL_KIND.ACTIVATE_CREATE ||
+          !armedFaults.delete(CONTROL_FAULT.DELAY_CREATED)
+        ) {
+          return forwarded
+        }
+        return forwarded.then(async (created) => {
+          await wait(5_100)
+          return created
+        })
       }
     })
     destroyActor = destroyDistributedPrivateRelayActor
@@ -338,6 +357,10 @@ export function createRoleRunner(options = {}) {
       case CONTROL_COMMAND.START:
         await node.start()
         await node.connect()
+        if (armedFaults.delete(CONTROL_FAULT.CLOSE_SOCKET)) {
+          await node[LIVE_ROUTE_CLOSE_SOCKET]()
+          throw PrivateRouteError.ROUTE_UNAVAILABLE()
+        }
         send({
           ...snapshotEvent(CONTROL_EVENT.READY),
           ...runtimeRecord(),
@@ -353,6 +376,16 @@ export function createRoleRunner(options = {}) {
         send(snapshotEvent(CONTROL_EVENT.SNAPSHOT))
         return true
       case CONTROL_COMMAND.FAULT:
+        if (lifecycle.state === 'CONFIGURED') {
+          if (
+            command.fault !== CONTROL_FAULT.DELAY_CREATED &&
+            command.fault !== CONTROL_FAULT.CLOSE_SOCKET
+          ) {
+            throw PrivateRouteError.ROUTE_UNAVAILABLE()
+          }
+          armedFaults.add(command.fault)
+          return true
+        }
         if (typeof onFault === 'function') await onFault(command.fault, node, projection)
         else if (command.fault === CONTROL_FAULT.CLOSE_SOCKET) {
           await node[LIVE_ROUTE_CLOSE_SOCKET]()

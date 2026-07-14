@@ -290,6 +290,7 @@ export class ControlLifecycle {
       this.#state = 'STOPPING'
       return command
     }
+    if (command === CONTROL_COMMAND.FAULT && this.#state === 'CONFIGURED') return command
     if (this.#state !== 'STARTED') throw invalid('command before start')
     return command
   }

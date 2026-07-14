@@ -32,11 +32,7 @@ import {
   RemoteControlMux,
   createRemoteActorControlBoundary
 } from '../lib/remote-control.js'
-import {
-  createDestinationReplayCache,
-  createRemoteActivationVerifier,
-  createRemoteRegistrationVerifier
-} from '../lib/activation.js'
+import { createDestinationReplayCache } from '../lib/activation.js'
 import { DIRECTION } from '../lib/protocol.js'
 import { expectCode, privateRoleIdentity, seed } from './helpers.js'
 
@@ -154,7 +150,7 @@ function activationOptions(body, circuitId, generation) {
   if (!context) throw new Error('missing test activation context')
   try {
     return {
-      activationVerifier: createRemoteActivationVerifier({
+      activationVerifier: publicApi.createRemoteActivationVerifier({
         ...context,
         request: body,
         circuitId,
@@ -171,7 +167,7 @@ function activationOptions(body, circuitId, generation) {
 
 function registrationOptions(fixture) {
   return {
-    registrationVerifier: createRemoteRegistrationVerifier({
+    registrationVerifier: publicApi.createRemoteRegistrationVerifier({
       request: fixture.built.registrationCapsule,
       registrations: fixture.built.registrations
     })
@@ -785,6 +781,71 @@ test('relay adapter executes canonical stage, prepare, finalize, and abort bytes
     }
     host.destroy()
     fixture.destroy()
+  }
+})
+
+test('finalized registration abort ownership survives stage but not full reaffirmation', async (t) => {
+  const codec = new ActorControlCodec()
+  for (const fullReaffirmation of [false, true]) {
+    const observed = []
+    const fixture = registrationFixture(
+      fullReaffirmation ? 32 : 30,
+      () => 1_000,
+      (event) => observed.push(event)
+    )
+    const sent = []
+    const host = new RemoteActorHost({
+      sendControl(message) {
+        sent.push(b4a.from(message))
+        return true
+      },
+      now: () => 1_000,
+      randomBytes: sequenceBytes(1),
+      schedule() {
+        return 1
+      },
+      cancel() {}
+    })
+    const actorId = bytes(16, fullReaffirmation ? 0xa9 : 0xa8)
+    host.register(actorId, fixture.relay)
+    let requestId = 1n
+    const command = async (kind, body) => {
+      const request = codec.encode({
+        version: 0,
+        kind,
+        flags: 0,
+        requestId: requestId++,
+        actorId,
+        circuitId: b4a.alloc(16),
+        generation: 0n,
+        body
+      })
+      t.is(await host.receiveAuthenticated(request), true)
+      return codec.decode(sent.pop())
+    }
+    for (const [kind, body] of [
+      [ACTOR_CONTROL_KIND.REGISTER_STAGE, fixture.built.registrationCapsule],
+      [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
+      [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule],
+      [ACTOR_CONTROL_KIND.REGISTER_STAGE, fixture.built.registrationCapsule]
+    ])
+      t.is((await command(kind, body)).kind, kind + 1)
+    if (fullReaffirmation)
+      for (const [kind, body] of [
+        [ACTOR_CONTROL_KIND.REGISTER_PREPARE, fixture.built.prepareCapsule],
+        [ACTOR_CONTROL_KIND.REGISTER_FINALIZE, fixture.built.finalizeCapsule]
+      ])
+        t.is((await command(kind, body)).kind, kind + 1)
+    t.is(
+      (await command(ACTOR_CONTROL_KIND.REGISTER_ABORT, fixture.built.abortCapsule)).kind,
+      ACTOR_CONTROL_KIND.REGISTER_ABORTED
+    )
+    host.destroy()
+    fixture.destroy()
+    t.is(
+      observed.find((event) => event.type === 'private-relay-destroying').records,
+      fullReaffirmation ? 1 : 0
+    )
   }
 })
 
@@ -1613,7 +1674,10 @@ test('failed verifier reuse cannot consume the owning activation verifier', asyn
 test('raw ActorControl bytes are not an authenticated host capability', async (t) => {
   t.is(publicApi.createRemoteActorControlBoundary, undefined)
   t.is(publicApi.readAuthenticatedRemoteActorEvent, undefined)
-  t.is(publicApi.createRemoteActivationVerifier, undefined)
+  t.is(typeof publicApi.createRemoteRegistrationVerifier, 'function')
+  t.is(typeof publicApi.destroyRemoteRegistrationVerifier, 'function')
+  t.is(typeof publicApi.createRemoteActivationVerifier, 'function')
+  t.is(typeof publicApi.destroyRemoteActivationVerifier, 'function')
   const sent = []
   const timers = scheduler()
   const host = new RemoteActorHost({

@@ -19,23 +19,20 @@ import {
   createDestinationReplayCache,
   createPrivateDestinationActor,
   createPrivateRelayActor,
+  createRemoteActivationVerifier,
+  createRemoteRegistrationVerifier,
   cryptoSuite,
   destroyPrivateDestinationActor,
   destroyPrivateRelayActor,
+  destroyRemoteActivationVerifier,
+  destroyRemoteRegistrationVerifier,
   encodeActivationRequest,
   encodeCreate,
   encodeRelayAdvertisement,
   hashCreateBase,
   signRelayAdvertisement
 } from '../index.js'
-import {
-  createRemoteActivationVerifier,
-  createRemoteRegistrationVerifier,
-  destroyRemoteActivationVerifier,
-  destroyRemoteRegistrationVerifier,
-  isRemoteActivationVerifier,
-  isRemoteRegistrationVerifier
-} from '../lib/activation.js'
+import { isRemoteActivationVerifier, isRemoteRegistrationVerifier } from '../lib/activation.js'
 import {
   RemoteControlFragmentCodec,
   RemoteControlMux,
@@ -1304,6 +1301,58 @@ test('explicit abort cancels in-flight prepare or finalize and late success stay
     t.is(pair.client.stats.ownedBytes, 0)
     t.is(pair.clientTimers.records.size, 0)
     t.is(pair.serverTimers.records.size, 0)
+  }
+})
+
+test('registration abort cannot cancel an unrelated circuit operation', async (t) => {
+  for (const operation of ['activate', 'destroy']) {
+    let settle = null
+    let operationSignal = null
+    const peer = controlledRemote(
+      function request(kind, actorId, circuitId, generation, body, options) {
+        if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) return Promise.resolve(bytes(195, 1))
+        if (
+          (operation === 'activate' && kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) ||
+          (operation === 'destroy' && kind === ACTOR_CONTROL_KIND.CIRCUIT_DESTROY)
+        ) {
+          operationSignal = options.signal
+          return new Promise((resolve) => {
+            settle = resolve
+          })
+        }
+        if (kind === ACTOR_CONTROL_KIND.ACTIVATE_CREATE) return Promise.resolve(bytes(305, 2))
+        return Promise.resolve(b4a.alloc(0))
+      }
+    )
+    const control = session(peer)
+    await control.stage(bytes(64, 1), { abort: bytes(64, 2) })
+    const activation = activationFixture(operation === 'activate' ? 231 : 241)
+    let pending
+    if (operation === 'activate') {
+      pending = control.activate({
+        body: activation.body,
+        circuitId: activation.circuitId,
+        generation: activation.generation,
+        activationVerifier: activation.verifier
+      })
+    } else {
+      const proof = await control.activate({
+        body: activation.body,
+        circuitId: activation.circuitId,
+        generation: activation.generation,
+        activationVerifier: activation.verifier
+      })
+      proof.fill(0)
+      pending = control.destroy()
+    }
+    t.is(await rejectionCode(control.abort()), 'CIRCUIT_STATE', operation)
+    t.is(operationSignal.aborted, false, `${operation} wait remains live`)
+    settle(operation === 'activate' ? bytes(305, 3) : b4a.alloc(0))
+    const result = await pending
+    if (b4a.isBuffer(result)) result.fill(0)
+    t.is(control.stats.waits, 0, operation)
+    activation.destroy()
+    await control.stop()
   }
 })
 

@@ -30,6 +30,14 @@ The deterministic actor fixture exchanges stream and datagram payloads in both d
 
 These are executable protocol invariants in a socket-free model, not measurements from a real network and not evidence against traffic analysis.
 
+Async remote registration and activation require a source-side verifier capability. Create it with
+`createRemoteRegistrationVerifier()` or `createRemoteActivationVerifier()` from the package root
+and pass it to the matching `AsyncRouteControlSession` operation. Each factory defensively copies
+the canonical request and verification records or source secrets into a frozen, opaque, one-shot
+capability. A host consumes and clears it when the authenticated reply arrives. If an operation is
+never started, call the matching `destroyRemoteRegistrationVerifier()` or
+`destroyRemoteActivationVerifier()` to clear the retained copies.
+
 ## Threat model and limitations
 
 For independently operated, non-colluding relays in the tested model, the destination does not receive the source address, the source does not receive the destination address, and one forwarding relay has only adjacent-hop visibility. Authenticated cells reject modification and disallowed replay, while private-only provenance cannot authorize a direct probe, public routing-table promotion, or direct dial.

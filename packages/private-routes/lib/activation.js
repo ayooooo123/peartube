@@ -108,6 +108,10 @@ const ASYNC_CIRCUIT_TRANSITIONS = Object.freeze({
   DESTROYING: Object.freeze({ destroyed: ASYNC_CIRCUIT_STATE.DESTROYED })
 })
 
+const TRANSACTION_REAFFIRMING_NONE = 0
+const TRANSACTION_REAFFIRMING_STAGED = 1
+const TRANSACTION_REAFFIRMING_PREPARED = 2
+
 const MAX_U64 = 0xffff_ffff_ffff_ffffn
 const DELEGATION_SIZE = 168
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
@@ -1031,9 +1035,14 @@ export function createTemplateRegistry(options) {
         (!transactionId || !same(existing.stagedTransactionId, transactionId))
       )
         replay()
-      if (existing && existing.committed && transactionId) {
-        clear(existing.stagedTransactionId)
-        existing.stagedTransactionId = null
+      if (existing && existing.committed) {
+        if (transactionId && same(existing.stagedTransactionId, transactionId)) {
+          existing.reaffirming = TRANSACTION_REAFFIRMING_STAGED
+        } else {
+          clear(existing.stagedTransactionId)
+          existing.stagedTransactionId = null
+          existing.reaffirming = TRANSACTION_REAFFIRMING_NONE
+        }
       }
       if (!existing) {
         if (records.size >= MAX_TEMPLATE_RECORDS) throw PrivateRouteError.CIRCUIT_LIMIT()
@@ -1046,7 +1055,8 @@ export function createTemplateRegistry(options) {
           nextCommitment: copy(register.nextCommitment),
           committed: transactionId === null,
           prepared: transactionId === null,
-          stagedTransactionId: transactionId ? copy(transactionId) : null
+          stagedTransactionId: transactionId ? copy(transactionId) : null,
+          reaffirming: TRANSACTION_REAFFIRMING_NONE
         })
       }
       const ackUnsigned = {
@@ -1151,7 +1161,21 @@ export function createTemplateRegistry(options) {
       let changed = 0
       for (const [key, record] of records) {
         if (!same(record.stagedTransactionId, transactionId)) continue
-        if (record.committed && action !== 'abort') continue
+        if (record.committed && action !== 'abort') {
+          if (action === 'prepare' && record.reaffirming === TRANSACTION_REAFFIRMING_STAGED) {
+            record.reaffirming = TRANSACTION_REAFFIRMING_PREPARED
+            changed++
+          } else if (
+            action === 'finalize' &&
+            record.reaffirming === TRANSACTION_REAFFIRMING_PREPARED
+          ) {
+            clear(record.stagedTransactionId)
+            record.stagedTransactionId = null
+            record.reaffirming = TRANSACTION_REAFFIRMING_NONE
+            changed++
+          }
+          continue
+        }
         changed++
         if (action === 'prepare') {
           record.prepared = true

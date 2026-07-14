@@ -1942,7 +1942,8 @@ test('registration PREPARE, FINALIZE, and ABORT are authenticated onion commands
     views.map(
       (events) => events.filter((event) => event.type === 'private-relay-destroying').at(-1).records
     ),
-    [1, 1, 1]
+    [0, 0, 0],
+    'a same-transaction stage followed by abort rolls back the retained finalize-loss window'
   )
   destroyPrivateDestinationActor(destinationActor)
 })

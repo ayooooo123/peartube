@@ -328,9 +328,8 @@ export class AsyncRouteControlSession {
       const active = this.#current
       if (active) {
         if (
-          this.#registrationState !== ASYNC_REGISTRATION_STATE.STAGED &&
-          this.#registrationState !== ASYNC_REGISTRATION_STATE.PREPARED &&
-          this.#registrationState !== ASYNC_REGISTRATION_STATE.ABORTING
+          active.operationKind !== ACTOR_CONTROL_KIND.REGISTER_PREPARE &&
+          active.operationKind !== ACTOR_CONTROL_KIND.REGISTER_FINALIZE
         )
           circuitState()
         active.signal.abort()
@@ -711,6 +710,7 @@ export class AsyncRouteControlSession {
       signal,
       removeExternal,
       dispatched: false,
+      operationKind: null,
       finished,
       finish
     }
@@ -737,6 +737,7 @@ export class AsyncRouteControlSession {
     if (this.#readNow() >= context.deadline) throw unavailable()
     let result
     try {
+      context.operationKind = kind
       if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) context.dispatched = true
       result = await requestRemoteActorHost(
         this.#remote,

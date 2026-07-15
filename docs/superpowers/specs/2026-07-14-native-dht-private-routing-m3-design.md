@@ -129,6 +129,8 @@ M3 keeps two identities distinct:
 
 M3 defines a new versioned capability-advertisement codec and signature domain. It does not reuse M2's forward/datagram/stream capability mask as though that mask already described DHT exit or storage services.
 
+The new wire integer is `M3_PROTOCOL_VERSION = 1`. Branch class `0` is lookup and branch class `1` is announce; all other values are rejected in this version.
+
 ## Permissionless Discovery Without a Registry
 
 Relay discovery uses DHT participation rather than a signed operator list:
@@ -141,11 +143,11 @@ Relay discovery uses DHT participation rather than a signed operator list:
 6. Once the client→guard→middle route and a fresh source↔middle tail-control context exist, the client invokes the same bounded discovery service at the middle to obtain `ROLE.PRIVATE` exit candidates. The exit offer travels inside that context, so the guard forwards fixed-size opaque cells and does not learn the selected exit. Exit validation and link extension run through the partial route.
 7. If the client cannot find enough compatible and diverse nodes, `required` mode remains unavailable. It never downgrades to direct DHT traffic.
 
-`CAPS_QUERY_V1` responses contain at most eight advertisements, have an exact encoded-size limit, and are never accepted without each candidate's own signature and later active validation. Referrals are availability hints: a malicious bootstrap, guard, or middle may bias or censor them but cannot make the client dial a middle or exit outside the partially constructed route.
+`CAPS_QUERY_V1` responses contain at most eight advertisements, have an exact encoded-size limit, and are never accepted without each candidate's own signature and later active validation. Cold start has one global `MAX_DIRECT_GUARD_CHALLENGES = 3` budget across compatible-bootstrap self-advertisements, compatible-bootstrap referrals, and legacy referrals. The client may rank eight returned advertisements but actively challenges at most three addresses in total before failing closed. Referrals are availability hints: a malicious bootstrap, guard, or middle may bias or censor them but cannot make the client dial a middle or exit outside the partially constructed route.
 
 ### Cold start
 
-The preferred cold start has at least one configured bootstrap candidate that supports `CAPS_QUERY_V1`, either as a guard or as a source of signed guard advertisements. This is a deployment availability assumption, not a trusted registry.
+The preferred cold start contacts at most three configured bootstrap candidates sequentially and has at least one that supports `CAPS_QUERY_V1`, either as a guard or as a source of signed guard advertisements. This is a deployment availability assumption, not a trusted registry.
 
 When all configured bootstrap nodes are legacy nodes, the client may perform one strictly bounded direct discovery walk: one non-iterative, single-node legacy `FIND_NODE` request to one configured bootstrap followed by at most three sequential direct capability probes to nodes returned by that response. It must not invoke DHT-RPC's normal iterative query engine. Every contacted address is recorded in the privacy-readiness report because it saw the client IP. Discovery stops immediately when a guard is pinned. If no guard is found within the bound, private readiness fails closed. Applications may disable this legacy cold-start walk and require a compatible configured bootstrap.
 
@@ -209,11 +211,43 @@ For the first link, the fresh client circuit identity is the initiator. For late
 
 Every accepted extension establishes a temporary end-to-end control context between the client and the current tail:
 
-1. The client creates a fresh X25519 tail ephemeral key and nonce and includes the public key in the extension request for the signed candidate advertisement.
-2. After adjacent `LINK_ACCEPT_V1`, the new tail derives a shared secret from its advertisement-scoped route-encryption secret key and the client tail public key.
-3. Client and tail derive independent forward and reverse control keys with domain-separated HKDF over the branch class, branch and circuit IDs, generation, extension index, candidate advertisement digest, client nonce, tail identity, tail ephemeral key, redacted admitted limits, and protocol version.
-4. The tail returns `TAIL_READY_V1`, authenticated under the new reverse key and separately signed by the advertised tail identity. It contains no predecessor address and no earlier route identity or transcript digest.
-5. The client sends fixed-size tail-control cells through the installed route. Intermediate relays forward them using M2 circuit bindings but cannot open the tail-control payload.
+1. The first direct client→guard link runs this derivation as extension index `0`; middle and exit use indices `1` and `2`. Indices cannot be skipped or reused within a generation.
+2. The client creates a fresh X25519 keypair and 32-byte nonce for that extension. The extension carries the **client tail ephemeral public key**.
+3. The signed candidate advertisement carries the tail's epoch-scoped **advertised route-encryption public key**. The tail retains the corresponding route-encryption secret key.
+4. Client and tail compute the same 32-byte X25519 shared secret from exactly those inputs: client tail ephemeral secret × advertised route-encryption public, or advertised route-encryption secret × client tail ephemeral public.
+5. They encode the fixed-order, length-delimited `TAIL_CONTROL_TRANSCRIPT_V1` below and pass the shared secret and transcript to the M3 tail-control derivation.
+6. The tail returns `TAIL_READY_V1`, authenticated under the new reverse key and separately signed by the advertised tail identity. It contains no predecessor address and no earlier route identity or transcript digest.
+7. The client sends fixed-size tail-control cells through the installed route. Intermediate relays forward them using M2 circuit bindings but cannot open the tail-control payload.
+
+`TAIL_CONTROL_TRANSCRIPT_V1` has this canonical field order and exact types:
+
+```text
+u32  M3 protocol version
+u8   branch class
+16B  branch ID
+16B  circuit ID
+u64  branch generation
+u8   extension index (0 guard, 1 middle, 2 exit)
+32B  client tail ephemeral public key
+32B  advertised tail route-encryption public key
+32B  candidate advertisement digest
+32B  client nonce
+32B  tail Ed25519 identity
+32B  canonical admitted-limits digest
+```
+
+The transcript is prefixed by the length-delimited domain string `hyperdht-private-routes/tail-control/transcript/v1`. The admitted-limits digest is `cryptoSuite.hash([domain, encoding])`, where `domain` is `hyperdht-private-routes/tail-control/limits/v1` and `encoding` is `u16 cellSize || u32 maxCells || u32 maxBytes || u32 maxCommands || u32 idleTimeoutMs || u64 expiresAtMs`. Integers are unsigned big-endian. No field is optional.
+
+M3 extends `cryptoSuite.deriveKeys`; it does not introduce generic HKDF. For each output it computes keyed BLAKE2b with the 32-byte X25519 shared secret as key over `u16 labelLength || label || u32 M3ProtocolVersion || u32 transcriptLength || transcript`, the same construction used by M2. The four new labels are:
+
+```text
+hyperdht-private-routes/kdf/v1/tail-control/forward-key
+hyperdht-private-routes/kdf/v1/tail-control/reverse-key
+hyperdht-private-routes/kdf/v1/tail-control/forward-nonce
+hyperdht-private-routes/kdf/v1/tail-control/reverse-nonce
+```
+
+Forward and reverse keys are the full 32-byte outputs. Forward and reverse XChaCha20 nonce prefixes are the first 16 bytes of their respective 32-byte nonce outputs, matching M2 counter-based nonce construction. The adjacency-local ephemeral keys from `LINK_OFFER_V1`/`LINK_ACCEPT_V1` are not tail-control inputs and do not appear in the redacted proof.
 
 Each tail-control direction has its own monotonic counter, exact-next replay rule, deadline, and byte/command budget. Its expiry is the earliest of the advertisement, branch, circuit, or admitted-link expiry. Authentication failure, counter failure, timeout, extension failure, or route teardown erases both directions and all partially derived secrets. When a new tail confirms, the previous tail-control context is destroyed; it cannot authorize later extensions. The final source↔exit context is domain-separated again into routed DHT payload and terminal-control keys.
 
@@ -385,7 +419,9 @@ The extension is wire-compatible but requires enough opt-in storage nodes to be 
 
 M2's sub-second integration-test heartbeat and failure timers are not M3 production defaults. M3 introduces a negotiated mobile liveness profile:
 
-- while a branch is established, heartbeat interval defaults to 25 seconds with bounded jitter;
+- the predecessor, meaning the participant closer to the client, is the sole heartbeat initiator on every adjacent link;
+- after 25 seconds with deterministic per-link jitter bounded to 20–30 seconds, only that initiator sends `HEARTBEAT`; the successor sends exactly one authenticated `HEARTBEAT_ACK` and never starts a competing timer;
+- any valid authenticated inbound cell resets the initiator's silence timer, and ordinary authenticated traffic may satisfy liveness without an extra heartbeat;
 - three missed heartbeat rounds mark a link failed;
 - a branch is destroyed after 60 seconds without an application-routed operation, required record refresh, or route setup/repair event; liveness heartbeat traffic never resets this idle timer;
 - after idle destruction, the client emits zero route cells until new work arrives;
@@ -514,7 +550,7 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 
 - exact capability-advertisement codecs, signatures, expiry, replay, and active challenge;
 - production `LINK_OFFER_V1`/`LINK_ACCEPT_V1`, role mapping, partial-route extension, and terminal-exit confirmation;
-- source↔tail key derivation, counters, replay, replacement, expiry, redacted confirmation, and failure erasure;
+- source↔tail key derivation, counters, replay, replacement, expiry, redacted confirmation, and failure erasure, with fixed test vectors for guard index zero, middle replacement, final exit derivation, and cross-index/transcript substitution;
 - selection invariants for identity, XOR, prefix, branch, and loop diversity;
 - compatible bootstrap, legacy-only bounded cold start, malicious referral, and no-direct-candidate-probe behavior;
 - guard and branch active-time lease state machines;
@@ -527,7 +563,7 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - compatible-storage zero/stale/successful seed behavior, malicious referrals, overlay convergence, partial quorum, prepare/commit rotation, replayed receipts, cross-exit tokens, and insufficient density;
 - same-sequence endpoint equivocation and quarantine;
 - quotas, response amplification, fairness, backpressure, and `BUSY` behavior;
-- mobile liveness cell/wakeup budgets using the client↔guard definition, heartbeat-excluded idle timing, and zero traffic after idle destruction;
+- mobile liveness cell/wakeup budgets using the client↔guard definition, sole-initiator simultaneous-timer and jitter bounds, heartbeat-excluded idle timing, and zero traffic after idle destruction;
 - malicious buffers, codecs, callbacks, clocks, and transport adapters;
 - bounded-memory fuzzing for every new envelope and state transition.
 

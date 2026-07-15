@@ -81,6 +81,7 @@ test('command vocabulary and lifecycle are exact and closed is terminal', (t) =>
   t.alike(Object.values(CONTROL_COMMAND), [
     'configure',
     'start',
+    'activate',
     'fault',
     'revoke',
     'snapshot',
@@ -88,6 +89,7 @@ test('command vocabulary and lifecycle are exact and closed is terminal', (t) =>
   ])
   t.alike(Object.values(CONTROL_EVENT), [
     'configured',
+    'prepared',
     'ready',
     'retry',
     'snapshot',
@@ -106,6 +108,9 @@ test('command vocabulary and lifecycle are exact and closed is terminal', (t) =>
   t.is(lifecycle.accept({ command: 'revoke', grantDigest32: b4a.alloc(32) }), 'revoke')
   t.is(lifecycle.state, 'CONFIGURED')
   t.is(lifecycle.accept({ command: 'start' }), 'start')
+  t.ok(code(() => lifecycle.emit({ event: 'ready' })))
+  t.is(lifecycle.emit({ event: 'prepared' }), 'prepared')
+  t.is(lifecycle.accept({ command: 'activate' }), 'activate')
   t.is(lifecycle.emit({ event: 'ready' }), 'ready')
   t.is(lifecycle.accept({ command: 'snapshot' }), 'snapshot')
   t.is(lifecycle.emit({ event: 'snapshot' }), 'snapshot')
@@ -184,6 +189,12 @@ test('role runner configures once, serializes commands, and emits one terminal c
   }
   t.ok(duplicate)
   await runner.handle({ command: 'start' })
+  t.alike(
+    events.map((event) => event.event),
+    ['configured', 'prepared'],
+    'START stops at the actor-readiness barrier'
+  )
+  await runner.handle({ command: 'activate' })
   await runner.handle({ command: 'snapshot' })
   await runner.handle({ command: 'revoke', grantDigest32: b4a.alloc(32, 7) })
   await runner.handle({ command: 'fault', fault: 'close-socket' })
@@ -198,7 +209,7 @@ test('role runner configures once, serializes commands, and emits one terminal c
   t.alike(calls, ['start', 'connect', 'revoke:7', 'close-socket', 'stop'])
   t.alike(
     events.map((event) => event.event),
-    ['configured', 'ready', 'snapshot', 'snapshot', 'snapshot', 'closed']
+    ['configured', 'prepared', 'ready', 'snapshot', 'snapshot', 'snapshot', 'closed']
   )
   t.is(events.filter((event) => event.event === 'closed').length, 1)
   t.alike(events.at(-1).resources, {
@@ -207,6 +218,106 @@ test('role runner configures once, serializes commands, and emits one terminal c
     timers: 0,
     openSockets: 0
   })
+})
+
+test('role runner snapshots READY only after activation establishment settles', async (t) => {
+  const order = []
+  const projection = {
+    role: 'source',
+    grants: [b4a.alloc(32, 1)],
+    local: { identity32: b4a.alloc(32, 2) },
+    get route() {
+      order.push('establish')
+      return undefined
+    }
+  }
+  const runner = createRoleRunner({
+    emit() {},
+    createNode() {
+      return {
+        async start() {},
+        async connect() {},
+        snapshot() {
+          order.push('snapshot')
+          return {
+            role: 'source',
+            state: 'OPEN',
+            links: 1,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: { bindings: 1, waits: 0, timers: 0, openSockets: 1 }
+          }
+        }
+      }
+    }
+  })
+  await runner.handle({ command: 'configure', projection })
+  await runner.handle({ command: 'start' })
+  order.length = 0
+  await runner.handle({ command: 'activate' })
+  t.alike(order, ['establish', 'snapshot'])
+})
+
+test('role runner clears every configured buffer before CLOSED is observable', async (t) => {
+  const secret = b4a.alloc(64, 0xa7)
+  const nested = b4a.alloc(32, 0xb8)
+  const projection = {
+    role: 'safety-guard',
+    grants: [b4a.alloc(32, 1)],
+    local: { identity32: b4a.alloc(32, 2), identitySecretKey: secret },
+    route: { nested }
+  }
+  const events = []
+  const runner = createRoleRunner({
+    emit(event) {
+      if (event.event === 'closed') {
+        t.ok(
+          secret.every((value) => value === 0),
+          'identity secret cleared before CLOSED'
+        )
+        t.ok(
+          nested.every((value) => value === 0),
+          'nested route secret cleared before CLOSED'
+        )
+        t.ok(
+          projection.grants[0].every((value) => value === 0),
+          'serialized grant copy cleared before CLOSED'
+        )
+      }
+      events.push(event)
+    },
+    createNode() {
+      let state = 'NEW'
+      return {
+        async start() {
+          state = 'READY'
+        },
+        async connect() {
+          state = 'OPEN'
+        },
+        snapshot() {
+          return {
+            role: 'safety-guard',
+            state,
+            links: state === 'OPEN' ? 1 : 0,
+            counters: { queuedPackets: 0, queuedBytes: 0, inFlightSends: 0 },
+            resources: {
+              bindings: state === 'CLOSED' ? 0 : 1,
+              waits: 0,
+              timers: 0,
+              openSockets: state === 'CLOSED' ? 0 : 1
+            }
+          }
+        },
+        async stop() {
+          state = 'CLOSED'
+        }
+      }
+    }
+  })
+  await runner.handle({ command: 'configure', projection })
+  await runner.handle({ command: 'start' })
+  await runner.handle({ command: 'stop' })
+  t.is(events.at(-1).event, 'closed')
 })
 
 test('role runner arms socket closure until after the transport opens', async (t) => {
@@ -416,6 +527,7 @@ test('role runner retry refuses fallback without invoking its negative control',
     }
   })
   await runner.handle({ command: 'start' })
+  await runner.handle({ command: 'activate' })
   await runner.handle({ command: 'fault', fault: 'retry' })
   t.alike(events.at(-1), {
     event: 'retry',

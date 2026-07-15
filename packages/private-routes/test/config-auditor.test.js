@@ -39,6 +39,92 @@ test('independent auditor accepts exact semantic and serialized role projections
   auditor.destroy()
 })
 
+test('auditor policy cannot be widened by the fixture it audits', (t) => {
+  const fixture = createLiveRouteFixture()
+  const projections = new Map(fixture.projections)
+  const source = clone(projections.get('source'))
+  source.known.push({
+    role: 'destination',
+    identity32: b4a.from(projections.get('destination').local.identity32)
+  })
+  projections.set('source', source)
+  t.ok(
+    fails(() => createConfigurationAuditor({ ...fixture, projections })),
+    'independent role policy rejects a self-authorized knowledge expansion'
+  )
+})
+
+test('auditor rejects a nested source activation leak before the fixture can self-authorize it', (t) => {
+  const fixture = createLiveRouteFixture()
+  const projections = new Map(fixture.projections)
+  const source = clone(projections.get('source'))
+  source.route.activation.leakedPath = ['source', 'destination']
+  source.route.activation.leakedSecret = b4a.alloc(32, 0xa7)
+  projections.set('source', source)
+  t.ok(
+    fails(() => createConfigurationAuditor({ ...fixture, projections })),
+    'independent nested schema rejects path and secret fields even when expected input is mutated'
+  )
+})
+
+test('auditor recursively locks every role-specific route structure and secret size', (t) => {
+  const mutations = [
+    [
+      'source registration',
+      'source',
+      (route) => (route.registrations[0].leakedSecret = b4a.alloc(32))
+    ],
+    ['safety advertisement', 'safety-guard', (route) => (route.leakedPath = [])],
+    [
+      'private registration',
+      'private-middle',
+      (route) => (route.registration.leakedAddress = '127.0.0.1')
+    ],
+    ['destination payload', 'destination', (route) => (route.payload.leakedGrant = b4a.alloc(32))],
+    [
+      'destination secret size',
+      'destination',
+      (route) => (route.routeSigningSecretKey = b4a.alloc(63))
+    ]
+  ]
+  for (const [name, role, mutate] of mutations) {
+    const fixture = createLiveRouteFixture()
+    const projections = new Map(fixture.projections)
+    const projection = clone(projections.get(role))
+    mutate(projection.route)
+    projections.set(role, projection)
+    t.ok(
+      fails(() => createConfigurationAuditor({ ...fixture, projections })),
+      name
+    )
+  }
+})
+
+test('auditor rejects duplicate grants that omit a required adjacent peer', (t) => {
+  const fixture = createLiveRouteFixture()
+  const projections = new Map(fixture.projections)
+  const safetyGuard = clone(projections.get('safety-guard'))
+  safetyGuard.grants = [b4a.from(safetyGuard.grants[0]), b4a.from(safetyGuard.grants[0])]
+  projections.set('safety-guard', safetyGuard)
+  t.ok(
+    fails(() => createConfigurationAuditor({ ...fixture, projections })),
+    'duplicate source grant cannot stand in for the omitted safety-final grant'
+  )
+})
+
+test('auditor requires the complete role set independently of the fixture', (t) => {
+  const fixture = createLiveRouteFixture()
+  t.ok(
+    fails(() =>
+      createConfigurationAuditor({
+        ...fixture,
+        roles: fixture.roles.filter((role) => role !== 'destination')
+      })
+    ),
+    'a fixture cannot remove a policy role from the audit'
+  )
+})
+
 test('auditor rejects every forbidden non-adjacent address and topology expansion', (t) => {
   const fixture = createLiveRouteFixture()
   const auditor = createConfigurationAuditor(fixture)
@@ -86,6 +172,15 @@ test('auditor locks event schemas and rejects address-bearing output', (t) => {
     codecVectors: createProcessCodecVectors()
   }
   t.is(auditor.auditEvent(role, configured), true)
+  t.ok(
+    fails(() =>
+      auditor.auditEvent(role, {
+        ...configured,
+        runtimeVersion: `v22.19.0-LEAK-${'ab'.repeat(32)}`
+      })
+    ),
+    'runtime metadata cannot carry an encoded secret suffix'
+  )
   t.is(
     auditor.auditEvent(role, {
       event: 'error',

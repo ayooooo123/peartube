@@ -33,6 +33,7 @@ import {
   signRelayAdvertisement
 } from '../index.js'
 import { isRemoteActivationVerifier, isRemoteRegistrationVerifier } from '../lib/activation.js'
+import { abortAsyncRouteControlSessionAfterTransportLoss } from '../lib/async-route-control-session.js'
 import {
   RemoteControlFragmentCodec,
   RemoteControlMux,
@@ -1215,6 +1216,71 @@ test('stop during setup cancels the installed wait before remote completion', as
     circuitState: ASYNC_CIRCUIT_STATE.DESTROYING,
     stopped: true
   })
+  activation.destroy()
+})
+
+test('transport-loss abort terminalizes hanging prepare without cleanup traffic', async (t) => {
+  const calls = []
+  const peer = controlledRemote(
+    function request(kind, _actor, _circuit, _generation, _body, options) {
+      calls.push(kind)
+      if (kind === ACTOR_CONTROL_KIND.REGISTER_STAGE) return Promise.resolve(bytes(195, 1))
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener(
+          'abort',
+          () => reject(PrivateRouteError.ROUTE_UNAVAILABLE()),
+          { once: true }
+        )
+      })
+    }
+  )
+  const control = session(peer)
+  const staged = await control.stage(bytes(64, 2), { abort: bytes(64, 3) })
+  staged.fill(0)
+  const pending = control.prepare(bytes(64, 4))
+  await Promise.resolve()
+  const aborting = abortAsyncRouteControlSessionAfterTransportLoss(control)
+  t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+  t.is(await aborting, true)
+  t.alike(calls, [ACTOR_CONTROL_KIND.REGISTER_STAGE, ACTOR_CONTROL_KIND.REGISTER_PREPARE])
+  t.is(control.registrationState, ASYNC_REGISTRATION_STATE.ABORTED)
+  t.alike(control.stats, {
+    waits: 0,
+    timers: 0,
+    ownedBytes: 0,
+    registrationState: ASYNC_REGISTRATION_STATE.ABORTED,
+    circuitState: ASYNC_CIRCUIT_STATE.NEW,
+    stopped: true
+  })
+})
+
+test('transport-loss abort terminalizes hanging activation after its wait settles', async (t) => {
+  const activation = activationFixture(251, bytes(16, 0x52), 1n)
+  const peer = controlledRemote(
+    function request(_kind, _actor, _circuit, _generation, _body, options) {
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener(
+          'abort',
+          () => reject(PrivateRouteError.ROUTE_UNAVAILABLE()),
+          { once: true }
+        )
+      })
+    }
+  )
+  const control = session(peer)
+  const pending = control.activate({
+    body: activation.body,
+    circuitId: activation.circuitId,
+    generation: activation.generation,
+    activationVerifier: activation.verifier
+  })
+  await Promise.resolve()
+  const aborting = abortAsyncRouteControlSessionAfterTransportLoss(control)
+  t.is(await rejectionCode(pending), 'ROUTE_UNAVAILABLE')
+  t.is(await aborting, true)
+  t.is(control.circuitState, ASYNC_CIRCUIT_STATE.DESTROYED)
+  t.is(control.stats.waits, 0)
+  t.is(control.stats.ownedBytes, 0)
   activation.destroy()
 })
 

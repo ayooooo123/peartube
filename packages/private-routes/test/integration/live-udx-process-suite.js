@@ -243,7 +243,7 @@ export function registerLiveUdxProcessSuite(options) {
       )
       t.ok(failure)
       const elapsed = Date.now() - startedAt
-      t.ok(elapsed >= 4_500)
+      t.ok(elapsed >= 1_250, 'replay cannot refresh the 1.5s link liveness deadline')
       t.ok(elapsed < 6_500)
     } finally {
       exits = await coordinator.destroy()
@@ -351,8 +351,7 @@ export function registerLiveUdxProcessSuite(options) {
       )
       t.ok(failure)
       const elapsed = Date.now() - startedAt
-      t.ok(elapsed >= 4_500)
-      t.ok(elapsed < 6_500)
+      t.ok(elapsed < 4_500, 'synchronous queue refusal does not wait for setup timeout')
     } finally {
       exits = await coordinator.destroy()
     }

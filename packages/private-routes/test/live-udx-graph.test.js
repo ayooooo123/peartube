@@ -3,6 +3,7 @@ import b4a from 'b4a'
 
 import * as publicApi from '../index.js'
 import {
+  ACTOR_CONTROL_KIND,
   MAX_ROUTE_PAYLOAD,
   createPrivateDestinationActor,
   createPrivateRelayActor,
@@ -17,6 +18,8 @@ import {
 import {
   LIVE_ROUTE_ACTIVATE_ENDPOINT,
   LIVE_ROUTE_CREATE_CONTROL,
+  LIVE_ROUTE_FAIL_ROUTE,
+  LIVE_ROUTE_FORWARD_ACTOR,
   LIVE_ROUTE_REGISTER_ACTOR
 } from '../lib/live-route-node.js'
 import { UdxAdapter } from '../lib/udx-adapter.js'
@@ -43,9 +46,10 @@ function scheduler() {
 }
 
 class TracedUdxAdapter {
-  constructor(role, transmissions) {
+  constructor(role, transmissions, fault = null) {
     this.role = role
     this.transmissions = transmissions
+    this.fault = fault
   }
 
   create() {
@@ -69,6 +73,15 @@ class TracedUdxAdapter {
               bytes: packet.byteLength,
               cellClass: packet[1]
             })
+            if (
+              this.fault &&
+              this.fault.actorAdmissionArmed &&
+              packet[1] === publicApi.CELL_CLASS.CONTROL
+            ) {
+              this.fault.actorAdmissionArmed = false
+              this.fault.actorAdmissionTriggers++
+              return true
+            }
             return socket.send(packet, port, host)
           },
           close() {
@@ -269,15 +282,24 @@ test('seven live route nodes authenticate exactly six real UDX adjacencies', asy
     expiresAt: startedAt + 30_000n
   })
   const transmissions = []
+  const sourceFault = {
+    actorAdmissionArmed: false,
+    actorAdmissionTriggers: 0,
+    failedEvents: 0
+  }
   const nodes = LIVE_ROUTE_ROLES.map((role, index) => {
     let value = 0x51 + index * 7
     return publicApi.createLiveRouteNode(fixture.projections.get(role), {
-      adapter: new TracedUdxAdapter(role, transmissions),
+      adapter: new TracedUdxAdapter(role, transmissions, index === 0 ? sourceFault : null),
+      ...(index === 0 ? { endpointLimits: { maxQueuedPackets: 7, maxQueuedBytes: 8_400 } } : {}),
       now: Date.now,
       schedule: setTimeout,
       cancel: clearTimeout,
       randomBytes(size) {
         return b4a.alloc(size, value++)
+      },
+      observe(snapshot) {
+        if (index === 0 && snapshot.state === 'FAILED') sourceFault.failedEvents++
       }
     })
   })
@@ -427,6 +449,67 @@ test('seven live route nodes authenticate exactly six real UDX adjacencies', asy
       expectedDirected.sort(),
       'exactly six bilateral adjacencies'
     )
+
+    const teardownStarted = Date.now()
+    sourceFault.actorAdmissionArmed = true
+    const actorBody = b4a.alloc(8_000, 0x6d)
+    const registrationCircuit = b4a.alloc(16)
+    const forwarded = nodes[0]
+      [LIVE_ROUTE_FORWARD_ACTOR](
+        ACTOR_CONTROL_KIND.REGISTER_PREPARE,
+        sourceRoute.entryActorId,
+        registrationCircuit,
+        0n,
+        actorBody
+      )
+      .then(
+        () => 'resolved',
+        (err) => err && err.code
+      )
+    await waitForValue(() => {
+      const current = nodes[0].snapshot().state
+      return current === 'CLOSING' || current === 'CLOSED'
+    })
+    const firstFailure = nodes[0][LIVE_ROUTE_FAIL_ROUTE]()
+    const repeatedFailure = nodes[0][LIVE_ROUTE_FAIL_ROUTE]()
+    t.is(firstFailure, repeatedFailure, 'reentrant failure joins one published cascade')
+    await firstFailure
+    t.is(
+      nodes[0][LIVE_ROUTE_FAIL_ROUTE](),
+      firstFailure,
+      'published cascade remains stable after node stop completes'
+    )
+    t.is(sourceFault.failedEvents, 1, 'actor failure publishes FAILED exactly once')
+    t.is(sourceFault.actorAdmissionTriggers, 1, 'bounded actor queue refusal is deterministic')
+    t.is(await forwarded, 'ROUTE_UNAVAILABLE', 'pending actor forwarding rejects on route failure')
+    try {
+      await waitForValue(
+        () => nodes.every((node) => node.snapshot().state === 'CLOSED'),
+        teardownStarted + 6_500
+      )
+    } catch {
+      throw new Error(
+        `bounded teardown snapshots: ${JSON.stringify(nodes.map((node) => node.snapshot()))}`
+      )
+    }
+    t.ok(Date.now() - teardownStarted <= 6_500, 'actor-control failure teardown is bounded')
+    for (let index = 0; index < nodes.length; index++) {
+      const snapshot = nodes[index].snapshot()
+      t.alike(
+        snapshot.resources,
+        { bindings: 0, waits: 0, timers: 0, openSockets: 0 },
+        `${LIVE_ROUTE_ROLES[index]} clears all route-owned state without coordinator STOP`
+      )
+    }
+    let laterTrafficCode = null
+    try {
+      source.write(b4a.from('must not survive middle failure'))
+    } catch (err) {
+      laterTrafficCode = err && err.code
+    }
+    t.is(laterTrafficCode, 'CIRCUIT_STATE', 'later traffic rejects with no fallback')
+    actorBody.fill(0)
+    registrationCircuit.fill(0)
 
     for (const value of [...receivedAtDestination, ...receivedAtSource]) value.fill(0)
     sourceStream.fill(0)

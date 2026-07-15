@@ -78,14 +78,35 @@ function layoutMember(layout, role) {
   return member
 }
 
-export function createCaptureMatrix(layout, contacts, phases, sentinels = null) {
-  if (!contacts || typeof contacts !== 'object' || !phases || typeof phases !== 'object') invalid()
+export function createCaptureMatrix(layout, contacts, phases, interfaceIndexes, sentinels = null) {
+  if (
+    !contacts ||
+    typeof contacts !== 'object' ||
+    !phases ||
+    typeof phases !== 'object' ||
+    !interfaceIndexes ||
+    typeof interfaceIndexes !== 'object' ||
+    Array.isArray(interfaceIndexes)
+  ) {
+    invalid()
+  }
   const roles = {}
+  const seenInterfaceIndexes = new Set()
   for (const member of layout.members) {
+    const interfaceIndex = interfaceIndexes[member.role]
+    if (
+      !Number.isSafeInteger(interfaceIndex) ||
+      interfaceIndex < 1 ||
+      seenInterfaceIndexes.has(interfaceIndex)
+    ) {
+      invalid()
+    }
+    seenInterfaceIndexes.add(interfaceIndex)
     roles[member.role] = Object.freeze({
       addresses: Object.freeze([member.address]),
       port: member.port,
-      route: member.route
+      route: member.route,
+      interfaceIndex
     })
   }
   const copiedContacts = {}
@@ -148,7 +169,42 @@ export function createNamespaceManager(options = {}) {
         results.push(Object.freeze({ status: 'rejected', reason }))
       }
     }
+    const failures = results.filter((result) => result.status === 'rejected')
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((result) => result.reason),
+        'namespace cleanup failed'
+      )
+    }
     return results
+  }
+
+  const readInterfaceIndexes = async () => {
+    const result = {}
+    const seen = new Set()
+    for (const member of layout.members) {
+      const output = await run('ip', ['-j', 'link', 'show', 'dev', member.hostVeth])
+      let records
+      try {
+        records = JSON.parse(output?.stdout)
+      } catch {
+        invalid()
+      }
+      const record = records?.[0]
+      if (
+        !Array.isArray(records) ||
+        records.length !== 1 ||
+        record.ifname !== member.hostVeth ||
+        !Number.isSafeInteger(record.ifindex) ||
+        record.ifindex < 1 ||
+        seen.has(record.ifindex)
+      ) {
+        invalid()
+      }
+      seen.add(record.ifindex)
+      result[member.role] = record.ifindex
+    }
+    return Object.freeze(result)
   }
 
   const setupMember = async (member) => {
@@ -229,8 +285,9 @@ export function createNamespaceManager(options = {}) {
       ])
       await run('ip', ['link', 'set', layout.bridge.name, 'up'])
       for (const member of layout.members) await setupMember(member)
+      const interfaceIndexes = await readInterfaceIndexes()
       state = 'open'
-      return layout
+      return interfaceIndexes
     } catch (error) {
       await cleanup()
       throw error

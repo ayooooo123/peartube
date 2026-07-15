@@ -150,6 +150,7 @@ export class AsyncRouteControlSession {
   #destroyPromise = null
   #stopped = false
   #stopPromise = null
+  #transportLost = false
   #ownedBytes = 0
 
   constructor(options = {}) {
@@ -462,6 +463,19 @@ export class AsyncRouteControlSession {
     return this.#stopPromise
   }
 
+  abortAfterTransportLoss() {
+    if (this.#stopPromise) return this.#stopPromise
+    this.#stopped = true
+    this.#transportLost = true
+    const active = this.#current
+    this.#stopPromise = Promise.resolve(active ? active.finished : true).then(() => {
+      this.#terminalizeTransportLoss()
+      return true
+    })
+    if (active) active.signal.abort()
+    return this.#stopPromise
+  }
+
   async #stop() {
     try {
       const active = this.#current
@@ -572,6 +586,7 @@ export class AsyncRouteControlSession {
   }
 
   async #rollbackRegistration(context) {
+    if (this.#transportLost) return false
     if (
       !context.dispatched &&
       this.#registrationState !== ASYNC_REGISTRATION_STATE.STAGED &&
@@ -626,6 +641,7 @@ export class AsyncRouteControlSession {
   }
 
   async #destroyAfterFailure(context, reason) {
+    if (this.#transportLost) return
     if (
       this.#circuitState !== ASYNC_CIRCUIT_STATE.ACTIVATING &&
       this.#circuitState !== ASYNC_CIRCUIT_STATE.OPEN
@@ -841,10 +857,33 @@ export class AsyncRouteControlSession {
     this.#generation = null
     this.#circuitDeadline = null
   }
+
+  #terminalizeTransportLoss() {
+    if (
+      this.#registrationState === ASYNC_REGISTRATION_STATE.STAGED ||
+      this.#registrationState === ASYNC_REGISTRATION_STATE.PREPARED ||
+      this.#registrationState === ASYNC_REGISTRATION_STATE.ABORTING
+    ) {
+      this.#registrationState = ASYNC_REGISTRATION_STATE.ABORTED
+    }
+    if (
+      this.#circuitState === ASYNC_CIRCUIT_STATE.ACTIVATING ||
+      this.#circuitState === ASYNC_CIRCUIT_STATE.OPEN ||
+      this.#circuitState === ASYNC_CIRCUIT_STATE.DESTROYING
+    ) {
+      this.#circuitState = ASYNC_CIRCUIT_STATE.DESTROYED
+    }
+    this.#clearAbortBody()
+    this.#clearCircuit()
+    clear(this.#actorId)
+    this.#actorId = b4a.alloc(0)
+    this.#ownedBytes = 0
+  }
 }
 
 const genuineDestroy = AsyncRouteControlSession.prototype.destroy
 const genuineStop = AsyncRouteControlSession.prototype.stop
+const genuineAbortAfterTransportLoss = AsyncRouteControlSession.prototype.abortAfterTransportLoss
 const genuineCircuitState = Object.getOwnPropertyDescriptor(
   AsyncRouteControlSession.prototype,
   'circuitState'
@@ -873,6 +912,11 @@ export function destroyAsyncRouteControlSession(session, reason, options) {
 export function stopAsyncRouteControlSession(session) {
   if (!isAsyncRouteControlSession(session)) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
   return genuineStop.call(session)
+}
+
+export function abortAsyncRouteControlSessionAfterTransportLoss(session) {
+  if (!isAsyncRouteControlSession(session)) return Promise.reject(PrivateRouteError.INVALID_ROUTE())
+  return genuineAbortAfterTransportLoss.call(session)
 }
 
 export { ASYNC_CIRCUIT_STATE, ASYNC_REGISTRATION_STATE }

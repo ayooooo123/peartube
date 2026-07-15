@@ -233,6 +233,13 @@ export async function createProcessCoordinator(options = {}) {
 
   const start = async () => {
     await Promise.all(Array.from(records.values(), (record) => send(record, { command: 'start' })))
+    await Promise.all(roles.map((role) => waitFor(records.get(role), 'prepared', timeout)))
+    for (const record of records.values()) {
+      if (record.stderr.length > 0) invalid(`stderr output from ${record.role}`)
+    }
+    await Promise.all(
+      Array.from(records.values(), (record) => send(record, { command: 'activate' }))
+    )
     const ready = await Promise.all(
       roles.map((role) => waitFor(records.get(role), 'ready', timeout))
     )

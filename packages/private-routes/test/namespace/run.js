@@ -27,20 +27,8 @@ function invalid(message = 'invalid namespace capture') {
   throw new Error(message)
 }
 
-export function tcpdumpLaunch(network, path) {
-  if (
-    typeof network !== 'string' ||
-    !/^\d{1,3}(?:\.\d{1,3}){3}\/24$/.test(network) ||
-    network
-      .slice(0, -3)
-      .split('.')
-      .some((part) => Number(part) > 255) ||
-    !network.endsWith('.0/24') ||
-    typeof path !== 'string' ||
-    path.length === 0
-  ) {
-    invalid()
-  }
+export function tcpdumpLaunch(path) {
+  if (typeof path !== 'string' || path.length === 0) invalid()
   return Object.freeze({
     command: 'tcpdump',
     args: Object.freeze([
@@ -54,7 +42,7 @@ export function tcpdumpLaunch(network, path) {
       path,
       '-i',
       'any',
-      `ip and net ${network}`
+      'ip or ip6'
     ])
   })
 }
@@ -99,7 +87,7 @@ export function createNamespaceFixture(layout, negativeControlPayload, now) {
 
 export function createTcpdumpCapture(options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) invalid()
-  const launch = tcpdumpLaunch(options.network, options.path)
+  const launch = tcpdumpLaunch(options.path)
   const spawnProcess = options.spawnProcess || spawn
   const statFile = options.statFile || stat
   const schedule = options.schedule || setTimeout
@@ -432,7 +420,10 @@ export async function calibrateNegativeControl(options = {}) {
     options.payload.byteLength < 1 ||
     options.payload.byteLength > 1_200 ||
     typeof options.capturePath !== 'string' ||
-    options.capturePath.length === 0
+    options.capturePath.length === 0 ||
+    !options.interfaceIndexes ||
+    !Number.isSafeInteger(options.interfaceIndexes.source) ||
+    options.interfaceIndexes.source < 1
   ) {
     invalid('invalid negative-control calibration')
   }
@@ -459,7 +450,6 @@ export async function calibrateNegativeControl(options = {}) {
   const source = member(layout, 'source')
   const decoy = member(layout, 'decoy')
   const capture = createCapture({
-    network: `${layout.subnet}.0/24`,
     path: options.capturePath
   })
   if (
@@ -511,6 +501,7 @@ export async function calibrateNegativeControl(options = {}) {
       sourcePort: layout.portBase + 50,
       destination: decoy.address,
       destinationPort: decoy.port,
+      sourceInterfaceIndex: options.interfaceIndexes.source,
       payload
     })
     await removeCapture(options.capturePath)
@@ -623,6 +614,53 @@ export function assertRelayFailure(events) {
   return true
 }
 
+export async function cleanupNamespaceResources(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    invalid('invalid namespace cleanup')
+  }
+  const errors = []
+  if (options.coordinator) {
+    try {
+      await options.coordinator.destroy()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (options.capture && options.captureOpen) {
+    try {
+      await options.capture.stop()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (options.manager && options.managerOpen) {
+    try {
+      await options.manager.cleanup()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'namespace cleanup failed')
+  return true
+}
+
+export async function finalizeNamespaceGate(options = {}) {
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    Array.isArray(options) ||
+    typeof options.capturePath !== 'string' ||
+    options.capturePath.length === 0 ||
+    typeof options.cleanup !== 'function' ||
+    typeof options.removeCapture !== 'function'
+  ) {
+    invalid('invalid namespace finalization')
+  }
+  await options.cleanup()
+  await options.removeCapture(options.capturePath)
+  return true
+}
+
 export async function runNamespaceGate(options = {}) {
   if (process.platform !== 'linux') throw new Error('Linux is required for the namespace gate')
   if (typeof process.getuid !== 'function' || process.getuid() !== 0) {
@@ -653,45 +691,39 @@ export async function runNamespaceGate(options = {}) {
   let capture = null
   let captureOpen = false
   let managerOpen = false
+  let interfaceIndexes = null
   let succeeded = false
   let auditSummary = null
+  let cleanupTask = null
 
-  const cleanup = async () => {
-    if (coordinator) {
-      try {
-        await coordinator.destroy()
-      } catch {}
-      coordinator = null
-    }
-    if (capture && captureOpen) {
-      try {
-        await capture.stop()
-      } catch {}
-      captureOpen = false
-    }
-    if (managerOpen) {
-      await manager.cleanup()
-      managerOpen = false
-    }
+  const cleanup = () => {
+    if (cleanupTask) return cleanupTask
+    const resources = { coordinator, capture, captureOpen, manager, managerOpen }
+    coordinator = null
+    capture = null
+    captureOpen = false
+    managerOpen = false
+    cleanupTask = cleanupNamespaceResources(resources)
+    return cleanupTask
   }
   const onSignal = () => {
-    void cleanup()
+    void cleanup().catch(() => {})
   }
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
 
   try {
-    await manager.setup()
+    interfaceIndexes = await manager.setup()
     managerOpen = true
     await proveReachability(layout)
     await calibrateNegativeControl({
       layout,
       payload: preflightPayload,
-      capturePath: preflightCapturePath
+      capturePath: preflightCapturePath,
+      interfaceIndexes
     })
 
     capture = createTcpdumpCapture({
-      network: `${layout.subnet}.0/24`,
       path: capturePath
     })
     await capture.start()
@@ -738,6 +770,7 @@ export async function runNamespaceGate(options = {}) {
           closedAtNs,
           captureStoppedAtNs: stopSentinel.receivedAtNs
         },
+        interfaceIndexes,
         Object.freeze({ start: startSentinel, stop: stopSentinel })
       )
       auditSummary = auditPrivateRouteCapture(parsePcap(captureBytes), matrix)
@@ -746,18 +779,21 @@ export async function runNamespaceGate(options = {}) {
       startSentinel.payload.fill(0)
       stopSentinel.payload.fill(0)
     }
+    await finalizeNamespaceGate({ capturePath, cleanup, removeCapture: unlink })
     succeeded = true
-    await unlink(capturePath)
     process.stdout.write(formatNamespaceAuditSummary(auditSummary))
     return true
   } finally {
     process.removeListener('SIGINT', onSignal)
     process.removeListener('SIGTERM', onSignal)
-    await cleanup()
-    preflightPayload.fill(0)
-    startPayload.fill(0)
-    stopPayload.fill(0)
-    if (!succeeded) process.stderr.write(`namespace capture preserved: ${capturePath}\n`)
+    try {
+      await cleanup()
+    } finally {
+      preflightPayload.fill(0)
+      startPayload.fill(0)
+      stopPayload.fill(0)
+      if (!succeeded) process.stderr.write(`namespace capture preserved: ${capturePath}\n`)
+    }
   }
 }
 

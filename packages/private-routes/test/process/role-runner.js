@@ -46,6 +46,16 @@ function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function clearTree(value, seen = new Set()) {
+  if (b4a.isBuffer(value)) {
+    value.fill(0)
+    return
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) return
+  seen.add(value)
+  for (const entry of Array.isArray(value) ? value : Object.values(value)) clearTree(entry, seen)
+}
+
 function runtimeRecord() {
   const bare = typeof Bare !== 'undefined'
   return Object.freeze({
@@ -158,6 +168,8 @@ export function createRoleRunner(options = {}) {
   let destroyActor = null
   let codecVectors = null
   let negativeControl = null
+  let preparedMilestone = null
+  let destinationWork = null
   let armedRevocation = null
   let phase = 'configured'
   const armedFaults = new Set()
@@ -311,7 +323,7 @@ export function createRoleRunner(options = {}) {
     return 'actor-registered'
   }
 
-  const registerDestinationActor = async () => {
+  const prepareDestinationActor = () => {
     phase = 'destination-register'
     const route = projection.route
     if (!object(route)) invalid()
@@ -343,13 +355,17 @@ export function createRoleRunner(options = {}) {
     })
     destroyActor = destroyPrivateDestinationActor
     node[LIVE_ROUTE_REGISTER_ACTOR](route.actorId, actor)
-    phase = 'destination-receive'
-    const duplex = await created
-    const value = routeTraffic()
-    await receiveTraffic(duplex, value)
-    phase = 'destination-send'
-    await sendTraffic(duplex, value)
-    return 'traffic-exchanged'
+    destinationWork = (async () => {
+      phase = 'destination-receive'
+      const duplex = await created
+      const value = routeTraffic()
+      await receiveTraffic(duplex, value)
+      phase = 'destination-send'
+      await sendTraffic(duplex, value)
+      return 'traffic-exchanged'
+    })()
+    void destinationWork.catch(() => {})
+    return 'actor-registered'
   }
 
   const establishSource = async () => {
@@ -417,11 +433,16 @@ export function createRoleRunner(options = {}) {
     return 'created-and-traffic-verified'
   }
 
-  const establishRole = async () => {
+  const prepareRole = () => {
     if (projection.role.startsWith('private-')) return registerPrivateActor()
-    if (projection.role === 'destination') return registerDestinationActor()
-    if (projection.role === 'source') return establishSource()
+    if (projection.role === 'destination') return prepareDestinationActor()
     return 'transport-open'
+  }
+
+  const establishRole = async () => {
+    if (projection.role === 'source') return establishSource()
+    if (projection.role === 'destination') return destinationWork
+    return preparedMilestone
   }
 
   const send = (record) => {
@@ -494,13 +515,25 @@ export function createRoleRunner(options = {}) {
           await node[LIVE_ROUTE_CLOSE_SOCKET]()
           throw PrivateRouteError.ROUTE_UNAVAILABLE()
         }
+        preparedMilestone = prepareRole()
         send({
-          ...snapshotEvent(CONTROL_EVENT.READY),
+          ...snapshotEvent(CONTROL_EVENT.PREPARED),
           ...runtimeRecord(),
           codecVectors,
-          milestone: await establishRole(),
-          traffic: { ...traffic }
+          milestone: preparedMilestone
         })
+        return true
+      case CONTROL_COMMAND.ACTIVATE:
+        {
+          const milestone = await establishRole()
+          send({
+            ...snapshotEvent(CONTROL_EVENT.READY),
+            ...runtimeRecord(),
+            codecVectors,
+            milestone,
+            traffic: { ...traffic }
+          })
+        }
         return true
       case CONTROL_COMMAND.SNAPSHOT:
         send(snapshotEvent(CONTROL_EVENT.SNAPSHOT))
@@ -551,6 +584,7 @@ export function createRoleRunner(options = {}) {
         if (armedRevocation) armedRevocation.fill(0)
         armedRevocation = null
         releaseActor()
+        clearTree(projection)
         send(snapshotEvent(CONTROL_EVENT.CLOSED))
         return true
       default:
@@ -594,6 +628,7 @@ export function createRoleRunner(options = {}) {
     if (armedRevocation) armedRevocation.fill(0)
     armedRevocation = null
     releaseActor()
+    clearTree(projection)
     return true
   }
 

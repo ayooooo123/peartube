@@ -5,6 +5,7 @@ export const CONTROL_BODY_MAX = 64 * 1024
 export const CONTROL_COMMAND = Object.freeze({
   CONFIGURE: 'configure',
   START: 'start',
+  ACTIVATE: 'activate',
   FAULT: 'fault',
   REVOKE: 'revoke',
   SNAPSHOT: 'snapshot',
@@ -13,6 +14,7 @@ export const CONTROL_COMMAND = Object.freeze({
 
 export const CONTROL_EVENT = Object.freeze({
   CONFIGURED: 'configured',
+  PREPARED: 'prepared',
   READY: 'ready',
   RETRY: 'retry',
   SNAPSHOT: 'snapshot',
@@ -265,6 +267,7 @@ export class ControlLifecycle {
   #state = 'NEW'
   #closed = false
   #configured = false
+  #prepared = false
   #ready = false
 
   get state() {
@@ -284,8 +287,15 @@ export class ControlLifecycle {
       this.#state = 'STARTED'
       return command
     }
+    if (command === CONTROL_COMMAND.ACTIVATE) {
+      if (this.#state !== 'STARTED' || !this.#prepared) {
+        throw invalid('activate before preparation')
+      }
+      this.#state = 'ACTIVE'
+      return command
+    }
     if (command === CONTROL_COMMAND.STOP) {
-      if (this.#state !== 'CONFIGURED' && this.#state !== 'STARTED') {
+      if (this.#state !== 'CONFIGURED' && this.#state !== 'STARTED' && this.#state !== 'ACTIVE') {
         throw invalid('stop before configuration')
       }
       this.#state = 'STOPPING'
@@ -297,7 +307,7 @@ export class ControlLifecycle {
     ) {
       return command
     }
-    if (this.#state !== 'STARTED') throw invalid('command before start')
+    if (this.#state !== 'ACTIVE') throw invalid('command before activation')
     return command
   }
 
@@ -312,14 +322,20 @@ export class ControlLifecycle {
         this.#configured = true
         break
       case CONTROL_EVENT.READY:
-        if (this.#state !== 'STARTED' || !this.#configured || this.#ready) {
+        if (this.#state !== 'ACTIVE' || !this.#configured || !this.#prepared || this.#ready) {
           throw invalid('unexpected ready event')
         }
         this.#ready = true
         break
+      case CONTROL_EVENT.PREPARED:
+        if (this.#state !== 'STARTED' || !this.#configured || this.#prepared) {
+          throw invalid('unexpected prepared event')
+        }
+        this.#prepared = true
+        break
       case CONTROL_EVENT.SNAPSHOT:
       case CONTROL_EVENT.RETRY:
-        if (this.#state !== 'STARTED' || !this.#ready) throw invalid('unexpected snapshot event')
+        if (this.#state !== 'ACTIVE' || !this.#ready) throw invalid('unexpected snapshot event')
         break
       case CONTROL_EVENT.ERROR:
         if (!this.#configured || this.#state === 'STOPPING') throw invalid('unexpected error event')

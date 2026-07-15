@@ -25,6 +25,20 @@ function command(value) {
   return [value.command, ...value.args].join(' ')
 }
 
+function executeWithInterfaceIndexes(commands, failures = new Set()) {
+  return async (commandValue, args) => {
+    const value = { command: commandValue, args }
+    commands.push(value)
+    const rendered = command(value)
+    if (failures.has(rendered)) throw new Error(`injected failure: ${rendered}`)
+    const memberMatch = /^ip -j link show dev ph(\d)/.exec(rendered)
+    if (!memberMatch) return { stdout: '', stderr: '' }
+    const index = 100 + Number(memberMatch[1])
+    const ifname = args.at(-1)
+    return { stdout: JSON.stringify([{ ifindex: index, ifname }]), stderr: '' }
+  }
+}
+
 test('namespace layout locks nine fully reachable synthetic bridge members', (t) => {
   const layout = createNamespaceLayout({ suffix: 'abc123', subnetId: 77, portBase: 48_100 })
   t.alike(layout.roles, NAMESPACE_ROLES)
@@ -49,16 +63,25 @@ test('namespace layout locks nine fully reachable synthetic bridge members', (t)
     t.ok(member.hostVeth.length <= 15, member.hostVeth)
     t.ok(member.peerVeth.length <= 15, member.peerVeth)
   }
-  const matrix = createCaptureMatrix(layout, CONTACTS, {
-    captureStartedAtNs: 1n,
-    closedAtNs: 2n,
-    captureStoppedAtNs: 3n
-  })
+  const interfaceIndexes = Object.fromEntries(
+    layout.members.map((member, index) => [member.role, 100 + index])
+  )
+  const matrix = createCaptureMatrix(
+    layout,
+    CONTACTS,
+    {
+      captureStartedAtNs: 1n,
+      closedAtNs: 2n,
+      captureStoppedAtNs: 3n
+    },
+    interfaceIndexes
+  )
   t.is(matrix.roles.decoy.route, false)
   t.alike(matrix.roles.auditor, {
     addresses: ['10.203.77.10'],
     port: 48_201,
-    route: false
+    route: false,
+    interfaceIndex: 108
   })
   t.is(matrix.roles.source.route, true)
   t.alike(matrix.requiredEdges, [
@@ -82,11 +105,20 @@ test('namespace setup disables only kernel noise and adds no adjacency firewall'
   const commands = []
   const manager = createNamespaceManager({
     layout,
-    async execute(command, args) {
-      commands.push({ command, args })
-    }
+    execute: executeWithInterfaceIndexes(commands)
   })
-  await manager.setup()
+  const interfaceIndexes = await manager.setup()
+  t.alike(interfaceIndexes, {
+    source: 100,
+    'safety-guard': 101,
+    'safety-final': 102,
+    'private-entry': 103,
+    'private-middle': 104,
+    'private-final': 105,
+    destination: 106,
+    decoy: 107,
+    auditor: 108
+  })
   t.alike(commands.slice(0, 3).map(command), [
     'ip link add name pbabc123 type bridge',
     'ip address add 10.203.77.1/24 dev pbabc123',
@@ -101,6 +133,7 @@ test('namespace setup disables only kernel noise and adds no adjacency firewall'
           `ip netns exec ${member.namespace} sysctl -q -w net.ipv6.conf.all.autoconf=0`
       )
     )
+    t.ok(commands.some((value) => command(value) === `ip -j link show dev ${member.hostVeth}`))
     t.ok(
       commands.some(
         (value) =>
@@ -153,6 +186,28 @@ test('namespace setup failure cleans every created resource in reverse order', a
   const count = commands.length
   await manager.cleanup()
   t.is(commands.length, count)
+})
+
+test('namespace cleanup attempts every action and rejects if any action fails', async (t) => {
+  const layout = createNamespaceLayout({ suffix: 'clean1', subnetId: 79, portBase: 48_500 })
+  const commands = []
+  const failures = new Set()
+  const manager = createNamespaceManager({
+    layout,
+    execute: executeWithInterfaceIndexes(commands, failures)
+  })
+  await manager.setup()
+  failures.add('ip link delete ph7clean1')
+  failures.add('ip netns delete prsgclean1')
+  await t.exception(manager.cleanup(), /namespace cleanup failed/)
+  t.ok(commands.some((value) => command(value) === 'ip link delete pbclean1'))
+  const count = commands.length
+  await manager.cleanup()
+  t.is(
+    commands.length,
+    count,
+    'failed cleanup is still idempotent after all actions were attempted'
+  )
 })
 
 test('namespace launches each role through ip netns exec without a shell', async (t) => {

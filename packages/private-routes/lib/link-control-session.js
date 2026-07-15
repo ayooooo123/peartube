@@ -33,6 +33,13 @@ const EVENTS = new WeakMap()
 const SESSIONS = new WeakMap()
 const CIRCUIT_DIRECTION_CAPABILITIES = new WeakMap()
 const CIRCUIT_TEARDOWNS = new WeakMap()
+const DESTROY_REASON_NAMES = Object.freeze({
+  [CIRCUIT_DESTROY_REASON.REQUESTED]: 'REQUESTED',
+  [CIRCUIT_DESTROY_REASON.EXPIRED]: 'EXPIRED',
+  [CIRCUIT_DESTROY_REASON.REVOKED]: 'REVOKED',
+  [CIRCUIT_DESTROY_REASON.TRANSPORT_LOST]: 'TRANSPORT_LOST',
+  [CIRCUIT_DESTROY_REASON.ACK_TIMEOUT]: 'ACK_TIMEOUT'
+})
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -324,6 +331,15 @@ function clearStreams(state) {
   state.pendingBytes = 0
 }
 
+function settleDestroy(state, success) {
+  if (!state.destroyPromise || state.destroySettled) return
+  state.destroySettled = true
+  if (success) state.resolveDestroy(true)
+  else state.rejectDestroy(unavailable())
+  state.resolveDestroy = null
+  state.rejectDestroy = null
+}
+
 function destroyConsumer(consumer) {
   const state = CONSUMERS.get(consumer)
   if (!state || state.destroyed) return
@@ -342,6 +358,7 @@ function closeState(state, reason = 'ROUTE_UNAVAILABLE') {
   if (state.closed) return false
   state.closed = true
   state.reason = reason
+  if (!state.peerDestroyed) settleDestroy(state, false)
 
   try {
     state.cancelPending()
@@ -362,6 +379,7 @@ function closeState(state, reason = 'ROUTE_UNAVAILABLE') {
   clearStreams(state)
   for (const record of state.sendRecords) {
     record.active = false
+    if (record.reject) record.reject(unavailable())
     clear(record.payload)
     record.payload = null
   }
@@ -422,7 +440,7 @@ function scheduleLiveness(state) {
   armTimer(state, 'livenessTimer', Math.max(0, dueAt - current), () => runLiveness(state))
 }
 
-function sendPayload(state, payload) {
+function sendPayload(state, payload, wait = false) {
   if (state.closed) {
     clear(payload)
     throw unavailable()
@@ -432,7 +450,15 @@ function sendPayload(state, payload) {
     closeState(state, 'CIRCUIT_LIMIT')
     throw unavailable()
   }
-  const record = { payload, active: true }
+  let resolve = null
+  let reject = null
+  const completion = wait
+    ? new Promise((res, rej) => {
+        resolve = res
+        reject = rej
+      })
+    : null
+  const record = { payload, active: true, resolve, reject }
   state.sendRecords.add(record)
   let sending
   try {
@@ -444,6 +470,15 @@ function sendPayload(state, payload) {
     closeState(state)
     throw unavailable()
   }
+  if (sending === state.destroyPromise) {
+    state.sendRecords.delete(record)
+    record.active = false
+    clear(record.payload)
+    record.payload = null
+    if (record.resolve) record.resolve(false)
+    closeState(state)
+    throw unavailable()
+  }
   Promise.resolve(sending).then(
     (sent) => {
       if (!record.active) return
@@ -451,7 +486,12 @@ function sendPayload(state, payload) {
       state.sendRecords.delete(record)
       clear(record.payload)
       record.payload = null
-      if (sent !== true && !state.closed) closeState(state)
+      if (sent === true) {
+        if (record.resolve) record.resolve(true)
+      } else {
+        if (record.reject) record.reject(unavailable())
+        if (!state.closed) closeState(state)
+      }
     },
     () => {
       if (!record.active) return
@@ -459,13 +499,14 @@ function sendPayload(state, payload) {
       state.sendRecords.delete(record)
       clear(record.payload)
       record.payload = null
+      if (record.reject) record.reject(unavailable())
       if (!state.closed) closeState(state)
     }
   )
-  return true
+  return completion || true
 }
 
-function sendLink(state, value) {
+function sendLink(state, value, wait = false) {
   let payload = null
   try {
     payload = state.mux.encodeLink(value, {
@@ -473,7 +514,7 @@ function sendLink(state, value) {
       direction: value.direction,
       circuitId: state.circuitId
     })
-    return sendPayload(state, payload)
+    return sendPayload(state, payload, wait)
   } catch {
     clear(payload)
     closeState(state)
@@ -578,6 +619,12 @@ function acknowledge(state, message) {
 }
 
 function receiveLink(state, message) {
+  if (message.kind === LINK_CONTROL_KIND.CIRCUIT_DESTROY) {
+    state.peerDestroyed = true
+    settleDestroy(state, true)
+    closeState(state, DESTROY_REASON_NAMES[message.reason])
+    return true
+  }
   if (message.kind === LINK_CONTROL_KIND.LINK_PING) {
     return sendLink(state, {
       version: PROTOCOL_VERSION,
@@ -745,7 +792,12 @@ export class LinkControlSession {
       pendingStreams: 0,
       pendingBytes: 0,
       closed: false,
-      reason: null
+      reason: null,
+      destroyPromise: null,
+      destroySettled: false,
+      resolveDestroy: null,
+      rejectDestroy: null,
+      peerDestroyed: false
     }
     authority.session = this
     SESSIONS.set(this, state)
@@ -774,6 +826,48 @@ export class LinkControlSession {
 
   get pendingSends() {
     return SESSIONS.get(this).sendRecords.size
+  }
+
+  destroy(reason = CIRCUIT_DESTROY_REASON.REQUESTED) {
+    const state = SESSIONS.get(this)
+    if (!Object.hasOwn(DESTROY_REASON_NAMES, reason)) return Promise.reject(unavailable())
+    if (state.destroyPromise) return state.destroyPromise
+    if (state.closed) return Promise.resolve(true)
+    state.destroyPromise = new Promise((resolve, reject) => {
+      state.resolveDestroy = resolve
+      state.rejectDestroy = reject
+    })
+    let sending
+    try {
+      sending = sendLink(
+        state,
+        {
+          version: PROTOCOL_VERSION,
+          kind: LINK_CONTROL_KIND.CIRCUIT_DESTROY,
+          flags: 0,
+          direction: state.heartbeatDirection,
+          circuitId: state.circuitId,
+          generation: 0n,
+          reason
+        },
+        true
+      )
+    } catch {
+      closeState(state, DESTROY_REASON_NAMES[reason])
+      return state.destroyPromise
+    }
+    Promise.resolve(sending).then(
+      () => {
+        settleDestroy(state, true)
+        closeState(state, DESTROY_REASON_NAMES[reason])
+      },
+      () => {
+        if (state.peerDestroyed) settleDestroy(state, true)
+        else settleDestroy(state, false)
+        closeState(state, DESTROY_REASON_NAMES[reason])
+      }
+    )
+    return state.destroyPromise
   }
 
   trackStream(direction, generation, counter, bytes) {

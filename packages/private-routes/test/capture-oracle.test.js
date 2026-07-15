@@ -121,10 +121,10 @@ function ethernet(network, etherType, vlan = null) {
   return result
 }
 
-function linuxCookedV2(network, protocol) {
+function linuxCookedV2(network, protocol, interfaceIndex = 2) {
   const result = b4a.alloc(20 + network.byteLength)
   result.writeUInt16BE(protocol, 0)
-  result.writeUInt32BE(2, 4)
+  result.writeUInt32BE(interfaceIndex, 4)
   result.writeUInt16BE(1, 8)
   result[11] = 6
   b4a.alloc(6, 0x22).copy(result, 12)
@@ -166,18 +166,21 @@ function roles() {
     result[ROLE_ORDER[index]] = Object.freeze({
       addresses: Object.freeze([`10.77.0.${index + 2}`, `fd00::${index + 2}`]),
       port: 48_100 + index,
-      route: true
+      route: true,
+      interfaceIndex: 100 + index
     })
   }
   result.decoy = Object.freeze({
     addresses: Object.freeze(['10.77.0.9', 'fd00::9']),
     port: 49_999,
-    route: false
+    route: false,
+    interfaceIndex: 107
   })
   result.auditor = Object.freeze({
     addresses: Object.freeze(['10.77.0.10', 'fd00::10']),
     port: 48_250,
-    route: false
+    route: false,
+    interfaceIndex: 108
   })
   return Object.freeze(result)
 }
@@ -222,9 +225,26 @@ function routePacket(source, destination, options = {}) {
   )
 }
 
+function managedPacket(source, destination, options = {}) {
+  const packet = routePacket(source, destination, options)
+  const interfaceRole = options.interfaceRole || source
+  const interfaceIndex =
+    options.interfaceIndex === undefined
+      ? ROLES[interfaceRole].interfaceIndex
+      : options.interfaceIndex
+  return record(
+    linuxCookedV2(packet.bytes.subarray(14), packet.bytes.readUInt16BE(12), interfaceIndex),
+    packet.timestampNs
+  )
+}
+
+function managedCapture(records) {
+  return parsePcap(pcap(records, { linkType: 276 }))
+}
+
 function validRecords() {
   return REQUIRED_EDGES.map(([source, destination], index) =>
-    routePacket(source, destination, {
+    managedPacket(source, destination, {
       timestampNs: 10n * NS_PER_SECOND + BigInt(index) * 1_000n
     })
   )
@@ -233,7 +253,7 @@ function validRecords() {
 function failure(t, records, pattern, matrix = MATRIX) {
   let error = null
   try {
-    auditPrivateRouteCapture(parsePcap(pcap(records)), matrix)
+    auditPrivateRouteCapture(managedCapture(records), matrix)
   } catch (cause) {
     error = cause
   }
@@ -248,7 +268,7 @@ function sentinelPacket(kind, timestampNs) {
   const payload = b4a.alloc(32, kind === 'start' ? 0xa1 : 0xa2)
   const transport = udp(ROLES.decoy.port, ROLES.auditor.port, payload.byteLength)
   payload.copy(transport, 8)
-  return routePacket('decoy', 'auditor', { transport, timestampNs })
+  return managedPacket('decoy', 'auditor', { transport, timestampNs })
 }
 
 const SENTINEL_MATRIX = Object.freeze({
@@ -279,32 +299,32 @@ test('negative-control preflight capture proves the exact source-to-decoy capabi
   const payload = b4a.alloc(32, 0xa7)
   const transport = udp(48_150, ROLES.decoy.port, payload.byteLength)
   payload.copy(transport, 8)
-  const capture = parsePcap(
-    pcap([
-      routePacket('source', 'decoy', {
-        sourcePort: 48_150,
-        transport,
-        timestampNs: 10n * NS_PER_SECOND
-      })
-    ])
-  )
+  const capture = managedCapture([
+    managedPacket('source', 'decoy', {
+      sourcePort: 48_150,
+      transport,
+      timestampNs: 10n * NS_PER_SECOND
+    })
+  ])
   t.alike(
     auditNegativeControlCapture(capture, {
       source: ROLES.source.addresses[0],
       sourcePort: 48_150,
       destination: ROLES.decoy.addresses[0],
       destinationPort: ROLES.decoy.port,
+      sourceInterfaceIndex: ROLES.source.interfaceIndex,
       payload
     }),
     { packetIndex: 0 }
   )
   await t.exception.all(
     () =>
-      auditNegativeControlCapture(parsePcap(pcap([])), {
+      auditNegativeControlCapture(managedCapture([]), {
         source: ROLES.source.addresses[0],
         sourcePort: 48_150,
         destination: ROLES.decoy.addresses[0],
         destinationPort: ROLES.decoy.port,
+        sourceInterfaceIndex: ROLES.source.interfaceIndex,
         payload
       }),
     /negative-control packet is missing/
@@ -409,7 +429,7 @@ test('classic PCAP parser rejects unknown links, truncation, fragments, and malf
 })
 
 test('capture oracle accepts only a non-vacuous exact adjacent fixed-cell matrix', (t) => {
-  const result = auditPrivateRouteCapture(parsePcap(pcap(validRecords())), MATRIX)
+  const result = auditPrivateRouteCapture(managedCapture(validRecords()), MATRIX)
   t.alike(result, {
     packetCount: REQUIRED_EDGES.length,
     rolePacketCount: REQUIRED_EDGES.length,
@@ -425,48 +445,48 @@ test('capture oracle rejects empty and missing-edge captures', (t) => {
 test('capture oracle rejects every non-UDX role-originated packet', (t) => {
   failure(
     t,
-    [routePacket('source', 'safety-guard', { destinationPort: 53 })],
+    [managedPacket('source', 'safety-guard', { destinationPort: 53 })],
     /packet 0 source -> safety-guard: UDP port/
   )
   failure(
     t,
-    [routePacket('source', 'safety-guard', { protocol: 6 })],
+    [managedPacket('source', 'safety-guard', { protocol: 6 })],
     /packet 0 source -> safety-guard: protocol tcp/
   )
   failure(
     t,
-    [routePacket('source', 'safety-guard', { protocol: 1 })],
+    [managedPacket('source', 'safety-guard', { protocol: 1 })],
     /packet 0 source -> safety-guard: protocol icmp/
   )
   failure(
     t,
-    [routePacket('source', 'safety-guard', { destinationPort: 48_099 })],
+    [managedPacket('source', 'safety-guard', { destinationPort: 48_099 })],
     /packet 0 source -> safety-guard: UDP port/
   )
   failure(
     t,
-    [routePacket('source', 'safety-guard', { payloadLength: 1_199 })],
+    [managedPacket('source', 'safety-guard', { payloadLength: 1_199 })],
     /packet 0 source -> safety-guard: UDP payload length/
   )
   failure(
     t,
     [
-      routePacket('source', 'safety-guard', {
+      managedPacket('source', 'safety-guard', {
         sourceAddress: ROLES.source.addresses[1],
         destinationAddress: 'ff02::2',
         protocol: 58
       })
     ],
-    /packet 0 source -> external: protocol icmpv6/
+    /packet 0 source -> external: IPv6 traffic/
   )
 })
 
 test('capture oracle rejects decoy, external, direct, and endpoint-bypass edges', (t) => {
-  failure(t, [routePacket('source', 'decoy')], /packet 0 source -> decoy: forbidden edge/)
+  failure(t, [managedPacket('source', 'decoy')], /packet 0 source -> decoy: forbidden edge/)
   failure(
     t,
     [
-      routePacket('source', 'decoy', {
+      managedPacket('source', 'decoy', {
         destinationAddress: '203.0.113.20',
         destinationPort: 48_101
       })
@@ -475,30 +495,30 @@ test('capture oracle rejects decoy, external, direct, and endpoint-bypass edges'
   )
   failure(
     t,
-    [routePacket('source', 'destination')],
+    [managedPacket('source', 'destination')],
     /packet 0 source -> destination: forbidden edge/
   )
   failure(
     t,
-    [routePacket('source', 'private-entry')],
+    [managedPacket('source', 'private-entry')],
     /packet 0 source -> private-entry: source may contact only safety-guard/
   )
   failure(
     t,
-    [routePacket('destination', 'private-middle')],
+    [managedPacket('destination', 'private-middle')],
     /packet 0 destination -> private-middle: destination may contact only private-final/
   )
 })
 
 test('capture oracle rejects role traffic outside the measured phase', (t) => {
   const afterClose = validRecords()
-  afterClose[afterClose.length - 1] = routePacket('destination', 'private-final', {
+  afterClose[afterClose.length - 1] = managedPacket('destination', 'private-final', {
     timestampNs: 21n * NS_PER_SECOND
   })
   failure(t, afterClose, /packet 11 destination -> private-final: after closed phase/)
 
   const beforeStart = validRecords()
-  beforeStart[0] = routePacket('source', 'safety-guard', {
+  beforeStart[0] = managedPacket('source', 'safety-guard', {
     timestampNs: 8n * NS_PER_SECOND
   })
   failure(t, beforeStart, /packet 0 source -> safety-guard: before capture phase/)
@@ -510,7 +530,7 @@ test('capture oracle requires ordered flushed sentinels aligned to coordinator t
     ...validRecords(),
     sentinelPacket('stop', 29_500_000_000n)
   ]
-  const result = auditPrivateRouteCapture(parsePcap(pcap(records)), SENTINEL_MATRIX)
+  const result = auditPrivateRouteCapture(managedCapture(records), SENTINEL_MATRIX)
   t.alike(result.sentinels, { start: 0, stop: 13 })
 
   failure(t, records.slice(1), /capture start sentinel is missing/, SENTINEL_MATRIX)
@@ -524,4 +544,73 @@ test('capture oracle requires ordered flushed sentinels aligned to coordinator t
   const outsideWindow = [...records]
   outsideWindow[0] = sentinelPacket('start', 8_500_000_000n)
   failure(t, outsideWindow, /capture start sentinel is outside coordinator window/, SENTINEL_MATRIX)
+})
+
+test('capture oracle attributes a managed packet to its SLL2 ingress interface, not claimed IP', (t) => {
+  failure(
+    t,
+    [managedPacket('private-final', 'private-middle', { interfaceRole: 'source' })],
+    /packet 0 source -> private-middle: claimed source does not match ingress role/
+  )
+})
+
+test('capture oracle rejects unknown-address IPv6 ingress on a managed route interface', (t) => {
+  failure(
+    t,
+    [
+      managedPacket('source', 'safety-guard', {
+        sourceAddress: 'fd42::99',
+        destinationAddress: 'ff02::2',
+        protocol: 58
+      })
+    ],
+    /packet 0 source -> external: IPv6 traffic/
+  )
+})
+
+test('capture oracle ignores packets on non-managed host interfaces even with a claimed role IP', (t) => {
+  const result = auditPrivateRouteCapture(
+    managedCapture([
+      ...validRecords(),
+      managedPacket('source', 'destination', { interfaceIndex: 999 })
+    ]),
+    MATRIX
+  )
+  t.is(result.rolePacketCount, REQUIRED_EDGES.length)
+})
+
+test('capture oracle requires sentinels on the expected auxiliary ingress interface', (t) => {
+  const payload = b4a.alloc(32, 0xa1)
+  const transport = udp(ROLES.decoy.port, ROLES.auditor.port, payload.byteLength)
+  payload.copy(transport, 8)
+  const records = [
+    managedPacket('decoy', 'auditor', {
+      interfaceRole: 'source',
+      transport,
+      timestampNs: 9_500_000_000n
+    }),
+    ...validRecords(),
+    sentinelPacket('stop', 29_500_000_000n)
+  ]
+  failure(t, records, /capture start sentinel is missing/, SENTINEL_MATRIX)
+
+  const ipv6Records = [
+    managedPacket('decoy', 'auditor', {
+      sourceAddress: ROLES.decoy.addresses[1],
+      destinationAddress: ROLES.auditor.addresses[1],
+      transport,
+      timestampNs: 9_500_000_000n
+    }),
+    ...validRecords(),
+    sentinelPacket('stop', 29_500_000_000n)
+  ]
+  failure(t, ipv6Records, /capture start sentinel is missing/, SENTINEL_MATRIX)
+})
+
+test('capture oracle rejects non-sentinel traffic on a managed auxiliary ingress interface', (t) => {
+  failure(
+    t,
+    [...validRecords(), managedPacket('decoy', 'source')],
+    /packet 12 decoy -> source: unexpected auxiliary traffic/
+  )
 })

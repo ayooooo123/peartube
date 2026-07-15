@@ -82,14 +82,18 @@ remain atomic, bounded, unordered within their replay window, and best effort.
 UDX send completion does not establish peer health. After 500 ms without qualifying authenticated
 inbound traffic, a link sends an authenticated ping. At 1,500 ms it closes if no fresh qualifying
 cell arrived. A valid replay cannot refresh liveness. Link failure tombstones the link, rejects
-queued sends and requests, destroys affected route state on surviving segments, and never requests
-a direct-network fallback.
+queued sends and requests, and sends a fixed-size authenticated link-namespace `CIRCUIT_DESTROY`
+across every surviving adjacent segment before local closure. Reentrant or simultaneous local and
+peer destroy operations converge on one terminal operation. Affected route state reaches zero
+without coordinator intervention and never requests a direct-network fallback.
 
-The portable runner launches seven independent processes, communicates through a bounded canonical
-stdio protocol, and requires zero surviving processes, sockets, circuits, queues, and owned secrets
-after teardown. The Linux namespace gate additionally assigns one namespace to each role, plus
-isolated decoy and auditor namespaces, and validates the resulting PCAP against the exact six-edge
-bilateral graph.
+The portable runner launches seven independent processes and communicates through a bounded
+canonical stdio protocol. `start` opens each transport and registers its private/destination actor;
+the coordinator waits for all seven `prepared` events before sending `activate`, so source
+registration cannot race an actor that has not been installed. Teardown requires zero surviving
+processes, sockets, circuits, queues, and owned secrets. The Linux namespace gate additionally
+assigns one namespace to each role, plus isolated decoy and auditor namespaces, and validates the
+resulting interface-attributed PCAP against the exact six-edge bilateral graph.
 
 ## Vocabulary
 

@@ -21,11 +21,15 @@ import {
 } from './topology-grant.js'
 import {
   UDX_LINK_CLOSE,
+  UDX_LINK_DESTROY_CIRCUIT,
   UDX_LINK_OPEN,
   UDX_LINK_STATS,
   UDX_LINK_STREAM_PROGRESS,
+  UDX_ENDPOINT_RESERVATION_STATS,
+  TEST_ONLY_UDX_STREAM_COUNTER,
   UDX_SEND_ACTOR_CONTROL,
   UDX_SEND_CELL,
+  UDX_TRY_SEND_CELL,
   UDX_SEND_DISPATCH,
   UdxAdapter
 } from './udx-adapter.js'
@@ -468,6 +472,69 @@ function pump(state) {
   }
 }
 
+function reservePacket(state, authority) {
+  if (
+    state.reservedPackets >= state.maxQueuedPackets ||
+    state.reservedBytes + BOOTSTRAP_SIZE > state.maxQueuedBytes
+  ) {
+    return null
+  }
+  state.reservedPackets++
+  state.reservedBytes += BOOTSTRAP_SIZE
+  return { state, authority, active: true }
+}
+
+function releaseReservation(reservation) {
+  if (!reservation || !reservation.active) return
+  reservation.active = false
+  reservation.state.reservedPackets--
+  reservation.state.reservedBytes -= BOOTSTRAP_SIZE
+}
+
+function sendReserved(state, authority, packet, reservation) {
+  if (
+    !reservation ||
+    !reservation.active ||
+    reservation.state !== state ||
+    reservation.authority !== authority ||
+    state.closing ||
+    !validateRecord(state, authority)
+  ) {
+    releaseReservation(reservation)
+    throw unavailable()
+  }
+  let record
+  let sending
+  try {
+    const owned = b4a.from(packet)
+    sending = new Promise((resolve, reject) => {
+      record = {
+        packet: owned,
+        peer: authority.peer,
+        authority,
+        signal: null,
+        removeAbort: null,
+        onDispatch: null,
+        abort: null,
+        admitted: true,
+        resolve,
+        reject,
+        settled: false,
+        cancelled: false
+      }
+    })
+    reservation.active = false
+    state.queue.push(record)
+    state.queuedBytes += BOOTSTRAP_SIZE
+    void sending.catch(() => {})
+    pump(state)
+    return sending
+  } catch (err) {
+    releaseReservation(reservation)
+    throw err
+  }
+}
+
 function releaseReceive(state, record) {
   if (!record.active) return
   record.active = false
@@ -543,6 +610,82 @@ function receive(state, packet, from) {
     Promise.resolve(result).then(settleOwnership, settleOwnership)
   } catch {
     settleOwnership()
+  }
+}
+
+function trySendEstablishedCell(endpoint, handle, value) {
+  const state = ENDPOINTS.get(endpoint)
+  const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
+  if (
+    state.closing ||
+    !validateRecord(state, record) ||
+    record.phase !== 'OPEN' ||
+    !record.linkControl ||
+    !isObject(value)
+  ) {
+    throw PrivateRouteError.UNAUTHORIZED()
+  }
+  const cellClass = value.class
+  const direction = value.direction
+  const generation = value.generation
+  const payload = value.payload
+  if (
+    (cellClass !== CELL_CLASS.STREAM && cellClass !== CELL_CLASS.DATAGRAM) ||
+    direction !== record.heartbeatDirection ||
+    typeof generation !== 'bigint' ||
+    generation < 1n ||
+    generation > MAX_UINT64 ||
+    !b4a.isBuffer(payload) ||
+    payload.byteLength >
+      (cellClass === CELL_CLASS.STREAM ? MAX_STREAM_PAYLOAD : MAX_DATAGRAM_PAYLOAD)
+  ) {
+    throw PrivateRouteError.INVALID_ROUTE()
+  }
+  const reservation = reservePacket(state, record)
+  if (!reservation) return null
+  let context = null
+  let logical = null
+  let logicalKey = null
+  let logicalState = null
+  let packet = null
+  let framed = null
+  try {
+    context = record.linkState.contexts[cellClass].tx
+    if (cellClass === CELL_CLASS.STREAM) {
+      logicalKey = `${direction}:${generation}`
+      logicalState = record.streamCounters.get(logicalKey) || { next: 0n, closed: false }
+      if (logicalState.closed) throw PrivateRouteError.COUNTER_EXHAUSTED()
+      logical = logicalState.next
+    }
+    framed = frameEstablished(cellClass, generation, logical, payload)
+    packet = record.cellCodec.seal({
+      key: context.key,
+      noncePrefix: context.noncePrefix,
+      senderCounter: context.counter,
+      class: cellClass,
+      direction,
+      epoch: record.linkState.epoch,
+      circuitId: record.linkState.circuitId,
+      payload: framed
+    })
+    if (cellClass === CELL_CLASS.STREAM) {
+      record.linkControl.trackStream(direction, generation, logical, payload.byteLength)
+      if (logical === MAX_UINT64) logicalState.closed = true
+      else logicalState.next = logical + 1n
+      record.streamCounters.set(logicalKey, logicalState)
+    }
+    const sending = sendReserved(state, record, packet, reservation).catch((err) => {
+      if (record.linkControl) record.linkControl.close()
+      throw err
+    })
+    return Object.freeze({ sending })
+  } catch (err) {
+    releaseReservation(reservation)
+    if (record.linkControl) record.linkControl.close()
+    throw err instanceof PrivateRouteError ? err : unavailable()
+  } finally {
+    clear(packet)
+    clear(framed)
   }
 }
 
@@ -637,6 +780,32 @@ export class UdxCellEndpoint {
 
   get inFlightSends() {
     return ENDPOINTS.get(this).inFlight
+  }
+
+  [UDX_ENDPOINT_RESERVATION_STATS]() {
+    const state = ENDPOINTS.get(this)
+    return Object.freeze({ packets: state.reservedPackets, bytes: state.reservedBytes })
+  }
+
+  [TEST_ONLY_UDX_STREAM_COUNTER](handle, direction, generation, next, closed) {
+    const state = ENDPOINTS.get(this)
+    const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
+    if (
+      state.closing ||
+      !validateRecord(state, record) ||
+      record.phase !== 'OPEN' ||
+      direction !== record.heartbeatDirection ||
+      typeof generation !== 'bigint' ||
+      generation < 1n ||
+      generation > MAX_UINT64 ||
+      typeof next !== 'bigint' ||
+      next < 0n ||
+      next > MAX_UINT64 ||
+      typeof closed !== 'boolean'
+    ) {
+      throw PrivateRouteError.INVALID_ROUTE()
+    }
+    record.streamCounters.set(`${direction}:${generation}`, { next, closed })
   }
 
   async bind() {
@@ -888,76 +1057,31 @@ export class UdxCellEndpoint {
     if (record && record.endpoint === this) invalidateRecord(state, record)
   }
 
-  [UDX_SEND_CELL](handle, value) {
+  [UDX_LINK_DESTROY_CIRCUIT](handle, reason) {
     const state = ENDPOINTS.get(this)
     const record = isObject(handle) ? SEND_HANDLES.get(handle) : null
     if (
       state.closing ||
       !validateRecord(state, record) ||
       record.phase !== 'OPEN' ||
-      !record.linkControl ||
-      !isObject(value)
+      !record.linkControl
     ) {
       return Promise.reject(PrivateRouteError.UNAUTHORIZED())
     }
-    const cellClass = value.class
-    const direction = value.direction
-    const generation = value.generation
-    const payload = value.payload
-    if (
-      (cellClass !== CELL_CLASS.STREAM && cellClass !== CELL_CLASS.DATAGRAM) ||
-      direction !== record.heartbeatDirection ||
-      typeof generation !== 'bigint' ||
-      generation < 1n ||
-      generation > MAX_UINT64 ||
-      !b4a.isBuffer(payload) ||
-      payload.byteLength >
-        (cellClass === CELL_CLASS.STREAM ? MAX_STREAM_PAYLOAD : MAX_DATAGRAM_PAYLOAD)
-    ) {
-      return Promise.reject(PrivateRouteError.INVALID_ROUTE())
-    }
-    const context = record.linkState.contexts[cellClass].tx
-    let logical = null
-    let logicalKey = null
-    let logicalState = null
-    if (cellClass === CELL_CLASS.STREAM) {
-      logicalKey = `${direction}:${generation}`
-      logicalState = record.streamCounters.get(logicalKey) || { next: 0n, closed: false }
-      if (logicalState.closed) return Promise.reject(PrivateRouteError.COUNTER_EXHAUSTED())
-      logical = logicalState.next
-    }
-    let packet = null
-    let framed = null
+    return record.linkControl.destroy(reason)
+  }
+
+  [UDX_SEND_CELL](handle, value) {
     try {
-      framed = frameEstablished(cellClass, generation, logical, payload)
-      packet = record.cellCodec.seal({
-        key: context.key,
-        noncePrefix: context.noncePrefix,
-        senderCounter: context.counter,
-        class: cellClass,
-        direction,
-        epoch: record.linkState.epoch,
-        circuitId: record.linkState.circuitId,
-        payload: framed
-      })
-      if (cellClass === CELL_CLASS.STREAM) {
-        record.linkControl.trackStream(direction, generation, logical, payload.byteLength)
-        if (logical === MAX_UINT64) logicalState.closed = true
-        else logicalState.next = logical + 1n
-        record.streamCounters.set(logicalKey, logicalState)
-      }
-      const sending = this.send(handle, packet)
-      return sending.catch((err) => {
-        if (record.linkControl) record.linkControl.close()
-        throw err
-      })
+      const admitted = trySendEstablishedCell(this, handle, value)
+      return admitted ? admitted.sending : Promise.reject(PrivateRouteError.CIRCUIT_LIMIT())
     } catch (err) {
-      if (record.linkControl) record.linkControl.close()
       return Promise.reject(err instanceof PrivateRouteError ? err : unavailable())
-    } finally {
-      clear(packet)
-      clear(framed)
     }
+  }
+
+  [UDX_TRY_SEND_CELL](handle, value) {
+    return trySendEstablishedCell(this, handle, value)
   }
 
   [UDX_SEND_ACTOR_CONTROL](handle, fragment) {

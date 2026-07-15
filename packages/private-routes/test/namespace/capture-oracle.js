@@ -36,6 +36,7 @@ function validateMatrix(matrix) {
     invalidMatrix()
   }
   const addresses = new Map()
+  const interfaceRoles = new Map()
   const routeRoles = new Set()
   for (const [role, value] of Object.entries(matrix.roles)) {
     if (
@@ -45,11 +46,15 @@ function validateMatrix(matrix) {
       !Number.isSafeInteger(value.port) ||
       value.port < 1 ||
       value.port > 65_535 ||
-      typeof value.route !== 'boolean'
+      typeof value.route !== 'boolean' ||
+      !Number.isSafeInteger(value.interfaceIndex) ||
+      value.interfaceIndex < 1 ||
+      interfaceRoles.has(value.interfaceIndex)
     ) {
       invalidMatrix()
     }
     if (value.route) routeRoles.add(role)
+    interfaceRoles.set(value.interfaceIndex, role)
     for (const address of value.addresses) {
       if (typeof address !== 'string' || addresses.has(address)) invalidMatrix()
       addresses.set(address, role)
@@ -92,14 +97,16 @@ function validateMatrix(matrix) {
       sentinels[kind] = value
     }
   }
-  return { addresses, routeRoles, sentinels }
+  return { addresses, interfaceRoles, routeRoles, sentinels }
 }
 
-function findSentinel(capture, addresses, kind, expected) {
+function findSentinel(capture, addresses, interfaceRoles, kind, expected) {
   const matches = []
   for (const record of capture.records) {
     if (
-      record?.ip?.protocol === 'udp' &&
+      record?.ip?.version === 4 &&
+      record.ip.protocol === 'udp' &&
+      interfaceRoles.get(record?.linuxCooked?.interfaceIndex) === expected.source &&
       addresses.get(record.ip.source) === expected.source &&
       addresses.get(record.ip.destination) === expected.destination &&
       record.ip.sourcePort === expected.sourcePort &&
@@ -169,6 +176,8 @@ export function auditNegativeControlCapture(capture, expected) {
     !Number.isSafeInteger(expected.destinationPort) ||
     expected.destinationPort < 1 ||
     expected.destinationPort > 65_535 ||
+    !Number.isSafeInteger(expected.sourceInterfaceIndex) ||
+    expected.sourceInterfaceIndex < 1 ||
     !b4a.isBuffer(expected.payload) ||
     expected.payload.byteLength < 1 ||
     expected.payload.byteLength > 1_200
@@ -177,7 +186,9 @@ export function auditNegativeControlCapture(capture, expected) {
   }
   const matches = capture.records.filter(
     (record) =>
-      record?.ip?.protocol === 'udp' &&
+      record?.ip?.version === 4 &&
+      record.ip.protocol === 'udp' &&
+      record?.linuxCooked?.interfaceIndex === expected.sourceInterfaceIndex &&
       record.ip.source === expected.source &&
       record.ip.destination === expected.destination &&
       record.ip.sourcePort === expected.sourcePort &&
@@ -192,29 +203,41 @@ export function auditNegativeControlCapture(capture, expected) {
 
 export function auditPrivateRouteCapture(capture, matrix) {
   if (!capture || !Array.isArray(capture.records)) throw new Error('Malformed parsed capture')
-  const { addresses, routeRoles, sentinels } = validateMatrix(matrix)
+  const { addresses, interfaceRoles, routeRoles, sentinels } = validateMatrix(matrix)
   let sentinelResult = null
+  const sentinelIndexes = new Set()
   if (sentinels) {
-    const start = findSentinel(capture, addresses, 'start', sentinels.start)
-    const stop = findSentinel(capture, addresses, 'stop', sentinels.stop)
+    const start = findSentinel(capture, addresses, interfaceRoles, 'start', sentinels.start)
+    const stop = findSentinel(capture, addresses, interfaceRoles, 'stop', sentinels.stop)
     if (start.index >= stop.index || start.timestampNs >= stop.timestampNs) {
       throw new Error('capture sentinels are out of order')
     }
+    sentinelIndexes.add(start.index)
+    sentinelIndexes.add(stop.index)
     sentinelResult = Object.freeze({ start: start.index, stop: stop.index })
   }
   const observed = new Set()
   let rolePacketCount = 0
   for (const record of capture.records) {
-    if (!record || !record.ip) continue
-    const source = addresses.get(record.ip.source)
-    if (!source || !routeRoles.has(source)) continue
-    const destination = addresses.get(record.ip.destination) || 'external'
+    if (!record) continue
+    const source = interfaceRoles.get(record?.linuxCooked?.interfaceIndex)
+    if (!source) continue
+    const destination = record.ip ? addresses.get(record.ip.destination) || 'external' : 'external'
+    if (!routeRoles.has(source)) {
+      if (sentinelIndexes.has(record.index)) continue
+      fail(record, source, destination, 'unexpected auxiliary traffic')
+    }
     rolePacketCount++
+    if (!record.ip) fail(record, source, destination, 'unparsed network packet')
     if (record.timestampNs < matrix.phases.captureStartedAtNs) {
       fail(record, source, destination, 'before capture phase')
     }
     if (record.timestampNs > matrix.phases.closedAtNs) {
       fail(record, source, destination, 'after closed phase')
+    }
+    if (record.ip.version === 6) fail(record, source, destination, 'IPv6 traffic')
+    if (!matrix.roles[source].addresses.includes(record.ip.source)) {
+      fail(record, source, destination, 'claimed source does not match ingress role')
     }
     if (record.ip.protocol !== 'udp') {
       fail(record, source, destination, `protocol ${record.ip.protocol}`)

@@ -1,6 +1,9 @@
 import b4a from 'b4a'
 
-import { AsyncRouteControlSession } from './async-route-control-session.js'
+import {
+  AsyncRouteControlSession,
+  abortAsyncRouteControlSessionAfterTransportLoss
+} from './async-route-control-session.js'
 import { BootstrapEnvelopeCodec } from './bootstrap-envelope.js'
 import {
   createCompiledRouteDuplex,
@@ -20,6 +23,7 @@ import {
 } from './protocol.js'
 import { RemoteActorHost, forwardRemoteActorHost } from './remote-actor-host.js'
 import {
+  CIRCUIT_DESTROY_REASON,
   RemoteControlFragmentCodec,
   RemoteControlMux,
   createRemoteActorControlBoundary
@@ -30,7 +34,11 @@ import {
   mintCreatedRoutePayloadContext
 } from './route-payload.js'
 import { LinkDirectory, decodeTopologyGrant } from './topology-grant.js'
-import { UDX_SEND_ACTOR_CONTROL, UDX_SEND_CELL } from './udx-adapter.js'
+import {
+  UDX_LINK_DESTROY_CIRCUIT,
+  UDX_SEND_ACTOR_CONTROL,
+  UDX_TRY_SEND_CELL
+} from './udx-adapter.js'
 import { UdxCellEndpoint } from './udx-cell-endpoint.js'
 
 export const LIVE_ROUTE_CREATE_CONTROL = Symbol('live-route-create-control')
@@ -39,6 +47,7 @@ export const LIVE_ROUTE_REGISTER_ACTOR = Symbol('live-route-register-actor')
 export const LIVE_ROUTE_FORWARD_ACTOR = Symbol('live-route-forward-actor')
 export const LIVE_ROUTE_REVOKE_GRANT = Symbol('live-route-revoke-grant')
 export const LIVE_ROUTE_CLOSE_SOCKET = Symbol('live-route-close-socket')
+export const LIVE_ROUTE_FAIL_ROUTE = Symbol('live-route-fail-route')
 
 const ROLE_BINDINGS = Object.freeze({
   source: TOPOLOGY_ROLE.SOURCE,
@@ -166,6 +175,7 @@ export function createLiveRouteNode(roleProjection, adapters) {
   let bound = false
   let connecting = null
   let stopping = null
+  let failing = null
 
   const schedule = (callback, delay) => {
     let handle = null
@@ -182,6 +192,67 @@ export function createLiveRouteNode(roleProjection, adapters) {
     return runtime.cancel(handle)
   }
   const actorSchedule = (delay, callback) => schedule(callback, delay)
+
+  const destroyReason = (reason) => {
+    if (reason === 'ACK_TIMEOUT' || reason === CIRCUIT_DESTROY_REASON.ACK_TIMEOUT) {
+      return CIRCUIT_DESTROY_REASON.ACK_TIMEOUT
+    }
+    if (reason === 'REVOKED' || reason === CIRCUIT_DESTROY_REASON.REVOKED) {
+      return CIRCUIT_DESTROY_REASON.REVOKED
+    }
+    if (reason === 'EXPIRED' || reason === CIRCUIT_DESTROY_REASON.EXPIRED) {
+      return CIRCUIT_DESTROY_REASON.EXPIRED
+    }
+    return CIRCUIT_DESTROY_REASON.TRANSPORT_LOST
+  }
+
+  const failRoute = (failedHandle, reason = CIRCUIT_DESTROY_REASON.TRANSPORT_LOST) => {
+    if (failing) return failing
+    if (state === 'CLOSING' || state === 'CLOSED') return stopping || Promise.resolve(true)
+    let resolveFailure
+    let rejectFailure
+    failing = new Promise((resolve, reject) => {
+      resolveFailure = resolve
+      rejectFailure = reject
+    })
+    state = 'FAILED'
+    if (compiledDuplex) {
+      try {
+        failCompiledRouteDuplex(compiledDuplex)
+      } catch {}
+    }
+    emit()
+    const propagations = []
+    for (const control of controls) {
+      try {
+        propagations.push(abortAsyncRouteControlSessionAfterTransportLoss(control))
+      } catch {}
+    }
+    controls.clear()
+    for (const record of links) {
+      if (record.sendHandle === failedHandle) continue
+      try {
+        propagations.push(
+          endpoint[UDX_LINK_DESTROY_CIRCUIT](record.sendHandle, destroyReason(reason))
+        )
+      } catch {}
+    }
+    Promise.allSettled(propagations)
+      .then(() => node.stop())
+      .then(resolveFailure, rejectFailure)
+    return failing
+  }
+
+  const failActorControl = (failedHandle, error) => {
+    let limited = false
+    try {
+      limited = error && error.code === 'CIRCUIT_LIMIT'
+    } catch {}
+    void failRoute(
+      limited ? null : failedHandle,
+      limited ? CIRCUIT_DESTROY_REASON.ACK_TIMEOUT : CIRCUIT_DESTROY_REASON.TRANSPORT_LOST
+    )
+  }
 
   const initializeActorEndpoint = (record) => {
     const privateRole = projection.role.startsWith('private-')
@@ -211,13 +282,11 @@ export function createLiveRouteNode(roleProjection, adapters) {
           frames = sender.fragment(message, { messageId })
           for (const frame of frames) {
             const sending = endpoint[UDX_SEND_ACTOR_CONTROL](record.sendHandle, frame)
-            void sending.catch(() => {
-              if (state !== 'CLOSING' && state !== 'CLOSED') state = 'FAILED'
-              emit()
-            })
+            void sending.catch((err) => failActorControl(record.sendHandle, err))
           }
           return true
-        } catch {
+        } catch (err) {
+          failActorControl(record.sendHandle, err)
           return false
         } finally {
           if (messageId) b4a.fill(messageId, 0)
@@ -379,11 +448,11 @@ export function createLiveRouteNode(roleProjection, adapters) {
                   })
                   if (!event) return true
                   const receiving = incoming.actorEndpoint.host.receiveAuthenticated(event)
-                  void receiving.catch(() => {
-                    if (state !== 'CLOSING' && state !== 'CLOSED') state = 'FAILED'
-                    emit()
-                  })
+                  void receiving.catch((err) => failActorControl(null, err))
                   return true
+                } catch (err) {
+                  failActorControl(null, err)
+                  return false
                 } finally {
                   if (muxed) b4a.fill(muxed, 0)
                 }
@@ -393,11 +462,14 @@ export function createLiveRouteNode(roleProjection, adapters) {
                   record.sendHandle !== sendHandle && record.sendDirection === metadata.direction
               )
               if (!outgoing) return false
-              const sending = endpoint[UDX_SEND_ACTOR_CONTROL](outgoing.sendHandle, payload)
-              void sending.catch(() => {
-                if (state !== 'CLOSING' && state !== 'CLOSED') state = 'FAILED'
-                emit()
-              })
+              let sending
+              try {
+                sending = endpoint[UDX_SEND_ACTOR_CONTROL](outgoing.sendHandle, payload)
+              } catch (err) {
+                failActorControl(outgoing.sendHandle, err)
+                return false
+              }
+              void sending.catch((err) => failActorControl(outgoing.sendHandle, err))
               return true
             }
             if (
@@ -422,26 +494,28 @@ export function createLiveRouteNode(roleProjection, adapters) {
                 record.sendHandle !== sendHandle && record.sendDirection === metadata.direction
             )
             if (!outgoing) return false
-            const sending = endpoint[UDX_SEND_CELL](outgoing.sendHandle, {
-              class: metadata.class,
-              direction: metadata.direction,
-              generation: metadata.generation,
-              payload
-            })
-            void sending.catch(() => {
-              if (state !== 'CLOSING' && state !== 'CLOSED') state = 'FAILED'
-              emit()
+            let admitted = null
+            try {
+              admitted = endpoint[UDX_TRY_SEND_CELL](outgoing.sendHandle, {
+                class: metadata.class,
+                direction: metadata.direction,
+                generation: metadata.generation,
+                payload
+              })
+            } catch {
+              return false
+            }
+            if (!admitted) {
+              void failRoute(outgoing.sendHandle, CIRCUIT_DESTROY_REASON.ACK_TIMEOUT)
+              return false
+            }
+            void admitted.sending.catch(() => {
+              void failRoute(outgoing.sendHandle, CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
             })
             return true
           },
-          onLinkFailure() {
-            if (compiledDuplex) {
-              try {
-                failCompiledRouteDuplex(compiledDuplex)
-              } catch {}
-            }
-            if (state !== 'CLOSING' && state !== 'CLOSED') state = 'FAILED'
-            emit()
+          onLinkFailure(handle, _direction, reason) {
+            void failRoute(handle, reason)
           }
         })
         await endpoint.bind()
@@ -637,6 +711,9 @@ export function createLiveRouteNode(roleProjection, adapters) {
       state = 'FAILED'
       emit()
       return true
+    },
+    [LIVE_ROUTE_FAIL_ROUTE](reason = CIRCUIT_DESTROY_REASON.TRANSPORT_LOST) {
+      return failRoute(null, reason)
     },
     async [LIVE_ROUTE_CLOSE_SOCKET]() {
       if (state !== 'OPEN' || !endpoint) throw stateError()

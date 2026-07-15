@@ -282,15 +282,15 @@ leaves 1,145 bytes. An actor fragment therefore uses the existing 22-byte fragme
 most 1,123 data bytes. A link-control message is never fragmented and has this 44-byte body after
 the namespace byte:
 
-| Bytes | Field                                           |
-| ----: | ----------------------------------------------- |
-|     1 | protocol version (`0`)                          |
-|     1 | kind: `LINK_PING`, `LINK_PONG`, or `STREAM_ACK` |
-|     1 | flags (`0`)                                     |
-|     1 | direction                                       |
-|    16 | circuit ID                                      |
-|     8 | route generation                                |
-|    16 | kind-specific value                             |
+| Bytes | Field                                                              |
+| ----: | ------------------------------------------------------------------ |
+|     1 | protocol version (`0`)                                             |
+|     1 | kind: `LINK_PING`, `LINK_PONG`, `STREAM_ACK`, or `CIRCUIT_DESTROY` |
+|     1 | flags (`0`)                                                        |
+|     1 | direction                                                          |
+|    16 | circuit ID                                                         |
+|     8 | route generation                                                   |
+|    16 | kind-specific value                                                |
 
 The direction and circuit ID must equal the surrounding authenticated `CellCodec` header. A link
 is circuit-scoped: `LinkCreate` allocates its circuit ID before any actor circuit is installed, and
@@ -298,9 +298,13 @@ the link is not shared by another circuit. `LINK_PING` and `LINK_PONG` require g
 carry the same random 16-byte challenge. `STREAM_ACK` travels opposite the acknowledged data
 direction and requires an open nonzero generation; its value is the highest contiguous
 authenticated STREAM cell counter from that opposite direction as an unsigned 64-bit integer
-followed by eight zero bytes. Link-control messages are consumed by `LinkControlSession` and never
-dispatched to `RemoteActorHost`. Destroying the link's final circuit closes that link and stops its
-liveness timer atomically.
+followed by eight zero bytes. Link-namespace `CIRCUIT_DESTROY` requires generation zero and encodes
+one allowlisted destroy-reason byte followed by 15 zero bytes. A local destroy publishes one
+single-flight promise before invoking transport callbacks, waits until the authenticated destroy
+cell is owned by the native send, and then closes; a simultaneous authenticated peer destroy
+converges on the same successful terminal state. Link-control messages are consumed by
+`LinkControlSession` and never dispatched to `RemoteActorHost`. Destroying the link's final circuit
+closes that link and stops its liveness timer atomically.
 
 Stream acknowledgement is hop-by-hop, not an end-to-end delivery receipt. Each link direction and
 route generation has an independent STREAM `CellCodec` counter space. A relay terminates the
@@ -364,13 +368,17 @@ stdio, and waits for structured readiness and teardown records.
 
 The runner uses a small injected `ProcessControlChannel`, not ambient Node-only process behavior.
 The wire framing is a four-byte big-endian length followed by canonical UTF-8 JSON, capped at 64
-KiB. Commands are exactly `configure`, `start`, `fault`, `revoke`, `snapshot`, and `stop`; events
-are exactly `configured`, `ready`, `snapshot`, `closed`, and `error`. Configuration is accepted
-once, before start. Unknown keys, duplicate configuration, malformed framing, commands after
-`stop`, and non-canonical values fail the process. The one terminal `closed` event remains required
-after `stop`. Protocol frames use stdout only; redacted diagnostics use stderr only. The Node
-adapter uses `process.stdin`/`stdout`; the Bare adapter imports the
-lock-pinned `bare-process` module and exposes the same byte-channel interface.
+KiB. Commands are exactly `configure`, `start`, `activate`, `fault`, `revoke`, `snapshot`, and
+`stop`; events are exactly `configured`, `prepared`, `ready`, `retry`, `snapshot`, `closed`, and
+`error`.
+Configuration is accepted once, before start. `start` opens the transport and registers every
+private/destination actor, then emits `prepared`; the coordinator waits for all seven `prepared`
+events before sending `activate`, so source registration cannot race actor availability. Unknown
+keys, duplicate configuration, malformed framing, commands after `stop`, and non-canonical values
+fail the process. The one terminal `closed` event remains required after `stop`. Protocol frames
+use stdout only; redacted diagnostics use stderr only. The Node adapter uses
+`process.stdin`/`stdout`; the Bare adapter imports the lock-pinned `bare-process` module and exposes
+the same byte-channel interface.
 
 The coordinator may see complete synthetic topology because it is the test auditor. Role processes
 emit redacted events containing role, state, counters, synthetic link fingerprints, and resource

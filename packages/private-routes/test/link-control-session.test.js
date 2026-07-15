@@ -1307,6 +1307,122 @@ test('relay and endpoint send ACK only after the whole STREAM payload enters the
   ack.message.circuitId.fill(0)
 })
 
+test('authenticated link CIRCUIT_DESTROY crosses a surviving segment before local teardown', async (t) => {
+  let release
+  const f = fixture({
+    sendControl(payload) {
+      f.sent.push(b4a.from(payload))
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+  })
+  const destroying = f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+  t.is(f.sent.length, 1)
+  const decoded = f.mux.decode(f.sent[0], {
+    class: CELL_CLASS.CONTROL,
+    direction: DIRECTION.FORWARD,
+    circuitId: f.circuitId
+  })
+  t.is(decoded.message.kind, LINK_CONTROL_KIND.CIRCUIT_DESTROY)
+  t.is(decoded.message.reason, CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+  t.is(f.session.closed, false, 'surviving link stays live until destroy is dispatched')
+  release(true)
+  t.is(await destroying, true)
+  t.is(f.session.closed, true)
+  decoded.message.circuitId.fill(0)
+
+  const remote = fixture({ circuitByte: 0x67 })
+  t.is(
+    remote.receiveLink({
+      version: PROTOCOL_VERSION,
+      kind: LINK_CONTROL_KIND.CIRCUIT_DESTROY,
+      flags: 0,
+      direction: DIRECTION.FORWARD,
+      circuitId: remote.circuitId,
+      generation: 0n,
+      reason: CIRCUIT_DESTROY_REASON.TRANSPORT_LOST
+    }),
+    true
+  )
+  t.is(remote.session.closed, true, 'authenticated remote destroy clears local link state')
+  t.ok(
+    remote.order.includes(`notify-${DIRECTION.FORWARD}-TRANSPORT_LOST`),
+    'remote destroy notifies the local route in the authenticated direction'
+  )
+})
+
+test('link destroy publishes one stable promise before reentrant send callbacks', async (t) => {
+  let release
+  let repeated = null
+  const f = fixture({
+    sendControl(payload) {
+      f.sent.push(b4a.from(payload))
+      repeated = f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+  })
+  const destroying = f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+  t.is(repeated, destroying)
+  t.is(f.sent.length, 1)
+  release(true)
+  t.is(await destroying, true)
+})
+
+test('link destroy rejects a send result that recursively waits on itself', async (t) => {
+  const f = fixture({
+    sendControl(payload) {
+      f.sent.push(b4a.from(payload))
+      return f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+    }
+  })
+  const destroying = f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+  const outcome = await Promise.race([
+    destroying.then(
+      () => 'resolved',
+      (err) => err && err.code
+    ),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 100))
+  ])
+  t.is(outcome, 'ROUTE_UNAVAILABLE')
+  t.is(f.session.closed, true)
+  t.is(f.session.pendingSends, 0)
+  t.is(f.sent.length, 1)
+  t.is(f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST), destroying)
+})
+
+test('authenticated peer destroy completes an in-flight local destroy', async (t) => {
+  let release
+  const f = fixture({
+    sendControl(payload) {
+      f.sent.push(b4a.from(payload))
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+  })
+  const destroying = f.session.destroy(CIRCUIT_DESTROY_REASON.TRANSPORT_LOST)
+  t.is(
+    f.receiveLink({
+      version: PROTOCOL_VERSION,
+      kind: LINK_CONTROL_KIND.CIRCUIT_DESTROY,
+      flags: 0,
+      direction: DIRECTION.REVERSE,
+      circuitId: f.circuitId,
+      generation: 0n,
+      reason: CIRCUIT_DESTROY_REASON.TRANSPORT_LOST
+    }),
+    true
+  )
+  t.is(await destroying, true)
+  release(false)
+  await Promise.resolve()
+  t.is(f.session.closed, true)
+  t.is(f.sent.length, 1)
+})
+
 test('authenticated inbound counter spaces are independent per direction and generation', (t) => {
   const f = fixture()
   for (const [direction, generation] of [

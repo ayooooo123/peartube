@@ -6,8 +6,10 @@ import b4a from 'b4a'
 import {
   calibrateNegativeControl,
   assertRelayFailure,
+  cleanupNamespaceResources,
   createNamespaceFixture,
   createTcpdumpCapture,
+  finalizeNamespaceGate,
   formatNamespaceAuditSummary,
   tcpdumpLaunch
 } from './run.js'
@@ -28,8 +30,8 @@ class FakeChild extends EventEmitter {
   }
 }
 
-test('tcpdump launch captures synthetic ingress across every namespace veth', (t) => {
-  t.alike(tcpdumpLaunch('10.203.77.0/24', '/tmp/private-route.pcap'), {
+test('tcpdump launch captures every IPv4 and IPv6 packet without an address or port prefilter', (t) => {
+  t.alike(tcpdumpLaunch('/tmp/private-route.pcap'), {
     command: 'tcpdump',
     args: [
       '--immediate-mode',
@@ -42,7 +44,7 @@ test('tcpdump launch captures synthetic ingress across every namespace veth', (t
       '/tmp/private-route.pcap',
       '-i',
       'any',
-      'ip and net 10.203.77.0/24'
+      'ip or ip6'
     ]
   })
 })
@@ -71,7 +73,6 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
   const child = new FakeChild()
   const launches = []
   const capture = createTcpdumpCapture({
-    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess(command, args, options) {
       launches.push({ command, args, options })
@@ -99,7 +100,7 @@ test('tcpdump capture requires listening output and a valid PCAP header before r
         '/tmp/private-route.pcap',
         '-i',
         'any',
-        'ip and net 10.203.77.0/24'
+        'ip or ip6'
       ],
       options: { stdio: ['ignore', 'ignore', 'pipe'] }
     }
@@ -113,7 +114,6 @@ test('tcpdump capture observes a packet record before shutdown', async (t) => {
   const child = new FakeChild()
   let stats = 0
   const capture = createTcpdumpCapture({
-    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => child,
     async statFile() {
@@ -133,7 +133,6 @@ test('tcpdump capture observes a packet record before shutdown', async (t) => {
 test('tcpdump capture fails bounded when no packet record becomes visible', async (t) => {
   const child = new FakeChild()
   const capture = createTcpdumpCapture({
-    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => child,
     statFile: async () => ({ size: 24 }),
@@ -149,7 +148,6 @@ test('tcpdump capture fails bounded when no packet record becomes visible', asyn
 test('tcpdump capture fails bounded on missing readiness or header', async (t) => {
   const silent = new FakeChild()
   const missingReady = createTcpdumpCapture({
-    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => silent,
     statFile: async () => ({ size: 24 }),
@@ -160,7 +158,6 @@ test('tcpdump capture fails bounded on missing readiness or header', async (t) =
 
   const noHeader = new FakeChild()
   const missingHeader = createTcpdumpCapture({
-    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => noHeader,
     statFile: async () => ({ size: 0 }),
@@ -175,7 +172,6 @@ test('tcpdump capture fails bounded on missing readiness or header', async (t) =
 test('tcpdump capture rejects an early process exit', async (t) => {
   const child = new FakeChild({ closeOnKill: false })
   const capture = createTcpdumpCapture({
-    network: '10.203.77.0/24',
     path: '/tmp/private-route.pcap',
     spawnProcess: () => child,
     statFile: async () => ({ size: 24 }),
@@ -220,7 +216,7 @@ test('negative-control calibration owns a separate capture and removes it only a
       payload,
       capturePath: '/tmp/preflight.pcap',
       createCapture(options) {
-        t.alike(options, { network: '10.203.77.0/24', path: '/tmp/preflight.pcap' })
+        t.alike(options, { path: '/tmp/preflight.pcap' })
         return {
           async start() {
             sequence.push('capture-start')
@@ -262,13 +258,15 @@ test('negative-control calibration owns a separate capture and removes it only a
           sourcePort: 48_150,
           destination: '10.203.77.9',
           destinationPort: 48_200,
+          sourceInterfaceIndex: 101,
           payload
         })
       },
       async removeCapture(path) {
         sequence.push('capture-remove')
         t.is(path, '/tmp/preflight.pcap')
-      }
+      },
+      interfaceIndexes: { source: 101 }
     }),
     true
   )
@@ -284,6 +282,57 @@ test('negative-control calibration owns a separate capture and removes it only a
     'capture-audit',
     'capture-remove'
   ])
+})
+
+test('namespace resource cleanup attempts every action and rejects every cleanup failure', async (t) => {
+  const actions = []
+  const coordinator = {
+    async destroy() {
+      actions.push('coordinator')
+      throw new Error('coordinator cleanup failed')
+    }
+  }
+  const capture = {
+    async stop() {
+      actions.push('capture')
+      throw new Error('capture cleanup failed')
+    }
+  }
+  const manager = {
+    async cleanup() {
+      actions.push('manager')
+      throw new Error('manager cleanup failed')
+    }
+  }
+  await t.exception(
+    cleanupNamespaceResources({
+      coordinator,
+      capture,
+      captureOpen: true,
+      manager,
+      managerOpen: true
+    }),
+    /namespace cleanup failed/
+  )
+  t.alike(actions, ['coordinator', 'capture', 'manager'])
+})
+
+test('namespace finalization preserves the PCAP and propagates cleanup failure', async (t) => {
+  const actions = []
+  await t.exception(
+    finalizeNamespaceGate({
+      capturePath: '/tmp/private-route.pcap',
+      async cleanup() {
+        actions.push('cleanup')
+        throw new Error('namespace cleanup failed')
+      },
+      async removeCapture() {
+        actions.push('remove')
+      }
+    }),
+    /namespace cleanup failed/
+  )
+  t.alike(actions, ['cleanup'])
 })
 
 test('relay failure oracle requires post-liveness failure on the dead relay and both neighbors', async (t) => {

@@ -25,7 +25,11 @@ import { FakeUdxAdapter } from './fake-udx.js'
 import { expectCode, safetyRoleIdentity, seed } from './helpers.js'
 import {
   UDX_LINK_CLOSE,
+  UDX_ENDPOINT_RESERVATION_STATS,
+  TEST_ONLY_UDX_STREAM_COUNTER,
   UDX_LINK_OPEN,
+  UDX_LINK_STREAM_PROGRESS,
+  UDX_TRY_SEND_CELL,
   UDX_SEND_ACTOR_CONTROL,
   UDX_SEND_DISPATCH,
   selectUdxLoopbackHosts
@@ -422,6 +426,155 @@ test('send queue copies ownership, bounds packets/bytes, and handles cancellatio
   t.is(f.endpoint.queuedPackets, 0)
   t.is(f.endpoint.queuedBytes, 0)
   t.is(f.endpoint.inFlightSends, 0)
+})
+
+test('established STREAM admission reports bounded next-hop ownership synchronously', async (t) => {
+  let release
+  const f = fixture({
+    maxQueuedPackets: 1,
+    maxQueuedBytes: 1_200,
+    adapterOptions: {
+      send() {
+        return new Promise((resolve) => {
+          release = resolve
+        })
+      }
+    }
+  })
+  const circuitId = b4a.alloc(16, 0x75)
+  const contexts = establishedContexts()
+  await f.endpoint.bind()
+  const handle = f.endpoint.openLink(f.linkHandle)
+  f.endpoint[UDX_LINK_OPEN](handle, {
+    linkState: { circuitId, epoch: f.epoch, contexts },
+    mode: 'initiate',
+    now: () => 1_000,
+    schedule: () => 1,
+    cancel() {},
+    randomBytes: (size) => b4a.alloc(size, 0x76)
+  })
+
+  const first = f.endpoint[UDX_TRY_SEND_CELL](handle, {
+    class: CELL_CLASS.STREAM,
+    direction: DIRECTION.FORWARD,
+    generation: 1n,
+    payload: b4a.from('first')
+  })
+  t.ok(first, 'first plaintext is owned by the bounded next-hop queue')
+  t.is(typeof first.sending?.then, 'function')
+  t.is(
+    f.endpoint[UDX_TRY_SEND_CELL](handle, {
+      class: CELL_CLASS.STREAM,
+      direction: DIRECTION.FORWARD,
+      generation: 1n,
+      payload: b4a.from('refused')
+    }),
+    null,
+    'capacity refusal is observable before an upstream ACK can be emitted'
+  )
+  t.is(f.adapter.sockets[0].sends.length, 1)
+
+  release(true)
+  t.is(await first.sending, true)
+  await f.endpoint.close()
+})
+
+test('STREAM admission reserves before a reentrant scheduler can fill the queue', async (t) => {
+  let release
+  let armed = false
+  let reentrant = undefined
+  let endpoint = null
+  let handle = null
+  const f = fixture({
+    maxQueuedPackets: 1,
+    maxQueuedBytes: 1_200,
+    adapterOptions: {
+      send() {
+        return new Promise((resolve) => {
+          release = resolve
+        })
+      }
+    }
+  })
+  endpoint = f.endpoint
+  const circuitId = b4a.alloc(16, 0x77)
+  const contexts = establishedContexts()
+  await endpoint.bind()
+  handle = endpoint.openLink(f.linkHandle)
+  endpoint[UDX_LINK_OPEN](handle, {
+    linkState: { circuitId, epoch: f.epoch, contexts },
+    mode: 'initiate',
+    now: () => 1_000,
+    schedule() {
+      if (armed && reentrant === undefined) {
+        reentrant = endpoint[UDX_TRY_SEND_CELL](handle, {
+          class: CELL_CLASS.STREAM,
+          direction: DIRECTION.FORWARD,
+          generation: 1n,
+          payload: b4a.from('reentrant')
+        })
+      }
+      return Object.freeze({})
+    },
+    cancel() {},
+    randomBytes: (size) => b4a.alloc(size, 0x78)
+  })
+  armed = true
+  const admitted = endpoint[UDX_TRY_SEND_CELL](handle, {
+    class: CELL_CLASS.STREAM,
+    direction: DIRECTION.FORWARD,
+    generation: 1n,
+    payload: b4a.from('reserved-first')
+  })
+  t.ok(admitted)
+  t.is(reentrant, null, 'reentrant admission is refused by the published reservation')
+  const progress = endpoint[UDX_LINK_STREAM_PROGRESS](handle, DIRECTION.FORWARD, 1n)
+  t.alike(progress, {
+    epoch: f.epoch,
+    circuitId,
+    direction: DIRECTION.FORWARD,
+    generation: 1n,
+    highestSent: 0n,
+    highestAck: null,
+    pendingStreams: 1,
+    pendingBytes: 14
+  })
+  t.is(f.adapter.sockets[0].sends.length, 1)
+  release(true)
+  t.is(await admitted.sending, true)
+  progress.circuitId.fill(0)
+  await endpoint.close()
+})
+
+test('counter exhaustion after reservation rolls back all endpoint capacity', async (t) => {
+  const f = fixture({ maxQueuedPackets: 1, maxQueuedBytes: 1_200 })
+  const circuitId = b4a.alloc(16, 0x79)
+  const contexts = establishedContexts()
+  await f.endpoint.bind()
+  const handle = f.endpoint.openLink(f.linkHandle)
+  f.endpoint[UDX_LINK_OPEN](handle, {
+    linkState: { circuitId, epoch: f.epoch, contexts },
+    mode: 'initiate',
+    now: () => 1_000,
+    schedule: () => Object.freeze({}),
+    cancel() {},
+    randomBytes: (size) => b4a.alloc(size, 0x7a)
+  })
+  f.endpoint[TEST_ONLY_UDX_STREAM_COUNTER](handle, DIRECTION.FORWARD, 1n, (1n << 64n) - 1n, true)
+  let code = null
+  try {
+    f.endpoint[UDX_TRY_SEND_CELL](handle, {
+      class: CELL_CLASS.STREAM,
+      direction: DIRECTION.FORWARD,
+      generation: 1n,
+      payload: b4a.from('exhausted')
+    })
+  } catch (err) {
+    code = err && err.code
+  }
+  t.is(code, 'COUNTER_EXHAUSTED')
+  t.alike(f.endpoint[UDX_ENDPOINT_RESERVATION_STATS](), { packets: 0, bytes: 0 })
+  await f.endpoint.close()
 })
 
 test('reentrant signal access cannot admit a send after endpoint close begins', async (t) => {

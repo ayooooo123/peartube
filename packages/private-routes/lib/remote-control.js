@@ -11,7 +11,8 @@ export const CONTROL_NAMESPACE = Object.freeze({
 export const LINK_CONTROL_KIND = Object.freeze({
   LINK_PING: 0,
   LINK_PONG: 1,
-  STREAM_ACK: 2
+  STREAM_ACK: 2,
+  CIRCUIT_DESTROY: 3
 })
 
 export const ACTOR_CONTROL_KIND = Object.freeze({
@@ -800,6 +801,13 @@ function linkShape(value, outer, copyValues = false) {
     if (!copyValues) return normalized
     return { ...normalized, circuitId: copy(circuitId) }
   }
+  if (kind === LINK_CONTROL_KIND.CIRCUIT_DESTROY) {
+    const reason = option(value, 'reason')
+    if (generation !== 0n || !DESTROY_REASONS.has(reason)) invalid()
+    const normalized = { version, kind, flags, direction, circuitId, generation, reason }
+    if (!copyValues) return normalized
+    return { ...normalized, circuitId: copy(circuitId) }
+  }
   const challenge = option(value, 'challenge')
   if (generation !== 0n || !fixed(challenge, 16) || allZero(challenge)) invalid()
   const normalized = {
@@ -841,6 +849,9 @@ export class LinkControlCodec {
       if (link.kind === LINK_CONTROL_KIND.STREAM_ACK) {
         writeU64(output, link.counter, 28)
         bufferFill.call(output, 0, 36, 44)
+      } else if (link.kind === LINK_CONTROL_KIND.CIRCUIT_DESTROY) {
+        output[28] = link.reason
+        bufferFill.call(output, 0, 29, 44)
       } else {
         put(output, link.challenge, 28)
       }
@@ -867,6 +878,17 @@ export class LinkControlCodec {
         generation: readU64(message, 20),
         acknowledgedDirection: opposite(message[3]),
         counter: readU64(message, 28)
+      }
+    } else if (kind === LINK_CONTROL_KIND.CIRCUIT_DESTROY) {
+      for (let index = 29; index < 44; index++) if (message[index] !== 0) invalid()
+      value = {
+        version: message[0],
+        kind,
+        flags: message[2],
+        direction: message[3],
+        circuitId: slice(message, 4, 20),
+        generation: readU64(message, 20),
+        reason: message[28]
       }
     } else {
       value = {

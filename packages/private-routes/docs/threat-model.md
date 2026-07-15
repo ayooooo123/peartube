@@ -71,24 +71,27 @@ domains.
 ## Packet-capture gate and limits
 
 The authoritative gate runs on Linux with seven isolated role namespaces and separate decoy and
-auditor namespaces. It captures ingress for the synthetic IPv4 subnet and requires packets on all
-six adjacent bilateral route edges. A decoy-to-auditor sentinel is a negative control proving that
-the capture could observe a forbidden-capability packet; the private route must record zero use of
-the source's separately named test-only decoy capability.
+auditor namespaces. It captures inbound IPv4 and IPv6, attributes packets by Linux cooked-capture
+interface index to the exact managed host veth, and requires IPv4 packets on all six adjacent
+bilateral route edges. A decoy-to-auditor sentinel is a negative control proving that the capture
+could observe a forbidden-capability packet; the private route must record zero use of the source's
+separately named test-only decoy capability.
 
 The oracle fails closed on:
 
 - an empty, truncated, malformed, or missing capture;
 - a missing required edge or unexpected direct, decoy, external, or non-adjacent edge;
-- DNS, TCP, ICMP, IPv6, or UDP on an alternate port;
+- DNS, TCP, ICMP, IPv6, UDP on an alternate port, or a source tuple inconsistent with the ingress
+  interface;
 - any role packet after the authenticated route has closed;
 - absent or reordered capture sentinels;
 - leaked addresses, grants, paths, secrets, or payloads in role configuration or diagnostics;
 - disabled or unobserved negative-control evidence.
 
-This is a synthetic IPv4 namespace measurement. It does not observe arbitrary host interfaces,
-the public Internet, DNS/HTTP/media initiated by an application, mobile OS networking, or a global
-passive observer. Timing correlation remains possible even though payload sizes are fixed.
+This is a managed-interface namespace measurement whose accepted route graph is synthetic IPv4.
+It does not observe arbitrary host interfaces, the public Internet, DNS/HTTP/media initiated by an
+application, mobile OS networking, or a global passive observer. Timing correlation remains
+possible even though payload sizes are fixed.
 
 ## Fail-closed boundary
 

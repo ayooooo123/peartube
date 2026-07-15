@@ -462,7 +462,7 @@ git commit -m "feat: compose the live private relay graph"
 
 - [ ] **Step 1: Write RED framing tests**
 
-Lock four-byte big-endian length + canonical UTF-8 JSON, 64 KiB maximum, exact command/event enums, configure-once-before-start, commands-after-stop rejection, and exactly one legal terminal `closed` event. Test split/coalesced frames and malformed/noncanonical input.
+Lock four-byte big-endian length + canonical UTF-8 JSON, 64 KiB maximum, exact command/event enums, configure-once-before-start, the `start → prepared → activate → ready` barrier, commands-after-stop rejection, and exactly one legal terminal `closed` event. Test split/coalesced frames and malformed/noncanonical input.
 
 - [ ] **Step 2: Write RED independent projection tests**
 
@@ -483,7 +483,7 @@ The Bare adapter imports exact `bare-process`; the Node adapter uses global `pro
 
 - [ ] **Step 4: Implement the role runner**
 
-Accept one audited projection, instantiate one `LiveRouteNode`, respond to `configure/start/fault/revoke/snapshot/stop`, and emit only audited records. Do not log payloads, keys, full configs, or paths.
+Accept one audited projection, instantiate one `LiveRouteNode`, respond to `configure/start/activate/fault/revoke/snapshot/stop`, and emit only audited records. `start` must open the transport and register actors before `prepared`; source route establishment begins only after the coordinator sends `activate` to every prepared process. Do not log payloads, keys, full configs, or paths.
 
 - [ ] **Step 5: Verify Node/Bare control tests and commit**
 
@@ -501,7 +501,7 @@ git commit -m "test: isolate live route role processes"
 
 - [ ] **Step 1: Write RED coordinator lifecycle tests**
 
-Launch exactly seven Node children with inherited pipes, send only their audited projections, wait for seven `ready` records, and enforce bounded startup/teardown. Unexpected exit, stdout junk, stderr leak, or timeout fails with redacted diagnostics.
+Launch exactly seven Node children with inherited pipes, send only their audited projections, wait for seven `prepared` records, activate all seven, then wait for seven `ready` records and enforce bounded startup/teardown. Unexpected exit, stdout junk, stderr leak, or timeout fails with redacted diagnostics.
 
 - [ ] **Step 2: Write the live success test**
 

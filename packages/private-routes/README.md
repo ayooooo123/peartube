@@ -40,15 +40,18 @@ dial, hole-punch, public DHT socket, or fallback capability.
 - STREAM backpressure is hop-by-hop. An upstream acknowledgement is sent only after the complete
   plaintext fragment enters the bounded next-hop queue. DATAGRAM delivery remains atomic and best
   effort.
-- Established links use authenticated ping/pong liveness. A silent peer closes the link and its
-  route state instead of falling back to a direct connection.
+- Established links use authenticated ping/pong liveness. A silent peer triggers fixed-size
+  authenticated destroy propagation across surviving adjacent segments; every affected role
+  clears its route state without falling back to a direct connection.
 - The portable integration suite launches seven separate Node processes or seven separate Bare
-  processes. Each receives an audited role-scoped configuration, and teardown requires zero
-  remaining processes, sockets, circuits, queues, and owned secret state.
-- The authoritative Linux namespace gate captures the synthetic test subnet and requires exactly
-  the six adjacent bilateral edges. A separately isolated decoy-to-auditor packet proves the
-  capture can observe a forbidden-capability packet; the private route never uses the source's
-  test-only decoy capability.
+  processes. Each receives an audited role-scoped configuration. Every process must open its
+  transport and register its actors before the coordinator activates source route establishment;
+  teardown requires zero remaining processes, sockets, circuits, queues, and owned secret state.
+- The authoritative Linux namespace gate attributes inbound IP packets to the exact managed host
+  veth interface reported by Linux and requires exactly the six adjacent bilateral IPv4 edges.
+  IPv6 and traffic from a wrong managed interface fail the gate. A separately isolated
+  decoy-to-auditor packet proves the capture can observe a forbidden-capability packet; the private
+  route never uses the source's test-only decoy capability.
 
 The virtual suites additionally exercise authentication, replay, counter, expiry, queue,
 cancellation, rotation, drain, and teardown faults with deterministic clocks. Deep test-only hooks
@@ -71,11 +74,13 @@ contains disallowed identities, addresses, grants, paths, keys, or payloads. Rel
 Sybil operators, a global observer, endpoint compromise, application logging, and traffic
 correlation remain out of scope.
 
-The Linux capture covers the isolated synthetic IPv4 subnet, not arbitrary host traffic or a real
-mobile/desktop deployment. The oracle fails on unexpected IPv4 protocols, IPv6, alternate UDP
-ports, direct/decoy/external edges, post-close packets, malformed or missing capture data, and
-missing negative-control evidence. It does not prove NAT traversal, public discovery, Internet
-relay diversity, DNS/HTTP/media privacy, or protection from a global passive observer.
+The Linux capture covers inbound IPv4 and IPv6 on the managed synthetic role, decoy, and auditor
+interfaces, not arbitrary host traffic or a real mobile/desktop deployment. The expected route is
+IPv4; the oracle fails on unexpected IPv4 protocols, any IPv6, alternate UDP ports, packets whose
+source tuple does not match their ingress interface, direct/decoy/external edges, post-close
+packets, malformed or missing capture data, and missing negative-control evidence. It does not
+prove NAT traversal, public discovery, Internet relay diversity, DNS/HTTP/media privacy, or
+protection from a global passive observer.
 
 Private routing is fail closed. Invalid or expired descriptors or grants, unavailable routes,
 authentication or replay failures, transport loss, setup timeout, queue exhaustion, liveness

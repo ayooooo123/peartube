@@ -346,6 +346,28 @@ test('relay failure oracle requires post-liveness failure on the dead relay and 
     ['destination', 'OPEN', 1]
   ].map(([role, state, openSockets]) => ({ role, state, resources: { openSockets } }))
   t.is(assertRelayFailure(snapshots), true)
+  t.is(
+    assertRelayFailure(
+      snapshots.map((value) =>
+        value.role.startsWith('private-')
+          ? { ...value, state: 'CLOSED', resources: { openSockets: 0 } }
+          : value
+      )
+    ),
+    true,
+    'an autonomously closed relay segment is stronger terminal evidence'
+  )
+  await t.exception.all(
+    () =>
+      assertRelayFailure(
+        snapshots.map((value) =>
+          value.role === 'private-final'
+            ? { ...value, state: 'CLOSED', resources: { openSockets: 1 } }
+            : value
+        )
+      ),
+    /relay failure did not propagate/
+  )
   await t.exception.all(
     () =>
       assertRelayFailure(

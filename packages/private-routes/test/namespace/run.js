@@ -604,7 +604,11 @@ export function assertRelayFailure(events) {
   const byRole = new Map(events.map((event) => [event?.role, event]))
   if (byRole.size !== 7) throw new Error('relay failure did not propagate')
   for (const role of ['private-entry', 'private-middle', 'private-final']) {
-    if (byRole.get(role)?.state !== 'FAILED') {
+    const event = byRole.get(role)
+    if (
+      (event?.state !== 'FAILED' && event?.state !== 'CLOSED') ||
+      (event.state === 'CLOSED' && event.resources?.openSockets !== 0)
+    ) {
       throw new Error('relay failure did not propagate')
     }
   }

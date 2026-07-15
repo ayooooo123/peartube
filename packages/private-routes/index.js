@@ -1,4 +1,4 @@
-export { ERROR_CODES, PrivateRouteError } from './lib/errors.js'
+export { ERROR_CODES, M3_ERROR_CODES, PrivateRouteError } from './lib/errors.js'
 export {
   DatagramReplayWindow,
   MAX_COUNTER,
@@ -270,14 +270,59 @@ export {
 export {
   BOOTSTRAP_REJECT_CODE,
   BOOTSTRAP_TYPE,
+  BRANCH_CLASS,
   CAPABILITY,
+  CAPACITY_CLASS,
   CELL_CLASS,
   CIRCUIT_STATE,
+  CONTEXT_CLASS,
+  DESTINATION_VALIDATION_CLASS,
   DIRECTION,
   DOMAIN,
   LINK_OPERATION,
+  M3_ID_REGISTRY,
+  M3_LINK_ROLE,
+  M3_MESSAGE_ID,
+  M3_PROTOCOL_VERSION,
+  MUTATION_FLAG,
   PROTOCOL_VERSION,
+  RELAY_CAPABILITY,
   ROLE,
+  ROUTED_ERROR,
   TOPOLOGY_ROLE,
+  decodeM3Object,
+  encodeM3Object,
   roleForIdentity
 } from './lib/protocol.js'
+export {
+  M3_CONTEXT_AD_SIZE,
+  M3_CONTEXT_ENVELOPE_SIZE,
+  decodeM3ContextAD,
+  decodeM3ContextEnvelope,
+  encodeM3ContextAD,
+  encodeM3ContextEnvelope
+} from './lib/m3-context.js'
+export {
+  ADMITTED_LIMITS_SIZE,
+  TAIL_CONTROL_TRANSCRIPT_SIZE,
+  decodeAdmittedLimits,
+  decodeTailControlTranscript,
+  digestAdmittedLimits,
+  digestTailControlTranscript,
+  encodeAdmittedLimits,
+  encodeTailControlTranscript
+} from './lib/tail-control.js'
+export {
+  EXIT_ORIGIN_SERVICE_POLICY,
+  FINAL_EXIT_TRANSCRIPT_SIZE,
+  PAYLOAD_PARAMETERS_SIZE,
+  SERVICE_POLICY_ENTRY_SIZE,
+  decodeExitOriginServicePolicy,
+  decodeFinalExitTranscript,
+  decodePayloadParameters,
+  digestExitOriginServicePolicy,
+  digestPayloadParameters,
+  encodeExitOriginServicePolicy,
+  encodeFinalExitTranscript,
+  encodePayloadParameters
+} from './lib/final-exit.js'

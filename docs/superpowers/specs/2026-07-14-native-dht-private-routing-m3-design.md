@@ -418,8 +418,12 @@ overlap an existing `RoutedDHTIO` branch while it owns one narrow guard-bound
 handshake channel, possibly carried by a shared physical UDX multiplexer. It is
 pinned to the exact guard endpoint and can send or receive only the five
 CAPS/challenge messages plus `LINK_OFFER_V1` and `LINK_ACCEPT_V1`, along with
-transport framing and destroy. It internally issues and consumes the one-time
-admission capability when sending OFFER and remains alive through ACCEPT.
+transport framing and destroy. Its `CAPS_QUERY_V1.maximumResults` is exactly
+one, and it accepts only one unfragmented `CAPS_RESPONSE_V1` containing exactly
+the matching pinned-guard self-advertisement, at most 695 wire bytes. Zero,
+additional, or referral advertisements and every `CORE_FRAGMENT_V1` are
+rejected. It internally issues and consumes the one-time admission capability
+when sending OFFER and remains alive through ACCEPT.
 
 On a valid `LINK_ACCEPT_V1`, `GuardRevalidationIO` atomically transfers only
 the accepted per-branch guard link context/channel to `RouteManager`, then
@@ -569,7 +573,7 @@ It rejects legacy peer announce/unannounce, legacy peer lookup/find-peer at the 
 
 1. `BootstrapIO` exists only during the separately bounded cold-start policy. It owns the temporary direct socket used for permitted bootstrap/guard discovery and the first guard link establishment.
 2. Before private readiness, `BootstrapIO` destroys its ordinary DHT socket, clears its public routing state and direct-discovery scratch state, and transfers only the authenticated guard link, the pinned guard identity/endpoint, and signed provenance-tagged advertisements.
-3. `GuardRevalidationIO` may exist after readiness only for rotation, rebuild, or resume. It contacts exactly the pinned guard endpoint and owns a narrow guard-bound handshake channel that can encode, send, receive, and decode only `CAPS_QUERY_V1`, `CAPS_COOKIE_CHALLENGE_V1`, `CAPS_RESPONSE_V1`, `ACTIVE_CHALLENGE_V1`, `ACTIVE_CHALLENGE_RESPONSE_V1`, `LINK_OFFER_V1`, and `LINK_ACCEPT_V1`, plus transport framing/destroy. It accepts only the pinned guard's matching self-advertisement and ignores referrals. It may overlap `RoutedDHTIO` for make-before-break, internally issues and consumes one admission capability at OFFER, and on valid ACCEPT atomically transfers only the accepted branch link channel/context to `RouteManager` before erasing and destroying itself. A dedicated accepted physical transport transfers with the link; a shared physical multiplexer keeps only the accepted link context while the handshake channel closes. Failure closes only its owned channel/transport and leaves the existing branch intact. It has no generic send, DHT query, referral-probe, hostname-resolution, or other-endpoint authority.
+3. `GuardRevalidationIO` may exist after readiness only for rotation, rebuild, or resume. It contacts exactly the pinned guard endpoint and owns a narrow guard-bound handshake channel that can encode, send, receive, and decode only `CAPS_QUERY_V1`, `CAPS_COOKIE_CHALLENGE_V1`, `CAPS_RESPONSE_V1`, `ACTIVE_CHALLENGE_V1`, `ACTIVE_CHALLENGE_RESPONSE_V1`, `LINK_OFFER_V1`, and `LINK_ACCEPT_V1`, plus transport framing/destroy. Its CAPS query requests exactly one result, and it accepts only one unfragmented CAPS response containing exactly the pinned guard's matching self-advertisement; zero, additional, or referral advertisements and every core fragment are rejected. It may overlap `RoutedDHTIO` for make-before-break, internally issues and consumes one admission capability at OFFER, and on valid ACCEPT atomically transfers only the accepted branch link channel/context to `RouteManager` before erasing and destroying itself. A dedicated accepted physical transport transfers with the link; a shared physical multiplexer keeps only the accepted link context while the handshake channel closes. Failure closes only its owned channel/transport and leaves the existing branch intact. It has no generic send, DHT query, referral-probe, hostname-resolution, or other-endpoint authority.
 4. `RoutedDHTIO` services DHT-RPC exclusively through ready circuit branches and exit-issued handles. It has no method that can send an ordinary client DHT datagram.
 
 In `RoutedDHTIO` mode, DHT-RPC must not bind a background public DHT socket, perform client NAT sampling, consume exit-observed `to` addresses as the client's address, maintain public direct-dial authority, send background pings or down hints, retry via a direct socket, refresh against bootstrap nodes, or resolve/dial newly learned DHT addresses itself. Routed destination metadata lives in a separate handle table and can never be promoted into the client's public routing table.
@@ -783,7 +787,7 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - guard and branch active-time lease state machines;
 - make-before-break, drain, network-change, suspend, resume, and teardown;
 - exact command-policy enforcement and unknown-command rejection;
-- required-mode IO matrix, temporary bootstrap-socket destruction, guard-only seven-message `GuardRevalidationIO` allowlist, internal one-time capability consumption, dedicated/shared-channel ACCEPT handoff, failure isolation, disabled NAT sampling/background DHT IO, and stable M4-required errors;
+- required-mode IO matrix, temporary bootstrap-socket destruction, guard-only seven-message `GuardRevalidationIO` allowlist, exact-one query/result and unfragmented pinned-self CAPS profile, internal one-time capability consumption, dedicated/shared-channel ACCEPT handoff, failure isolation, disabled NAT sampling/background DHT IO, and stable M4-required errors;
 - arbitrary exit destinations, address substitution, stale handles, cross-exit handles, client-side relay-as-destination exclusion, and handle invalidation;
 - DHT and storage token/exit/handle binding across rotation;
 - private presence record signatures, bounds, expiry, sequence conflicts, tombstone retention, and source-address exclusion;
@@ -822,7 +826,7 @@ The suite proves:
 - insufficient private-record density fails closed;
 - zero and stale exit storage seeds report private records unavailable, while a locally validated seed converges to the deterministic closest set;
 - branch and guard rotations follow the active-time policy;
-- rotation, rebuild, and resume revalidate only the exact pinned guard through the seven-message `GuardRevalidationIO` allowlist, atomically hand an accepted link to `RouteManager`, and on failure leave the existing branch intact while replacement uses only the bounded cold-start policy;
+- rotation, rebuild, and resume revalidate only the exact pinned guard through the seven-message `GuardRevalidationIO` allowlist, request exactly one CAPS result, reject fragmented, empty, additional, or referral-bearing CAPS responses, atomically hand an accepted link to `RouteManager`, and on failure leave the existing branch intact while replacement uses only the bounded cold-start policy;
 - suspension destroys live branches and resume uses fresh generations, keys, counters, handles, tokens, and active challenges;
 - an interface change cancels outstanding work and invalidates all branch-bound authority;
 - Node and Bare produce the same protocol result.
@@ -842,7 +846,7 @@ A Linux network-namespace job captures every relevant interface and fails unless
 - no endpoint address from private material enters a public routing table or direct probe;
 - all processes, sockets, circuits, queues, and owned secret state are gone after teardown.
 
-A separate authority trap intercepts ordinary DHT socket creation and send capability. It proves the temporary `BootstrapIO` socket is destroyed before readiness, no ordinary DHT socket exists afterward, and no such send authority can be invoked. It separately instruments `GuardRevalidationIO` and proves that it can contact only the exact pinned guard, use only the seven permitted CAPS/challenge/link messages plus framing/destroy, cannot probe referrals or any other endpoint, internally consumes exactly one admission capability at OFFER, and remains alive through ACCEPT. A successful dedicated/shared-channel case transfers only the accepted link context/transport to `RouteManager`; failure closes only owned state and leaves an existing branch intact. `GuardRevalidationIO` then destroys all residual authority. It may overlap `RoutedDHTIO` during make-before-break, but the pinned guard remains the only permitted post-readiness client network destination.
+A separate authority trap intercepts ordinary DHT socket creation and send capability. It proves the temporary `BootstrapIO` socket is destroyed before readiness, no ordinary DHT socket exists afterward, and no such send authority can be invoked. It separately instruments `GuardRevalidationIO` and proves that it can contact only the exact pinned guard, use only the seven permitted CAPS/challenge/link messages plus framing/destroy, emit CAPS queries with `maximumResults = 1`, accept only one unfragmented CAPS response containing exactly the matching pinned-guard self-advertisement, reject zero/additional/referral advertisements and every core fragment, cannot probe referrals or any other endpoint, internally consumes exactly one admission capability at OFFER, and remains alive through ACCEPT. A successful dedicated/shared-channel case transfers only the accepted link context/transport to `RouteManager`; failure closes only owned state and leaves an existing branch intact. `GuardRevalidationIO` then destroys all residual authority. It may overlap `RoutedDHTIO` during make-before-break, but the pinned guard remains the only permitted post-readiness client network destination.
 
 ### CI and packaging
 

@@ -492,6 +492,15 @@ A nonce mismatch, absent cookie validation, response received from a different q
 invalid responder signature, late response, count/length mismatch, invalid
 candidate, duplicate, or non-canonical sort order rejects the response.
 
+The general discovery profile above remains `maximumResults = 1..8` and may
+fragment a cookie-authorized response. `GuardRevalidationIO` uses a stricter
+profile without changing this wire encoding: both query phases set
+`maximumResults = 1`, and the response contains exactly one advertisement, the
+current matching self-advertisement for the already pinned guard and endpoint.
+That one-advertisement response is at most body 623 and wire 695 bytes and must
+be unfragmented. Zero advertisements, any additional or referral advertisement,
+and every `CORE_FRAGMENT_V1` are fatal to that revalidation attempt.
+
 ### 3.5 `ACTIVE_CHALLENGE_V1` (`0x0004`)
 
 ```text
@@ -964,10 +973,14 @@ may contact only the exact pinned guard endpoint, using only `CAPS_QUERY_V1`,
 `ACTIVE_CHALLENGE_RESPONSE_V1` in the exact existing cookie-gated direct flow,
 followed only by `LINK_OFFER_V1` and `LINK_ACCEPT_V1`. Transport framing and
 destroy are the only non-message operations. It accepts only the pinned guard's
-matching self-advertisement, ignores referrals, and has no generic send, DHT
-query, referral-probe, hostname-resolution, or other-endpoint authority. It may
-overlap `RoutedDHTIO` only for make-before-break and owns one narrow
-guard-bound handshake channel, possibly over a shared physical UDX multiplexer.
+matching self-advertisement, sets `CAPS_QUERY_V1.maximumResults` to exactly one
+in both cookie phases, and accepts only one unfragmented `CAPS_RESPONSE_V1`
+containing exactly that advertisement. The response is at most 695 wire bytes;
+zero, additional, or referral advertisements and every `CORE_FRAGMENT_V1` are
+rejected. It has no generic send, DHT query, referral-probe, hostname-resolution,
+or other-endpoint authority. It may overlap `RoutedDHTIO` only for
+make-before-break and owns one narrow guard-bound handshake channel, possibly
+over a shared physical UDX multiplexer.
 
 After successful validation, `GuardRevalidationIO` internally issues one
 one-time client-local guard-admission capability bound to that advertisement
@@ -2610,6 +2623,7 @@ carrier and post-admission bounds in Section 4A. No carrier has fragment ACKs.
 | CAPS query                | 110                                     | 118                       | one direct datagram                        |
 | CAPS cookie challenge     | 72                                      | 80                        | one direct datagram                        |
 | CAPS response             | `73 + sum(2 + advertBytes)`, count <= 8 | 4545                      | cookie-gated direct fragments              |
+| Guard revalidation CAPS   | query 110; response `75 + advertBytes`  | query 118; response <=695 | one query/one unfragmented direct response |
 | Active challenge          | 176                                     | 184                       | cookie-gated direct guard/storage datagram |
 | Active challenge response | 272                                     | 344                       | cookie-gated direct guard/storage datagram |
 | Relay discover            | 69                                      | 77                        | one tail-control payload                   |
@@ -2869,6 +2883,7 @@ transcript checks before Task 1.
 | Advertisement lifetime                | Maximum 30 minutes, monotonic epochs, fresh route-encryption key on policy change                                                                                                                                                                                   | Limits stale-key replay and cache poisoning. Shorter values increase mobile refresh/battery cost; longer values improve intermittent reliability but prolong compromise/staleness.                                                                                                                     |
 | Advertisement collection cap          | At most 8 advertisements in CAPS/relay discovery                                                                                                                                                                                                                    | Bounds memory/amplification while offering limited diversity. Alternatives 4 or 16 trade discovery success against response size and referral bias.                                                                                                                                                    |
 | CAPS self-advertisement               | A signed CAPS response must contain exactly one current self-ad matching the responder and queried endpoint                                                                                                                                                         | Prevents an unsigned referrer-only identity and makes the responder accountable. It can reduce availability for compatible referral-only bootstrap nodes; alternative is a separately signed responder certificate.                                                                                    |
+| Guard revalidation CAPS profile       | `maximumResults = 1`; exactly one matching pinned-guard self-advertisement; unfragmented response at most 695 wire bytes; zero/additional/referral advertisements and every core fragment reject                                                                    | Keeps post-readiness direct authority unable to collect referrals or allocate CAPS reassembly while leaving general cold-start discovery at 1..8 results.                                                                                                                                              |
 | CAPS return routability/resources     | 118-byte phase-0 query; 80-byte stateless endpoint/query cookie; 4,096-entry/5,000 ms replay cache; exactly 32-byte CSPRNG cookie secret rotated every 300,000 ms with only the prior secret retained exactly 5,000 ms                                              | Eliminates reflection and bounds memory/key exposure. Smaller caches or shorter overlap reduce replay service/mobile tolerance; larger caches/overlap or slower rotation consume memory and prolong key exposure. Bulk CAPS, client→guard challenge, and exit→storage admission require the live echo. |
 | Storage OPEN admission resources      | Per-source syntactically valid OPEN cap 8/s; global Ed25519 bucket 64/s with burst 128; accepted replay cache exactly 4,096 entries through the at-most-5,000 ms deadline                                                                                           | Bounds spoofed-source signature/X25519/allocation work while allowing bursts and exact replay recovery. Lower limits can reject mobile reconnect bursts; higher/per-source-only limits increase distributed DoS work; a larger cache consumes more memory.                                             |
 | Discovery exchanges                   | CAPS and routed relay discovery each have a 5,000 ms non-extending exchange deadline                                                                                                                                                                                | Bounds sockets/reassembly and mobile wakeups. A longer deadline helps high-latency paths; adaptive deadlines increase fingerprinting/state complexity.                                                                                                                                                 |
@@ -2907,12 +2922,16 @@ Task 0 amendments elsewhere in these documents.
 
 - **Post-readiness direct authority is guard-only:** cold-start
   `BootstrapIO` is destroyed before readiness. `GuardRevalidationIO` can later
-  contact only the exact pinned guard endpoint with the five registered
-  CAPS/challenge messages, ignores referrals, can establish only guard-bound
-  transport, issues one one-time local admission capability, and then destroys
-  all socket/send/scratch state. It cannot perform a DHT query or contact a
-  different endpoint, including when overlapping `RoutedDHTIO` for
-  make-before-break.
+  contact only the exact pinned guard endpoint with the exact seven registered
+  CAPS/challenge/link messages. Its CAPS query requests exactly one result, and
+  it accepts only one unfragmented response containing exactly the matching
+  pinned-guard self-advertisement, at most 695 wire bytes; zero, additional, or
+  referral advertisements and every core fragment reject. It can establish
+  only guard-bound transport, internally issues and consumes one one-time local
+  admission capability at OFFER, remains alive through ACCEPT, then transfers
+  only the accepted link context/channel and destroys residual authority. It
+  cannot perform a DHT query or contact a different endpoint, including when
+  overlapping `RoutedDHTIO` for make-before-break.
 - **No client-supplied raw address:** the public destination adapter is exactly
   `{ id, handle }`. The only endpoint is inside the issuing exit's non-wire
   `serverBinding`; command bodies, replies, records, and public adapters contain

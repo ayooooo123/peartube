@@ -350,7 +350,11 @@ test('relay failure oracle requires post-liveness failure on the dead relay and 
     assertRelayFailure(
       snapshots.map((value) =>
         value.role.startsWith('private-')
-          ? { ...value, state: 'CLOSED', resources: { openSockets: 0 } }
+          ? {
+              ...value,
+              state: 'CLOSED',
+              resources: { bindings: 0, waits: 0, timers: 0, openSockets: 0 }
+            }
           : value
       )
     ),
@@ -363,6 +367,21 @@ test('relay failure oracle requires post-liveness failure on the dead relay and 
         snapshots.map((value) =>
           value.role === 'private-final'
             ? { ...value, state: 'CLOSED', resources: { openSockets: 1 } }
+            : value
+        )
+      ),
+    /relay failure did not propagate/
+  )
+  await t.exception.all(
+    () =>
+      assertRelayFailure(
+        snapshots.map((value) =>
+          value.role === 'private-final'
+            ? {
+                ...value,
+                state: 'CLOSED',
+                resources: { bindings: 1, waits: 0, timers: 0, openSockets: 0 }
+              }
             : value
         )
       ),

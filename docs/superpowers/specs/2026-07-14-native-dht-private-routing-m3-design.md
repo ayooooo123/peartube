@@ -271,7 +271,11 @@ u64  branch generation
 32B  M2 payload-parameters digest
 ```
 
-The tail transcript digest is `cryptoSuite.hash([UTF8('hyperdht-private-routes/final-exit/tail-digest/v1'), completeEncodedTailTranscript])`. The service-policy digest is copied from the verified signed exit advertisement and equals `cryptoSuite.hash([domain, encoding])`, with domain `hyperdht-private-routes/final-exit/service-policy/v1`. Its encoding is `u16 entryCount` followed by entries sorted by `(commandId, commandVersion)`, each encoded as `u16 commandId || u16 commandVersion || u32 maxRequestBytes || u32 maxResponseBytes || u32 timeoutMs || u16 maxOutstanding || u32 requestCost || u32 responseCost || u32 maxAmplificationBytes || u8 mutationFlag || u8 destinationValidationClass`. Duplicate entries and unknown flag/class values are invalid. The payload-parameters digest is `cryptoSuite.hash([domain, encoding])`, where domain is `hyperdht-private-routes/final-exit/payload-parameters/v1` and encoding is `u16 cellSize || u16 maxCellPayload || u16 datagramReplayWindow || u32 maxQueuedBytes || u32 idleTimeoutMs`.
+The tail transcript digest is `cryptoSuite.hash([UTF8('hyperdht-private-routes/final-exit/tail-digest/v1'), completeEncodedTailTranscript])`. The service-policy digest is copied from the verified signed exit advertisement and equals `cryptoSuite.hash([domain, encoding])`, with domain `hyperdht-private-routes/final-exit/service-policy/v1`. Its encoding is `u16 entryCount` followed by entries sorted by `(commandId, commandVersion)`, each encoded as `u16 commandId || u16 commandVersion || u32 maxRequestBytes || u32 maxResponseBytes || u32 timeoutMs || u16 maxOutstanding || u32 requestCost || u32 responseCost || u32 maxAmplificationBytes || u8 mutationFlag || u8 destinationValidationClass`. `mutationFlag` is exactly `0 = READ_ONLY` or `1 = MUTATING`. `destinationValidationClass` is exactly `0 = EXIT_LOCAL`, `1 = DHT_NODE_HANDLE`, or `2 = SIGNED_CAPABILITY_HANDLE`. Duplicate entries and all other flag/class values are invalid.
+
+M3 performs no service-policy subset negotiation. The activation digest must equal the complete policy digest in the exit's currently verified signed advertisement byte for byte; otherwise activation fails. An operator changing one command policy must issue a new advertisement and route-encryption key/epoch.
+
+The payload-parameters digest is `cryptoSuite.hash([domain, encoding])`, where domain is `hyperdht-private-routes/final-exit/payload-parameters/v1` and encoding is `u16 cellSize || u16 maxCellPayload || u16 routeFrameSize || u16 maxRoutePayload || u16 datagramReplayWindow || u32 maxQueuedBytes || u32 idleTimeoutMs`. M3 fixes the inherited values to `cellSize = 1200`, `maxCellPayload = 1146`, `routeFrameSize = 1100`, and `maxRoutePayload = 1073`; a mismatch fails activation rather than negotiating alternate framing.
 
 Using the same keyed-BLAKE2b construction defined above, with the retained index-2 X25519 shared secret and `FINAL_EXIT_TRANSCRIPT_V1`, M3 derives eight outputs under these labels:
 
@@ -286,9 +290,28 @@ hyperdht-private-routes/kdf/v1/final-exit/control/forward-nonce
 hyperdht-private-routes/kdf/v1/final-exit/control/reverse-nonce
 ```
 
-Each key is the full 32-byte output; each XChaCha20 nonce prefix is the first 16 bytes of its nonce output. Payload and terminal-control directions each start independent counters at zero and use the M2 exact-next/replay rules. The four payload values are installed into the existing M2 `RoutePayloadCodec`; the four control values protect post-ready exit control, rotation, and destroy messages. Index-2 tail-control keys are erased only after `DHT_EXIT_READY_V1` is verified and all eight final outputs are installed. Any failure erases the shared secret, tail keys, final outputs, and partial circuit state.
+Each key is the full 32-byte output; each XChaCha20 nonce prefix is the first 16 bytes of its nonce output. Payload and terminal-control directions each start independent counters at zero and use the M2 exact-next/replay rules. The four payload values are installed into the existing M2 `RoutePayloadCodec`; the four control values protect post-ready exit control, rotation, and destroy messages.
 
-Fixed vectors must cover all eight outputs, nonce prefixes, transcript or policy substitution, and proof that no tail-control, payload, or terminal-control key/nonce output is equal.
+### Finalization acknowledgement
+
+Finalization is a bounded idempotent state machine:
+
+```text
+TAIL_READY → ACTIVATING → FINALIZING → ACKING → OPEN
+     └──────────────── any failure/timeout ─────────→ DESTROYED
+```
+
+1. The client sends `DHT_EXIT_ACTIVATE_V1` under the tail-control forward key and enters `ACTIVATING` while retaining the tail shared secret and keys.
+2. The exit validates the exact activation tuple, derives all final outputs, enters half-open `FINALIZING`, caches the signed semantic `DHT_EXIT_READY_V1` body, and sends it under the next tail-control reverse counter. An identical activation nonce and tuple is idempotent and causes the same cached body to be sent under a fresh tail-control counter; a conflicting tuple tears down the circuit.
+3. The client verifies READY, derives the same final outputs, enters `ACKING`, and sends `DHT_EXIT_READY_ACK_V1` under the final terminal-control forward key. ACK binds the READY digest, activation nonce, branch and circuit IDs, and generation. The client retains tail keys and sends no DHT payload before `OPEN`.
+4. The exit verifies ACK, enters `OPEN`, erases its tail shared secret and tail-control keys, and returns `DHT_EXIT_OPEN_V1` under the final terminal-control reverse key. OPEN binds the ACK digest and the same activation tuple.
+5. The client verifies OPEN, enters `OPEN`, and erases its tail shared secret and tail-control keys. Only then may it send routed DHT payload.
+
+The activation nonce identifies the complete four-message semantic operation. Retransmission uses a fresh authenticated cell counter but the identical cached semantic body for that message. Before ACK, the exit retransmits READY on an identical ACTIVATE or its bounded timer. After ACK, an identical final-key-authenticated ACK makes an already-open exit retransmit OPEN. The client retransmits ACK on duplicate valid READY or its bounded timer. Duplicate semantic messages never derive keys again or advance state twice.
+
+The finalization deadline is five seconds with at most four sends of each pending semantic message using bounded 250 ms, 500 ms, 1,000 ms, and 2,000 ms retry delays. Deadline, invalid transition, conflicting duplicate, counter/authentication failure, or transport close destroys both tail and final contexts and erases all partial state. Lost/duplicate ACTIVATE, READY, ACK, and OPEN are mandatory tests.
+
+Fixed vectors must cover all eight outputs, nonce prefixes, transcript, enum or policy substitution, and proof that no tail-control, payload, or terminal-control key/nonce output is equal.
 
 The terminal key schedule binds no client address, guard identity, guard advertisement, address-bearing link transcript, or complete-route digest. The exit already knows its directly observed middle; it learns nothing about earlier relays from terminal confirmation.
 
@@ -591,6 +614,7 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - exact capability-advertisement codecs, signatures, expiry, replay, and active challenge;
 - production `LINK_OFFER_V1`/`LINK_ACCEPT_V1`, role mapping, partial-route extension, and terminal-exit confirmation;
 - source↔tail key derivation, counters, replay, replacement, expiry, redacted confirmation, and failure erasure, with fixed test vectors for guard index zero, middle replacement, final exit derivation, and cross-index/transcript substitution;
+- final ACTIVATE/READY/ACK/OPEN loss, duplication, idempotence, retry bounds, policy-enum substitution, half-open timeout, and tail-key erasure timing;
 - selection invariants for identity, XOR, prefix, branch, and loop diversity;
 - compatible bootstrap, legacy-only bounded cold start, malicious referral, and no-direct-candidate-probe behavior;
 - guard and branch active-time lease state machines;

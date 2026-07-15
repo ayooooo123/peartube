@@ -961,25 +961,34 @@ for the exact guard advertisement and observed endpoint. After readiness,
 rotation, rebuild, and resume use `GuardRevalidationIO` instead. That authority
 may contact only the exact pinned guard endpoint, using only `CAPS_QUERY_V1`,
 `CAPS_COOKIE_CHALLENGE_V1`, `CAPS_RESPONSE_V1`, `ACTIVE_CHALLENGE_V1`, and
-`ACTIVE_CHALLENGE_RESPONSE_V1` in the exact existing cookie-gated direct flow.
-It accepts only the pinned guard's matching self-advertisement, ignores
-referrals, opens or uses only guard-bound transport, and has no generic send,
-DHT query, referral-probe, hostname-resolution, or other-endpoint authority. It
-may overlap `RoutedDHTIO` only for make-before-break.
+`ACTIVE_CHALLENGE_RESPONSE_V1` in the exact existing cookie-gated direct flow,
+followed only by `LINK_OFFER_V1` and `LINK_ACCEPT_V1`. Transport framing and
+destroy are the only non-message operations. It accepts only the pinned guard's
+matching self-advertisement, ignores referrals, and has no generic send, DHT
+query, referral-probe, hostname-resolution, or other-endpoint authority. It may
+overlap `RoutedDHTIO` only for make-before-break and owns one narrow
+guard-bound handshake channel, possibly over a shared physical UDX multiplexer.
 
-After successful validation, the responsible IO issues one one-time,
-client-local guard-admission capability bound to that advertisement digest,
-endpoint, client circuit identity, branch ID, circuit ID, generation, and the
-challenge expiry. Emitting the offer consumes the capability; it cannot be
-reused across offers, branches, circuits, identities, endpoints, generations,
-or expiries. `GuardRevalidationIO` then destroys its socket, transport scratch,
-cookie/query state, advertisement scratch, and send authority. If the pinned
-guard cannot be revalidated, construction fails closed; guard replacement may
-run only through a separately bounded cold-start policy and never through
-ordinary DHT IO. This is a sender-side precondition only. It adds no wire field
-and does not change the sizes above. The `LINK_OFFER_V1` responder does not
-receive, verify, or infer the client's challenge state or local admission
-capability; it validates only the signed offer and its own
+After successful validation, `GuardRevalidationIO` internally issues one
+one-time client-local guard-admission capability bound to that advertisement
+digest, endpoint, client circuit identity, branch ID, circuit ID, generation,
+and challenge expiry, and consumes it itself while emitting OFFER. The
+capability and offer-sending authority are never returned to an outside caller.
+The capability cannot be reused across offers, branches, circuits, identities,
+endpoints, generations, or expiries. The IO remains alive until ACCEPT, failure,
+or timeout.
+
+On valid `LINK_ACCEPT_V1`, `GuardRevalidationIO` atomically transfers only the
+accepted per-branch guard link context/channel to `RouteManager`, then erases
+cookie/query, challenge, admission, advertisement-scratch, and handshake
+authority and destroys itself. If it opened a dedicated physical guard
+transport, that accepted transport transfers too; if it used a shared physical
+multiplexer, only its handshake channel closes. Failure or timeout closes every
+owned channel/dedicated transport, erases all state, and leaves an existing
+branch unaffected. Guard replacement may run only through a separately bounded
+cold-start policy and never ordinary DHT IO. This adds no wire field and does
+not change the sizes above. The responder does not receive, verify, or infer
+challenge/admission state; it validates only the signed offer and its own
 advertisement/adjacency state.
 Both ephemeral keys must be valid non-low-order X25519 public keys. IDs, keys,
 and the client nonce are non-zero and fresh. The responder identity, route role,
@@ -1364,7 +1373,10 @@ expiry, then mints the references. Only after at least one valid DHT reference
 and one valid storage pair exist does it construct, sign, and cache the
 byte-exact `DHT_EXIT_SEEDS_V1` and send it under
 `TERMINAL_CONTROL_ORDERED`. Retransmission after OPEN uses only that cached
-signed object.
+signed object. The exit sends `DHT_EXIT_OPEN_V1` first, then starts terminal
+seed delivery, but the finalization and terminal-control contexts are
+independent and impose no cross-context arrival order. Section 8.3 therefore
+defines the sole pre-OPEN terminal-control exception at the client.
 
 The client does not declare the branch private-ready until the complete signed
 set is validated within the existing 5,000 ms deadline from OPEN. Fewer than
@@ -1666,22 +1678,47 @@ generation, direction, or counter substitution fails authentication.
 
 This is the complete actor/state/class/direction/message matrix:
 
-| Receiver | State        | Accepted class / direction / semantic message                                                                                          |
-| -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| client   | extending    | `TAIL_CONTROL_ORDERED` reverse control permitted by the extension state machine                                                        |
-| exit     | tail-ready   | `TAIL_CONTROL_ORDERED` forward control; `TAIL_FINALIZE_DATAGRAM` forward `DHT_EXIT_ACTIVATE_V1` only                                   |
-| client   | `ACTIVATING` | `TAIL_FINALIZE_DATAGRAM` reverse `DHT_EXIT_READY_V1` only                                                                              |
-| exit     | `FINALIZING` | `TAIL_FINALIZE_DATAGRAM` forward identical `DHT_EXIT_ACTIVATE_V1`; `FINAL_EXIT_FINALIZE_DATAGRAM` forward `DHT_EXIT_READY_ACK_V1` only |
-| client   | `ACKING`     | `TAIL_FINALIZE_DATAGRAM` reverse identical `DHT_EXIT_READY_V1`; `FINAL_EXIT_FINALIZE_DATAGRAM` reverse `DHT_EXIT_OPEN_V1` only         |
-| client   | `OPEN`       | `ROUTE_PAYLOAD` reverse; `TERMINAL_CONTROL_ORDERED` reverse; Section 9.3 receive-only READY/OPEN grace                                 |
-| exit     | `OPEN`       | `ROUTE_PAYLOAD` forward; `TERMINAL_CONTROL_ORDERED` forward; Section 9.3 ACTIVATE/ACK grace handlers only                              |
-| either   | `DRAINING`   | existing `ROUTE_PAYLOAD` and `TERMINAL_CONTROL_ORDERED` in the actor's established direction only                                      |
-| either   | `DESTROYED`  | none                                                                                                                                   |
+| Receiver | State        | Accepted class / direction / semantic message                                                                                                                        |
+| -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| client   | extending    | `TAIL_CONTROL_ORDERED` reverse control permitted by the extension state machine                                                                                      |
+| exit     | tail-ready   | `TAIL_CONTROL_ORDERED` forward control; `TAIL_FINALIZE_DATAGRAM` forward `DHT_EXIT_ACTIVATE_V1` only                                                                 |
+| client   | `ACTIVATING` | `TAIL_FINALIZE_DATAGRAM` reverse `DHT_EXIT_READY_V1` only                                                                                                            |
+| exit     | `FINALIZING` | `TAIL_FINALIZE_DATAGRAM` forward identical `DHT_EXIT_ACTIVATE_V1`; `FINAL_EXIT_FINALIZE_DATAGRAM` forward `DHT_EXIT_READY_ACK_V1` only                               |
+| client   | `ACKING`     | reverse identical `DHT_EXIT_READY_V1`; reverse `DHT_EXIT_OPEN_V1`; reverse `TERMINAL_CONTROL_ORDERED` only for the bounded early `DHT_EXIT_SEEDS_V1` exception below |
+| client   | `OPEN`       | `ROUTE_PAYLOAD` reverse; `TERMINAL_CONTROL_ORDERED` reverse; Section 9.3 receive-only READY/OPEN grace                                                               |
+| exit     | `OPEN`       | `ROUTE_PAYLOAD` forward; `TERMINAL_CONTROL_ORDERED` forward; Section 9.3 ACTIVATE/ACK grace handlers only                                                            |
+| either   | `DRAINING`   | existing `ROUTE_PAYLOAD` and `TERMINAL_CONTROL_ORDERED` in the actor's established direction only                                                                    |
+| either   | `DESTROYED`  | none                                                                                                                                                                 |
 
 An idempotent duplicate is accepted only in the exact actor row, direction,
 class, state, message ID, activation nonce, and byte-equal semantic tuple shown
 above. A class cannot smuggle another registered message, and an actor never
 accepts the peer's half of ACTIVATE/READY/ACK/OPEN.
+
+The ACKING terminal-control exception admits at most one logical
+`DHT_EXIT_SEEDS_V1` object for this branch/generation. It accepts either the
+unfragmented signed object or `CORE_FRAGMENT_V1` with
+`objectMessageId = 0x0044`; nested fragments and every other object ID are
+fatal. The client authenticates the terminal context and exact-next counter,
+then reserves/reassembles at most one object, 4,337 bytes, and five fragments.
+It verifies the complete object digest, canonical encoding, exit signature,
+branch/circuit/generation, counts, advertisement signatures, and reference
+bindings, but while ACKING stores the result only in an early-seed quarantine.
+It must not expose, install, use, query through, or count that object as private
+readiness before a valid OPEN.
+
+The first accepted unfragmented object or fragment starts a non-extending
+5,000 ms early-reassembly deadline. A second logical object, conflicting bytes
+or digest, wrong ID, over-cap object/count, authentication/counter failure,
+signature/binding failure, or deadline failure is fatal and erases the buffer.
+If OPEN arrives with a complete valid object buffered, the client validates
+OPEN first and then immediately installs the object. If OPEN arrives while
+reassembly is incomplete, completion may continue only until
+`min(firstAcceptedFragmentAt + 5,000 ms, openAcceptedAt + 5,000 ms)`. The
+overall private-readiness deadline remains exactly 5,000 ms after valid OPEN.
+If finalization fails or OPEN does not arrive by the finalization deadline, the
+client erases the complete or partial early-seed buffer. When no object arrived
+early, OPEN enables the normal one-object receive path under the same caps.
 
 Unknown classes, wrong-size envelopes, a known class outside this matrix, more
 than one logical interpretation, or key/state absence fails closed. Ordered
@@ -1711,11 +1748,16 @@ TAIL_READY -> ACTIVATING -> FINALIZING -> ACKING -> OPEN
    It sends no routed DHT payload.
 4. The exit validates ACK, enters `OPEN`, creates the fresh 32-byte branch
    handle secret and empty destination table under Section 10.1, installs the
-   retired state below, and sends cached OPEN under a fresh
-   final-exit/finalize reverse counter. No destination handle or semantic seed
-   object exists before this transition.
+   retired state below, and sends cached OPEN first under a fresh
+   final-exit/finalize reverse counter. It then starts seed delivery on the
+   independent terminal-control context. No destination handle or semantic
+   seed object exists before this transition, and no cross-context arrival
+   order is assumed.
 5. The client validates OPEN, enters `OPEN`, installs its retired receive state,
-   and only then may send route payload.
+   and only then may send route payload. It immediately validates and installs
+   a complete quarantined early seed object, or continues the one allowed
+   incomplete reassembly under the Section 8.3 deadline; otherwise it begins
+   the normal post-OPEN seed receive path.
 
 The semantic duplicate key is `(messageId, clientActivationNonce)`. ACTIVATE
 also requires byte equality of both digests; READY, ACK, and OPEN require byte
@@ -1723,6 +1765,12 @@ equality of their entire cached semantic message. An identical semantic
 duplicate triggers only the cached next response under a fresh datagram
 counter. A conflicting tuple, digest, or body destroys the circuit. Duplicate
 messages never derive keys or advance state twice.
+
+Early seed bytes are not a finalization semantic response and never cause a
+state transition. If the finalization deadline expires without valid OPEN,
+finalization teardown also erases the early-seed quarantine and its terminal
+counter/reassembly state. Receipt of early seed bytes never extends the
+finalization or private-readiness deadline.
 
 ### 9.2 Deadline and sends
 

@@ -221,8 +221,8 @@ The following M2 state remains unchanged: cell sealing/opening, link key derivat
 
 M2's coordinator-signed topology grants remain test scaffolding and are not accepted by production M3 route construction. Every adjacent M3 link uses a bilateral handshake:
 
-1. Before creating an index-zero offer, the client verifies the live cookie-bound direct active challenge for the exact guard advertisement and endpoint. Cold start uses `BootstrapIO`. After private readiness, branch rotation, rebuild, and resume use the narrow `GuardRevalidationIO` defined below for the already pinned guard only. The responsible IO issues a one-time, local guard-admission capability bound to that advertisement, endpoint, client circuit identity, branch, circuit, generation, and challenge expiry. Sending the offer consumes it. This capability is client-local and never appears on the wire.
-2. The initiator sends a signed `LINK_OFFER_V1` binding the responder advertisement digest, both claimed roles, branch class, branch and circuit identifiers, generation, ephemeral link key, protocol parameters, and a short deadline. A client signs with a fresh circuit identity; a relay signs with its advertised relay identity.
+1. Before creating an index-zero offer, the client verifies the live cookie-bound direct active challenge for the exact guard advertisement and endpoint. Cold start uses `BootstrapIO`. After private readiness, branch rotation, rebuild, and resume use the narrow `GuardRevalidationIO` defined below for the already pinned guard only. The owning IO internally issues a one-time local guard-admission capability bound to that advertisement, endpoint, client circuit identity, branch, circuit, generation, and challenge expiry, then consumes it itself when emitting `LINK_OFFER_V1`. No capability or offer-sending authority is returned to an outside caller.
+2. The owning IO sends the signed `LINK_OFFER_V1`, binding the responder advertisement digest, both claimed roles, branch class, branch and circuit identifiers, generation, ephemeral link key, protocol parameters, and a short deadline. A client signs with a fresh circuit identity; a relay signs with its advertised relay identity.
 3. The responder verifies role derivation, its advertisement and expiry, protocol compatibility, loop/identity rules, and capacity. It does not receive or verify the client's challenge state or guard-admission capability. Indices one and two use the signed adjacency offer and tail proof instead of direct challenge.
 4. The responder returns `LINK_ACCEPT_V1`, signed by its relay identity, binding the complete offer transcript, observed predecessor endpoint, its ephemeral link key, admitted limits, and expiry.
 5. Both sides derive the existing M2 directional link contexts from the mutually authenticated transcript. Failure or timeout installs no forwarding state.
@@ -363,7 +363,7 @@ M3ContextAD =
 
 `M3ContextAD` replaces, rather than prefixes, M2 `RoutePayloadCodec` associated data for every M3 context envelope. There is no M2 descriptor ID in M3 associated data and no duplicated circuit, direction, or counter field. `innerCounter` is the unsigned big-endian 8-byte clear counter at offset `0` of the 1,100-byte inner frame and is exactly the counter supplied to nonce construction and the selected ordered or replay-window validator. A mismatch is impossible to reinterpret under another context and fails authentication. The 1,100-byte inner frame and inherited 1,073-byte maximum route payload remain unchanged. Class substitution therefore fails authentication before semantic decoding.
 
-The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current actor/state/direction, wrong-size envelopes, and more than one logical interpretation fail closed. The registry's actor-specific matrix is normative: the client accepts READY only while `ACTIVATING`, duplicate READY and OPEN while `ACKING`, and its receive-only READY/OPEN grace after `OPEN`; the exit accepts ACTIVATE only when tail-ready, duplicate ACTIVATE and ACK while `FINALIZING`, and only ACTIVATE/ACK grace handlers after `OPEN`. A context class never authorizes the peer's message or another setup message carried under the same class.
+The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current actor/state/direction, wrong-size envelopes, and more than one logical interpretation fail closed. The registry's actor-specific matrix is normative: the client accepts READY only while `ACTIVATING`; while `ACKING` it accepts duplicate READY, OPEN, and the single bounded early-seed quarantine exception; after `OPEN` it accepts the READY/OPEN grace handlers and normal terminal control. The exit accepts ACTIVATE only when tail-ready, duplicate ACTIVATE and ACK while `FINALIZING`, and only ACTIVATE/ACK grace handlers after `OPEN`. A context class never authorizes the peer's message or another setup message carried under the same class.
 
 ### Finalization acknowledgement
 
@@ -377,10 +377,18 @@ TAIL_READY → ACTIVATING → FINALIZING → ACKING → OPEN
 1. The client sends `DHT_EXIT_ACTIVATE_V1` under the tail-finalize forward datagram key and enters `ACTIVATING` while retaining the tail shared secret and keys. Until READY arrives, the client explicitly retransmits the identical semantic ACTIVATE body under a fresh tail-finalize datagram counter on the bounded timer.
 2. The exit validates the exact activation tuple, derives all final outputs, enters half-open `FINALIZING`, caches the signed semantic `DHT_EXIT_READY_V1` body, and sends it under a fresh tail-finalize reverse datagram counter. An identical activation nonce and tuple is idempotent and causes the same cached body to be sent under another fresh datagram counter; a conflicting tuple tears down the circuit.
 3. The client verifies READY, derives the same final outputs, enters `ACKING`, and sends `DHT_EXIT_READY_ACK_V1` under the final-exit/finalize forward datagram key. ACK binds the READY digest, activation nonce, branch and circuit IDs, and generation. The client retains all tail contexts and sends no DHT payload before `OPEN`.
-4. The exit verifies ACK, enters `OPEN`, creates the fresh 32-byte branch handle secret and empty destination table, erases its tail shared secret and ordered tail-control keys, installs the retired receive/send grace state below, and returns `DHT_EXIT_OPEN_V1` under the final-exit/finalize reverse datagram key. OPEN binds the ACK digest and the same activation tuple. No destination handle or signed seed object exists before this transition.
+4. The exit verifies ACK, enters `OPEN`, creates the fresh 32-byte branch handle secret and empty destination table, erases its tail shared secret and ordered tail-control keys, installs the retired receive/send grace state below, and sends `DHT_EXIT_OPEN_V1` first under the final-exit/finalize reverse datagram key. OPEN binds the ACK digest and the same activation tuple. No destination handle or signed seed object exists before this transition.
 5. The client verifies OPEN, enters `OPEN`, erases its tail shared secret and ordered tail-control keys, and installs the retired receive grace state below. Only then may it send routed DHT payload.
 
 The activation nonce and message kind identify semantic duplicates across the two dedicated finalization datagram domains. Retransmission uses a fresh datagram counter but the identical cached semantic body. Gaps and reordering are accepted within the 64-counter replay window; repeated counters are discarded, while a new counter carrying the same authenticated semantic tuple triggers only the cached idempotent response. Before ACK, the exit retransmits READY on an identical ACTIVATE or its bounded timer. After ACK, an identical final-key-authenticated ACK makes an already-open exit retransmit OPEN. The client retransmits ACK on duplicate valid READY or its bounded timer. Duplicate semantic messages never derive keys again or advance state twice.
+
+After sending OPEN first, the exit may send the completed seed object on the
+independent reverse terminal-control context. No cross-context arrival order is
+assumed. While the client remains `ACKING`, it may authenticate and buffer at
+most one `DHT_EXIT_SEEDS_V1` object, directly or in at most five core fragments
+and 4,337 bytes, but cannot expose, install, use, or treat it as readiness before
+valid OPEN. The exact deadlines and fatal rejection rules are normative in the
+registry. Finalization failure or absence of OPEN erases this quarantine.
 
 The finalization deadline is five seconds. Each pending semantic message has one initial send plus at most four retries after 250 ms, 500 ms, 1,000 ms, and 2,000 ms, for at most five sends total.
 
@@ -406,14 +414,23 @@ Make-before-break creates a complete independent branch generation alongside the
 
 Reusing that pinned guard after readiness never reopens bootstrap or ordinary
 DHT authority. For rotation, rebuild, or resume, `GuardRevalidationIO` may
-overlap an existing `RoutedDHTIO` branch only long enough to revalidate the
-exact pinned guard endpoint and establish its new guard-bound transport. It
-uses the existing cookie-gated CAPS/challenge flow, emits one one-time local
-guard-admission capability, and then destroys its socket, cookie/query state,
-advertisement scratch state, and send authority. If the pinned guard cannot be
-revalidated, the new branch fails closed. Guard replacement runs only through
-a separately bounded cold-start policy; it never turns a revalidation failure
-into ordinary DHT IO or an unbounded direct probe.
+overlap an existing `RoutedDHTIO` branch while it owns one narrow guard-bound
+handshake channel, possibly carried by a shared physical UDX multiplexer. It is
+pinned to the exact guard endpoint and can send or receive only the five
+CAPS/challenge messages plus `LINK_OFFER_V1` and `LINK_ACCEPT_V1`, along with
+transport framing and destroy. It internally issues and consumes the one-time
+admission capability when sending OFFER and remains alive through ACCEPT.
+
+On a valid `LINK_ACCEPT_V1`, `GuardRevalidationIO` atomically transfers only
+the accepted per-branch guard link context/channel to `RouteManager`, then
+erases all cookie, challenge, admission, and handshake authority. If it opened
+a dedicated physical guard transport, that accepted transport is transferred
+too; on a shared multiplexer, only the temporary handshake channel closes. On
+failure or timeout it closes every channel/transport it owns, erases its state,
+and leaves the existing branch untouched. The IO is destroyed only after
+successful transfer or failure. Guard replacement runs only through a
+separately bounded cold-start policy; revalidation failure never becomes
+ordinary DHT IO or an unbounded direct probe.
 
 Defaults are prototype policy values, not a stable wire-format promise:
 
@@ -480,10 +497,12 @@ provenance, identity, capability, endpoint, and expiry, and mints the required
 handles. Only then does it build, sign, and cache the byte-exact semantic seed
 object for retransmission.
 
-Immediately after OPEN, every lookup and announce branch receives a signed
+After entering OPEN and sending OPEN first, every lookup and announce exit sends a signed
 `DHT_EXIT_SEEDS_V1` containing one to three public-DHT references and one to
 five actively validated `PRIVATE_RECORDS_V1` storage advertisement/reference
-pairs. A zero-storage set is invalid; storage readiness is not an
+pairs. The independent terminal-control context may deliver it before OPEN; the
+client then quarantines it under the bounded ACKING exception above. A
+zero-storage set is invalid; storage readiness is not an
 unauthenticated per-branch feature. The client cannot declare the branch
 private-ready until it validates at least one pair. Missing, invalid, or late
 storage seeds, or any candidate recheck, handle mint, object build, or signature
@@ -550,7 +569,7 @@ It rejects legacy peer announce/unannounce, legacy peer lookup/find-peer at the 
 
 1. `BootstrapIO` exists only during the separately bounded cold-start policy. It owns the temporary direct socket used for permitted bootstrap/guard discovery and the first guard link establishment.
 2. Before private readiness, `BootstrapIO` destroys its ordinary DHT socket, clears its public routing state and direct-discovery scratch state, and transfers only the authenticated guard link, the pinned guard identity/endpoint, and signed provenance-tagged advertisements.
-3. `GuardRevalidationIO` may exist after readiness only for rotation, rebuild, or resume. It can contact exactly the pinned guard endpoint and can encode, send, receive, and decode only `CAPS_QUERY_V1`, `CAPS_COOKIE_CHALLENGE_V1`, `CAPS_RESPONSE_V1`, `ACTIVE_CHALLENGE_V1`, and `ACTIVE_CHALLENGE_RESPONSE_V1` using the exact existing cookie-gated direct flow. It accepts only the pinned guard's matching self-advertisement and ignores referrals. It may open and use only guard-bound transport, may overlap `RoutedDHTIO` for make-before-break, issues exactly one one-time client-local guard-admission capability, and then destroys and clears itself. It has no generic send, DHT query, referral-probe, hostname-resolution, or other-endpoint authority.
+3. `GuardRevalidationIO` may exist after readiness only for rotation, rebuild, or resume. It contacts exactly the pinned guard endpoint and owns a narrow guard-bound handshake channel that can encode, send, receive, and decode only `CAPS_QUERY_V1`, `CAPS_COOKIE_CHALLENGE_V1`, `CAPS_RESPONSE_V1`, `ACTIVE_CHALLENGE_V1`, `ACTIVE_CHALLENGE_RESPONSE_V1`, `LINK_OFFER_V1`, and `LINK_ACCEPT_V1`, plus transport framing/destroy. It accepts only the pinned guard's matching self-advertisement and ignores referrals. It may overlap `RoutedDHTIO` for make-before-break, internally issues and consumes one admission capability at OFFER, and on valid ACCEPT atomically transfers only the accepted branch link channel/context to `RouteManager` before erasing and destroying itself. A dedicated accepted physical transport transfers with the link; a shared physical multiplexer keeps only the accepted link context while the handshake channel closes. Failure closes only its owned channel/transport and leaves the existing branch intact. It has no generic send, DHT query, referral-probe, hostname-resolution, or other-endpoint authority.
 4. `RoutedDHTIO` services DHT-RPC exclusively through ready circuit branches and exit-issued handles. It has no method that can send an ordinary client DHT datagram.
 
 In `RoutedDHTIO` mode, DHT-RPC must not bind a background public DHT socket, perform client NAT sampling, consume exit-observed `to` addresses as the client's address, maintain public direct-dial authority, send background pings or down hints, retry via a direct socket, refresh against bootstrap nodes, or resolve/dial newly learned DHT addresses itself. Routed destination metadata lives in a separate handle table and can never be promoted into the client's public routing table.
@@ -758,13 +777,13 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - source↔tail key derivation, counters, replay, replacement, expiry, redacted confirmation, and failure erasure, with fixed test vectors for guard index zero, middle replacement, final exit derivation, and cross-index/transcript substitution;
 - context-class encoding, associated-data substitution, state-allowed class matrix, and exact 1,101-byte envelope bounds;
 - fixed 54-byte `M3ContextAD` byte vectors and one-field substitution tests, including clear-counter/nonce/replay equality;
-- final ACTIVATE/READY/ACK/OPEN loss, counter gaps, reordering, repeated counters, semantic duplication, idempotence, retry bounds, policy-enum substitution, half-open timeout, delayed ACTIVATE/READY/OPEN after OPEN, post-open grace erasure, and tail-key erasure timing;
+- final ACTIVATE/READY/ACK/OPEN loss, counter gaps, reordering, repeated counters, semantic duplication, idempotence, retry bounds, policy-enum substitution, half-open timeout, delayed ACTIVATE/READY/OPEN after OPEN, seeds arriving before/after OPEN across independent contexts, early-seed one-object/byte/fragment/deadline caps, post-open grace erasure, and tail-key erasure timing;
 - selection invariants for identity, XOR, prefix, branch, and loop diversity;
 - compatible bootstrap, legacy-only bounded cold start, malicious referral, and no-direct-candidate-probe behavior;
 - guard and branch active-time lease state machines;
 - make-before-break, drain, network-change, suspend, resume, and teardown;
 - exact command-policy enforcement and unknown-command rejection;
-- required-mode IO matrix, temporary bootstrap-socket destruction, guard-only `GuardRevalidationIO` message/endpoint allowlist and one-time capability consumption, disabled NAT sampling/background DHT IO, and stable M4-required errors;
+- required-mode IO matrix, temporary bootstrap-socket destruction, guard-only seven-message `GuardRevalidationIO` allowlist, internal one-time capability consumption, dedicated/shared-channel ACCEPT handoff, failure isolation, disabled NAT sampling/background DHT IO, and stable M4-required errors;
 - arbitrary exit destinations, address substitution, stale handles, cross-exit handles, client-side relay-as-destination exclusion, and handle invalidation;
 - DHT and storage token/exit/handle binding across rotation;
 - private presence record signatures, bounds, expiry, sequence conflicts, tombstone retention, and source-address exclusion;
@@ -803,7 +822,7 @@ The suite proves:
 - insufficient private-record density fails closed;
 - zero and stale exit storage seeds report private records unavailable, while a locally validated seed converges to the deterministic closest set;
 - branch and guard rotations follow the active-time policy;
-- rotation, rebuild, and resume revalidate only the exact pinned guard through the five-message `GuardRevalidationIO` allowlist, while failure rotates only through the bounded cold-start policy;
+- rotation, rebuild, and resume revalidate only the exact pinned guard through the seven-message `GuardRevalidationIO` allowlist, atomically hand an accepted link to `RouteManager`, and on failure leave the existing branch intact while replacement uses only the bounded cold-start policy;
 - suspension destroys live branches and resume uses fresh generations, keys, counters, handles, tokens, and active challenges;
 - an interface change cancels outstanding work and invalidates all branch-bound authority;
 - Node and Bare produce the same protocol result.
@@ -823,7 +842,7 @@ A Linux network-namespace job captures every relevant interface and fails unless
 - no endpoint address from private material enters a public routing table or direct probe;
 - all processes, sockets, circuits, queues, and owned secret state are gone after teardown.
 
-A separate authority trap intercepts ordinary DHT socket creation and send capability. It proves the temporary `BootstrapIO` socket is destroyed before readiness, no ordinary DHT socket exists afterward, and no such send authority can be invoked. It separately instruments `GuardRevalidationIO` and proves that it can contact only the exact pinned guard, can use only the five permitted CAPS/challenge messages and guard-bound transport, cannot probe referrals or any other endpoint, emits at most one local admission capability, and destroys all authority afterward. `GuardRevalidationIO` may overlap `RoutedDHTIO` during make-before-break, but the pinned guard remains the only permitted post-readiness client network destination.
+A separate authority trap intercepts ordinary DHT socket creation and send capability. It proves the temporary `BootstrapIO` socket is destroyed before readiness, no ordinary DHT socket exists afterward, and no such send authority can be invoked. It separately instruments `GuardRevalidationIO` and proves that it can contact only the exact pinned guard, use only the seven permitted CAPS/challenge/link messages plus framing/destroy, cannot probe referrals or any other endpoint, internally consumes exactly one admission capability at OFFER, and remains alive through ACCEPT. A successful dedicated/shared-channel case transfers only the accepted link context/transport to `RouteManager`; failure closes only owned state and leaves an existing branch intact. `GuardRevalidationIO` then destroys all residual authority. It may overlap `RoutedDHTIO` during make-before-break, but the pinned guard remains the only permitted post-readiness client network destination.
 
 ### CI and packaging
 

@@ -475,16 +475,21 @@ u64  cookieExpiresAtMs
 
 The body is exactly 176 bytes and the wire message is exactly 184 bytes. The
 deadline is at most 5,000 ms after local send time. The challenger key and
-nonce are fresh for one challenge. Direct challenge is permitted only for a
-prospective guard and must arrive from the same observed endpoint while the
-exact phase-1 CAPS query/cookie tuple is live in the responder's bounded
-five-second cache. Pre-validation work is bounded to fixed-field parsing, one
+nonce are fresh for one challenge. Cookie-gated direct challenge is permitted
+only for (a) a client probing a prospective guard or (b) a route exit probing a
+`PRIVATE_RECORDS_V1` storage candidate under its bounded capability-cache
+admission budget before minting a `SIGNED_CAPABILITY_HANDLE`. In both cases it
+must arrive from the same observed source endpoint that completed the
+challenger's own phase-1 CAPS query/cookie flow, while that exact tuple remains
+live in the responder's bounded five-second cache. The exit uses its own public
+source endpoint and never forwards or substitutes a client endpoint.
+Pre-validation work is bounded to fixed-field parsing, one
 4,096-entry cache lookup, and at most one keyed-BLAKE2b cookie recomputation.
 The responder performs no X25519, Ed25519 signing, route-key proof work, or
 exchange allocation before that succeeds. Invalid/unbound challenge receives
 zero response bytes.
 
-Middle and exit candidates are never sent direct `ACTIVE_CHALLENGE_V1`.
+Clients never directly challenge middle or exit candidates.
 Behind a guard, the current tail sends signed `LINK_OFFER_V1` through the
 partially authenticated route; its 374-byte authenticated request, LINK_ACCEPT,
 and tail transcript jointly prove the candidate identity/route key. Thus routed
@@ -2590,8 +2595,12 @@ The cap includes the complete canonical object header and signature suffix.
 
 This checklist includes every assigned ID. `Body/wire` is repeated here to
 make ownership review self-contained; Section 13.3 remains authoritative for
-size/carrier conflicts. Error IDs are values inside the authenticated
-`ROUTED_REPLY_V1.errorCode` field and do not create standalone objects.
+size/carrier conflicts. All 15 error IDs are valid inside authenticated
+`ROUTED_REPLY_V1.errorCode`. The exact eleven-code subset `0x0180`, `0x0181`,
+`0x0182`, `0x0185..0x0188`, and `0x018b..0x018e` is also valid inside
+authenticated `EXIT_RPC_RESPONSE_V1.errorCode`; `0x0183`, `0x0184`, `0x0189`,
+and `0x018a` are exit-local and routed-reply-only. Error values do not create
+standalone objects.
 
 | ID/version  | Object, message, command, or error    | Transport / context                    | Authentication / domain                                                     | Max body / wire bytes | Approved-design behavior section               | Implementation owner |
 | ----------- | ------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------- | --------------------- | ---------------------------------------------- | -------------------- |
@@ -2627,21 +2636,21 @@ size/carrier conflicts. Error IDs are values inside the authenticated
 | `0x0121/1`  | `IMMUTABLE_PUT`                       | embedded routed command                | route AEAD + same-exit token + immutable content hash                       | 1,090 / 1,319 request | Token and Address Binding / Command Policy     | dht-rpc              |
 | `0x0122/1`  | `MUTABLE_GET`                         | embedded routed command                | route AEAD + existing HyperDHT mutable signature on result                  | 40 / 269 request      | Command Policy                                 | dht-rpc              |
 | `0x0123/1`  | `MUTABLE_PUT`                         | embedded routed command                | route AEAD + same-exit token + existing mutable signature                   | 1,066 / 1,295 request | Token and Address Binding / Command Policy     | dht-rpc              |
-| `0x0180/v1` | `ROUTED_ERROR_MALFORMED`              | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Errors and Observability                       | private-routes       |
-| `0x0181/v1` | `ROUTED_ERROR_UNSUPPORTED_COMMAND`    | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Command Policy / Errors                        | private-routes       |
-| `0x0182/v1` | `ROUTED_ERROR_POLICY_MISMATCH`        | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Command Policy / Errors                        | private-routes       |
-| `0x0183/v1` | `ROUTED_ERROR_DESTINATION_INVALID`    | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x0184/v1` | `ROUTED_ERROR_DESTINATION_EXPIRED`    | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x0185/v1` | `ROUTED_ERROR_DEADLINE_EXPIRED`       | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x0186/v1` | `ROUTED_ERROR_BUSY`                   | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty coarse error                                              | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0187/v1` | `ROUTED_ERROR_RESPONSE_TOO_LARGE`     | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0188/v1` | `ROUTED_ERROR_AMPLIFICATION_EXCEEDED` | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0189/v1` | `ROUTED_ERROR_UPSTREAM_TIMEOUT`       | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x018a/v1` | `ROUTED_ERROR_UPSTREAM_REJECTED`      | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x018b/v1` | `ROUTED_ERROR_TOKEN_INVALID`          | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Token and Address Binding                      | private-routes       |
-| `0x018c/v1` | `ROUTED_ERROR_STORAGE_UNAVAILABLE`    | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Compatible Storage Overlay                     | private-routes       |
-| `0x018d/v1` | `ROUTED_ERROR_RECORD_CONFLICT`        | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty error payload                                             | n/a / reply cap 8,270 | Native Private Presence Records                | private-routes       |
-| `0x018e/v1` | `ROUTED_ERROR_QUOTA_EXCEEDED`         | `ROUTED_REPLY_V1.errorCode`            | route AEAD; empty coarse error                                              | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
+| `0x0180/v1` | `ROUTED_ERROR_MALFORMED`              | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Errors and Observability                       | private-routes       |
+| `0x0181/v1` | `ROUTED_ERROR_UNSUPPORTED_COMMAND`    | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Command Policy / Errors                        | private-routes       |
+| `0x0182/v1` | `ROUTED_ERROR_POLICY_MISMATCH`        | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Command Policy / Errors                        | private-routes       |
+| `0x0183/v1` | `ROUTED_ERROR_DESTINATION_INVALID`    | routed reply only; exit-local          | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x0184/v1` | `ROUTED_ERROR_DESTINATION_EXPIRED`    | routed reply only; exit-local          | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x0185/v1` | `ROUTED_ERROR_DEADLINE_EXPIRED`       | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x0186/v1` | `ROUTED_ERROR_BUSY`                   | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
+| `0x0187/v1` | `ROUTED_ERROR_RESPONSE_TOO_LARGE`     | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
+| `0x0188/v1` | `ROUTED_ERROR_AMPLIFICATION_EXCEEDED` | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
+| `0x0189/v1` | `ROUTED_ERROR_UPSTREAM_TIMEOUT`       | routed reply only; exit-local          | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x018a/v1` | `ROUTED_ERROR_UPSTREAM_REJECTED`      | routed reply only; exit-local          | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x018b/v1` | `ROUTED_ERROR_TOKEN_INVALID`          | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Token and Address Binding                      | private-routes       |
+| `0x018c/v1` | `ROUTED_ERROR_STORAGE_UNAVAILABLE`    | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Compatible Storage Overlay                     | private-routes       |
+| `0x018d/v1` | `ROUTED_ERROR_RECORD_CONFLICT`        | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Native Private Presence Records                | private-routes       |
+| `0x018e/v1` | `ROUTED_ERROR_QUOTA_EXCEEDED`         | routed reply / storage response        | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
 | `0x0200/1`  | `PRIVATE_FIND_NODE`                   | embedded routed command                | route AEAD; target orders only                                              | 69 / 298 request      | Compatible Storage Overlay                     | HyperDHT             |
 | `0x0201/v1` | `PRIVATE_FIND_NODE_RESPONSE_V1`       | nested routed reply                    | storage Ed25519, `hyperdht-private-routes/m3/private-find-node-response/v1` | 2,891 / 2,963         | Compatible Storage Overlay                     | HyperDHT             |
 | `0x0280/v1` | `PRIVATE_PRESENCE_RECORD_V1`          | nested storage object                  | endpoint Ed25519, `hyperdht-private-routes/m3/private-presence-record/v1`   | 899 / 971             | Native Private Presence Records                | HyperDHT             |

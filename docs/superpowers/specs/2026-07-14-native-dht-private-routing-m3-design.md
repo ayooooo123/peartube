@@ -326,7 +326,20 @@ Context classes are exact:
 4 = TERMINAL_CONTROL_ORDERED
 ```
 
-The class byte is public to forwarding relays but reveals only setup/control/payload phase. It is authenticated end to end by including `u8 contextClass || u32 M3ProtocolVersion || 16B branchId || 16B circuitId || u64 generation || u8 direction || u64 innerCounter` in the selected context's AEAD associated data. M3 extends `RoutePayloadCodec` to include this associated-data prefix; the 1,100-byte inner frame and its inherited 1,073-byte maximum route payload remain unchanged. Class substitution therefore fails authentication even before semantic decoding.
+The class byte is public to forwarding relays but reveals only setup/control/payload phase. Every M3 context uses exactly this 54-byte AEAD associated data and no other bytes:
+
+```text
+M3ContextAD =
+  u8 contextClass ||
+  u32be M3ProtocolVersion ||
+  16B branchId ||
+  16B circuitId ||
+  u64be generation ||
+  u8 direction ||
+  u64be innerCounter
+```
+
+`M3ContextAD` replaces, rather than prefixes, M2 `RoutePayloadCodec` associated data for every M3 context envelope. There is no M2 descriptor ID in M3 associated data and no duplicated circuit, direction, or counter field. `innerCounter` is the unsigned big-endian 8-byte clear counter at offset `0` of the 1,100-byte inner frame and is exactly the counter supplied to nonce construction and the selected ordered or replay-window validator. A mismatch is impossible to reinterpret under another context and fails authentication. The 1,100-byte inner frame and inherited 1,073-byte maximum route payload remain unchanged. Class substitution therefore fails authentication before semantic decoding.
 
 The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current state, wrong-size envelopes, and more than one logical interpretation fail closed. The allowed set is:
 
@@ -672,6 +685,7 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - production `LINK_OFFER_V1`/`LINK_ACCEPT_V1`, role mapping, partial-route extension, and terminal-exit confirmation;
 - source↔tail key derivation, counters, replay, replacement, expiry, redacted confirmation, and failure erasure, with fixed test vectors for guard index zero, middle replacement, final exit derivation, and cross-index/transcript substitution;
 - context-class encoding, associated-data substitution, state-allowed class matrix, and exact 1,101-byte envelope bounds;
+- fixed 54-byte `M3ContextAD` byte vectors and one-field substitution tests, including clear-counter/nonce/replay equality;
 - final ACTIVATE/READY/ACK/OPEN loss, counter gaps, reordering, repeated counters, semantic duplication, idempotence, retry bounds, policy-enum substitution, half-open timeout, delayed ACTIVATE/READY/OPEN after OPEN, post-open grace erasure, and tail-key erasure timing;
 - selection invariants for identity, XOR, prefix, branch, and loop diversity;
 - compatible bootstrap, legacy-only bounded cold start, malicious referral, and no-direct-candidate-probe behavior;

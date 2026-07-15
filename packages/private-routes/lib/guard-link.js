@@ -30,14 +30,27 @@ const LINK_OFFER_DOMAIN = b4a.from('hyperdht-private-routes/m3/link-offer/v1')
 const LINK_ACCEPT_DOMAIN = b4a.from('hyperdht-private-routes/m3/link-accept/v1')
 const LINK_OFFER_DIGEST_DOMAIN = b4a.from('hyperdht-private-routes/m3/link-offer-digest/v1')
 const LINK_ACCEPT_DIGEST_DOMAIN = b4a.from('hyperdht-private-routes/m3/link-accept-digest/v1')
+const INITIATOR_CELL_ID_DOMAIN = b4a.from('hyperdht-private-routes/m3/cell-id/initiator/v1')
+const RESPONDER_CELL_ID_DOMAIN = b4a.from('hyperdht-private-routes/m3/cell-id/responder/v1')
 const MAX_U32 = 0xffff_ffff
 const MAX_U64 = 0xffff_ffff_ffff_ffffn
 const PENDING = new WeakMap()
 const PENDING_TOKENS = new Set()
 const SPENT = new WeakSet()
 const ESTABLISHED = new WeakMap()
+const SPENT_ESTABLISHED = new WeakSet()
 const MAX_PENDING_OFFERS = 4096
 const MAX_RESPONDER_REPLAYS = 4096
+
+// Deep test import only. Synthetic states still pass through the production
+// one-shot established-link adoption boundary.
+export const TEST_ONLY_M3_ESTABLISHED_ISSUER = Object.freeze({
+  issue(state) {
+    const handle = Object.freeze({})
+    ESTABLISHED.set(handle, { ...state })
+    return handle
+  }
+})
 
 const byteLengthGetter = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
@@ -195,6 +208,20 @@ function digest(domain, bytes) {
     return cryptoSuite.hash([prefix, domain, bytes])
   } finally {
     clear(prefix)
+  }
+}
+
+function cellIds(completeOfferDigest) {
+  const initiator = digest(INITIATOR_CELL_ID_DOMAIN, completeOfferDigest)
+  const responder = digest(RESPONDER_CELL_ID_DOMAIN, completeOfferDigest)
+  try {
+    return {
+      initiatorCellId: copy(subarray(initiator, 0, 16), 16),
+      responderCellId: copy(subarray(responder, 0, 16), 16)
+    }
+  } finally {
+    clear(initiator)
+    clear(responder)
   }
 }
 
@@ -382,6 +409,7 @@ function context(cellClass, key, noncePrefix, sender, now) {
 function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
   const offerDigest = digest(LINK_OFFER_DIGEST_DOMAIN, offer.encoded)
   const acceptDigest = digest(LINK_ACCEPT_DIGEST_DOMAIN, accept.encoded)
+  const ids = cellIds(offerDigest)
   const contexts = {}
   try {
     for (const cellClass of [CELL_CLASS.CONTROL, CELL_CLASS.STREAM, CELL_CLASS.DATAGRAM]) {
@@ -418,6 +446,10 @@ function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
       }
     }
     return {
+      initiator,
+      completeOfferDigest: copy(offerDigest, 32),
+      localId: copy(initiator ? ids.initiatorCellId : ids.responderCellId, 16),
+      peerLocalId: copy(initiator ? ids.responderCellId : ids.initiatorCellId, 16),
       physicalChannel,
       localIdentity: copy(initiator ? offer.initiatorIdentity : offer.responderIdentity, 32),
       peerIdentity: copy(initiator ? offer.responderIdentity : offer.initiatorIdentity, 32),
@@ -436,6 +468,8 @@ function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
     clearContexts(contexts)
     throw err
   } finally {
+    clear(ids.initiatorCellId)
+    clear(ids.responderCellId)
     clear(offerDigest)
     clear(acceptDigest)
   }
@@ -465,6 +499,9 @@ function clearState(state) {
   const physicalChannel = state.physicalChannel
   clear(state.localIdentity)
   clear(state.peerIdentity)
+  clear(state.completeOfferDigest)
+  clear(state.localId)
+  clear(state.peerLocalId)
   clear(state.branchId)
   clear(state.circuitId)
   clear(state.responderAdvertisementDigest)
@@ -948,6 +985,27 @@ export function destroyM3EstablishedLink(value) {
   const state = value !== null && typeof value === 'object' ? ESTABLISHED.get(value) : null
   if (!state) return false
   ESTABLISHED.delete(value)
+  SPENT_ESTABLISHED.add(value)
+  clearState(state)
+  return true
+}
+
+// Deep production import used only by M3AdjacencyAuthority. Ownership moves
+// out of guard-link exactly once; callers cannot inspect or reuse the handle.
+export function takeM3EstablishedLink(value) {
+  const state = value !== null && typeof value === 'object' ? ESTABLISHED.get(value) : null
+  if (!state) {
+    if (value !== null && typeof value === 'object' && SPENT_ESTABLISHED.has(value)) replay()
+    authentication()
+  }
+  ESTABLISHED.delete(value)
+  SPENT_ESTABLISHED.add(value)
+  return state
+}
+
+// Deep production import used when adoption fails after the one-shot take.
+export function destroyTakenM3EstablishedLink(state) {
+  if (state === null || typeof state !== 'object') return false
   clearState(state)
   return true
 }

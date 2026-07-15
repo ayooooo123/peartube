@@ -11,7 +11,6 @@ function completeSurface() {
   return (
     typeof routes.RouteManager.createDynamic === 'function' &&
     typeof routes.M3AdjacencyAuthority === 'function' &&
-    typeof routes.RouteExtensionSession === 'function' &&
     typeof routeManagerModule.TEST_ONLY_DYNAMIC_OBSERVER === 'symbol'
   )
 }

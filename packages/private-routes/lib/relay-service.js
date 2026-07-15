@@ -3,6 +3,14 @@ import b4a from 'b4a'
 import { CELL_SIZE, MAX_CELL_PAYLOAD, CellCodec } from './cell-codec.js'
 import { PrivateRouteError } from './errors.js'
 import { isLinkTicketChecker } from './link-setup.js'
+import {
+  abortM3Install,
+  beginM3Install,
+  commitM3Install,
+  createM3ForwardingOwner,
+  releaseM3InstalledPair,
+  validateM3Install
+} from './m3-adjacency-runtime.js'
 import { CELL_CLASS, CIRCUIT_STATE, DIRECTION } from './protocol.js'
 
 export const DEFAULT_MAX_CIRCUITS = 128
@@ -16,6 +24,7 @@ export const RELAY_DESTROY_PAYLOAD = b4a.from([0xff, 0x44, 0x45, 0x53, 0x54, 0x5
 export const TEST_ONLY_RELAY_OBSERVER = Symbol('test-only-relay-observer')
 
 const DESTROY_PAYLOAD = b4a.from(RELAY_DESTROY_PAYLOAD)
+const STATE_NAME = Object.freeze(['CREATE', 'CREATED', 'OPEN', 'DRAINING', 'DESTROYED'])
 const MAX_TIME = Number.MAX_SAFE_INTEGER
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferArrayBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer').get
@@ -245,6 +254,8 @@ export class RelayService {
   #sourceCircuits
   #queuedBytes
   #destroying
+  #installingM3
+  #m3InstallViolated
 
   constructor(options) {
     if (!safeObject(options)) invalidRoute()
@@ -316,6 +327,8 @@ export class RelayService {
     this.#sourceCircuits = new Map()
     this.#queuedBytes = 0
     this.#destroying = false
+    this.#installingM3 = false
+    this.#m3InstallViolated = false
   }
 
   get activeCircuits() {
@@ -391,6 +404,93 @@ export class RelayService {
       if (previous) this.#clearTicket(previous)
       if (next) this.#clearTicket(next)
       throw err
+    }
+  }
+
+  installM3(previousRuntime, nextRuntime) {
+    if (this.#installingM3) {
+      this.#m3InstallViolated = true
+      invalidRoute()
+    }
+    this.#installingM3 = true
+    this.#m3InstallViolated = false
+    let plan = null
+    let record = null
+    let committed = false
+    try {
+      plan = beginM3Install(previousRuntime, nextRuntime)
+      const current = this.#readTime()
+      if (this.#m3InstallViolated) invalidRoute()
+      if (current > MAX_TIME - this.#halfOpenTimeout) invalidRoute()
+      validateM3Install(plan, this.#identity, this.#maxCircuits, current)
+      const previous = plan.previous
+      const next = plan.next
+      const expiresAt = previous.expiresAt < next.expiresAt ? previous.expiresAt : next.expiresAt
+      if (expiresAt <= BigInt(current)) invalidRoute()
+      if (this.#records.size >= this.#maxCircuits) throw PrivateRouteError.CIRCUIT_LIMIT()
+
+      const sourceKey = identityHex(previous.peerIdentity)
+      if ((this.#sourceCircuits.get(sourceKey) || 0) >= this.#maxCircuitsPerSource) {
+        throw PrivateRouteError.CIRCUIT_LIMIT()
+      }
+      const previousKey = mapKey(previous.peerIdentity, previous.localId)
+      const nextKey = mapKey(next.peerIdentity, next.localId)
+      if (
+        this.#previousBindings.has(previousKey) ||
+        this.#nextBindings.has(previousKey) ||
+        this.#previousBindings.has(nextKey) ||
+        this.#nextBindings.has(nextKey)
+      ) {
+        invalidRoute()
+      }
+
+      record = {
+        previous: null,
+        next: null,
+        previousKey,
+        nextKey,
+        sourceKey,
+        state: CIRCUIT_STATE.CREATE,
+        installedAt: current,
+        halfOpenDeadline: current + this.#halfOpenTimeout,
+        queue: [],
+        queuedBytes: 0,
+        busy: false,
+        transitioning: false,
+        flushing: false,
+        destroyed: false,
+        m3: true
+      }
+      this.#previousBindings.set(previousKey, record)
+      this.#nextBindings.set(nextKey, record)
+      this.#records.add(record)
+      this.#sourceCircuits.set(sourceKey, (this.#sourceCircuits.get(sourceKey) || 0) + 1)
+
+      const forwardingOwner = createM3ForwardingOwner(() => this.#destroyRecord(record, false))
+      const moved = commitM3Install(plan, expiresAt, forwardingOwner)
+      committed = true
+      record.previous = moved.previous
+      record.next = moved.next
+      const service = this
+      return Object.freeze({
+        diagnostics() {
+          if (record.destroyed) throw PrivateRouteError.ERR_DESTROYED()
+          return Object.freeze({ state: STATE_NAME[record.state], expiresAt })
+        },
+        destroy() {
+          if (record.destroyed) return false
+          service.#destroyRecord(record, false)
+          return true
+        }
+      })
+    } catch (err) {
+      if (record && !committed) this.#removePendingM3Record(record)
+      if (plan && !committed) abortM3Install(plan)
+      if (record && committed) this.#destroyRecord(record, false)
+      throw err
+    } finally {
+      this.#installingM3 = false
+      this.#m3InstallViolated = false
     }
   }
 
@@ -773,6 +873,17 @@ export class RelayService {
     this.#queuedBytes += CELL_SIZE
   }
 
+  #removePendingM3Record(record) {
+    this.#previousBindings.delete(record.previousKey)
+    this.#nextBindings.delete(record.nextKey)
+    this.#records.delete(record)
+    const sourceCount = this.#sourceCircuits.get(record.sourceKey) || 0
+    if (sourceCount <= 1) this.#sourceCircuits.delete(record.sourceKey)
+    else this.#sourceCircuits.set(record.sourceKey, sourceCount - 1)
+    record.destroyed = true
+    record.state = CIRCUIT_STATE.DESTROYED
+  }
+
   #destroyRecord(record, notify) {
     if (!record || record.destroyed) return
     record.destroyed = true
@@ -796,8 +907,12 @@ export class RelayService {
     record.queuedBytes = 0
 
     const contexts = this.#contexts(record)
-    this.#clearTicket(record.previous)
-    this.#clearTicket(record.next)
+    if (record.m3) {
+      releaseM3InstalledPair(record.previous, record.next)
+    } else {
+      this.#clearTicket(record.previous)
+      this.#clearTicket(record.next)
+    }
     this.#safeObserve({ type: 'zeroized', contexts, queuedBytes: this.#queuedBytes })
 
     if (this.#destroying) {

@@ -109,6 +109,7 @@ export {
   BootstrapRequestTable
 } from './lib/bootstrap-envelope.js'
 export { RouteManager } from './lib/route-manager.js'
+export { M3AdjacencyAuthority } from './lib/m3-adjacency-runtime.js'
 export { createLiveRouteNode } from './lib/live-route-node.js'
 export {
   DEFAULT_COMPILED_LOW_WATER_MARK,

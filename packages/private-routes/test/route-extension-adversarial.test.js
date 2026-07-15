@@ -21,7 +21,6 @@ function hasSurface() {
   return (
     typeof routes.RouteManager.createDynamic === 'function' &&
     typeof routes.M3AdjacencyAuthority === 'function' &&
-    typeof routes.RouteExtensionSession === 'function' &&
     typeof routes.RelayService.prototype.installM3 === 'function' &&
     typeof TEST_ONLY_DYNAMIC_OBSERVER === 'symbol'
   )
@@ -31,7 +30,6 @@ function requireSurface(t) {
   const required = [
     ['RouteManager.createDynamic', routes.RouteManager.createDynamic, 'function'],
     ['M3AdjacencyAuthority', routes.M3AdjacencyAuthority, 'function'],
-    ['RouteExtensionSession', routes.RouteExtensionSession, 'function'],
     ['RelayService.installM3', routes.RelayService.prototype.installM3, 'function'],
     ['deep TEST_ONLY_DYNAMIC_OBSERVER', TEST_ONLY_DYNAMIC_OBSERVER, 'symbol']
   ]

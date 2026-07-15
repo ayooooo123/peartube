@@ -33,8 +33,9 @@ import {
 } from './descriptor.js'
 import { PrivateRouteError } from './errors.js'
 import { createLinkSetupAuthority } from './link-setup.js'
+import { isM3AdjacencyAuthority } from './m3-adjacency-runtime.js'
 import { PRIVACY_OPERATION } from './privacy-domains.js'
-import { CELL_CLASS, DIRECTION, DOMAIN, ROLE, roleForIdentity } from './protocol.js'
+import { BRANCH_CLASS, CELL_CLASS, DIRECTION, DOMAIN, ROLE, roleForIdentity } from './protocol.js'
 import { RelayService, TEST_ONLY_RELAY_OBSERVER } from './relay-service.js'
 import {
   ROUTE_ENDPOINT,
@@ -45,6 +46,23 @@ import { VirtualNetwork } from './virtual-network.js'
 
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype)
 const bufferByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get
+const bufferFill = Uint8Array.prototype.fill
+
+export const TEST_ONLY_DYNAMIC_OBSERVER = Symbol('test-only-dynamic-observer')
+
+const DYNAMIC_OPTION_KEYS = new Set([
+  'adjacencyAuthority',
+  'bootstrapIOFactory',
+  'cancel',
+  'crypto',
+  'guardRevalidationIOFactory',
+  'limits',
+  'now',
+  'randomBytes',
+  'routedDiscoveryService',
+  'schedule',
+  'tailControlTransportFactory'
+])
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -74,6 +92,91 @@ function same(a, b) {
     return false
   }
 }
+function clear(value) {
+  try {
+    if (b4a.isBuffer(value)) bufferFill.call(value, 0)
+  } catch {
+    // Best-effort zeroization only.
+  }
+}
+function dynamicOptions(options) {
+  if (!safeObject(options)) invalid()
+  let keys
+  try {
+    keys = Reflect.ownKeys(options)
+  } catch {
+    invalid()
+  }
+  for (const key of keys) {
+    if (key === TEST_ONLY_DYNAMIC_OBSERVER) continue
+    if (typeof key !== 'string' || !DYNAMIC_OPTION_KEYS.has(key)) invalid()
+  }
+  let values
+  try {
+    values = {
+      adjacencyAuthority: options.adjacencyAuthority,
+      bootstrapIOFactory: options.bootstrapIOFactory,
+      cancel: options.cancel,
+      crypto: options.crypto,
+      guardRevalidationIOFactory: options.guardRevalidationIOFactory,
+      limits: options.limits,
+      now: options.now,
+      observe: options[TEST_ONLY_DYNAMIC_OBSERVER],
+      randomBytes: options.randomBytes,
+      routedDiscoveryService: options.routedDiscoveryService,
+      schedule: options.schedule,
+      tailControlTransportFactory: options.tailControlTransportFactory
+    }
+  } catch {
+    invalid()
+  }
+  if (
+    !isM3AdjacencyAuthority(values.adjacencyAuthority) ||
+    typeof values.bootstrapIOFactory !== 'function' ||
+    typeof values.cancel !== 'function' ||
+    !safeObject(values.crypto) ||
+    typeof values.crypto.hash !== 'function' ||
+    typeof values.guardRevalidationIOFactory !== 'function' ||
+    !safeObject(values.limits) ||
+    !Object.isFrozen(values.limits) ||
+    typeof values.now !== 'function' ||
+    (values.observe !== undefined && typeof values.observe !== 'function') ||
+    typeof values.randomBytes !== 'function' ||
+    !safeObject(values.routedDiscoveryService) ||
+    typeof values.routedDiscoveryService.request !== 'function' ||
+    typeof values.schedule !== 'function' ||
+    typeof values.tailControlTransportFactory !== 'function'
+  ) {
+    invalid()
+  }
+  return values
+}
+function ownedRandom(randomBytes, size) {
+  let value
+  try {
+    value = randomBytes(size)
+  } catch {
+    invalid()
+  }
+  if (length(value) !== size) {
+    clear(value)
+    invalid()
+  }
+  return value
+}
+function nonzero(value) {
+  for (let index = 0; index < value.byteLength; index++) {
+    if (value[index] !== 0) return true
+  }
+  return false
+}
+function generationFrom(value) {
+  let generation = 0n
+  for (let index = 0; index < value.byteLength; index++) {
+    generation = (generation << 8n) | BigInt(value[index])
+  }
+  return generation
+}
 function nowValue(clock) {
   let value
   try {
@@ -83,6 +186,174 @@ function nowValue(clock) {
   }
   if (!Number.isSafeInteger(value) || value < 0) invalid()
   return BigInt(value)
+}
+
+class DynamicRouteManager {
+  #options
+  #observer
+  #allocations
+  #bootstrapIO
+  #destroyed
+  #opening
+  #lifecycle
+
+  constructor(options) {
+    this.#options = dynamicOptions(options)
+    this.#observer = this.#options.observe || null
+    this.#allocations = []
+    this.#bootstrapIO = null
+    this.#destroyed = false
+    this.#opening = false
+    this.#lifecycle = Object.freeze({})
+  }
+
+  async openDynamic(...args) {
+    if (args.length !== 0) invalid()
+    if (this.#destroyed) throw PrivateRouteError.ERR_DESTROYED()
+    if (this.#opening) throw PrivateRouteError.ERR_BUSY()
+    this.#opening = true
+    const lifecycle = this.#lifecycle
+    try {
+      this.#allocatePair(lifecycle)
+      this.#notify({ type: 'allocation-reserved', resource: 'lookup', branchClass: 'LOOKUP' })
+      this.#assertLifecycle(lifecycle)
+      this.#notify({ type: 'allocation-reserved', resource: 'announce', branchClass: 'ANNOUNCE' })
+      this.#assertLifecycle(lifecycle)
+
+      const request = Object.freeze({})
+      let io
+      try {
+        io = this.#options.bootstrapIOFactory(request)
+      } catch {
+        throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      }
+      this.#assertLifecycle(lifecycle)
+      if (!safeObject(io) || typeof io.open !== 'function' || typeof io.destroy !== 'function') {
+        try {
+          if (safeObject(io) && typeof io.destroy === 'function') io.destroy()
+        } catch {}
+        invalid()
+      }
+      this.#bootstrapIO = io
+      this.#notify({ type: 'io-created', resource: 'bootstrap' })
+      this.#assertLifecycle(lifecycle)
+
+      try {
+        await io.open()
+      } catch {
+        this.#assertLifecycle(lifecycle)
+        throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      }
+      this.#assertLifecycle(lifecycle)
+
+      // A successful transfer is consumed only after the Task 3 branded handoff lands.
+      // Until then, never accept an unverified object from an injected factory.
+      throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+    } finally {
+      this.#opening = false
+    }
+  }
+
+  destroy() {
+    if (this.#destroyed) return false
+    this.#terminate()
+    return true
+  }
+
+  #allocatePair(lifecycle) {
+    const allocated = []
+    try {
+      allocated.push(this.#allocateBranch(BRANCH_CLASS.LOOKUP, lifecycle))
+      allocated.push(this.#allocateBranch(BRANCH_CLASS.ANNOUNCE, lifecycle))
+      const [lookup, announce] = allocated
+      if (
+        same(lookup.branchId, announce.branchId) ||
+        same(lookup.circuitId, announce.circuitId) ||
+        lookup.generation === announce.generation
+      ) {
+        invalid()
+      }
+      this.#allocations = allocated
+    } catch (err) {
+      for (const allocation of allocated) this.#clearAllocation(allocation)
+      throw err
+    }
+  }
+
+  #allocateBranch(branchClass, lifecycle) {
+    const values = []
+    try {
+      for (const size of [16, 16, 8, 32, 32]) {
+        const value = ownedRandom(this.#options.randomBytes, size)
+        values.push(value)
+        this.#assertLifecycle(lifecycle)
+        if (!nonzero(value)) invalid()
+      }
+      const generation = generationFrom(values[2])
+      if (generation === 0n) invalid()
+      return {
+        branchClass,
+        branchId: values[0],
+        circuitId: values[1],
+        generationSeed: values[2],
+        generation,
+        clientIdentitySeed: values[3],
+        clientTailSeed: values[4]
+      }
+    } catch (err) {
+      for (const value of values) clear(value)
+      throw err
+    }
+  }
+
+  #terminate() {
+    if (!this.#destroyed) {
+      this.#destroyed = true
+      this.#lifecycle = Object.freeze({})
+    }
+    const io = this.#bootstrapIO
+    this.#bootstrapIO = null
+    if (io) {
+      try {
+        io.destroy()
+      } catch {}
+    }
+    const allocations = this.#allocations
+    this.#allocations = []
+    for (const allocation of allocations) {
+      const resource = allocation.branchClass === BRANCH_CLASS.LOOKUP ? 'lookup' : 'announce'
+      this.#clearAllocation(allocation)
+      this.#notify({ type: 'allocation-erased', resource })
+    }
+  }
+
+  #clearAllocation(allocation) {
+    clear(allocation.branchId)
+    clear(allocation.circuitId)
+    clear(allocation.generationSeed)
+    clear(allocation.clientIdentitySeed)
+    clear(allocation.clientTailSeed)
+    allocation.generation = 0n
+  }
+
+  #assertLifecycle(lifecycle) {
+    if (this.#destroyed || lifecycle !== this.#lifecycle) {
+      throw PrivateRouteError.ERR_DESTROYED()
+    }
+  }
+
+  #notify(event) {
+    if (!this.#observer) return
+    try {
+      this.#observer(Object.freeze({ ...event }))
+    } catch {
+      // Test-only observation cannot affect protocol behavior.
+    }
+  }
 }
 
 export class RouteManager {
@@ -100,6 +371,10 @@ export class RouteManager {
   #maxSafetyHops
   #routeCandidate
   #routeCandidateChecker
+
+  static createDynamic(options) {
+    return new DynamicRouteManager(options)
+  }
 
   constructor(options) {
     if (

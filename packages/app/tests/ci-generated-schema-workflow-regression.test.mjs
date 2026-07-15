@@ -54,6 +54,9 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
 test('fast CI avoids the historical repo-wide lint backlog on both PR and main pushes', () => {
   const workflow = readFile('.github/workflows/ci-fast.yml')
   const rootPackage = JSON.parse(readFile('package.json'))
+  const eslintIgnore = readFile('.eslintignore')
+  const changedLint = readFile('scripts/lint-changed.mjs')
+  const privateRoutesPackage = JSON.parse(readFile('packages/private-routes/package.json'))
 
   assert.match(
     rootPackage.scripts['lint:changed'],
@@ -74,5 +77,20 @@ test('fast CI avoids the historical repo-wide lint backlog on both PR and main p
     workflow,
     /npm run lint(\s|$)/,
     'Fast CI must not run repo-wide lint until the historical backlog is cleared',
+  )
+  assert.match(
+    eslintIgnore,
+    /^packages\/private-routes\/\*\*$/m,
+    'the standalone Holepunch-style package must use its own pinned format and runtime gates',
+  )
+  assert.match(
+    privateRoutesPackage.scripts['format:check'],
+    /prettier --check/,
+    'the private-routes workflow must retain an explicit package-local format gate',
+  )
+  assert.match(
+    changedLint,
+    /PACKAGE_LOCAL_LINT_PREFIXES[\s\S]*packages\/private-routes\//,
+    'changed-file lint must omit packages governed by their own runtime-native workflow',
   )
 })

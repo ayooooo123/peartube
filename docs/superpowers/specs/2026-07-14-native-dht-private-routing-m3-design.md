@@ -6,6 +6,15 @@
 **First consumer:** PearTube  
 **Protocol package:** `hyperdht-private-routes`
 
+**Byte registry:**
+[`2026-07-14-native-dht-private-routing-m3-wire-registry.md`](./2026-07-14-native-dht-private-routing-m3-wire-registry.md)
+
+This design is normative for behavior. The linked wire registry is normative
+for bytes only after its independent review and explicit owner approval. Any
+conflict between the two documents blocks implementation and requires a
+reviewed amendment to both; an implementer must not choose a convenient
+interpretation locally.
+
 ## Summary
 
 Milestone 3 integrates the verified private-route transport with DHT-RPC and HyperDHT. It replaces the earlier application-level gateway idea with a permissionless, protocol-native relay capability. Persistent DHT nodes may opt into circuit forwarding, typed DHT egress, private-record storage, or any combination. Clients discover those capabilities through ordinary DHT participation and build fixed three-relay circuits without consulting a trusted registry.
@@ -343,14 +352,14 @@ M3ContextAD =
 
 The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current state, wrong-size envelopes, and more than one logical interpretation fail closed. The allowed set is:
 
-| Circuit state | Accepted context classes |
-| --- | --- |
-| Extending before exit | `TAIL_CONTROL_ORDERED` |
-| Exit tail ready, before READY | `TAIL_CONTROL_ORDERED`, `TAIL_FINALIZE_DATAGRAM` |
-| READY verified / ACKING | `TAIL_FINALIZE_DATAGRAM`, `FINAL_EXIT_FINALIZE_DATAGRAM` |
-| OPEN | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED`, plus only the retired receive contexts described below during grace |
-| DRAINING | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED` |
-| DESTROYED | none |
+| Circuit state                 | Accepted context classes                                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Extending before exit         | `TAIL_CONTROL_ORDERED`                                                                                           |
+| Exit tail ready, before READY | `TAIL_CONTROL_ORDERED`, `TAIL_FINALIZE_DATAGRAM`                                                                 |
+| READY verified / ACKING       | `TAIL_FINALIZE_DATAGRAM`, `FINAL_EXIT_FINALIZE_DATAGRAM`                                                         |
+| OPEN                          | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED`, plus only the retired receive contexts described below during grace |
+| DRAINING                      | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED`                                                                      |
+| DESTROYED                     | none                                                                                                             |
 
 ### Finalization acknowledgement
 
@@ -604,9 +613,9 @@ HyperDHT exposes a fail-closed option:
 ```js
 const dht = new HyperDHT({
   privateRouting: {
-    mode: 'required'
-  }
-})
+    mode: "required",
+  },
+});
 ```
 
 Initial modes are:
@@ -618,16 +627,16 @@ There is no `preferred` mode and no transparent direct fallback.
 
 ### M3 required-mode method matrix
 
-| HyperDHT surface | M3 behavior in `required` mode |
-| --- | --- |
-| `ready`, `destroy`, `suspend`, `resume` | Supported with private lifecycle semantics |
-| `lookup(topic)` | Maps exclusively to `PRIVATE_LOOKUP`; returns non-dialable private presence records |
-| `announce(topic, keyPair, ...)` | Maps exclusively to `PRIVATE_ANNOUNCE`; never emits legacy `ANNOUNCE` |
-| `unannounce(topic, keyPair, ...)` | Maps exclusively to `PRIVATE_UNANNOUNCE`; never emits legacy `UNANNOUNCE` |
-| `immutableGet`, `mutableGet` | Supported through lookup-branch routed RPC |
-| `immutablePut`, `mutablePut` | Supported through one announce-branch prepare/commit generation |
-| `findPeer`, `connect`, `createServer`, `pool`, raw stream, peer handshake, punch, holepunch, direct relay | Synchronously reject with stable `ERR_PRIVATE_ROUTING_M4_REQUIRED` |
-| direct `query` or raw command registration without policy | Reject with `ERR_PRIVATE_COMMAND_UNSUPPORTED` |
+| HyperDHT surface                                                                                          | M3 behavior in `required` mode                                                      |
+| --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `ready`, `destroy`, `suspend`, `resume`                                                                   | Supported with private lifecycle semantics                                          |
+| `lookup(topic)`                                                                                           | Maps exclusively to `PRIVATE_LOOKUP`; returns non-dialable private presence records |
+| `announce(topic, keyPair, ...)`                                                                           | Maps exclusively to `PRIVATE_ANNOUNCE`; never emits legacy `ANNOUNCE`               |
+| `unannounce(topic, keyPair, ...)`                                                                         | Maps exclusively to `PRIVATE_UNANNOUNCE`; never emits legacy `UNANNOUNCE`           |
+| `immutableGet`, `mutableGet`                                                                              | Supported through lookup-branch routed RPC                                          |
+| `immutablePut`, `mutablePut`                                                                              | Supported through one announce-branch prepare/commit generation                     |
+| `findPeer`, `connect`, `createServer`, `pool`, raw stream, peer handshake, punch, holepunch, direct relay | Synchronously reject with stable `ERR_PRIVATE_ROUTING_M4_REQUIRED`                  |
+| direct `query` or raw command registration without policy                                                 | Reject with `ERR_PRIVATE_COMMAND_UNSUPPORTED`                                       |
 
 M3 never returns a legacy public peer address as something a required-mode caller may dial. Connection-related surfaces remain closed until M4 provides a private descriptor and routed Noise transport.
 

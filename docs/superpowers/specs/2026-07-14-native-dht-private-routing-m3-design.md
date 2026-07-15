@@ -286,7 +286,7 @@ The tail transcript digest is `cryptoSuite.hash([UTF8('hyperdht-private-routes/f
 
 M3 performs no service-policy subset negotiation. The activation digest must equal the complete policy digest in the exit's currently verified signed advertisement byte for byte; otherwise activation fails. An operator changing one command policy must issue a new advertisement and route-encryption key/epoch.
 
-The payload-parameters digest is `cryptoSuite.hash([domain, encoding])`, where domain is `hyperdht-private-routes/final-exit/payload-parameters/v1` and encoding is `u16 cellSize || u16 maxCellPayload || u16 routeFrameSize || u16 maxRoutePayload || u16 datagramReplayWindow || u32 maxQueuedBytes || u32 idleTimeoutMs`. M3 fixes the inherited values to `cellSize = 1200`, `maxCellPayload = 1146`, `routeFrameSize = 1100`, and `maxRoutePayload = 1073`; a mismatch fails activation rather than negotiating alternate framing.
+The payload-parameters digest is `cryptoSuite.hash([domain, encoding])`, where domain is `hyperdht-private-routes/final-exit/payload-parameters/v1` and encoding is `u16 cellSize || u16 maxCellPayload || u16 contextEnvelopeSize || u16 routeFrameSize || u16 maxRoutePayload || u16 datagramReplayWindow || u32 maxQueuedBytes || u32 idleTimeoutMs`. M3 fixes the inherited values to `cellSize = 1200`, `maxCellPayload = 1146`, `contextEnvelopeSize = 1101`, `routeFrameSize = 1100`, and `maxRoutePayload = 1073`; a mismatch fails activation rather than negotiating alternate framing.
 
 Using the same keyed-BLAKE2b construction defined above, with the retained index-2 X25519 shared secret and `FINAL_EXIT_TRANSCRIPT_V1`, M3 derives twelve outputs under these labels:
 
@@ -307,6 +307,38 @@ hyperdht-private-routes/kdf/v1/final-exit/finalize/reverse-nonce
 
 Each key is the full 32-byte output; each XChaCha20 nonce prefix is the first 16 bytes of its nonce output. Payload and terminal-control directions each start independent counters at zero and use the M2 exact-next/replay rules. The four payload values are installed into the existing M2 `RoutePayloadCodec`; the four control values protect post-ready exit control, rotation, and destroy messages. The four final-exit/finalize values use independent forward/reverse M2 datagram replay-window counters starting at zero with window size 64 and carry only READY_ACK and OPEN.
 
+### On-wire context selection
+
+Every source↔tail or source↔exit frame uses a fixed 1,101-byte M3 context envelope inside the existing 1,200-byte routed cell:
+
+```text
+u8     contextClass
+1100B  context-specific encrypted frame
+```
+
+Context classes are exact:
+
+```text
+0 = TAIL_CONTROL_ORDERED
+1 = TAIL_FINALIZE_DATAGRAM
+2 = FINAL_EXIT_FINALIZE_DATAGRAM
+3 = ROUTE_PAYLOAD
+4 = TERMINAL_CONTROL_ORDERED
+```
+
+The class byte is public to forwarding relays but reveals only setup/control/payload phase. It is authenticated end to end by including `u8 contextClass || u32 M3ProtocolVersion || 16B branchId || 16B circuitId || u64 generation || u8 direction || u64 innerCounter` in the selected context's AEAD associated data. M3 extends `RoutePayloadCodec` to include this associated-data prefix; the 1,100-byte inner frame and its inherited 1,073-byte maximum route payload remain unchanged. Class substitution therefore fails authentication even before semantic decoding.
+
+The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current state, wrong-size envelopes, and more than one logical interpretation fail closed. The allowed set is:
+
+| Circuit state | Accepted context classes |
+| --- | --- |
+| Extending before exit | `TAIL_CONTROL_ORDERED` |
+| Exit tail ready, before READY | `TAIL_CONTROL_ORDERED`, `TAIL_FINALIZE_DATAGRAM` |
+| READY verified / ACKING | `TAIL_FINALIZE_DATAGRAM`, `FINAL_EXIT_FINALIZE_DATAGRAM` |
+| OPEN | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED`, plus only the retired receive contexts described below during grace |
+| DRAINING | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED` |
+| DESTROYED | none |
+
 ### Finalization acknowledgement
 
 Finalization is a bounded idempotent state machine:
@@ -319,12 +351,22 @@ TAIL_READY → ACTIVATING → FINALIZING → ACKING → OPEN
 1. The client sends `DHT_EXIT_ACTIVATE_V1` under the tail-finalize forward datagram key and enters `ACTIVATING` while retaining the tail shared secret and keys. Until READY arrives, the client explicitly retransmits the identical semantic ACTIVATE body under a fresh tail-finalize datagram counter on the bounded timer.
 2. The exit validates the exact activation tuple, derives all final outputs, enters half-open `FINALIZING`, caches the signed semantic `DHT_EXIT_READY_V1` body, and sends it under a fresh tail-finalize reverse datagram counter. An identical activation nonce and tuple is idempotent and causes the same cached body to be sent under another fresh datagram counter; a conflicting tuple tears down the circuit.
 3. The client verifies READY, derives the same final outputs, enters `ACKING`, and sends `DHT_EXIT_READY_ACK_V1` under the final-exit/finalize forward datagram key. ACK binds the READY digest, activation nonce, branch and circuit IDs, and generation. The client retains all tail contexts and sends no DHT payload before `OPEN`.
-4. The exit verifies ACK, enters `OPEN`, erases its tail shared secret, ordered tail-control keys, and tail-finalize keys, and returns `DHT_EXIT_OPEN_V1` under the final-exit/finalize reverse datagram key. OPEN binds the ACK digest and the same activation tuple.
-5. The client verifies OPEN, enters `OPEN`, and erases its tail shared secret, ordered tail-control keys, tail-finalize keys, and final-exit/finalize keys. Only then may it send routed DHT payload.
+4. The exit verifies ACK, enters `OPEN`, erases its tail shared secret and ordered tail-control keys, installs the retired receive/send grace state below, and returns `DHT_EXIT_OPEN_V1` under the final-exit/finalize reverse datagram key. OPEN binds the ACK digest and the same activation tuple.
+5. The client verifies OPEN, enters `OPEN`, erases its tail shared secret and ordered tail-control keys, and installs the retired receive grace state below. Only then may it send routed DHT payload.
 
 The activation nonce and message kind identify semantic duplicates across the two dedicated finalization datagram domains. Retransmission uses a fresh datagram counter but the identical cached semantic body. Gaps and reordering are accepted within the 64-counter replay window; repeated counters are discarded, while a new counter carrying the same authenticated semantic tuple triggers only the cached idempotent response. Before ACK, the exit retransmits READY on an identical ACTIVATE or its bounded timer. After ACK, an identical final-key-authenticated ACK makes an already-open exit retransmit OPEN. The client retransmits ACK on duplicate valid READY or its bounded timer. Duplicate semantic messages never derive keys again or advance state twice.
 
-The finalization deadline is five seconds. Each pending semantic message has one initial send plus at most four retries after 250 ms, 500 ms, 1,000 ms, and 2,000 ms, for at most five sends total. An open exit retains only its final-exit/finalize keys and cached OPEN for a five-second post-open grace so a lost OPEN can be recovered by a duplicate ACK, then erases that retry state. Deadline, invalid transition, conflicting duplicate, authentication failure, or transport close destroys both tail and final contexts and erases all partial state. Replay-window duplicate/too-old counters are the sole non-fatal counter case. Lost/duplicate ACTIVATE, READY, ACK, and OPEN are mandatory tests.
+The finalization deadline is five seconds. Each pending semantic message has one initial send plus at most four retries after 250 ms, 500 ms, 1,000 ms, and 2,000 ms, for at most five sends total.
+
+On entering `OPEN`, both sides install a five-second retired-context grace:
+
+- the exit retains the tail-finalize forward receive key/window, final-exit/finalize forward receive key/window, final-exit/finalize reverse send key/counter, activation semantic cache, and cached OPEN;
+- the client retains the tail-finalize reverse receive key/window and final-exit/finalize reverse receive key/window as receive-only tombstones;
+- an authenticated delayed ACTIVATE at the exit or duplicate ACK causes only cached OPEN retransmission under a fresh final-exit/finalize reverse counter;
+- an authenticated delayed READY or OPEN at the client is consumed and discarded without state change;
+- grace handlers cannot derive keys, reopen transitions, accept payload, reset circuit lifetime, or advance any state except the retained finalize send counter used to retransmit cached OPEN.
+
+At grace expiry both sides erase all retained finalization keys, windows, counters, and semantic caches. Until expiry, authenticated delayed setup frames are never treated as invalid OPEN-state transitions. Deadline before OPEN, conflicting semantic duplicate, authentication failure, or transport close destroys both tail and final contexts and erases all partial state. Replay-window duplicate/too-old counters and the explicit retired-context handlers are the sole non-fatal setup-counter cases. Lost/duplicate ACTIVATE, READY, ACK, OPEN, and delayed arrival of each after OPEN are mandatory tests.
 
 Fixed vectors must cover the four tail-finalize outputs, all twelve final outputs, nonce prefixes, transcript, enum or policy substitution, and proof that no tail-control, tail-finalize, payload, terminal-control, or final-exit/finalize key/nonce output is equal.
 
@@ -629,7 +671,8 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - exact capability-advertisement codecs, signatures, expiry, replay, and active challenge;
 - production `LINK_OFFER_V1`/`LINK_ACCEPT_V1`, role mapping, partial-route extension, and terminal-exit confirmation;
 - source↔tail key derivation, counters, replay, replacement, expiry, redacted confirmation, and failure erasure, with fixed test vectors for guard index zero, middle replacement, final exit derivation, and cross-index/transcript substitution;
-- final ACTIVATE/READY/ACK/OPEN loss, counter gaps, reordering, repeated counters, semantic duplication, idempotence, retry bounds, policy-enum substitution, half-open timeout, post-open grace, and tail-key erasure timing;
+- context-class encoding, associated-data substitution, state-allowed class matrix, and exact 1,101-byte envelope bounds;
+- final ACTIVATE/READY/ACK/OPEN loss, counter gaps, reordering, repeated counters, semantic duplication, idempotence, retry bounds, policy-enum substitution, half-open timeout, delayed ACTIVATE/READY/OPEN after OPEN, post-open grace erasure, and tail-key erasure timing;
 - selection invariants for identity, XOR, prefix, branch, and loop diversity;
 - compatible bootstrap, legacy-only bounded cold start, malicious referral, and no-direct-candidate-probe behavior;
 - guard and branch active-time lease state machines;

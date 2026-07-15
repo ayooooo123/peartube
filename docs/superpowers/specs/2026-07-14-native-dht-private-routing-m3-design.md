@@ -236,7 +236,7 @@ u8   extension index (0 guard, 1 middle, 2 exit)
 32B  canonical admitted-limits digest
 ```
 
-The transcript is prefixed by the length-delimited domain string `hyperdht-private-routes/tail-control/transcript/v1`. The admitted-limits digest is `cryptoSuite.hash([domain, encoding])`, where `domain` is `hyperdht-private-routes/tail-control/limits/v1` and `encoding` is `u16 cellSize || u32 maxCells || u32 maxBytes || u32 maxCommands || u32 idleTimeoutMs || u64 expiresAtMs`. Integers are unsigned big-endian. No field is optional.
+The transcript encoding is `u16be domainByteLength || UTF8(domain) || fields`, where `domain` is `hyperdht-private-routes/tail-control/transcript/v1` and `fields` are the fixed-width values above. The admitted-limits digest is `cryptoSuite.hash([domain, encoding])`, where `domain` is `hyperdht-private-routes/tail-control/limits/v1` and `encoding` is `u16 cellSize || u32 maxCells || u32 maxBytes || u32 maxCommands || u32 idleTimeoutMs || u64 expiresAtMs`. Integers are unsigned big-endian. No field is optional.
 
 M3 extends `cryptoSuite.deriveKeys`; it does not introduce generic HKDF. For each output it computes keyed BLAKE2b with the 32-byte X25519 shared secret as key over `u16 labelLength || label || u32 M3ProtocolVersion || u32 transcriptLength || transcript`, the same construction used by M2. The four new labels are:
 
@@ -249,7 +249,46 @@ hyperdht-private-routes/kdf/v1/tail-control/reverse-nonce
 
 Forward and reverse keys are the full 32-byte outputs. Forward and reverse XChaCha20 nonce prefixes are the first 16 bytes of their respective 32-byte nonce outputs, matching M2 counter-based nonce construction. The adjacency-local ephemeral keys from `LINK_OFFER_V1`/`LINK_ACCEPT_V1` are not tail-control inputs and do not appear in the redacted proof.
 
-Each tail-control direction has its own monotonic counter, exact-next replay rule, deadline, and byte/command budget. Its expiry is the earliest of the advertisement, branch, circuit, or admitted-link expiry. Authentication failure, counter failure, timeout, extension failure, or route teardown erases both directions and all partially derived secrets. When a new tail confirms, the previous tail-control context is destroyed; it cannot authorize later extensions. The final source↔exit context is domain-separated again into routed DHT payload and terminal-control keys.
+Each tail-control direction has its own monotonic counter, exact-next replay rule, deadline, and byte/command budget. Its expiry is the earliest of the advertisement, branch, circuit, or admitted-link expiry. Authentication failure, counter failure, timeout, extension failure, or route teardown erases both directions and all partially derived secrets. When a new tail confirms, the previous tail-control context is destroyed; it cannot authorize later extensions.
+
+### Final exit key handoff
+
+After extension index `2` produces a source↔exit tail-control context, the client sends `DHT_EXIT_ACTIVATE_V1` within that context. It contains a fresh 32-byte activation nonce, the accepted service-policy digest, and the M2 payload-parameters digest. The exit verifies both digests against its signed advertisement and negotiated limits and returns signed, tail-control-authenticated `DHT_EXIT_READY_V1` binding the same values.
+
+Both sides retain the index-2 X25519 shared secret and encode `FINAL_EXIT_TRANSCRIPT_V1` as `u16be domainByteLength || UTF8(domain) || fields`, with domain `hyperdht-private-routes/final-exit/transcript/v1` and these fixed-order fields:
+
+```text
+u32  M3 protocol version
+u8   branch class
+16B  branch ID
+16B  circuit ID
+u64  branch generation
+32B  TAIL_CONTROL_TRANSCRIPT_V1 digest
+32B  exit advertisement digest
+32B  exit Ed25519 identity
+32B  client activation nonce
+32B  accepted service-policy digest
+32B  M2 payload-parameters digest
+```
+
+The tail transcript digest is `cryptoSuite.hash([UTF8('hyperdht-private-routes/final-exit/tail-digest/v1'), completeEncodedTailTranscript])`. The service-policy digest is copied from the verified signed exit advertisement and equals `cryptoSuite.hash([domain, encoding])`, with domain `hyperdht-private-routes/final-exit/service-policy/v1`. Its encoding is `u16 entryCount` followed by entries sorted by `(commandId, commandVersion)`, each encoded as `u16 commandId || u16 commandVersion || u32 maxRequestBytes || u32 maxResponseBytes || u32 timeoutMs || u16 maxOutstanding || u32 requestCost || u32 responseCost || u32 maxAmplificationBytes || u8 mutationFlag || u8 destinationValidationClass`. Duplicate entries and unknown flag/class values are invalid. The payload-parameters digest is `cryptoSuite.hash([domain, encoding])`, where domain is `hyperdht-private-routes/final-exit/payload-parameters/v1` and encoding is `u16 cellSize || u16 maxCellPayload || u16 datagramReplayWindow || u32 maxQueuedBytes || u32 idleTimeoutMs`.
+
+Using the same keyed-BLAKE2b construction defined above, with the retained index-2 X25519 shared secret and `FINAL_EXIT_TRANSCRIPT_V1`, M3 derives eight outputs under these labels:
+
+```text
+hyperdht-private-routes/kdf/v1/final-exit/payload/forward-key
+hyperdht-private-routes/kdf/v1/final-exit/payload/reverse-key
+hyperdht-private-routes/kdf/v1/final-exit/payload/forward-nonce
+hyperdht-private-routes/kdf/v1/final-exit/payload/reverse-nonce
+hyperdht-private-routes/kdf/v1/final-exit/control/forward-key
+hyperdht-private-routes/kdf/v1/final-exit/control/reverse-key
+hyperdht-private-routes/kdf/v1/final-exit/control/forward-nonce
+hyperdht-private-routes/kdf/v1/final-exit/control/reverse-nonce
+```
+
+Each key is the full 32-byte output; each XChaCha20 nonce prefix is the first 16 bytes of its nonce output. Payload and terminal-control directions each start independent counters at zero and use the M2 exact-next/replay rules. The four payload values are installed into the existing M2 `RoutePayloadCodec`; the four control values protect post-ready exit control, rotation, and destroy messages. Index-2 tail-control keys are erased only after `DHT_EXIT_READY_V1` is verified and all eight final outputs are installed. Any failure erases the shared secret, tail keys, final outputs, and partial circuit state.
+
+Fixed vectors must cover all eight outputs, nonce prefixes, transcript or policy substitution, and proof that no tail-control, payload, or terminal-control key/nonce output is equal.
 
 The terminal key schedule binds no client address, guard identity, guard advertisement, address-bearing link transcript, or complete-route digest. The exit already knows its directly observed middle; it learns nothing about earlier relays from terminal confirmation.
 
@@ -423,6 +462,7 @@ M2's sub-second integration-test heartbeat and failure timers are not M3 product
 - after 25 seconds with deterministic per-link jitter bounded to 20–30 seconds, only that initiator sends `HEARTBEAT`; the successor sends exactly one authenticated `HEARTBEAT_ACK` and never starts a competing timer;
 - any valid authenticated inbound cell resets the initiator's silence timer, and ordinary authenticated traffic may satisfy liveness without an extra heartbeat;
 - three missed heartbeat rounds mark a link failed;
+- the successor maintains a receive-only deadline of three maximum heartbeat intervals, exactly 90 seconds, since its last valid authenticated predecessor cell; expiry tears down and erases the link and dependent circuit state without transmitting its own heartbeat;
 - a branch is destroyed after 60 seconds without an application-routed operation, required record refresh, or route setup/repair event; liveness heartbeat traffic never resets this idle timer;
 - after idle destruction, the client emits zero route cells until new work arrives;
 - no more than six heartbeat cells total in both directions may cross each branch's client↔guard link per minute while otherwise idle; the two branches therefore permit at most twelve such cells per minute, and shared-transport batching must limit client radio wakeups to three per minute across both branches;
@@ -563,7 +603,7 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - compatible-storage zero/stale/successful seed behavior, malicious referrals, overlay convergence, partial quorum, prepare/commit rotation, replayed receipts, cross-exit tokens, and insufficient density;
 - same-sequence endpoint equivocation and quarantine;
 - quotas, response amplification, fairness, backpressure, and `BUSY` behavior;
-- mobile liveness cell/wakeup budgets using the client↔guard definition, sole-initiator simultaneous-timer and jitter bounds, heartbeat-excluded idle timing, and zero traffic after idle destruction;
+- mobile liveness cell/wakeup budgets using the client↔guard definition, sole-initiator simultaneous-timer and jitter bounds, predecessor-missing and successor-missing failure directions, heartbeat-excluded idle timing, and zero traffic after idle destruction;
 - malicious buffers, codecs, callbacks, clocks, and transport adapters;
 - bounded-memory fuzzing for every new envelope and state transition.
 
@@ -603,7 +643,7 @@ The suite proves:
 
 A Linux network-namespace job captures every relevant interface and fails unless:
 
-- before guard pinning, the client contacts only configured bootstrap addresses plus at most three sequential prospective-guard addresses returned by the one permitted non-iterative single-node request;
+- before guard pinning, the client contacts only the at-most-three configured bootstrap addresses plus at most three globally budgeted prospective-guard addresses obtained from permitted `CAPS_QUERY_V1` self/referral responses or the one permitted legacy non-iterative single-node `FIND_NODE` response;
 - after pinning, the client contacts only its guard;
 - the guard contacts only the two selected middles for circuit traffic;
 - each middle contacts only its selected exit;

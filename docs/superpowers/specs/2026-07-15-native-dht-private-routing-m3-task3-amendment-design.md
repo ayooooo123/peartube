@@ -353,11 +353,50 @@ const manager = RouteManager.createDynamic(options);
 const branches = await manager.openDynamic();
 ```
 
-`options` contains narrow BootstrapIO and GuardRevalidationIO factories, tail-control transport
-factories, adjacency authorities, routed-discovery services, clocks/timers, limits, and crypto. It
-does not contain prebuilt links, candidate endpoints, topology grants, M2 link handles, branch IDs,
-circuit IDs, generations, or path arrays. The manager allocates all branch state and consumes the
-opaque guard/candidate/link transfers itself.
+The exact Task 3 option surface is:
+
+```js
+const options = {
+  bootstrapIOFactory,
+  guardRevalidationIOFactory,
+  tailControlTransportFactory,
+  adjacencyAuthority,
+  routedDiscoveryService,
+  now,
+  schedule,
+  cancel,
+  randomBytes,
+  crypto,
+  limits,
+};
+```
+
+The three factories each receive one frozen zero-key manager-minted request capability.
+`bootstrapIOFactory` and `guardRevalidationIOFactory` return the corresponding IO object; the
+IO object's one-use `open()` returns only its library-branded transfer. `tailControlTransportFactory`
+returns byte-oriented transport authority and never replaces `TailControlSession` or
+`RouteExtensionSession`. `adjacencyAuthority` is an `M3AdjacencyAuthority` owned by the local node.
+`routedDiscoveryService.request(requestCapability)` performs the bounded routed request used by the
+real candidate directory and accepts no endpoint or candidate override. `now`, `schedule`, `cancel`,
+`randomBytes`, and `crypto` use the same provider contracts as the existing M3 modules. `limits` is
+a frozen object of optional protocol-limit overrides; omitted entries use the approved safe defaults
+and no override may exceed an approved hard cap.
+
+The public package index exports `RouteManager`, `RouteExtensionSession`, and
+`M3AdjacencyAuthority`. `M3AdjacencyRuntime`, `GuardRevalidationIO`, `RoutedCandidateDirectory`, and
+`TailControlSession` are implementation modules, not public construction APIs. For tests only,
+`lib/route-manager.js` exports `TEST_ONLY_DYNAMIC_OBSERVER`; the public index must not re-export it.
+It receives frozen, copied, redacted lifecycle snapshots and must never expose a raw identifier,
+identity, endpoint, advertisement, key, nonce, counter, runtime, capability, or channel.
+
+The public authority constructor is
+`new M3AdjacencyAuthority({ now, crypto, maxRuntimes })`; `crypto` defaults to the package crypto
+suite, `maxRuntimes` defaults to 128, and the existing hard maximum of 4,096 still applies.
+
+`options` does not contain prebuilt links, candidate capabilities or endpoints, topology grants, M2
+link handles, branch IDs, circuit IDs, generations, or path arrays. The manager allocates all branch
+state and consumes the opaque guard/candidate/link transfers itself. Unknown option keys reject
+before allocation or callbacks. `openDynamic()` accepts no arguments.
 
 `RouteExtensionSession` is the client-side coordinator. The current-tail and successor work occurs
 in separate internal actor sessions; no object owns both address-bearing adjacency acceptance and

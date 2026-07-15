@@ -1,6 +1,6 @@
 # Native DHT Private Routing — M3 Wire Registry
 
-**Status:** Draft — Task 0 amendments pending independent review and explicit owner approval
+**Status:** Independently reviewed and owner-approved for M3 implementation
 
 **Date:** 2026-07-15
 
@@ -9,19 +9,19 @@
 **Stability:** Experimental and unstable; no production security or wire-compatibility claim
 
 This registry is the byte-level companion to the amended M3 behavior
-specification. The original pre-Task-0 behavior baseline was independently
-reviewed and owner-approved, but the Task 0 amendments in both documents remain
-draft. This registry freezes one non-overlapping identifier namespace,
-canonical encodings, bounded collections, signature inputs, fragmentation, and
-the already-approved tail/final-exit transcripts. The amended behavior
-specification will become normative for state-machine and privacy behavior,
-and this registry will become normative for bytes, only after independent
-review and explicit owner approval of the amendments.
+specification. The Task 0 amendments in both documents were independently
+reviewed, and the owner explicitly approved them on 2026-07-15 against commit
+`b43e0ecb1aafa48f24d64d64dbe5dd735bb743a7`. This registry freezes one
+non-overlapping identifier namespace, canonical encodings, bounded collections,
+signature inputs, fragmentation, and the already-approved tail/final-exit
+transcripts. The amended behavior
+specification is normative for state-machine and privacy behavior, and this
+registry is normative for bytes.
 
 This document covers capability discovery, circuit construction, opaque
 destination authority, routed RPC, and the private-record storage overlay.
-Implementation and publishing remain blocked until explicit owner approval of
-the amended behavior specification and this registry. A later external
+Implementation may proceed under the approved M3 plan. Publishing remains
+separately blocked. A later external
 cryptographic review is also required before any production security or
 stable-wire claim.
 
@@ -3073,5 +3073,9 @@ Before Task 1 implementation begins, this registry must receive:
   normative for bytes and the owner-approved amended design is normative for
   behavior.
 
-Until those steps are complete, status remains draft, all values are unstable,
-and no implementation or publication may claim M3 wire compatibility.
+All three gates were satisfied on 2026-07-15. Independent protocol and
+quality/security reviews approved the final registry, the design cross-link is
+present, and the owner explicitly approved the amendments against commit
+`b43e0ecb1aafa48f24d64d64dbe5dd735bb743a7`. Task 1 implementation may use
+these bytes. The protocol remains experimental and unstable; implementation
+approval is not permission to publish or to claim production security.

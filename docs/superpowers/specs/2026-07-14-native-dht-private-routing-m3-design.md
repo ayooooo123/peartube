@@ -1,6 +1,6 @@
 # Native DHT Private Routing — Milestone 3 Design
 
-**Status:** Original behavior baseline independently reviewed and owner-approved; Task 0 amendments pending explicit owner approval
+**Status:** Independently reviewed and owner-approved, including Task 0 amendments
 **Date:** 2026-07-14  
 **Parent design:** `2026-07-12-holepunch-private-routing-design.md`  
 **First consumer:** PearTube  
@@ -9,14 +9,13 @@
 **Byte registry:**
 [`2026-07-14-native-dht-private-routing-m3-wire-registry.md`](./2026-07-14-native-dht-private-routing-m3-wire-registry.md)
 
-The original pre-Task-0 behavior baseline was independently reviewed and
-owner-approved. This document now includes Task 0 amendments and, as amended,
-remains draft pending explicit owner approval. Neither the amended behavior nor
-the linked wire registry is normative for implementation until that approval.
-After approval, this design is normative for behavior and the registry is
-normative for bytes. Any conflict between the two documents blocks
-implementation and requires a reviewed amendment to both; an implementer must
-not choose a convenient interpretation locally.
+The original pre-Task-0 behavior baseline and the Task 0 amendments were
+independently reviewed. The owner explicitly approved the amended design and
+linked registry on 2026-07-15 against registry commit
+`b43e0ecb1aafa48f24d64d64dbe5dd735bb743a7`. This design is normative for
+behavior and the registry is normative for bytes. Any conflict between the two
+documents blocks implementation and requires a reviewed amendment to both; an
+implementer must not choose a convenient interpretation locally.
 
 ## Summary
 

@@ -41,12 +41,12 @@ Do not publish any package during M3. Use exact Git commit dependencies in integ
 - Create: `docs/superpowers/specs/2026-07-14-native-dht-private-routing-m3-wire-registry.md`
 - Modify: `docs/superpowers/specs/2026-07-14-native-dht-private-routing-m3-design.md`
 
-- [ ] Before writing M3 implementation code, define one canonical wire registry containing numeric message IDs, fixed field order, integer endian/width, length-prefix width, signature domain and covered bytes, exact maximum body/collection sizes, and rejection rules for: signed capability advertisements; `CAPS_QUERY_V1`/response; active challenge/response; `RELAY_DISCOVER_V1`/response; `LINK_OFFER_V1`; `LINK_ACCEPT_V1`; redacted responder proof; `EXTENDED_V1`; `TAIL_READY_V1`; `DHT_EXIT_ACTIVATE_V1`; `DHT_EXIT_READY_V1`; `DHT_EXIT_READY_ACK_V1`; `DHT_EXIT_OPEN_V1`; destination references; typed routed request/reply; every storage command, token, receipt, and signed response used in Chunk 3.
-- [ ] Pin `M3_PROTOCOL_VERSION = 1`, `LOOKUP = 0`, `ANNOUNCE = 1`, the five context-class values from the approved design, advertisement count at eight, replay window at 64, and every inherited 1,200/1,101/1,100/1,073-byte framing bound. No “implementation defined” field is permitted.
-- [ ] Add size arithmetic tables proving each bounded message fits its selected fixed-cell fragmentation or direct-bootstrap transport. Specify fragment count/byte/time limits for any body larger than one route payload.
-- [ ] Cross-link the registry from the design and state that the registry is normative for bytes while the design is normative for behavior.
-- [ ] Obtain independent protocol review and explicit owner approval of the registry amendment. **Stop here** if either is missing; Task 1 must not choose wire layouts during implementation.
-- [ ] Commit: `docs: freeze native private routing m3 wire registry`
+- [x] Before writing M3 implementation code, define one canonical wire registry containing numeric message IDs, fixed field order, integer endian/width, length-prefix width, signature domain and covered bytes, exact maximum body/collection sizes, and rejection rules for: signed capability advertisements; `CAPS_QUERY_V1`/response; active challenge/response; `RELAY_DISCOVER_V1`/response; `LINK_OFFER_V1`; `LINK_ACCEPT_V1`; redacted responder proof; `EXTENDED_V1`; `TAIL_READY_V1`; `DHT_EXIT_ACTIVATE_V1`; `DHT_EXIT_READY_V1`; `DHT_EXIT_READY_ACK_V1`; `DHT_EXIT_OPEN_V1`; destination references; typed routed request/reply; every storage command, token, receipt, and signed response used in Chunk 3.
+- [x] Pin `M3_PROTOCOL_VERSION = 1`, `LOOKUP = 0`, `ANNOUNCE = 1`, the five context-class values from the approved design, advertisement count at eight, replay window at 64, and every inherited 1,200/1,101/1,100/1,073-byte framing bound. No “implementation defined” field is permitted.
+- [x] Add size arithmetic tables proving each bounded message fits its selected fixed-cell fragmentation or direct-bootstrap transport. Specify fragment count/byte/time limits for any body larger than one route payload.
+- [x] Cross-link the registry from the design and state that the registry is normative for bytes while the design is normative for behavior.
+- [x] Obtain independent protocol review and explicit owner approval of the registry amendment. **Stop here** if either is missing; Task 1 must not choose wire layouts during implementation.
+- [x] Commit: `docs: freeze native private routing m3 wire registry`
 
 ### Task 1: Freeze M3 protocol identifiers and byte-exact codecs
 

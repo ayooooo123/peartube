@@ -5,6 +5,7 @@ import {
   BootstrapIO,
   BRANCH_CLASS,
   CAPACITY_CLASS,
+  M3AdjacencyAuthority,
   M3_MESSAGE_ID,
   RELAY_CAPABILITY,
   consumeBootstrapGuardLink,
@@ -19,12 +20,21 @@ import {
   providerServicePolicyForCapabilities,
   signRelayCapabilityAdvertisement
 } from '../index.js'
+import { consumeBootstrapGuardReady } from '../lib/bootstrap-io.js'
+import {
+  completeBranchConstruction,
+  createBranchConstructionAuthority,
+  initializeBranchGuardLease,
+  takeBranchConstructionRequest
+} from '../lib/branch-construction-authority.js'
 import { readEstablishedLink } from '../lib/link-bootstrap-session.js'
 import {
   createIndexZeroGuardLinkResponder,
   destroyM3EstablishedLink,
   readM3EstablishedLink
 } from '../lib/guard-link.js'
+import { GuardRevalidationIO, consumeGuardRevalidationReady } from '../lib/guard-revalidation-io.js'
+import { createTailControlSession } from '../lib/tail-control.js'
 import { seed } from './helpers.js'
 
 const CAPS_RESPONSE_DOMAIN = b4a.from('hyperdht-private-routes/m3/caps-response/v1')
@@ -1534,7 +1544,8 @@ test('guard pin performs only OFFER then ACCEPT and transfers a new M3 link bran
   t.is(link.extensionIndex, 0)
   t.alike(link.peerIdentity, decoded.relayIdentity)
   t.alike(link.branchId, guardSetup().branchId)
-  t.ok(link.clientTailEphemeralSecretKey)
+  t.ok(link.tailSharedSecret)
+  t.is(link.tailControlTranscript.byteLength, 290)
   t.exception(
     () => readEstablishedLink(moved.established),
     'M2 topology-grant brand rejects M3 link'
@@ -1542,6 +1553,293 @@ test('guard pin performs only OFFER then ACCEPT and transfers a new M3 link bran
   destroyM3EstablishedLink(moved.established)
   destroyM3EstablishedLink(responderEstablished)
   responder.destroy()
+})
+
+test('manager construction request requires signed index-zero TAIL_READY before completion', async (t) => {
+  const fixture = signedAdvertisementFixture()
+  const decoded = decodeRelayCapabilityAdvertisement(fixture.advertisement, { now: 1_000n })
+  const validated = Object.freeze({})
+  const clientAuthority = new M3AdjacencyAuthority({ now: () => 1_000, crypto: cryptoSuite })
+  const responderAuthority = new M3AdjacencyAuthority({ now: () => 1_000, crypto: cryptoSuite })
+  const limits = Object.freeze(guardSetup().requestedLimits)
+  const branch = (branchClass, byte) =>
+    Object.freeze({
+      branchClass,
+      branchId: b4a.alloc(16, byte),
+      circuitId: b4a.alloc(16, byte + 1),
+      generation: BigInt(byte),
+      clientCircuitIdentity: cryptoSuite.keyPair(seed(byte)),
+      clientTailEphemeral: cryptoSuite.encryptionKeyPair(seed(byte + 1)),
+      deadline: 5_000n,
+      requestedLimits: limits
+    })
+  const construction = createBranchConstructionAuthority({
+    lookup: branch(BRANCH_CLASS.LOOKUP, 0x31),
+    announce: branch(BRANCH_CLASS.ANNOUNCE, 0x41),
+    now: () => 1_000n,
+    adjacencyAuthority: clientAuthority
+  })
+  const predecessorEndpoint = encodeCanonicalEndpoint({
+    addressFamily: 4,
+    addressBytes: b4a.from([198, 51, 100, 18]),
+    port: 44000
+  })
+  let receivedOffer = null
+  const responder = createIndexZeroGuardLinkResponder({
+    advertisement: fixture.advertisement,
+    responderIdentitySecretKey: fixture.signer.secretKey,
+    responderRouteEncryptionSecretKey: fixture.route.secretKey,
+    now: () => 1_000n,
+    randomBytes: sequence(0xa1),
+    receiveOffer: () => ({
+      offer: receivedOffer,
+      observedPredecessorEndpoint: predecessorEndpoint,
+      physicalChannel: Object.freeze({ destroy() {} })
+    })
+  })
+  let responderResource = null
+  let accepted = null
+  const transcript = []
+  const io = new BootstrapIO({
+    socketFactory: () => ({
+      async bind() {},
+      async send() {},
+      async receive() {},
+      abort() {},
+      destroy() {}
+    }),
+    candidateChecker: guardCandidateChecker(validated, () => ({
+      ...decoded,
+      advertisement: fixture.advertisement,
+      challengeExpiresAtMs: 5_000n,
+      cookieExpiresAtMs: 5_000n,
+      queryNonce: b4a.alloc(32, 0xb1),
+      returnRoutabilityCookie: b4a.alloc(32, 0xb2)
+    })),
+    guardHandshakeFactory: {
+      async openGuard() {
+        return {
+          async sendOffer(value) {
+            receivedOffer = b4a.from(value)
+            transcript.push(value.byteLength)
+          },
+          async receiveAccept() {
+            accepted = responder.accept()
+            transcript.push(accepted.accept.byteLength)
+            return accepted.accept
+          },
+          async receiveReady() {
+            const adopted = responderAuthority.adopt(accepted.established)
+            const tailControl = createTailControlSession(adopted.tail, {
+              now: () => 1_000,
+              crypto: cryptoSuite
+            })
+            responderResource = { runtime: adopted.runtime, tailControl }
+            const ready = tailControl.sealReady({
+              identitySecretKey: fixture.signer.secretKey,
+              randomBytes: (size) => b4a.alloc(size, 0xb3)
+            })
+            transcript.push(ready.byteLength)
+            return ready
+          },
+          takePhysicalChannel() {
+            return Object.freeze({ destroy() {} })
+          },
+          destroy() {}
+        }
+      }
+    },
+    configuredBootstraps: [decoded.reachableEndpoint],
+    constructionRequest: construction.bootstrapRequest,
+    now: () => 1_000n,
+    randomBytes: sequence(0xc1)
+  })
+  await io.ready()
+  const ready = await io.pinGuard(validated)
+
+  t.alike(transcript, [374, 285, 1101])
+  t.ok(consumeBootstrapGuardReady(ready))
+  t.exception(() => consumeBootstrapGuardReady(ready), 'guard-ready transfer is one-use')
+  t.alike(construction.diagnostics(), { state: 'ACTIVE', completedBranches: 1 })
+  t.ok(construction.destroy(), 'paired authority owns the completed branch')
+  responderResource.tailControl.destroy()
+  responderResource.runtime.destroy()
+  responder.destroy()
+})
+
+test('GuardRevalidationIO is pinned to one exact self advertisement and reaches TAIL_READY', async (t) => {
+  for (const reentrantDestroy of [false, true]) {
+    const fixture = signedAdvertisementFixture()
+    const decoded = decodeRelayCapabilityAdvertisement(fixture.advertisement, { now: 1_000n })
+    const clientAuthority = new M3AdjacencyAuthority({ now: () => 1_000, crypto: cryptoSuite })
+    const responderAuthority = new M3AdjacencyAuthority({ now: () => 1_000, crypto: cryptoSuite })
+    const limits = Object.freeze(guardSetup().requestedLimits)
+    const branch = (branchClass, byte) =>
+      Object.freeze({
+        branchClass,
+        branchId: b4a.alloc(16, byte),
+        circuitId: b4a.alloc(16, byte + 1),
+        generation: BigInt(byte),
+        clientCircuitIdentity: cryptoSuite.keyPair(seed(byte)),
+        clientTailEphemeral: cryptoSuite.encryptionKeyPair(seed(byte + 1)),
+        deadline: 5_000n,
+        requestedLimits: limits
+      })
+    const construction = createBranchConstructionAuthority({
+      lookup: branch(BRANCH_CLASS.LOOKUP, 0x51),
+      announce: branch(BRANCH_CLASS.ANNOUNCE, 0x61),
+      now: () => 1_000n,
+      adjacencyAuthority: clientAuthority
+    })
+    const bootstrapSession = takeBranchConstructionRequest(construction.bootstrapRequest)
+    initializeBranchGuardLease(bootstrapSession, fixture.advertisement)
+    completeBranchConstruction(
+      bootstrapSession,
+      Object.freeze({
+        destroy() {}
+      })
+    )
+
+    const validated = Object.freeze({})
+    const admissions = new WeakMap()
+    const validatedState = () => ({
+      ...decoded,
+      relayIdentity: b4a.from(decoded.relayIdentity),
+      reachableEndpoint: b4a.from(decoded.reachableEndpoint),
+      routeEncryptionPublicKey: b4a.from(decoded.routeEncryptionPublicKey),
+      advertisement: b4a.from(fixture.advertisement),
+      challengeExpiresAtMs: 5_000n,
+      cookieExpiresAtMs: 5_000n,
+      queryNonce: b4a.alloc(32, 0xd1),
+      returnRoutabilityCookie: b4a.alloc(32, 0xd2)
+    })
+    const directory = guardCandidateChecker(validated, validatedState)
+    directory.admit = (advertisement, { observedEndpoint, capsBinding }) => {
+      const admitted = Object.freeze({})
+      admissions.set(admitted, {
+        advertisement: b4a.from(advertisement),
+        reachableEndpoint: b4a.from(observedEndpoint),
+        capsBinding: Object.freeze({
+          queryNonce: b4a.from(capsBinding.queryNonce),
+          cookieExpiresAtMs: capsBinding.cookieExpiresAtMs,
+          returnRoutabilityCookie: b4a.from(capsBinding.returnRoutabilityCookie)
+        })
+      })
+      return admitted
+    }
+    directory.isAdmitted = (value) => admissions.has(value)
+    directory.readAdmitted = (value) => admissions.get(value)
+    directory.validate = async (admitted, challenge) => {
+      await challenge(activeChallengeBytes())
+      return admissions.has(admitted) ? validated : null
+    }
+    directory.read = (value) => {
+      if (value !== validated) throw new Error('not validated')
+      return validatedState()
+    }
+
+    const wire = wireFixture({ activeResponse: activeResponseBytes() })
+    let receivedOffer = null
+    let accepted = null
+    let responderResource = null
+    let physicalCloses = 0
+    const responder = createIndexZeroGuardLinkResponder({
+      advertisement: fixture.advertisement,
+      responderIdentitySecretKey: fixture.signer.secretKey,
+      responderRouteEncryptionSecretKey: fixture.route.secretKey,
+      now: () => 1_000n,
+      randomBytes: sequence(0xe1),
+      receiveOffer: () => ({
+        offer: receivedOffer,
+        observedPredecessorEndpoint: decoded.reachableEndpoint,
+        physicalChannel: Object.freeze({ destroy() {} })
+      })
+    })
+    const io = new GuardRevalidationIO({
+      constructionRequest: construction.revalidationRequest,
+      socketFactory: () => wire.socket,
+      directory,
+      guardHandshakeFactory: {
+        async openGuard() {
+          return {
+            async sendOffer(value) {
+              receivedOffer = b4a.from(value)
+            },
+            async receiveAccept() {
+              accepted = responder.accept()
+              return accepted.accept
+            },
+            async receiveReady() {
+              const adopted = responderAuthority.adopt(accepted.established)
+              const tailControl = createTailControlSession(adopted.tail, {
+                now: () => 1_000,
+                crypto: cryptoSuite
+              })
+              responderResource = { runtime: adopted.runtime, tailControl }
+              const ready = tailControl.sealReady({
+                identitySecretKey: fixture.signer.secretKey,
+                randomBytes: (size) => b4a.alloc(size, 0xe2)
+              })
+              if (reentrantDestroy) io.destroy()
+              return ready
+            },
+            takePhysicalChannel() {
+              return Object.freeze({
+                destroy() {
+                  physicalCloses++
+                }
+              })
+            },
+            destroy() {}
+          }
+        }
+      },
+      now: () => 1_000n,
+      randomBytes: sequence(0xf1)
+    })
+    t.alike(
+      Reflect.ownKeys(io),
+      [],
+      'guard-only actor exposes no nested IO, session, or pinned bytes'
+    )
+    t.alike(
+      Object.getOwnPropertyNames(Object.getPrototypeOf(io)),
+      ['constructor', 'open', 'diagnostics', 'destroy'],
+      'guard-only actor exposes no referral or arbitrary probe surface'
+    )
+    let transfer = null
+    let failure = null
+    try {
+      transfer = await io.open()
+    } catch (err) {
+      failure = err
+    }
+
+    if (reentrantDestroy) {
+      t.ok(failure, 'queued destroy before publication fails closed')
+      t.is(transfer, null, 'destroyed revalidation actor publishes no transfer')
+      t.alike(construction.diagnostics(), { state: 'DESTROYED', completedBranches: 0 })
+      t.is(physicalCloses, 1, 'the adopted branch channel closes exactly once')
+      t.absent(construction.destroy(), 'paired construction was already terminalized')
+      responderResource.tailControl.destroy()
+      responderResource.runtime.destroy()
+      responder.destroy()
+      continue
+    }
+
+    t.ok(consumeGuardRevalidationReady(transfer))
+    t.exception(() => consumeGuardRevalidationReady(transfer), 'revalidation transfer is one-use')
+    t.alike(
+      wire.sent.map((encoded) => decodeM3Object(encoded).messageId),
+      [M3_MESSAGE_ID.CAPS_QUERY_V1, M3_MESSAGE_ID.CAPS_QUERY_V1, M3_MESSAGE_ID.ACTIVE_CHALLENGE_V1]
+    )
+    t.alike(construction.diagnostics(), { state: 'ACTIVE', completedBranches: 2 })
+    construction.destroy()
+    t.is(physicalCloses, 1, 'authority teardown closes the completed branch exactly once')
+    responderResource.tailControl.destroy()
+    responderResource.runtime.destroy()
+    responder.destroy()
+  }
 })
 
 test('PINNING rejects reentrant direct IO before awaiting the guard channel', async (t) => {

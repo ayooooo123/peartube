@@ -594,10 +594,12 @@ test('destroy erases M3 link contexts and tail secret and closes physical owners
   })
   const state = readM3EstablishedLink(established)
   const forwardKey = state.contexts[0].tx.key
-  const tailSecret = state.clientTailEphemeralSecretKey
+  const tailSecret = state.tailSharedSecret
+  const tailTranscript = state.tailControlTranscript
   t.ok(destroyM3EstablishedLink(established))
   t.alike(forwardKey, b4a.alloc(32))
   t.alike(tailSecret, b4a.alloc(32))
+  t.alike(tailTranscript, b4a.alloc(290))
   t.is(closes, 1)
   t.absent(destroyM3EstablishedLink(established))
   destroyM3EstablishedLink(x.accepted.established)

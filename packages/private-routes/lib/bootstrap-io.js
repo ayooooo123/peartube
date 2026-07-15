@@ -1,6 +1,16 @@
 import b4a from 'b4a'
 
 import { BOOTSTRAP_PROVENANCE, createBootstrapReferralAuthority } from './discovery-evidence.js'
+import {
+  adoptBranchEstablishedLink,
+  completeBranchConstruction,
+  failBranchConstruction,
+  initializeBranchGuardLease,
+  readBranchConstructionDeadline,
+  readBranchConstructionSetup,
+  takeBranchConstructionRequest,
+  validateBranchGuardLease
+} from './branch-construction-authority.js'
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
 import { digestPayloadParameters } from './final-exit.js'
@@ -11,12 +21,14 @@ import {
   destroyM3EstablishedLink,
   readM3EstablishedLink
 } from './guard-link.js'
+import { revokeM3TailCapability } from './m3-adjacency-runtime.js'
 import {
   decodeCanonicalEndpoint,
   decodeRelayCapabilityAdvertisement,
   digestRelayCapabilityAdvertisement
 } from './relay-capability.js'
 import { M3_MESSAGE_ID, M3_PROTOCOL_VERSION, decodeM3Object, encodeM3Object } from './protocol.js'
+import { createTailControlSession } from './tail-control.js'
 
 const CAPS_RESPONSE_DOMAIN = b4a.from('hyperdht-private-routes/m3/caps-response/v1')
 const CORE_FRAGMENT_DOMAIN = b4a.from('hyperdht-private-routes/m3/core-fragment/object/v1')
@@ -28,6 +40,8 @@ const DIRECT_REASSEMBLIES = 2
 const MAX_RESPONSE_DATAGRAMS = 32
 const GUARD_ESTABLISH_TIMEOUT = 5_000n
 const GUARD_LINK_TRANSFERS = new WeakMap()
+const CONSTRUCTED_GUARD_BRANCHES = new WeakMap()
+const GUARD_READY_TRANSFERS = new WeakSet()
 const byteLengthGetter = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength'
@@ -120,6 +134,48 @@ export function revokeBootstrapGuardLink(capability) {
       : null
   if (!state) throw PrivateRouteError.ERR_REPLAY()
   return closeGuardTransfer(capability, state)
+}
+
+function constructedGuardBranch(runtime, tailControl) {
+  const resource = Object.freeze({
+    destroy() {
+      const state = CONSTRUCTED_GUARD_BRANCHES.get(resource)
+      if (!state) return false
+      CONSTRUCTED_GUARD_BRANCHES.delete(resource)
+      try {
+        state.tailControl.destroy()
+      } finally {
+        state.runtime.destroy()
+      }
+      return true
+    }
+  })
+  CONSTRUCTED_GUARD_BRANCHES.set(resource, { runtime, tailControl })
+  return resource
+}
+
+// Deep production import used by RouteManager after the paired construction
+// authority releases both branches atomically.
+export function consumeConstructedGuardBranch(resource) {
+  const state =
+    resource !== null && typeof resource === 'object'
+      ? CONSTRUCTED_GUARD_BRANCHES.get(resource)
+      : null
+  if (!state) throw PrivateRouteError.ERR_REPLAY()
+  CONSTRUCTED_GUARD_BRANCHES.delete(resource)
+  return Object.freeze({ runtime: state.runtime, tailControl: state.tailControl })
+}
+
+export function consumeBootstrapGuardReady(capability) {
+  if (
+    capability === null ||
+    typeof capability !== 'object' ||
+    !GUARD_READY_TRANSFERS.has(capability)
+  ) {
+    throw PrivateRouteError.ERR_REPLAY()
+  }
+  GUARD_READY_TRANSFERS.delete(capability)
+  return true
 }
 
 function abortBoundary() {
@@ -358,7 +414,9 @@ export class BootstrapIO {
     randomBytes,
     setTimeout: setTimer = globalThis.setTimeout,
     clearTimeout: clearTimer = globalThis.clearTimeout,
-    normalDht: _normalDht
+    normalDht: _normalDht,
+    constructionRequest = null,
+    constructionSession = null
   } = {}) {
     if (
       typeof socketFactory !== 'function' ||
@@ -376,6 +434,17 @@ export class BootstrapIO {
       invalid()
     }
     this._socketFactory = socketFactory
+    if (constructionRequest !== null && constructionSession !== null) invalid()
+    this._constructionSession =
+      constructionSession !== null
+        ? constructionSession
+        : constructionRequest === null
+          ? null
+          : takeBranchConstructionRequest(constructionRequest)
+    this._authorityDeadline = this._constructionSession
+      ? readBranchConstructionDeadline(this._constructionSession)
+      : null
+    this._constructionComplete = false
     this._candidateChecker = candidateChecker
     this._guardHandshakeFactory = guardHandshakeFactory
     const referralAuthority = createBootstrapReferralAuthority({ now })
@@ -410,6 +479,7 @@ export class BootstrapIO {
     this._advertisements = []
     this._queryNonces = new Set()
     this._capsInFlight = false
+    this._capsFragmented = false
     this._reassemblies = new Map()
     this._reservedReassemblyBytes = 0
     this._timeoutErrors = new WeakSet()
@@ -468,6 +538,15 @@ export class BootstrapIO {
 
   _assertNotDestroyed() {
     if (this._destroyed) destroyed()
+  }
+
+  _clampDeadline(current, deadline) {
+    if (!uint64(current) || !uint64(deadline)) invalid()
+    if (this._authorityDeadline !== null && this._authorityDeadline < deadline) {
+      deadline = this._authorityDeadline
+    }
+    if (deadline <= current) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+    return deadline
   }
 
   _resolveProbe(target) {
@@ -649,6 +728,7 @@ export class BootstrapIO {
       const object = decodeM3Object(datagram)
       if (object.messageId === M3_MESSAGE_ID.CAPS_RESPONSE_V1) return datagram
       if (object.messageId !== M3_MESSAGE_ID.CORE_FRAGMENT_V1) invalid()
+      this._capsFragmented = true
       const complete = this._acceptFragment(object, this._now())
       if (complete) return complete
     }
@@ -728,6 +808,7 @@ export class BootstrapIO {
     }
     if (selfCount !== 1) unauthorized()
     return Object.freeze({
+      fragmented: this._capsFragmented,
       advertisements: Object.freeze(
         decodedEntries.map(({ advertisement, decoded, self }) => {
           const capsBinding = {
@@ -761,6 +842,7 @@ export class BootstrapIO {
     this._assertLive()
     if (this._capsInFlight) throw PrivateRouteError.ERR_BUSY()
     this._capsInFlight = true
+    this._capsFragmented = false
     let queryScratch = null
     let returnRoutabilityCookie = null
     let endpoint = null
@@ -782,7 +864,7 @@ export class BootstrapIO {
       const startedAt = this._now()
       this._assertLive()
       if (!uint64(startedAt)) invalid()
-      const deadline = startedAt + EXCHANGE_TIMEOUT
+      const deadline = this._clampDeadline(startedAt, startedAt + EXCHANGE_TIMEOUT)
       try {
         await this._send(endpoint, encodeCapsQuery(queryScratch, 0), deadline)
         const challengeObject = decodeM3Object(await this._receive(endpoint, deadline))
@@ -855,7 +937,7 @@ export class BootstrapIO {
       if (!uint64(current)) invalid()
       const referrals = await this._timed(
         legacyFindNode.call(this._socket, dialEndpoint, targetScratch),
-        current + EXCHANGE_TIMEOUT,
+        this._clampDeadline(current, current + EXCHANGE_TIMEOUT),
         dialEndpoint
       )
       if (!Array.isArray(referrals) || referrals.length > 20) invalid()
@@ -919,6 +1001,7 @@ export class BootstrapIO {
       const cookieExpiresAt = readUint64(challengeObject.body, 136)
       if (challengeExpiresAt < deadline) deadline = challengeExpiresAt
       if (cookieExpiresAt < deadline) deadline = cookieExpiresAt
+      deadline = this._clampDeadline(current, deadline)
       await this._send(endpoint, copy(challenge, 184), deadline)
       const response = await this._receive(endpoint, deadline)
       const responseObject = decodeM3Object(response)
@@ -1004,6 +1087,12 @@ export class BootstrapIO {
     let tailSeed = null
     let identityScratch = null
     let tailScratch = null
+    let constructionSetup = null
+    let adopted = null
+    let tailControl = null
+    let branchResource = null
+    let receiveReady = null
+    let readyEnvelope = null
     try {
       const isValidated = candidateChecker && candidateChecker.isValidated
       this._assertNotDestroyed()
@@ -1030,27 +1119,41 @@ export class BootstrapIO {
       const current = this._now()
       this._assertNotDestroyed()
       if (!uint64(current) || !isValidated.call(candidateChecker, validated)) unauthorized()
-      this._assertNotDestroyed()
-      identityScratch = this._randomBytes(32)
-      this._assertNotDestroyed()
-      identitySeed = copy(identityScratch, 32)
-      clear(identityScratch)
-      identityScratch = null
-      tailScratch = this._randomBytes(32)
-      this._assertNotDestroyed()
-      tailSeed = copy(tailScratch, 32)
-      clear(tailScratch)
-      tailScratch = null
-      clientIdentity = cryptoSuite.keyPair(identitySeed)
-      clientTail = cryptoSuite.encryptionKeyPair(tailSeed)
-      clear(identitySeed)
-      clear(tailSeed)
-      identitySeed = null
-      tailSeed = null
-      const setupBranchClass = safe(setup, 'branchClass')
-      setupBranchId = copy(safe(setup, 'branchId'), 16)
-      setupCircuitId = copy(safe(setup, 'circuitId'), 16)
-      const setupGeneration = safe(setup, 'generation')
+      let setupSource = setup
+      if (this._constructionSession) {
+        constructionSetup = readBranchConstructionSetup(this._constructionSession)
+        setupSource = constructionSetup
+        clientIdentity = {
+          publicKey: copy(constructionSetup.clientCircuitIdentity.publicKey, 32),
+          secretKey: copy(constructionSetup.clientCircuitIdentity.secretKey, 64)
+        }
+        clientTail = {
+          publicKey: copy(constructionSetup.clientTailEphemeral.publicKey, 32),
+          secretKey: copy(constructionSetup.clientTailEphemeral.secretKey, 32)
+        }
+      } else {
+        this._assertNotDestroyed()
+        identityScratch = this._randomBytes(32)
+        this._assertNotDestroyed()
+        identitySeed = copy(identityScratch, 32)
+        clear(identityScratch)
+        identityScratch = null
+        tailScratch = this._randomBytes(32)
+        this._assertNotDestroyed()
+        tailSeed = copy(tailScratch, 32)
+        clear(tailScratch)
+        tailScratch = null
+        clientIdentity = cryptoSuite.keyPair(identitySeed)
+        clientTail = cryptoSuite.encryptionKeyPair(tailSeed)
+        clear(identitySeed)
+        clear(tailSeed)
+        identitySeed = null
+        tailSeed = null
+      }
+      const setupBranchClass = safe(setupSource, 'branchClass')
+      setupBranchId = copy(safe(setupSource, 'branchId'), 16)
+      setupCircuitId = copy(safe(setupSource, 'circuitId'), 16)
+      const setupGeneration = safe(setupSource, 'generation')
       this._assertNotDestroyed()
       guardAdmission = reserveGuardAdmission.call(candidateChecker, validated, {
         clientIdentity: clientIdentity.publicKey,
@@ -1094,6 +1197,7 @@ export class BootstrapIO {
       if (decoded.expiresAtMs < deadline) deadline = decoded.expiresAtMs
       if (challengeExpiresAtMs < deadline) deadline = challengeExpiresAtMs
       if (cookieExpiresAtMs < deadline) deadline = cookieExpiresAtMs
+      deadline = this._clampDeadline(current, deadline)
       if (deadline <= current) unauthorized()
       const deadlinePromise = new Promise((resolve, reject) => {
         deadlineReject = reject
@@ -1135,6 +1239,8 @@ export class BootstrapIO {
         this._assertNotDestroyed()
         receiveAccept = channel.receiveAccept
         this._assertNotDestroyed()
+        receiveReady = channel.receiveReady
+        this._assertNotDestroyed()
         takePhysicalChannel = channel.takePhysicalChannel
         this._assertNotDestroyed()
         closeChannel = channel.destroy
@@ -1145,6 +1251,7 @@ export class BootstrapIO {
         typeof channel !== 'object' ||
         typeof sendOffer !== 'function' ||
         typeof receiveAccept !== 'function' ||
+        (this._constructionSession && typeof receiveReady !== 'function') ||
         typeof takePhysicalChannel !== 'function' ||
         typeof closeChannel !== 'function'
       ) {
@@ -1184,7 +1291,7 @@ export class BootstrapIO {
         clientCircuitIdentity: clientIdentity,
         clientTailEphemeral: clientTail,
         payloadParametersDigest: digestPayloadParameters(decoded),
-        requestedLimits: safe(setup, 'requestedLimits')
+        requestedLimits: safe(setupSource, 'requestedLimits')
       })
       pendingOffer = initiated.pending
       await Promise.race([
@@ -1232,9 +1339,52 @@ export class BootstrapIO {
       ) {
         unauthorized()
       }
+      if (this._constructionSession) {
+        adopted = adoptBranchEstablishedLink(this._constructionSession, established)
+        established = null
+        tailControl = createTailControlSession(adopted.tail, {
+          now: this._now,
+          crypto: cryptoSuite
+        })
+        adopted = { runtime: adopted.runtime, tail: null }
+        readyEnvelope = await Promise.race([
+          Promise.resolve().then(() => {
+            this._assertNotDestroyed()
+            return receiveReady.call(channel)
+          }),
+          deadlinePromise
+        ])
+        this._assertNotDestroyed()
+        tailControl.openReady(readyEnvelope)
+        clear(readyEnvelope)
+        readyEnvelope = null
+        if (constructionSetup.kind === 'bootstrap') {
+          initializeBranchGuardLease(this._constructionSession, advertisement)
+        } else if (constructionSetup.kind === 'revalidation') {
+          validateBranchGuardLease(this._constructionSession, advertisement)
+        } else {
+          invalid()
+        }
+        branchResource = constructedGuardBranch(adopted.runtime, tailControl)
+        adopted = null
+        tailControl = null
+        completeBranchConstruction(this._constructionSession, branchResource)
+        branchResource = null
+        this._constructionComplete = true
+      }
       if (timer !== null) {
         this._clearTimer(timer)
         timer = null
+      }
+      if (this._constructionSession) {
+        const guardReady = Object.freeze({})
+        GUARD_READY_TRANSFERS.add(guardReady)
+        const ownedChannel = channel
+        channel = null
+        closeChannel.call(ownedChannel)
+        this._assertNotDestroyed()
+        this.destroy()
+        return guardReady
       }
       const pinnedGuard = Object.freeze({
         relayIdentity: copy(relayIdentity, 32),
@@ -1299,6 +1449,27 @@ export class BootstrapIO {
         } catch {}
       }
       if (established) destroyM3EstablishedLink(established)
+      if (branchResource) {
+        try {
+          branchResource.destroy()
+        } catch {}
+        branchResource = null
+      }
+      if (tailControl) {
+        try {
+          tailControl.destroy()
+        } catch {}
+        tailControl = null
+      }
+      if (adopted) {
+        try {
+          if (adopted.tail) revokeM3TailCapability(adopted.tail)
+        } catch {}
+        try {
+          if (adopted.runtime) adopted.runtime.destroy()
+        } catch {}
+        adopted = null
+      }
       if (pendingOffer) abortIndexZeroGuardLink(pendingOffer)
       if (physicalChannel) {
         try {
@@ -1327,6 +1498,29 @@ export class BootstrapIO {
       clear(tailSeed)
       clear(identityScratch)
       clear(tailScratch)
+      clear(readyEnvelope)
+      clear(constructionSetup && constructionSetup.branchId)
+      clear(constructionSetup && constructionSetup.circuitId)
+      clear(
+        constructionSetup &&
+          constructionSetup.clientCircuitIdentity &&
+          constructionSetup.clientCircuitIdentity.publicKey
+      )
+      clear(
+        constructionSetup &&
+          constructionSetup.clientCircuitIdentity &&
+          constructionSetup.clientCircuitIdentity.secretKey
+      )
+      clear(
+        constructionSetup &&
+          constructionSetup.clientTailEphemeral &&
+          constructionSetup.clientTailEphemeral.publicKey
+      )
+      clear(
+        constructionSetup &&
+          constructionSetup.clientTailEphemeral &&
+          constructionSetup.clientTailEphemeral.secretKey
+      )
       if (admissionProjection) {
         clear(admissionProjection.advertisement)
         clear(admissionProjection.advertisementDigest)
@@ -1382,6 +1576,12 @@ export class BootstrapIO {
     this._socketFactory = null
     this._candidateChecker = null
     this._guardHandshakeFactory = null
+    this._authorityDeadline = null
+    if (this._constructionSession && !this._constructionComplete) {
+      try {
+        failBranchConstruction(this._constructionSession)
+      } catch {}
+    }
     try {
       if (this._destroyReferralAuthority) this._destroyReferralAuthority()
     } catch {}

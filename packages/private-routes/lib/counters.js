@@ -144,6 +144,7 @@ export class OrderedReceiver {
   #lastObservedAt
   #closed
   #mutating
+  #destroyRequested
   #observeBuffered
 
   constructor(options) {
@@ -168,6 +169,7 @@ export class OrderedReceiver {
     this.#lastObservedAt = null
     this.#closed = false
     this.#mutating = false
+    this.#destroyRequested = false
     this.#observeBuffered = observeBuffered || null
   }
 
@@ -202,11 +204,12 @@ export class OrderedReceiver {
   }
 
   destroy() {
-    return this.#mutate(() => {
-      this.#clearBuffered()
-      this.#next = 0n
+    if (this.#mutating) {
+      this.#destroyRequested = true
       this.#closed = true
-    })
+      return
+    }
+    this.#destroyNow()
   }
 
   #pushAuthenticated(counter, payload) {
@@ -263,7 +266,17 @@ export class OrderedReceiver {
       return operation()
     } finally {
       this.#mutating = false
+      if (this.#destroyRequested) this.#destroyNow()
     }
+  }
+
+  #destroyNow() {
+    this.#destroyRequested = false
+    this.#clearBuffered()
+    this.#next = 0n
+    this.#closed = true
+    this.#now = null
+    this.#observeBuffered = null
   }
 
   #readNow() {

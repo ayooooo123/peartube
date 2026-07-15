@@ -10,6 +10,22 @@ export const DEFAULT_MAX_M3_ADJACENCY_RUNTIMES = 128
 export const MAX_M3_ADJACENCY_RUNTIMES = 4096
 export const TEST_ONLY_M3_ADJACENCY_OBSERVER = Symbol('test-only-m3-adjacency-observer')
 
+// Deep test import only. Production tail capabilities are minted exclusively
+// while an authenticated established link is adopted below.
+export const TEST_ONLY_M3_TAIL_ISSUER = Object.freeze({
+  issue({ initiator, sharedSecret, transcript, expiresAt }) {
+    const capability = Object.freeze({})
+    TAILS.set(capability, {
+      initiator,
+      secret: copy(sharedSecret, 32),
+      transcript: copy(transcript, 290),
+      expiresAt,
+      used: false
+    })
+    return capability
+  }
+})
+
 const INITIATOR_CELL_ID_DOMAIN = b4a.from('hyperdht-private-routes/m3/cell-id/initiator/v1')
 const RESPONDER_CELL_ID_DOMAIN = b4a.from('hyperdht-private-routes/m3/cell-id/responder/v1')
 const AUTHORITIES = new WeakSet()
@@ -18,6 +34,7 @@ const RUNTIMES = new WeakMap()
 const DESTROYED_RUNTIMES = new WeakSet()
 const MOVED_RUNTIMES = new WeakSet()
 const TAILS = new WeakMap()
+const SPENT_TAILS = new WeakSet()
 const FORWARDING_OWNERS = new WeakMap()
 const byteLengthGetter = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
@@ -516,7 +533,10 @@ export class M3AdjacencyAuthority {
 
       runtime = new M3AdjacencyRuntime()
       tail = Object.freeze({})
-      const tailSecret = state.clientTailEphemeralSecretKey || null
+      const tailSecret = state.tailSharedSecret || state.clientTailEphemeralSecretKey || null
+      const tailTranscript = state.tailControlTranscript || null
+      state.tailSharedSecret = null
+      state.tailControlTranscript = null
       state.clientTailEphemeralSecretKey = null
       const runtimeValue = {
         ...state,
@@ -531,7 +551,13 @@ export class M3AdjacencyAuthority {
       }
       reservation.runtimeState = runtimeValue
       RUNTIMES.set(runtime, runtimeValue)
-      TAILS.set(tail, { secret: tailSecret, used: false })
+      TAILS.set(tail, {
+        initiator: state.initiator,
+        secret: tailSecret,
+        transcript: tailTranscript,
+        expiresAt: state.expiresAt,
+        used: false
+      })
       adopted = true
       return Object.freeze({ runtime, tail })
     } catch (err) {
@@ -572,10 +598,30 @@ export function revokeM3TailCapability(capability) {
   const state = safeObject(capability) ? TAILS.get(capability) : null
   if (!state) return false
   TAILS.delete(capability)
+  SPENT_TAILS.add(capability)
   clear(state.secret)
+  clear(state.transcript)
   state.secret = null
+  state.transcript = null
   state.used = true
   return true
+}
+
+// Deep production import used only by TailControlSession. Ownership moves out
+// of the adjacency authority once and raw key material is never returned by a
+// public package API.
+export function takeM3TailCapability(capability) {
+  const state = safeObject(capability) ? TAILS.get(capability) : null
+  if (!state) {
+    if (safeObject(capability) && SPENT_TAILS.has(capability)) {
+      throw PrivateRouteError.ERR_REPLAY()
+    }
+    invalid()
+  }
+  TAILS.delete(capability)
+  SPENT_TAILS.add(capability)
+  state.used = true
+  return state
 }
 
 export function createM3ForwardingOwner(destroy) {

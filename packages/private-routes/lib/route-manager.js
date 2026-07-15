@@ -17,7 +17,11 @@ import {
   verifyDestinationProof,
   verifyEntryProof
 } from './activation.js'
-import { createBranchConstructionAuthority } from './branch-construction-authority.js'
+import {
+  consumeBranchConstructionPair,
+  createBranchConstructionAuthority
+} from './branch-construction-authority.js'
+import { consumeBootstrapGuardReady, consumeConstructedGuardBranch } from './bootstrap-io.js'
 import { CELL_SIZE, CellCodec } from './cell-codec.js'
 import {
   isRouteCompilerChecker,
@@ -33,6 +37,7 @@ import {
   readVerifiedDescriptor
 } from './descriptor.js'
 import { PrivateRouteError } from './errors.js'
+import { consumeGuardRevalidationReady } from './guard-revalidation-io.js'
 import { createLinkSetupAuthority } from './link-setup.js'
 import { isM3AdjacencyAuthority } from './m3-adjacency-runtime.js'
 import { PRIVACY_OPERATION } from './privacy-domains.js'
@@ -64,6 +69,35 @@ const DYNAMIC_OPTION_KEYS = new Set([
   'schedule',
   'tailControlTransportFactory'
 ])
+
+const DYNAMIC_BRANCH_STATES = new WeakMap()
+
+function destroyConstructedBranch(branch) {
+  if (!branch) return
+  try {
+    branch.tailControl.destroy()
+  } finally {
+    branch.runtime.destroy()
+  }
+}
+
+function dynamicBranches(lookup, announce) {
+  const branches = Object.freeze({
+    destroy() {
+      const state = DYNAMIC_BRANCH_STATES.get(branches)
+      if (!state) return false
+      DYNAMIC_BRANCH_STATES.delete(branches)
+      try {
+        destroyConstructedBranch(state.lookup)
+      } finally {
+        destroyConstructedBranch(state.announce)
+      }
+      return true
+    }
+  })
+  DYNAMIC_BRANCH_STATES.set(branches, { lookup, announce })
+  return branches
+}
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
@@ -212,6 +246,8 @@ class DynamicRouteManager {
   #allocations
   #constructionAuthority
   #bootstrapIO
+  #revalidationIO
+  #branches
   #destroyed
   #opening
   #lifecycle
@@ -222,6 +258,8 @@ class DynamicRouteManager {
     this.#allocations = []
     this.#constructionAuthority = null
     this.#bootstrapIO = null
+    this.#revalidationIO = null
+    this.#branches = null
     this.#destroyed = false
     this.#opening = false
     this.#lifecycle = Object.freeze({})
@@ -230,6 +268,7 @@ class DynamicRouteManager {
   async openDynamic(...args) {
     if (args.length !== 0) invalid()
     if (this.#destroyed) throw PrivateRouteError.ERR_DESTROYED()
+    if (this.#branches) throw PrivateRouteError.ERR_REPLAY()
     if (this.#opening) throw PrivateRouteError.ERR_BUSY()
     this.#opening = true
     const lifecycle = this.#lifecycle
@@ -260,17 +299,94 @@ class DynamicRouteManager {
       this.#notify({ type: 'io-created', resource: 'bootstrap' })
       this.#assertLifecycle(lifecycle)
 
+      let bootstrapTransfer
       try {
-        await io.open()
+        bootstrapTransfer = await io.open()
       } catch {
         this.#assertLifecycle(lifecycle)
         throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
       }
       this.#assertLifecycle(lifecycle)
+      consumeBootstrapGuardReady(bootstrapTransfer)
+      this.#assertLifecycle(lifecycle)
+      try {
+        io.destroy()
+      } catch {}
+      this.#bootstrapIO = null
 
-      // A successful transfer is consumed only after the Task 3 branded handoff lands.
-      // Until then, never accept an unverified object from an injected factory.
-      throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      const revalidationRequest = this.#constructionAuthority.revalidationRequest
+      let revalidationIO
+      try {
+        revalidationIO = this.#options.guardRevalidationIOFactory(revalidationRequest)
+      } catch {
+        throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      }
+      this.#assertLifecycle(lifecycle)
+      if (
+        !safeObject(revalidationIO) ||
+        typeof revalidationIO.open !== 'function' ||
+        typeof revalidationIO.destroy !== 'function'
+      ) {
+        try {
+          if (safeObject(revalidationIO) && typeof revalidationIO.destroy === 'function') {
+            revalidationIO.destroy()
+          }
+        } catch {}
+        invalid()
+      }
+      this.#revalidationIO = revalidationIO
+      this.#notify({ type: 'io-created', resource: 'guard-revalidation' })
+      this.#assertLifecycle(lifecycle)
+      let revalidationTransfer
+      try {
+        revalidationTransfer = await revalidationIO.open()
+      } catch {
+        this.#assertLifecycle(lifecycle)
+        throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      }
+      this.#assertLifecycle(lifecycle)
+      consumeGuardRevalidationReady(revalidationTransfer)
+      this.#assertLifecycle(lifecycle)
+      try {
+        revalidationIO.destroy()
+      } catch {}
+      this.#revalidationIO = null
+
+      const pairTransfer = this.#constructionAuthority.takePair()
+      const pair = consumeBranchConstructionPair(pairTransfer)
+      this.#constructionAuthority = null
+      let lookup = null
+      let announce = null
+      let lookupMoved = false
+      let announceMoved = false
+      let branches = null
+      let published = false
+      try {
+        lookup = consumeConstructedGuardBranch(pair.lookup)
+        lookupMoved = true
+        announce = consumeConstructedGuardBranch(pair.announce)
+        announceMoved = true
+        branches = dynamicBranches(lookup, announce)
+        lookup = null
+        announce = null
+        this.#releaseAllocations(lifecycle)
+        this.#assertLifecycle(lifecycle)
+        this.#notify({ type: 'guard-ready', resource: 'paired-branches' })
+        this.#assertLifecycle(lifecycle)
+        this.#branches = branches
+        published = true
+        return branches
+      } finally {
+        if (!published && branches) branches.destroy()
+        destroyConstructedBranch(lookup)
+        destroyConstructedBranch(announce)
+        try {
+          if (!lookupMoved) pair.lookup.destroy()
+        } catch {}
+        try {
+          if (!announceMoved) pair.announce.destroy()
+        } catch {}
+      }
     } catch (err) {
       this.#terminate()
       if (err instanceof PrivateRouteError) throw err
@@ -370,7 +486,8 @@ class DynamicRouteManager {
       authority = createBranchConstructionAuthority({
         lookup: branches[0],
         announce: branches[1],
-        now: this.#options.now
+        now: this.#options.now,
+        adjacencyAuthority: this.#options.adjacencyAuthority
       })
       this.#assertLifecycle(lifecycle)
       this.#constructionAuthority = authority
@@ -399,13 +516,34 @@ class DynamicRouteManager {
         io.destroy()
       } catch {}
     }
+    const revalidationIO = this.#revalidationIO
+    this.#revalidationIO = null
+    if (revalidationIO) {
+      try {
+        revalidationIO.destroy()
+      } catch {}
+    }
+    const branches = this.#branches
+    this.#branches = null
+    if (branches) {
+      try {
+        branches.destroy()
+      } catch {}
+    }
+    this.#releaseAllocations()
+  }
+
+  #releaseAllocations(lifecycle = null) {
     const allocations = this.#allocations
     this.#allocations = []
+    const resources = []
     for (const allocation of allocations) {
       const resource = allocation.branchClass === BRANCH_CLASS.LOOKUP ? 'lookup' : 'announce'
       this.#clearAllocation(allocation)
-      this.#notify({ type: 'allocation-erased', resource })
+      resources.push(resource)
     }
+    for (const resource of resources) this.#notify({ type: 'allocation-erased', resource })
+    if (lifecycle !== null) this.#assertLifecycle(lifecycle)
   }
 
   #clearAllocation(allocation) {

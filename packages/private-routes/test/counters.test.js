@@ -282,6 +282,29 @@ test('ordered receiver rejects reentrant state mutation from its clock', (t) => 
   t.is(receiver.buffered, 1)
 })
 
+test('ordered receiver reentrant destroy zeroes newly buffered authenticated payload', (t) => {
+  const owned = []
+  let receiver = null
+  receiver = new OrderedReceiver({
+    window: 4,
+    gapTimeout: 50,
+    now() {
+      receiver.destroy()
+      return 0
+    },
+    [TEST_ONLY_BUFFER_OBSERVER](payload) {
+      owned.push(payload)
+    }
+  })
+
+  t.alike(receiver.pushAuthenticated(1n, b4a.from('authenticated secret')), [])
+  t.is(receiver.closed, true)
+  t.is(receiver.buffered, 0)
+  t.is(owned.length, 1)
+  t.alike(owned[0], b4a.alloc(owned[0].byteLength))
+  expectCode(t, () => receiver.pushAuthenticated(0n, b4a.from('later')), 'COUNTER_EXHAUSTED')
+})
+
 test('window one accepts only the exact ordered counter and latest datagram', (t) => {
   const ordered = new OrderedReceiver({ window: 1, gapTimeout: 50, now: () => 0 })
   t.alike(ordered.pushAuthenticated(0n, 'exact'), ['exact'])

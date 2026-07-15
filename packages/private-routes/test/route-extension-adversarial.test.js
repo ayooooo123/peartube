@@ -243,6 +243,30 @@ test('both manager allocations precede bootstrap and are erased on bootstrap fai
   t.is(state.records[0].closes, 1, 'terminal destroy cannot close BootstrapIO twice')
 })
 
+test('destroy on first allocation-erased notification still clears the complete pair', async (t) => {
+  if (!hasSurface()) return
+  let manager = null
+  let destroyedOnFirst = false
+  const { options, state } = harness(t, {
+    bootstrap: { fail: new Error('bootstrap failed') }
+  })
+  const observe = options[TEST_ONLY_DYNAMIC_OBSERVER]
+  options[TEST_ONLY_DYNAMIC_OBSERVER] = (event) => {
+    observe(event)
+    if (!destroyedOnFirst && event.type === 'allocation-erased') {
+      destroyedOnFirst = true
+      manager.destroy()
+    }
+  }
+  manager = routes.RouteManager.createDynamic(options)
+
+  await rejects(t, () => manager.openDynamic(), 'observer reentry keeps open fail-closed')
+  t.ok(destroyedOnFirst, 'the first erasure notification triggered terminal reentry')
+  t.is(events(state, 'allocation-erased').length, 2, 'both cleared allocations are reported')
+  t.ok(allZero(state.random), 'both allocations are zeroized before the first callback')
+  t.absent(manager.destroy(), 'reentrant destroy left the manager terminal')
+})
+
 test('reentry and queued completion cannot publish a transfer after terminal destroy', async (t) => {
   if (!hasSurface()) return
   let manager = null

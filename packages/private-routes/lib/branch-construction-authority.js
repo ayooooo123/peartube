@@ -5,6 +5,7 @@ import {
   decodeRelayCapabilityAdvertisement,
   digestRelayCapabilityAdvertisement
 } from './relay-capability.js'
+import { isM3AdjacencyAuthority, revokeM3TailCapability } from './m3-adjacency-runtime.js'
 import { BRANCH_CLASS, ROLE, roleForIdentity } from './protocol.js'
 
 export const TEST_ONLY_BRANCH_CONSTRUCTION_OBSERVER = Symbol(
@@ -393,6 +394,8 @@ function terminalize(owner, { closeResources, type }) {
       state.authority = null
       state.branch = null
       state.completed = true
+      state.setupRead = true
+      state.guardRead = true
       state.mutating = false
       state.violated = false
     }
@@ -411,6 +414,7 @@ function terminalize(owner, { closeResources, type }) {
   owner.lookup = null
   owner.announce = null
   owner.authority = null
+  owner.adjacencyAuthority = null
   owner.pairIssued = true
   owner.now = null
   const observe = owner.observe
@@ -428,17 +432,27 @@ class BranchConstructionAuthority {
   constructor(options) {
     if (!safeObject(options)) invalid()
     let symbols
+    let hasAdjacencyAuthority
     try {
       symbols = Reflect.ownKeys(options).includes(TEST_ONLY_BRANCH_CONSTRUCTION_OBSERVER)
         ? [TEST_ONLY_BRANCH_CONSTRUCTION_OBSERVER]
         : []
+      hasAdjacencyAuthority = Reflect.ownKeys(options).includes('adjacencyAuthority')
     } catch {
       invalid()
     }
-    if (!exactKeys(options, ['lookup', 'announce', 'now'], symbols)) invalid()
+    const expected = hasAdjacencyAuthority
+      ? ['lookup', 'announce', 'now', 'adjacencyAuthority']
+      : ['lookup', 'announce', 'now']
+    if (!exactKeys(options, expected, symbols)) invalid()
     const now = option(options, 'now')
+    const adjacencyAuthority = hasAdjacencyAuthority ? option(options, 'adjacencyAuthority') : null
     const observe = option(options, TEST_ONLY_BRANCH_CONSTRUCTION_OBSERVER)
-    if (typeof now !== 'function' || (observe !== undefined && typeof observe !== 'function')) {
+    if (
+      typeof now !== 'function' ||
+      (adjacencyAuthority !== null && !isM3AdjacencyAuthority(adjacencyAuthority)) ||
+      (observe !== undefined && typeof observe !== 'function')
+    ) {
       invalid()
     }
     let lookup = null
@@ -457,6 +471,7 @@ class BranchConstructionAuthority {
       }
       const owner = {
         authority: this,
+        adjacencyAuthority,
         now,
         observe: observe || null,
         lookup,
@@ -544,6 +559,8 @@ export function takeBranchConstructionRequest(request) {
     branch: requestState.branch,
     kind: requestState.kind,
     guardValidated: false,
+    setupRead: false,
+    guardRead: false,
     completed: false,
     mutating: true,
     violated: false
@@ -569,6 +586,135 @@ export function takeBranchConstructionRequest(request) {
     state.mutating = false
     throw err
   }
+}
+
+function clearSetup(value) {
+  if (!value) return
+  clear(value.branchId)
+  clear(value.circuitId)
+  clear(value.clientCircuitIdentity && value.clientCircuitIdentity.publicKey)
+  clear(value.clientCircuitIdentity && value.clientCircuitIdentity.secretKey)
+  clear(value.clientTailEphemeral && value.clientTailEphemeral.publicKey)
+  clear(value.clientTailEphemeral && value.clientTailEphemeral.secretKey)
+}
+
+// Deep production import used by BootstrapIO and GuardRevalidationIO. The
+// projection is an owned copy and must be erased by the IO actor.
+export function readBranchConstructionSetup(session) {
+  const { owner, state, lifecycle } = beginSessionMutation(session)
+  let result = null
+  let complete = false
+  try {
+    if (state.setupRead || state.completed) replay()
+    state.setupRead = true
+    const branch = state.branch
+    result = {
+      kind: state.kind,
+      branchClass: branch.branchClass,
+      branchId: copy(branch.branchId, 16),
+      circuitId: copy(branch.circuitId, 16),
+      generation: branch.generation,
+      clientCircuitIdentity: Object.freeze({
+        publicKey: copy(branch.clientCircuitIdentity.publicKey, 32),
+        secretKey: copy(branch.clientCircuitIdentity.secretKey, 64)
+      }),
+      clientTailEphemeral: Object.freeze({
+        publicKey: copy(branch.clientTailEphemeral.publicKey, 32),
+        secretKey: copy(branch.clientTailEphemeral.secretKey, 32)
+      }),
+      deadline: branch.deadline,
+      requestedLimits: branch.requestedLimits
+    }
+    assertMutation(owner, lifecycle, state)
+    complete = true
+    return Object.freeze(result)
+  } catch (err) {
+    if (!owner.destroyed) terminalize(owner, { closeResources: true, type: 'destroyed' })
+    throw err
+  } finally {
+    if (!complete) clearSetup(result)
+    endSessionMutation(state)
+  }
+}
+
+export function readPinnedBranchGuard(session) {
+  const { owner, state, lifecycle } = beginSessionMutation(session)
+  let result = null
+  let complete = false
+  try {
+    if (state.kind !== 'revalidation' || state.guardRead || !owner.lease) invalid()
+    state.guardRead = true
+    result = {
+      relayIdentity: copy(owner.lease.relayIdentity, 32),
+      reachableEndpoint: copy(owner.lease.reachableEndpoint, 19),
+      advertisementDigest: copy(owner.lease.advertisementDigest, 32),
+      epoch: owner.lease.epoch,
+      deadline: state.branch.deadline
+    }
+    assertMutation(owner, lifecycle, state)
+    complete = true
+    return Object.freeze(result)
+  } catch (err) {
+    if (!owner.destroyed) terminalize(owner, { closeResources: true, type: 'destroyed' })
+    throw err
+  } finally {
+    if (!complete && result) clearLease(result)
+    endSessionMutation(state)
+  }
+}
+
+export function readBranchConstructionDeadline(session) {
+  const { owner, state, lifecycle } = beginSessionMutation(session)
+  try {
+    const deadline = state.branch.deadline
+    assertMutation(owner, lifecycle, state)
+    return deadline
+  } catch (err) {
+    if (!owner.destroyed) terminalize(owner, { closeResources: true, type: 'destroyed' })
+    throw err
+  } finally {
+    endSessionMutation(state)
+  }
+}
+
+// Deep production import. The local M3 authority consumes the authenticated
+// established-link handle and returns only its runtime and opaque tail brand.
+export function adoptBranchEstablishedLink(session, established) {
+  const { owner, state, lifecycle } = beginSessionMutation(session)
+  let adopted = null
+  let complete = false
+  try {
+    if (!state.setupRead || state.completed || !owner.adjacencyAuthority) invalid()
+    adopted = owner.adjacencyAuthority.adopt(established)
+    assertMutation(owner, lifecycle, state)
+    complete = true
+    return adopted
+  } catch (err) {
+    if (!owner.destroyed) terminalize(owner, { closeResources: true, type: 'destroyed' })
+    throw err
+  } finally {
+    if (!complete && adopted) {
+      try {
+        revokeM3TailCapability(adopted.tail)
+      } catch {}
+      try {
+        adopted.runtime.destroy()
+      } catch {}
+    }
+    endSessionMutation(state)
+  }
+}
+
+export function failBranchConstruction(session) {
+  const state = safeObject(session) ? SESSIONS.get(session) : null
+  if (!state) return false
+  if (state.mutating) {
+    state.violated = true
+    busy()
+  }
+  const owner = liveOwner(state.authority)
+  terminalize(owner, { closeResources: true, type: 'destroyed' })
+  return true
 }
 
 export function initializeBranchGuardLease(session, encodedAdvertisement) {

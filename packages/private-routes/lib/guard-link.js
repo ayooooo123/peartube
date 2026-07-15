@@ -20,6 +20,7 @@ import {
   decodeM3Object,
   encodeM3Object
 } from './protocol.js'
+import { digestAdmittedLimits, encodeTailControlTranscript } from './tail-control.js'
 
 export const LINK_OFFER_SIZE = 374
 export const LINK_ACCEPT_SIZE = 285
@@ -406,11 +407,22 @@ function context(cellClass, key, noncePrefix, sender, now) {
   }
 }
 
-function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
+function deriveState(
+  shared,
+  tailShared,
+  offer,
+  accept,
+  initiator,
+  physicalChannel,
+  now,
+  tailRouteEncryptionPublicKey
+) {
   const offerDigest = digest(LINK_OFFER_DIGEST_DOMAIN, offer.encoded)
   const acceptDigest = digest(LINK_ACCEPT_DIGEST_DOMAIN, accept.encoded)
   const ids = cellIds(offerDigest)
   const contexts = {}
+  let admittedLimitsDigest = null
+  let tailControlTranscript = null
   try {
     for (const cellClass of [CELL_CLASS.CONTROL, CELL_CLASS.STREAM, CELL_CLASS.DATAGRAM]) {
       const transcript = b4a.concat([
@@ -445,7 +457,21 @@ function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
         clear(transcript)
       }
     }
-    return {
+    admittedLimitsDigest = digestAdmittedLimits(accept.admittedLimits)
+    tailControlTranscript = encodeTailControlTranscript({
+      branchClass: offer.branchClass,
+      branchId: offer.branchId,
+      circuitId: offer.circuitId,
+      generation: offer.generation,
+      extensionIndex: 0,
+      clientTailEphemeralPublicKey: offer.clientTailEphemeralPublicKey,
+      advertisedTailRouteEncryptionPublicKey: tailRouteEncryptionPublicKey,
+      candidateAdvertisementDigest: offer.responderAdvertisementDigest,
+      clientNonce: offer.clientNonce,
+      tailIdentity: offer.responderIdentity,
+      admittedLimitsDigest
+    })
+    const result = {
       initiator,
       completeOfferDigest: copy(offerDigest, 32),
       localId: copy(initiator ? ids.initiatorCellId : ids.responderCellId, 16),
@@ -459,11 +485,14 @@ function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
       generation: offer.generation,
       extensionIndex: 0,
       responderAdvertisementDigest: copy(offer.responderAdvertisementDigest, 32),
-      clientTailEphemeralSecretKey: initiator ? copy(offer.clientTailEphemeralSecretKey, 32) : null,
+      tailSharedSecret: copy(tailShared, 32),
+      tailControlTranscript,
       expiresAt: accept.admittedLimits.expiresAtMs,
       admittedLimits: accept.admittedLimits,
       contexts
     }
+    tailControlTranscript = null
+    return result
   } catch (err) {
     clearContexts(contexts)
     throw err
@@ -472,6 +501,8 @@ function deriveState(shared, offer, accept, initiator, physicalChannel, now) {
     clear(ids.responderCellId)
     clear(offerDigest)
     clear(acceptDigest)
+    clear(admittedLimitsDigest)
+    clear(tailControlTranscript)
   }
 }
 
@@ -506,6 +537,8 @@ function clearState(state) {
   clear(state.circuitId)
   clear(state.responderAdvertisementDigest)
   clear(state.clientTailEphemeralSecretKey)
+  clear(state.tailSharedSecret)
+  clear(state.tailControlTranscript)
   clearContexts(state.contexts)
   state.physicalChannel = null
   try {
@@ -829,7 +862,16 @@ export function createIndexZeroGuardLinkResponder({
         shared = cryptoSuite.keyAgreement(pair.secretKey, offer.initiatorLinkEphemeralPublicKey)
         assertGeneration(operationGeneration)
         if (replayCache.get(replayKey) !== replayReservation) replay()
-        derivedState = deriveState(shared, offer, decodedAccept, false, physicalChannel, now)
+        derivedState = deriveState(
+          shared,
+          tailShared,
+          offer,
+          decodedAccept,
+          false,
+          physicalChannel,
+          now,
+          decodedAdvertisement.routeEncryptionPublicKey
+        )
         physicalChannel = null
         assertGeneration(operationGeneration)
         if (replayCache.get(replayKey) !== replayReservation) replay()
@@ -907,13 +949,16 @@ export function completeIndexZeroGuardLink(
   let accept = null
   let shared = null
   let advertisementBytes = null
+  let decodedAdvertisement = null
   let advertisementDigest = null
   let offerDigest = null
   let input = null
+  let tailShared = null
   let transferred = false
   try {
     if (!u64(now) || !ownsPhysical) invalid()
     advertisementBytes = copy(advertisement)
+    decodedAdvertisement = decodeRelayCapabilityAdvertisement(advertisementBytes, { now })
     advertisementDigest = digestRelayCapabilityAdvertisement(advertisementBytes, { now })
     accept = decodeAccept(encodedAccept)
     offerDigest = digest(LINK_OFFER_DIGEST_DOMAIN, state.offer.encoded)
@@ -944,8 +989,21 @@ export function completeIndexZeroGuardLink(
       state.ephemeralSecretKey,
       accept.responderLinkEphemeralPublicKey
     )
+    tailShared = cryptoSuite.keyAgreement(
+      state.offer.clientTailEphemeralSecretKey,
+      decodedAdvertisement.routeEncryptionPublicKey
+    )
     const established = establish(
-      deriveState(shared, state.offer, accept, true, physicalChannel, () => Number(now))
+      deriveState(
+        shared,
+        tailShared,
+        state.offer,
+        accept,
+        true,
+        physicalChannel,
+        () => Number(now),
+        decodedAdvertisement.routeEncryptionPublicKey
+      )
     )
     transferred = true
     return established
@@ -956,10 +1014,12 @@ export function completeIndexZeroGuardLink(
       } catch {}
     }
     clear(advertisementBytes)
+    clearDecoded(decodedAdvertisement)
     clear(advertisementDigest)
     clear(offerDigest)
     clear(input)
     clear(shared)
+    clear(tailShared)
     clearPending(state)
     clearDecoded(accept)
   }

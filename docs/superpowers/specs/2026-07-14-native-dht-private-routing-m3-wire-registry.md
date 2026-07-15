@@ -922,6 +922,29 @@ branch, or another identity in its own branch. Thus the only cross-branch
 identity equality is lookup index 0 = announce index 0; all four middle/exit
 identities are pairwise distinct, and every branch rejects repeats or loops.
 
+M3 adjacency runtimes map the signed offer to M2-compatible public cell fields
+without adding wire fields. `cellEpoch = generation`. Let `completeOfferDigest`
+be the Section 5.2 digest of the complete signed 374-byte offer. The local IDs
+are:
+
+```text
+initiatorCellId = first16(
+  digest('hyperdht-private-routes/m3/cell-id/initiator/v1', completeOfferDigest)
+)
+responderCellId = first16(
+  digest('hyperdht-private-routes/m3/cell-id/responder/v1', completeOfferDigest)
+)
+```
+
+`first16` is digest byte range `[0,16)`, and `digest(domain, bytes)` is
+`hash(u16be(domainByteLength) || UTF8(domain) || bytes)`. The initiator runtime
+uses `localId = initiatorCellId` and `peerLocalId = responderCellId`; the
+responder reverses them. All-zero, equal, mismatched, colliding, or already-live
+local IDs reject. One exclusive runtime owns the live contexts and counters;
+they are moved, never copied, when a tail becomes an intermediate. The complete
+runtime ownership and install rules are normative in the reviewed Task 3
+amendment design dated 2026-07-15.
+
 The canonical admitted/requested-limits encoding is exactly 26 bytes:
 
 ```text
@@ -1093,6 +1116,16 @@ generation, and index. Reuse or conflicting proof bytes are rejected.
 
 The admitted-limits digest is the approved construction in Section 7.1, not a
 digest of the address-bearing accept.
+
+For extension indices one and two, this byte-identical 378-byte proof has two
+authoritative carriers. It is first the standalone third and final object on
+the adjacency-local setup channel, immediately after the exact 374-byte OFFER
+and 285-byte ACCEPT. It is then nested unchanged in `EXTENDED_V1`. Both forms
+must be canonical and unfragmented. The setup parser accepts exactly
+OFFER→ACCEPT→PROOF, with no fourth object, alternate ID, reordering, trailing
+bytes, or deadline extension. Index zero does not use this proof because the
+client directly verifies its ACCEPT; it still requires `TAIL_READY_V1` before
+the guard link transfers as active.
 
 ### 5.5 `EXTEND_REQUEST_V1` (`0x0025`)
 
@@ -2700,51 +2733,51 @@ For `0x0044`, the Section 8.3 early bound is
 the buffer if finalization fails or OPEN misses its deadline; with no early
 object, the normal readiness deadline is 5,000 ms from OPEN.
 
-| ID       | Registered message/object       | Body bytes (fixed..max)                | Envelope | Max wire                   | Selected carrier/context                          | Fragment data / max count            | Timeout or validity                        |
-| -------- | ------------------------------- | -------------------------------------- | -------- | -------------------------- | ------------------------------------------------- | ------------------------------------ | ------------------------------------------ |
-| `0x0001` | `CAPABILITY_ADVERTISEMENT_V1`   | `188..476`                             | 72       | 548                        | nested discovery object; direct or routed         | none / 1                             | signed expiry, at most 1,800,000 ms        |
-| `0x0002` | `CAPS_QUERY_V1`                 | 110                                    | 8        | 118                        | direct bootstrap UDP request                      | none / 1                             | 5,000 ms exchange                          |
-| `0x0003` | `CAPS_RESPONSE_V1`              | `335..4,473`                           | 72       | 4,545                      | cookie-gated direct bootstrap UDP response        | 1,144 / 4                            | 5,000 ms exchange/reassembly               |
-| `0x0004` | `ACTIVE_CHALLENGE_V1`           | 176                                    | 8        | 184                        | cookie-gated client→guard or exit→storage UDP     | none / 1                             | at most 5,000 ms                           |
-| `0x0005` | `ACTIVE_CHALLENGE_RESPONSE_V1`  | 272                                    | 72       | 344                        | cookie-gated guard→client or storage→exit UDP     | none / 1                             | challenge expiry, at most 5,000 ms         |
-| `0x0006` | `RELAY_DISCOVER_V1`             | 69                                     | 8        | 77                         | `TAIL_CONTROL_ORDERED`                            | none / 1                             | 5,000 ms exchange                          |
-| `0x0007` | `RELAY_DISCOVER_RESPONSE_V1`    | `41..4,441`                            | 8        | 4,449                      | `TAIL_CONTROL_ORDERED`                            | 1,017 / 5                            | 5,000 ms exchange/reassembly               |
-| `0x0008` | `CORE_FRAGMENT_V1`              | routed `48..1,065`; direct `48..1,192` | 8        | routed 1,073; direct 1,200 | containing routed context or CAPS direct response | 1,017 / 13 routed; 1,144 / 11 direct | 5,000 ms non-extending reassembly          |
-| `0x0009` | `CAPS_COOKIE_CHALLENGE_V1`      | 72                                     | 8        | 80                         | direct bootstrap UDP response                     | none / 1                             | at most 5,000 ms                           |
-| `0x0020` | `LINK_OFFER_V1`                 | 302                                    | 72       | 374                        | adjacency-local setup transport                   | none / 1                             | offer deadline, at most 5,000 ms           |
-| `0x0021` | `LINK_ACCEPT_V1`                | 213                                    | 72       | 285                        | adjacency-local setup transport                   | none / 1                             | offer deadline, at most 5,000 ms           |
-| `0x0022` | `REDACTED_RESPONDER_PROOF_V1`   | 306                                    | 72       | 378                        | nested in `EXTENDED_V1`                           | none / 1                             | admitted-link expiry                       |
-| `0x0023` | `EXTENDED_V1`                   | 486                                    | 8        | 494                        | prior `TAIL_CONTROL_ORDERED`                      | none / 1                             | offer/extension deadline, at most 5,000 ms |
-| `0x0024` | `TAIL_READY_V1`                 | 210                                    | 72       | 282                        | new reverse `TAIL_CONTROL_ORDERED`                | none / 1                             | admitted-link expiry                       |
-| `0x0025` | `EXTEND_REQUEST_V1`             | `458..746`                             | 8        | `466..754`                 | current `TAIL_CONTROL_ORDERED`                    | none / 1                             | 5,000 ms extension deadline                |
-| `0x0040` | `DHT_EXIT_ACTIVATE_V1`          | 96                                     | 8        | 104                        | forward `TAIL_FINALIZE_DATAGRAM`                  | none / 1                             | shared 5,000 ms finalization deadline      |
-| `0x0041` | `DHT_EXIT_READY_V1`             | 233                                    | 72       | 305                        | reverse `TAIL_FINALIZE_DATAGRAM`                  | none / 1                             | shared 5,000 ms finalization deadline      |
-| `0x0042` | `DHT_EXIT_READY_ACK_V1`         | 105                                    | 8        | 113                        | forward `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                             | shared 5,000 ms finalization deadline      |
-| `0x0043` | `DHT_EXIT_OPEN_V1`              | 169                                    | 8        | 177                        | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                             | 5,000 ms retired-context grace after OPEN  |
-| `0x0044` | `DHT_EXIT_SEEDS_V1`             | `905..4,265`                           | 72       | `977..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                | 1,017 / 5                            | §8.3 early; else OPEN + 5,000 ms           |
-| `0x0050` | `EXIT_RPC_OPEN_V1`              | `578..738`                             | 72       | `650..810`                 | direct exit-to-storage UDP                        | none / 1                             | at most 5,000 ms                           |
-| `0x0051` | `EXIT_RPC_ACCEPT_V1`            | 124                                    | 24       | 148                        | direct exit-to-storage UDP                        | none / 1                             | OPEN deadline                              |
-| `0x0052` | `EXIT_RPC_FRAGMENT_V1`          | `27..1,176`                            | 24       | `51..1,200`                | admitted exit-to-storage session                  | 1,149 / 8                            | OPEN deadline, at most 5,000 ms            |
-| `0x0053` | `EXIT_RPC_REQUEST_V1`           | `30..1,191`                            | 8        | `38..1,199`                | encrypted storage-session object                  | 1,149 / 2                            | OPEN deadline                              |
-| `0x0054` | `EXIT_RPC_RESPONSE_V1`          | `20..8,082`                            | 8        | `28..8,090`                | encrypted storage-session object                  | 1,149 / 8                            | OPEN deadline                              |
-| `0x0100` | `DESTINATION_REF_V1`            | 164                                    | 8        | 172                        | nested `ROUTE_PAYLOAD` authority                  | none / 1                             | at most 300,000 ms and route-bound         |
-| `0x0101` | `ROUTED_REQUEST_V1`             | `221..1,382`                           | 8        | 1,390                      | forward `ROUTE_PAYLOAD`                           | 1,017 / 2                            | selected command policy, at most 5,000 ms  |
-| `0x0102` | `ROUTED_REPLY_V1`               | `200..8,262`                           | 8        | 8,270                      | reverse `ROUTE_PAYLOAD`                           | 1,017 / 9                            | original request deadline                  |
-| `0x0120` | `IMMUTABLE_GET/1`               | 32 request                             | 0        | 261 request / 4,706 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 5 for exchange maximum       | 3,000 ms                                   |
-| `0x0121` | `IMMUTABLE_PUT/1`               | `67..1,090` request                    | 0        | 1,319 request / 209 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 2 for exchange maximum       | 3,000 ms                                   |
-| `0x0122` | `MUTABLE_GET/1`                 | 40 request                             | 0        | 269 request / 4,650 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 5 for exchange maximum       | 3,000 ms                                   |
-| `0x0123` | `MUTABLE_PUT/1`                 | `171..1,066` request                   | 0        | 1,295 request / 209 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 2 for exchange maximum       | 3,000 ms                                   |
-| `0x0200` | `PRIVATE_FIND_NODE/1`           | 69 request                             | 0        | 298 request / 4,031 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 4 for exchange maximum       | 5,000 ms                                   |
-| `0x0201` | `PRIVATE_FIND_NODE_RESPONSE_V1` | `141..2,891`                           | 72       | 2,963                      | nested in `ROUTED_REPLY_V1`                       | 1,017 / 3 if transported alone       | original 5,000 ms request deadline         |
-| `0x0280` | `PRIVATE_PRESENCE_RECORD_V1`    | `132..899`                             | 72       | `204..971`                 | nested storage command/response                   | none / 1                             | live expiry, at most 86,400,000 ms         |
-| `0x0281` | `PRIVATE_TOMBSTONE_V1`          | 131                                    | 72       | 203                        | nested storage command/response                   | none / 1                             | signed 1..7 days; retained at least 1 day  |
-| `0x0282` | `PRIVATE_LOOKUP_RESPONSE_V1`    | `206..7,990`                           | 72       | 8,062                      | nested in `ROUTED_REPLY_V1`                       | 1,017 / 8 if transported alone       | original 5,000 ms request deadline         |
-| `0x0283` | `PRIVATE_WRITE_TOKEN_V1`        | 72                                     | 8        | 80                         | nested in prepare reply/commit request            | none / 1                             | at most 30,000 ms                          |
-| `0x0284` | `PRIVATE_WRITE_RECEIPT_V1`      | 301                                    | 72       | 373                        | nested in commit `ROUTED_REPLY_V1`                | none / 1                             | original 5,000 ms request deadline         |
-| `0x02a0` | `PRIVATE_LOOKUP/1`              | 134 request                            | 0        | 363 request / 8,270 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 9 for exchange maximum       | 5,000 ms                                   |
-| `0x02a1` | `PRIVATE_PREPARE/1`             | 189 request                            | 0        | 418 request / 288 reply    | embedded `ROUTE_PAYLOAD` command                  | none / 1                             | 3,000 ms                                   |
-| `0x02a2` | `PRIVATE_ANNOUNCE/1`            | `394..1,161` request                   | 0        | 1,390 request / 581 reply  | embedded `ROUTE_PAYLOAD` command                  | 1,017 / 2 for exchange maximum       | 5,000 ms                                   |
-| `0x02a3` | `PRIVATE_UNANNOUNCE/1`          | 393 request                            | 0        | 622 request / 581 reply    | embedded `ROUTE_PAYLOAD` command                  | none / 1                             | 5,000 ms                                   |
+| ID       | Registered message/object       | Body bytes (fixed..max)                | Envelope | Max wire                   | Selected carrier/context                                                 | Fragment data / max count            | Timeout or validity                            |
+| -------- | ------------------------------- | -------------------------------------- | -------- | -------------------------- | ------------------------------------------------------------------------ | ------------------------------------ | ---------------------------------------------- |
+| `0x0001` | `CAPABILITY_ADVERTISEMENT_V1`   | `188..476`                             | 72       | 548                        | nested discovery object; direct or routed                                | none / 1                             | signed expiry, at most 1,800,000 ms            |
+| `0x0002` | `CAPS_QUERY_V1`                 | 110                                    | 8        | 118                        | direct bootstrap UDP request                                             | none / 1                             | 5,000 ms exchange                              |
+| `0x0003` | `CAPS_RESPONSE_V1`              | `335..4,473`                           | 72       | 4,545                      | cookie-gated direct bootstrap UDP response                               | 1,144 / 4                            | 5,000 ms exchange/reassembly                   |
+| `0x0004` | `ACTIVE_CHALLENGE_V1`           | 176                                    | 8        | 184                        | cookie-gated client→guard or exit→storage UDP                            | none / 1                             | at most 5,000 ms                               |
+| `0x0005` | `ACTIVE_CHALLENGE_RESPONSE_V1`  | 272                                    | 72       | 344                        | cookie-gated guard→client or storage→exit UDP                            | none / 1                             | challenge expiry, at most 5,000 ms             |
+| `0x0006` | `RELAY_DISCOVER_V1`             | 69                                     | 8        | 77                         | `TAIL_CONTROL_ORDERED`                                                   | none / 1                             | 5,000 ms exchange                              |
+| `0x0007` | `RELAY_DISCOVER_RESPONSE_V1`    | `41..4,441`                            | 8        | 4,449                      | `TAIL_CONTROL_ORDERED`                                                   | 1,017 / 5                            | 5,000 ms exchange/reassembly                   |
+| `0x0008` | `CORE_FRAGMENT_V1`              | routed `48..1,065`; direct `48..1,192` | 8        | routed 1,073; direct 1,200 | containing routed context or CAPS direct response                        | 1,017 / 13 routed; 1,144 / 11 direct | 5,000 ms non-extending reassembly              |
+| `0x0009` | `CAPS_COOKIE_CHALLENGE_V1`      | 72                                     | 8        | 80                         | direct bootstrap UDP response                                            | none / 1                             | at most 5,000 ms                               |
+| `0x0020` | `LINK_OFFER_V1`                 | 302                                    | 72       | 374                        | adjacency-local setup transport                                          | none / 1                             | offer deadline, at most 5,000 ms               |
+| `0x0021` | `LINK_ACCEPT_V1`                | 213                                    | 72       | 285                        | adjacency-local setup transport                                          | none / 1                             | offer deadline, at most 5,000 ms               |
+| `0x0022` | `REDACTED_RESPONDER_PROOF_V1`   | 306                                    | 72       | 378                        | index 1/2 adjacency third object, then nested unchanged in `EXTENDED_V1` | none / 1                             | offer/extension deadline, at most 5,000 ms     |
+| `0x0023` | `EXTENDED_V1`                   | 486                                    | 8        | 494                        | prior `TAIL_CONTROL_ORDERED`                                             | none / 1                             | offer/extension deadline, at most 5,000 ms     |
+| `0x0024` | `TAIL_READY_V1`                 | 210                                    | 72       | 282                        | new reverse `TAIL_CONTROL_ORDERED`                                       | none / 1                             | min(offer/extension deadline, admitted expiry) |
+| `0x0025` | `EXTEND_REQUEST_V1`             | `458..746`                             | 8        | `466..754`                 | current `TAIL_CONTROL_ORDERED`                                           | none / 1                             | 5,000 ms extension deadline                    |
+| `0x0040` | `DHT_EXIT_ACTIVATE_V1`          | 96                                     | 8        | 104                        | forward `TAIL_FINALIZE_DATAGRAM`                                         | none / 1                             | shared 5,000 ms finalization deadline          |
+| `0x0041` | `DHT_EXIT_READY_V1`             | 233                                    | 72       | 305                        | reverse `TAIL_FINALIZE_DATAGRAM`                                         | none / 1                             | shared 5,000 ms finalization deadline          |
+| `0x0042` | `DHT_EXIT_READY_ACK_V1`         | 105                                    | 8        | 113                        | forward `FINAL_EXIT_FINALIZE_DATAGRAM`                                   | none / 1                             | shared 5,000 ms finalization deadline          |
+| `0x0043` | `DHT_EXIT_OPEN_V1`              | 169                                    | 8        | 177                        | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`                                   | none / 1                             | 5,000 ms retired-context grace after OPEN      |
+| `0x0044` | `DHT_EXIT_SEEDS_V1`             | `905..4,265`                           | 72       | `977..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                                       | 1,017 / 5                            | §8.3 early; else OPEN + 5,000 ms               |
+| `0x0050` | `EXIT_RPC_OPEN_V1`              | `578..738`                             | 72       | `650..810`                 | direct exit-to-storage UDP                                               | none / 1                             | at most 5,000 ms                               |
+| `0x0051` | `EXIT_RPC_ACCEPT_V1`            | 124                                    | 24       | 148                        | direct exit-to-storage UDP                                               | none / 1                             | OPEN deadline                                  |
+| `0x0052` | `EXIT_RPC_FRAGMENT_V1`          | `27..1,176`                            | 24       | `51..1,200`                | admitted exit-to-storage session                                         | 1,149 / 8                            | OPEN deadline, at most 5,000 ms                |
+| `0x0053` | `EXIT_RPC_REQUEST_V1`           | `30..1,191`                            | 8        | `38..1,199`                | encrypted storage-session object                                         | 1,149 / 2                            | OPEN deadline                                  |
+| `0x0054` | `EXIT_RPC_RESPONSE_V1`          | `20..8,082`                            | 8        | `28..8,090`                | encrypted storage-session object                                         | 1,149 / 8                            | OPEN deadline                                  |
+| `0x0100` | `DESTINATION_REF_V1`            | 164                                    | 8        | 172                        | nested `ROUTE_PAYLOAD` authority                                         | none / 1                             | at most 300,000 ms and route-bound             |
+| `0x0101` | `ROUTED_REQUEST_V1`             | `221..1,382`                           | 8        | 1,390                      | forward `ROUTE_PAYLOAD`                                                  | 1,017 / 2                            | selected command policy, at most 5,000 ms      |
+| `0x0102` | `ROUTED_REPLY_V1`               | `200..8,262`                           | 8        | 8,270                      | reverse `ROUTE_PAYLOAD`                                                  | 1,017 / 9                            | original request deadline                      |
+| `0x0120` | `IMMUTABLE_GET/1`               | 32 request                             | 0        | 261 request / 4,706 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 5 for exchange maximum       | 3,000 ms                                       |
+| `0x0121` | `IMMUTABLE_PUT/1`               | `67..1,090` request                    | 0        | 1,319 request / 209 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 2 for exchange maximum       | 3,000 ms                                       |
+| `0x0122` | `MUTABLE_GET/1`                 | 40 request                             | 0        | 269 request / 4,650 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 5 for exchange maximum       | 3,000 ms                                       |
+| `0x0123` | `MUTABLE_PUT/1`                 | `171..1,066` request                   | 0        | 1,295 request / 209 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 2 for exchange maximum       | 3,000 ms                                       |
+| `0x0200` | `PRIVATE_FIND_NODE/1`           | 69 request                             | 0        | 298 request / 4,031 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 4 for exchange maximum       | 5,000 ms                                       |
+| `0x0201` | `PRIVATE_FIND_NODE_RESPONSE_V1` | `141..2,891`                           | 72       | 2,963                      | nested in `ROUTED_REPLY_V1`                                              | 1,017 / 3 if transported alone       | original 5,000 ms request deadline             |
+| `0x0280` | `PRIVATE_PRESENCE_RECORD_V1`    | `132..899`                             | 72       | `204..971`                 | nested storage command/response                                          | none / 1                             | live expiry, at most 86,400,000 ms             |
+| `0x0281` | `PRIVATE_TOMBSTONE_V1`          | 131                                    | 72       | 203                        | nested storage command/response                                          | none / 1                             | signed 1..7 days; retained at least 1 day      |
+| `0x0282` | `PRIVATE_LOOKUP_RESPONSE_V1`    | `206..7,990`                           | 72       | 8,062                      | nested in `ROUTED_REPLY_V1`                                              | 1,017 / 8 if transported alone       | original 5,000 ms request deadline             |
+| `0x0283` | `PRIVATE_WRITE_TOKEN_V1`        | 72                                     | 8        | 80                         | nested in prepare reply/commit request                                   | none / 1                             | at most 30,000 ms                              |
+| `0x0284` | `PRIVATE_WRITE_RECEIPT_V1`      | 301                                    | 72       | 373                        | nested in commit `ROUTED_REPLY_V1`                                       | none / 1                             | original 5,000 ms request deadline             |
+| `0x02a0` | `PRIVATE_LOOKUP/1`              | 134 request                            | 0        | 363 request / 8,270 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 9 for exchange maximum       | 5,000 ms                                       |
+| `0x02a1` | `PRIVATE_PREPARE/1`             | 189 request                            | 0        | 418 request / 288 reply    | embedded `ROUTE_PAYLOAD` command                                         | none / 1                             | 3,000 ms                                       |
+| `0x02a2` | `PRIVATE_ANNOUNCE/1`            | `394..1,161` request                   | 0        | 1,390 request / 581 reply  | embedded `ROUTE_PAYLOAD` command                                         | 1,017 / 2 for exchange maximum       | 5,000 ms                                       |
+| `0x02a3` | `PRIVATE_UNANNOUNCE/1`          | 393 request                            | 0        | 622 request / 581 reply    | embedded `ROUTE_PAYLOAD` command                                         | none / 1                             | 5,000 ms                                       |
 
 The `PRIVATE_PRESENCE_RECORD_V1` fixed portion is 131 bytes; its non-empty
 descriptor makes its minimum body 132 bytes. This is why the table shows

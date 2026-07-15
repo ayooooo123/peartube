@@ -218,6 +218,13 @@ The following M2 state remains unchanged: cell sealing/opening, link key derivat
 
 ### Production bilateral link authorization
 
+The reviewed Task 3 amendment design dated 2026-07-15 is normative for paired guard acquisition,
+the one-time guard-lease initialization, deterministic cell IDs, exclusive live adjacency runtimes,
+`RelayService.installM3`, routed-candidate provenance, actor-scoped extension state, the standalone
+adjacency proof carrier, and the `EXTENDED_V1`/early-`TAIL_READY_V1` ordering barrier. It preserves
+the fixed message fields and sizes below. Where this section previously left one of those runtime
+ownership details implicit, the amendment supplies the required rule.
+
 M2's coordinator-signed topology grants remain test scaffolding and are not accepted by production M3 route construction. Every adjacent M3 link uses a bilateral handshake:
 
 1. Before creating an index-zero offer, the client verifies the live cookie-bound direct active challenge for the exact guard advertisement and endpoint. Cold start uses `BootstrapIO`. After private readiness, branch rotation, rebuild, and resume use the narrow `GuardRevalidationIO` defined below for the already pinned guard only. The owning IO internally issues a one-time local guard-admission capability bound to that advertisement, endpoint, client circuit identity, branch, circuit, generation, and challenge expiry, then consumes it itself when emitting `LINK_OFFER_V1`. No capability or offer-sending authority is returned to an outside caller.

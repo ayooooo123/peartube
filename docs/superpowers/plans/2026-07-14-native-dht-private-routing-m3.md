@@ -122,30 +122,55 @@ export const BRANCH_CLASS = Object.freeze({ LOOKUP: 0, ANNOUNCE: 1 });
 
 **Files:**
 
-- Modify: `packages/private-routes/lib/link-setup.js`
-- Modify: `packages/private-routes/lib/link-bootstrap-session.js`
-- Modify: `packages/private-routes/lib/async-route-control-session.js`
+- Modify: `packages/private-routes/lib/guard-link.js`
+- Modify: `packages/private-routes/lib/bootstrap-io.js`
+- Create: `packages/private-routes/lib/guard-revalidation-io.js`
+- Create: `packages/private-routes/lib/branch-construction-authority.js`
+- Create: `packages/private-routes/lib/m3-adjacency-runtime.js`
+- Modify: `packages/private-routes/lib/relay-service.js`
+- Create: `packages/private-routes/lib/routed-candidate.js`
+- Create: `packages/private-routes/lib/tail-control-session.js`
 - Create: `packages/private-routes/lib/route-extension.js`
 - Modify: `packages/private-routes/lib/route-manager.js`
 - Modify: `packages/private-routes/lib/errors.js`
+- Modify: `packages/private-routes/index.js`
+- Create: `packages/private-routes/test/guard-revalidation-io.test.js`
+- Create: `packages/private-routes/test/m3-adjacency-runtime.test.js`
+- Create: `packages/private-routes/test/routed-candidate.test.js`
+- Modify: `packages/private-routes/test/tail-control-session.test.js`
 - Create: `packages/private-routes/test/route-extension.test.js`
 - Create: `packages/private-routes/test/route-extension-adversarial.test.js`
 
-- [ ] Write failing tests for `LINK_OFFER_V1`/`LINK_ACCEPT_V1`, shared guard at index 0, separate lookup and announce branches, middle replacement, terminal exit confirmation, and exact M2 role mapping: guard/middle use `ROLE.SAFETY`; exit uses `ROLE.PRIVATE`.
-- [ ] Cover replay, expired offers, self-loop, repeated identities, wrong branch, wrong index, wrong transcript, cross-route substitution, omitted bilateral consent, and partial-extension teardown. Reject coordinator topology grants specifically on every production M3 entry point.
-- [ ] Assert the guard never receives the exit advertisement, exit identity, exit address, or an address-bearing later-link acceptance. The two branches may share guard identity/transport only; circuit IDs, bilateral acceptances, keys, counters, replay windows, generations, queues, and teardown must be pairwise distinct.
-- [ ] Run `npm run test:one -- test/route-extension.test.js test/route-extension-adversarial.test.js`; expect failures showing v1 setup and production grant rejection are not implemented.
-- [ ] Add `RouteExtensionSession` with explicit states `OFFER`, `ACCEPTED`, `ACTIVE`, `FAILED`, `DESTROYED`. Every transition must be idempotent or fail closed; no callback may re-enter after terminal state.
-- [ ] Make `RouteManager` build `client → guard → middle → exit` from validated capability objects rather than static topology grants. Preserve the M2 static constructor for M2 tests.
-- [ ] Add bounded setup deadlines and per-identity/per-epoch replay caches. On failure, send a generic destroy reason, erase partial keys, and leave no live circuit entry.
-- [ ] Run `npm run test:one -- test/route-extension.test.js test/route-extension-adversarial.test.js`; expect focused tests to pass. Run `npm run test:node` and `npm run test:bare`; expect green in both runtimes.
+- [ ] Rewrite the provisional route-extension RED fixtures to the approved manager-owned API. `RouteManager.createDynamic(options).openDynamic()` allocates both branches before either handshake and orchestrates narrow BootstrapIO/GuardRevalidationIO factories; tests must not inject prebuilt links, branch IDs, candidate endpoints, path arrays, topology grants, or already-ACTIVE extension objects.
+- [ ] Run `npm run test:one -- test/route-extension.test.js test/route-extension-adversarial.test.js`; expect RED only because the reviewed Task 3 production surfaces do not exist.
+- [ ] Add byte-vector RED tests for the two cell-ID labels, `[0,16)` truncation, `epoch = generation`, reciprocal actor IDs, all-zero/equal/collision rejection, independent adjacent expiries, and cross-offer/branch separation.
+- [ ] Implement `M3AdjacencyAuthority` and exclusive `M3AdjacencyRuntime`. One runtime owns live keys, nonce prefixes, counters, replay state, channel, expiry, and local binding reservation. It supports tail termination, one-time move, revoke, destroy, and redacted diagnostics; it never copies live contexts.
+- [ ] Add `RelayService.installM3(previousRuntime, nextRuntime)`. Validate both runtimes and reserve capacity before moving ownership, preserve the existing M2 `install()` unchanged, clamp the M3 forwarding record to the minimum independently authenticated expiry, and make post-move failure destroy rather than roll counters back.
+- [ ] Run `npm run test:one -- test/m3-adjacency-runtime.test.js test/relay-service.test.js`; expect Node and Bare green before continuing.
+- [ ] Add `BranchConstructionAuthority` RED tests for two preallocated branches, one-time initially-unset guard-lease initialization, immutable identity/endpoint pinning, strictly newer same-identity/same-endpoint guard advertisements, second-capability gating, rollback, exact-once close, metadata erasure, and rejection of every caller-supplied ID/generation/path field.
+- [ ] Implement `GuardRevalidationIO` by composing the Task 2 capability/cookie/challenge primitives under its narrower profile: exact pinned endpoint, `maximumResults = 1`, one unfragmented exact self-advertisement, no referrals/fragments/generic send, one active challenge, one internally consumed admission, and one branch-bound OFFER/ACCEPT.
+- [ ] Extend BootstrapIO and GuardRevalidationIO to derive index-zero tail contexts, require exactly one valid guard-signed `TAIL_READY_V1` by the earlier offer/admitted expiry, and transfer the live client adjacency runtime plus opaque tail capability only after ready verification.
+- [ ] Run `npm run test:one -- test/bootstrap-io-authority.test.js test/guard-revalidation-io.test.js test/guard-link.test.js`; expect Node and Bare green.
+- [ ] Add routed-discovery RED tests: one bounded client request; approved bounded iterative public-DHT walk only at the current tail; at most eight advertisements; at most five canonical fragments/4,449 bytes/5,000 ms; AEAD-authenticated response evidence; nested advertisement signatures; three attempts per branch/index; sixteen live and ninety-six total candidate states; matching current-tail digest admission before dial.
+- [ ] Implement `AuthenticatedDiscoveryEvidence`, `RoutedCandidateDirectory`, and current-tail discovery admissions. Keep Task 2 direct-validation brands incompatible, reserve before callbacks, consume once, retain bounded tombstones until the original request deadline, sweep synchronously, and clear all response/endpoint/identity material on terminal paths.
+- [ ] Run `npm run test:one -- test/routed-candidate.test.js`; expect Node and Bare green.
+- [ ] Add exact Task 3 `TailControlSession` vector/state tests for indices zero, one, and two; independent ordered keys/counters; the construction class/direction matrix; routed discovery/fragments; `EXTEND_REQUEST_V1`; `EXTENDED_V1`; `TAIL_READY_V1`; deadline/byte/command bounds; context substitution; terminal zeroization; and one-cell early-ready quarantine.
+- [ ] Implement the setup-only `TailControlSession`. Task 3 permits only discovery, extension, and ready messages. Open the early successor cell with the successor runtime, quarantine exactly one extracted 1,101-byte M3 envelope, and enqueue EXTENDED on the prior context. Pass the envelope with both runtimes into `installM3`; after ownership moves, only the returned forwarding record may reseal and queue it behind the same FIFO barrier. A post-move failure destroys that record and branch.
+- [ ] Run `npm run test:one -- test/tail-control-session.test.js`; expect Node and Bare green.
+- [ ] Generalize the bilateral guard-link implementation for indices one and two without accepting M2 grants. Implement exact OFFER→ACCEPT→standalone redacted proof setup, actor-local role/index checks, responder runtime creation, proof replay bounds, opaque responder tail context, and index-two `FinalExitSeed`; keep the address-bearing ACCEPT adjacency-local.
+- [ ] Implement the three actor-scoped extension machines: exported client `RouteExtensionSession` (`REQUESTED → EXTENDED → ACTIVE`), internal current-tail initiator (`IDLE → OFFER → ACCEPTED → PROVED → COMMITTED`), and internal successor responder (`IDLE → OFFER_VERIFIED → ACCEPTED → PROOF_SENT → HALF_OPEN → ACTIVE`), each with `FAILED` and idempotent `DESTROYED` terminal paths.
+- [ ] Cover replay, exact expiry boundaries, self-loop, repeated identities, wrong branch/index/role/transcript, cross-route substitution, omitted consent, proof reordering/fourth objects, callback reentry, queued-callback destroy, bounded caches, exactly-once physical/channel ownership, and partial-extension erasure. Reject coordinator topology grants, M2 link handles, and M2 bootstrap envelopes at every production M3 entry point.
+- [ ] Make the dynamic RouteManager construct distinct lookup and announce branches. They share only guard identity and endpoint; every accepted link, client identity, branch/circuit ID, generation, key, counter, replay window, queue, logical channel, and teardown remains distinct. A failure before runtime move may retry a fresh outgoing extension; a failure after move rebuilds that branch from its guard link.
+- [ ] Assert the guard never receives the exit advertisement, exit identity, exit address, address-bearing ACCEPT, or decryptable index-two tail contents. Task 3 returns `CONSTRUCTED` branches only after index-two `TAIL_READY_V1`; it does not expose routed DHT IO.
+- [ ] Run `npm run test:one -- test/m3-adjacency-runtime.test.js test/guard-revalidation-io.test.js test/routed-candidate.test.js test/tail-control-session.test.js test/route-extension.test.js test/route-extension-adversarial.test.js`; expect green in Node, then run the same files under Bare.
+- [ ] Run `npm run test:node`, `npm run test:bare`, `npm run format:check`, `npm run check:dependencies`, and `git diff --check`; expect every gate green.
 - [ ] Commit: `feat(private-routes): extend routes with bilateral authorization`
 
 ### Task 4: Add tail control, final-exit activation, and opaque destination handles
 
 **Files:**
 
-- Create: `packages/private-routes/lib/tail-control-session.js`
+- Modify: `packages/private-routes/lib/tail-control-session.js`
 - Create: `packages/private-routes/lib/final-exit-session.js`
 - Create: `packages/private-routes/lib/destination-handle.js`
 - Create: `packages/private-routes/lib/routed-rpc-endpoint.js`
@@ -153,11 +178,11 @@ export const BRANCH_CLASS = Object.freeze({ LOOKUP: 0, ANNOUNCE: 1 });
 - Modify: `packages/private-routes/lib/live-route-node.js`
 - Modify: `packages/private-routes/lib/remote-actor-host.js`
 - Modify: `packages/private-routes/index.js`
-- Create: `packages/private-routes/test/tail-control-session.test.js`
+- Modify: `packages/private-routes/test/tail-control-session.test.js`
 - Create: `packages/private-routes/test/final-exit-session.test.js`
 - Create: `packages/private-routes/test/destination-handle.test.js`
 
-- [ ] Write failing fixed-vector tests for index-0/index-1/index-2 and transcript substitution; four tail-control outputs; four tail-finalize outputs; all twelve final-exit outputs; full 32-byte key and first-16-byte nonce-prefix rules; pairwise inequality across every key/nonce domain; exact context state/class matrix; counters; replay windows; the five sends at `0/250/750/1750/3750ms`; five-second retired-context grace; erasure; and redacted confirmation.
+- [ ] Extend the Task 3 tail-control vectors with four tail-finalize outputs and all twelve final-exit outputs; preserve the already-tested index-0/index-1/index-2 tail-control derivation, construction matrix, counters, deadlines, erasure, routed discovery, EXTENDED, and TAIL_READY behavior. Add full 32-byte key and first-16-byte nonce-prefix rules, pairwise inequality across the new key/nonce domains, finalization replay windows, the five sends at `0/250/750/1750/3750ms`, and five-second retired-context grace.
 - [ ] Write failure tests for dropped/reordered/duplicated finalization datagrams, counter gaps, post-open delayed controls, half-open timeout, policy substitution, stale/cross-exit/cross-branch handles, and address substitution.
 - [ ] Define the client-facing endpoint contract in tests before implementation:
 

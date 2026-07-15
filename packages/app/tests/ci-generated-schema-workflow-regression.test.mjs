@@ -56,6 +56,7 @@ test('fast CI avoids the historical repo-wide lint backlog on both PR and main p
   const rootPackage = JSON.parse(readFile('package.json'))
   const eslintIgnore = readFile('.eslintignore')
   const changedLint = readFile('scripts/lint-changed.mjs')
+  const privateRoutesWorkflow = readFile('.github/workflows/private-routes.yml')
   const privateRoutesPackage = JSON.parse(readFile('packages/private-routes/package.json'))
 
   assert.match(
@@ -87,6 +88,16 @@ test('fast CI avoids the historical repo-wide lint backlog on both PR and main p
     privateRoutesPackage.scripts['format:check'],
     /prettier --check/,
     'the private-routes workflow must retain an explicit package-local format gate',
+  )
+  assert.match(
+    privateRoutesWorkflow,
+    /packages\/private-routes\/\*\*/,
+    'the package-local workflow must run whenever private-routes changes',
+  )
+  assert.match(
+    privateRoutesWorkflow,
+    /npm run format:check/,
+    'the package-local workflow must invoke its pinned format gate',
   )
   assert.match(
     changedLint,

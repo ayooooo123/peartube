@@ -1691,17 +1691,17 @@ generation, direction, or counter substitution fails authentication.
 
 This is the complete actor/state/class/direction/message matrix:
 
-| Receiver | State        | Accepted class / direction / semantic message                                                                                                                        |
-| -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| client   | extending    | `TAIL_CONTROL_ORDERED` reverse control permitted by the extension state machine                                                                                      |
-| exit     | tail-ready   | `TAIL_CONTROL_ORDERED` forward control; `TAIL_FINALIZE_DATAGRAM` forward `DHT_EXIT_ACTIVATE_V1` only                                                                 |
-| client   | `ACTIVATING` | `TAIL_FINALIZE_DATAGRAM` reverse `DHT_EXIT_READY_V1` only                                                                                                            |
-| exit     | `FINALIZING` | `TAIL_FINALIZE_DATAGRAM` forward identical `DHT_EXIT_ACTIVATE_V1`; `FINAL_EXIT_FINALIZE_DATAGRAM` forward `DHT_EXIT_READY_ACK_V1` only                               |
-| client   | `ACKING`     | reverse identical `DHT_EXIT_READY_V1`; reverse `DHT_EXIT_OPEN_V1`; reverse `TERMINAL_CONTROL_ORDERED` only for the bounded early `DHT_EXIT_SEEDS_V1` exception below |
-| client   | `OPEN`       | `ROUTE_PAYLOAD` reverse; `TERMINAL_CONTROL_ORDERED` reverse; Section 9.3 receive-only READY/OPEN grace                                                               |
-| exit     | `OPEN`       | `ROUTE_PAYLOAD` forward; `TERMINAL_CONTROL_ORDERED` forward; Section 9.3 ACTIVATE/ACK grace handlers only                                                            |
-| either   | `DRAINING`   | existing `ROUTE_PAYLOAD` and `TERMINAL_CONTROL_ORDERED` in the actor's established direction only                                                                    |
-| either   | `DESTROYED`  | none                                                                                                                                                                 |
+| Receiver | State        | Accepted class / direction / semantic message                                                                                                                                                                                |
+| -------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| client   | extending    | `TAIL_CONTROL_ORDERED` reverse control permitted by the extension state machine                                                                                                                                              |
+| exit     | tail-ready   | `TAIL_CONTROL_ORDERED` forward control; `TAIL_FINALIZE_DATAGRAM` forward `DHT_EXIT_ACTIVATE_V1` only                                                                                                                         |
+| client   | `ACTIVATING` | `TAIL_FINALIZE_DATAGRAM` reverse `DHT_EXIT_READY_V1` only                                                                                                                                                                    |
+| exit     | `FINALIZING` | `TAIL_FINALIZE_DATAGRAM` forward identical `DHT_EXIT_ACTIVATE_V1`; `FINAL_EXIT_FINALIZE_DATAGRAM` forward `DHT_EXIT_READY_ACK_V1` only                                                                                       |
+| client   | `ACKING`     | `TAIL_FINALIZE_DATAGRAM` reverse identical `DHT_EXIT_READY_V1`; `FINAL_EXIT_FINALIZE_DATAGRAM` reverse `DHT_EXIT_OPEN_V1`; `TERMINAL_CONTROL_ORDERED` reverse only for the bounded early `DHT_EXIT_SEEDS_V1` exception below |
+| client   | `OPEN`       | `ROUTE_PAYLOAD` reverse; `TERMINAL_CONTROL_ORDERED` reverse; Section 9.3 receive-only READY/OPEN grace                                                                                                                       |
+| exit     | `OPEN`       | `ROUTE_PAYLOAD` forward; `TERMINAL_CONTROL_ORDERED` forward; Section 9.3 ACTIVATE/ACK grace handlers only                                                                                                                    |
+| either   | `DRAINING`   | existing `ROUTE_PAYLOAD` and `TERMINAL_CONTROL_ORDERED` in the actor's established direction only                                                                                                                            |
+| either   | `DESTROYED`  | none                                                                                                                                                                                                                         |
 
 An idempotent duplicate is accepted only in the exact actor row, direction,
 class, state, message ID, activation nonce, and byte-equal semantic tuple shown
@@ -2695,6 +2695,10 @@ the command ID/version and raw body are already inside `ROUTED_REQUEST_V1`.
 `Max wire` for those commands shows both the complete outer request and the
 largest permitted complete reply. A fragment count includes the complete outer
 object, not a nested command or record. `1` means no `CORE_FRAGMENT_V1` wrapper.
+For `0x0044`, the Section 8.3 early bound is
+`min(firstAcceptedFragmentAt + 5,000 ms, openAcceptedAt + 5,000 ms)` and erases
+the buffer if finalization fails or OPEN misses its deadline; with no early
+object, the normal readiness deadline is 5,000 ms from OPEN.
 
 | ID       | Registered message/object       | Body bytes (fixed..max)                | Envelope | Max wire                   | Selected carrier/context                          | Fragment data / max count            | Timeout or validity                        |
 | -------- | ------------------------------- | -------------------------------------- | -------- | -------------------------- | ------------------------------------------------- | ------------------------------------ | ------------------------------------------ |
@@ -2717,7 +2721,7 @@ object, not a nested command or record. `1` means no `CORE_FRAGMENT_V1` wrapper.
 | `0x0041` | `DHT_EXIT_READY_V1`             | 233                                    | 72       | 305                        | reverse `TAIL_FINALIZE_DATAGRAM`                  | none / 1                             | shared 5,000 ms finalization deadline      |
 | `0x0042` | `DHT_EXIT_READY_ACK_V1`         | 105                                    | 8        | 113                        | forward `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                             | shared 5,000 ms finalization deadline      |
 | `0x0043` | `DHT_EXIT_OPEN_V1`              | 169                                    | 8        | 177                        | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                             | 5,000 ms retired-context grace after OPEN  |
-| `0x0044` | `DHT_EXIT_SEEDS_V1`             | `905..4,265`                           | 72       | `977..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                | 1,017 / 5                            | 5,000 ms from OPEN                         |
+| `0x0044` | `DHT_EXIT_SEEDS_V1`             | `905..4,265`                           | 72       | `977..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                | 1,017 / 5                            | §8.3 early; else OPEN + 5,000 ms           |
 | `0x0050` | `EXIT_RPC_OPEN_V1`              | `578..738`                             | 72       | `650..810`                 | direct exit-to-storage UDP                        | none / 1                             | at most 5,000 ms                           |
 | `0x0051` | `EXIT_RPC_ACCEPT_V1`            | 124                                    | 24       | 148                        | direct exit-to-storage UDP                        | none / 1                             | OPEN deadline                              |
 | `0x0052` | `EXIT_RPC_FRAGMENT_V1`          | `27..1,176`                            | 24       | `51..1,200`                | admitted exit-to-storage session                  | 1,149 / 8                            | OPEN deadline, at most 5,000 ms            |

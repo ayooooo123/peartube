@@ -17,6 +17,7 @@ import {
   verifyDestinationProof,
   verifyEntryProof
 } from './activation.js'
+import { createBranchConstructionAuthority } from './branch-construction-authority.js'
 import { CELL_SIZE, CellCodec } from './cell-codec.js'
 import {
   isRouteCompilerChecker,
@@ -136,6 +137,8 @@ function dynamicOptions(options) {
     typeof values.cancel !== 'function' ||
     !safeObject(values.crypto) ||
     typeof values.crypto.hash !== 'function' ||
+    typeof values.crypto.keyPair !== 'function' ||
+    typeof values.crypto.encryptionKeyPair !== 'function' ||
     typeof values.guardRevalidationIOFactory !== 'function' ||
     !safeObject(values.limits) ||
     !Object.isFrozen(values.limits) ||
@@ -188,10 +191,26 @@ function nowValue(clock) {
   return BigInt(value)
 }
 
+function dynamicNowValue(clock) {
+  let value
+  try {
+    value = clock()
+  } catch {
+    invalid()
+  }
+  if (typeof value === 'bigint') {
+    if (value < 0n || value > 0xffff_ffff_ffff_ffffn) invalid()
+    return value
+  }
+  if (!Number.isSafeInteger(value) || value < 0) invalid()
+  return BigInt(value)
+}
+
 class DynamicRouteManager {
   #options
   #observer
   #allocations
+  #constructionAuthority
   #bootstrapIO
   #destroyed
   #opening
@@ -201,6 +220,7 @@ class DynamicRouteManager {
     this.#options = dynamicOptions(options)
     this.#observer = this.#options.observe || null
     this.#allocations = []
+    this.#constructionAuthority = null
     this.#bootstrapIO = null
     this.#destroyed = false
     this.#opening = false
@@ -220,7 +240,9 @@ class DynamicRouteManager {
       this.#notify({ type: 'allocation-reserved', resource: 'announce', branchClass: 'ANNOUNCE' })
       this.#assertLifecycle(lifecycle)
 
-      const request = Object.freeze({})
+      this.#createConstructionAuthority(lifecycle)
+
+      const request = this.#constructionAuthority.bootstrapRequest
       let io
       try {
         io = this.#options.bootstrapIOFactory(request)
@@ -310,11 +332,66 @@ class DynamicRouteManager {
     }
   }
 
+  #createConstructionAuthority(lifecycle) {
+    const keyPairs = []
+    let authority = null
+    try {
+      const current = dynamicNowValue(this.#options.now)
+      this.#assertLifecycle(lifecycle)
+      if (current > 0xffff_ffff_ffff_ffffn - 5_000n) invalid()
+      const deadline = current + 5_000n
+      const branches = []
+      for (const allocation of this.#allocations) {
+        let identity
+        let tail
+        try {
+          identity = this.#options.crypto.keyPair(allocation.clientIdentitySeed)
+          keyPairs.push(identity)
+          this.#assertLifecycle(lifecycle)
+          tail = this.#options.crypto.encryptionKeyPair(allocation.clientTailSeed)
+          keyPairs.push(tail)
+          this.#assertLifecycle(lifecycle)
+        } catch {
+          invalid()
+        }
+        branches.push(
+          Object.freeze({
+            branchClass: allocation.branchClass,
+            branchId: allocation.branchId,
+            circuitId: allocation.circuitId,
+            generation: allocation.generation,
+            clientCircuitIdentity: identity,
+            clientTailEphemeral: tail,
+            deadline,
+            requestedLimits: this.#options.limits
+          })
+        )
+      }
+      authority = createBranchConstructionAuthority({
+        lookup: branches[0],
+        announce: branches[1],
+        now: this.#options.now
+      })
+      this.#assertLifecycle(lifecycle)
+      this.#constructionAuthority = authority
+      authority = null
+    } finally {
+      if (authority) authority.destroy()
+      for (const pair of keyPairs) {
+        clear(pair && pair.publicKey)
+        clear(pair && pair.secretKey)
+      }
+    }
+  }
+
   #terminate() {
     if (!this.#destroyed) {
       this.#destroyed = true
       this.#lifecycle = Object.freeze({})
     }
+    const constructionAuthority = this.#constructionAuthority
+    this.#constructionAuthority = null
+    if (constructionAuthority) constructionAuthority.destroy()
     const io = this.#bootstrapIO
     this.#bootstrapIO = null
     if (io) {

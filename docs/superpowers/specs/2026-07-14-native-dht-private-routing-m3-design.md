@@ -118,12 +118,17 @@ The private-route layer is above UDX and below DHT-RPC. UDX remains unaware of D
 
 ## Advertised Capabilities
 
-Private routing is opt-in. A persistent node may advertise these capabilities independently:
+Private routing is opt-in. A persistent node may advertise these service
+capabilities without storage implying exit or relay:
 
 - `CIRCUIT_RELAY_V1`: forward bounded opaque route cells;
 - `DHT_EXIT_V1`: execute typed single-node DHT-RPC operations;
 - `PRIVATE_RECORDS_V1`: store and return private presence records;
 - supported wire versions, command policies, cell parameters, and coarse capacity classes.
+
+`PRIVATE_RECORDS_V1` may be advertised alone by a storage-only node.
+`DHT_EXIT_V1` requires `CIRCUIT_RELAY_V1` because an exit must terminate an M2
+route, but it does not require `PRIVATE_RECORDS_V1`.
 
 A short-lived advertisement contains the relay identity, current DHT node ID and reachable address, an epoch-scoped route-encryption key, capabilities, protocol limits, epoch, and expiry. It is signed by the relay identity already used by the M2 protocol. M3 v1 advertisements use IPv4 because existing DHT-RPC peer IDs are derived from its exact six-byte IPv4/port codec; the advertised ID must equal that derivation. Same-epoch advertisements must be byte-identical, while any policy change requires a higher epoch and fresh route-encryption key. Route construction includes an active challenge that proves current possession of the advertised identity and route-encryption key at the observed endpoint. Replayed, equivocating, or expired advertisements cannot establish a circuit.
 
@@ -133,7 +138,7 @@ Capacity values are hints, not promises. A dishonest advertisement can cause onl
 
 M3 keeps two identities distinct:
 
-- **Relay/storage identity:** a long-term Ed25519 public key used to sign advertisements, link handshakes, private-storage receipts, and capability state. Its domain-separated hash determines M2 `ROLE.SAFETY` or `ROLE.PRIVATE` eligibility.
+- **Relay/storage identity:** a long-term Ed25519 public key used to sign advertisements, link handshakes, private-storage receipts, and capability state. For a node participating in an M2 route, its domain-separated hash determines `ROLE.SAFETY` or `ROLE.PRIVATE` eligibility. A storage-only `PRIVATE_RECORDS_V1` node has this signing identity but no M2 route-role requirement.
 - **DHT node ID:** the existing DHT-RPC identifier derived from the node's network address. It is routing metadata, not a signing identity and not proof that an address is safe to contact.
 
 M3 defines a new versioned capability-advertisement codec and signature domain. It does not reuse M2's forward/datagram/stream capability mask as though that mask already described DHT exit or storage services.
@@ -201,7 +206,7 @@ M3 middle       = M2 safety final, must derive as ROLE.SAFETY
 M3 DHT exit     = new terminating service endpoint, must derive as ROLE.PRIVATE
 ```
 
-The exit is both the final adjacent route participant and the owner of the end-to-end route payload codec. It is not modeled as an M2 private entry followed by an imaginary destination. M3 therefore extends activation with a `DHT_EXIT_V1` terminal confirmation that binds only exit-visible state: exit service policy, branch class, branch and circuit IDs, branch generation, exit advertisement digest, current tail-control transcript, fresh client nonce, and negotiated M2 key/cell parameters. The client validates earlier path construction locally; no complete-path transcript or commitment is disclosed to the exit.
+The exit is both the final adjacent route participant and the owner of the end-to-end route payload codec. It is not modeled as an M2 private entry followed by an imaginary destination. M3 therefore extends activation with a `DHT_EXIT_V1` terminal confirmation that binds only exit-visible state: the immutable M3-v1 exit-origin command policy, branch class, branch and circuit IDs, branch generation, exit advertisement digest, current tail-control transcript, fresh client nonce, and negotiated M2 key/cell parameters. The client validates earlier path construction locally; no complete-path transcript or commitment is disclosed to the exit.
 
 The following M2 state remains unchanged: cell sealing/opening, link key derivation, direction-specific counters, replay windows, relay forwarding records, bounded queues, `START→PREPARED→ACTIVATE→READY`, authenticated destroy, expiry, and secret erasure. M3 extends path compilation, terminal activation, link admission, configurable liveness, and concurrent generation ownership.
 
@@ -209,10 +214,11 @@ The following M2 state remains unchanged: cell sealing/opening, link key derivat
 
 M2's coordinator-signed topology grants remain test scaffolding and are not accepted by production M3 route construction. Every adjacent M3 link uses a bilateral handshake:
 
-1. The initiator sends a signed `LINK_OFFER_V1` binding the responder advertisement digest, both claimed roles, branch class, branch and circuit identifiers, generation, ephemeral link key, protocol parameters, and a short deadline. A client signs with a fresh circuit identity; a relay signs with its advertised relay identity.
-2. The responder verifies role derivation, its advertisement and expiry, protocol compatibility, loop/identity rules, and capacity. Index zero additionally requires the live cookie-bound direct active challenge; indices one and two use the signed adjacency offer and tail proof instead of direct challenge.
-3. The responder returns `LINK_ACCEPT_V1`, signed by its relay identity, binding the complete offer transcript, observed predecessor endpoint, its ephemeral link key, admitted limits, and expiry.
-4. Both sides derive the existing M2 directional link contexts from the mutually authenticated transcript. Failure or timeout installs no forwarding state.
+1. Before creating an index-zero offer, the client's `BootstrapIO` verifies the live cookie-bound direct active challenge for the exact guard advertisement and endpoint. It issues a one-time, local guard-admission capability bound to that advertisement, endpoint, client circuit identity, branch, circuit, generation, and challenge expiry. Sending the offer consumes it. This capability is client-local and never appears on the wire.
+2. The initiator sends a signed `LINK_OFFER_V1` binding the responder advertisement digest, both claimed roles, branch class, branch and circuit identifiers, generation, ephemeral link key, protocol parameters, and a short deadline. A client signs with a fresh circuit identity; a relay signs with its advertised relay identity.
+3. The responder verifies role derivation, its advertisement and expiry, protocol compatibility, loop/identity rules, and capacity. It does not receive or verify the client's challenge state or guard-admission capability. Indices one and two use the signed adjacency offer and tail proof instead of direct challenge.
+4. The responder returns `LINK_ACCEPT_V1`, signed by its relay identity, binding the complete offer transcript, observed predecessor endpoint, its ephemeral link key, admitted limits, and expiry.
+5. Both sides derive the existing M2 directional link contexts from the mutually authenticated transcript. Failure or timeout installs no forwarding state.
 
 For the first link, the fresh client circuit identity is the initiator. For later links, the current tail relay is the initiator after receiving an authenticated extension request in the tail-control context defined below. The client accepts the extension only after receiving an `EXTENDED_V1` confirmation binding the selected advertisement and a redacted responder proof. Address-bearing `LINK_ACCEPT_V1` fields remain link-local between adjacent nodes and are never forwarded to a later tail. This authorizes only one adjacent link and reveals no complete path. A relay advertisement is an invitation to request bounded service, not a pre-issued topology grant.
 
@@ -273,7 +279,7 @@ These outputs have the same 32-byte key and 16-byte nonce-prefix rules but use i
 
 ### Final exit key handoff
 
-After extension index `2` produces a source↔exit tail-control context, the client sends `DHT_EXIT_ACTIVATE_V1` through the tail-finalize forward datagram context. It contains a fresh 32-byte activation nonce, the accepted service-policy digest, and the M2 payload-parameters digest. The exit verifies both digests against its signed advertisement and negotiated limits and returns signed `DHT_EXIT_READY_V1` through the tail-finalize reverse datagram context, binding the same values.
+After extension index `2` produces a source↔exit tail-control context, the client sends `DHT_EXIT_ACTIVATE_V1` through the tail-finalize forward datagram context. It contains a fresh 32-byte activation nonce, the M3-v1 exit-origin command-policy digest, and the M2 payload-parameters digest. The signed exit advertisement must authorize `DHT_EXIT_V1`, but its provider-service entry set may contain four or nine entries. Both peers independently compute the exit-origin digest from the immutable nine-command M3-v1 protocol constant, verify exact equality plus the negotiated payload limits, and bind that value in signed `DHT_EXIT_READY_V1` through the tail-finalize reverse datagram context.
 
 Both sides retain the index-2 X25519 shared secret and encode `FINAL_EXIT_TRANSCRIPT_V1` as `u16be domainByteLength || UTF8(domain) || fields`, with domain `hyperdht-private-routes/final-exit/transcript/v1` and these fixed-order fields:
 
@@ -287,13 +293,13 @@ u64  branch generation
 32B  exit advertisement digest
 32B  exit Ed25519 identity
 32B  client activation nonce
-32B  accepted service-policy digest
+32B  M3-v1 exit-origin command-policy digest
 32B  M2 payload-parameters digest
 ```
 
-The tail transcript digest is `cryptoSuite.hash([UTF8('hyperdht-private-routes/final-exit/tail-digest/v1'), completeEncodedTailTranscript])`. The service-policy digest is copied from the verified signed exit advertisement and equals `cryptoSuite.hash([domain, encoding])`, with domain `hyperdht-private-routes/final-exit/service-policy/v1`. Its encoding is `u16 entryCount` followed by entries sorted by `(commandId, commandVersion)`, each encoded as `u16 commandId || u16 commandVersion || u32 maxRequestBytes || u32 maxResponseBytes || u32 timeoutMs || u16 maxOutstanding || u32 requestCost || u32 responseCost || u32 maxAmplificationBytes || u8 mutationFlag || u8 destinationValidationClass`. `mutationFlag` is exactly `0 = READ_ONLY` or `1 = MUTATING`. `destinationValidationClass` is exactly `0 = EXIT_LOCAL`, `1 = DHT_NODE_HANDLE`, or `2 = SIGNED_CAPABILITY_HANDLE`. Duplicate entries and all other flag/class values are invalid.
+The tail transcript digest is `cryptoSuite.hash([UTF8('hyperdht-private-routes/final-exit/tail-digest/v1'), completeEncodedTailTranscript])`. The exit-origin command-policy digest equals `cryptoSuite.hash([domain, encoding])`, retaining domain `hyperdht-private-routes/final-exit/service-policy/v1`. Its encoding is exactly `u16 entryCount`, with `entryCount = 9`, followed by all nine immutable M3-v1 command tuples sorted by `(commandId, commandVersion)`. Each tuple is `u16 commandId || u16 commandVersion || u32 maxRequestBytes || u32 maxResponseBytes || u32 timeoutMs || u16 maxOutstanding || u32 requestCost || u32 responseCost || u32 maxAmplificationBytes || u8 mutationFlag || u8 destinationValidationClass`. `mutationFlag` is exactly `0 = READ_ONLY` or `1 = MUTATING`. `destinationValidationClass` is exactly `0 = EXIT_LOCAL`, `1 = DHT_NODE_HANDLE`, or `2 = SIGNED_CAPABILITY_HANDLE`. Duplicate, missing, unsorted, unknown, or locally altered entries are invalid.
 
-M3 performs no service-policy subset negotiation. The activation digest must equal the complete policy digest in the exit's currently verified signed advertisement byte for byte; otherwise activation fails. An operator changing one command policy must issue a new advertisement and route-encryption key/epoch.
+M3 performs no exit-origin policy subset negotiation. This exact nine-entry encoding and digest are immutable constants of M3 protocol version 1, compiled into the client and exit; an operator and a four-entry provider advertisement cannot choose different budgets. A future command or budget change requires a new protocol version. The advertisement's signed provider-service entries independently describe which services that node accepts: zero, the four legacy services, the five private-record services, or all nine according to its capability bits.
 
 The payload-parameters digest is `cryptoSuite.hash([domain, encoding])`, where domain is `hyperdht-private-routes/final-exit/payload-parameters/v1` and encoding is `u16 cellSize || u16 maxCellPayload || u16 contextEnvelopeSize || u16 routeFrameSize || u16 maxRoutePayload || u16 datagramReplayWindow || u32 maxQueuedBytes || u32 idleTimeoutMs`. M3 fixes the inherited values to `cellSize = 1200`, `maxCellPayload = 1146`, `contextEnvelopeSize = 1101`, `routeFrameSize = 1100`, and `maxRoutePayload = 1073`; a mismatch fails activation rather than negotiating alternate framing.
 
@@ -439,9 +445,13 @@ destination/timeout/upstream errors cannot be forged by storage.
 
 Routed amplification is measured over the complete outer reply—fixed wrapper,
 token, closer references, and response body—not only application bytes. The
-nine signed service-policy tuples are closed: a legacy-value exit advertises
-exactly four and a private-record exit exactly all nine. Arbitrary subsets,
-object/error IDs, and locally chosen budgets are invalid.
+nine exit-origin command-policy tuples are a closed, immutable M3-v1 constant.
+The exit and client bind their digest during finalization; arbitrary subsets,
+object/error IDs, and locally chosen budgets are invalid. Separately, an
+advertisement's signed provider-service entries describe services that node
+accepts: four for `DHT_EXIT_V1`, five for `PRIVATE_RECORDS_V1`, and nine for
+both. A DHT exit may therefore originate a private-record command through a
+separate storage-only provider without itself advertising storage.
 
 The client never authorizes a raw host, port, or caller-computed DHT node ID. Each exit owns a bounded destination table. It mints an unpredictable opaque handle only for a node learned from:
 

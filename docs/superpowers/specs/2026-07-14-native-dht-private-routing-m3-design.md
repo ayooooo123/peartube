@@ -164,6 +164,10 @@ Relay discovery uses DHT participation rather than a signed operator list:
 
 ### Cold start
 
+`BootstrapIO` alone owns cold-start direct discovery and the first index-zero
+guard challenge/link. It is not retained as post-readiness revalidation
+authority.
+
 The preferred cold start contacts at most three configured bootstrap candidates sequentially and has at least one that supports `CAPS_QUERY_V1`, either as a guard or as a source of signed guard advertisements. This is a deployment availability assumption, not a trusted registry.
 
 When all configured bootstrap nodes are legacy nodes, the client may perform one strictly bounded direct discovery walk: one non-iterative, single-node legacy `FIND_NODE` request to one configured bootstrap followed by at most three sequential direct capability probes to nodes returned by that response. It must not invoke DHT-RPC's normal iterative query engine. Every contacted address is recorded in the privacy-readiness report because it saw the client IP. Discovery stops immediately when a guard is pinned. If no guard is found within the bound, private readiness fails closed. Applications may disable this legacy cold-start walk and require a compatible configured bootstrap.
@@ -217,7 +221,7 @@ The following M2 state remains unchanged: cell sealing/opening, link key derivat
 
 M2's coordinator-signed topology grants remain test scaffolding and are not accepted by production M3 route construction. Every adjacent M3 link uses a bilateral handshake:
 
-1. Before creating an index-zero offer, the client's `BootstrapIO` verifies the live cookie-bound direct active challenge for the exact guard advertisement and endpoint. It issues a one-time, local guard-admission capability bound to that advertisement, endpoint, client circuit identity, branch, circuit, generation, and challenge expiry. Sending the offer consumes it. This capability is client-local and never appears on the wire.
+1. Before creating an index-zero offer, the client verifies the live cookie-bound direct active challenge for the exact guard advertisement and endpoint. Cold start uses `BootstrapIO`. After private readiness, branch rotation, rebuild, and resume use the narrow `GuardRevalidationIO` defined below for the already pinned guard only. The responsible IO issues a one-time, local guard-admission capability bound to that advertisement, endpoint, client circuit identity, branch, circuit, generation, and challenge expiry. Sending the offer consumes it. This capability is client-local and never appears on the wire.
 2. The initiator sends a signed `LINK_OFFER_V1` binding the responder advertisement digest, both claimed roles, branch class, branch and circuit identifiers, generation, ephemeral link key, protocol parameters, and a short deadline. A client signs with a fresh circuit identity; a relay signs with its advertised relay identity.
 3. The responder verifies role derivation, its advertisement and expiry, protocol compatibility, loop/identity rules, and capacity. It does not receive or verify the client's challenge state or guard-admission capability. Indices one and two use the signed adjacency offer and tail proof instead of direct challenge.
 4. The responder returns `LINK_ACCEPT_V1`, signed by its relay identity, binding the complete offer transcript, observed predecessor endpoint, its ephemeral link key, admitted limits, and expiry.
@@ -373,7 +377,7 @@ TAIL_READY → ACTIVATING → FINALIZING → ACKING → OPEN
 1. The client sends `DHT_EXIT_ACTIVATE_V1` under the tail-finalize forward datagram key and enters `ACTIVATING` while retaining the tail shared secret and keys. Until READY arrives, the client explicitly retransmits the identical semantic ACTIVATE body under a fresh tail-finalize datagram counter on the bounded timer.
 2. The exit validates the exact activation tuple, derives all final outputs, enters half-open `FINALIZING`, caches the signed semantic `DHT_EXIT_READY_V1` body, and sends it under a fresh tail-finalize reverse datagram counter. An identical activation nonce and tuple is idempotent and causes the same cached body to be sent under another fresh datagram counter; a conflicting tuple tears down the circuit.
 3. The client verifies READY, derives the same final outputs, enters `ACKING`, and sends `DHT_EXIT_READY_ACK_V1` under the final-exit/finalize forward datagram key. ACK binds the READY digest, activation nonce, branch and circuit IDs, and generation. The client retains all tail contexts and sends no DHT payload before `OPEN`.
-4. The exit verifies ACK, enters `OPEN`, erases its tail shared secret and ordered tail-control keys, installs the retired receive/send grace state below, and returns `DHT_EXIT_OPEN_V1` under the final-exit/finalize reverse datagram key. OPEN binds the ACK digest and the same activation tuple.
+4. The exit verifies ACK, enters `OPEN`, creates the fresh 32-byte branch handle secret and empty destination table, erases its tail shared secret and ordered tail-control keys, installs the retired receive/send grace state below, and returns `DHT_EXIT_OPEN_V1` under the final-exit/finalize reverse datagram key. OPEN binds the ACK digest and the same activation tuple. No destination handle or signed seed object exists before this transition.
 5. The client verifies OPEN, enters `OPEN`, erases its tail shared secret and ordered tail-control keys, and installs the retired receive grace state below. Only then may it send routed DHT payload.
 
 The activation nonce and message kind identify semantic duplicates across the two dedicated finalization datagram domains. Retransmission uses a fresh datagram counter but the identical cached semantic body. Gaps and reordering are accepted within the 64-counter replay window; repeated counters are discarded, while a new counter carrying the same authenticated semantic tuple triggers only the cached idempotent response. Before ACK, the exit retransmits READY on an identical ACTIVATE or its bounded timer. After ACK, an identical final-key-authenticated ACK makes an already-open exit retransmit OPEN. The client retransmits ACK on duplicate valid READY or its bounded timer. Duplicate semantic messages never derive keys again or advance state twice.
@@ -399,6 +403,17 @@ The terminal key schedule binds no client address, guard identity, guard adverti
 Lookup and announce share a guard **identity and transport endpoint**, not cryptographic circuit state. Each branch has independent circuit IDs, bilateral link acceptances, link keys, counters, replay windows, queues, limits, and teardown. An implementation may multiplex those independently authenticated link contexts over one guard UDX socket. It must not reuse a link context across branches or generations.
 
 Make-before-break creates a complete independent branch generation alongside the draining generation. The guard identity may be reused, but every link acceptance, ephemeral key, counter, handle, and token is fresh.
+
+Reusing that pinned guard after readiness never reopens bootstrap or ordinary
+DHT authority. For rotation, rebuild, or resume, `GuardRevalidationIO` may
+overlap an existing `RoutedDHTIO` branch only long enough to revalidate the
+exact pinned guard endpoint and establish its new guard-bound transport. It
+uses the existing cookie-gated CAPS/challenge flow, emits one one-time local
+guard-admission capability, and then destroys its socket, cookie/query state,
+advertisement scratch state, and send authority. If the pinned guard cannot be
+revalidated, the new branch fails closed. Guard replacement runs only through
+a separately bounded cold-start policy; it never turns a revalidation failure
+into ordinary DHT IO or an unbounded direct probe.
 
 Defaults are prototype policy values, not a stable wire-format promise:
 
@@ -456,13 +471,25 @@ accepts: four for `DHT_EXIT_V1`, five for `PRIVATE_RECORDS_V1`, and nine for
 both. A DHT exit may therefore originate a private-record command through a
 separate storage-only provider without itself advertising storage.
 
+Before READY, the exit may discover, actively validate, and cache only bounded
+public-DHT and storage candidate evidence. It has no branch handle secret or
+destination table yet and cannot mint a `DESTINATION_REF_V1`, assemble a
+semantic seed set, or sign `DHT_EXIT_SEEDS_V1`. After it validates ACK and
+enters OPEN, it creates the branch handle secret/table, rechecks candidate
+provenance, identity, capability, endpoint, and expiry, and mints the required
+handles. Only then does it build, sign, and cache the byte-exact semantic seed
+object for retransmission.
+
 Immediately after OPEN, every lookup and announce branch receives a signed
 `DHT_EXIT_SEEDS_V1` containing one to three public-DHT references and one to
 five actively validated `PRIVATE_RECORDS_V1` storage advertisement/reference
 pairs. A zero-storage set is invalid; storage readiness is not an
 unauthenticated per-branch feature. The client cannot declare the branch
 private-ready until it validates at least one pair. Missing, invalid, or late
-storage seeds destroy the branch and never enable direct or legacy fallback.
+storage seeds, or any candidate recheck, handle mint, object build, or signature
+failure, destroy the branch, erase its handle secret/table and partial seed
+state, and never enable direct or legacy fallback. A partial seed set is never
+sent.
 
 The client never authorizes a raw host, port, or caller-computed DHT node ID. Each exit owns a bounded destination table. It mints an unpredictable opaque handle only for a node learned from:
 
@@ -519,15 +546,16 @@ It rejects legacy peer announce/unannounce, legacy peer lookup/find-peer at the 
 
 ### Required-mode IO boundary
 
-`required` mode uses two non-overlapping IO phases:
+`required` mode separates three IO authorities:
 
-1. `BootstrapIO` owns the temporary direct socket used only for bounded guard discovery and guard link establishment.
-2. Before private readiness, `BootstrapIO` destroys its ordinary DHT socket, clears its public routing state, and transfers only the authenticated guard link plus signed, provenance-tagged advertisements.
-3. `RoutedDHTIO` then services DHT-RPC exclusively through ready circuit branches and exit-issued handles. It has no method that can send an ordinary client DHT datagram.
+1. `BootstrapIO` exists only during the separately bounded cold-start policy. It owns the temporary direct socket used for permitted bootstrap/guard discovery and the first guard link establishment.
+2. Before private readiness, `BootstrapIO` destroys its ordinary DHT socket, clears its public routing state and direct-discovery scratch state, and transfers only the authenticated guard link, the pinned guard identity/endpoint, and signed provenance-tagged advertisements.
+3. `GuardRevalidationIO` may exist after readiness only for rotation, rebuild, or resume. It can contact exactly the pinned guard endpoint and can encode, send, receive, and decode only `CAPS_QUERY_V1`, `CAPS_COOKIE_CHALLENGE_V1`, `CAPS_RESPONSE_V1`, `ACTIVE_CHALLENGE_V1`, and `ACTIVE_CHALLENGE_RESPONSE_V1` using the exact existing cookie-gated direct flow. It accepts only the pinned guard's matching self-advertisement and ignores referrals. It may open and use only guard-bound transport, may overlap `RoutedDHTIO` for make-before-break, issues exactly one one-time client-local guard-admission capability, and then destroys and clears itself. It has no generic send, DHT query, referral-probe, hostname-resolution, or other-endpoint authority.
+4. `RoutedDHTIO` services DHT-RPC exclusively through ready circuit branches and exit-issued handles. It has no method that can send an ordinary client DHT datagram.
 
 In `RoutedDHTIO` mode, DHT-RPC must not bind a background public DHT socket, perform client NAT sampling, consume exit-observed `to` addresses as the client's address, maintain public direct-dial authority, send background pings or down hints, retry via a direct socket, refresh against bootstrap nodes, or resolve/dial newly learned DHT addresses itself. Routed destination metadata lives in a separate handle table and can never be promoted into the client's public routing table.
 
-The guard UDX transport remains intentionally direct: the guard is the one post-bootstrap endpoint permitted to observe the client address. A runtime assertion and packet oracle enforce that it is the only client destination after readiness.
+The guard UDX transport remains intentionally direct: the guard is the one post-bootstrap endpoint permitted to observe the client address. A runtime assertion and packet oracle enforce that the pinned guard is the only client destination after readiness, including during `GuardRevalidationIO`. Failure to revalidate it fails closed or enters the separately bounded cold-start replacement policy; no direct DHT fallback is available.
 
 ## Native Private Presence Records
 
@@ -568,7 +596,7 @@ recordTarget = hash('hyperdht/private-record-topic/v1' || topic)
 
 Compatible storage nodes maintain a bounded routing cache of signed storage advertisements. `PRIVATE_FIND_NODE` returns at most `K` candidate-signed advertisements closest to `recordTarget`. The client performs iterative lookup through its exit, while the exit converts only protocol-observed and actively validated referrals into branch-bound destination handles. Legacy nodes ignore the unknown commands.
 
-Before advertising any M3 branch as private-ready, the exit supplies one to five live seed handles from its locally validated `PRIVATE_RECORDS_V1` capability cache in signed `DHT_EXIT_SEEDS_V1`. If its cache has no live seed, the exit runs its own bounded capability-discovery walk through its public DHT participation and actively validates candidates it contacted itself. It never probes a client-supplied raw address. Zero valid seeds or a zero storage count is invalid and produces `ERR_PRIVATE_RECORDS_UNAVAILABLE`; the client may rotate the exit, but it cannot make the branch private-ready, start `PRIVATE_FIND_NODE`, or fall back to direct or legacy records.
+Before READY, the exit obtains one to five actively validated storage candidates from its bounded `PRIVATE_RECORDS_V1` capability cache, running its own bounded capability-discovery walk when necessary. This cache is evidence only, not handle or seed-object authority. After ACK opens the branch and creates the handle secret/table, the exit rechecks that evidence and mints the signed seed set under the lifecycle above. It never probes a client-supplied raw address. Zero valid seeds or a zero storage count is invalid and produces `ERR_PRIVATE_RECORDS_UNAVAILABLE`; the client may rotate the exit, but it cannot make the branch private-ready, start `PRIVATE_FIND_NODE`, receive a partial seed set, or fall back to direct or legacy records.
 
 Seed handles are ordinary branch-bound handles: expiry, rotation, path-identity exclusion, and command-class rules apply. The first `PRIVATE_FIND_NODE` response can introduce closer candidate-signed advertisements; the exit admits handles for them only through the provenance and active-validation process above.
 
@@ -607,7 +635,7 @@ M2's sub-second integration-test heartbeat and failure timers are not M3 product
 
 Destroying idle links does not force immediate relay reselection. If the 15-active-minute branch-selection lease and advertisements remain valid, new work may reselect the same middle and exit, but it still creates a fresh circuit generation and fresh bilateral links.
 
-On suspension the client cancels outstanding operations, destroys both branches, invalidates all destination handles and DHT/storage tokens, erases link and route secrets, and closes temporary IO. Old storage receipts never count toward a new transaction's `W`. A value already stored idempotently may return a fresh receipt only after a new prepare on the new branch. On resume the client may reuse the pinned guard identity, but it must revalidate a current advertisement and active challenge and create fresh bilateral link acceptances, ephemeral keys, circuit IDs, generations, counters, handles, and tokens.
+On suspension the client cancels outstanding operations, destroys both branches, invalidates all destination handles and DHT/storage tokens, erases link and route secrets, and closes temporary IO. Old storage receipts never count toward a new transaction's `W`. A value already stored idempotently may return a fresh receipt only after a new prepare on the new branch. On resume the client may reuse the pinned guard identity, but `GuardRevalidationIO` must revalidate its exact endpoint, current advertisement, and active challenge before issuing the one-time local admission capability. The resumed branch creates fresh bilateral link acceptances, ephemeral keys, circuit IDs, generations, counters, handles, and tokens. Failure follows the separately bounded cold-start replacement policy and never opens ordinary DHT authority.
 
 A network-interface change performs the same invalidation immediately. Mutating operations interrupted after prepare restart from prepare. Previously issued receipts remain historical evidence only and are never combined with a new transaction quorum.
 
@@ -736,11 +764,11 @@ Defaults remain backward compatible. Each fork change should be organized so it 
 - guard and branch active-time lease state machines;
 - make-before-break, drain, network-change, suspend, resume, and teardown;
 - exact command-policy enforcement and unknown-command rejection;
-- required-mode IO matrix, temporary bootstrap-socket destruction, disabled NAT sampling/background DHT IO, and stable M4-required errors;
+- required-mode IO matrix, temporary bootstrap-socket destruction, guard-only `GuardRevalidationIO` message/endpoint allowlist and one-time capability consumption, disabled NAT sampling/background DHT IO, and stable M4-required errors;
 - arbitrary exit destinations, address substitution, stale handles, cross-exit handles, client-side relay-as-destination exclusion, and handle invalidation;
 - DHT and storage token/exit/handle binding across rotation;
 - private presence record signatures, bounds, expiry, sequence conflicts, tombstone retention, and source-address exclusion;
-- compatible-storage zero/stale/successful seed behavior, malicious referrals, overlay convergence, partial quorum, prepare/commit rotation, replayed receipts, cross-exit tokens, and insufficient density;
+- compatible-storage zero/stale/successful candidate behavior, no pre-OPEN handle/seed-object creation, post-OPEN recheck/mint/sign failure, partial-seed suppression and erasure, malicious referrals, overlay convergence, partial quorum, prepare/commit rotation, replayed receipts, cross-exit tokens, and insufficient density;
 - same-sequence endpoint equivocation and quarantine;
 - quotas, response amplification, fairness, backpressure, and `BUSY` behavior;
 - mobile liveness cell/wakeup budgets using the client↔guard definition, sole-initiator simultaneous-timer and jitter bounds, predecessor-missing and successor-missing failure directions, heartbeat-excluded idle timing, and zero traffic after idle destruction;
@@ -775,6 +803,7 @@ The suite proves:
 - insufficient private-record density fails closed;
 - zero and stale exit storage seeds report private records unavailable, while a locally validated seed converges to the deterministic closest set;
 - branch and guard rotations follow the active-time policy;
+- rotation, rebuild, and resume revalidate only the exact pinned guard through the five-message `GuardRevalidationIO` allowlist, while failure rotates only through the bounded cold-start policy;
 - suspension destroys live branches and resume uses fresh generations, keys, counters, handles, tokens, and active challenges;
 - an interface change cancels outstanding work and invalidates all branch-bound authority;
 - Node and Bare produce the same protocol result.
@@ -794,7 +823,7 @@ A Linux network-namespace job captures every relevant interface and fails unless
 - no endpoint address from private material enters a public routing table or direct probe;
 - all processes, sockets, circuits, queues, and owned secret state are gone after teardown.
 
-A separate authority trap intercepts ordinary DHT socket creation and send capability. It proves the temporary `BootstrapIO` socket is destroyed before readiness, no ordinary DHT socket exists afterward, and no such send authority can be invoked. The routed UDX guard transport is instrumented separately and is the only permitted post-readiness client network destination.
+A separate authority trap intercepts ordinary DHT socket creation and send capability. It proves the temporary `BootstrapIO` socket is destroyed before readiness, no ordinary DHT socket exists afterward, and no such send authority can be invoked. It separately instruments `GuardRevalidationIO` and proves that it can contact only the exact pinned guard, can use only the five permitted CAPS/challenge messages and guard-bound transport, cannot probe referrals or any other endpoint, emits at most one local admission capability, and destroys all authority afterward. `GuardRevalidationIO` may overlap `RoutedDHTIO` during make-before-break, but the pinned guard remains the only permitted post-readiness client network destination.
 
 ### CI and packaging
 

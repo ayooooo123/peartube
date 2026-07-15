@@ -1,6 +1,6 @@
 # Native DHT Private Routing — Milestone 3 Design
 
-**Status:** Draft pending protocol re-review
+**Status:** Independently reviewed; pending owner approval
 **Date:** 2026-07-14  
 **Parent design:** `2026-07-12-holepunch-private-routing-design.md`  
 **First consumer:** PearTube  

@@ -146,9 +146,9 @@ Relay discovery uses DHT participation rather than a signed operator list:
 
 1. The client contacts a bounded number of ordinary HyperDHT bootstrap candidates. This unavoidable bootstrap phase is explicitly outside the post-guard IP-exposure guarantee.
 2. It sends an initial `CAPS_QUERY_V1`, containing a protocol version, requested capability mask, random XOR target, nonce, maximum result count, and empty return-routability-cookie fields. The responder may return only a smaller stateless cookie challenge. The client echoes that endpoint-bound cookie before the responder may return its own signed advertisement and a bounded list of verbatim candidate-signed advertisements. This prevents an unauthenticated small query from reflecting a fragmented bulk response. A referrer cannot forge a candidate advertisement.
-3. The client pins a reachable `ROLE.SAFETY` guard as soon as one passes signature, expiry, capability, and active challenge checks.
+3. The client pins a reachable `ROLE.SAFETY` guard as soon as one passes signature, expiry, capability, and a direct active challenge bound to the still-live CAPS return-routability cookie/query tuple. Invalid direct challenges receive no response or expensive cryptographic work.
 4. After guard pinning, the client invokes `RELAY_DISCOVER_V1` over its source↔guard tail-control context. The guard performs ordinary random-target DHT walks using its public DHT participation and returns bounded candidate-signed advertisements. These targets are random discovery probes, not application topics.
-5. The client selects a `ROLE.SAFETY` middle and asks the guard to extend through that tail-control context. The guard contacts the selected address; the middle proves advertisement possession through the partial route. The client never probes it directly.
+5. The client selects a `ROLE.SAFETY` middle and asks the guard to extend through that tail-control context. The guard contacts the selected address with its signed `LINK_OFFER_V1`; LINK_ACCEPT and the tail transcript replace direct active challenge for middle/exit candidates and prove advertisement identity/route-key possession through the authenticated adjacency. The client never probes it directly.
 6. Once the client→guard→middle route and a fresh source↔middle tail-control context exist, the client invokes the same bounded discovery service at the middle to obtain `ROLE.PRIVATE` exit candidates. The exit offer travels inside that context, so the guard forwards fixed-size opaque cells and does not learn the selected exit. Exit validation and link extension run through the partial route.
 7. If the client cannot find enough compatible and diverse nodes, `required` mode remains unavailable. It never downgrades to direct DHT traffic.
 
@@ -210,7 +210,7 @@ The following M2 state remains unchanged: cell sealing/opening, link key derivat
 M2's coordinator-signed topology grants remain test scaffolding and are not accepted by production M3 route construction. Every adjacent M3 link uses a bilateral handshake:
 
 1. The initiator sends a signed `LINK_OFFER_V1` binding the responder advertisement digest, both claimed roles, branch class, branch and circuit identifiers, generation, ephemeral link key, protocol parameters, and a short deadline. A client signs with a fresh circuit identity; a relay signs with its advertised relay identity.
-2. The responder verifies role derivation, its advertisement and expiry, active challenge, protocol compatibility, loop/identity rules, and capacity.
+2. The responder verifies role derivation, its advertisement and expiry, protocol compatibility, loop/identity rules, and capacity. Index zero additionally requires the live cookie-bound direct active challenge; indices one and two use the signed adjacency offer and tail proof instead of direct challenge.
 3. The responder returns `LINK_ACCEPT_V1`, signed by its relay identity, binding the complete offer transcript, observed predecessor endpoint, its ephemeral link key, admitted limits, and expiry.
 4. Both sides derive the existing M2 directional link contexts from the mutually authenticated transcript. Failure or timeout installs no forwarding state.
 
@@ -430,6 +430,12 @@ and receives an authenticated acceptance before either side sends bounded
 fragments. Its KDF, directional keys/nonces, replay rules, deadlines, and
 reassembly memory are byte-exact in the registry. This carrier is never exposed
 to the client and never contains the client's address or dialing authority.
+Its KDF transcript contains the two explicitly named Section 2.1 advertisement
+digests and is exactly 308 bytes. Global pre-authentication signature work is
+bounded independent of spoofed source addresses; exact OPEN replay reuses one
+cached ACCEPT without re-derivation/allocation, while conflicting reuse fails
+closed. Storage may return only the registry's closed error subset; exit-local
+destination/timeout/upstream errors cannot be forged by storage.
 
 Routed amplification is measured over the complete outer reply—fixed wrapper,
 token, closer references, and response body—not only application bytes. The
@@ -445,7 +451,7 @@ The client never authorizes a raw host, port, or caller-computed DHT node ID. Ea
 - a protocol-valid DHT response received by that exit from an already admitted handle; or
 - recent protocol-valid traffic received by the exit at the claimed endpoint.
 
-A capability-cache entry is admitted only after the exit itself receives a valid signed advertisement, directly contacts the advertised endpoint under a bounded discovery budget, and completes the capability's active challenge. A client-supplied address or merely self-signed advertisement never causes an exit probe.
+A capability-cache entry is admitted only after the exit itself receives a valid signed advertisement, directly contacts the advertised endpoint under a bounded discovery budget, completes its own CAPS return-routability exchange, and completes the cookie-bound active challenge. A client-supplied address or merely self-signed advertisement never causes an exit probe.
 
 A referral learned in a response is not immediately caller-authorized. The exit records its provenance, applies referral and probing budgets, performs the normal DHT reachability exchange, and only then exposes a handle. The handle maps server-side to the exit identity, branch and circuit IDs, branch generation, address, derived address-based DHT node ID, provenance, expiry, and allowed command classes. It cannot be used at another exit, on another branch, after rotation, or for a different command class.
 

@@ -188,8 +188,8 @@ Core assignments are:
 | `0x0001` | `CAPABILITY_ADVERTISEMENT_V1`   | Ed25519                   |
 | `0x0002` | `CAPS_QUERY_V1`                 | transport/request binding |
 | `0x0003` | `CAPS_RESPONSE_V1`              | Ed25519                   |
-| `0x0004` | `ACTIVE_CHALLENGE_V1`           | transport/request binding |
-| `0x0005` | `ACTIVE_CHALLENGE_RESPONSE_V1`  | Ed25519 + X25519 proof    |
+| `0x0004` | `ACTIVE_CHALLENGE_V1`           | live CAPS cookie          |
+| `0x0005` | `ACTIVE_CHALLENGE_RESPONSE_V1`  | cookie + Ed25519/X25519   |
 | `0x0006` | `RELAY_DISCOVER_V1`             | tail-control AEAD         |
 | `0x0007` | `RELAY_DISCOVER_RESPONSE_V1`    | tail-control AEAD         |
 | `0x0008` | `CORE_FRAGMENT_V1`              | containing transport      |
@@ -468,12 +468,28 @@ candidate, duplicate, or non-canonical sort order rejects the response.
 32B  challengeNonce
 32B  challengerEphemeralPublicKey // X25519
 u64  challengeExpiresAtMs
+32B  capsQueryNonce
+u64  cookieExpiresAtMs
+32B  returnRoutabilityCookie
 ```
 
-The body is exactly 104 bytes and the wire message is exactly 112 bytes. The
+The body is exactly 176 bytes and the wire message is exactly 184 bytes. The
 deadline is at most 5,000 ms after local send time. The challenger key and
-nonce are fresh for one challenge. The challenge is sent only to the endpoint
-already authorized by bounded discovery evidence.
+nonce are fresh for one challenge. Direct challenge is permitted only for a
+prospective guard and must arrive from the same observed endpoint while the
+exact phase-1 CAPS query/cookie tuple is live in the responder's bounded
+five-second cache. Pre-validation work is bounded to fixed-field parsing, one
+4,096-entry cache lookup, and at most one keyed-BLAKE2b cookie recomputation.
+The responder performs no X25519, Ed25519 signing, route-key proof work, or
+exchange allocation before that succeeds. Invalid/unbound challenge receives
+zero response bytes.
+
+Middle and exit candidates are never sent direct `ACTIVE_CHALLENGE_V1`.
+Behind a guard, the current tail sends signed `LINK_OFFER_V1` through the
+partially authenticated route; its 374-byte authenticated request, LINK_ACCEPT,
+and tail transcript jointly prove the candidate identity/route key. Thus routed
+discovery has an authenticated adjacency path and does not require a CAPS
+cookie visible to the client or candidate.
 
 ### 3.6 `ACTIVE_CHALLENGE_RESPONSE_V1` (`0x0005`)
 
@@ -486,11 +502,14 @@ Signature domain: `hyperdht-private-routes/m3/active-challenge-response/v1`.
 32B  challengerEphemeralPublicKey // exact challenge value
 32B  responderNonce
 u64  challengeExpiresAtMs         // exact challenge value
+32B  capsQueryNonce               // exact challenge value
+u64  cookieExpiresAtMs            // exact challenge value
+32B  returnRoutabilityCookie      // exact challenge value
 32B  routeKeyPossessionProof
 64B  Ed25519 signature suffix
 ```
 
-The body is exactly 200 bytes and the wire message is exactly 272 bytes. The
+The body is exactly 272 bytes and the wire message is exactly 344 bytes. The
 responder computes X25519 using its advertised route-encryption secret and the
 challenger ephemeral public key. A low-order input or all-zero shared secret is
 rejected. The proof is the 32-byte keyed BLAKE2b output whose key is that shared
@@ -499,7 +518,8 @@ secret and whose input is:
 ```text
 u16be domainByteLength || UTF8(domain) ||
 advertisementDigest || responderIdentity || challengeNonce ||
-challengerEphemeralPublicKey || responderNonce || u64be(challengeExpiresAtMs)
+challengerEphemeralPublicKey || responderNonce || u64be(challengeExpiresAtMs) ||
+capsQueryNonce || u64be(cookieExpiresAtMs) || returnRoutabilityCookie
 ```
 
 where `domain` is
@@ -672,6 +692,7 @@ exchange uses a fresh exit ephemeral X25519 key and fresh 16-byte `exchangeId`.
 16B  exchangeId
 32B  storageIdentity
 32B  storageAdvertisementDigest
+32B  exitAdvertisementDigest
 u16  exitAdvertisementByteLength     // exactly 548
 exitAdvertisementByteLength bytes complete signed exit advertisement
 32B  exitEphemeralPublicKey
@@ -682,15 +703,31 @@ u16  requestFragmentCount            // 1..2
 64B  exit Ed25519 signature suffix
 ```
 
-The body is `158 + exitAdvertisementByteLength`; wire size is exactly 778
+The body is `190 + exitAdvertisementByteLength`; wire size is exactly 810
 bytes. The embedded advertisement must authorize the exact command tuple and
-its signer signs OPEN. Before X25519 or allocation, storage applies a per-source
-cap of eight syntactically valid OPEN packets per second. It then verifies
-source endpoint equals the advertisement, peer-ID equality, both signatures,
-epoch/expiry, storage identity and exact current storage-advertisement digest,
-deadline at most five seconds, fresh exchange
-ID, canonical counts, and digest. Only then may it derive keys and reserve the
-exact request size. Invalid OPEN is silently dropped and elicits no response.
+its signer signs OPEN. `exitAdvertisementDigest` and
+`storageAdvertisementDigest` are each exactly the 32-byte Section 2.1
+capability-advertisement digest of the named complete signed advertisement; the
+embedded exit advertisement must reproduce the former byte-for-byte.
+
+Before X25519 or allocation, storage applies a per-source cap of eight
+syntactically valid OPEN packets per second and a global token bucket of 64
+Ed25519 OPEN verifications per second with burst 128, independent of source
+addresses. Exhaustion silently drops OPEN before signature or X25519 work. It
+then verifies source endpoint equals the advertisement, peer-ID equality, both
+signatures, epoch/expiry, storage identity and exact current storage-advertisement
+digest, deadline at most five seconds, fresh exchange ID, canonical counts, and
+digest. Only then may it derive keys and reserve the exact request size.
+
+The accepted replay key is `(exitIdentity, exchangeId)` and is retained until
+the OPEN deadline, at most five seconds, in a 4,096-entry global cache. After
+fixed-size/canonical parsing, a byte-for-byte cache match is checked before
+consuming either verification-rate budget. An exact byte-identical OPEN replay receives only the byte-identical cached ACCEPT and
+does not verify signatures, run X25519/KDF, allocate, or extend any deadline.
+A different validly signed OPEN for the same key is conflicting reuse: storage
+destroys any partial exchange, caches the conflict through the original
+deadline, and responds to neither object. Invalid OPEN is silently dropped and
+elicits no response.
 
 Let `S = X25519(storageRouteSecret, exitEphemeralPublicKey)`, rejecting
 low-order keys and all-zero `S`. The exact transcript is:
@@ -699,11 +736,16 @@ low-order keys and all-zero `S`. The exact transcript is:
 u16be domainByteLength ||
 UTF8('hyperdht-private-routes/m3/exit-storage-session/v1') ||
 u32be(1) || exchangeId || exitIdentity || storageIdentity ||
-digest(exitAdvertisement) || digest(storageAdvertisement) ||
+exitAdvertisementDigest || storageAdvertisementDigest ||
 exitEphemeralPublicKey || storageRouteEncryptionPublicKey ||
 u64be(absoluteDeadlineMs) || u16be(requestObjectBytes) ||
 u16be(requestFragmentCount) || requestObjectDigest
 ```
+
+The domain is exactly 50 bytes. The fixed fields after it are exactly 256
+bytes, so the complete transcript is exactly `2 + 50 + 256 = 308` bytes. No
+generic or implementation-selected digest operation occurs while constructing
+it.
 
 Each output is keyed BLAKE2b under `S` over
 `u16be(labelLength) || UTF8(label) || u32be(transcriptLength) || transcript`.
@@ -777,8 +819,22 @@ encodedResponseByteLength bytes encodedResponse
 ```
 
 It has `20 + encodedResponseByteLength` body bytes and at most 8,090 wire
-bytes. Error responses have zero encoded bytes. No destination references or
-raw addresses cross this carrier.
+bytes. `errorCode = 0` is success and requires the exact command-specific
+encoded success body from Sections 10.6 and 11.3–11.6. A successful empty body
+is permitted only where those sections explicitly define one.
+
+The only storage-carrier errors are `0x0180` malformed, `0x0181` unsupported
+command, `0x0182` policy mismatch, `0x0185` deadline expired, `0x0186` busy,
+`0x0187` response too large, `0x0188` amplification exceeded, `0x018b` token
+invalid, `0x018c` storage unavailable, `0x018d` record conflict, and `0x018e`
+quota exceeded. Each error requires `encodedResponseByteLength = 0` and maps
+unchanged to the same `ROUTED_REPLY_V1.errorCode`. Codes `0x0183`, `0x0184`,
+`0x0189`, and `0x018a` are exit-local only and are invalid on this carrier, as
+is every other non-zero value. An authenticated invalid carrier code/body
+destroys the exchange and the exit reports local `0x018a` upstream rejected;
+authentication failure or deadline without a valid response reports local
+`0x0189` upstream timeout. No destination references or raw addresses cross
+this carrier.
 
 Request reassembly is at most two fragments; response reassembly is at most
 eight because `ceil(8090 / 1149) = 8`. Both expire at the OPEN deadline, never
@@ -859,8 +915,11 @@ and the client nonce are non-zero and fresh. The responder identity, route role,
 endpoint, and route key must match the signed advertisement digest. The offer
 deadline is at most 5,000 ms after local send time and at most the requested
 expiry. A payload-parameter mismatch, role/index mismatch, expired or replayed
-offer, self-link, repeated branch identity, or identity present anywhere else
-in either branch is rejected without installing forwarding state.
+offer, self-link, or repeated branch identity is rejected without installing
+forwarding state. Cross-branch identity presence is also rejected except for
+the sole required equality: lookup index-0 guard identity and endpoint must
+equal announce index-0 guard identity and endpoint. That exception never
+permits guard equality at index 1/2 or reuse of cryptographic state.
 
 The complete offer digest used by the adjacent responder is:
 
@@ -1702,7 +1761,8 @@ only when the exit learned them in a protocol-valid response from an admitted
 handle, then completed its bounded reachability validation. A private-storage
 candidate becomes eligible only after the exit received its candidate-signed
 advertisement as protocol evidence, contacted that advertised endpoint under
-its own budget, and completed the active challenge. The exit may then return
+its own budget, completed its own CAPS cookie exchange, and completed the
+cookie-bound active challenge. The exit may then return
 the original signed advertisement and a newly minted reference whose
 `destinationId` matches it. The advertisement is evidence to validate; it is
 never handle authority by itself.
@@ -2373,8 +2433,8 @@ carrier and post-admission bounds in Section 4A. No carrier has fragment ACKs.
 | CAPS query                | 110                                     | 118                       | one direct datagram                        |
 | CAPS cookie challenge     | 72                                      | 80                        | one direct datagram                        |
 | CAPS response             | `73 + sum(2 + advertBytes)`, count <= 8 | 4545                      | cookie-gated direct fragments              |
-| Active challenge          | 104                                     | 112                       | one direct datagram                        |
-| Active challenge response | 200                                     | 272                       | one direct datagram                        |
+| Active challenge          | 176                                     | 184                       | cookie-validated direct guard datagram     |
+| Active challenge response | 272                                     | 344                       | cookie-validated direct guard datagram     |
 | Relay discover            | 69                                      | 77                        | one tail-control payload                   |
 | Relay discover response   | `41 + sum(2 + advertBytes)`, count <= 8 | 4449                      | routed object; fragment above 1073         |
 | Core fragment             | `48 + fragmentDataBytes`                | 1073 routed / 1200 direct | containing transport                       |
@@ -2389,7 +2449,7 @@ carrier and post-admission bounds in Section 4A. No carrier has fragment ACKs.
 | Exit ready ACK            | 105                                     | 113                       | one final-finalize payload                 |
 | Exit OPEN                 | 169                                     | 177                       | one final-finalize payload                 |
 | Exit seed set             | `139 + 172d + sum(2 + advert + 172)`    | 4337                      | terminal-control object; fragment at max   |
-| Exit RPC OPEN             | `158 + 548`                             | 778                       | authenticated direct admission             |
+| Exit RPC OPEN             | `190 + 548`                             | 810                       | authenticated direct admission             |
 | Exit RPC ACCEPT           | 124                                     | 148                       | authenticated direct acceptance            |
 | Exit RPC fragment         | `27 + fragmentDataBytes`                | 1200                      | admitted direct storage session            |
 | Exit RPC request object   | `30 + encodedBodyBytes`                 | 1199                      | encrypted carrier fragments                |
@@ -2446,8 +2506,8 @@ object, not a nested command or record. `1` means no `CORE_FRAGMENT_V1` wrapper.
 | `0x0001` | `CAPABILITY_ADVERTISEMENT_V1`   | `188..476`                             | 72       | 548                        | nested discovery object; direct or routed         | none / 1                       | signed expiry, at most 1,800,000 ms        |
 | `0x0002` | `CAPS_QUERY_V1`                 | 110                                    | 8        | 118                        | direct bootstrap UDP request                      | none / 1                       | 5,000 ms exchange                          |
 | `0x0003` | `CAPS_RESPONSE_V1`              | `335..4,473`                           | 72       | 4,545                      | cookie-gated direct bootstrap UDP response        | 1,144 / 4                      | 5,000 ms exchange/reassembly               |
-| `0x0004` | `ACTIVE_CHALLENGE_V1`           | 104                                    | 8        | 112                        | direct bounded-discovery UDP                      | none / 1                       | at most 5,000 ms                           |
-| `0x0005` | `ACTIVE_CHALLENGE_RESPONSE_V1`  | 200                                    | 72       | 272                        | direct bounded-discovery UDP                      | none / 1                       | challenge expiry, at most 5,000 ms         |
+| `0x0004` | `ACTIVE_CHALLENGE_V1`           | 176                                    | 8        | 184                        | cookie-validated direct guard UDP                 | none / 1                       | at most 5,000 ms                           |
+| `0x0005` | `ACTIVE_CHALLENGE_RESPONSE_V1`  | 272                                    | 72       | 344                        | cookie-validated direct guard UDP                 | none / 1                       | challenge expiry, at most 5,000 ms         |
 | `0x0006` | `RELAY_DISCOVER_V1`             | 69                                     | 8        | 77                         | `TAIL_CONTROL_ORDERED`                            | none / 1                       | 5,000 ms exchange                          |
 | `0x0007` | `RELAY_DISCOVER_RESPONSE_V1`    | `41..4,441`                            | 8        | 4,449                      | `TAIL_CONTROL_ORDERED`                            | 1,017 / 5                      | 5,000 ms exchange/reassembly               |
 | `0x0008` | `CORE_FRAGMENT_V1`              | routed `48..1,065`; direct `48..1,192` | 8        | routed 1,073; direct 1,200 | containing routed context or CAPS direct response | 1,017 routed; 1,144 direct / 1 | 5,000 ms non-extending reassembly          |
@@ -2463,7 +2523,7 @@ object, not a nested command or record. `1` means no `CORE_FRAGMENT_V1` wrapper.
 | `0x0042` | `DHT_EXIT_READY_ACK_V1`         | 105                                    | 8        | 113                        | forward `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                       | shared 5,000 ms finalization deadline      |
 | `0x0043` | `DHT_EXIT_OPEN_V1`              | 169                                    | 8        | 177                        | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                       | 5,000 ms retired-context grace after OPEN  |
 | `0x0044` | `DHT_EXIT_SEEDS_V1`             | `311..4,265`                           | 72       | `383..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                | 1,017 / 5                      | 5,000 ms from OPEN                         |
-| `0x0050` | `EXIT_RPC_OPEN_V1`              | 706                                    | 72       | 778                        | direct exit-to-storage UDP                        | none / 1                       | at most 5,000 ms                           |
+| `0x0050` | `EXIT_RPC_OPEN_V1`              | 738                                    | 72       | 810                        | direct exit-to-storage UDP                        | none / 1                       | at most 5,000 ms                           |
 | `0x0051` | `EXIT_RPC_ACCEPT_V1`            | 124                                    | 24       | 148                        | direct exit-to-storage UDP                        | none / 1                       | OPEN deadline                              |
 | `0x0052` | `EXIT_RPC_FRAGMENT_V1`          | `27..1,176`                            | 24       | `51..1,200`                | admitted exit-to-storage session                  | 1,149 / 8                      | OPEN deadline, at most 5,000 ms            |
 | `0x0053` | `EXIT_RPC_REQUEST_V1`           | `30..1,191`                            | 8        | `38..1,199`                | encrypted storage-session object                  | 1,149 / 2                      | OPEN deadline                              |
@@ -2538,8 +2598,8 @@ size/carrier conflicts. Error IDs are values inside the authenticated
 | `0x0001/v1` | `CAPABILITY_ADVERTISEMENT_V1`         | direct/routed nested evidence          | Ed25519, `hyperdht-private-routes/m3/capability-advertisement/v1`           | 476 / 548             | Advertised Capabilities                        | private-routes       |
 | `0x0002/v1` | `CAPS_QUERY_V1`                       | direct bootstrap UDP                   | endpoint-bound return cookie                                                | 110 / 118             | Permissionless Discovery                       | private-routes       |
 | `0x0003/v1` | `CAPS_RESPONSE_V1`                    | cookie-gated direct UDP/fragments      | Ed25519, `hyperdht-private-routes/m3/caps-response/v1`                      | 4,473 / 4,545         | Permissionless Discovery                       | private-routes       |
-| `0x0004/v1` | `ACTIVE_CHALLENGE_V1`                 | direct bounded-discovery UDP           | endpoint/request binding                                                    | 104 / 112             | Advertised Capabilities                        | private-routes       |
-| `0x0005/v1` | `ACTIVE_CHALLENGE_RESPONSE_V1`        | direct bounded-discovery UDP           | Ed25519 domain in Section 3.6 plus X25519/keyed-BLAKE2b proof               | 200 / 272             | Advertised Capabilities                        | private-routes       |
+| `0x0004/v1` | `ACTIVE_CHALLENGE_V1`                 | cookie-validated direct guard UDP      | live CAPS return-routability tuple                                          | 176 / 184             | Advertised Capabilities                        | private-routes       |
+| `0x0005/v1` | `ACTIVE_CHALLENGE_RESPONSE_V1`        | cookie-validated direct guard UDP      | Ed25519 domain in Section 3.6 plus X25519/keyed-BLAKE2b proof               | 272 / 344             | Advertised Capabilities                        | private-routes       |
 | `0x0006/v1` | `RELAY_DISCOVER_V1`                   | `TAIL_CONTROL_ORDERED`                 | context AEAD                                                                | 69 / 77               | Permissionless Discovery                       | private-routes       |
 | `0x0007/v1` | `RELAY_DISCOVER_RESPONSE_V1`          | `TAIL_CONTROL_ORDERED`/fragments       | context AEAD plus nested signatures                                         | 4,441 / 4,449         | Permissionless Discovery                       | private-routes       |
 | `0x0008/v1` | `CORE_FRAGMENT_V1`                    | containing direct/routed carrier       | containing transport; whole-object digest                                   | 1,192 / 1,200 direct  | Relationship to M2 / On-wire Context Selection | private-routes       |
@@ -2555,11 +2615,11 @@ size/carrier conflicts. Error IDs are values inside the authenticated
 | `0x0042/v1` | `DHT_EXIT_READY_ACK_V1`               | forward `FINAL_EXIT_FINALIZE_DATAGRAM` | context AEAD                                                                | 105 / 113             | Finalization Acknowledgement                   | private-routes       |
 | `0x0043/v1` | `DHT_EXIT_OPEN_V1`                    | reverse `FINAL_EXIT_FINALIZE_DATAGRAM` | context AEAD                                                                | 169 / 177             | Finalization Acknowledgement                   | private-routes       |
 | `0x0044/v1` | `DHT_EXIT_SEEDS_V1`                   | reverse `TERMINAL_CONTROL_ORDERED`     | context AEAD + Ed25519, `hyperdht-private-routes/m3/dht-exit-seeds/v1`      | 4,265 / 4,337         | Native DHT-RPC Transport / Compatible Storage  | private-routes       |
-| `0x0050/v1` | `EXIT_RPC_OPEN_V1`                    | direct exit-to-storage UDP             | exit Ed25519 + signed advertisement                                         | 706 / 778             | Native DHT-RPC Transport                       | private-routes       |
+| `0x0050/v1` | `EXIT_RPC_OPEN_V1`                    | direct exit-to-storage UDP             | exit Ed25519 + signed advertisement                                         | 738 / 810             | Native DHT-RPC Transport                       | private-routes       |
 | `0x0051/v1` | `EXIT_RPC_ACCEPT_V1`                  | direct exit-to-storage UDP             | storage-session XChaCha20-Poly1305                                          | 124 / 148             | Native DHT-RPC Transport                       | private-routes       |
 | `0x0052/v1` | `EXIT_RPC_FRAGMENT_V1`                | admitted exit-to-storage UDP           | directional storage-session AEAD                                            | 1,176 / 1,200         | Native DHT-RPC Transport                       | private-routes       |
 | `0x0053/v1` | `EXIT_RPC_REQUEST_V1`                 | encrypted storage-session object       | request-direction AEAD                                                      | 1,191 / 1,199         | Native DHT-RPC Transport                       | private-routes       |
-| `0x0054/v1` | `EXIT_RPC_RESPONSE_V1`                | encrypted storage-session object       | response-direction AEAD                                                     | 8,082 / 8,090         | Native DHT-RPC Transport                       | private-routes       |
+| `0x0054/v1` | `EXIT_RPC_RESPONSE_V1`                | encrypted storage-session object       | response AEAD + closed 11-code error mapping                                | 8,082 / 8,090         | Native DHT-RPC Transport                       | private-routes       |
 | `0x0100/v1` | `DESTINATION_REF_V1`                  | nested `ROUTE_PAYLOAD`                 | exit-local keyed-BLAKE2b tag + live table entry + route context             | 164 / 172             | Native DHT-RPC Transport                       | private-routes       |
 | `0x0101/v1` | `ROUTED_REQUEST_V1`                   | forward `ROUTE_PAYLOAD`                | context AEAD + exact advertised policy                                      | 1,382 / 1,390         | Native DHT-RPC Transport / Command Policy      | private-routes       |
 | `0x0102/v1` | `ROUTED_REPLY_V1`                     | reverse `ROUTE_PAYLOAD`                | context AEAD + exact request/reference equality                             | 8,262 / 8,270         | Native DHT-RPC Transport                       | private-routes       |
@@ -2612,38 +2672,39 @@ behavior design. The owner/security review must explicitly approve, amend, or
 reject every row. Amendments require rerunning all size, ID, and transcript
 checks before Task 1.
 
-| Pending decision                      | Draft selection in this registry                                                                                                                             | Security/availability tradeoff and alternatives                                                                                                                                                                     |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scalar and object framing             | Big-endian fixed-width scalars; eight-byte `u32 version / u16 ID / u16 body length`; `u16` byte-string lengths; no varints/defaults                          | Simple canonical parsing and signatures at modest fixed overhead. Alternatives are compact-encoding varints or per-message framing, both with more malleability/version-skew risk.                                  |
-| Shared numeric namespace              | Ranges and exact IDs in Sections 1.5 and 14; reserved IDs fail closed                                                                                        | Prevents cross-type reinterpretation but consumes one global allocation. Alternative is transport-local namespaces with greater collision/audit risk.                                                               |
-| Signature/digest domains              | Exact new per-object domains in Sections 1–11; generic digest has a length-prefixed domain, while behavior-approved legacy digests retain raw domains        | Strong separation but more vectors and implementation surface. Alternative is one transcript schema/domain, which raises substitution risk.                                                                         |
-| Canonical network address             | Canonical 17/19-byte form; advertisements restricted to IPv4 and exact existing DHT-RPC peer-ID derivation                                                   | Preserves interoperability and prevents an unproven IPv6 ID scheme. IPv6 advertisements require a later coordinated DHT-RPC version.                                                                                |
-| Service-policy closed sets            | Only the nine exact Section 10.5 tuples; count 0 without exit, 4 for legacy-value exit, 9 for private-record exit                                            | Prevents arbitrary command IDs/budgets and downgrade subsets; future commands require a reviewed registry version.                                                                                                  |
-| Capability implication/role rule      | private records implies exit implies relay; relay-only derives safety, exit/storage derives private                                                          | Prevents advertising unusable partial services and binds M2 role. Alternative independent bits improve deployment flexibility but complicate safe path selection.                                                   |
-| Advertisement lifetime                | Maximum 30 minutes, monotonic epochs, fresh route-encryption key on policy change                                                                            | Limits stale-key replay and cache poisoning. Shorter values increase mobile refresh/battery cost; longer values improve intermittent reliability but prolong compromise/staleness.                                  |
-| Advertisement collection cap          | At most 8 advertisements in CAPS/relay discovery                                                                                                             | Bounds memory/amplification while offering limited diversity. Alternatives 4 or 16 trade discovery success against response size and referral bias.                                                                 |
-| CAPS self-advertisement               | A signed CAPS response must contain exactly one current self-ad matching the responder and queried endpoint                                                  | Prevents an unsigned referrer-only identity and makes the responder accountable. It can reduce availability for compatible referral-only bootstrap nodes; alternative is a separately signed responder certificate. |
-| CAPS return routability               | 118-byte phase-0 query; 80-byte stateless endpoint/query cookie; bulk response only after valid echo; five-second exact-replay cache                         | Eliminates small-query bulk reflection before validation. Adds one RTT to cold start; proof-of-work or a stateful SYN cache are alternatives.                                                                       |
-| Discovery exchanges                   | CAPS and routed relay discovery each have a 5,000 ms non-extending exchange deadline                                                                         | Bounds sockets/reassembly and mobile wakeups. A longer deadline helps high-latency paths; adaptive deadlines increase fingerprinting/state complexity.                                                              |
-| Fragment/object caps                  | Complete object cap 12,288 bytes; 1,017 routed/1,144 direct fragment data; at most 13/11 fragments; no nested fragments or fragment ACK                      | Covers all current maxima and bounds amplification. A smaller cap blocks lookup batches; a larger cap increases memory/DoS exposure.                                                                                |
-| Reassembly resources                  | 5,000 ms non-extending; routed 4/49,152; cookie-validated CAPS 2/24,576; admitted storage carrier 4/49,152 and 128/1,572,864 global                          | Hard memory bounds and no trickle extension; no bulk allocation precedes return-routability or signed OPEN admission.                                                                                               |
-| Challenge/link deadlines              | Active challenge and link offer/extension are capped at 5,000 ms                                                                                             | Limits replay/state retention. Longer deadlines improve poor-mobile-link construction but preserve partial secrets/state longer.                                                                                    |
-| Extension request layout              | Client sends one signed-advertisement-bearing `EXTEND_REQUEST_V1`; 754-byte maximum fits one current-tail payload                                            | Closes the client→tail authorization transcript without direct dialing. The closed nine-policy cap removes prior fragmentation.                                                                                     |
-| Initial exit seed delivery            | Signed proactive `DHT_EXIT_SEEDS_V1` after OPEN; 1..3 DHT refs and 1..5 storage pairs when storage is advertised; five-second readiness deadline             | Gives client-side iteration an address-free starting set. More seeds improve convergence but amplify a fresh circuit; on-demand EXIT_LOCAL commands add a request surface and policy entry.                         |
-| Opaque destination authority          | 130-byte handle, 16-byte MAC tag, mandatory live exit table entry, five-minute maximum lifetime                                                              | Strong branch/exit binding and bounded stale authority at 172 bytes per reference. Alternatives are shorter handles/tags or stateless encrypted handles, with collision/forgery or revocation costs.                |
-| Provenance classes and command bitmap | Five exit-local provenance enums; nine-bit allowlist in a `u16`; capability digest retained locally                                                          | Makes minting auditable and command-specific. A richer provenance graph improves evidence but expands parser/state complexity; a coarse single class weakens policy review.                                         |
-| Request identity and retry cache      | 16-byte random request IDs; exact byte-equal retries; result cache at most 5,000 ms and never past deadline; no wire CANCEL                                  | Bounds collision/replay state and avoids a cancellation oracle. Larger IDs add bytes; shorter cache increases duplicate mutation work; CANCEL improves resource release but adds state transitions.                 |
-| Routed error surface                  | IDs `0x0180..0x018e`; errors carry no token, referrals, or diagnostic body                                                                                   | Coarse authenticated failures reduce oracle/amplification risk. Rich errors improve debugging but expose load/provenance detail.                                                                                    |
-| Command budgets                       | Exact request/response/timeout/outstanding/cost/amplification tuples in Section 10.5                                                                         | Current values admit all bounded objects and cap work. Lower response budgets break batched results; higher outstanding/amplification values increase exit/storage abuse.                                           |
-| Amplification accounting              | Complete `ROUTED_REPLY_V1` bytes, including 208 fixed bytes, token, all refs, and response, are bounded against complete request bytes                       | Prevents token/referral overhead from bypassing signed policy. Body-only accounting is smaller but unsafe.                                                                                                          |
-| Legacy value translation              | Fixed-width wrappers; immutable max 1,024 bytes; mutable max 896 bytes; no compact-encoding varints inside canonical M3 bodies                               | Canonical M3 parsing while preserving legacy hashes/signatures. Reusing legacy codecs reduces translation code but introduces variable encodings into signed policy bounds.                                         |
-| Exit-to-network carriers              | Existing IPv4 DHT-RPC stays one datagram at a proven 1,250-byte ceiling; private storage uses signed OPEN, X25519 KDF, ACCEPT, and 1,149-byte AEAD fragments | Preserves legacy interoperability while authenticating new fragmentation. Reducing private records to one datagram would sharply reduce useful batches.                                                             |
-| Mutable sequence compatibility        | Wire `u64be`, restricted to `0..2^53-1` for current HyperDHT exact representation                                                                            | Avoids truncation in legacy JS codecs. Full `u64` support requires a coordinated upstream BigInt migration; a `u53` wire type would make future extension harder.                                                   |
-| Record descriptor and batch caps      | Non-dialable descriptor `1..768` bytes; lookup at most 8 records; closer refs at most 20; find returns at most K=5                                           | Fits the largest reply in 9 fragments and bounds storage. Smaller descriptors may constrain M4 migration; larger batches exceed current object/memory budget.                                                       |
-| Record clock/lifetime policy          | Future skew 300,000 ms; live at most 1 day; tombstone 1–7 days; readers stop at signed expiry; longer internal retention only suppresses rollback            | Gives readers a signed eligibility bound while allowing storage to reject stale resurrection. Longer reader lifetime prolongs stale absence.                                                                        |
-| Storage token/cache bounds            | 32-byte token nonce and tag, 30,000 ms token lifetime; idempotent commit result cached only until token expiry                                               | Keeps prepare/commit short and branch-bound. Longer tokens survive mobile jitter but widen replay/state windows; shorter tokens increase failed writes.                                                             |
-| Exact final-set semantics             | Discovery must have exactly five distinct storage identities; reads count three distinct valid identities and writes three distinct valid receipt signers    | Prevents duplicate handles/responses from manufacturing quorum. Allowing smaller sets improves sparse-network availability but materially weakens the quorum claim.                                                 |
-| Sorting/duplicate policy              | Canonical XOR/identity/epoch ordering; duplicate identity/digest/handle rejects enclosing signed collections, except later same-ID query handles are ignored | Deterministic transcripts prevent reordering malleability. Tolerant sorting improves interoperability but complicates signed-set equality and equivocation handling.                                                |
+| Pending decision                      | Draft selection in this registry                                                                                                                                         | Security/availability tradeoff and alternatives                                                                                                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scalar and object framing             | Big-endian fixed-width scalars; eight-byte `u32 version / u16 ID / u16 body length`; `u16` byte-string lengths; no varints/defaults                                      | Simple canonical parsing and signatures at modest fixed overhead. Alternatives are compact-encoding varints or per-message framing, both with more malleability/version-skew risk.                                  |
+| Shared numeric namespace              | Ranges and exact IDs in Sections 1.5 and 14; reserved IDs fail closed                                                                                                    | Prevents cross-type reinterpretation but consumes one global allocation. Alternative is transport-local namespaces with greater collision/audit risk.                                                               |
+| Signature/digest domains              | Exact new per-object domains in Sections 1–11; generic digest has a length-prefixed domain, while behavior-approved legacy digests retain raw domains                    | Strong separation but more vectors and implementation surface. Alternative is one transcript schema/domain, which raises substitution risk.                                                                         |
+| Canonical network address             | Canonical 17/19-byte form; advertisements restricted to IPv4 and exact existing DHT-RPC peer-ID derivation                                                               | Preserves interoperability and prevents an unproven IPv6 ID scheme. IPv6 advertisements require a later coordinated DHT-RPC version.                                                                                |
+| Service-policy closed sets            | Only the nine exact Section 10.5 tuples; count 0 without exit, 4 for legacy-value exit, 9 for private-record exit                                                        | Prevents arbitrary command IDs/budgets and downgrade subsets; future commands require a reviewed registry version.                                                                                                  |
+| Capability implication/role rule      | private records implies exit implies relay; relay-only derives safety, exit/storage derives private                                                                      | Prevents advertising unusable partial services and binds M2 role. Alternative independent bits improve deployment flexibility but complicate safe path selection.                                                   |
+| Advertisement lifetime                | Maximum 30 minutes, monotonic epochs, fresh route-encryption key on policy change                                                                                        | Limits stale-key replay and cache poisoning. Shorter values increase mobile refresh/battery cost; longer values improve intermittent reliability but prolong compromise/staleness.                                  |
+| Advertisement collection cap          | At most 8 advertisements in CAPS/relay discovery                                                                                                                         | Bounds memory/amplification while offering limited diversity. Alternatives 4 or 16 trade discovery success against response size and referral bias.                                                                 |
+| CAPS self-advertisement               | A signed CAPS response must contain exactly one current self-ad matching the responder and queried endpoint                                                              | Prevents an unsigned referrer-only identity and makes the responder accountable. It can reduce availability for compatible referral-only bootstrap nodes; alternative is a separately signed responder certificate. |
+| CAPS return routability               | 118-byte phase-0 query; 80-byte stateless endpoint/query cookie; bulk CAPS and direct guard challenge require its live echo; five-second exact-replay cache              | Eliminates reflection and pre-validation X25519/signing. Adds one RTT to cold start; routed middle/exit construction instead uses authenticated LINK_OFFER adjacency.                                               |
+| Discovery exchanges                   | CAPS and routed relay discovery each have a 5,000 ms non-extending exchange deadline                                                                                     | Bounds sockets/reassembly and mobile wakeups. A longer deadline helps high-latency paths; adaptive deadlines increase fingerprinting/state complexity.                                                              |
+| Fragment/object caps                  | Complete object cap 12,288 bytes; 1,017 routed/1,144 direct fragment data; at most 13/11 fragments; no nested fragments or fragment ACK                                  | Covers all current maxima and bounds amplification. A smaller cap blocks lookup batches; a larger cap increases memory/DoS exposure.                                                                                |
+| Reassembly resources                  | 5,000 ms non-extending; routed 4/49,152; cookie-validated CAPS 2/24,576; admitted storage carrier 4/49,152 and 128/1,572,864 global                                      | Hard memory bounds and no trickle extension; no bulk allocation precedes return-routability or signed OPEN admission.                                                                                               |
+| Challenge/link deadlines              | Active challenge and link offer/extension are capped at 5,000 ms                                                                                                         | Limits replay/state retention. Longer deadlines improve poor-mobile-link construction but preserve partial secrets/state longer.                                                                                    |
+| Extension request layout              | Client sends one signed-advertisement-bearing `EXTEND_REQUEST_V1`; 754-byte maximum fits one current-tail payload                                                        | Closes the client→tail authorization transcript without direct dialing. The closed nine-policy cap removes prior fragmentation.                                                                                     |
+| Initial exit seed delivery            | Signed proactive `DHT_EXIT_SEEDS_V1` after OPEN; 1..3 DHT refs and 1..5 storage pairs when storage is advertised; five-second readiness deadline                         | Gives client-side iteration an address-free starting set. More seeds improve convergence but amplify a fresh circuit; on-demand EXIT_LOCAL commands add a request surface and policy entry.                         |
+| Opaque destination authority          | 130-byte handle, 16-byte MAC tag, mandatory live exit table entry, five-minute maximum lifetime                                                                          | Strong branch/exit binding and bounded stale authority at 172 bytes per reference. Alternatives are shorter handles/tags or stateless encrypted handles, with collision/forgery or revocation costs.                |
+| Provenance classes and command bitmap | Five exit-local provenance enums; nine-bit allowlist in a `u16`; capability digest retained locally                                                                      | Makes minting auditable and command-specific. A richer provenance graph improves evidence but expands parser/state complexity; a coarse single class weakens policy review.                                         |
+| Request identity and retry cache      | 16-byte random request IDs; exact byte-equal retries; result cache at most 5,000 ms and never past deadline; no wire CANCEL                                              | Bounds collision/replay state and avoids a cancellation oracle. Larger IDs add bytes; shorter cache increases duplicate mutation work; CANCEL improves resource release but adds state transitions.                 |
+| Routed error surface                  | IDs `0x0180..0x018e`; errors carry no token, referrals, or diagnostic body                                                                                               | Coarse authenticated failures reduce oracle/amplification risk. Rich errors improve debugging but expose load/provenance detail.                                                                                    |
+| Command budgets                       | Exact request/response/timeout/outstanding/cost/amplification tuples in Section 10.5                                                                                     | Current values admit all bounded objects and cap work. Lower response budgets break batched results; higher outstanding/amplification values increase exit/storage abuse.                                           |
+| Amplification accounting              | Complete `ROUTED_REPLY_V1` bytes, including 208 fixed bytes, token, all refs, and response, are bounded against complete request bytes                                   | Prevents token/referral overhead from bypassing signed policy. Body-only accounting is smaller but unsafe.                                                                                                          |
+| Legacy value translation              | Fixed-width wrappers; immutable max 1,024 bytes; mutable max 896 bytes; no compact-encoding varints inside canonical M3 bodies                                           | Canonical M3 parsing while preserving legacy hashes/signatures. Reusing legacy codecs reduces translation code but introduces variable encodings into signed policy bounds.                                         |
+| Exit-to-network carriers              | Legacy IPv4 DHT-RPC stays one bounded datagram; private storage uses globally rate-limited signed OPEN, exact 308-byte KDF transcript, cached ACCEPT, and AEAD fragments | Preserves legacy interoperability while bounding spoofed-source signature work, duplicate derivation/allocation, and authenticated fragmentation.                                                                   |
+| Storage-carrier errors                | Success is zero; eleven exact routed-error values map unchanged; destination/timeout/upstream codes remain exit-local; all other values fail closed                      | Reuses the authenticated routed error surface without letting storage impersonate exit-local authority or attach diagnostic amplification.                                                                          |
+| Mutable sequence compatibility        | Wire `u64be`, restricted to `0..2^53-1` for current HyperDHT exact representation                                                                                        | Avoids truncation in legacy JS codecs. Full `u64` support requires a coordinated upstream BigInt migration; a `u53` wire type would make future extension harder.                                                   |
+| Record descriptor and batch caps      | Non-dialable descriptor `1..768` bytes; lookup at most 8 records; closer refs at most 20; find returns at most K=5                                                       | Fits the largest reply in 9 fragments and bounds storage. Smaller descriptors may constrain M4 migration; larger batches exceed current object/memory budget.                                                       |
+| Record clock/lifetime policy          | Future skew 300,000 ms; live at most 1 day; tombstone 1–7 days; readers stop at signed expiry; longer internal retention only suppresses rollback                        | Gives readers a signed eligibility bound while allowing storage to reject stale resurrection. Longer reader lifetime prolongs stale absence.                                                                        |
+| Storage token/cache bounds            | 32-byte token nonce and tag, 30,000 ms token lifetime; idempotent commit result cached only until token expiry                                                           | Keeps prepare/commit short and branch-bound. Longer tokens survive mobile jitter but widen replay/state windows; shorter tokens increase failed writes.                                                             |
+| Exact final-set semantics             | Discovery must have exactly five distinct storage identities; reads count three distinct valid identities and writes three distinct valid receipt signers                | Prevents duplicate handles/responses from manufacturing quorum. Allowing smaller sets improves sparse-network availability but materially weakens the quorum claim.                                                 |
+| Sorting/duplicate policy              | Canonical XOR/identity/epoch ordering; duplicate identity/digest/handle rejects enclosing signed collections, except later same-ID query handles are ignored             | Deterministic transcripts prevent reordering malleability. Tolerant sorting improves interoperability but complicates signed-set equality and equivocation handling.                                                |
 
 The following are **not** new selections in this table: branch values, the five
 context classes, the 64-counter replay window, exact 1,200/1,101/1,100/1,073

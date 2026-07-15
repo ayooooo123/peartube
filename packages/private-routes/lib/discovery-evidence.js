@@ -4,6 +4,7 @@ import { decodeRelayAdvertisement, encodeUnsignedRelayAdvertisement } from './de
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
 import { DOMAIN, ROLE, roleForIdentity } from './protocol.js'
+import { decodeCanonicalEndpoint, decodeRelayCapabilityAdvertisement } from './relay-capability.js'
 
 export const PUBLIC_DHT = 0
 export const DISCOVERY_MAX_AGE = 30_000n
@@ -179,4 +180,213 @@ export function createDiscoveryEvidenceAuthority({ now, maxAge = DISCOVERY_MAX_A
 
 export function isDiscoveryEvidenceChecker(value) {
   return isObject(value) && CHECKERS.has(value)
+}
+
+export const BOOTSTRAP_PROVENANCE = Object.freeze({
+  CAPS_RESPONSE: 0,
+  LEGACY_FIND_NODE: 1
+})
+
+const BOOTSTRAP_REFERRAL_CHECKERS = new WeakSet()
+
+function bootstrapCopy(value, size) {
+  if (!fixedBuffer(value, size)) invalidRoute()
+  return b4a.from(value)
+}
+
+function readBootstrapBinding(value, now) {
+  if (!exactKeys(value, ['queryNonce', 'cookieExpiresAtMs', 'returnRoutabilityCookie'])) {
+    invalidRoute()
+  }
+  let queryNonce = null
+  let returnRoutabilityCookie = null
+  let transferred = false
+  try {
+    queryNonce = bootstrapCopy(value.queryNonce, 32)
+    returnRoutabilityCookie = bootstrapCopy(value.returnRoutabilityCookie, 32)
+    const cookieExpiresAtMs = value.cookieExpiresAtMs
+    if (
+      !validU64(cookieExpiresAtMs) ||
+      cookieExpiresAtMs <= now ||
+      cookieExpiresAtMs - now > 5_000n
+    ) {
+      invalidRoute()
+    }
+    transferred = true
+    return { queryNonce, cookieExpiresAtMs, returnRoutabilityCookie }
+  } finally {
+    if (!transferred) {
+      if (queryNonce) b4a.fill(queryNonce, 0)
+      if (returnRoutabilityCookie) b4a.fill(returnRoutabilityCookie, 0)
+    }
+  }
+}
+
+function clearCapabilityAdvertisement(advertisement) {
+  if (!advertisement) return
+  for (const name of [
+    'relayIdentity',
+    'currentDhtNodeId',
+    'reachableEndpoint',
+    'routeEncryptionPublicKey',
+    'signature'
+  ]) {
+    if (advertisement[name]) b4a.fill(advertisement[name], 0)
+  }
+}
+
+export function createBootstrapReferralAuthority({ now, maxEvidence = 64 } = {}) {
+  if (
+    typeof now !== 'function' ||
+    !Number.isSafeInteger(maxEvidence) ||
+    maxEvidence < 1 ||
+    maxEvidence > 4096
+  ) {
+    invalidRoute()
+  }
+  const states = new WeakMap()
+  const live = new Set()
+  const spent = new WeakSet()
+  let issued = 0
+
+  function clearBootstrapState(state) {
+    if (!state) return
+    b4a.fill(state.endpoint, 0)
+    if (state.advertisement) b4a.fill(state.advertisement, 0)
+    if (state.capsBinding) {
+      b4a.fill(state.capsBinding.queryNonce, 0)
+      b4a.fill(state.capsBinding.returnRoutabilityCookie, 0)
+    }
+  }
+
+  function issue(state) {
+    if (issued >= maxEvidence) throw PrivateRouteError.ERR_BUSY()
+    const evidence = Object.freeze({})
+    states.set(evidence, { ...state, consumed: false })
+    live.add(evidence)
+    issued++
+    return evidence
+  }
+
+  const capsIssuer = Object.freeze({
+    issue(value) {
+      if (!exactKeys(value, ['advertisement', 'capsBinding'])) invalidRoute()
+      const current = now()
+      if (!validU64(current)) invalidRoute()
+      let advertisement = null
+      let endpoint = null
+      let advertisementBytes = null
+      let binding = null
+      let transferred = false
+      try {
+        advertisement = decodeRelayCapabilityAdvertisement(value.advertisement, {
+          now: current
+        })
+        binding = readBootstrapBinding(value.capsBinding, current)
+        endpoint = b4a.from(advertisement.reachableEndpoint)
+        advertisementBytes = b4a.from(value.advertisement)
+        const evidence = issue({
+          provenance: BOOTSTRAP_PROVENANCE.CAPS_RESPONSE,
+          endpoint,
+          advertisement: advertisementBytes,
+          capsBinding: binding
+        })
+        transferred = true
+        return evidence
+      } finally {
+        clearCapabilityAdvertisement(advertisement)
+        if (!transferred) {
+          if (endpoint) b4a.fill(endpoint, 0)
+          if (advertisementBytes) b4a.fill(advertisementBytes, 0)
+          if (binding) {
+            b4a.fill(binding.queryNonce, 0)
+            b4a.fill(binding.returnRoutabilityCookie, 0)
+          }
+        }
+      }
+    }
+  })
+
+  const legacyIssuer = Object.freeze({
+    issue(value) {
+      if (!exactKeys(value, ['endpoint'])) invalidRoute()
+      const endpoint = decodeCanonicalEndpoint(value.endpoint)
+      let transferred = false
+      try {
+        const evidence = issue({
+          provenance: BOOTSTRAP_PROVENANCE.LEGACY_FIND_NODE,
+          endpoint,
+          advertisement: null,
+          capsBinding: null
+        })
+        transferred = true
+        return evidence
+      } finally {
+        if (!transferred) b4a.fill(endpoint, 0)
+      }
+    }
+  })
+
+  const checker = Object.freeze({
+    isReferral(value) {
+      const state = isObject(value) ? states.get(value) : null
+      return Boolean(state && !state.consumed)
+    },
+    readReferral(value) {
+      const state = isObject(value) ? states.get(value) : null
+      if (!state) unauthorized()
+      return {
+        provenance: state.provenance,
+        endpoint: b4a.from(state.endpoint),
+        advertisement: state.advertisement ? b4a.from(state.advertisement) : null,
+        capsBinding: state.capsBinding
+          ? {
+              queryNonce: b4a.from(state.capsBinding.queryNonce),
+              cookieExpiresAtMs: state.capsBinding.cookieExpiresAtMs,
+              returnRoutabilityCookie: b4a.from(state.capsBinding.returnRoutabilityCookie)
+            }
+          : null
+      }
+    },
+    consumeReferral(value) {
+      const state = isObject(value) ? states.get(value) : null
+      if (!state) {
+        if (isObject(value) && spent.has(value)) throw PrivateRouteError.ERR_REPLAY()
+        unauthorized()
+      }
+      const result = {
+        provenance: state.provenance,
+        endpoint: b4a.from(state.endpoint),
+        advertisement: state.advertisement ? b4a.from(state.advertisement) : null,
+        capsBinding: state.capsBinding
+          ? {
+              queryNonce: b4a.from(state.capsBinding.queryNonce),
+              cookieExpiresAtMs: state.capsBinding.cookieExpiresAtMs,
+              returnRoutabilityCookie: b4a.from(state.capsBinding.returnRoutabilityCookie)
+            }
+          : null
+      }
+      states.delete(value)
+      live.delete(value)
+      spent.add(value)
+      issued--
+      clearBootstrapState(state)
+      return result
+    }
+  })
+  const destroy = () => {
+    for (const evidence of live) {
+      clearBootstrapState(states.get(evidence))
+      states.delete(evidence)
+      spent.add(evidence)
+    }
+    live.clear()
+    issued = 0
+  }
+  BOOTSTRAP_REFERRAL_CHECKERS.add(checker)
+  return Object.freeze({ capsIssuer, legacyIssuer, checker, destroy })
+}
+
+export function isBootstrapReferralChecker(value) {
+  return isObject(value) && BOOTSTRAP_REFERRAL_CHECKERS.has(value)
 }

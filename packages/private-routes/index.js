@@ -36,10 +36,41 @@ export {
   fragment
 } from './lib/fragments.js'
 export {
+  BOOTSTRAP_PROVENANCE,
   DISCOVERY_MAX_AGE,
   PUBLIC_DHT,
   createDiscoveryEvidenceAuthority
 } from './lib/discovery-evidence.js'
+export {
+  ACTIVE_CHALLENGE_TIMEOUT,
+  CAPABILITY_ADVERTISEMENT_FIXED_BODY,
+  CAPABILITY_ADVERTISEMENT_MAX_BYTES,
+  CAPABILITY_ADVERTISEMENT_MIN_BYTES,
+  MAX_CAPABILITY_ADVERTISEMENTS,
+  MAX_CAPABILITY_LIFETIME,
+  RelayCapabilityDirectory,
+  createActiveChallengeResponderAuthority,
+  decodeCanonicalEndpoint,
+  decodeRelayCapabilityAdvertisement,
+  deriveM3DhtNodeId,
+  digestRelayCapabilityAdvertisement,
+  encodeCanonicalEndpoint,
+  encodeRelayCapabilityAdvertisement,
+  providerServicePolicyForCapabilities,
+  signRelayCapabilityAdvertisement
+} from './lib/relay-capability.js'
+export { CapsResponder } from './lib/caps-responder.js'
+export {
+  MAX_COMPATIBLE_BOOTSTRAPS,
+  MAX_DIRECT_GUARD_CHALLENGES,
+  CompatibleDiscovery,
+  selectDiverseRelayCapabilities
+} from './lib/compatible-discovery.js'
+export {
+  BootstrapIO,
+  consumeBootstrapGuardLink,
+  revokeBootstrapGuardLink
+} from './lib/bootstrap-io.js'
 export {
   createCircuitAuthority,
   createRouteCompilerAuthority,

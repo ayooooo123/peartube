@@ -125,7 +125,7 @@ Private routing is opt-in. A persistent node may advertise these capabilities in
 - `PRIVATE_RECORDS_V1`: store and return private presence records;
 - supported wire versions, command policies, cell parameters, and coarse capacity classes.
 
-A short-lived advertisement contains the relay identity, current DHT node ID and reachable address, an epoch-scoped route-encryption key, capabilities, protocol limits, epoch, and expiry. It is signed by the relay identity already used by the M2 protocol. Route construction includes an active challenge that proves current possession of the advertised identity and route-encryption key at the observed endpoint. Replayed or expired advertisements cannot establish a circuit.
+A short-lived advertisement contains the relay identity, current DHT node ID and reachable address, an epoch-scoped route-encryption key, capabilities, protocol limits, epoch, and expiry. It is signed by the relay identity already used by the M2 protocol. M3 v1 advertisements use IPv4 because existing DHT-RPC peer IDs are derived from its exact six-byte IPv4/port codec; the advertised ID must equal that derivation. Same-epoch advertisements must be byte-identical, while any policy change requires a higher epoch and fresh route-encryption key. Route construction includes an active challenge that proves current possession of the advertised identity and route-encryption key at the observed endpoint. Replayed, equivocating, or expired advertisements cannot establish a circuit.
 
 Capacity values are hints, not promises. A dishonest advertisement can cause only selection and availability failure; it cannot expand the client's permitted command surface or disable local bounds.
 
@@ -145,7 +145,7 @@ The new wire integer is `M3_PROTOCOL_VERSION = 1`. Branch class `0` is lookup an
 Relay discovery uses DHT participation rather than a signed operator list:
 
 1. The client contacts a bounded number of ordinary HyperDHT bootstrap candidates. This unavoidable bootstrap phase is explicitly outside the post-guard IP-exposure guarantee.
-2. It sends `CAPS_QUERY_V1`, containing a protocol version, requested capability mask, random XOR target, nonce, and maximum result count. A compatible responder returns its own signed advertisement and may return a bounded list of verbatim candidate-signed advertisements from its recently validated capability cache. A referrer cannot forge a candidate advertisement.
+2. It sends an initial `CAPS_QUERY_V1`, containing a protocol version, requested capability mask, random XOR target, nonce, maximum result count, and empty return-routability-cookie fields. The responder may return only a smaller stateless cookie challenge. The client echoes that endpoint-bound cookie before the responder may return its own signed advertisement and a bounded list of verbatim candidate-signed advertisements. This prevents an unauthenticated small query from reflecting a fragmented bulk response. A referrer cannot forge a candidate advertisement.
 3. The client pins a reachable `ROLE.SAFETY` guard as soon as one passes signature, expiry, capability, and active challenge checks.
 4. After guard pinning, the client invokes `RELAY_DISCOVER_V1` over its source↔guard tail-control context. The guard performs ordinary random-target DHT walks using its public DHT participation and returns bounded candidate-signed advertisements. These targets are random discovery probes, not application topics.
 5. The client selects a `ROLE.SAFETY` middle and asks the guard to extend through that tail-control context. The guard contacts the selected address; the middle proves advertisement possession through the partial route. The client never probes it directly.
@@ -176,7 +176,7 @@ Selection prefers, without treating any signal as proof of trust:
 - low recent failure and overload rates;
 - compatible versions and adequate advertised limits.
 
-The shared guard is the only identity that may overlap the lookup and announce branches. Their middle and exit identities must be distinct. A branch must not contain a repeated identity or route loop. Existing M2 privacy-domain and dial-authority rules remain mandatory.
+Lookup and announce must use the same guard identity and endpoint at index zero while the guard lease is active. That is the sole overlap exception. The two middles and two exits are pairwise distinct, none equals the guard, and no branch contains a repeated identity or route loop. Existing M2 privacy-domain and dial-authority rules remain mandatory.
 
 These heuristics raise the cost of simple Sybil placement but do not solve Sybil resistance. Documentation and UI must not imply otherwise.
 
@@ -350,16 +350,7 @@ M3ContextAD =
 
 `M3ContextAD` replaces, rather than prefixes, M2 `RoutePayloadCodec` associated data for every M3 context envelope. There is no M2 descriptor ID in M3 associated data and no duplicated circuit, direction, or counter field. `innerCounter` is the unsigned big-endian 8-byte clear counter at offset `0` of the 1,100-byte inner frame and is exactly the counter supplied to nonce construction and the selected ordered or replay-window validator. A mismatch is impossible to reinterpret under another context and fails authentication. The 1,100-byte inner frame and inherited 1,073-byte maximum route payload remain unchanged. Class substitution therefore fails authentication before semantic decoding.
 
-The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current state, wrong-size envelopes, and more than one logical interpretation fail closed. The allowed set is:
-
-| Circuit state                 | Accepted context classes                                                                                         |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Extending before exit         | `TAIL_CONTROL_ORDERED`                                                                                           |
-| Exit tail ready, before READY | `TAIL_CONTROL_ORDERED`, `TAIL_FINALIZE_DATAGRAM`                                                                 |
-| READY verified / ACKING       | `TAIL_FINALIZE_DATAGRAM`, `FINAL_EXIT_FINALIZE_DATAGRAM`                                                         |
-| OPEN                          | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED`, plus only the retired receive contexts described below during grace |
-| DRAINING                      | `ROUTE_PAYLOAD`, `TERMINAL_CONTROL_ORDERED`                                                                      |
-| DESTROYED                     | none                                                                                                             |
+The receiver selects exactly one key and replay/counter state from the public class and current circuit state; it never trial-opens across keys. Unknown classes, classes not permitted in the current actor/state/direction, wrong-size envelopes, and more than one logical interpretation fail closed. The registry's actor-specific matrix is normative: the client accepts READY only while `ACTIVATING`, duplicate READY and OPEN while `ACKING`, and its receive-only READY/OPEN grace after `OPEN`; the exit accepts ACTIVATE only when tail-ready, duplicate ACTIVATE and ACK while `FINALIZING`, and only ACTIVATE/ACK grace handlers after `OPEN`. A context class never authorizes the peer's message or another setup message carried under the same class.
 
 ### Finalization acknowledgement
 
@@ -428,6 +419,23 @@ bounded encoded command body
 deadline
 response and command-cost budget
 ```
+
+This review adds an explicit exit-to-network carrier boundary. Immutable and
+mutable operations remain byte-compatible with existing IPv4 DHT-RPC and are
+restricted to the registry's proven one-datagram request/response ceiling.
+Private-record operations use a separate registered exit-to-storage carrier:
+the exit presents its signed advertisement, proves its observed source
+endpoint, establishes a fresh ephemeral-to-advertised-static X25519 session,
+and receives an authenticated acceptance before either side sends bounded
+fragments. Its KDF, directional keys/nonces, replay rules, deadlines, and
+reassembly memory are byte-exact in the registry. This carrier is never exposed
+to the client and never contains the client's address or dialing authority.
+
+Routed amplification is measured over the complete outer reply—fixed wrapper,
+token, closer references, and response body—not only application bytes. The
+nine signed service-policy tuples are closed: a legacy-value exit advertises
+exactly four and a private-record exit exactly all nine. Arbitrary subsets,
+object/error IDs, and locally chosen budgets are invalid.
 
 The client never authorizes a raw host, port, or caller-computed DHT node ID. Each exit owns a bounded destination table. It mints an unpredictable opaque handle only for a node learned from:
 
@@ -516,7 +524,7 @@ A private presence record binds at least:
 - bounded descriptor bytes and descriptor digest for `LIVE`, or an empty descriptor for `TOMBSTONE`;
 - endpoint signature over every field.
 
-Storage nodes validate the signature, exact bounds, sequence, expiry, topic binding, and storage quotas. A higher sequence replaces a lower sequence. The same sequence and digest is idempotent; the same sequence with a different digest is rejected. A tombstone must have a higher sequence than the live value it removes and is retained for at least the maximum permitted live-record lifetime from acceptance, preventing replay of a stale live record during that window.
+Storage nodes validate the signature, exact bounds, sequence, expiry, topic binding, and storage quotas. A higher sequence replaces a lower sequence. The same sequence and digest is idempotent; the same sequence with a different digest is rejected. A tombstone must have a higher sequence than the live value it removes. Readers honor it only through its signed `expiresAtMs`; storage may retain it longer through signed receipt `storedUntilMs` solely for rollback suppression and never returns the expired tombstone.
 
 Storage nodes store no source address in the record and return no observed source address to readers. They can see, copy, and correlate complete descriptor bytes. “Opaque” means only that storage nodes do not interpret those bytes; it is not a confidentiality claim. The M4 descriptor itself will expose its public entry advertisement while encrypting only its nested private-hop material.
 

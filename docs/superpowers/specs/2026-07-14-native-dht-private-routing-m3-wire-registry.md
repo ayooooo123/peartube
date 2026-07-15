@@ -1,6 +1,6 @@
 # Native DHT Private Routing — M3 Wire Registry
 
-**Status:** Draft — independently reviewed and owner approval pending
+**Status:** Draft — Task 0 amendments pending independent review and explicit owner approval
 
 **Date:** 2026-07-15
 
@@ -8,18 +8,22 @@
 
 **Stability:** Experimental and unstable; no production security or wire-compatibility claim
 
-This registry is the byte-level companion to the M3 behavior specification. It
-freezes one non-overlapping identifier namespace, canonical encodings, bounded
-collections, signature inputs, fragmentation, and the already-approved
-tail/final-exit transcripts. The behavior specification remains normative for
-state-machine and privacy behavior. This registry will become normative for
-bytes only after independent review and explicit owner approval.
+This registry is the byte-level companion to the amended M3 behavior
+specification. The original pre-Task-0 behavior baseline was independently
+reviewed and owner-approved, but the Task 0 amendments in both documents remain
+draft. This registry freezes one non-overlapping identifier namespace,
+canonical encodings, bounded collections, signature inputs, fragmentation, and
+the already-approved tail/final-exit transcripts. The amended behavior
+specification will become normative for state-machine and privacy behavior,
+and this registry will become normative for bytes, only after independent
+review and explicit owner approval of the amendments.
 
 This document covers capability discovery, circuit construction, opaque
 destination authority, routed RPC, and the private-record storage overlay.
 Implementation and publishing remain blocked until explicit owner approval of
-this registry. A later external cryptographic review is also required before
-any production security or stable-wire claim.
+the amended behavior specification and this registry. A later external
+cryptographic review is also required before any production security or
+stable-wire claim.
 
 ## 1. Global Encoding Rules
 
@@ -1291,7 +1295,7 @@ u64  generation
 32B  seedSetNonce
 u8   dhtSeedCount                 // 1..3
 dhtSeedCount * 172B DESTINATION_REF_V1
-u8   storageSeedCount             // 0..5
+u8   storageSeedCount             // 1..5
 repeated:
   u16 advertisementByteLength     // exactly 420 or 548
   advertisementByteLength bytes complete signed capability advertisement
@@ -1300,10 +1304,17 @@ repeated:
 64B  Ed25519 signature suffix
 ```
 
-The fixed body is 139 bytes. With one DHT seed and no storage seed, the body is
-311 bytes and the complete message is 383 bytes. With three DHT seeds and five
-maximum advertisements/references, the body is 4,265 bytes and the complete
-message is 4,337 bytes, requiring five routed fragments.
+The fixed body is 139 bytes. The minimum has one DHT seed and one storage-only
+420-byte advertisement/reference pair:
+
+```text
+body = 139 + 172 + (2 + 420 + 172) = 905
+wire = 8 + 905 + 64 = 977
+```
+
+With three DHT seeds and five maximum advertisements/references, the body is
+4,265 bytes and the complete message is 4,337 bytes, requiring five routed
+fragments.
 
 `seedSetDigest` is:
 
@@ -1323,16 +1334,17 @@ the advertisement signer's derived storage ID. Storage pairs are unique and
 strictly sorted by storage ID, relay identity, then epoch. Advertisement and
 reference equality is checked before either enters client query state.
 
-An exit opening a branch that requires private-record commands must supply at
-least one storage seed, whether its own provider advertisement has four or nine
-entries. A branch that does not require private records supplies zero. The exit completes any
+Every M3 branch must supply one to five storage seeds, whether the exit's own
+provider advertisement has four or nine entries. Zero is invalid and there is
+no unauthenticated branch feature that disables storage. The exit completes
 bounded seed discovery and active validation before READY, caches this semantic
 seed set, and sends it under `TERMINAL_CONTROL_ORDERED` immediately after OPEN.
-The client does not declare the branch DHT-ready until the signed set is
-validated. Missing, empty-invalid, conflicting, or late seeds within 5,000 ms
-of OPEN destroy the branch and surface privacy/records unavailable; they never
-trigger direct bootstrap or caller-selected probing. Retransmission uses the
-same signed semantic object with ordinary routed fragmentation and no special
+The client does not declare the branch private-ready until the complete signed
+set, including at least one storage pair, is validated. Missing, zero-count,
+invalid, conflicting, or late seeds within 5,000 ms of OPEN destroy the branch
+and surface privacy/records unavailable; they never trigger direct bootstrap,
+legacy fallback, or caller-selected probing. Retransmission uses the same
+signed semantic object with ordinary routed fragmentation and no special
 acknowledgement.
 
 The DHT-seed cap of three, storage-seed cap of five, exact proactive delivery,
@@ -1347,13 +1359,14 @@ not owner-approved.
 | `DHT_EXIT_READY_V1`     | 233        | 64         | 305        | yes               |
 | `DHT_EXIT_READY_ACK_V1` | 105        | 0          | 113        | yes               |
 | `DHT_EXIT_OPEN_V1`      | 169        | 0          | 177        | yes               |
-| `DHT_EXIT_SEEDS_V1`     | 311..4,265 | 64         | 383..4,337 | fragmented at max |
+| `DHT_EXIT_SEEDS_V1`     | 905..4,265 | 64         | 977..4,337 | fragmented at max |
 
 ## 7. Approved Transcripts, Digests, and Key Schedule
 
-This section reproduces the approved behavior specification. Implementations
-must not replace these constructions with generic HKDF or the generic digest
-helper in Section 1.2.
+This section reproduces transcript and KDF artifacts approved in the original
+behavior baseline. That approval does not extend to the Task 0 amendments.
+Implementations must not replace these constructions with generic HKDF or the
+generic digest helper in Section 1.2.
 
 ### 7.1 Admitted-limits digest
 
@@ -2456,6 +2469,7 @@ not become referrals.
 | Routed reply, mutable GET maximum   | 4650               | 5                | `208 + 32 + 20*172 + 970`                 |
 | Routed reply, private write receipt | 581                | 1                | `208 + 373`                               |
 | Extend request maximum              | 754                | 1                | `8 + 198 + 548`                           |
+| Exit seed set minimum               | 977                | 1                | `72 + 139 + 172 + (2+420+172)`            |
 | Exit seed set maximum               | 4337               | 5                | `72 + 139 + 3*172 + 5*(2+548+172)`        |
 | Private presence record             | 971                | 1                | complete signed nested object             |
 | Private find response object        | 2963               | 3                | fragmented only if carried as core object |
@@ -2525,7 +2539,7 @@ carrier and post-admission bounds in Section 4A. No carrier has fragment ACKs.
 | Exit ready                | 233                                     | 305                       | one tail-finalize payload                  |
 | Exit ready ACK            | 105                                     | 113                       | one final-finalize payload                 |
 | Exit OPEN                 | 169                                     | 177                       | one final-finalize payload                 |
-| Exit seed set             | `139 + 172d + sum(2 + advert + 172)`    | 4337                      | terminal-control object; fragment at max   |
+| Exit seed set             | `139 + 172d + sum(2 + advert + 172)`    | 977..4337                 | terminal-control object; fragment at max   |
 | Exit RPC OPEN             | `190 + a`, `a in {388,548}`             | 650..810                  | authenticated direct admission             |
 | Exit RPC ACCEPT           | 124                                     | 148                       | authenticated direct acceptance            |
 | Exit RPC fragment         | `27 + fragmentDataBytes`                | 1200                      | admitted direct storage session            |
@@ -2552,6 +2566,10 @@ EXTEND_REQUEST_V1 maximum:
 
 DHT_EXIT_SEEDS_V1 maximum:
   ceil(4337 / 1017) = 5 routed fragments
+
+DHT_EXIT_SEEDS_V1 minimum:
+  body = 139 + 172 + (2 + 420 + 172) = 905
+  wire = 8 + 905 + 64 = 977, unfragmented
 
 EXIT_RPC_RESPONSE_V1 maximum:
   ceil(8090 / 1149) = 8 authenticated storage fragments
@@ -2599,7 +2617,7 @@ object, not a nested command or record. `1` means no `CORE_FRAGMENT_V1` wrapper.
 | `0x0041` | `DHT_EXIT_READY_V1`             | 233                                    | 72       | 305                        | reverse `TAIL_FINALIZE_DATAGRAM`                  | none / 1                             | shared 5,000 ms finalization deadline      |
 | `0x0042` | `DHT_EXIT_READY_ACK_V1`         | 105                                    | 8        | 113                        | forward `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                             | shared 5,000 ms finalization deadline      |
 | `0x0043` | `DHT_EXIT_OPEN_V1`              | 169                                    | 8        | 177                        | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`            | none / 1                             | 5,000 ms retired-context grace after OPEN  |
-| `0x0044` | `DHT_EXIT_SEEDS_V1`             | `311..4,265`                           | 72       | `383..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                | 1,017 / 5                            | 5,000 ms from OPEN                         |
+| `0x0044` | `DHT_EXIT_SEEDS_V1`             | `905..4,265`                           | 72       | `977..4,337`               | reverse `TERMINAL_CONTROL_ORDERED`                | 1,017 / 5                            | 5,000 ms from OPEN                         |
 | `0x0050` | `EXIT_RPC_OPEN_V1`              | `578..738`                             | 72       | `650..810`                 | direct exit-to-storage UDP                        | none / 1                             | at most 5,000 ms                           |
 | `0x0051` | `EXIT_RPC_ACCEPT_V1`            | 124                                    | 24       | 148                        | direct exit-to-storage UDP                        | none / 1                             | OPEN deadline                              |
 | `0x0052` | `EXIT_RPC_FRAGMENT_V1`          | `27..1,176`                            | 24       | `51..1,200`                | admitted exit-to-storage session                  | 1,149 / 8                            | OPEN deadline, at most 5,000 ms            |
@@ -2674,66 +2692,66 @@ authenticated `EXIT_RPC_RESPONSE_V1.errorCode`; `0x0183`, `0x0184`, `0x0189`,
 and `0x018a` are exit-local and routed-reply-only. Error values do not create
 standalone objects.
 
-| ID/version  | Object, message, command, or error    | Transport / context                          | Authentication / domain                                                     | Max body / wire bytes | Approved-design behavior section               | Implementation owner |
-| ----------- | ------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------- | --------------------- | ---------------------------------------------- | -------------------- |
-| `0x0001/v1` | `CAPABILITY_ADVERTISEMENT_V1`         | direct/routed nested evidence                | Ed25519, `hyperdht-private-routes/m3/capability-advertisement/v1`           | 476 / 548             | Advertised Capabilities                        | private-routes       |
-| `0x0002/v1` | `CAPS_QUERY_V1`                       | direct bootstrap UDP                         | endpoint-bound return cookie                                                | 110 / 118             | Permissionless Discovery                       | private-routes       |
-| `0x0003/v1` | `CAPS_RESPONSE_V1`                    | cookie-gated direct UDP/fragments            | Ed25519, `hyperdht-private-routes/m3/caps-response/v1`                      | 4,473 / 4,545         | Permissionless Discovery                       | private-routes       |
-| `0x0004/v1` | `ACTIVE_CHALLENGE_V1`                 | cookie-gated client→guard / exit→storage UDP | live CAPS return-routability tuple                                          | 176 / 184             | Advertised Capabilities                        | private-routes       |
-| `0x0005/v1` | `ACTIVE_CHALLENGE_RESPONSE_V1`        | cookie-gated guard→client / storage→exit UDP | Ed25519 domain in Section 3.6 plus X25519/keyed-BLAKE2b proof               | 272 / 344             | Advertised Capabilities                        | private-routes       |
-| `0x0006/v1` | `RELAY_DISCOVER_V1`                   | `TAIL_CONTROL_ORDERED`                       | context AEAD                                                                | 69 / 77               | Permissionless Discovery                       | private-routes       |
-| `0x0007/v1` | `RELAY_DISCOVER_RESPONSE_V1`          | `TAIL_CONTROL_ORDERED`/fragments             | context AEAD plus nested signatures                                         | 4,441 / 4,449         | Permissionless Discovery                       | private-routes       |
-| `0x0008/v1` | `CORE_FRAGMENT_V1`                    | containing direct/routed carrier             | containing transport; whole-object digest                                   | 1,192 / 1,200 direct  | Relationship to M2 / On-wire Context Selection | private-routes       |
-| `0x0009/v1` | `CAPS_COOKIE_CHALLENGE_V1`            | direct bootstrap UDP                         | keyed BLAKE2b, observed source/query binding                                | 72 / 80               | Permissionless Discovery                       | private-routes       |
-| `0x0020/v1` | `LINK_OFFER_V1`                       | adjacency-local setup                        | Ed25519, `hyperdht-private-routes/m3/link-offer/v1`                         | 302 / 374             | Production Bilateral Link Authorization        | private-routes       |
-| `0x0021/v1` | `LINK_ACCEPT_V1`                      | adjacency-local setup                        | Ed25519, `hyperdht-private-routes/m3/link-accept/v1`                        | 213 / 285             | Production Bilateral Link Authorization        | private-routes       |
-| `0x0022/v1` | `REDACTED_RESPONDER_PROOF_V1`         | nested `EXTENDED_V1`                         | Ed25519, `hyperdht-private-routes/m3/redacted-responder-proof/v1`           | 306 / 378             | Production Bilateral Link Authorization        | private-routes       |
-| `0x0023/v1` | `EXTENDED_V1`                         | prior `TAIL_CONTROL_ORDERED`                 | context AEAD plus nested responder signature                                | 486 / 494             | Incremental Tail-control Context               | private-routes       |
-| `0x0024/v1` | `TAIL_READY_V1`                       | new reverse `TAIL_CONTROL_ORDERED`           | context AEAD + Ed25519, `hyperdht-private-routes/m3/tail-ready/v1`          | 210 / 282             | Incremental Tail-control Context               | private-routes       |
-| `0x0025/v1` | `EXTEND_REQUEST_V1`                   | current `TAIL_CONTROL_ORDERED`               | context AEAD plus nested candidate signature                                | 746 / 754             | Incremental Tail-control Context               | private-routes       |
-| `0x0040/v1` | `DHT_EXIT_ACTIVATE_V1`                | forward `TAIL_FINALIZE_DATAGRAM`             | context AEAD                                                                | 96 / 104              | Final Exit Key Handoff                         | private-routes       |
-| `0x0041/v1` | `DHT_EXIT_READY_V1`                   | reverse `TAIL_FINALIZE_DATAGRAM`             | context AEAD + Ed25519, `hyperdht-private-routes/m3/dht-exit-ready/v1`      | 233 / 305             | Final Exit Key Handoff                         | private-routes       |
-| `0x0042/v1` | `DHT_EXIT_READY_ACK_V1`               | forward `FINAL_EXIT_FINALIZE_DATAGRAM`       | context AEAD                                                                | 105 / 113             | Finalization Acknowledgement                   | private-routes       |
-| `0x0043/v1` | `DHT_EXIT_OPEN_V1`                    | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`       | context AEAD                                                                | 169 / 177             | Finalization Acknowledgement                   | private-routes       |
-| `0x0044/v1` | `DHT_EXIT_SEEDS_V1`                   | reverse `TERMINAL_CONTROL_ORDERED`           | context AEAD + Ed25519, `hyperdht-private-routes/m3/dht-exit-seeds/v1`      | 4,265 / 4,337         | Native DHT-RPC Transport / Compatible Storage  | private-routes       |
-| `0x0050/v1` | `EXIT_RPC_OPEN_V1`                    | direct exit-to-storage UDP                   | exit Ed25519 + signed advertisement                                         | `578..738 / 650..810` | Native DHT-RPC Transport                       | private-routes       |
-| `0x0051/v1` | `EXIT_RPC_ACCEPT_V1`                  | direct exit-to-storage UDP                   | storage-session XChaCha20-Poly1305                                          | 124 / 148             | Native DHT-RPC Transport                       | private-routes       |
-| `0x0052/v1` | `EXIT_RPC_FRAGMENT_V1`                | admitted exit-to-storage UDP                 | directional storage-session AEAD                                            | 1,176 / 1,200         | Native DHT-RPC Transport                       | private-routes       |
-| `0x0053/v1` | `EXIT_RPC_REQUEST_V1`                 | encrypted storage-session object             | request-direction AEAD                                                      | 1,191 / 1,199         | Native DHT-RPC Transport                       | private-routes       |
-| `0x0054/v1` | `EXIT_RPC_RESPONSE_V1`                | encrypted storage-session object             | response AEAD + closed 11-code error mapping                                | 8,082 / 8,090         | Native DHT-RPC Transport                       | private-routes       |
-| `0x0100/v1` | `DESTINATION_REF_V1`                  | nested `ROUTE_PAYLOAD`                       | exit-local keyed-BLAKE2b tag + live table entry + route context             | 164 / 172             | Native DHT-RPC Transport                       | private-routes       |
-| `0x0101/v1` | `ROUTED_REQUEST_V1`                   | forward `ROUTE_PAYLOAD`                      | context AEAD + exact advertised policy                                      | 1,382 / 1,390         | Native DHT-RPC Transport / Command Policy      | private-routes       |
-| `0x0102/v1` | `ROUTED_REPLY_V1`                     | reverse `ROUTE_PAYLOAD`                      | context AEAD + exact request/reference equality                             | 8,262 / 8,270         | Native DHT-RPC Transport                       | private-routes       |
-| `0x0120/1`  | `IMMUTABLE_GET`                       | embedded routed command                      | route AEAD; immutable content hash on result                                | 32 / 261 request      | Command Policy                                 | dht-rpc              |
-| `0x0121/1`  | `IMMUTABLE_PUT`                       | embedded routed command                      | route AEAD + same-exit token + immutable content hash                       | 1,090 / 1,319 request | Token and Address Binding / Command Policy     | dht-rpc              |
-| `0x0122/1`  | `MUTABLE_GET`                         | embedded routed command                      | route AEAD + existing HyperDHT mutable signature on result                  | 40 / 269 request      | Command Policy                                 | dht-rpc              |
-| `0x0123/1`  | `MUTABLE_PUT`                         | embedded routed command                      | route AEAD + same-exit token + existing mutable signature                   | 1,066 / 1,295 request | Token and Address Binding / Command Policy     | dht-rpc              |
-| `0x0180/v1` | `ROUTED_ERROR_MALFORMED`              | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Errors and Observability                       | private-routes       |
-| `0x0181/v1` | `ROUTED_ERROR_UNSUPPORTED_COMMAND`    | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Command Policy / Errors                        | private-routes       |
-| `0x0182/v1` | `ROUTED_ERROR_POLICY_MISMATCH`        | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Command Policy / Errors                        | private-routes       |
-| `0x0183/v1` | `ROUTED_ERROR_DESTINATION_INVALID`    | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x0184/v1` | `ROUTED_ERROR_DESTINATION_EXPIRED`    | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x0185/v1` | `ROUTED_ERROR_DEADLINE_EXPIRED`       | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x0186/v1` | `ROUTED_ERROR_BUSY`                   | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0187/v1` | `ROUTED_ERROR_RESPONSE_TOO_LARGE`     | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0188/v1` | `ROUTED_ERROR_AMPLIFICATION_EXCEEDED` | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0189/v1` | `ROUTED_ERROR_UPSTREAM_TIMEOUT`       | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x018a/v1` | `ROUTED_ERROR_UPSTREAM_REJECTED`      | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270 | Native DHT-RPC Transport / Errors              | private-routes       |
-| `0x018b/v1` | `ROUTED_ERROR_TOKEN_INVALID`          | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Token and Address Binding                      | private-routes       |
-| `0x018c/v1` | `ROUTED_ERROR_STORAGE_UNAVAILABLE`    | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Compatible Storage Overlay                     | private-routes       |
-| `0x018d/v1` | `ROUTED_ERROR_RECORD_CONFLICT`        | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Native Private Presence Records                | private-routes       |
-| `0x018e/v1` | `ROUTED_ERROR_QUOTA_EXCEEDED`         | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270 | Abuse and Resource Control                     | private-routes       |
-| `0x0200/1`  | `PRIVATE_FIND_NODE`                   | embedded routed command                      | route AEAD; target orders only                                              | 69 / 298 request      | Compatible Storage Overlay                     | HyperDHT             |
-| `0x0201/v1` | `PRIVATE_FIND_NODE_RESPONSE_V1`       | nested routed reply                          | storage Ed25519, `hyperdht-private-routes/m3/private-find-node-response/v1` | 2,891 / 2,963         | Compatible Storage Overlay                     | HyperDHT             |
-| `0x0280/v1` | `PRIVATE_PRESENCE_RECORD_V1`          | nested storage object                        | endpoint Ed25519, `hyperdht-private-routes/m3/private-presence-record/v1`   | 899 / 971             | Native Private Presence Records                | HyperDHT             |
-| `0x0281/v1` | `PRIVATE_TOMBSTONE_V1`                | nested storage object                        | endpoint Ed25519, `hyperdht-private-routes/m3/private-tombstone/v1`         | 131 / 203             | Native Private Presence Records                | HyperDHT             |
-| `0x0282/v1` | `PRIVATE_LOOKUP_RESPONSE_V1`          | nested routed reply                          | storage Ed25519, `hyperdht-private-routes/m3/private-lookup-response/v1`    | 7,990 / 8,062         | Prepare, Commit, and Receipts / Lookup         | HyperDHT             |
-| `0x0283/v1` | `PRIVATE_WRITE_TOKEN_V1`              | nested prepare reply/commit                  | storage-local keyed-BLAKE2b MAC over full binding                           | 72 / 80               | Prepare, Commit, and Receipts                  | HyperDHT             |
-| `0x0284/v1` | `PRIVATE_WRITE_RECEIPT_V1`            | nested routed reply                          | storage Ed25519, `hyperdht-private-routes/m3/private-write-receipt/v1`      | 301 / 373             | Prepare, Commit, and Receipts                  | HyperDHT             |
-| `0x02a0/1`  | `PRIVATE_LOOKUP`                      | embedded routed command                      | route AEAD + signed storage responses                                       | 134 / 363 request     | Native Private Presence Records / Lookup       | HyperDHT             |
-| `0x02a1/1`  | `PRIVATE_PREPARE`                     | embedded routed command                      | route AEAD + storage MAC token                                              | 189 / 418 request     | Prepare, Commit, and Receipts                  | HyperDHT             |
-| `0x02a2/1`  | `PRIVATE_ANNOUNCE`                    | embedded routed command                      | route AEAD + token + endpoint record signature                              | 1,161 / 1,390 request | Prepare, Commit, and Receipts                  | HyperDHT             |
-| `0x02a3/1`  | `PRIVATE_UNANNOUNCE`                  | embedded routed command                      | route AEAD + token + endpoint tombstone signature                           | 393 / 622 request     | Prepare, Commit, and Receipts                  | HyperDHT             |
+| ID/version  | Object, message, command, or error    | Transport / context                          | Authentication / domain                                                     | Max body / wire bytes     | Approved-design behavior section               | Implementation owner |
+| ----------- | ------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------- | -------------------- |
+| `0x0001/v1` | `CAPABILITY_ADVERTISEMENT_V1`         | direct/routed nested evidence                | Ed25519, `hyperdht-private-routes/m3/capability-advertisement/v1`           | 476 / 548                 | Advertised Capabilities                        | private-routes       |
+| `0x0002/v1` | `CAPS_QUERY_V1`                       | direct bootstrap UDP                         | endpoint-bound return cookie                                                | 110 / 118                 | Permissionless Discovery                       | private-routes       |
+| `0x0003/v1` | `CAPS_RESPONSE_V1`                    | cookie-gated direct UDP/fragments            | Ed25519, `hyperdht-private-routes/m3/caps-response/v1`                      | 4,473 / 4,545             | Permissionless Discovery                       | private-routes       |
+| `0x0004/v1` | `ACTIVE_CHALLENGE_V1`                 | cookie-gated client→guard / exit→storage UDP | live CAPS return-routability tuple                                          | 176 / 184                 | Advertised Capabilities                        | private-routes       |
+| `0x0005/v1` | `ACTIVE_CHALLENGE_RESPONSE_V1`        | cookie-gated guard→client / storage→exit UDP | Ed25519 domain in Section 3.6 plus X25519/keyed-BLAKE2b proof               | 272 / 344                 | Advertised Capabilities                        | private-routes       |
+| `0x0006/v1` | `RELAY_DISCOVER_V1`                   | `TAIL_CONTROL_ORDERED`                       | context AEAD                                                                | 69 / 77                   | Permissionless Discovery                       | private-routes       |
+| `0x0007/v1` | `RELAY_DISCOVER_RESPONSE_V1`          | `TAIL_CONTROL_ORDERED`/fragments             | context AEAD plus nested signatures                                         | 4,441 / 4,449             | Permissionless Discovery                       | private-routes       |
+| `0x0008/v1` | `CORE_FRAGMENT_V1`                    | containing direct/routed carrier             | containing transport; whole-object digest                                   | 1,192 / 1,200 direct      | Relationship to M2 / On-wire Context Selection | private-routes       |
+| `0x0009/v1` | `CAPS_COOKIE_CHALLENGE_V1`            | direct bootstrap UDP                         | keyed BLAKE2b, observed source/query binding                                | 72 / 80                   | Permissionless Discovery                       | private-routes       |
+| `0x0020/v1` | `LINK_OFFER_V1`                       | adjacency-local setup                        | Ed25519, `hyperdht-private-routes/m3/link-offer/v1`                         | 302 / 374                 | Production Bilateral Link Authorization        | private-routes       |
+| `0x0021/v1` | `LINK_ACCEPT_V1`                      | adjacency-local setup                        | Ed25519, `hyperdht-private-routes/m3/link-accept/v1`                        | 213 / 285                 | Production Bilateral Link Authorization        | private-routes       |
+| `0x0022/v1` | `REDACTED_RESPONDER_PROOF_V1`         | nested `EXTENDED_V1`                         | Ed25519, `hyperdht-private-routes/m3/redacted-responder-proof/v1`           | 306 / 378                 | Production Bilateral Link Authorization        | private-routes       |
+| `0x0023/v1` | `EXTENDED_V1`                         | prior `TAIL_CONTROL_ORDERED`                 | context AEAD plus nested responder signature                                | 486 / 494                 | Incremental Tail-control Context               | private-routes       |
+| `0x0024/v1` | `TAIL_READY_V1`                       | new reverse `TAIL_CONTROL_ORDERED`           | context AEAD + Ed25519, `hyperdht-private-routes/m3/tail-ready/v1`          | 210 / 282                 | Incremental Tail-control Context               | private-routes       |
+| `0x0025/v1` | `EXTEND_REQUEST_V1`                   | current `TAIL_CONTROL_ORDERED`               | context AEAD plus nested candidate signature                                | 746 / 754                 | Incremental Tail-control Context               | private-routes       |
+| `0x0040/v1` | `DHT_EXIT_ACTIVATE_V1`                | forward `TAIL_FINALIZE_DATAGRAM`             | context AEAD                                                                | 96 / 104                  | Final Exit Key Handoff                         | private-routes       |
+| `0x0041/v1` | `DHT_EXIT_READY_V1`                   | reverse `TAIL_FINALIZE_DATAGRAM`             | context AEAD + Ed25519, `hyperdht-private-routes/m3/dht-exit-ready/v1`      | 233 / 305                 | Final Exit Key Handoff                         | private-routes       |
+| `0x0042/v1` | `DHT_EXIT_READY_ACK_V1`               | forward `FINAL_EXIT_FINALIZE_DATAGRAM`       | context AEAD                                                                | 105 / 113                 | Finalization Acknowledgement                   | private-routes       |
+| `0x0043/v1` | `DHT_EXIT_OPEN_V1`                    | reverse `FINAL_EXIT_FINALIZE_DATAGRAM`       | context AEAD                                                                | 169 / 177                 | Finalization Acknowledgement                   | private-routes       |
+| `0x0044/v1` | `DHT_EXIT_SEEDS_V1`                   | reverse `TERMINAL_CONTROL_ORDERED`           | context AEAD + Ed25519, `hyperdht-private-routes/m3/dht-exit-seeds/v1`      | `905..4,265 / 977..4,337` | Native DHT-RPC Transport / Compatible Storage  | private-routes       |
+| `0x0050/v1` | `EXIT_RPC_OPEN_V1`                    | direct exit-to-storage UDP                   | exit Ed25519 + signed advertisement                                         | `578..738 / 650..810`     | Native DHT-RPC Transport                       | private-routes       |
+| `0x0051/v1` | `EXIT_RPC_ACCEPT_V1`                  | direct exit-to-storage UDP                   | storage-session XChaCha20-Poly1305                                          | 124 / 148                 | Native DHT-RPC Transport                       | private-routes       |
+| `0x0052/v1` | `EXIT_RPC_FRAGMENT_V1`                | admitted exit-to-storage UDP                 | directional storage-session AEAD                                            | 1,176 / 1,200             | Native DHT-RPC Transport                       | private-routes       |
+| `0x0053/v1` | `EXIT_RPC_REQUEST_V1`                 | encrypted storage-session object             | request-direction AEAD                                                      | 1,191 / 1,199             | Native DHT-RPC Transport                       | private-routes       |
+| `0x0054/v1` | `EXIT_RPC_RESPONSE_V1`                | encrypted storage-session object             | response AEAD + closed 11-code error mapping                                | 8,082 / 8,090             | Native DHT-RPC Transport                       | private-routes       |
+| `0x0100/v1` | `DESTINATION_REF_V1`                  | nested `ROUTE_PAYLOAD`                       | exit-local keyed-BLAKE2b tag + live table entry + route context             | 164 / 172                 | Native DHT-RPC Transport                       | private-routes       |
+| `0x0101/v1` | `ROUTED_REQUEST_V1`                   | forward `ROUTE_PAYLOAD`                      | context AEAD + exact advertised policy                                      | 1,382 / 1,390             | Native DHT-RPC Transport / Command Policy      | private-routes       |
+| `0x0102/v1` | `ROUTED_REPLY_V1`                     | reverse `ROUTE_PAYLOAD`                      | context AEAD + exact request/reference equality                             | 8,262 / 8,270             | Native DHT-RPC Transport                       | private-routes       |
+| `0x0120/1`  | `IMMUTABLE_GET`                       | embedded routed command                      | route AEAD; immutable content hash on result                                | 32 / 261 request          | Command Policy                                 | dht-rpc              |
+| `0x0121/1`  | `IMMUTABLE_PUT`                       | embedded routed command                      | route AEAD + same-exit token + immutable content hash                       | 1,090 / 1,319 request     | Token and Address Binding / Command Policy     | dht-rpc              |
+| `0x0122/1`  | `MUTABLE_GET`                         | embedded routed command                      | route AEAD + existing HyperDHT mutable signature on result                  | 40 / 269 request          | Command Policy                                 | dht-rpc              |
+| `0x0123/1`  | `MUTABLE_PUT`                         | embedded routed command                      | route AEAD + same-exit token + existing mutable signature                   | 1,066 / 1,295 request     | Token and Address Binding / Command Policy     | dht-rpc              |
+| `0x0180/v1` | `ROUTED_ERROR_MALFORMED`              | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Errors and Observability                       | private-routes       |
+| `0x0181/v1` | `ROUTED_ERROR_UNSUPPORTED_COMMAND`    | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Command Policy / Errors                        | private-routes       |
+| `0x0182/v1` | `ROUTED_ERROR_POLICY_MISMATCH`        | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Command Policy / Errors                        | private-routes       |
+| `0x0183/v1` | `ROUTED_ERROR_DESTINATION_INVALID`    | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270     | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x0184/v1` | `ROUTED_ERROR_DESTINATION_EXPIRED`    | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270     | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x0185/v1` | `ROUTED_ERROR_DEADLINE_EXPIRED`       | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x0186/v1` | `ROUTED_ERROR_BUSY`                   | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Abuse and Resource Control                     | private-routes       |
+| `0x0187/v1` | `ROUTED_ERROR_RESPONSE_TOO_LARGE`     | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Abuse and Resource Control                     | private-routes       |
+| `0x0188/v1` | `ROUTED_ERROR_AMPLIFICATION_EXCEEDED` | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Abuse and Resource Control                     | private-routes       |
+| `0x0189/v1` | `ROUTED_ERROR_UPSTREAM_TIMEOUT`       | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270     | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x018a/v1` | `ROUTED_ERROR_UPSTREAM_REJECTED`      | routed reply only; exit-local                | route AEAD; empty payload                                                   | n/a / reply cap 8,270     | Native DHT-RPC Transport / Errors              | private-routes       |
+| `0x018b/v1` | `ROUTED_ERROR_TOKEN_INVALID`          | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Token and Address Binding                      | private-routes       |
+| `0x018c/v1` | `ROUTED_ERROR_STORAGE_UNAVAILABLE`    | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Compatible Storage Overlay                     | private-routes       |
+| `0x018d/v1` | `ROUTED_ERROR_RECORD_CONFLICT`        | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Native Private Presence Records                | private-routes       |
+| `0x018e/v1` | `ROUTED_ERROR_QUOTA_EXCEEDED`         | routed reply / storage response              | route or storage-session AEAD; empty payload                                | n/a / reply cap 8,270     | Abuse and Resource Control                     | private-routes       |
+| `0x0200/1`  | `PRIVATE_FIND_NODE`                   | embedded routed command                      | route AEAD; target orders only                                              | 69 / 298 request          | Compatible Storage Overlay                     | HyperDHT             |
+| `0x0201/v1` | `PRIVATE_FIND_NODE_RESPONSE_V1`       | nested routed reply                          | storage Ed25519, `hyperdht-private-routes/m3/private-find-node-response/v1` | 2,891 / 2,963             | Compatible Storage Overlay                     | HyperDHT             |
+| `0x0280/v1` | `PRIVATE_PRESENCE_RECORD_V1`          | nested storage object                        | endpoint Ed25519, `hyperdht-private-routes/m3/private-presence-record/v1`   | 899 / 971                 | Native Private Presence Records                | HyperDHT             |
+| `0x0281/v1` | `PRIVATE_TOMBSTONE_V1`                | nested storage object                        | endpoint Ed25519, `hyperdht-private-routes/m3/private-tombstone/v1`         | 131 / 203                 | Native Private Presence Records                | HyperDHT             |
+| `0x0282/v1` | `PRIVATE_LOOKUP_RESPONSE_V1`          | nested routed reply                          | storage Ed25519, `hyperdht-private-routes/m3/private-lookup-response/v1`    | 7,990 / 8,062             | Prepare, Commit, and Receipts / Lookup         | HyperDHT             |
+| `0x0283/v1` | `PRIVATE_WRITE_TOKEN_V1`              | nested prepare reply/commit                  | storage-local keyed-BLAKE2b MAC over full binding                           | 72 / 80                   | Prepare, Commit, and Receipts                  | HyperDHT             |
+| `0x0284/v1` | `PRIVATE_WRITE_RECEIPT_V1`            | nested routed reply                          | storage Ed25519, `hyperdht-private-routes/m3/private-write-receipt/v1`      | 301 / 373                 | Prepare, Commit, and Receipts                  | HyperDHT             |
+| `0x02a0/1`  | `PRIVATE_LOOKUP`                      | embedded routed command                      | route AEAD + signed storage responses                                       | 134 / 363 request         | Native Private Presence Records / Lookup       | HyperDHT             |
+| `0x02a1/1`  | `PRIVATE_PREPARE`                     | embedded routed command                      | route AEAD + storage MAC token                                              | 189 / 418 request         | Prepare, Commit, and Receipts                  | HyperDHT             |
+| `0x02a2/1`  | `PRIVATE_ANNOUNCE`                    | embedded routed command                      | route AEAD + token + endpoint record signature                              | 1,161 / 1,390 request     | Prepare, Commit, and Receipts                  | HyperDHT             |
+| `0x02a3/1`  | `PRIVATE_UNANNOUNCE`                  | embedded routed command                      | route AEAD + token + endpoint tombstone signature                           | 393 / 622 request         | Prepare, Commit, and Receipts                  | HyperDHT             |
 
 Inventory count: **58 assigned IDs**: 43 messages/objects/commands and 15 routed
 error values. Every Task 0 item is visible above: capability advertisement;
@@ -2748,10 +2766,11 @@ announce/unannounce/receipt.
 ## 15. Owner/Security Approval Decisions
 
 Nothing in this table is implied to be approved. These choices were needed to
-make the byte registry implementable but were not fixed by the already-approved
-behavior design. The owner/security review must explicitly approve, amend, or
-reject every row. Amendments require rerunning all size, ID, and transcript
-checks before Task 1.
+make the byte registry implementable but were not fixed by the original
+owner-approved behavior baseline. They are amendments to that baseline, not
+approved extensions of it. The owner/security review must explicitly approve,
+amend, or reject every row. Amendments require rerunning all size, ID, and
+transcript checks before Task 1.
 
 | Pending decision                      | Draft selection in this registry                                                                                                                                                                                       | Security/availability tradeoff and alternatives                                                                                                                                                                                                                                                        |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -2771,7 +2790,7 @@ checks before Task 1.
 | Reassembly resources                  | 5,000 ms non-extending; routed 4/49,152; cookie-validated CAPS 2/24,576; admitted storage carrier 4/49,152 and 128/1,572,864 global                                                                                    | Hard memory bounds and no trickle extension; no bulk allocation precedes return-routability or signed OPEN admission.                                                                                                                                                                                  |
 | Challenge/link deadlines              | Active challenge and link offer/extension are capped at 5,000 ms                                                                                                                                                       | Limits replay/state retention. Longer deadlines improve poor-mobile-link construction but preserve partial secrets/state longer.                                                                                                                                                                       |
 | Extension request layout              | Client sends one signed-advertisement-bearing `EXTEND_REQUEST_V1`; 754-byte maximum fits one current-tail payload                                                                                                      | Closes the client→tail authorization transcript without direct dialing. The closed nine-policy cap removes prior fragmentation.                                                                                                                                                                        |
-| Initial exit seed delivery            | Signed proactive `DHT_EXIT_SEEDS_V1` after OPEN; 1..3 DHT refs and 1..5 storage pairs when the branch requires private records; five-second readiness deadline                                                         | Gives client-side iteration an address-free starting set without requiring the exit to provide storage. More seeds improve convergence but amplify a fresh circuit; on-demand EXIT_LOCAL commands add a request surface and policy entry.                                                              |
+| Initial exit seed delivery            | Every branch receives signed proactive `DHT_EXIT_SEEDS_V1` after OPEN with 1..3 DHT refs and 1..5 validated storage pairs; zero storage pairs is invalid; five-second private-readiness deadline                       | Removes unauthenticated per-branch feature negotiation and gives iteration an address-free starting set. Mandatory storage discovery can reduce sparse-network availability; allowing zero improves startup but creates ambiguous/non-private readiness and is rejected.                               |
 | Opaque destination authority          | 130-byte handle, 16-byte MAC tag, mandatory live exit table entry, five-minute maximum lifetime; fresh 32-byte CSPRNG secret per exit branch generation at OPEN, never rotated/reused, erased at branch destroy        | Strong branch/exit binding and bounded stale authority at 172 bytes per reference. A rotating shared secret complicates live-handle validation; a cross-generation secret widens compromise; shorter handles/tags or stateless handles weaken collision/forgery or revocation properties.              |
 | Provenance classes and command bitmap | Five exit-local provenance enums; nine-bit allowlist in a `u16`; capability digest retained locally                                                                                                                    | Makes minting auditable and command-specific. A richer provenance graph improves evidence but expands parser/state complexity; a coarse single class weakens policy review.                                                                                                                            |
 | Request identity and retry cache      | 16-byte random request IDs; exact byte-equal retries; result cache at most 5,000 ms and never past deadline; no wire CANCEL                                                                                            | Bounds collision/replay state and avoids a cancellation oracle. Larger IDs add bytes; shorter cache increases duplicate mutation work; CANCEL improves resource release but adds state transitions.                                                                                                    |
@@ -2792,8 +2811,9 @@ The following are **not** new selections in this table: branch values, the five
 context classes, the 64-counter replay window, exact 1,200/1,101/1,100/1,073
 framing, `M3ContextAD`, the tail/final-exit transcripts and KDF construction,
 the five-send finalization schedule, K/alpha/W/R, and the behavioral privacy
-rules. They are reproduced byte-for-byte from the owner-approved behavior
-design and are audited in Section 16.3.
+rules. They are reproduced byte-for-byte from the original owner-approved
+behavior baseline and are audited in Section 16.3; that does not approve the
+Task 0 amendments elsewhere in these documents.
 
 ## 16. End-to-End Authority, Allocation, and Cryptographic Audit
 
@@ -2926,8 +2946,9 @@ Before Task 1 implementation begins, this registry must receive:
   input, fragmentation bounds, context framing, replay behavior, and all size
   arithmetic;
 - explicit owner approval;
-- a behavior-spec cross-link stating that this registry is normative for bytes
-  and the approved design is normative for behavior.
+- a behavior-spec cross-link stating that, after approval, this registry is
+  normative for bytes and the owner-approved amended design is normative for
+  behavior.
 
 Until those steps are complete, status remains draft, all values are unstable,
 and no implementation or publication may claim M3 wire compatibility.

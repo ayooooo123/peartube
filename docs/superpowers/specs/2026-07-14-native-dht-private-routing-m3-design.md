@@ -1,6 +1,6 @@
 # Native DHT Private Routing — Milestone 3 Design
 
-**Status:** Independently reviewed and owner-approved
+**Status:** Original behavior baseline independently reviewed and owner-approved; Task 0 amendments pending explicit owner approval
 **Date:** 2026-07-14  
 **Parent design:** `2026-07-12-holepunch-private-routing-design.md`  
 **First consumer:** PearTube  
@@ -9,11 +9,14 @@
 **Byte registry:**
 [`2026-07-14-native-dht-private-routing-m3-wire-registry.md`](./2026-07-14-native-dht-private-routing-m3-wire-registry.md)
 
-This design is normative for behavior. The linked wire registry is normative
-for bytes only after its independent review and explicit owner approval. Any
-conflict between the two documents blocks implementation and requires a
-reviewed amendment to both; an implementer must not choose a convenient
-interpretation locally.
+The original pre-Task-0 behavior baseline was independently reviewed and
+owner-approved. This document now includes Task 0 amendments and, as amended,
+remains draft pending explicit owner approval. Neither the amended behavior nor
+the linked wire registry is normative for implementation until that approval.
+After approval, this design is normative for behavior and the registry is
+normative for bytes. Any conflict between the two documents blocks
+implementation and requires a reviewed amendment to both; an implementer must
+not choose a convenient interpretation locally.
 
 ## Summary
 
@@ -23,7 +26,7 @@ The client continues to run the iterative DHT algorithm. An exit executes only o
 
 M3 proves private DHT discovery and record access. It does not yet claim that a Hyperswarm Noise connection or Hypercore replication runs over the route; that is the M4 gate.
 
-This document is normative for M3 where it conflicts with the parent design. It supersedes the parent's M3 gateway-completed query model, signed bootstrap-seed requirement, M3 server-signaling scope, and assumption that the full Hyperswarm interface subset lands in M3. The parent design remains normative for the M4 destination-selected Private Route and end-to-end Noise goals.
+After explicit owner approval, this amended document is normative for M3 where it conflicts with the parent design. It is intended to supersede the parent's M3 gateway-completed query model, signed bootstrap-seed requirement, M3 server-signaling scope, and assumption that the full Hyperswarm interface subset lands in M3. The parent design remains normative for the M4 destination-selected Private Route and end-to-end Noise goals.
 
 ## Relationship to M2
 
@@ -453,6 +456,14 @@ accepts: four for `DHT_EXIT_V1`, five for `PRIVATE_RECORDS_V1`, and nine for
 both. A DHT exit may therefore originate a private-record command through a
 separate storage-only provider without itself advertising storage.
 
+Immediately after OPEN, every lookup and announce branch receives a signed
+`DHT_EXIT_SEEDS_V1` containing one to three public-DHT references and one to
+five actively validated `PRIVATE_RECORDS_V1` storage advertisement/reference
+pairs. A zero-storage set is invalid; storage readiness is not an
+unauthenticated per-branch feature. The client cannot declare the branch
+private-ready until it validates at least one pair. Missing, invalid, or late
+storage seeds destroy the branch and never enable direct or legacy fallback.
+
 The client never authorizes a raw host, port, or caller-computed DHT node ID. Each exit owns a bounded destination table. It mints an unpredictable opaque handle only for a node learned from:
 
 - the exit's configured bootstrap set;
@@ -557,7 +568,7 @@ recordTarget = hash('hyperdht/private-record-topic/v1' || topic)
 
 Compatible storage nodes maintain a bounded routing cache of signed storage advertisements. `PRIVATE_FIND_NODE` returns at most `K` candidate-signed advertisements closest to `recordTarget`. The client performs iterative lookup through its exit, while the exit converts only protocol-observed and actively validated referrals into branch-bound destination handles. Legacy nodes ignore the unknown commands.
 
-Before advertising a branch as private-record ready, the exit supplies at least one live seed handle from its locally validated `PRIVATE_RECORDS_V1` capability cache. If its cache has no live seed, the exit runs its own bounded capability-discovery walk through its public DHT participation and actively validates candidates it contacted itself. It never probes a client-supplied raw address. Zero valid seeds after the bound produces `ERR_PRIVATE_RECORDS_UNAVAILABLE`; the client may rotate the exit, but it cannot start `PRIVATE_FIND_NODE` without a seed and cannot fall back to legacy records.
+Before advertising any M3 branch as private-ready, the exit supplies one to five live seed handles from its locally validated `PRIVATE_RECORDS_V1` capability cache in signed `DHT_EXIT_SEEDS_V1`. If its cache has no live seed, the exit runs its own bounded capability-discovery walk through its public DHT participation and actively validates candidates it contacted itself. It never probes a client-supplied raw address. Zero valid seeds or a zero storage count is invalid and produces `ERR_PRIVATE_RECORDS_UNAVAILABLE`; the client may rotate the exit, but it cannot make the branch private-ready, start `PRIVATE_FIND_NODE`, or fall back to direct or legacy records.
 
 Seed handles are ordinary branch-bound handles: expiry, rotation, path-identity exclusion, and command-class rules apply. The first `PRIVATE_FIND_NODE` response can introduce closer candidate-signed advertisements; the exit admits handles for them only through the provenance and active-validation process above.
 

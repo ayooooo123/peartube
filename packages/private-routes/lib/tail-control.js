@@ -2716,6 +2716,14 @@ class TailControlSession {
     clearSessionState(state, this)
     return true
   }
+
+  completeClientExtension(completion, readyEnvelope) {
+    return completeClientTailExtension(completion, readyEnvelope)
+  }
+
+  abortClientExtension(completion) {
+    return abortClientTailExtension(completion)
+  }
 }
 
 export function completeClientTailExtension(completion, readyEnvelope) {
@@ -2760,6 +2768,21 @@ export function abortClientTailExtension(completion) {
   CLIENT_EXTENSION_COMPLETIONS.delete(completion)
   SPENT_CLIENT_EXTENSION_COMPLETIONS.add(completion)
   return destroyClientExtensionCompletionState(state)
+}
+
+// Deep production read used by RouteExtensionSession to clamp its external IO
+// timer to the already-authenticated, non-extending tail deadline.
+export function readTailControlDeadline(session) {
+  const state = object(session) ? SESSIONS.get(session) : null
+  if (!state || state.destroyed || DESTROYED_SESSIONS.has(session)) {
+    throw PrivateRouteError.ERR_DESTROYED()
+  }
+  const current = sessionNow(state)
+  if (current >= state.expiresAt) {
+    clearSessionState(state, session)
+    throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+  }
+  return state.expiresAt
 }
 
 function tailControlOptions(options) {

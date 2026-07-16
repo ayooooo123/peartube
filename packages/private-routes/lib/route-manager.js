@@ -47,6 +47,13 @@ import { BRANCH_CLASS, CELL_CLASS, DIRECTION, DOMAIN, ROLE, roleForIdentity } fr
 import { RelayService, TEST_ONLY_RELAY_OBSERVER } from './relay-service.js'
 import { createRoutedCandidateAuthority } from './routed-candidate.js'
 import {
+  RouteExtensionSession,
+  createRouteExtensionLimits,
+  createRouteExtensionSessionRequest,
+  takeRouteExtensionTransfer
+} from './route-extension.js'
+import { readTailControlDeadline } from './tail-control.js'
+import {
   ROUTE_ENDPOINT,
   RoutePayloadCodec,
   mintCreatedRoutePayloadContext
@@ -80,7 +87,11 @@ function destroyConstructedBranch(branch) {
   try {
     branch.tailControl.destroy()
   } finally {
-    branch.runtime.destroy()
+    try {
+      if (branch.transport) branch.transport.destroy()
+    } finally {
+      branch.runtime.destroy()
+    }
   }
 }
 
@@ -202,6 +213,7 @@ function dynamicOptions(options) {
   ) {
     invalid()
   }
+  createRouteExtensionLimits(values.limits, () => 0n, 5_000n)
   return values
 }
 function ownedRandom(randomBytes, size) {
@@ -264,6 +276,7 @@ class DynamicRouteManager {
   #bootstrapIO
   #revalidationIO
   #branches
+  #extensions
   #destroyed
   #opening
   #lifecycle
@@ -276,6 +289,7 @@ class DynamicRouteManager {
     this.#bootstrapIO = null
     this.#revalidationIO = null
     this.#branches = null
+    this.#extensions = new Set()
     this.#destroyed = false
     this.#opening = false
     this.#lifecycle = Object.freeze({})
@@ -406,6 +420,10 @@ class DynamicRouteManager {
           routed.evidenceProducer
         )
         this.#assertLifecycle(lifecycle)
+        await this.#extendPair(lookup, announce, routed.directory, 1, lifecycle)
+        this.#assertLifecycle(lifecycle)
+        await this.#extendPair(lookup, announce, routed.directory, 2, lifecycle)
+        this.#assertLifecycle(lifecycle)
         branches = dynamicBranches(lookup, announce, pathAuthority, routed.directory)
         lookup = null
         announce = null
@@ -501,6 +519,11 @@ class DynamicRouteManager {
       this.#assertLifecycle(lifecycle)
       if (current > 0xffff_ffff_ffff_ffffn - 5_000n) invalid()
       const deadline = current + 5_000n
+      const requestedLimits = createRouteExtensionLimits(
+        this.#options.limits,
+        () => current,
+        deadline
+      )
       const branches = []
       for (const allocation of this.#allocations) {
         let identity
@@ -524,7 +547,7 @@ class DynamicRouteManager {
             clientCircuitIdentity: identity,
             clientTailEphemeral: tail,
             deadline,
-            requestedLimits: this.#options.limits
+            requestedLimits
           })
         )
       }
@@ -546,6 +569,56 @@ class DynamicRouteManager {
     }
   }
 
+  async #extendPair(lookup, announce, candidateDirectory, extensionIndex, lifecycle) {
+    const results = await Promise.allSettled([
+      this.#extendBranch(lookup, 'lookup', candidateDirectory, extensionIndex, lifecycle),
+      this.#extendBranch(announce, 'announce', candidateDirectory, extensionIndex, lifecycle)
+    ])
+    this.#assertLifecycle(lifecycle)
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason
+    }
+  }
+
+  async #extendBranch(branch, resource, candidateDirectory, extensionIndex, lifecycle) {
+    const transportFactory = branch.transport
+      ? () => branch.transport
+      : this.#options.tailControlTransportFactory
+    const request = createRouteExtensionSessionRequest({
+      candidateDirectory,
+      cancel: this.#options.cancel,
+      deadline: readTailControlDeadline(branch.tailControl),
+      extensionIndex,
+      limits: this.#options.limits,
+      now: this.#options.now,
+      randomBytes: this.#options.randomBytes,
+      routedDiscoveryService: this.#options.routedDiscoveryService,
+      schedule: this.#options.schedule,
+      tailControl: branch.tailControl,
+      tailControlTransportFactory: transportFactory
+    })
+    const session = new RouteExtensionSession(request)
+    this.#extensions.add(session)
+    let moved = false
+    try {
+      const transfer = await session.open()
+      this.#assertLifecycle(lifecycle)
+      const next = takeRouteExtensionTransfer(transfer)
+      moved = true
+      branch.tailControl = next.tailControl
+      branch.transport = next.transport
+      this.#notify({
+        type: 'extension-ready',
+        resource,
+        extensionIndex
+      })
+      this.#assertLifecycle(lifecycle)
+    } finally {
+      this.#extensions.delete(session)
+      if (!moved) session.destroy()
+    }
+  }
+
   #terminate() {
     if (!this.#destroyed) {
       this.#destroyed = true
@@ -554,6 +627,13 @@ class DynamicRouteManager {
     const constructionAuthority = this.#constructionAuthority
     this.#constructionAuthority = null
     if (constructionAuthority) constructionAuthority.destroy()
+    const extensions = [...this.#extensions]
+    this.#extensions.clear()
+    for (const extension of extensions) {
+      try {
+        extension.destroy()
+      } catch {}
+    }
     const io = this.#bootstrapIO
     this.#bootstrapIO = null
     if (io) {

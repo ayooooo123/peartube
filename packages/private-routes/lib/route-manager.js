@@ -395,9 +395,19 @@ class DynamicRouteManager {
       let branches = null
       let published = false
       try {
-        lookup = consumeConstructedGuardBranch(pair.lookup)
+        const consumedLookup = consumeConstructedGuardBranch(pair.lookup)
+        lookup = {
+          runtime: consumedLookup.runtime,
+          tailControl: consumedLookup.tailControl,
+          transport: null
+        }
         lookupMoved = true
-        announce = consumeConstructedGuardBranch(pair.announce)
+        const consumedAnnounce = consumeConstructedGuardBranch(pair.announce)
+        announce = {
+          runtime: consumedAnnounce.runtime,
+          tailControl: consumedAnnounce.tailControl,
+          transport: null
+        }
         announceMoved = true
         routed = createRoutedCandidateAuthority({ now: this.#options.now })
         this.#assertLifecycle(lifecycle)

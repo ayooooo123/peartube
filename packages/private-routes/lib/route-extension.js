@@ -309,7 +309,7 @@ export class RouteExtensionSession {
           requestedCapabilityMask:
             this.#material.extensionIndex === 1
               ? RELAY_CAPABILITY.CIRCUIT_RELAY_V1
-              : RELAY_CAPABILITY.DHT_EXIT_V1,
+              : RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
           randomTarget,
           queryNonce,
           maximumResults: 1,

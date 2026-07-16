@@ -15,6 +15,7 @@ function opaque(t, value, name) {
 }
 
 function harness(t, overrides = {}) {
+  const extensionIndex = overrides.extensionIndex || 1
   const trace = []
   const candidate = Object.freeze({})
   const evidence = Object.freeze({})
@@ -27,7 +28,12 @@ function harness(t, overrides = {}) {
     sealDiscoverRequest(options) {
       trace.push('discover:seal')
       t.is(options.maximumResults, 1)
-      t.is(options.requestedCapabilityMask, RELAY_CAPABILITY.CIRCUIT_RELAY_V1)
+      t.is(
+        options.requestedCapabilityMask,
+        extensionIndex === 1
+          ? RELAY_CAPABILITY.CIRCUIT_RELAY_V1
+          : RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1
+      )
       t.is(options.randomTarget.byteLength, 32)
       t.is(options.queryNonce.byteLength, 32)
       return b4a.alloc(1101, 0x11)
@@ -94,7 +100,7 @@ function harness(t, overrides = {}) {
     candidateDirectory,
     cancel: clearTimeout,
     deadline: 6_000n,
-    extensionIndex: 1,
+    extensionIndex,
     limits: Object.freeze({}),
     now: () => 1_000n,
     randomBytes: (size) => b4a.alloc(size, randomByte++),
@@ -158,6 +164,16 @@ test('RouteExtensionSession transfers one authenticated successor tail', async (
     'ready:open'
   ])
   t.exception(() => takeRouteExtensionTransfer(transfer), 'the transfer is one-use')
+})
+
+test('the final extension discovers a relay-capable DHT exit', async (t) => {
+  const f = harness(t, { extensionIndex: 2 })
+  const session = new RouteExtensionSession(f.request)
+  const transfer = await session.open()
+  const moved = takeRouteExtensionTransfer(transfer)
+
+  t.is(moved.tailControl, f.nextTail)
+  t.is(moved.transport, f.transport)
 })
 
 test('RouteExtensionSession fails closed when discovery mints no candidate', async (t) => {

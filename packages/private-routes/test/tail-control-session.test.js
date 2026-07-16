@@ -4,10 +4,19 @@ import test from 'brittle'
 import * as routes from '../index.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
 import {
+  LINK_ACCEPT_SIZE,
   LINK_OFFER_SIZE,
   abortExtensionLinkOffer,
-  createExtensionLinkOffer
+  completeExtensionLink,
+  createExtensionLinkOffer,
+  createExtensionLinkResponder,
+  destroyM3EstablishedLink,
+  takeExtensionResponderAdjacency
 } from '../lib/guard-link.js'
+import {
+  createExtensionOfferReceiver,
+  createExtensionResponseReceiver
+} from '../lib/extension-setup-channel.js'
 import { TEST_ONLY_M3_TAIL_ISSUER, revokeM3TailCapability } from '../lib/m3-adjacency-runtime.js'
 import {
   M3_CONTEXT_ENVELOPE_SIZE,
@@ -49,6 +58,12 @@ import {
   digestAdmittedLimits,
   takeAdmittedExtendRequest
 } from '../lib/tail-control.js'
+import {
+  REDACTED_RESPONDER_PROOF_SIZE,
+  consumeVerifiedRedactedResponderProof,
+  createRedactedResponderProofAuthority,
+  decodeRedactedResponderProof
+} from '../lib/redacted-responder-proof.js'
 import { privateRoleIdentity, safetyRoleIdentity } from './helpers.js'
 
 const NOW = 1_000
@@ -76,14 +91,17 @@ function endpoint(last) {
   })
 }
 
-function privateAdvertisement(byte) {
-  const identity = privateRoleIdentity(byte)
+function relayAdvertisement(byte, role = M3_LINK_ROLE.DHT_EXIT) {
+  const identity =
+    role === M3_LINK_ROLE.SAFETY_RELAY ? safetyRoleIdentity(byte) : privateRoleIdentity(byte)
   const reachableEndpoint = endpoint(byte)
   const route = cryptoSuite.encryptionKeyPair(seed(byte + 1))
   const capabilityMask =
-    RELAY_CAPABILITY.CIRCUIT_RELAY_V1 |
-    RELAY_CAPABILITY.DHT_EXIT_V1 |
-    RELAY_CAPABILITY.PRIVATE_RECORDS_V1
+    role === M3_LINK_ROLE.SAFETY_RELAY
+      ? RELAY_CAPABILITY.CIRCUIT_RELAY_V1
+      : RELAY_CAPABILITY.CIRCUIT_RELAY_V1 |
+        RELAY_CAPABILITY.DHT_EXIT_V1 |
+        RELAY_CAPABILITY.PRIVATE_RECORDS_V1
   return routes.encodeRelayCapabilityAdvertisement(
     routes.signRelayCapabilityAdvertisement(
       {
@@ -115,6 +133,14 @@ function privateAdvertisement(byte) {
       identity.secretKey
     )
   )
+}
+
+function privateAdvertisement(byte) {
+  return relayAdvertisement(byte)
+}
+
+function safetyAdvertisement(byte) {
+  return relayAdvertisement(byte, M3_LINK_ROLE.SAFETY_RELAY)
 }
 
 function compareAdvertisements(left, right, target) {
@@ -338,7 +364,7 @@ function extendRequest(advertisement, extensionIndex = 1, payloadParametersDiges
       maxBytes: 65_536,
       maxCommands: 10,
       idleTimeoutMs: 5_000,
-      expiresAtMs: 5_000n
+      expiresAtMs: 10_000n
     },
     extensionNonce: seed(0xa4)
   })
@@ -765,7 +791,7 @@ test('current tail opens one EXTEND only for an advertisement it returned', (t) 
   admissions.destroy()
 })
 
-test('only an admitted EXTEND can mint the exact successor LINK_OFFER', (t) => {
+test('an admitted EXTEND completes the exact successor OFFER ACCEPT PROOF exchange', (t) => {
   const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
   const fixture = pair(
     () => NOW,
@@ -858,9 +884,300 @@ test('only an admitted EXTEND can mint the exact successor LINK_OFFER', (t) => {
   t.ok(Object.isFrozen(extension.pending))
   t.alike(Object.keys(extension.pending), [])
   expectCode(t, () => takeAdmittedExtendRequest(admitted), 'ERR_REPLAY')
-  t.is(abortExtensionLinkOffer(extension.pending), true)
-  t.is(abortExtensionLinkOffer(extension.pending), false)
 
+  const successorIdentity = privateRoleIdentity(180)
+  const successorRoute = cryptoSuite.encryptionKeyPair(seed(181))
+  const reentrantAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  let reentrant = null
+  let recursiveCode = null
+  let reentrantCloses = 0
+  let reentrantReads = 0
+  reentrant = createExtensionLinkResponder({
+    advertisement,
+    adjacencyAdopter: reentrantAuthority.responderAdopter(),
+    responderIdentitySecretKey: successorIdentity.secretKey,
+    responderRouteEncryptionSecretKey: successorRoute.secretKey,
+    now: () => BigInt(NOW),
+    offerReceiver: createExtensionOfferReceiver({
+      observedPredecessorEndpoint: endpoint(220),
+      receiveObject() {
+        if (reentrantReads++ > 0) return null
+        try {
+          reentrant.accept()
+        } catch (err) {
+          recursiveCode = err && err.code
+        }
+        return extension.offer
+      },
+      takePhysicalChannel: () =>
+        Object.freeze({
+          destroy() {
+            reentrantCloses++
+          }
+        }),
+      sendObject() {},
+      finish() {},
+      destroy() {
+        reentrantCloses++
+      }
+    })
+  })
+  expectCode(t, () => reentrant.accept(), 'INVALID_ROUTE')
+  t.is(recursiveCode, 'ERR_BUSY')
+  t.is(reentrantCloses, 1)
+  t.alike(reentrantAuthority.diagnostics(), { activeRuntimes: 0, maxRuntimes: 128 })
+  t.is(reentrant.destroy(), false, 'reentry terminalizes the responder')
+
+  const sendReentryAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  const sentBeforeViolation = []
+  let sendReentry = null
+  let sendReentryCode = null
+  let sendNow = BigInt(NOW)
+  sendReentry = createExtensionLinkResponder({
+    advertisement,
+    adjacencyAdopter: sendReentryAuthority.responderAdopter(),
+    responderIdentitySecretKey: successorIdentity.secretKey,
+    responderRouteEncryptionSecretKey: successorRoute.secretKey,
+    now: () => sendNow,
+    offerReceiver: createExtensionOfferReceiver({
+      observedPredecessorEndpoint: endpoint(220),
+      receiveObject: (() => {
+        const objects = [extension.offer, null]
+        return () => objects.shift()
+      })(),
+      takePhysicalChannel: () => Object.freeze({ destroy() {} }),
+      sendObject(object) {
+        sentBeforeViolation.push(object)
+        sendNow = 5_000n
+        try {
+          sendReentry.accept()
+        } catch (err) {
+          sendReentryCode = err && err.code
+        }
+      },
+      finish() {},
+      destroy() {}
+    })
+  })
+  expectCode(t, () => sendReentry.accept(), 'INVALID_ROUTE')
+  t.is(sendReentryCode, 'ERR_BUSY')
+  t.is(sentBeforeViolation.length, 1, 'a hostile ACCEPT enqueue cannot release PROOF')
+  t.alike(sendReentryAuthority.diagnostics(), { activeRuntimes: 0, maxRuntimes: 128 })
+  t.is(sendReentry.destroy(), false, 'send reentry terminalizes the responder')
+
+  const successorPhysical = Object.freeze({ destroy() {} })
+  const successorAdjacencyAuthority = new routes.M3AdjacencyAuthority({
+    now: () => NOW
+  })
+  let randomByte = 0xf0
+  let randomCalls = 0
+  let proofSawLiveTail = false
+  const successorSetupObjects = []
+  const responder = createExtensionLinkResponder({
+    advertisement,
+    adjacencyAdopter: successorAdjacencyAuthority.responderAdopter(),
+    responderIdentitySecretKey: successorIdentity.secretKey,
+    responderRouteEncryptionSecretKey: successorRoute.secretKey,
+    now: () => BigInt(NOW),
+    offerReceiver: createExtensionOfferReceiver({
+      observedPredecessorEndpoint: endpoint(220),
+      receiveObject: (() => {
+        const objects = [extension.offer, null]
+        return () => objects.shift()
+      })(),
+      takePhysicalChannel: () => successorPhysical,
+      sendObject: (object) => successorSetupObjects.push(object),
+      finish: () => successorSetupObjects.push(null),
+      destroy() {}
+    }),
+    randomBytes(size) {
+      randomCalls++
+      if (randomCalls === 3) {
+        proofSawLiveTail = successorAdjacencyAuthority.diagnostics().activeRuntimes === 1
+      }
+      return seed(randomByte++, size)
+    }
+  })
+  const accepted = responder.accept()
+  const successorAdjacency = takeExtensionResponderAdjacency(responder, accepted.accepted)
+  const [accept, proof] = successorSetupObjects
+  let proofVerificationSampled = false
+  let postProofClockSamples = 0
+  const proofAuthority = createRedactedResponderProofAuthority({
+    now() {
+      proofVerificationSampled = true
+      return BigInt(NOW)
+    }
+  })
+  const initiatorPhysical = Object.freeze({ destroy() {} })
+  const completed = completeExtensionLink(extension.pending, {
+    now() {
+      if (proofVerificationSampled) postProofClockSamples++
+      return BigInt(NOW)
+    },
+    proofVerifier: proofAuthority.verifier,
+    proofConsumer: proofAuthority.consumer,
+    setupReceiver: createExtensionResponseReceiver({
+      receiveObject: () => successorSetupObjects.shift(),
+      takePhysicalChannel: () => initiatorPhysical,
+      destroy() {}
+    })
+  })
+  const currentTailAdjacencyAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  const currentTailAdjacency = currentTailAdjacencyAuthority.adopt(completed.established)
+  const expectedProof = decodeRedactedResponderProof(proof)
+
+  t.is(accept.byteLength, LINK_ACCEPT_SIZE)
+  t.is(proof.byteLength, REDACTED_RESPONDER_PROOF_SIZE)
+  t.is(proofSawLiveTail, true, 'proof randomness is requested only after TAIL_ENDPOINT is live')
+  t.is(postProofClockSamples, 1, 'the current-tail clock is refreshed after proof verification')
+  t.is(expectedProof.expiresAtMs, 5_000n, 'admitted expiry clamps to the offer deadline')
+  t.alike(successorAdjacency.runtime.diagnostics(), {
+    state: 'TAIL_ENDPOINT',
+    expiresAt: 5_000n
+  })
+  t.ok(Object.isFrozen(completed.established))
+  t.alike(Object.keys(completed.established), [])
+  t.alike(currentTailAdjacency.runtime.diagnostics(), {
+    state: 'TAIL_ENDPOINT',
+    expiresAt: 5_000n
+  })
+  t.ok(Object.isFrozen(completed.verifiedProof))
+  t.alike(Object.keys(completed.verifiedProof), [])
+  t.alike(
+    consumeVerifiedRedactedResponderProof(
+      proofAuthority.consumer,
+      completed.verifiedProof,
+      expectedProof
+    ),
+    proof
+  )
+  t.is(abortExtensionLinkOffer(extension.pending), false)
+  t.is(destroyM3EstablishedLink(completed.established), false)
+  currentTailAdjacency.runtime.destroy()
+  revokeM3TailCapability(currentTailAdjacency.tail)
+  successorAdjacency.runtime.destroy()
+  revokeM3TailCapability(successorAdjacency.tail)
+  responder.destroy()
+  proofAuthority.destroy()
+
+  fixture.client.destroy()
+  fixture.responder.destroy()
+  admissions.destroy()
+})
+
+test('the first extension establishes a safety-relay successor over the same setup channel', (t) => {
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    0,
+    5_000n,
+    {
+      identity: safetyRoleIdentity(221),
+      responder: {
+        candidateAdmissionProducer: admissions.producer,
+        candidateAdmissionConsumer: admissions.consumer
+      }
+    }
+  )
+  activate(fixture, 0xd0)
+  const randomTarget = seed(0xd1)
+  const queryNonce = seed(0xd2)
+  const advertisement = safetyAdvertisement(190)
+  const decodedAdvertisement = routes.decodeRelayCapabilityAdvertisement(advertisement, {
+    now: BigInt(NOW)
+  })
+  const discoverEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget,
+    queryNonce,
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xd3, size)
+  })
+  fixture.responder.openDiscoverRequest(discoverEnvelope)
+  fixture.responder.sealDiscoverResponse({
+    encodedResponse: encodeRelayDiscoverResponse({
+      queryNonce,
+      responseTimeMs: BigInt(NOW),
+      advertisements: [advertisement]
+    }),
+    randomBytes: (size) => seed(0xd4, size)
+  })
+  const encodedExtend = extendRequest(
+    advertisement,
+    1,
+    routes.digestPayloadParameters(decodedAdvertisement)
+  )
+  const envelope = resealForwardEnvelope(fixture, discoverEnvelope, 0n, 1n, 0, encodedExtend)
+  const admitted = fixture.responder.openExtendRequest(envelope)
+  const extension = createExtensionLinkOffer(admitted, {
+    initiatorIdentitySecretKey: fixture.identity.secretKey,
+    now: BigInt(NOW),
+    randomBytes: (size) => seed(0xd5, size)
+  })
+  const offer = decodeM3Object(extension.offer)
+  const setupObjects = []
+  const successorAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  const responder = createExtensionLinkResponder({
+    advertisement,
+    adjacencyAdopter: successorAuthority.responderAdopter(),
+    responderIdentitySecretKey: safetyRoleIdentity(190).secretKey,
+    responderRouteEncryptionSecretKey: cryptoSuite.encryptionKeyPair(seed(191)).secretKey,
+    now: () => BigInt(NOW),
+    offerReceiver: createExtensionOfferReceiver({
+      observedPredecessorEndpoint: endpoint(221),
+      receiveObject: (() => {
+        const objects = [extension.offer, null]
+        return () => objects.shift()
+      })(),
+      takePhysicalChannel: () => Object.freeze({ destroy() {} }),
+      sendObject: (object) => setupObjects.push(object),
+      finish: () => setupObjects.push(null),
+      destroy() {}
+    }),
+    randomBytes: (size) => seed(0xd6, size)
+  })
+  const accepted = responder.accept()
+  const successor = takeExtensionResponderAdjacency(responder, accepted.accepted)
+  const [accept, proof] = setupObjects
+  const proofAuthority = createRedactedResponderProofAuthority({ now: () => BigInt(NOW) })
+  const completed = completeExtensionLink(extension.pending, {
+    now: () => BigInt(NOW),
+    proofVerifier: proofAuthority.verifier,
+    proofConsumer: proofAuthority.consumer,
+    setupReceiver: createExtensionResponseReceiver({
+      receiveObject: () => setupObjects.shift(),
+      takePhysicalChannel: () => Object.freeze({ destroy() {} }),
+      destroy() {}
+    })
+  })
+  const currentTailAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  const currentTail = currentTailAuthority.adopt(completed.established)
+  const expectedProof = decodeRedactedResponderProof(proof)
+
+  t.is(offer.body[96], M3_LINK_ROLE.SAFETY_RELAY)
+  t.is(offer.body[97], M3_LINK_ROLE.SAFETY_RELAY)
+  t.is(offer.body[139], 1)
+  t.is(accept.byteLength, LINK_ACCEPT_SIZE)
+  t.is(expectedProof.extensionIndex, 1)
+  t.alike(successor.runtime.diagnostics(), { state: 'TAIL_ENDPOINT', expiresAt: 5_000n })
+  t.alike(currentTail.runtime.diagnostics(), { state: 'TAIL_ENDPOINT', expiresAt: 5_000n })
+  t.alike(
+    consumeVerifiedRedactedResponderProof(
+      proofAuthority.consumer,
+      completed.verifiedProof,
+      expectedProof
+    ),
+    proof
+  )
+
+  currentTail.runtime.destroy()
+  revokeM3TailCapability(currentTail.tail)
+  successor.runtime.destroy()
+  revokeM3TailCapability(successor.tail)
+  responder.destroy()
+  proofAuthority.destroy()
   fixture.client.destroy()
   fixture.responder.destroy()
   admissions.destroy()

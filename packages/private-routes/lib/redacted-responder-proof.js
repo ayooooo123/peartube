@@ -544,7 +544,7 @@ export function decodeRedactedResponderProof(encoded) {
   }
 }
 
-function verifyProof(verifier, encoded, expected) {
+function verifyProof(verifier, consumer, encoded, expected) {
   const owner = safeObject(verifier) ? VERIFIERS.get(verifier) : null
   const operation = begin(owner, true)
   let key = null
@@ -561,6 +561,10 @@ function verifyProof(verifier, encoded, expected) {
   let capabilityInserted = false
   let published = false
   try {
+    if (expected !== null) {
+      const consumerOwner = safeObject(consumer) ? CONSUMERS.get(consumer) : null
+      if (consumerOwner !== owner) authentication()
+    }
     if (!fixed(encoded, REDACTED_RESPONDER_PROOF_SIZE)) invalid()
     key = proofKey(encoded)
     assertOwner(owner, operation.lifecycle)
@@ -633,11 +637,11 @@ function verifyProof(verifier, encoded, expected) {
 }
 
 export function verifyRedactedResponderProof(verifier, encoded) {
-  return verifyProof(verifier, encoded, null)
+  return verifyProof(verifier, null, encoded, null)
 }
 
-export function verifyExpectedRedactedResponderProof(verifier, encoded, expected) {
-  return verifyProof(verifier, encoded, expected)
+export function verifyExpectedRedactedResponderProof(verifier, consumer, encoded, expected) {
+  return verifyProof(verifier, consumer, encoded, expected)
 }
 
 export function consumeVerifiedRedactedResponderProof(consumer, capability, expected) {

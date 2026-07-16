@@ -198,7 +198,7 @@ test('proof verification can bind the exact successor projection before publicat
   expectCode(
     t,
     () =>
-      verifyExpectedRedactedResponderProof(authority.verifier, encoded, {
+      verifyExpectedRedactedResponderProof(authority.verifier, authority.consumer, encoded, {
         ...value,
         clientNonce: seed(0x7a)
       }),
@@ -206,10 +206,23 @@ test('proof verification can bind the exact successor projection before publicat
     'a mismatch publishes no proof authority'
   )
   t.alike(authority.diagnostics(), { state: 'ACTIVE', live: 0, states: 0 })
-  const verified = verifyExpectedRedactedResponderProof(authority.verifier, encoded, value)
+  const other = createRedactedResponderProofAuthority({ now: () => NOW })
+  expectCode(
+    t,
+    () => verifyExpectedRedactedResponderProof(authority.verifier, other.consumer, encoded, value),
+    'ERR_AUTHENTICATION',
+    'the verifier and future consumer must share one owner'
+  )
+  const verified = verifyExpectedRedactedResponderProof(
+    authority.verifier,
+    authority.consumer,
+    encoded,
+    value
+  )
   t.ok(Object.isFrozen(verified))
   t.alike(Object.keys(verified), [])
   t.alike(consumeVerifiedRedactedResponderProof(authority.consumer, verified, value), encoded)
+  other.destroy()
   authority.destroy()
 })
 

@@ -27,6 +27,30 @@ import {
   encodeTailControlTranscript,
   takeAdmittedExtendRequest
 } from './tail-control.js'
+import {
+  REDACTED_RESPONDER_PROOF_SIZE,
+  decodeRedactedResponderProof,
+  revokeVerifiedRedactedResponderProof,
+  signRedactedResponderProof,
+  verifyExpectedRedactedResponderProof
+} from './redacted-responder-proof.js'
+import {
+  adoptM3ResponderLink,
+  destroyM3ResponderLink,
+  isM3ResponderAdopter,
+  takeM3ResponderLink
+} from './m3-adjacency-adopter.js'
+import {
+  destroyExtensionOfferReceiver,
+  destroyExtensionResponseWriter,
+  finishExtensionResponse,
+  isExtensionOfferReceiver,
+  isExtensionResponseReceiver,
+  sendExtensionAccept,
+  sendExtensionProof,
+  takeExtensionOffer,
+  takeExtensionResponse
+} from './extension-setup-channel.js'
 
 export const LINK_OFFER_SIZE = 374
 export const LINK_ACCEPT_SIZE = 285
@@ -49,6 +73,8 @@ const SPENT_ESTABLISHED = new WeakSet()
 const EXTENSION_PENDING = new WeakMap()
 const EXTENSION_PENDING_TOKENS = new Set()
 const SPENT_EXTENSION_PENDING = new WeakSet()
+const EXTENSION_RESPONDER_ADJACENCIES = new WeakMap()
+const SPENT_EXTENSION_RESPONDER_ADJACENCIES = new WeakSet()
 const MAX_PENDING_OFFERS = 4096
 const MAX_RESPONDER_REPLAYS = 4096
 const dateNowIntrinsic = Date.now
@@ -472,6 +498,37 @@ function validOffer(offer, now) {
   }
 }
 
+function validExtensionOffer(offer, now) {
+  const input = signatureInput(LINK_OFFER_DOMAIN, M3_MESSAGE_ID.LINK_OFFER_V1, offer.body)
+  const signatureValid = cryptoSuite.verify(input, offer.signature, offer.initiatorIdentity)
+  clear(input)
+  const expectedResponderRole =
+    offer.extensionIndex === 1 ? M3_LINK_ROLE.SAFETY_RELAY : M3_LINK_ROLE.DHT_EXIT
+  const expectedIdentityRole = offer.extensionIndex === 1 ? ROLE.SAFETY : ROLE.PRIVATE
+  if (
+    !signatureValid ||
+    (offer.extensionIndex !== 1 && offer.extensionIndex !== 2) ||
+    offer.initiatorRole !== M3_LINK_ROLE.SAFETY_RELAY ||
+    offer.responderRole !== expectedResponderRole ||
+    roleForIdentity(offer.initiatorIdentity) !== ROLE.SAFETY ||
+    roleForIdentity(offer.responderIdentity) !== expectedIdentityRole ||
+    (offer.branchClass !== BRANCH_CLASS.LOOKUP && offer.branchClass !== BRANCH_CLASS.ANNOUNCE) ||
+    offer.generation === 0n ||
+    offer.offerDeadlineMs <= now ||
+    offer.offerDeadlineMs > now + 5_000n ||
+    offer.requestedLimits.expiresAtMs < offer.offerDeadlineMs ||
+    equal(offer.initiatorIdentity, offer.responderIdentity) ||
+    !nonzero(offer.branchId) ||
+    !nonzero(offer.circuitId) ||
+    !nonzero(offer.initiatorLinkEphemeralPublicKey) ||
+    !nonzero(offer.clientTailEphemeralPublicKey) ||
+    !nonzero(offer.clientNonce) ||
+    !nonzero(offer.payloadParametersDigest)
+  ) {
+    authentication()
+  }
+}
+
 function context(cellClass, key, noncePrefix, sender, now) {
   return {
     key: copy(key, 32),
@@ -534,20 +591,22 @@ function deriveState(
         clear(transcript)
       }
     }
-    admittedLimitsDigest = digestAdmittedLimits(accept.admittedLimits)
-    tailControlTranscript = encodeTailControlTranscript({
-      branchClass: offer.branchClass,
-      branchId: offer.branchId,
-      circuitId: offer.circuitId,
-      generation: offer.generation,
-      extensionIndex: 0,
-      clientTailEphemeralPublicKey: offer.clientTailEphemeralPublicKey,
-      advertisedTailRouteEncryptionPublicKey: tailRouteEncryptionPublicKey,
-      candidateAdvertisementDigest: offer.responderAdvertisementDigest,
-      clientNonce: offer.clientNonce,
-      tailIdentity: offer.responderIdentity,
-      admittedLimitsDigest
-    })
+    if (tailShared) {
+      admittedLimitsDigest = digestAdmittedLimits(accept.admittedLimits)
+      tailControlTranscript = encodeTailControlTranscript({
+        branchClass: offer.branchClass,
+        branchId: offer.branchId,
+        circuitId: offer.circuitId,
+        generation: offer.generation,
+        extensionIndex: offer.extensionIndex,
+        clientTailEphemeralPublicKey: offer.clientTailEphemeralPublicKey,
+        advertisedTailRouteEncryptionPublicKey: tailRouteEncryptionPublicKey,
+        candidateAdvertisementDigest: offer.responderAdvertisementDigest,
+        clientNonce: offer.clientNonce,
+        tailIdentity: offer.responderIdentity,
+        admittedLimitsDigest
+      })
+    }
     const result = {
       initiator,
       completeOfferDigest: copy(offerDigest, 32),
@@ -560,9 +619,9 @@ function deriveState(
       branchId: copy(offer.branchId, 16),
       circuitId: copy(offer.circuitId, 16),
       generation: offer.generation,
-      extensionIndex: 0,
+      extensionIndex: offer.extensionIndex,
       responderAdvertisementDigest: copy(offer.responderAdvertisementDigest, 32),
-      tailSharedSecret: copy(tailShared, 32),
+      tailSharedSecret: tailShared ? copy(tailShared, 32) : null,
       tailControlTranscript,
       expiresAt: accept.admittedLimits.expiresAtMs,
       admittedLimits: accept.admittedLimits,
@@ -1152,6 +1211,558 @@ export function createIndexZeroGuardLinkResponder({
       return true
     }
   })
+}
+
+export function createExtensionLinkResponder({
+  advertisement,
+  adjacencyAdopter,
+  responderIdentitySecretKey,
+  responderRouteEncryptionSecretKey,
+  now,
+  offerReceiver,
+  randomBytes = cryptoSuite.randomBytes
+} = {}) {
+  if (
+    !isM3ResponderAdopter(adjacencyAdopter) ||
+    !isExtensionOfferReceiver(offerReceiver) ||
+    typeof now !== 'function' ||
+    typeof randomBytes !== 'function'
+  ) {
+    invalid()
+  }
+  let advertisementBytes = null
+  let responderSecretKey = null
+  let responderRouteSecretKey = null
+  let decodedAdvertisement = null
+  let identitySeed = null
+  let identityPair = null
+  let routePublicKey = null
+  try {
+    advertisementBytes = copy(advertisement)
+    responderSecretKey = copy(responderIdentitySecretKey, 64)
+    responderRouteSecretKey = copy(responderRouteEncryptionSecretKey, 32)
+    const current = now()
+    if (!u64(current)) invalid()
+    decodedAdvertisement = decodeRelayCapabilityAdvertisement(advertisementBytes, {
+      now: current
+    })
+    identitySeed = copy(subarray(responderSecretKey, 0, 32), 32)
+    identityPair = cryptoSuite.keyPair(identitySeed)
+    routePublicKey = b4a.allocUnsafeSlow(32)
+    if (!fixed(routePublicKey, 32)) invalid()
+    sodium.crypto_scalarmult_base(routePublicKey, responderRouteSecretKey)
+    if (
+      !equal(identityPair.publicKey, decodedAdvertisement.relayIdentity) ||
+      !equal(routePublicKey, decodedAdvertisement.routeEncryptionPublicKey)
+    ) {
+      authentication()
+    }
+  } catch (err) {
+    clear(advertisementBytes)
+    clear(responderSecretKey)
+    clear(responderRouteSecretKey)
+    destroyExtensionOfferReceiver(offerReceiver)
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    clearDecoded(decodedAdvertisement)
+    clear(identitySeed)
+    clear(identityPair && identityPair.secretKey)
+    clear(identityPair && identityPair.publicKey)
+    clear(routePublicKey)
+  }
+  const replayCache = new Map()
+  const acceptedAdjacencies = new Set()
+  let isDestroyed = false
+  let generation = Object.freeze({})
+  let mutating = false
+  let violated = false
+  const destroyResponder = () => {
+    if (isDestroyed) return false
+    isDestroyed = true
+    generation = null
+    for (const accepted of acceptedAdjacencies) {
+      const state = EXTENSION_RESPONDER_ADJACENCIES.get(accepted)
+      if (!state) continue
+      EXTENSION_RESPONDER_ADJACENCIES.delete(accepted)
+      SPENT_EXTENSION_RESPONDER_ADJACENCIES.add(accepted)
+      destroyM3ResponderLink(state.adoption)
+    }
+    acceptedAdjacencies.clear()
+    clear(advertisementBytes)
+    clear(responderSecretKey)
+    clear(responderRouteSecretKey)
+    destroyExtensionOfferReceiver(offerReceiver)
+    replayCache.clear()
+    return true
+  }
+  const assertGeneration = (operationGeneration) => {
+    if (violated) {
+      destroyResponder()
+      invalid()
+    }
+    if (isDestroyed || generation !== operationGeneration) {
+      throw PrivateRouteError.ERR_DESTROYED()
+    }
+  }
+  let responder = null
+  responder = Object.freeze({
+    accept() {
+      if (isDestroyed) throw PrivateRouteError.ERR_DESTROYED()
+      if (mutating) {
+        violated = true
+        throw PrivateRouteError.ERR_BUSY()
+      }
+      mutating = true
+      violated = false
+      const operationGeneration = generation
+      let received = null
+      let physicalChannel = null
+      let offer = null
+      let advertisementDigest = null
+      let currentAdvertisement = null
+      let offerDigest = null
+      let expectedParametersDigest = null
+      let seed = null
+      let pair = null
+      let acceptNonce = null
+      let proofNonce = null
+      let admittedLimits = null
+      let admittedLimitsDigest = null
+      let body = null
+      let input = null
+      let signature = null
+      let shared = null
+      let tailShared = null
+      let decodedAccept = null
+      let replayKey = null
+      let replayReservation = null
+      let replayCommitted = false
+      let randomScratch = null
+      let derivedState = null
+      let accept = null
+      let proof = null
+      let adoption = null
+      let accepted = null
+      let responseWriter = null
+      try {
+        let current = now()
+        assertGeneration(operationGeneration)
+        if (!u64(current)) invalid()
+        received = takeExtensionOffer(offerReceiver)
+        offerReceiver = null
+        physicalChannel = received.physicalChannel
+        responseWriter = received.responseWriter
+        current = now()
+        assertGeneration(operationGeneration)
+        if (!u64(current)) invalid()
+        offer = decodeOffer(received.offer)
+        validExtensionOffer(offer, current)
+        currentAdvertisement = decodeRelayCapabilityAdvertisement(advertisementBytes, {
+          now: current
+        })
+        advertisementDigest = digestRelayCapabilityAdvertisement(advertisementBytes, {
+          now: current
+        })
+        expectedParametersDigest = digestPayloadParameters(currentAdvertisement)
+        offerDigest = digest(LINK_OFFER_DIGEST_DOMAIN, offer.encoded)
+        replayKey = b4a.toString(offerDigest, 'hex')
+        for (const [key, reservation] of replayCache) {
+          if (reservation.expiresAt <= current) replayCache.delete(key)
+        }
+        if (replayCache.has(replayKey)) replay()
+        if (replayCache.size >= MAX_RESPONDER_REPLAYS) throw PrivateRouteError.ERR_BUSY()
+        const expectedResponderRole = offer.extensionIndex === 1 ? ROLE.SAFETY : ROLE.PRIVATE
+        if (
+          roleForIdentity(currentAdvertisement.relayIdentity) !== expectedResponderRole ||
+          !equal(offer.responderIdentity, currentAdvertisement.relayIdentity) ||
+          !equal(offer.responderAdvertisementDigest, advertisementDigest) ||
+          !equal(offer.payloadParametersDigest, expectedParametersDigest) ||
+          !limitsWithinAdvertisement(offer.requestedLimits, currentAdvertisement, current)
+        ) {
+          authentication()
+        }
+        replayReservation = {
+          completed: false,
+          expiresAt: offer.offerDeadlineMs
+        }
+        replayCache.set(replayKey, replayReservation)
+        tailShared = cryptoSuite.keyAgreement(
+          responderRouteSecretKey,
+          offer.clientTailEphemeralPublicKey
+        )
+        randomScratch = randomBytes(32)
+        current = now()
+        assertGeneration(operationGeneration)
+        if (!u64(current) || current >= offer.offerDeadlineMs) authentication()
+        seed = copy(randomScratch, 32)
+        clear(randomScratch)
+        randomScratch = null
+        pair = cryptoSuite.encryptionKeyPair(seed)
+        randomScratch = randomBytes(32)
+        current = now()
+        assertGeneration(operationGeneration)
+        if (!u64(current) || current >= offer.offerDeadlineMs) authentication()
+        acceptNonce = copy(randomScratch, 32)
+        clear(randomScratch)
+        randomScratch = null
+        admittedLimits = encodeLimits({
+          ...offer.requestedLimits,
+          expiresAtMs:
+            offer.requestedLimits.expiresAtMs < offer.offerDeadlineMs
+              ? offer.requestedLimits.expiresAtMs
+              : offer.offerDeadlineMs
+        })
+        body = b4a.allocUnsafeSlow(LINK_ACCEPT_BODY_SIZE)
+        if (!fixed(body, LINK_ACCEPT_BODY_SIZE)) invalid()
+        setIntrinsic.call(body, offerDigest, 0)
+        setIntrinsic.call(body, advertisementDigest, 32)
+        setIntrinsic.call(body, currentAdvertisement.relayIdentity, 64)
+        setIntrinsic.call(body, received.observedPredecessorEndpoint, 96)
+        setIntrinsic.call(body, pair.publicKey, 115)
+        setIntrinsic.call(body, admittedLimits, 147)
+        writeU64(body, current, 173)
+        setIntrinsic.call(body, acceptNonce, 181)
+        input = signatureInput(LINK_ACCEPT_DOMAIN, M3_MESSAGE_ID.LINK_ACCEPT_V1, body)
+        signature = cryptoSuite.sign(input, responderSecretKey)
+        accept = encodeM3Object({
+          messageId: M3_MESSAGE_ID.LINK_ACCEPT_V1,
+          body,
+          authSuffix: signature
+        })
+        if (!fixed(accept, LINK_ACCEPT_SIZE)) invalid()
+        decodedAccept = decodeAccept(accept)
+        shared = cryptoSuite.keyAgreement(pair.secretKey, offer.initiatorLinkEphemeralPublicKey)
+        assertGeneration(operationGeneration)
+        if (replayCache.get(replayKey) !== replayReservation) replay()
+        derivedState = deriveState(
+          shared,
+          tailShared,
+          offer,
+          decodedAccept,
+          false,
+          physicalChannel,
+          now,
+          currentAdvertisement.routeEncryptionPublicKey
+        )
+        physicalChannel = null
+        current = now()
+        assertGeneration(operationGeneration)
+        if (
+          !u64(current) ||
+          current >= offer.offerDeadlineMs ||
+          current >= currentAdvertisement.expiresAtMs
+        ) {
+          authentication()
+        }
+        admittedLimitsDigest = digestAdmittedLimits(decodedAccept.admittedLimits)
+        const established = establish(derivedState)
+        derivedState = null
+        adoption = adoptM3ResponderLink(adjacencyAdopter, established)
+        current = now()
+        assertGeneration(operationGeneration)
+        if (
+          !u64(current) ||
+          current >= offer.offerDeadlineMs ||
+          current >= currentAdvertisement.expiresAtMs
+        ) {
+          authentication()
+        }
+        randomScratch = randomBytes(32)
+        current = now()
+        assertGeneration(operationGeneration)
+        if (
+          !u64(current) ||
+          current >= offer.offerDeadlineMs ||
+          current >= currentAdvertisement.expiresAtMs
+        ) {
+          authentication()
+        }
+        proofNonce = copy(randomScratch, 32)
+        clear(randomScratch)
+        randomScratch = null
+        proof = signRedactedResponderProof(
+          {
+            responderAdvertisementDigest: advertisementDigest,
+            initiatorIdentity: offer.initiatorIdentity,
+            responderIdentity: offer.responderIdentity,
+            branchClass: offer.branchClass,
+            branchId: offer.branchId,
+            circuitId: offer.circuitId,
+            generation: offer.generation,
+            extensionIndex: offer.extensionIndex,
+            clientTailEphemeralPublicKey: offer.clientTailEphemeralPublicKey,
+            clientNonce: offer.clientNonce,
+            advertisedRouteEncryptionPublicKey: currentAdvertisement.routeEncryptionPublicKey,
+            admittedLimitsDigest,
+            expiresAtMs: decodedAccept.admittedLimits.expiresAtMs,
+            responderProofNonce: proofNonce
+          },
+          responderSecretKey
+        )
+        assertGeneration(operationGeneration)
+        if (replayCache.get(replayKey) !== replayReservation) replay()
+        sendExtensionAccept(responseWriter, accept)
+        current = now()
+        assertGeneration(operationGeneration)
+        if (
+          !u64(current) ||
+          current >= offer.offerDeadlineMs ||
+          current >= decodedAccept.admittedLimits.expiresAtMs ||
+          current >= currentAdvertisement.expiresAtMs
+        ) {
+          authentication()
+        }
+        sendExtensionProof(responseWriter, proof)
+        current = now()
+        assertGeneration(operationGeneration)
+        if (
+          !u64(current) ||
+          current >= offer.offerDeadlineMs ||
+          current >= decodedAccept.admittedLimits.expiresAtMs ||
+          current >= currentAdvertisement.expiresAtMs
+        ) {
+          authentication()
+        }
+        finishExtensionResponse(responseWriter)
+        responseWriter = null
+        current = now()
+        assertGeneration(operationGeneration)
+        if (
+          !u64(current) ||
+          current >= offer.offerDeadlineMs ||
+          current >= decodedAccept.admittedLimits.expiresAtMs ||
+          current >= currentAdvertisement.expiresAtMs
+        ) {
+          authentication()
+        }
+        accepted = Object.freeze({})
+        EXTENSION_RESPONDER_ADJACENCIES.set(accepted, {
+          responder,
+          adoption,
+          acceptedAdjacencies
+        })
+        acceptedAdjacencies.add(accepted)
+        adoption = null
+        replayReservation.completed = true
+        replayCommitted = true
+        return Object.freeze({ accepted })
+      } catch (err) {
+        if (err instanceof PrivateRouteError) throw err
+        invalid()
+      } finally {
+        if (
+          replayReservation &&
+          !replayCommitted &&
+          replayCache.get(replayKey) === replayReservation
+        ) {
+          replayCache.delete(replayKey)
+        }
+        try {
+          if (physicalChannel) physicalChannel.destroy()
+        } catch {}
+        clear(received && received.offer)
+        clear(received && received.observedPredecessorEndpoint)
+        clearDecoded(offer)
+        clearDecoded(currentAdvertisement)
+        clear(advertisementDigest)
+        clear(offerDigest)
+        clear(expectedParametersDigest)
+        clear(seed)
+        clear(pair && pair.publicKey)
+        clear(pair && pair.secretKey)
+        clear(acceptNonce)
+        clear(proofNonce)
+        clear(admittedLimits)
+        clear(admittedLimitsDigest)
+        clear(body)
+        clear(input)
+        clear(signature)
+        clear(shared)
+        clear(tailShared)
+        clearDecoded(decodedAccept)
+        clear(randomScratch)
+        clearState(derivedState)
+        destroyExtensionResponseWriter(responseWriter)
+        if (adoption) destroyM3ResponderLink(adoption)
+        clear(accept)
+        clear(proof)
+        mutating = false
+        if (violated && !isDestroyed) destroyResponder()
+      }
+    },
+    destroy() {
+      if (mutating) violated = true
+      return destroyResponder()
+    }
+  })
+  return responder
+}
+
+export function takeExtensionResponderAdjacency(responder, accepted) {
+  const state =
+    accepted !== null && typeof accepted === 'object'
+      ? EXTENSION_RESPONDER_ADJACENCIES.get(accepted)
+      : null
+  if (!state || state.responder !== responder) {
+    if (
+      accepted !== null &&
+      typeof accepted === 'object' &&
+      SPENT_EXTENSION_RESPONDER_ADJACENCIES.has(accepted)
+    ) {
+      replay()
+    }
+    authentication()
+  }
+  EXTENSION_RESPONDER_ADJACENCIES.delete(accepted)
+  SPENT_EXTENSION_RESPONDER_ADJACENCIES.add(accepted)
+  state.acceptedAdjacencies.delete(accepted)
+  const adjacency = takeM3ResponderLink(state.adoption)
+  state.adoption = null
+  return adjacency
+}
+
+export function completeExtensionLink(pending, options = {}) {
+  pruneExtensionPending(extensionResourceTime())
+  const state =
+    pending !== null && typeof pending === 'object' ? EXTENSION_PENDING.get(pending) : null
+  if (!state) {
+    if (pending !== null && typeof pending === 'object' && SPENT_EXTENSION_PENDING.has(pending)) {
+      replay()
+    }
+    authentication()
+  }
+  EXTENSION_PENDING.delete(pending)
+  EXTENSION_PENDING_TOKENS.delete(pending)
+  SPENT_EXTENSION_PENDING.add(pending)
+  let physicalChannel = null
+  let received = null
+  let accept = null
+  let decodedProof = null
+  let observedEndpoint = null
+  let offerDigest = null
+  let input = null
+  let shared = null
+  let admittedLimitsDigest = null
+  let derivedState = null
+  let verifiedProof = null
+  let proofConsumer = null
+  let transferred = false
+  try {
+    const now = safe(options, 'now')
+    const proofVerifier = safe(options, 'proofVerifier')
+    proofConsumer = safe(options, 'proofConsumer')
+    const setupReceiver = safe(options, 'setupReceiver')
+    if (typeof now !== 'function' || !isExtensionResponseReceiver(setupReceiver)) invalid()
+    let current = now()
+    if (!u64(current)) invalid()
+    received = takeExtensionResponse(setupReceiver)
+    physicalChannel = received.physicalChannel
+    current = now()
+    if (!u64(current)) invalid()
+    accept = decodeAccept(received.accept)
+    decodedProof = decodeRedactedResponderProof(received.proof)
+    observedEndpoint = decodeCanonicalEndpoint(accept.observedPredecessorEndpoint)
+    offerDigest = digest(LINK_OFFER_DIGEST_DOMAIN, state.offer.encoded)
+    input = signatureInput(LINK_ACCEPT_DOMAIN, M3_MESSAGE_ID.LINK_ACCEPT_V1, accept.body)
+    const validSignature = cryptoSuite.verify(
+      input,
+      accept.signature,
+      state.offer.responderIdentity
+    )
+    if (
+      !validSignature ||
+      !equal(accept.completeOfferDigest, offerDigest) ||
+      !equal(accept.responderAdvertisementDigest, state.advertisementDigest) ||
+      !equal(accept.responderIdentity, state.offer.responderIdentity) ||
+      accept.acceptedAtMs > state.offer.offerDeadlineMs ||
+      accept.acceptedAtMs > current ||
+      current >= state.offer.offerDeadlineMs ||
+      !limitsWithin(accept.admittedLimits, state.offer.requestedLimits) ||
+      accept.admittedLimits.expiresAtMs > state.offer.offerDeadlineMs ||
+      accept.admittedLimits.expiresAtMs <= current ||
+      !nonzero(accept.responderLinkEphemeralPublicKey) ||
+      !nonzero(accept.acceptNonce)
+    ) {
+      authentication()
+    }
+    shared = cryptoSuite.keyAgreement(
+      state.ephemeralSecretKey,
+      accept.responderLinkEphemeralPublicKey
+    )
+    derivedState = deriveState(
+      shared,
+      null,
+      state.offer,
+      accept,
+      true,
+      physicalChannel,
+      () => Number(current),
+      state.advertisedRouteEncryptionPublicKey
+    )
+    physicalChannel = null
+    admittedLimitsDigest = digestAdmittedLimits(accept.admittedLimits)
+    current = now()
+    if (!u64(current) || current >= state.offer.offerDeadlineMs) authentication()
+    verifiedProof = verifyExpectedRedactedResponderProof(
+      proofVerifier,
+      proofConsumer,
+      received.proof,
+      {
+        responderAdvertisementDigest: state.advertisementDigest,
+        initiatorIdentity: state.offer.initiatorIdentity,
+        responderIdentity: state.offer.responderIdentity,
+        branchClass: state.offer.branchClass,
+        branchId: state.offer.branchId,
+        circuitId: state.offer.circuitId,
+        generation: state.offer.generation,
+        extensionIndex: state.offer.extensionIndex,
+        clientTailEphemeralPublicKey: state.offer.clientTailEphemeralPublicKey,
+        clientNonce: state.offer.clientNonce,
+        advertisedRouteEncryptionPublicKey: state.advertisedRouteEncryptionPublicKey,
+        admittedLimitsDigest,
+        expiresAtMs: accept.admittedLimits.expiresAtMs,
+        responderProofNonce: decodedProof.responderProofNonce
+      }
+    )
+    current = now()
+    if (
+      !u64(current) ||
+      current >= state.offer.offerDeadlineMs ||
+      current >= accept.admittedLimits.expiresAtMs
+    ) {
+      authentication()
+    }
+    const established = establish(derivedState)
+    derivedState = null
+    transferred = true
+    return Object.freeze({ established, verifiedProof })
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (!transferred && verifiedProof) {
+      try {
+        revokeVerifiedRedactedResponderProof(proofConsumer, verifiedProof)
+      } catch {}
+    }
+    if (physicalChannel) {
+      try {
+        physicalChannel.destroy()
+      } catch {}
+    }
+    clearDecoded(accept)
+    clearDecoded(decodedProof)
+    clear(received && received.accept)
+    clear(received && received.proof)
+    clear(observedEndpoint)
+    clear(offerDigest)
+    clear(input)
+    clear(shared)
+    clear(admittedLimitsDigest)
+    clearState(derivedState)
+    clearExtensionPending(state)
+  }
 }
 
 export function completeIndexZeroGuardLink(

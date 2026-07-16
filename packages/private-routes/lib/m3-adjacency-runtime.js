@@ -4,6 +4,7 @@ import { CELL_SIZE, CellCodec } from './cell-codec.js'
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
 import { destroyTakenM3EstablishedLink, takeM3EstablishedLink } from './guard-link.js'
+import { createM3ResponderAdopter } from './m3-adjacency-adopter.js'
 import { BRANCH_CLASS, CELL_CLASS, DIRECTION } from './protocol.js'
 
 export const DEFAULT_MAX_M3_ADJACENCY_RUNTIMES = 128
@@ -499,10 +500,27 @@ export class M3AdjacencyAuthority {
       crypto,
       maxRuntimes: maximum === undefined ? DEFAULT_MAX_M3_ADJACENCY_RUNTIMES : maximum,
       observe: observe || null,
+      responderAdopter: null,
       reservations: new Map()
     }
     AUTHORITIES.add(this)
     AUTHORITY_STATES.set(this, state)
+    state.responderAdopter = createM3ResponderAdopter(
+      (established) => this.adopt(established),
+      (adjacency) => {
+        try {
+          adjacency.runtime.destroy()
+        } finally {
+          revokeM3TailCapability(adjacency.tail)
+        }
+      }
+    )
+  }
+
+  responderAdopter() {
+    const state = AUTHORITY_STATES.get(this)
+    if (!state) destroyed()
+    return state.responderAdopter
   }
 
   adopt(establishedHandle) {

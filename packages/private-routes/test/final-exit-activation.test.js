@@ -138,6 +138,8 @@ function handoffPair(
     })
   )
   return {
+    clientTail: client,
+    exitTail: exit,
     identity,
     tailControlTranscript: b4a.from(transcript),
     client: new FinalExitActivationSession(client.takeFinalExitHandoff(), {
@@ -155,13 +157,18 @@ function handoffPair(
 
 function readyPair(...args) {
   const pair = handoffPair(...args)
-  pair.exit.openActivate(pair.client.sealActivate({ randomBytes: (size) => seed(0xc1, size) }))
+  const activate = pair.client.sealActivate({ randomBytes: (size) => seed(0xc1, size) })
+  const delayedActivate = pair.client.retryActivate({
+    randomBytes: (size) => seed(0xc0, size)
+  })
+  pair.exit.openActivate(activate)
   pair.client.openReady(
     pair.exit.sealReady({
       identitySecretKey: pair.identity.secretKey,
       randomBytes: (size) => seed(0xc2, size)
     })
   )
+  pair.delayedActivate = delayedActivate
   return pair
 }
 
@@ -788,11 +795,11 @@ test('ACK and OPEN retries preserve semantic bytes under fresh counters', (t) =>
   })
   t.is(decodeM3ContextEnvelope(retryOpen).frame.readBigUInt64BE(0), 1n)
   const opened = pair.client.openOpen(retryOpen)
-  t.alike(pair.client.openOpen(firstOpen), opened, 'reordered semantic OPEN is identical')
+  t.is(pair.client.openOpen(firstOpen), null, 'reordered semantic OPEN is discarded')
 
   const proactiveRetry = pair.exit.retryOpen({ randomBytes: (size) => seed(0xe6, size) })
   t.is(decodeM3ContextEnvelope(proactiveRetry).frame.readBigUInt64BE(0), 2n)
-  t.alike(pair.client.openOpen(proactiveRetry), opened)
+  t.is(pair.client.openOpen(proactiveRetry), null)
   pair.client.destroy()
   pair.exit.destroy()
 })
@@ -825,7 +832,7 @@ test('final-finalize rejects class, role, and semantic substitution', (t) => {
     verify: (input, signature, publicKey) => cryptoSuite.verify(input, signature, publicKey),
     seal(options) {
       const plaintext = b4a.from(options.plaintext)
-      if (seals++ === 2) plaintext[20] ^= 1
+      if (seals++ === 3) plaintext[20] ^= 1
       return cryptoSuite.seal({ ...options, plaintext })
     }
   }
@@ -840,4 +847,51 @@ test('final-finalize rejects class, role, and semantic substitution', (t) => {
   )
   t.alike(conflicting.exit.diagnostics(), { state: 'DESTROYED' })
   conflicting.client.destroy()
+})
+
+test('OPEN erases ordered tail state and retains finalization only for exact grace', (t) => {
+  let current = 1_000n
+  const pair = readyPair(() => current, 20_000n)
+  const delayedReady = pair.exit.retryReady({ randomBytes: (size) => seed(0xa1, size) })
+  const firstAck = pair.client.sealAck({ randomBytes: (size) => seed(0xa2, size) })
+  const delayedAck = pair.client.retryAck({ randomBytes: (size) => seed(0xa3, size) })
+  const firstOpen = pair.exit.openAck(firstAck, {
+    randomBytes: (size) => seed(0xa4, size)
+  })
+  const delayedOpen = pair.exit.retryOpen({ randomBytes: (size) => seed(0xa5, size) })
+  pair.client.openOpen(firstOpen)
+
+  t.is(pair.clientTail.diagnostics().state, 'DESTROYED')
+  t.is(pair.exitTail.diagnostics().state, 'DESTROYED')
+  current = 5_999n
+  t.is(pair.client.openReady(delayedReady), null, 'delayed READY is a receive-only tombstone')
+  t.is(pair.client.openOpen(delayedOpen), null, 'delayed OPEN is a receive-only tombstone')
+  const resentOpen = pair.exit.openAck(delayedAck, {
+    randomBytes: (size) => seed(0xa6, size)
+  })
+  t.is(decodeM3ContextEnvelope(resentOpen).frame.readBigUInt64BE(0), 2n)
+  t.is(pair.client.openOpen(resentOpen), null)
+  const activateResponse = pair.exit.openRetiredActivate(pair.delayedActivate, {
+    randomBytes: (size) => seed(0xa7, size)
+  })
+  t.is(decodeM3ContextEnvelope(activateResponse).frame.readBigUInt64BE(0), 3n)
+  t.is(pair.client.openOpen(activateResponse), null)
+
+  current = 6_000n
+  t.ok(pair.client.expireGrace(), 'client grace expires at exactly five seconds')
+  t.ok(pair.exit.expireGrace(), 'exit grace expires at exactly five seconds')
+  t.alike(pair.client.diagnostics(), { state: 'OPEN' })
+  t.alike(pair.exit.diagnostics(), { state: 'OPEN' })
+  t.absent(pair.client.expireGrace(), 'grace erasure is idempotent')
+  t.absent(pair.exit.expireGrace(), 'grace erasure is idempotent')
+  t.is(pair.client.openOpen(delayedOpen), null, 'retired client context is inert after grace')
+  t.is(
+    pair.exit.openAck(delayedAck, { randomBytes: () => t.fail('must not reseal after grace') }),
+    null,
+    'retired exit context is inert after grace'
+  )
+  t.alike(pair.client.diagnostics(), { state: 'OPEN' })
+  t.alike(pair.exit.diagnostics(), { state: 'OPEN' })
+  pair.client.destroy()
+  pair.exit.destroy()
 })

@@ -386,6 +386,91 @@ function clearFinalMaterial(material) {
   for (const value of Object.values(material)) clear(value)
 }
 
+function destroyCounter(state, name) {
+  const counter = state[name]
+  state[name] = null
+  try {
+    if (counter) counter.destroy()
+  } catch {}
+}
+
+function clearMaterialField(material, name) {
+  if (!material) return
+  let value = null
+  try {
+    value = material[name]
+    material[name] = null
+  } catch {}
+  clear(value)
+}
+
+function eraseOrderedTailControl(state) {
+  const tailControl = state.material && state.material.tailControl
+  if (state.material) state.material.tailControl = null
+  try {
+    if (tailControl) tailControl.destroy()
+  } catch {}
+  clearMaterialField(state.material, 'sharedSecret')
+}
+
+function installRetiredFinalizationState(state) {
+  eraseOrderedTailControl(state)
+  if (state.initiator) {
+    destroyCounter(state, 'forwardTx')
+    destroyCounter(state, 'finalForwardTx')
+    clearMaterialField(state.material, 'finalizeForwardKey')
+    clearMaterialField(state.material, 'finalizeForwardNoncePrefix')
+    clearMaterialField(state.finalMaterial, 'finalizeForwardKey')
+    clearMaterialField(state.finalMaterial, 'finalizeForwardNoncePrefix')
+  } else {
+    destroyCounter(state, 'reverseTx')
+    clearMaterialField(state.material, 'finalizeReverseKey')
+    clearMaterialField(state.material, 'finalizeReverseNoncePrefix')
+  }
+}
+
+function eraseRetiredFinalizationState(state) {
+  for (const name of [
+    'forwardTx',
+    'forwardRx',
+    'reverseTx',
+    'reverseRx',
+    'finalForwardTx',
+    'finalForwardRx',
+    'finalReverseTx',
+    'finalReverseRx'
+  ]) {
+    destroyCounter(state, name)
+  }
+  for (const name of [
+    'finalizeForwardKey',
+    'finalizeForwardNoncePrefix',
+    'finalizeReverseKey',
+    'finalizeReverseNoncePrefix'
+  ]) {
+    clearMaterialField(state.material, name)
+    clearMaterialField(state.finalMaterial, name)
+  }
+  clear(state.activationEncoded)
+  clearActivation(state.activation)
+  clear(state.readyEncoded)
+  clearReady(state.ready)
+  clear(state.ackEncoded)
+  clearAck(state.ack)
+  clear(state.openEncoded)
+  clearOpen(state.open)
+  state.activationEncoded = null
+  state.activation = null
+  state.readyEncoded = null
+  state.ready = null
+  state.ackEncoded = null
+  state.ack = null
+  state.openEncoded = null
+  state.open = null
+  state.graceDeadline = null
+  state.graceRetired = true
+}
+
 function buildFinalTranscript(state, activation) {
   let tailDigest = null
   let encoded = null
@@ -475,6 +560,9 @@ export class FinalExitActivationSession {
         finalTranscriptDigest: null,
         forwardRx: material.initiator ? null : new DatagramReplayWindow({ window: 64 }),
         forwardTx: material.initiator ? new SenderCounter() : null,
+        graceDeadline: null,
+        graceRetired: false,
+        initiator: material.initiator,
         material,
         mutating: false,
         now,
@@ -514,7 +602,7 @@ export class FinalExitActivationSession {
     let nonce = null
     let encoded = null
     try {
-      if (!state.material.initiator || state.state !== 'TAIL_READY') authentication()
+      if (!state.initiator || state.state !== 'TAIL_READY') authentication()
       this.#checkDeadline(state, true)
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
@@ -555,7 +643,7 @@ export class FinalExitActivationSession {
   retryActivate(options) {
     const state = this.#begin()
     try {
-      if (!state.material.initiator || state.state !== 'ACTIVATING') authentication()
+      if (!state.initiator || state.state !== 'ACTIVATING') authentication()
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
       this.#checkDeadline(state)
@@ -582,10 +670,7 @@ export class FinalExitActivationSession {
     let encoded = null
     let activation = null
     try {
-      if (
-        state.material.initiator ||
-        (state.state !== 'TAIL_READY' && state.state !== 'FINALIZING')
-      ) {
+      if (state.initiator || (state.state !== 'TAIL_READY' && state.state !== 'FINALIZING')) {
         authentication()
       }
       this.#checkDeadline(state, state.state === 'TAIL_READY')
@@ -645,7 +730,7 @@ export class FinalExitActivationSession {
     let ready = null
     try {
       if (
-        state.material.initiator ||
+        state.initiator ||
         state.state !== 'FINALIZING' ||
         state.readyEncoded ||
         !state.finalTranscriptDigest
@@ -726,7 +811,7 @@ export class FinalExitActivationSession {
   retryReady(options) {
     const state = this.#begin()
     try {
-      if (state.material.initiator || state.state !== 'FINALIZING' || !state.readyEncoded) {
+      if (state.initiator || state.state !== 'FINALIZING' || !state.readyEncoded) {
         authentication()
       }
       const randomBytes = option(object(options), 'randomBytes')
@@ -757,10 +842,18 @@ export class FinalExitActivationSession {
     let input = null
     let finalTranscript = null
     try {
-      if (!state.material.initiator || (state.state !== 'ACTIVATING' && state.state !== 'ACKING')) {
+      if (
+        !state.initiator ||
+        (state.state !== 'ACTIVATING' && state.state !== 'ACKING' && state.state !== 'OPEN')
+      ) {
         authentication()
       }
-      this.#checkDeadline(state)
+      const retired = state.state === 'OPEN'
+      if (retired) {
+        if (!this.#checkGrace(state)) return null
+      } else {
+        this.#checkDeadline(state)
+      }
       encoded = openFrame(
         state,
         envelope,
@@ -772,6 +865,7 @@ export class FinalExitActivationSession {
       if (encoded === null) return null
       if (state.readyEncoded) {
         if (!same(encoded, state.readyEncoded)) authentication()
+        if (retired) return null
         return readyProjection(state.ready)
       }
       ready = decodeDhtExitReady(encoded)
@@ -825,7 +919,7 @@ export class FinalExitActivationSession {
     let encoded = null
     let ack = null
     try {
-      if (!state.material.initiator || state.state !== 'ACKING' || state.ackEncoded) {
+      if (!state.initiator || state.state !== 'ACKING' || state.ackEncoded) {
         authentication()
       }
       const randomBytes = option(object(options), 'randomBytes')
@@ -868,7 +962,7 @@ export class FinalExitActivationSession {
   retryAck(options) {
     const state = this.#begin()
     try {
-      if (!state.material.initiator || state.state !== 'ACKING' || !state.ackEncoded) {
+      if (!state.initiator || state.state !== 'ACKING' || !state.ackEncoded) {
         authentication()
       }
       const randomBytes = option(object(options), 'randomBytes')
@@ -892,6 +986,43 @@ export class FinalExitActivationSession {
     }
   }
 
+  openRetiredActivate(envelope, options) {
+    const state = this.#begin()
+    let encoded = null
+    try {
+      if (state.initiator || state.state !== 'OPEN') authentication()
+      if (!this.#checkGrace(state)) return null
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      encoded = openFrame(
+        state,
+        envelope,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD,
+        DHT_EXIT_ACTIVATE_SIZE
+      )
+      this.#assertLive(state)
+      if (encoded === null) return null
+      if (!same(encoded, state.activationEncoded)) authentication()
+      const response = sealFrame(
+        state,
+        state.openEncoded,
+        randomBytes,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE
+      )
+      this.#assertLive(state)
+      return response
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(encoded)
+    }
+  }
+
   openAck(envelope, options) {
     const state = this.#begin()
     let encoded = null
@@ -901,12 +1032,14 @@ export class FinalExitActivationSession {
     let openEncoded = null
     let open = null
     try {
-      if (state.material.initiator || (state.state !== 'FINALIZING' && state.state !== 'OPEN')) {
+      if (state.initiator || (state.state !== 'FINALIZING' && state.state !== 'OPEN')) {
         authentication()
       }
+      const retired = state.state === 'OPEN'
+      if (retired && !this.#checkGrace(state)) return null
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
-      this.#checkDeadline(state)
+      if (!retired) this.#checkDeadline(state)
       encoded = openFrame(
         state,
         envelope,
@@ -959,7 +1092,7 @@ export class FinalExitActivationSession {
         state.openEncoded = copy(openEncoded)
         state.open = open
         open = null
-        state.state = 'OPEN'
+        this.#enterOpen(state)
       }
       return response
     } catch (err) {
@@ -980,12 +1113,12 @@ export class FinalExitActivationSession {
   retryOpen(options) {
     const state = this.#begin()
     try {
-      if (state.material.initiator || state.state !== 'OPEN' || !state.openEncoded) {
+      if (state.initiator || state.state !== 'OPEN' || !state.openEncoded) {
         authentication()
       }
+      if (!this.#checkGrace(state)) return null
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
-      this.#checkDeadline(state)
       const envelope = sealFrame(
         state,
         state.openEncoded,
@@ -1010,11 +1143,16 @@ export class FinalExitActivationSession {
     let open = null
     let ackDigest = null
     try {
-      if (!state.material.initiator || (state.state !== 'ACKING' && state.state !== 'OPEN')) {
+      if (!state.initiator || (state.state !== 'ACKING' && state.state !== 'OPEN')) {
         authentication()
       }
+      const retired = state.state === 'OPEN'
+      if (retired) {
+        if (!this.#checkGrace(state)) return null
+      } else {
+        this.#checkDeadline(state)
+      }
       if (!state.ackEncoded) authentication()
-      this.#checkDeadline(state)
       encoded = openFrame(
         state,
         envelope,
@@ -1026,7 +1164,7 @@ export class FinalExitActivationSession {
       if (encoded === null) return null
       if (state.openEncoded) {
         if (!same(encoded, state.openEncoded)) authentication()
-        return openProjection(state.open)
+        return null
       }
       open = decodeDhtExitOpen(encoded)
       ackDigest = digestDhtExitReadyAck(state.ackEncoded)
@@ -1045,7 +1183,7 @@ export class FinalExitActivationSession {
       state.openEncoded = copy(encoded)
       state.open = open
       open = null
-      state.state = 'OPEN'
+      this.#enterOpen(state)
       return openProjection(state.open)
     } catch (err) {
       this.#terminate()
@@ -1056,6 +1194,21 @@ export class FinalExitActivationSession {
       clear(encoded)
       clearOpen(open)
       clear(ackDigest)
+    }
+  }
+
+  expireGrace() {
+    const state = this.#begin()
+    try {
+      if (state.state !== 'OPEN' || state.graceRetired) return false
+      if (this.#checkGrace(state)) return false
+      return true
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
     }
   }
 
@@ -1100,6 +1253,28 @@ export class FinalExitActivationSession {
     if (current >= state.deadline) {
       throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
     }
+  }
+
+  #enterOpen(state) {
+    this.#assertLive(state)
+    const current = nowValue(state.now)
+    this.#assertLive(state)
+    state.graceDeadline =
+      current > MAX_UINT64 - FINALIZATION_TIMEOUT_MS
+        ? MAX_UINT64
+        : current + FINALIZATION_TIMEOUT_MS
+    state.state = 'OPEN'
+    installRetiredFinalizationState(state)
+  }
+
+  #checkGrace(state) {
+    this.#assertLive(state)
+    if (state.graceRetired || state.graceDeadline === null) return false
+    const current = nowValue(state.now)
+    this.#assertLive(state)
+    if (current < state.graceDeadline) return true
+    eraseRetiredFinalizationState(state)
+    return false
   }
 
   #terminate() {
@@ -1155,8 +1330,11 @@ export class FinalExitActivationSession {
     state.finalTranscriptDigest = null
     state.finalMaterial = null
     state.deadline = null
+    state.graceDeadline = null
+    state.graceRetired = true
     state.crypto = null
     state.now = null
+    state.initiator = false
     state.forwardTx = null
     state.forwardRx = null
     state.reverseTx = null

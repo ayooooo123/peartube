@@ -233,9 +233,12 @@ expiry, and tail-context expiry to compute each candidate deadline.
 
 Independently, when the current tail constructs its response it stores one-use local digest
 admissions for the advertisements actually returned, bound to the same request nonce,
-branch/generation/index/role, current-tail context, and request deadline. Its tail adjacency
-initiator must consume the matching local admission before dialing. Thus neither a forged client
-capability nor a valid advertisement omitted from that tail's response can authorize contact.
+branch/generation/index/role, current-tail context, and the tail's non-extending local admission
+deadline. The exact request body has no timestamp, so this tail-local deadline begins at
+authenticated receipt and is distinct from the client's authoritative send-time request deadline;
+it never crosses the wire or extends client evidence acceptance. Its tail adjacency initiator must
+consume the matching local admission before dialing. Thus neither a forged client capability nor a
+valid advertisement omitted from that tail's response can authorize contact.
 
 `BranchPathAuthority` consumes that routed-candidate capability and issues one single-use extension
 authorization bound to:
@@ -459,6 +462,8 @@ read API and is cleared on failure, expiry, branch destroy, or after Task 4 cons
   live capabilities, and ninety-six total live-plus-tombstoned candidate states. Tombstones count
   against the total but not the sixteen-live limit and expire at the original request deadline.
   Client evidence and current-tail digest-admission directories use the same request and state caps.
+  Client tombstones expire at the original send-time request deadline; current-tail admission
+  tombstones expire at the separately bounded local admission deadline described in Section 4.
 - Current-tail extension-request admissions permit exactly one in progress per branch and two total;
   their consumed compound keys remain tombstoned until the extension deadline.
 - `M3AdjacencyAuthority` defaults to 128 and caps at 4,096 live runtimes as specified above.

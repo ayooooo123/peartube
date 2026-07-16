@@ -15,13 +15,16 @@ import {
   CELL_CLASS,
   CONTEXT_CLASS,
   DIRECTION,
+  M3_LINK_ROLE,
   M3_MESSAGE_ID,
   M3_PROTOCOL_VERSION,
+  RELAY_CAPABILITY,
   decodeM3Object,
   encodeM3Object
 } from './protocol.js'
 
 export const ADMITTED_LIMITS_SIZE = 26
+export const RELAY_DISCOVER_SIZE = 77
 export const TAIL_CONTROL_TRANSCRIPT_SIZE = 290
 export const TAIL_READY_SIZE = 282
 
@@ -35,6 +38,12 @@ const TAIL_READY_TRANSCRIPT_DOMAIN = b4a.from(
   'hyperdht-private-routes/m3/tail-control/transcript-digest/v1'
 )
 const TAIL_READY_BODY_SIZE = 210
+const RELAY_DISCOVER_BODY_SIZE = 69
+const RELAY_DISCOVER_DEADLINE_MS = 5_000n
+const MAX_RELAY_DISCOVER_REQUESTS = 3
+const RELAY_DISCOVER_NONCE_DOMAIN = b4a.from(
+  'hyperdht-private-routes/m3/tail-control/discovery-nonce/v1'
+)
 const ROUTE_FRAME_SIZE = 1100
 const ROUTE_PLAINTEXT_SIZE = 1076
 const MAX_ROUTE_PAYLOAD = 1073
@@ -65,6 +74,14 @@ const FINALIZE_LABELS = Object.freeze({
 
 function invalid() {
   throw PrivateRouteError.INVALID_ROUTE()
+}
+
+function busy() {
+  throw PrivateRouteError.ERR_BUSY()
+}
+
+function replay() {
+  throw PrivateRouteError.ERR_REPLAY()
 }
 
 function object(value) {
@@ -109,13 +126,16 @@ function subarray(value, start, end) {
 }
 
 function copy(value) {
+  let output = null
   try {
     const length = bufferLength(value)
     if (length < 0) invalid()
-    const output = b4a.allocUnsafeSlow(length)
+    output = b4a.allocUnsafeSlow(length)
+    if (!fixed(output, length)) invalid()
     set(output, value)
     return output
   } catch (err) {
+    clear(output)
     if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
     invalid()
   }
@@ -127,6 +147,17 @@ function uint16(value) {
 
 function uint32(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_UINT32
+}
+
+function relayCapabilityMask(value) {
+  const known =
+    RELAY_CAPABILITY.CIRCUIT_RELAY_V1 |
+    RELAY_CAPABILITY.DHT_EXIT_V1 |
+    RELAY_CAPABILITY.PRIVATE_RECORDS_V1
+  if (!uint32(value) || value === 0 || value & ~known) {
+    invalid()
+  }
+  return value
 }
 
 function uint64(value) {
@@ -188,6 +219,103 @@ function clear(buffer) {
     if (b4a.isBuffer(buffer)) bufferFill.call(buffer, 0)
   } catch {
     // Best-effort zeroization only.
+  }
+}
+
+function clearRelayDiscover(value) {
+  if (!value) return
+  for (const field of [
+    'randomTarget',
+    'queryNonce',
+    'branchId',
+    'circuitId',
+    'currentTailIdentity',
+    'currentTailAdvertisementDigest'
+  ]) {
+    clear(value[field])
+    value[field] = null
+  }
+  value.requestedCapabilityMask = 0
+  value.maximumResults = 0
+  value.branchClass = -1
+  value.generation = 0n
+  value.currentExtensionIndex = -1
+  value.extensionIndex = -1
+  value.requiredRole = -1
+  value.localAdmissionDeadline = 0n
+  value.tailExpiresAt = 0n
+}
+
+export function encodeRelayDiscoverRequest(value) {
+  let randomTarget = null
+  let queryNonce = null
+  let body = null
+  try {
+    object(value)
+    const requestedCapabilityMask = relayCapabilityMask(option(value, 'requestedCapabilityMask'))
+    randomTarget = copy(option(value, 'randomTarget'))
+    queryNonce = copy(option(value, 'queryNonce'))
+    const maximumResults = option(value, 'maximumResults')
+    if (
+      !fixed(randomTarget, 32) ||
+      !fixed(queryNonce, 32) ||
+      !Number.isSafeInteger(maximumResults) ||
+      maximumResults < 1 ||
+      maximumResults > 8
+    ) {
+      invalid()
+    }
+    body = b4a.allocUnsafeSlow(RELAY_DISCOVER_BODY_SIZE)
+    if (!fixed(body, RELAY_DISCOVER_BODY_SIZE)) invalid()
+    writeUint32(body, requestedCapabilityMask, 0)
+    set(body, randomTarget, 4)
+    set(body, queryNonce, 36)
+    body[68] = maximumResults
+    return encodeM3Object({ messageId: M3_MESSAGE_ID.RELAY_DISCOVER_V1, body })
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(randomTarget)
+    clear(queryNonce)
+    clear(body)
+  }
+}
+
+export function decodeRelayDiscoverRequest(encoded) {
+  let decoded = null
+  let result = null
+  try {
+    if (!fixed(encoded, RELAY_DISCOVER_SIZE)) invalid()
+    decoded = decodeM3Object(encoded)
+    if (
+      decoded.messageId !== M3_MESSAGE_ID.RELAY_DISCOVER_V1 ||
+      !fixed(decoded.body, RELAY_DISCOVER_BODY_SIZE) ||
+      bufferLength(decoded.authSuffix) !== 0
+    ) {
+      invalid()
+    }
+    const requestedCapabilityMask = relayCapabilityMask(readUint32(decoded.body, 0))
+    const maximumResults = decoded.body[68]
+    if (maximumResults < 1 || maximumResults > 8) invalid()
+    result = {
+      requestedCapabilityMask,
+      randomTarget: null,
+      queryNonce: null,
+      maximumResults
+    }
+    result.randomTarget = copy(subarray(decoded.body, 4, 36))
+    result.queryNonce = copy(subarray(decoded.body, 36, 68))
+    return result
+  } catch (err) {
+    clearRelayDiscover(result)
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    if (decoded) {
+      clear(decoded.body)
+      clear(decoded.authSuffix)
+    }
   }
 }
 
@@ -536,6 +664,91 @@ function frameAssociatedData(state, direction, counter) {
   })
 }
 
+function discoveryNonceKey(queryNonce) {
+  let digest = null
+  try {
+    digest = cryptoSuite.hash([RELAY_DISCOVER_NONCE_DOMAIN, queryNonce])
+    if (!fixed(digest, 32)) invalid()
+    return b4a.toString(digest, 'hex')
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    clear(digest)
+  }
+}
+
+function clearDiscoveryRecord(record) {
+  if (!record) return
+  clear(record.randomTarget)
+  clear(record.queryNonce)
+  record.randomTarget = null
+  record.queryNonce = null
+  record.deadline = 0n
+  record.requestedCapabilityMask = 0
+  record.maximumResults = 0
+}
+
+function clearDiscoveries(state) {
+  if (state.discoveries) {
+    for (const record of state.discoveries.values()) clearDiscoveryRecord(record)
+    state.discoveries.clear()
+  }
+  if (state.discoveryNonces) state.discoveryNonces.clear()
+  state.discoveries = null
+  state.discoveryNonces = null
+  state.discoveryAttempts = 0
+}
+
+function purgeExpiredDiscoveries(state, current) {
+  for (const [key, record] of state.discoveries) {
+    if (record.deadline > current) continue
+    state.discoveries.delete(key)
+    clearDiscoveryRecord(record)
+  }
+}
+
+function requiredDiscoveryMask(state) {
+  if (state.transcript.extensionIndex === 0) return RELAY_CAPABILITY.CIRCUIT_RELAY_V1
+  if (state.transcript.extensionIndex === 1) {
+    return RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1
+  }
+  invalid()
+}
+
+function registerDiscovery(state, request, current) {
+  purgeExpiredDiscoveries(state, current)
+  if (request.requestedCapabilityMask !== requiredDiscoveryMask(state)) invalid()
+  if (state.discoveryAttempts >= MAX_RELAY_DISCOVER_REQUESTS) busy()
+  const key = discoveryNonceKey(request.queryNonce)
+  if (state.discoveryNonces.has(key)) replay()
+  const deadline =
+    current + RELAY_DISCOVER_DEADLINE_MS < state.expiresAt
+      ? current + RELAY_DISCOVER_DEADLINE_MS
+      : state.expiresAt
+  const record = {
+    requestedCapabilityMask: request.requestedCapabilityMask,
+    randomTarget: null,
+    queryNonce: null,
+    maximumResults: request.maximumResults,
+    deadline
+  }
+  try {
+    record.randomTarget = copy(request.randomTarget)
+    record.queryNonce = copy(request.queryNonce)
+    state.discoveryNonces.add(key)
+    state.discoveries.set(key, record)
+    state.discoveryAttempts++
+    return record
+  } catch (err) {
+    state.discoveryNonces.delete(key)
+    state.discoveries.delete(key)
+    clearDiscoveryRecord(record)
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  }
+}
+
 function clearSessionState(state, session = null) {
   if (!state) return false
   if (session) {
@@ -562,6 +775,7 @@ function clearSessionState(state, session = null) {
   state.transcriptDigest = null
   state.now = null
   state.crypto = null
+  clearDiscoveries(state)
   clear(txKey)
   clear(rxKey)
   clear(txNoncePrefix)
@@ -599,19 +813,29 @@ function assertSessionMutation(state) {
   if (state.violated) invalid()
 }
 
-function sealReadyFrame(state, encoded, randomBytes) {
+function sessionNow(state) {
+  const current = nowValue(state.now)
+  assertSessionMutation(state)
+  purgeExpiredDiscoveries(state, current)
+  return current
+}
+
+function sealControlFrame(state, encoded, randomBytes, direction) {
   const counter = state.tx.next()
-  const direction = DIRECTION.REVERSE
-  const associatedData = frameAssociatedData(state, direction, counter)
-  const plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
+  let associatedData = null
+  let plaintext = null
   let padding = null
   let ciphertext = null
   let frame = null
   try {
+    associatedData = frameAssociatedData(state, direction, counter)
+    plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
+    if (!fixed(plaintext, ROUTE_PLAINTEXT_SIZE)) invalid()
     plaintext[0] = CELL_CLASS.CONTROL
     writeUint16(plaintext, encoded.byteLength, 1)
     set(plaintext, encoded, 3)
     padding = randomBytes(MAX_ROUTE_PAYLOAD - encoded.byteLength)
+    assertSessionMutation(state)
     if (!fixed(padding, MAX_ROUTE_PAYLOAD - encoded.byteLength)) invalid()
     set(plaintext, padding, 3 + encoded.byteLength)
     ciphertext = state.crypto.seal({
@@ -621,8 +845,10 @@ function sealReadyFrame(state, encoded, randomBytes) {
       associatedData,
       plaintext
     })
+    assertSessionMutation(state)
     if (!fixed(ciphertext, ROUTE_PLAINTEXT_SIZE + AEAD_TAG_SIZE)) invalid()
     frame = b4a.allocUnsafeSlow(ROUTE_FRAME_SIZE)
+    if (!fixed(frame, ROUTE_FRAME_SIZE)) invalid()
     writeFrameCounter(frame, counter)
     set(frame, ciphertext, 8)
     return encodeM3ContextEnvelope({
@@ -638,14 +864,14 @@ function sealReadyFrame(state, encoded, randomBytes) {
   }
 }
 
-function openReadyFrame(state, envelope) {
+function openControlFrame(state, envelope, direction, expectedSize) {
   const decodedEnvelope = decodeM3ContextEnvelope(envelope)
   let associatedData = null
   let plaintext = null
   try {
     if (decodedEnvelope.contextClass !== CONTEXT_CLASS.TAIL_CONTROL_ORDERED) invalid()
     const counter = readFrameCounter(decodedEnvelope.frame)
-    associatedData = frameAssociatedData(state, DIRECTION.REVERSE, counter)
+    associatedData = frameAssociatedData(state, direction, counter)
     plaintext = state.crypto.open({
       key: state.rxKey,
       noncePrefix: state.rxNoncePrefix,
@@ -653,16 +879,18 @@ function openReadyFrame(state, envelope) {
       associatedData,
       ciphertext: subarray(decodedEnvelope.frame, 8, ROUTE_FRAME_SIZE)
     })
+    assertSessionMutation(state)
     if (!fixed(plaintext, ROUTE_PLAINTEXT_SIZE) || plaintext[0] !== CELL_CLASS.CONTROL) invalid()
     const payloadLength = readUint16(plaintext, 1)
-    if (payloadLength !== TAIL_READY_SIZE || payloadLength > MAX_ROUTE_PAYLOAD) invalid()
+    if (payloadLength !== expectedSize || payloadLength > MAX_ROUTE_PAYLOAD) invalid()
     const encoded = copy(subarray(plaintext, 3, 3 + payloadLength))
     const delivered = state.rx.pushAuthenticated(counter, encoded)
-    if (counter !== 0n || delivered.length !== 1 || delivered[0] !== encoded) {
+    assertSessionMutation(state)
+    if (delivered.length !== 1 || delivered[0] !== encoded) {
       clear(encoded)
       invalid()
     }
-    return encoded
+    return { counter, encoded }
   } finally {
     clear(decodedEnvelope.frame)
     clear(associatedData)
@@ -681,8 +909,7 @@ class TailControlSession {
     let encoded = null
     try {
       if (state.initiator || state.ready) invalid()
-      const current = nowValue(state.now)
-      assertSessionMutation(state)
+      const current = sessionNow(state)
       if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
       const randomBytes = option(object(options), 'randomBytes')
       secretKey = copy(option(options, 'identitySecretKey'))
@@ -717,7 +944,7 @@ class TailControlSession {
         body,
         authSuffix: signature
       })
-      const envelope = sealReadyFrame(state, encoded, randomBytes)
+      const envelope = sealControlFrame(state, encoded, randomBytes, DIRECTION.REVERSE)
       assertSessionMutation(state)
       state.ready = true
       return envelope
@@ -738,15 +965,17 @@ class TailControlSession {
 
   openReady(envelope) {
     const state = beginSessionMutation(this)
+    let opened = null
     let encoded = null
     let ready = null
     let input = null
     try {
       if (!state.initiator || state.ready) invalid()
-      const current = nowValue(state.now)
-      assertSessionMutation(state)
+      const current = sessionNow(state)
       if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
-      encoded = openReadyFrame(state, envelope)
+      opened = openControlFrame(state, envelope, DIRECTION.REVERSE, TAIL_READY_SIZE)
+      if (opened.counter !== 0n) invalid()
+      encoded = opened.encoded
       assertSessionMutation(state)
       ready = decodeTailReady(encoded)
       input = tailReadySignatureInput(ready.body)
@@ -786,12 +1015,119 @@ class TailControlSession {
     }
   }
 
+  sealDiscoverRequest(options) {
+    const state = beginSessionMutation(this)
+    let encoded = null
+    let request = null
+    try {
+      if (!state.initiator || !state.ready) invalid()
+      const current = sessionNow(state)
+      if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      const selectedOptions = object(options)
+      const randomBytes = option(selectedOptions, 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      encoded = encodeRelayDiscoverRequest({
+        requestedCapabilityMask: option(selectedOptions, 'requestedCapabilityMask'),
+        randomTarget: option(selectedOptions, 'randomTarget'),
+        queryNonce: option(selectedOptions, 'queryNonce'),
+        maximumResults: option(selectedOptions, 'maximumResults')
+      })
+      assertSessionMutation(state)
+      request = decodeRelayDiscoverRequest(encoded)
+      assertSessionMutation(state)
+      registerDiscovery(state, request, current)
+      assertSessionMutation(state)
+      const envelope = sealControlFrame(state, encoded, randomBytes, DIRECTION.FORWARD)
+      assertSessionMutation(state)
+      return envelope
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(encoded)
+      clearRelayDiscover(request)
+    }
+  }
+
+  openDiscoverRequest(envelope) {
+    const state = beginSessionMutation(this)
+    let opened = null
+    let request = null
+    let projection = null
+    try {
+      if (state.initiator || !state.ready) invalid()
+      const current = sessionNow(state)
+      if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      opened = openControlFrame(state, envelope, DIRECTION.FORWARD, RELAY_DISCOVER_SIZE)
+      assertSessionMutation(state)
+      request = decodeRelayDiscoverRequest(opened.encoded)
+      const record = registerDiscovery(state, request, current)
+      assertSessionMutation(state)
+      projection = {
+        requestedCapabilityMask: request.requestedCapabilityMask,
+        randomTarget: null,
+        queryNonce: null,
+        maximumResults: request.maximumResults,
+        branchClass: state.transcript.branchClass,
+        branchId: null,
+        circuitId: null,
+        generation: state.transcript.generation,
+        currentTailIdentity: null,
+        currentTailAdvertisementDigest: null,
+        currentExtensionIndex: state.transcript.extensionIndex,
+        extensionIndex: state.transcript.extensionIndex + 1,
+        requiredRole:
+          state.transcript.extensionIndex === 0 ? M3_LINK_ROLE.SAFETY_RELAY : M3_LINK_ROLE.DHT_EXIT,
+        localAdmissionDeadline: record.deadline,
+        tailExpiresAt: state.expiresAt
+      }
+      projection.randomTarget = copy(request.randomTarget)
+      projection.queryNonce = copy(request.queryNonce)
+      projection.branchId = copy(state.transcript.branchId)
+      projection.circuitId = copy(state.transcript.circuitId)
+      projection.currentTailIdentity = copy(state.transcript.tailIdentity)
+      projection.currentTailAdvertisementDigest = copy(
+        state.transcript.candidateAdvertisementDigest
+      )
+      return Object.freeze(projection)
+    } catch (err) {
+      clearRelayDiscover(projection)
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (opened) clear(opened.encoded)
+      clearRelayDiscover(request)
+    }
+  }
+
   diagnostics() {
     const state = SESSIONS.get(this)
     if (!state || state.destroyed || DESTROYED_SESSIONS.has(this)) {
-      return Object.freeze({ state: 'DESTROYED' })
+      return Object.freeze({
+        state: 'DESTROYED',
+        pendingDiscoveries: 0,
+        discoveryAttempts: 0
+      })
     }
-    return Object.freeze({ state: state.ready ? 'ACTIVE' : 'WAITING_READY' })
+    beginSessionMutation(this)
+    try {
+      sessionNow(state)
+      return Object.freeze({
+        state: state.ready ? 'ACTIVE' : 'WAITING_READY',
+        pendingDiscoveries: state.discoveries.size,
+        discoveryAttempts: state.discoveryAttempts
+      })
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+    }
   }
 
   destroy() {
@@ -858,6 +1194,9 @@ export function createTailControlSession(capability, options = {}) {
       rxNoncePrefix: initiator ? derived.reverseNoncePrefix : derived.forwardNoncePrefix,
       tx: new SenderCounter(),
       rx: new OrderedReceiver({ window: 256, gapTimeout: 5_000, now: counterNow }),
+      discoveries: new Map(),
+      discoveryNonces: new Set(),
+      discoveryAttempts: 0,
       ready: false,
       mutating: false,
       violated: false,

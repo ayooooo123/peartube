@@ -588,7 +588,16 @@ accepted only in `TAIL_CONTROL_ORDERED` at the current tail and never on a
 direct bootstrap socket. The current tail performs the bounded public DHT walk;
 the client-supplied target orders discovery only and does not authorize a dial.
 The complete query/response exchange has a non-extending 5,000 ms deadline from
-the request send.
+the request send. That client send-time deadline is authoritative for response
+and evidence acceptance. Because this fixed 69-byte body carries no timestamp
+or deadline and peers do not share a clock, the current tail cannot reconstruct
+that absolute value. It therefore applies a distinct local admission/resource
+deadline of `min(authenticatedReceiptTime + 5,000 ms, tailContextExpiry)` to its
+walk, reassembly, and returned-advertisement digest admissions. This local bound
+is never sent to or trusted by the client, cannot extend the client's acceptance
+deadline, and is erased independently. A response arriving after the client's
+original deadline is rejected even if the tail's local resource window remains
+live.
 
 ### 3.8 `RELAY_DISCOVER_RESPONSE_V1` (`0x0007`)
 

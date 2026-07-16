@@ -9,12 +9,23 @@ import {
   encodeM3ContextAD,
   encodeM3ContextEnvelope
 } from '../lib/m3-context.js'
-import { BRANCH_CLASS, CONTEXT_CLASS, DIRECTION } from '../lib/protocol.js'
 import {
+  BRANCH_CLASS,
+  CONTEXT_CLASS,
+  DIRECTION,
+  M3_LINK_ROLE,
+  M3_MESSAGE_ID,
+  RELAY_CAPABILITY,
+  decodeM3Object
+} from '../lib/protocol.js'
+import {
+  RELAY_DISCOVER_SIZE,
   TAIL_READY_SIZE,
   createTailControlSession,
+  decodeRelayDiscoverRequest,
   decodeTailReady,
   deriveTailControlTestVector,
+  encodeRelayDiscoverRequest,
   encodeTailControlTranscript,
   digestAdmittedLimits
 } from '../lib/tail-control.js'
@@ -25,13 +36,13 @@ function seed(byte, size = 32) {
   return b4a.alloc(size, byte)
 }
 
-function transcript(identity) {
+function transcript(identity, extensionIndex = 0, expiresAt = 5_000n) {
   return encodeTailControlTranscript({
     branchClass: BRANCH_CLASS.LOOKUP,
     branchId: seed(0x11, 16),
     circuitId: seed(0x12, 16),
     generation: 7n,
-    extensionIndex: 0,
+    extensionIndex,
     clientTailEphemeralPublicKey: seed(0x13),
     advertisedTailRouteEncryptionPublicKey: seed(0x14),
     candidateAdvertisementDigest: seed(0x15),
@@ -43,26 +54,26 @@ function transcript(identity) {
       maxBytes: 65_536,
       maxCommands: 32,
       idleTimeoutMs: 5_000,
-      expiresAtMs: 5_000n
+      expiresAtMs: expiresAt
     })
   })
 }
 
-function pair(now = () => NOW, responderNow = () => NOW) {
+function pair(now = () => NOW, responderNow = () => NOW, extensionIndex = 0, expiresAt = 5_000n) {
   const identity = cryptoSuite.keyPair(seed(0x21))
-  const encodedTranscript = transcript(identity)
+  const encodedTranscript = transcript(identity, extensionIndex, expiresAt)
   const sharedSecret = seed(0x22)
   const initiatorTail = TEST_ONLY_M3_TAIL_ISSUER.issue({
     initiator: true,
     sharedSecret,
     transcript: encodedTranscript,
-    expiresAt: 5_000n
+    expiresAt
   })
   const responderTail = TEST_ONLY_M3_TAIL_ISSUER.issue({
     initiator: false,
     sharedSecret,
     transcript: encodedTranscript,
-    expiresAt: 5_000n
+    expiresAt
   })
   return {
     client: createTailControlSession(initiatorTail, { now, crypto: cryptoSuite }),
@@ -71,6 +82,14 @@ function pair(now = () => NOW, responderNow = () => NOW) {
     responder: createTailControlSession(responderTail, { now: responderNow, crypto: cryptoSuite }),
     sharedSecret
   }
+}
+
+function activate(fixture, byte = 0x31) {
+  const ready = fixture.responder.sealReady({
+    identitySecretKey: fixture.identity.secretKey,
+    randomBytes: (size) => seed(byte, size)
+  })
+  fixture.client.openReady(ready)
 }
 
 function writeUint64(target, value, offset = 0) {
@@ -105,6 +124,266 @@ test('index-zero tail session signs, seals, and verifies exactly one TAIL_READY'
   )
   fixture.client.destroy()
   fixture.responder.destroy()
+})
+
+test('RELAY_DISCOVER_V1 has one canonical 77-byte encoding', (t) => {
+  const request = {
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0x81),
+    queryNonce: seed(0x82),
+    maximumResults: 8
+  }
+  const encoded = encodeRelayDiscoverRequest(request)
+  const object = decodeM3Object(encoded)
+
+  t.is(encoded.byteLength, RELAY_DISCOVER_SIZE)
+  t.is(object.messageId, M3_MESSAGE_ID.RELAY_DISCOVER_V1)
+  t.is(object.body.byteLength, 69)
+  t.is(object.body.readUInt32BE(0), request.requestedCapabilityMask)
+  t.alike(object.body.subarray(4, 36), request.randomTarget)
+  t.alike(object.body.subarray(36, 68), request.queryNonce)
+  t.is(object.body[68], request.maximumResults)
+  t.alike(decodeRelayDiscoverRequest(encoded), request)
+
+  t.exception(() => encodeRelayDiscoverRequest({ ...request, maximumResults: 0 }))
+  t.exception(() => encodeRelayDiscoverRequest({ ...request, maximumResults: 9 }))
+  t.exception(() => encodeRelayDiscoverRequest({ ...request, requestedCapabilityMask: 0 }))
+  t.is(
+    decodeRelayDiscoverRequest(
+      encodeRelayDiscoverRequest({
+        ...request,
+        requestedCapabilityMask: RELAY_CAPABILITY.DHT_EXIT_V1
+      })
+    ).requestedCapabilityMask,
+    RELAY_CAPABILITY.DHT_EXIT_V1
+  )
+  t.exception(() => decodeRelayDiscoverRequest(encoded.subarray(0, 76)))
+})
+
+test('active tails authenticate forward relay discovery for only the next legal role', (t) => {
+  const indexZero = pair()
+  activate(indexZero)
+  const zeroEnvelope = indexZero.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0x83),
+    queryNonce: seed(0x84),
+    maximumResults: 4,
+    randomBytes: (size) => seed(0x85, size)
+  })
+  t.is(decodeM3ContextEnvelope(zeroEnvelope).frame.readBigUInt64BE(0), 0n)
+  const zero = indexZero.responder.openDiscoverRequest(zeroEnvelope)
+  t.is(zero.requestedCapabilityMask, RELAY_CAPABILITY.CIRCUIT_RELAY_V1)
+  t.alike(zero.randomTarget, seed(0x83))
+  t.alike(zero.queryNonce, seed(0x84))
+  t.is(zero.maximumResults, 4)
+  t.is(zero.branchClass, BRANCH_CLASS.LOOKUP)
+  t.is(zero.currentExtensionIndex, 0)
+  t.is(zero.extensionIndex, 1)
+  t.is(zero.requiredRole, M3_LINK_ROLE.SAFETY_RELAY)
+  t.alike(zero.branchId, seed(0x11, 16))
+  t.alike(zero.circuitId, seed(0x12, 16))
+  t.is(zero.generation, 7n)
+  t.alike(zero.currentTailIdentity, indexZero.identity.publicKey)
+  t.alike(zero.currentTailAdvertisementDigest, seed(0x15))
+  t.is(zero.localAdmissionDeadline, 5_000n)
+  t.is(zero.tailExpiresAt, 5_000n)
+  t.ok(Object.isFrozen(zero))
+  indexZero.client.destroy()
+  indexZero.responder.destroy()
+
+  const indexOne = pair(
+    () => NOW,
+    () => NOW,
+    1
+  )
+  activate(indexOne, 0x86)
+  const oneEnvelope = indexOne.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+    randomTarget: seed(0x87),
+    queryNonce: seed(0x88),
+    maximumResults: 1,
+    randomBytes: (size) => seed(0x89, size)
+  })
+  const one = indexOne.responder.openDiscoverRequest(oneEnvelope)
+  t.is(one.currentExtensionIndex, 1)
+  t.is(one.extensionIndex, 2)
+  t.is(one.requiredRole, M3_LINK_ROLE.DHT_EXIT)
+  t.is(
+    one.requestedCapabilityMask,
+    RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1
+  )
+  indexOne.client.destroy()
+  indexOne.responder.destroy()
+})
+
+test('relay discovery fixes local deadlines and rejects role substitution, replay, and reentry', (t) => {
+  const deadline = pair(
+    () => 1_000,
+    () => 1_500,
+    0,
+    10_000n
+  )
+  activate(deadline, 0xb0)
+  const deadlineEnvelope = deadline.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xb1),
+    queryNonce: seed(0xb2),
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xb3, size)
+  })
+  t.is(deadline.responder.openDiscoverRequest(deadlineEnvelope).localAdmissionDeadline, 6_500n)
+  deadline.client.destroy()
+  deadline.responder.destroy()
+
+  let sweepNow = 1_000
+  const swept = pair(
+    () => sweepNow,
+    () => 1_000,
+    0,
+    10_000n
+  )
+  activate(swept, 0xb4)
+  swept.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xb5),
+    queryNonce: seed(0xb6),
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xb7, size)
+  })
+  t.is(swept.client.diagnostics().pendingDiscoveries, 1)
+  sweepNow = 6_000
+  t.is(swept.client.diagnostics().pendingDiscoveries, 0)
+  t.is(swept.client.diagnostics().discoveryAttempts, 1)
+  swept.client.destroy()
+  swept.responder.destroy()
+
+  const wrongRole = pair()
+  activate(wrongRole, 0xb8)
+  t.exception(() =>
+    wrongRole.client.sealDiscoverRequest({
+      requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+      randomTarget: seed(0xb9),
+      queryNonce: seed(0xba),
+      maximumResults: 1,
+      randomBytes: (size) => seed(0xbb, size)
+    })
+  )
+  t.is(wrongRole.client.diagnostics().state, 'DESTROYED')
+  wrongRole.responder.destroy()
+
+  const replay = pair()
+  activate(replay, 0xbc)
+  const replayEnvelope = replay.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xbd),
+    queryNonce: seed(0xbe),
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xbf, size)
+  })
+  replay.responder.openDiscoverRequest(replayEnvelope)
+  t.exception(() => replay.responder.openDiscoverRequest(replayEnvelope))
+  t.is(replay.responder.diagnostics().state, 'DESTROYED')
+  replay.client.destroy()
+
+  const reentrant = pair()
+  activate(reentrant, 0xc0)
+  let attempted = false
+  const options = {
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xc1),
+    queryNonce: seed(0xc2),
+    maximumResults: 1,
+    randomBytes(size) {
+      if (!attempted) {
+        attempted = true
+        try {
+          reentrant.client.sealDiscoverRequest({
+            ...options,
+            queryNonce: seed(0xc3),
+            randomBytes: (nestedSize) => seed(0xc4, nestedSize)
+          })
+        } catch {}
+      }
+      return seed(0xc5, size)
+    }
+  }
+  t.exception(() => reentrant.client.sealDiscoverRequest(options))
+  t.ok(attempted)
+  t.is(reentrant.client.diagnostics().state, 'DESTROYED')
+  reentrant.responder.destroy()
+})
+
+test('relay discovery is active-only, bounded, nonce-unique, and forbidden at index two', (t) => {
+  const waiting = pair()
+  t.exception(() =>
+    waiting.client.sealDiscoverRequest({
+      requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+      randomTarget: seed(0x91),
+      queryNonce: seed(0x92),
+      maximumResults: 1,
+      randomBytes: (size) => seed(0x93, size)
+    })
+  )
+  t.is(waiting.client.diagnostics().state, 'DESTROYED')
+  waiting.responder.destroy()
+
+  const bounded = pair()
+  activate(bounded, 0x94)
+  for (let index = 0; index < 3; index++) {
+    const envelope = bounded.client.sealDiscoverRequest({
+      requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+      randomTarget: seed(0x95 + index),
+      queryNonce: seed(0x98 + index),
+      maximumResults: 1,
+      randomBytes: (size) => seed(0x9b + index, size)
+    })
+    bounded.responder.openDiscoverRequest(envelope)
+  }
+  let fourthError = null
+  try {
+    bounded.client.sealDiscoverRequest({
+      requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+      randomTarget: seed(0xa0),
+      queryNonce: seed(0xa1),
+      maximumResults: 1,
+      randomBytes: (size) => seed(0xa2, size)
+    })
+  } catch (err) {
+    fourthError = err
+  }
+  t.is(fourthError && fourthError.code, 'ERR_BUSY')
+  t.is(bounded.client.diagnostics().state, 'DESTROYED')
+  bounded.responder.destroy()
+
+  const duplicate = pair()
+  activate(duplicate, 0xa3)
+  const options = {
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xa4),
+    queryNonce: seed(0xa5),
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xa6, size)
+  }
+  duplicate.client.sealDiscoverRequest(options)
+  let replayError = null
+  try {
+    duplicate.client.sealDiscoverRequest(options)
+  } catch (err) {
+    replayError = err
+  }
+  t.is(replayError && replayError.code, 'ERR_REPLAY')
+  t.is(duplicate.client.diagnostics().state, 'DESTROYED')
+  duplicate.responder.destroy()
+
+  const terminal = pair(
+    () => NOW,
+    () => NOW,
+    2
+  )
+  activate(terminal, 0xa7)
+  t.exception(() => terminal.client.sealDiscoverRequest(options))
+  t.is(terminal.client.diagnostics().state, 'DESTROYED')
+  terminal.responder.destroy()
 })
 
 test('tail session rejects wrong actor, tampering, replay, and expired readiness', (t) => {

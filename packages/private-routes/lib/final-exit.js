@@ -17,12 +17,16 @@ export const SERVICE_POLICY_ENTRY_SIZE = 32
 export const PAYLOAD_PARAMETERS_SIZE = 20
 export const FINAL_EXIT_TRANSCRIPT_SIZE = 287
 export const DHT_EXIT_ACTIVATE_SIZE = 104
+export const DHT_EXIT_READY_SIZE = 305
 
 const MAX_UINT32 = 0xffff_ffff
 const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
 const POLICY_DOMAIN = b4a.from('hyperdht-private-routes/final-exit/service-policy/v1')
 const PARAMETERS_DOMAIN = b4a.from('hyperdht-private-routes/final-exit/payload-parameters/v1')
 const FINAL_DOMAIN = b4a.from('hyperdht-private-routes/final-exit/transcript/v1')
+const FINAL_DIGEST_DOMAIN = b4a.from('hyperdht-private-routes/m3/final-exit/transcript-digest/v1')
+const DHT_EXIT_READY_DOMAIN = b4a.from('hyperdht-private-routes/m3/dht-exit-ready/v1')
+const DHT_EXIT_READY_BODY_SIZE = 233
 const bufferByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength'
@@ -316,6 +320,126 @@ export function decodeDhtExitActivate(encoded) {
       clear(result.clientActivationNonce)
       clear(result.exitOriginCommandPolicyDigest)
       clear(result.payloadParametersDigest)
+    }
+  }
+}
+
+export function encodeDhtExitReadyBody(value) {
+  let output = null
+  try {
+    object(value)
+    const selectedBranchClass = branchClass(option(value, 'branchClass'))
+    const branchId = option(value, 'branchId')
+    const circuitId = option(value, 'circuitId')
+    const generation = option(value, 'generation')
+    const fields = [
+      option(value, 'exitIdentity'),
+      option(value, 'clientActivationNonce'),
+      option(value, 'exitOriginCommandPolicyDigest'),
+      option(value, 'payloadParametersDigest'),
+      option(value, 'finalExitTranscriptDigest'),
+      option(value, 'readyNonce')
+    ]
+    if (!fixed(branchId, 16) || !fixed(circuitId, 16) || !uint64(generation)) invalid()
+    if (fields.some((field) => !fixed(field, 32))) invalid()
+
+    output = b4a.allocUnsafeSlow(DHT_EXIT_READY_BODY_SIZE)
+    output[0] = selectedBranchClass
+    set(output, branchId, 1)
+    set(output, circuitId, 17)
+    writeUint64(output, generation, 33)
+    let offset = 41
+    for (const field of fields) {
+      set(output, field, offset)
+      offset += 32
+    }
+    return output
+  } catch (err) {
+    clear(output)
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  }
+}
+
+export function dhtExitReadySignatureInput(body) {
+  let output = null
+  try {
+    if (!fixed(body, DHT_EXIT_READY_BODY_SIZE)) invalid()
+    output = b4a.allocUnsafeSlow(10 + DHT_EXIT_READY_DOMAIN.byteLength + body.byteLength)
+    writeUint16(output, DHT_EXIT_READY_DOMAIN.byteLength, 0)
+    set(output, DHT_EXIT_READY_DOMAIN, 2)
+    writeUint32(output, M3_PROTOCOL_VERSION, 2 + DHT_EXIT_READY_DOMAIN.byteLength)
+    writeUint16(output, M3_MESSAGE_ID.DHT_EXIT_READY_V1, 6 + DHT_EXIT_READY_DOMAIN.byteLength)
+    writeUint16(output, body.byteLength, 8 + DHT_EXIT_READY_DOMAIN.byteLength)
+    set(output, body, 10 + DHT_EXIT_READY_DOMAIN.byteLength)
+    return output
+  } catch (err) {
+    clear(output)
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  }
+}
+
+export function encodeDhtExitReady(value) {
+  let body = null
+  try {
+    object(value)
+    const signature = option(value, 'signature')
+    if (!fixed(signature, 64)) invalid()
+    body = encodeDhtExitReadyBody(value)
+    return encodeM3Object({
+      messageId: M3_MESSAGE_ID.DHT_EXIT_READY_V1,
+      body,
+      authSuffix: signature
+    })
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(body)
+  }
+}
+
+export function decodeDhtExitReady(encoded) {
+  let decoded = null
+  let result = null
+  let complete = false
+  try {
+    decoded = decodeM3Object(encoded)
+    if (
+      decoded.messageId !== M3_MESSAGE_ID.DHT_EXIT_READY_V1 ||
+      !fixed(decoded.body, DHT_EXIT_READY_BODY_SIZE) ||
+      !fixed(decoded.authSuffix, 64)
+    ) {
+      invalid()
+    }
+    branchClass(decoded.body[0])
+    result = {
+      body: copy(decoded.body),
+      signature: copy(decoded.authSuffix),
+      branchClass: decoded.body[0],
+      branchId: copy(subarray(decoded.body, 1, 17)),
+      circuitId: copy(subarray(decoded.body, 17, 33)),
+      generation: readUint64(decoded.body, 33),
+      exitIdentity: copy(subarray(decoded.body, 41, 73)),
+      clientActivationNonce: copy(subarray(decoded.body, 73, 105)),
+      exitOriginCommandPolicyDigest: copy(subarray(decoded.body, 105, 137)),
+      payloadParametersDigest: copy(subarray(decoded.body, 137, 169)),
+      finalExitTranscriptDigest: copy(subarray(decoded.body, 169, 201)),
+      readyNonce: copy(subarray(decoded.body, 201, 233))
+    }
+    complete = true
+    return result
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    if (decoded) {
+      clear(decoded.body)
+      clear(decoded.authSuffix)
+    }
+    if (!complete && result) {
+      for (const value of Object.values(result)) clear(value)
     }
   }
 }
@@ -625,6 +749,21 @@ export function decodeFinalExitTranscript(encoded) {
   } catch (err) {
     if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
     invalid()
+  }
+}
+
+export function digestFinalExitTranscript(encoded) {
+  let output = null
+  try {
+    validateFinalExitTranscript(encoded)
+    output = cryptoSuite.hash([FINAL_DIGEST_DOMAIN, encoded])
+    if (!fixed(output, 32)) invalid()
+    return copy(output)
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(output)
   }
 }
 

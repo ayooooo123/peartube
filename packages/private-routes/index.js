@@ -347,18 +347,24 @@ export {
 } from './lib/tail-control.js'
 export {
   DHT_EXIT_ACTIVATE_SIZE,
+  DHT_EXIT_READY_SIZE,
   EXIT_ORIGIN_SERVICE_POLICY,
   FINAL_EXIT_TRANSCRIPT_SIZE,
   PAYLOAD_PARAMETERS_SIZE,
   SERVICE_POLICY_ENTRY_SIZE,
   decodeExitOriginServicePolicy,
   decodeDhtExitActivate,
+  decodeDhtExitReady,
   decodeFinalExitTranscript,
   decodePayloadParameters,
+  dhtExitReadySignatureInput,
+  digestFinalExitTranscript,
   digestExitOriginServicePolicy,
   digestPayloadParameters,
   encodeExitOriginServicePolicy,
   encodeDhtExitActivate,
+  encodeDhtExitReady,
+  encodeDhtExitReadyBody,
   encodeFinalExitTranscript,
   encodePayloadParameters
 } from './lib/final-exit.js'

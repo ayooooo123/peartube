@@ -4,10 +4,18 @@ import { DatagramReplayWindow, SenderCounter } from './counters.js'
 import { PrivateRouteError } from './errors.js'
 import {
   DHT_EXIT_ACTIVATE_SIZE,
+  DHT_EXIT_READY_SIZE,
   decodeDhtExitActivate,
+  decodeDhtExitReady,
+  deriveFinalExitTestVector,
+  dhtExitReadySignatureInput,
+  digestFinalExitTranscript,
   digestExitOriginServicePolicy,
   digestPayloadParameters,
-  encodeDhtExitActivate
+  encodeDhtExitActivate,
+  encodeDhtExitReady,
+  encodeDhtExitReadyBody,
+  encodeFinalExitTranscript
 } from './final-exit.js'
 import { consumeFinalExitHandoff, destroyFinalExitHandoffMaterial } from './final-exit-handoff.js'
 import {
@@ -16,7 +24,7 @@ import {
   encodeM3ContextEnvelope
 } from './m3-context.js'
 import { CELL_CLASS, CONTEXT_CLASS, DIRECTION } from './protocol.js'
-import { decodeTailControlTranscript } from './tail-control.js'
+import { decodeTailControlTranscript, digestTailControlTranscript } from './tail-control.js'
 
 const ROUTE_FRAME_SIZE = 1100
 const ROUTE_PLAINTEXT_SIZE = 1076
@@ -161,26 +169,46 @@ function readUint64(target, offset = 0) {
   return value
 }
 
-function associatedData(state, counter) {
+function associatedData(state, counter, direction) {
   return encodeM3ContextAD({
     contextClass: CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
     branchId: state.transcript.branchId,
     circuitId: state.transcript.circuitId,
     generation: state.transcript.generation,
-    direction: DIRECTION.FORWARD,
+    direction,
     innerCounter: counter
   })
 }
 
-function sealFrame(state, encoded, randomBytes) {
-  const counter = state.tx.next()
+function datagramState(state, direction, sending) {
+  if (direction === DIRECTION.FORWARD) {
+    return {
+      counter: sending ? state.forwardTx : state.forwardRx,
+      key: state.material.finalizeForwardKey,
+      noncePrefix: state.material.finalizeForwardNoncePrefix
+    }
+  }
+  if (direction === DIRECTION.REVERSE) {
+    return {
+      counter: sending ? state.reverseTx : state.reverseRx,
+      key: state.material.finalizeReverseKey,
+      noncePrefix: state.material.finalizeReverseNoncePrefix
+    }
+  }
+  invalid()
+}
+
+function sealFrame(state, encoded, randomBytes, direction) {
+  const selected = datagramState(state, direction, true)
+  if (!selected.counter) authentication()
+  const counter = selected.counter.next()
   let ad = null
   let plaintext = null
   let padding = null
   let ciphertext = null
   let frame = null
   try {
-    ad = associatedData(state, counter)
+    ad = associatedData(state, counter, direction)
     plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
     plaintext[0] = CELL_CLASS.CONTROL
     writeUint16(plaintext, encoded.byteLength, 1)
@@ -188,8 +216,8 @@ function sealFrame(state, encoded, randomBytes) {
     padding = random(randomBytes, MAX_ROUTE_PAYLOAD - encoded.byteLength)
     set(plaintext, padding, 3 + encoded.byteLength)
     ciphertext = state.crypto.seal({
-      key: state.material.finalizeForwardKey,
-      noncePrefix: state.material.finalizeForwardNoncePrefix,
+      key: selected.key,
+      noncePrefix: selected.noncePrefix,
       counter,
       associatedData: ad,
       plaintext
@@ -211,7 +239,7 @@ function sealFrame(state, encoded, randomBytes) {
   }
 }
 
-function openFrame(state, envelope) {
+function openFrame(state, envelope, direction, expectedSize) {
   let decoded = null
   let ad = null
   let plaintext = null
@@ -219,21 +247,23 @@ function openFrame(state, envelope) {
   try {
     decoded = decodeM3ContextEnvelope(envelope)
     if (decoded.contextClass !== CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM) invalid()
+    const selected = datagramState(state, direction, false)
+    if (!selected.counter) authentication()
     const counter = readUint64(decoded.frame)
-    ad = associatedData(state, counter)
+    ad = associatedData(state, counter, direction)
     plaintext = state.crypto.open({
-      key: state.material.finalizeForwardKey,
-      noncePrefix: state.material.finalizeForwardNoncePrefix,
+      key: selected.key,
+      noncePrefix: selected.noncePrefix,
       counter,
       associatedData: ad,
       ciphertext: subarray(decoded.frame, 8, ROUTE_FRAME_SIZE)
     })
     if (!fixed(plaintext, ROUTE_PLAINTEXT_SIZE) || plaintext[0] !== CELL_CLASS.CONTROL) invalid()
     const payloadLength = readUint16(plaintext, 1)
-    if (payloadLength !== DHT_EXIT_ACTIVATE_SIZE) invalid()
+    if (payloadLength !== expectedSize) invalid()
     encoded = copy(subarray(plaintext, 3, 3 + payloadLength))
     try {
-      state.rx.acceptAuthenticated(counter)
+      selected.counter.acceptAuthenticated(counter)
     } catch (err) {
       if (err instanceof PrivateRouteError && err.code === 'REPLAY') {
         clear(encoded)
@@ -284,6 +314,72 @@ function activationProjection(activation) {
   })
 }
 
+function clearReady(ready) {
+  if (!ready) return
+  for (const value of Object.values(ready)) clear(value)
+}
+
+function readyProjection(ready) {
+  return Object.freeze({
+    branchClass: ready.branchClass,
+    branchId: copy(ready.branchId),
+    circuitId: copy(ready.circuitId),
+    generation: ready.generation,
+    exitIdentity: copy(ready.exitIdentity),
+    clientActivationNonce: copy(ready.clientActivationNonce),
+    exitOriginCommandPolicyDigest: copy(ready.exitOriginCommandPolicyDigest),
+    payloadParametersDigest: copy(ready.payloadParametersDigest),
+    finalExitTranscriptDigest: copy(ready.finalExitTranscriptDigest),
+    readyNonce: copy(ready.readyNonce)
+  })
+}
+
+function clearFinalMaterial(material) {
+  if (!material) return
+  for (const value of Object.values(material)) clear(value)
+}
+
+function buildFinalTranscript(state, activation) {
+  let tailDigest = null
+  let encoded = null
+  let digest = null
+  let complete = false
+  try {
+    tailDigest = digestTailControlTranscript(state.material.tailControlTranscript)
+    encoded = encodeFinalExitTranscript({
+      branchClass: state.transcript.branchClass,
+      branchId: state.transcript.branchId,
+      circuitId: state.transcript.circuitId,
+      generation: state.transcript.generation,
+      tailControlTranscriptDigest: tailDigest,
+      exitAdvertisementDigest: state.transcript.candidateAdvertisementDigest,
+      exitIdentity: state.transcript.tailIdentity,
+      clientActivationNonce: activation.clientActivationNonce,
+      exitOriginCommandPolicyDigest: activation.exitOriginCommandPolicyDigest,
+      payloadParametersDigest: activation.payloadParametersDigest
+    })
+    digest = digestFinalExitTranscript(encoded)
+    complete = true
+    return { encoded, digest }
+  } finally {
+    clear(tailDigest)
+    if (!complete) {
+      clear(encoded)
+      clear(digest)
+    }
+  }
+}
+
+function installFinalMaterial(state, transcript) {
+  if (state.finalMaterial || state.finalTranscript || state.finalTranscriptDigest) invalid()
+  const material = deriveFinalExitTestVector(state.material.sharedSecret, transcript.encoded)
+  state.finalMaterial = material
+  state.finalTranscript = transcript.encoded
+  state.finalTranscriptDigest = transcript.digest
+  transcript.encoded = null
+  transcript.digest = null
+}
+
 export class FinalExitActivationSession {
   #state
 
@@ -303,7 +399,9 @@ export class FinalExitActivationSession {
         typeof now !== 'function' ||
         !object(crypto) ||
         typeof crypto.seal !== 'function' ||
-        typeof crypto.open !== 'function'
+        typeof crypto.open !== 'function' ||
+        typeof crypto.sign !== 'function' ||
+        typeof crypto.verify !== 'function'
       ) {
         invalid()
       }
@@ -319,15 +417,22 @@ export class FinalExitActivationSession {
         crypto,
         deadline: null,
         destroyed: false,
+        finalMaterial: null,
+        finalTranscript: null,
+        finalTranscriptDigest: null,
+        forwardRx: material.initiator ? null : new DatagramReplayWindow({ window: 64 }),
+        forwardTx: material.initiator ? new SenderCounter() : null,
         material,
         mutating: false,
         now,
         payloadDigest,
         policyDigest,
-        rx: material.initiator ? null : new DatagramReplayWindow({ window: 64 }),
+        ready: null,
+        readyEncoded: null,
+        reverseRx: material.initiator ? new DatagramReplayWindow({ window: 64 }) : null,
+        reverseTx: material.initiator ? null : new SenderCounter(),
         state: 'TAIL_READY',
         transcript,
-        tx: material.initiator ? new SenderCounter() : null,
         violated: false
       }
       material = null
@@ -365,7 +470,7 @@ export class FinalExitActivationSession {
         exitOriginCommandPolicyDigest: state.policyDigest,
         payloadParametersDigest: state.payloadDigest
       })
-      const envelope = sealFrame(state, encoded, randomBytes)
+      const envelope = sealFrame(state, encoded, randomBytes, DIRECTION.FORWARD)
       this.#assertLive(state)
       state.activationEncoded = copy(encoded)
       state.activation = Object.freeze({
@@ -393,7 +498,7 @@ export class FinalExitActivationSession {
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
       this.#checkDeadline(state)
-      const envelope = sealFrame(state, state.activationEncoded, randomBytes)
+      const envelope = sealFrame(state, state.activationEncoded, randomBytes, DIRECTION.FORWARD)
       this.#assertLive(state)
       return envelope
     } catch (err) {
@@ -417,7 +522,7 @@ export class FinalExitActivationSession {
         authentication()
       }
       this.#checkDeadline(state, state.state === 'TAIL_READY')
-      encoded = openFrame(state, envelope)
+      encoded = openFrame(state, envelope, DIRECTION.FORWARD, DHT_EXIT_ACTIVATE_SIZE)
       this.#assertLive(state)
       if (encoded === null) return null
       activation = decodeDhtExitActivate(encoded)
@@ -435,6 +540,13 @@ export class FinalExitActivationSession {
           exitOriginCommandPolicyDigest: copy(activation.exitOriginCommandPolicyDigest),
           payloadParametersDigest: copy(activation.payloadParametersDigest)
         })
+        const finalTranscript = buildFinalTranscript(state, state.activation)
+        try {
+          installFinalMaterial(state, finalTranscript)
+        } finally {
+          clear(finalTranscript.encoded)
+          clear(finalTranscript.digest)
+        }
         state.state = 'FINALIZING'
       }
       return activationProjection(state.activation)
@@ -446,6 +558,173 @@ export class FinalExitActivationSession {
       state.mutating = false
       clear(encoded)
       clearActivation(activation)
+    }
+  }
+
+  sealReady(options) {
+    const state = this.#begin()
+    let secretKey = null
+    let readyNonce = null
+    let body = null
+    let input = null
+    let signature = null
+    let encoded = null
+    let ready = null
+    try {
+      if (
+        state.material.initiator ||
+        state.state !== 'FINALIZING' ||
+        state.readyEncoded ||
+        !state.finalTranscriptDigest
+      ) {
+        authentication()
+      }
+      this.#checkDeadline(state)
+      options = object(options)
+      const randomBytes = option(options, 'randomBytes')
+      secretKey = copy(option(options, 'identitySecretKey'))
+      if (typeof randomBytes !== 'function' || !fixed(secretKey, 64)) invalid()
+      readyNonce = random(randomBytes, 32)
+      this.#assertLive(state)
+      body = encodeDhtExitReadyBody({
+        branchClass: state.transcript.branchClass,
+        branchId: state.transcript.branchId,
+        circuitId: state.transcript.circuitId,
+        generation: state.transcript.generation,
+        exitIdentity: state.transcript.tailIdentity,
+        clientActivationNonce: state.activation.clientActivationNonce,
+        exitOriginCommandPolicyDigest: state.policyDigest,
+        payloadParametersDigest: state.payloadDigest,
+        finalExitTranscriptDigest: state.finalTranscriptDigest,
+        readyNonce
+      })
+      input = dhtExitReadySignatureInput(body)
+      signature = state.crypto.sign(input, secretKey)
+      this.#assertLive(state)
+      if (
+        !fixed(signature, 64) ||
+        !state.crypto.verify(input, signature, state.transcript.tailIdentity)
+      ) {
+        invalid()
+      }
+      this.#assertLive(state)
+      encoded = encodeDhtExitReady({
+        branchClass: state.transcript.branchClass,
+        branchId: state.transcript.branchId,
+        circuitId: state.transcript.circuitId,
+        generation: state.transcript.generation,
+        exitIdentity: state.transcript.tailIdentity,
+        clientActivationNonce: state.activation.clientActivationNonce,
+        exitOriginCommandPolicyDigest: state.policyDigest,
+        payloadParametersDigest: state.payloadDigest,
+        finalExitTranscriptDigest: state.finalTranscriptDigest,
+        readyNonce,
+        signature
+      })
+      const envelope = sealFrame(state, encoded, randomBytes, DIRECTION.REVERSE)
+      this.#assertLive(state)
+      ready = decodeDhtExitReady(encoded)
+      state.readyEncoded = copy(encoded)
+      state.ready = ready
+      ready = null
+      return envelope
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(secretKey)
+      clear(readyNonce)
+      clear(body)
+      clear(input)
+      clear(signature)
+      clear(encoded)
+      clearReady(ready)
+    }
+  }
+
+  retryReady(options) {
+    const state = this.#begin()
+    try {
+      if (state.material.initiator || state.state !== 'FINALIZING' || !state.readyEncoded) {
+        authentication()
+      }
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      this.#checkDeadline(state)
+      const envelope = sealFrame(state, state.readyEncoded, randomBytes, DIRECTION.REVERSE)
+      this.#assertLive(state)
+      return envelope
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+    }
+  }
+
+  openReady(envelope) {
+    const state = this.#begin()
+    let encoded = null
+    let ready = null
+    let input = null
+    let finalTranscript = null
+    try {
+      if (!state.material.initiator || (state.state !== 'ACTIVATING' && state.state !== 'ACKING')) {
+        authentication()
+      }
+      this.#checkDeadline(state)
+      encoded = openFrame(state, envelope, DIRECTION.REVERSE, DHT_EXIT_READY_SIZE)
+      this.#assertLive(state)
+      if (encoded === null) return null
+      if (state.readyEncoded) {
+        if (!same(encoded, state.readyEncoded)) authentication()
+        return readyProjection(state.ready)
+      }
+      ready = decodeDhtExitReady(encoded)
+      input = dhtExitReadySignatureInput(ready.body)
+      const signatureValid = state.crypto.verify(
+        input,
+        ready.signature,
+        state.transcript.tailIdentity
+      )
+      this.#assertLive(state)
+      if (!signatureValid) authentication()
+      finalTranscript = buildFinalTranscript(state, state.activation)
+      if (
+        ready.branchClass !== state.transcript.branchClass ||
+        !same(ready.branchId, state.transcript.branchId) ||
+        !same(ready.circuitId, state.transcript.circuitId) ||
+        ready.generation !== state.transcript.generation ||
+        !same(ready.exitIdentity, state.transcript.tailIdentity) ||
+        !same(ready.clientActivationNonce, state.activation.clientActivationNonce) ||
+        !same(ready.exitOriginCommandPolicyDigest, state.policyDigest) ||
+        !same(ready.payloadParametersDigest, state.payloadDigest) ||
+        !same(ready.finalExitTranscriptDigest, finalTranscript.digest)
+      ) {
+        authentication()
+      }
+      installFinalMaterial(state, finalTranscript)
+      state.readyEncoded = copy(encoded)
+      state.ready = ready
+      ready = null
+      state.state = 'ACKING'
+      return readyProjection(state.ready)
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(encoded)
+      clearReady(ready)
+      clear(input)
+      if (finalTranscript) {
+        clear(finalTranscript.encoded)
+        clear(finalTranscript.digest)
+      }
     }
   }
 
@@ -502,27 +781,38 @@ export class FinalExitActivationSession {
     try {
       if (tailControl) tailControl.destroy()
     } catch {}
-    try {
-      if (state.tx) state.tx.destroy()
-    } catch {}
-    try {
-      if (state.rx) state.rx.destroy()
-    } catch {}
+    for (const counter of [state.forwardTx, state.forwardRx, state.reverseTx, state.reverseRx]) {
+      try {
+        if (counter) counter.destroy()
+      } catch {}
+    }
     clearTranscript(state.transcript)
     clear(state.policyDigest)
     clear(state.payloadDigest)
     clear(state.activationEncoded)
     clearActivation(state.activation)
+    clear(state.readyEncoded)
+    clearReady(state.ready)
+    clear(state.finalTranscript)
+    clear(state.finalTranscriptDigest)
+    clearFinalMaterial(state.finalMaterial)
     state.transcript = null
     state.policyDigest = null
     state.payloadDigest = null
     state.activationEncoded = null
     state.activation = null
+    state.readyEncoded = null
+    state.ready = null
+    state.finalTranscript = null
+    state.finalTranscriptDigest = null
+    state.finalMaterial = null
     state.deadline = null
     state.crypto = null
     state.now = null
-    state.tx = null
-    state.rx = null
+    state.forwardTx = null
+    state.forwardRx = null
+    state.reverseTx = null
+    state.reverseRx = null
     state.state = 'DESTROYED'
     return true
   }

@@ -6,11 +6,11 @@ import { cryptoSuite } from '../lib/crypto-suite.js'
 import {
   LINK_ACCEPT_SIZE,
   LINK_OFFER_SIZE,
+  abortExtensionLinkCompletion,
   abortExtensionLinkOffer,
   completeExtensionLink,
   createExtensionLinkOffer,
   createExtensionLinkResponder,
-  destroyM3EstablishedLink,
   takeExtensionResponderAdjacency
 } from '../lib/guard-link.js'
 import {
@@ -60,10 +60,10 @@ import {
 } from '../lib/tail-control.js'
 import {
   REDACTED_RESPONDER_PROOF_SIZE,
-  consumeVerifiedRedactedResponderProof,
   createRedactedResponderProofAuthority,
   decodeRedactedResponderProof
 } from '../lib/redacted-responder-proof.js'
+import { createTailExtensionCommitter } from '../lib/tail-extension-committer.js'
 import { privateRoleIdentity, safetyRoleIdentity } from './helpers.js'
 
 const NOW = 1_000
@@ -88,6 +88,21 @@ function endpoint(last) {
     addressFamily: 4,
     addressBytes: b4a.from([192, 0, 2, last]),
     port: 44_000 + last
+  })
+}
+
+function forwardingRecord() {
+  let live = true
+  return Object.freeze({
+    diagnostics() {
+      if (!live) throw new Error('destroyed')
+      return Object.freeze({ state: 'CREATE', expiresAt: 5_000n })
+    },
+    destroy() {
+      if (!live) return false
+      live = false
+      return true
+    }
   })
 }
 
@@ -793,6 +808,20 @@ test('current tail opens one EXTEND only for an advertisement it returned', (t) 
 
 test('an admitted EXTEND completes the exact successor OFFER ACCEPT PROOF exchange', (t) => {
   const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const currentTailAdjacencyAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  const installedForwarding = forwardingRecord()
+  let enqueuedExtended = null
+  let installedNextRuntime = null
+  const extensionCommitter = createTailExtensionCommitter({
+    enqueue(envelope) {
+      enqueuedExtended = envelope
+    },
+    install(runtime) {
+      installedNextRuntime = runtime
+      return installedForwarding
+    },
+    destroy() {}
+  })
   const fixture = pair(
     () => NOW,
     () => NOW,
@@ -802,7 +831,9 @@ test('an admitted EXTEND completes the exact successor OFFER ACCEPT PROOF exchan
       identity: safetyRoleIdentity(220),
       responder: {
         candidateAdmissionProducer: admissions.producer,
-        candidateAdmissionConsumer: admissions.consumer
+        candidateAdmissionConsumer: admissions.consumer,
+        adjacencyAuthority: currentTailAdjacencyAuthority,
+        extensionCommitter
       }
     }
   )
@@ -1023,9 +1054,10 @@ test('an admitted EXTEND completes the exact successor OFFER ACCEPT PROOF exchan
       destroy() {}
     })
   })
-  const currentTailAdjacencyAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
-  const currentTailAdjacency = currentTailAdjacencyAuthority.adopt(completed.established)
   const expectedProof = decodeRedactedResponderProof(proof)
+  const forwarding = fixture.responder.sealExtended(completed, {
+    randomBytes: (size) => seed(0xf8, size)
+  })
 
   t.is(accept.byteLength, LINK_ACCEPT_SIZE)
   t.is(proof.byteLength, REDACTED_RESPONDER_PROOF_SIZE)
@@ -1036,38 +1068,42 @@ test('an admitted EXTEND completes the exact successor OFFER ACCEPT PROOF exchan
     state: 'TAIL_ENDPOINT',
     expiresAt: 5_000n
   })
-  t.ok(Object.isFrozen(completed.established))
-  t.alike(Object.keys(completed.established), [])
-  t.alike(currentTailAdjacency.runtime.diagnostics(), {
+  t.ok(Object.isFrozen(completed))
+  t.alike(Object.keys(completed), [])
+  t.is(enqueuedExtended.byteLength, M3_CONTEXT_ENVELOPE_SIZE)
+  t.alike(installedNextRuntime.diagnostics(), {
     state: 'TAIL_ENDPOINT',
     expiresAt: 5_000n
   })
-  t.ok(Object.isFrozen(completed.verifiedProof))
-  t.alike(Object.keys(completed.verifiedProof), [])
-  t.alike(
-    consumeVerifiedRedactedResponderProof(
-      proofAuthority.consumer,
-      completed.verifiedProof,
-      expectedProof
-    ),
-    proof
-  )
+  t.alike(forwarding.diagnostics(), { state: 'CREATE', expiresAt: 5_000n })
+  t.alike(proofAuthority.diagnostics(), { state: 'ACTIVE', live: 0, states: 1 })
   t.is(abortExtensionLinkOffer(extension.pending), false)
-  t.is(destroyM3EstablishedLink(completed.established), false)
-  currentTailAdjacency.runtime.destroy()
-  revokeM3TailCapability(currentTailAdjacency.tail)
+  t.is(abortExtensionLinkCompletion(completed), false)
+  installedNextRuntime.destroy()
+  forwarding.destroy()
   successorAdjacency.runtime.destroy()
   revokeM3TailCapability(successorAdjacency.tail)
   responder.destroy()
   proofAuthority.destroy()
 
   fixture.client.destroy()
-  fixture.responder.destroy()
+  t.is(fixture.responder.destroy(), false, 'EXTENDED commit retires the old tail context')
   admissions.destroy()
 })
 
 test('the first extension establishes a safety-relay successor over the same setup channel', (t) => {
   const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const currentTailAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
+  const installedForwarding = forwardingRecord()
+  let installedNextRuntime = null
+  const extensionCommitter = createTailExtensionCommitter({
+    enqueue() {},
+    install(runtime) {
+      installedNextRuntime = runtime
+      return installedForwarding
+    },
+    destroy() {}
+  })
   const fixture = pair(
     () => NOW,
     () => NOW,
@@ -1077,7 +1113,9 @@ test('the first extension establishes a safety-relay successor over the same set
       identity: safetyRoleIdentity(221),
       responder: {
         candidateAdmissionProducer: admissions.producer,
-        candidateAdmissionConsumer: admissions.consumer
+        candidateAdmissionConsumer: admissions.consumer,
+        adjacencyAuthority: currentTailAuthority,
+        extensionCommitter
       }
     }
   )
@@ -1152,9 +1190,10 @@ test('the first extension establishes a safety-relay successor over the same set
       destroy() {}
     })
   })
-  const currentTailAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
-  const currentTail = currentTailAuthority.adopt(completed.established)
   const expectedProof = decodeRedactedResponderProof(proof)
+  const forwarding = fixture.responder.sealExtended(completed, {
+    randomBytes: (size) => seed(0xd7, size)
+  })
 
   t.is(offer.body[96], M3_LINK_ROLE.SAFETY_RELAY)
   t.is(offer.body[97], M3_LINK_ROLE.SAFETY_RELAY)
@@ -1162,24 +1201,18 @@ test('the first extension establishes a safety-relay successor over the same set
   t.is(accept.byteLength, LINK_ACCEPT_SIZE)
   t.is(expectedProof.extensionIndex, 1)
   t.alike(successor.runtime.diagnostics(), { state: 'TAIL_ENDPOINT', expiresAt: 5_000n })
-  t.alike(currentTail.runtime.diagnostics(), { state: 'TAIL_ENDPOINT', expiresAt: 5_000n })
-  t.alike(
-    consumeVerifiedRedactedResponderProof(
-      proofAuthority.consumer,
-      completed.verifiedProof,
-      expectedProof
-    ),
-    proof
-  )
+  t.alike(installedNextRuntime.diagnostics(), { state: 'TAIL_ENDPOINT', expiresAt: 5_000n })
+  t.alike(forwarding.diagnostics(), { state: 'CREATE', expiresAt: 5_000n })
+  t.alike(proofAuthority.diagnostics(), { state: 'ACTIVE', live: 0, states: 1 })
 
-  currentTail.runtime.destroy()
-  revokeM3TailCapability(currentTail.tail)
+  installedNextRuntime.destroy()
+  forwarding.destroy()
   successor.runtime.destroy()
   revokeM3TailCapability(successor.tail)
   responder.destroy()
   proofAuthority.destroy()
   fixture.client.destroy()
-  fixture.responder.destroy()
+  t.is(fixture.responder.destroy(), false)
   admissions.destroy()
 })
 

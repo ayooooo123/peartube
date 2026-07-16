@@ -4,7 +4,22 @@ import sodium from 'sodium-universal'
 import { OrderedReceiver, SenderCounter } from './counters.js'
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
-import { takeM3TailCapability } from './m3-adjacency-runtime.js'
+import {
+  isM3AdjacencyAuthority,
+  revokeM3TailCapability,
+  takeM3TailCapability
+} from './m3-adjacency-runtime.js'
+import {
+  destroyTakenExtensionLinkCompletion,
+  takeExtensionLinkCompletion
+} from './extension-link-completion.js'
+import {
+  destroyTailExtensionCommitter,
+  enqueueTailExtended,
+  installTailExtension,
+  isTailExtensionCommitter
+} from './tail-extension-committer.js'
+import { consumeVerifiedRedactedResponderProof } from './redacted-responder-proof.js'
 import {
   decodeM3ContextEnvelope,
   encodeM3ContextAD,
@@ -1535,6 +1550,9 @@ function clearSessionState(state, session = null) {
   state.candidateAdmissionProducer = null
   clearCandidateAdmissions(state)
   state.candidateAdmissionConsumer = null
+  state.adjacencyAuthority = null
+  destroyTailExtensionCommitter(state.extensionCommitter)
+  state.extensionCommitter = null
   clearAdmittedExtendRequest(state.extensionRequest)
   state.extensionRequest = null
   state.now = null
@@ -2075,6 +2093,111 @@ class TailControlSession {
     }
   }
 
+  sealExtended(completion, options) {
+    const state = beginSessionMutation(this)
+    let material = null
+    let encodedProof = null
+    let encodedExtended = null
+    let envelope = null
+    let nextRuntime = null
+    let nextTail = null
+    let forwarding = null
+    let complete = false
+    try {
+      if (
+        state.initiator ||
+        !state.ready ||
+        !state.adjacencyAuthority ||
+        !state.extensionCommitter
+      ) {
+        invalid()
+      }
+      const current = sessionNow(state)
+      if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      material = takeExtensionLinkCompletion(completion)
+      const expected = material.expectedProof
+      const record = state.extensionRequest
+      if (
+        !record ||
+        record.status !== 'CONSUMED' ||
+        !expected ||
+        expected.branchClass !== state.transcript.branchClass ||
+        !same(expected.branchId, state.transcript.branchId) ||
+        !same(expected.circuitId, state.transcript.circuitId) ||
+        expected.generation !== state.transcript.generation ||
+        expected.extensionIndex !== state.transcript.extensionIndex + 1 ||
+        !same(expected.initiatorIdentity, state.transcript.tailIdentity) ||
+        expected.expiresAtMs > state.expiresAt ||
+        expected.expiresAtMs <= current ||
+        responseFragmentKey(material.extensionNonce) !== record.extensionNonce
+      ) {
+        authentication()
+      }
+      const adopted = state.adjacencyAuthority.adopt(material.established)
+      material.established = null
+      nextRuntime = adopted.runtime
+      nextTail = adopted.tail
+      assertSessionMutation(state)
+      if (!revokeM3TailCapability(nextTail)) invalid()
+      nextTail = null
+      encodedProof = consumeVerifiedRedactedResponderProof(
+        material.proofConsumer,
+        material.verifiedProof,
+        expected
+      )
+      material.verifiedProof = null
+      material.proofConsumer = null
+      assertSessionMutation(state)
+      encodedExtended = encodeExtended({
+        branchClass: expected.branchClass,
+        branchId: expected.branchId,
+        circuitId: expected.circuitId,
+        generation: expected.generation,
+        extensionIndex: expected.extensionIndex,
+        responderAdvertisementDigest: expected.responderAdvertisementDigest,
+        redactedProof: encodedProof,
+        extensionNonce: material.extensionNonce
+      })
+      envelope = sealControlFrame(state, encodedExtended, randomBytes, DIRECTION.REVERSE)
+      assertSessionMutation(state)
+      enqueueTailExtended(state.extensionCommitter, envelope)
+      let refreshed = sessionNow(state)
+      if (refreshed >= expected.expiresAtMs) authentication()
+      forwarding = installTailExtension(state.extensionCommitter, nextRuntime)
+      nextRuntime = null
+      refreshed = sessionNow(state)
+      if (refreshed >= expected.expiresAtMs) authentication()
+      clearSessionState(state, this)
+      complete = true
+      const result = forwarding
+      forwarding = null
+      return result
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (!complete && forwarding) {
+        try {
+          forwarding.destroy()
+        } catch {}
+      }
+      if (nextRuntime) {
+        try {
+          nextRuntime.destroy()
+        } catch {}
+      }
+      if (nextTail) revokeM3TailCapability(nextTail)
+      destroyTakenExtensionLinkCompletion(material)
+      clear(encodedProof)
+      clear(encodedExtended)
+      clear(envelope)
+    }
+  }
+
   openDiscoverResponse(envelope) {
     const state = beginSessionMutation(this)
     let opened = null
@@ -2190,6 +2313,8 @@ export function createTailControlSession(capability, options = {}) {
     const evidenceProducer = option(options, 'evidenceProducer')
     const candidateAdmissionProducer = option(options, 'candidateAdmissionProducer')
     const candidateAdmissionConsumer = option(options, 'candidateAdmissionConsumer')
+    const adjacencyAuthority = option(options, 'adjacencyAuthority')
+    const extensionCommitter = option(options, 'extensionCommitter')
     if (
       typeof now !== 'function' ||
       !object(crypto) ||
@@ -2229,6 +2354,14 @@ export function createTailControlSession(capability, options = {}) {
       transcript.extensionIndex
     )
     const initiator = material.initiator
+    if (
+      (adjacencyAuthority !== undefined || extensionCommitter !== undefined) &&
+      (!isM3AdjacencyAuthority(adjacencyAuthority) ||
+        !isTailExtensionCommitter(extensionCommitter) ||
+        initiator)
+    ) {
+      invalid()
+    }
     session = new TailControlSession()
     SESSIONS.set(session, {
       initiator,
@@ -2250,6 +2383,8 @@ export function createTailControlSession(capability, options = {}) {
       evidenceProducer,
       candidateAdmissionProducer,
       candidateAdmissionConsumer,
+      adjacencyAuthority: adjacencyAuthority || null,
+      extensionCommitter: extensionCommitter || null,
       candidateAdmissions: new Map(),
       extensionRequest: null,
       ready: false,

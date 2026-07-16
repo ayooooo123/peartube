@@ -51,6 +51,10 @@ import {
   takeExtensionOffer,
   takeExtensionResponse
 } from './extension-setup-channel.js'
+import {
+  createExtensionLinkCompletion,
+  destroyExtensionLinkCompletion
+} from './extension-link-completion.js'
 
 export const LINK_OFFER_SIZE = 374
 export const LINK_ACCEPT_SIZE = 285
@@ -1647,6 +1651,10 @@ export function completeExtensionLink(pending, options = {}) {
   let derivedState = null
   let verifiedProof = null
   let proofConsumer = null
+  let expectedProof = null
+  let extensionNonce = null
+  let established = null
+  let completion = null
   let transferred = false
   try {
     const now = safe(options, 'now')
@@ -1704,26 +1712,27 @@ export function completeExtensionLink(pending, options = {}) {
     admittedLimitsDigest = digestAdmittedLimits(accept.admittedLimits)
     current = now()
     if (!u64(current) || current >= state.offer.offerDeadlineMs) authentication()
+    expectedProof = {
+      responderAdvertisementDigest: copy(state.advertisementDigest, 32),
+      initiatorIdentity: copy(state.offer.initiatorIdentity, 32),
+      responderIdentity: copy(state.offer.responderIdentity, 32),
+      branchClass: state.offer.branchClass,
+      branchId: copy(state.offer.branchId, 16),
+      circuitId: copy(state.offer.circuitId, 16),
+      generation: state.offer.generation,
+      extensionIndex: state.offer.extensionIndex,
+      clientTailEphemeralPublicKey: copy(state.offer.clientTailEphemeralPublicKey, 32),
+      clientNonce: copy(state.offer.clientNonce, 32),
+      advertisedRouteEncryptionPublicKey: copy(state.advertisedRouteEncryptionPublicKey, 32),
+      admittedLimitsDigest: copy(admittedLimitsDigest, 32),
+      expiresAtMs: accept.admittedLimits.expiresAtMs,
+      responderProofNonce: copy(decodedProof.responderProofNonce, 32)
+    }
     verifiedProof = verifyExpectedRedactedResponderProof(
       proofVerifier,
       proofConsumer,
       received.proof,
-      {
-        responderAdvertisementDigest: state.advertisementDigest,
-        initiatorIdentity: state.offer.initiatorIdentity,
-        responderIdentity: state.offer.responderIdentity,
-        branchClass: state.offer.branchClass,
-        branchId: state.offer.branchId,
-        circuitId: state.offer.circuitId,
-        generation: state.offer.generation,
-        extensionIndex: state.offer.extensionIndex,
-        clientTailEphemeralPublicKey: state.offer.clientTailEphemeralPublicKey,
-        clientNonce: state.offer.clientNonce,
-        advertisedRouteEncryptionPublicKey: state.advertisedRouteEncryptionPublicKey,
-        admittedLimitsDigest,
-        expiresAtMs: accept.admittedLimits.expiresAtMs,
-        responderProofNonce: decodedProof.responderProofNonce
-      }
+      expectedProof
     )
     current = now()
     if (
@@ -1733,10 +1742,40 @@ export function completeExtensionLink(pending, options = {}) {
     ) {
       authentication()
     }
-    const established = establish(derivedState)
+    established = establish(derivedState)
     derivedState = null
+    extensionNonce = copy(state.extensionNonce, 32)
+    completion = createExtensionLinkCompletion(
+      {
+        established,
+        verifiedProof,
+        proofConsumer,
+        expectedProof,
+        extensionNonce
+      },
+      (material) => {
+        destroyM3EstablishedLink(material.established)
+        try {
+          if (material.verifiedProof) {
+            revokeVerifiedRedactedResponderProof(material.proofConsumer, material.verifiedProof)
+          }
+        } catch {}
+        clearDecoded(material.expectedProof)
+        clear(material.extensionNonce)
+        material.established = null
+        material.verifiedProof = null
+        material.proofConsumer = null
+        material.expectedProof = null
+        material.extensionNonce = null
+      }
+    )
+    established = null
+    verifiedProof = null
+    proofConsumer = null
+    expectedProof = null
+    extensionNonce = null
     transferred = true
-    return Object.freeze({ established, verifiedProof })
+    return completion
   } catch (err) {
     if (err instanceof PrivateRouteError) throw err
     invalid()
@@ -1760,9 +1799,16 @@ export function completeExtensionLink(pending, options = {}) {
     clear(input)
     clear(shared)
     clear(admittedLimitsDigest)
+    destroyM3EstablishedLink(established)
+    clearDecoded(expectedProof)
+    clear(extensionNonce)
     clearState(derivedState)
     clearExtensionPending(state)
   }
+}
+
+export function abortExtensionLinkCompletion(completion) {
+  return destroyExtensionLinkCompletion(completion)
 }
 
 export function completeIndexZeroGuardLink(

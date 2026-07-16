@@ -22,6 +22,7 @@ import {
   createBranchConstructionAuthority,
   revokeBranchPathPairBinding
 } from './branch-construction-authority.js'
+import { createBranchPathAuthority } from './branch-path-authority.js'
 import { consumeBootstrapGuardReady, consumeConstructedGuardBranch } from './bootstrap-io.js'
 import { CELL_SIZE, CellCodec } from './cell-codec.js'
 import {
@@ -44,6 +45,7 @@ import { isM3AdjacencyAuthority } from './m3-adjacency-runtime.js'
 import { PRIVACY_OPERATION } from './privacy-domains.js'
 import { BRANCH_CLASS, CELL_CLASS, DIRECTION, DOMAIN, ROLE, roleForIdentity } from './protocol.js'
 import { RelayService, TEST_ONLY_RELAY_OBSERVER } from './relay-service.js'
+import { createRoutedCandidateAuthority } from './routed-candidate.js'
 import {
   ROUTE_ENDPOINT,
   RoutePayloadCodec,
@@ -82,7 +84,7 @@ function destroyConstructedBranch(branch) {
   }
 }
 
-function dynamicBranches(lookup, announce) {
+function dynamicBranches(lookup, announce, pathAuthority, candidateDirectory) {
   const branches = Object.freeze({
     destroy() {
       const state = DYNAMIC_BRANCH_STATES.get(branches)
@@ -91,12 +93,25 @@ function dynamicBranches(lookup, announce) {
       try {
         destroyConstructedBranch(state.lookup)
       } finally {
-        destroyConstructedBranch(state.announce)
+        try {
+          destroyConstructedBranch(state.announce)
+        } finally {
+          try {
+            state.pathAuthority.destroy()
+          } finally {
+            state.candidateDirectory.destroy()
+          }
+        }
       }
       return true
     }
   })
-  DYNAMIC_BRANCH_STATES.set(branches, { lookup, announce })
+  DYNAMIC_BRANCH_STATES.set(branches, {
+    lookup,
+    announce,
+    pathAuthority,
+    candidateDirectory
+  })
   return branches
 }
 
@@ -360,6 +375,9 @@ class DynamicRouteManager {
       let announce = null
       let lookupMoved = false
       let announceMoved = false
+      let pathBindingMoved = false
+      let routed = null
+      let pathAuthority = null
       let branches = null
       let published = false
       try {
@@ -367,9 +385,32 @@ class DynamicRouteManager {
         lookupMoved = true
         announce = consumeConstructedGuardBranch(pair.announce)
         announceMoved = true
-        branches = dynamicBranches(lookup, announce)
+        routed = createRoutedCandidateAuthority({ now: this.#options.now })
+        this.#assertLifecycle(lifecycle)
+        pathAuthority = createBranchPathAuthority({
+          now: this.#options.now,
+          candidateDirectory: routed.directory,
+          pairBinding: pair.pathBinding
+        })
+        pathBindingMoved = true
+        this.#assertLifecycle(lifecycle)
+        lookup.tailControl.attachClientExtensionAuthority(
+          pathAuthority,
+          routed.directory,
+          routed.evidenceProducer
+        )
+        this.#assertLifecycle(lifecycle)
+        announce.tailControl.attachClientExtensionAuthority(
+          pathAuthority,
+          routed.directory,
+          routed.evidenceProducer
+        )
+        this.#assertLifecycle(lifecycle)
+        branches = dynamicBranches(lookup, announce, pathAuthority, routed.directory)
         lookup = null
         announce = null
+        pathAuthority = null
+        routed = null
         this.#releaseAllocations(lifecycle)
         this.#assertLifecycle(lifecycle)
         this.#notify({ type: 'guard-ready', resource: 'paired-branches' })
@@ -378,10 +419,12 @@ class DynamicRouteManager {
         published = true
         return branches
       } finally {
-        revokeBranchPathPairBinding(pair.pathBinding)
+        if (!pathBindingMoved) revokeBranchPathPairBinding(pair.pathBinding)
         if (!published && branches) branches.destroy()
         destroyConstructedBranch(lookup)
         destroyConstructedBranch(announce)
+        if (pathAuthority) pathAuthority.destroy()
+        if (routed) routed.directory.destroy()
         try {
           if (!lookupMoved) pair.lookup.destroy()
         } catch {}

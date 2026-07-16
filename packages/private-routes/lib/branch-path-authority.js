@@ -600,6 +600,11 @@ export function isBranchPathAuthority(value) {
   return safeObject(value) && STATES.has(value)
 }
 
+export function isBranchPathAuthorityFor(value, candidateDirectory) {
+  const owner = safeObject(value) ? STATES.get(value) : null
+  return !!owner && !owner.destroyed && owner.candidateDirectory === candidateDirectory
+}
+
 export function takeBranchPathAuthorization(authorization) {
   const state = safeObject(authorization) ? AUTHORIZATIONS.get(authorization) : null
   if (!state || state.status !== 'LIVE' || state.consumed) replay()

@@ -10,6 +10,7 @@ import {
   failBranchPathAuthorization,
   failBranchPathReservation,
   isBranchPathAuthority,
+  isBranchPathAuthorityFor,
   takeBranchPathAuthorization
 } from './branch-path-authority.js'
 import {
@@ -54,6 +55,7 @@ import {
   commitCurrentTailCandidateResponse,
   consumeCurrentTailCandidateAdmissionHandle,
   decodeRelayDiscoverResponse,
+  isRoutedCandidateAuthorityPair,
   isCurrentTailCandidateAdmissionPair,
   publishAuthenticatedDiscoveryEvidence,
   reserveCurrentTailCandidateResponse,
@@ -1646,6 +1648,7 @@ function clearSessionState(state, session = null) {
   state.rxNoncePrefix = null
   state.transcriptDigest = null
   state.evidenceProducer = null
+  state.candidateDirectory = null
   state.branchPathAuthority = null
   rollbackClientExtension(state.clientExtension)
   state.clientExtension = null
@@ -1940,6 +1943,36 @@ class TailControlSession {
       clear(encoded)
       clearTailReady(ready)
       clear(input)
+    }
+  }
+
+  attachClientExtensionAuthority(branchPathAuthority, candidateDirectory, evidenceProducer) {
+    const state = beginSessionMutation(this)
+    try {
+      if (
+        !state.initiator ||
+        !state.ready ||
+        state.branchPathAuthority ||
+        state.candidateDirectory ||
+        state.clientExtension ||
+        (state.evidenceProducer && state.evidenceProducer !== evidenceProducer) ||
+        !isBranchPathAuthorityFor(branchPathAuthority, candidateDirectory) ||
+        !isRoutedCandidateAuthorityPair(candidateDirectory, evidenceProducer)
+      ) {
+        authentication()
+      }
+      sessionNow(state)
+      state.branchPathAuthority = branchPathAuthority
+      state.candidateDirectory = candidateDirectory
+      state.evidenceProducer = evidenceProducer
+      assertSessionMutation(state)
+      return true
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
     }
   }
 
@@ -2544,6 +2577,7 @@ class TailControlSession {
           now: state.now,
           crypto: state.crypto,
           evidenceProducer: state.evidenceProducer,
+          candidateDirectory: state.candidateDirectory,
           branchPathAuthority: state.branchPathAuthority
         }
       )
@@ -2734,6 +2768,7 @@ function tailControlOptions(options) {
     now: option(selected, 'now'),
     crypto: option(selected, 'crypto') || cryptoSuite,
     evidenceProducer: option(selected, 'evidenceProducer'),
+    candidateDirectory: option(selected, 'candidateDirectory'),
     candidateAdmissionProducer: option(selected, 'candidateAdmissionProducer'),
     candidateAdmissionConsumer: option(selected, 'candidateAdmissionConsumer'),
     branchPathAuthority: option(selected, 'branchPathAuthority'),
@@ -2762,10 +2797,13 @@ function tailControlOptions(options) {
   }
   if (
     values.branchPathAuthority !== undefined &&
-    !isBranchPathAuthority(values.branchPathAuthority)
+    (!isBranchPathAuthority(values.branchPathAuthority) ||
+      !isBranchPathAuthorityFor(values.branchPathAuthority, values.candidateDirectory) ||
+      !isRoutedCandidateAuthorityPair(values.candidateDirectory, values.evidenceProducer))
   ) {
     invalid()
   }
+  if (values.candidateDirectory !== undefined && values.branchPathAuthority === undefined) invalid()
   if (
     (values.adjacencyAuthority !== undefined || values.extensionCommitter !== undefined) &&
     (!isM3AdjacencyAuthority(values.adjacencyAuthority) ||
@@ -2787,6 +2825,7 @@ function createTailControlSessionFromMaterial(material, options = {}, normalized
       now,
       crypto,
       evidenceProducer,
+      candidateDirectory,
       candidateAdmissionProducer,
       candidateAdmissionConsumer,
       branchPathAuthority,
@@ -2846,6 +2885,7 @@ function createTailControlSessionFromMaterial(material, options = {}, normalized
       discoveryAttempts: 0,
       responseReassemblies: new Map(),
       evidenceProducer,
+      candidateDirectory: candidateDirectory || null,
       branchPathAuthority: branchPathAuthority || null,
       clientExtension: null,
       candidateAdmissionProducer,

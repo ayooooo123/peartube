@@ -924,6 +924,19 @@ export function isRoutedCandidateDirectory(value) {
   return value !== null && typeof value === 'object' && ROUTED_CANDIDATE_DIRECTORIES.has(value)
 }
 
+export function isRoutedCandidateAuthorityPair(directory, evidenceProducer) {
+  const owner =
+    evidenceProducer !== null && typeof evidenceProducer === 'object'
+      ? EVIDENCE_PRODUCERS.get(evidenceProducer)
+      : null
+  return (
+    !!owner &&
+    owner.active &&
+    owner.directory === directory &&
+    isRoutedCandidateDirectory(directory)
+  )
+}
+
 export function createRoutedCandidateAuthority(options) {
   const owner = {
     active: true,

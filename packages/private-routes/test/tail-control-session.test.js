@@ -487,6 +487,67 @@ test('index-zero tail session signs, seals, and verifies exactly one TAIL_READY'
   fixture.responder.destroy()
 })
 
+test('active client tails attach one exact manager-owned path authority', (t) => {
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const other = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const identity = safetyRoleIdentity(223)
+  const clientPath = clientPathAuthority(routed, identity)
+  const first = pair(
+    () => NOW,
+    () => NOW,
+    0,
+    5_000n,
+    { identity, candidateAdvertisementDigest: clientPath.guardDigest }
+  )
+  activate(first, 0x41)
+
+  t.is(
+    first.client.attachClientExtensionAuthority(
+      clientPath.path,
+      routed.directory,
+      routed.evidenceProducer
+    ),
+    true
+  )
+  expectCode(
+    t,
+    () =>
+      first.client.attachClientExtensionAuthority(
+        clientPath.path,
+        routed.directory,
+        routed.evidenceProducer
+      ),
+    'ERR_AUTHENTICATION'
+  )
+  t.is(first.client.diagnostics().state, 'DESTROYED')
+  first.responder.destroy()
+
+  const mismatched = pair(
+    () => NOW,
+    () => NOW,
+    0,
+    5_000n,
+    { identity, candidateAdvertisementDigest: clientPath.guardDigest }
+  )
+  activate(mismatched, 0x42)
+  expectCode(
+    t,
+    () =>
+      mismatched.client.attachClientExtensionAuthority(
+        clientPath.path,
+        other.directory,
+        other.evidenceProducer
+      ),
+    'ERR_AUTHENTICATION'
+  )
+  t.is(mismatched.client.diagnostics().state, 'DESTROYED')
+  mismatched.responder.destroy()
+
+  clientPath.path.destroy()
+  routed.directory.destroy()
+  other.directory.destroy()
+})
+
 test('RELAY_DISCOVER_V1 has one canonical 77-byte encoding', (t) => {
   const request = {
     requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
@@ -1180,6 +1241,7 @@ test('the first extension establishes a safety-relay successor over the same set
       candidateAdvertisementDigest: clientPath.guardDigest,
       client: {
         evidenceProducer: routed.evidenceProducer,
+        candidateDirectory: routed.directory,
         branchPathAuthority: clientPath.path
       },
       responder: {
@@ -1344,6 +1406,7 @@ test('client EXTEND teardown rolls its uncommitted branch reservation back', (t)
       candidateAdvertisementDigest: clientPath.guardDigest,
       client: {
         evidenceProducer: routed.evidenceProducer,
+        candidateDirectory: routed.directory,
         branchPathAuthority: clientPath.path
       },
       responder: {

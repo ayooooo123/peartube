@@ -1,5 +1,6 @@
 import b4a from 'b4a'
 
+import { RoutedCoreReassembler, encodeRoutedCoreObjects } from './core-fragment.js'
 import { SenderCounter } from './counters.js'
 import { PrivateRouteError } from './errors.js'
 import {
@@ -298,6 +299,7 @@ export class OpenRouteSession {
         now,
         payloadRx: 0n,
         payloadTx: new SenderCounter(),
+        reassembler: new RoutedCoreReassembler({ now }),
         violated: false
       }
       material = null
@@ -317,12 +319,28 @@ export class OpenRouteSession {
     return this.#open(CONTEXT_CLASS.ROUTE_PAYLOAD, envelope)
   }
 
+  sealPayloadObject(encoded, options) {
+    return this.#sealObject(CONTEXT_CLASS.ROUTE_PAYLOAD, encoded, options)
+  }
+
+  openPayloadObject(envelope) {
+    return this.#openObject(CONTEXT_CLASS.ROUTE_PAYLOAD, envelope)
+  }
+
   sealControl(payload, options) {
     return this.#seal(CONTEXT_CLASS.TERMINAL_CONTROL_ORDERED, payload, options)
   }
 
   openControl(envelope) {
     return this.#open(CONTEXT_CLASS.TERMINAL_CONTROL_ORDERED, envelope)
+  }
+
+  sealControlObject(encoded, options) {
+    return this.#sealObject(CONTEXT_CLASS.TERMINAL_CONTROL_ORDERED, encoded, options)
+  }
+
+  openControlObject(envelope) {
+    return this.#openObject(CONTEXT_CLASS.TERMINAL_CONTROL_ORDERED, envelope)
   }
 
   diagnostics() {
@@ -375,6 +393,52 @@ export class OpenRouteSession {
     }
   }
 
+  #sealObject(contextClass, encoded, options) {
+    const state = this.#begin()
+    let objects = null
+    const envelopes = []
+    try {
+      objects = encodeRoutedCoreObjects(encoded)
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      this.#checkExpiry(state)
+      for (const semantic of objects) {
+        envelopes.push(sealFrame(state, contextClass, semantic, randomBytes))
+        this.#assertLive(state)
+      }
+      return envelopes
+    } catch (err) {
+      for (const envelope of envelopes) clear(envelope)
+      envelopes.length = 0
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (objects) {
+        for (const semantic of objects) clear(semantic)
+      }
+    }
+  }
+
+  #openObject(contextClass, envelope) {
+    const state = this.#begin()
+    let semantic = null
+    try {
+      this.#checkExpiry(state)
+      semantic = openFrame(state, contextClass, envelope)
+      this.#assertLive(state)
+      return state.reassembler.accept(semantic, contextClass)
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(semantic)
+    }
+  }
+
   #begin() {
     const state = this.#state
     if (!state || state.destroyed) throw PrivateRouteError.ERR_DESTROYED()
@@ -411,6 +475,9 @@ export class OpenRouteSession {
     try {
       state.controlTx.destroy()
     } catch {}
+    try {
+      state.reassembler.destroy()
+    } catch {}
     destroyOpenRouteMaterial(state.material)
     state.material = null
     state.crypto = null
@@ -419,6 +486,7 @@ export class OpenRouteSession {
     state.controlTx = null
     state.payloadRx = null
     state.controlRx = null
+    state.reassembler = null
     return true
   }
 }

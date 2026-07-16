@@ -5,7 +5,13 @@ import { cryptoSuite } from '../lib/crypto-suite.js'
 import { decodeM3ContextEnvelope } from '../lib/m3-context.js'
 import { createOpenRouteHandoff } from '../lib/open-route-handoff.js'
 import { OpenRouteSession } from '../lib/open-route-session.js'
-import { BRANCH_CLASS, CONTEXT_CLASS } from '../lib/protocol.js'
+import {
+  BRANCH_CLASS,
+  CONTEXT_CLASS,
+  M3_MESSAGE_ID,
+  decodeM3Object,
+  encodeM3Object
+} from '../lib/protocol.js'
 
 function seed(byte, size = 32) {
   return b4a.alloc(size, byte)
@@ -188,4 +194,56 @@ test('route lifetime expiry and caught callback reentry fail closed', (t) => {
   t.is(reentryCode, 'ERR_BUSY')
   t.alike(reentrant.client.diagnostics(), { state: 'DESTROYED' })
   reentrant.exit.destroy()
+})
+
+test('large canonical M3 objects fragment and reassemble over the live route', (t) => {
+  const route = pair()
+  const object = encodeM3Object({
+    messageId: M3_MESSAGE_ID.ROUTED_REPLY_V1,
+    body: seed(0x71, 8_000)
+  })
+  const envelopes = route.exit.sealPayloadObject(object, {
+    randomBytes: (size) => seed(0x72, size)
+  })
+  t.is(envelopes.length, 8)
+  let complete = null
+  for (let index = 0; index < envelopes.length; index++) {
+    const context = decodeM3ContextEnvelope(envelopes[index])
+    t.is(context.contextClass, CONTEXT_CLASS.ROUTE_PAYLOAD)
+    t.is(context.frame.readBigUInt64BE(0), BigInt(index))
+    complete = route.client.openPayloadObject(envelopes[index])
+    if (index + 1 < envelopes.length) t.is(complete, null)
+  }
+  t.alike(complete, object)
+  t.is(decodeM3Object(complete).messageId, M3_MESSAGE_ID.ROUTED_REPLY_V1)
+
+  const controlObject = encodeM3Object({
+    messageId: M3_MESSAGE_ID.DHT_EXIT_OPEN_V1,
+    body: seed(0x73, 169)
+  })
+  const control = route.exit.sealControlObject(controlObject, {
+    randomBytes: (size) => seed(0x74, size)
+  })
+  t.is(control.length, 1)
+  t.is(decodeM3ContextEnvelope(control[0]).frame.readBigUInt64BE(0), 0n)
+  t.alike(route.client.openControlObject(control[0]), controlObject)
+  route.client.destroy()
+  route.exit.destroy()
+})
+
+test('fragment reassembly deadline is non-extending and fails the route closed', (t) => {
+  let current = 1_000n
+  const route = pair(() => current)
+  const object = encodeM3Object({
+    messageId: M3_MESSAGE_ID.ROUTED_REPLY_V1,
+    body: seed(0x81, 3_000)
+  })
+  const envelopes = route.exit.sealPayloadObject(object, {
+    randomBytes: (size) => seed(0x82, size)
+  })
+  t.is(route.client.openPayloadObject(envelopes[0]), null)
+  current = 6_000n
+  expectCode(t, () => route.client.openPayloadObject(envelopes[1]), 'INVALID_ROUTE')
+  t.alike(route.client.diagnostics(), { state: 'DESTROYED' })
+  route.exit.destroy()
 })

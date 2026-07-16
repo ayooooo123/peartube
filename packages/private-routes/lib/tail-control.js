@@ -6,6 +6,11 @@ import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
 import { digestPayloadParameters } from './final-exit.js'
 import {
+  createFinalExitHandoff,
+  destroyFinalExitHandoffMaterial,
+  revokeFinalExitHandoff
+} from './final-exit-handoff.js'
+import {
   completeBranchPathReservation,
   failBranchPathAuthorization,
   failBranchPathReservation,
@@ -1639,6 +1644,7 @@ function clearSessionState(state, session = null) {
   const txNoncePrefix = state.txNoncePrefix
   const rxNoncePrefix = state.rxNoncePrefix
   const transcriptDigest = state.transcriptDigest
+  const finalExitMaterial = state.finalExitMaterial
   state.tx = null
   state.rx = null
   state.transcript = null
@@ -1647,6 +1653,8 @@ function clearSessionState(state, session = null) {
   state.txNoncePrefix = null
   state.rxNoncePrefix = null
   state.transcriptDigest = null
+  state.finalExitMaterial = null
+  state.finalExitHandoff = null
   state.evidenceProducer = null
   state.candidateDirectory = null
   state.branchPathAuthority = null
@@ -1669,6 +1677,8 @@ function clearSessionState(state, session = null) {
   clear(txNoncePrefix)
   clear(rxNoncePrefix)
   clear(transcriptDigest)
+  if (session) revokeFinalExitHandoff(session)
+  destroyFinalExitHandoffMaterial(finalExitMaterial)
   clearTailReady(transcript)
   try {
     if (tx) tx.destroy()
@@ -1943,6 +1953,34 @@ class TailControlSession {
       clear(encoded)
       clearTailReady(ready)
       clear(input)
+    }
+  }
+
+  takeFinalExitHandoff(...args) {
+    if (args.length !== 0) invalid()
+    const state = beginSessionMutation(this)
+    let handoff = null
+    try {
+      if (
+        !state.ready ||
+        state.transcript.extensionIndex !== 2 ||
+        !state.finalExitMaterial ||
+        state.finalExitHandoff
+      ) {
+        authentication()
+      }
+      sessionNow(state)
+      handoff = createFinalExitHandoff(this, state.finalExitMaterial)
+      state.finalExitMaterial = null
+      state.finalExitHandoff = handoff
+      assertSessionMutation(state)
+      return handoff
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
     }
   }
 
@@ -2840,6 +2878,7 @@ function tailControlOptions(options) {
 function createTailControlSessionFromMaterial(material, options = {}, normalized = null) {
   let transcript = null
   let derived = null
+  let finalExitMaterial = null
   let session = null
   let installed = false
   try {
@@ -2890,6 +2929,19 @@ function createTailControlSessionFromMaterial(material, options = {}, normalized
       invalid()
     }
     session = new TailControlSession()
+    if (transcript.extensionIndex === 2) {
+      finalExitMaterial = {
+        expiresAt: material.expiresAt,
+        finalizeForwardKey: derived.finalizeForwardKey,
+        finalizeForwardNoncePrefix: derived.finalizeForwardNoncePrefix,
+        finalizeReverseKey: derived.finalizeReverseKey,
+        finalizeReverseNoncePrefix: derived.finalizeReverseNoncePrefix,
+        initiator,
+        sharedSecret: copy(material.secret),
+        tailControl: session,
+        tailControlTranscript: copy(material.transcript)
+      }
+    }
     SESSIONS.set(session, {
       initiator,
       now,
@@ -2897,6 +2949,8 @@ function createTailControlSessionFromMaterial(material, options = {}, normalized
       expiresAt: material.expiresAt,
       transcript,
       transcriptDigest: digestTailReadyTranscript(material.transcript),
+      finalExitMaterial,
+      finalExitHandoff: null,
       txKey: initiator ? derived.forwardKey : derived.reverseKey,
       rxKey: initiator ? derived.reverseKey : derived.forwardKey,
       txNoncePrefix: initiator ? derived.forwardNoncePrefix : derived.reverseNoncePrefix,
@@ -2922,6 +2976,7 @@ function createTailControlSessionFromMaterial(material, options = {}, normalized
       violated: false,
       destroyed: false
     })
+    finalExitMaterial = null
     transcript = null
     derived = null
     installed = true
@@ -2937,6 +2992,7 @@ function createTailControlSessionFromMaterial(material, options = {}, normalized
       material.transcript = null
     }
     clearTailReady(transcript)
+    destroyFinalExitHandoffMaterial(finalExitMaterial)
     if (derived) for (const value of Object.values(derived)) clear(value)
     if (!installed && session) {
       const state = SESSIONS.get(session)

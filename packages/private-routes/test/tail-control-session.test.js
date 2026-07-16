@@ -6,6 +6,10 @@ import * as construction from '../lib/branch-construction-authority.js'
 import { createBranchPathAuthority } from '../lib/branch-path-authority.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
 import {
+  consumeFinalExitHandoff,
+  destroyFinalExitHandoffMaterial
+} from '../lib/final-exit-handoff.js'
+import {
   LINK_ACCEPT_SIZE,
   LINK_OFFER_SIZE,
   abortExtensionLinkCompletion,
@@ -316,6 +320,92 @@ function activate(fixture, byte = 0x31) {
   })
   fixture.client.openReady(ready)
 }
+
+test('ready index-two tails transfer one opaque final-exit handoff', (t) => {
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    2
+  )
+  activate(fixture)
+
+  const clientHandoff = fixture.client.takeFinalExitHandoff()
+  const responderHandoff = fixture.responder.takeFinalExitHandoff()
+  t.ok(Object.isFrozen(clientHandoff))
+  t.alike(Object.keys(clientHandoff), [])
+  t.ok(Object.isFrozen(responderHandoff))
+  t.alike(Object.keys(responderHandoff), [])
+
+  const client = consumeFinalExitHandoff(clientHandoff)
+  const responder = consumeFinalExitHandoff(responderHandoff)
+  const vector = deriveTailControlTestVector(fixture.sharedSecret, fixture.encodedTranscript, 2)
+  t.is(client.initiator, true)
+  t.is(responder.initiator, false)
+  t.is(client.tailControl, fixture.client)
+  t.is(responder.tailControl, fixture.responder)
+  for (const material of [client, responder]) {
+    t.alike(material.sharedSecret, fixture.sharedSecret)
+    t.alike(material.tailControlTranscript, fixture.encodedTranscript)
+    t.alike(material.finalizeForwardKey, vector.finalizeForwardKey)
+    t.alike(material.finalizeReverseKey, vector.finalizeReverseKey)
+    t.alike(material.finalizeForwardNoncePrefix, vector.finalizeForwardNoncePrefix)
+    t.alike(material.finalizeReverseNoncePrefix, vector.finalizeReverseNoncePrefix)
+    t.is(material.expiresAt, 5_000n)
+  }
+  expectCode(t, () => consumeFinalExitHandoff(clientHandoff), 'ERR_REPLAY')
+
+  const owned = [
+    client.sharedSecret,
+    client.tailControlTranscript,
+    client.finalizeForwardKey,
+    client.finalizeReverseKey,
+    client.finalizeForwardNoncePrefix,
+    client.finalizeReverseNoncePrefix
+  ]
+  t.ok(destroyFinalExitHandoffMaterial(client))
+  t.ok(owned.every((value) => value.every((byte) => byte === 0)))
+  t.is(destroyFinalExitHandoffMaterial(client), false)
+  destroyFinalExitHandoffMaterial(responder)
+  fixture.client.destroy()
+  fixture.responder.destroy()
+})
+
+test('final-exit handoff rejects early and nonterminal tails and revokes pending transfer', (t) => {
+  expectCode(t, () => consumeFinalExitHandoff(Object.freeze({})), 'ERR_AUTHENTICATION')
+  const revoked = Proxy.revocable({}, {})
+  revoked.revoke()
+  expectCode(t, () => consumeFinalExitHandoff(revoked.proxy), 'ERR_AUTHENTICATION')
+
+  const early = pair(
+    () => NOW,
+    () => NOW,
+    2
+  )
+  expectCode(t, () => early.client.takeFinalExitHandoff(), 'ERR_AUTHENTICATION')
+  t.is(early.client.destroy(), false)
+  early.responder.destroy()
+
+  const middle = pair(
+    () => NOW,
+    () => NOW,
+    1
+  )
+  activate(middle)
+  expectCode(t, () => middle.client.takeFinalExitHandoff(), 'ERR_AUTHENTICATION')
+  t.is(middle.client.destroy(), false)
+  middle.responder.destroy()
+
+  const pending = pair(
+    () => NOW,
+    () => NOW,
+    2
+  )
+  activate(pending)
+  const handoff = pending.client.takeFinalExitHandoff()
+  t.ok(pending.client.destroy())
+  expectCode(t, () => consumeFinalExitHandoff(handoff), 'ERR_REPLAY')
+  pending.responder.destroy()
+})
 
 function writeUint64(target, value, offset = 0) {
   for (let index = 7; index >= 0; index--) {

@@ -19,7 +19,8 @@ import {
 } from './activation.js'
 import {
   consumeBranchConstructionPair,
-  createBranchConstructionAuthority
+  createBranchConstructionAuthority,
+  revokeBranchPathPairBinding
 } from './branch-construction-authority.js'
 import { consumeBootstrapGuardReady, consumeConstructedGuardBranch } from './bootstrap-io.js'
 import { CELL_SIZE, CellCodec } from './cell-codec.js'
@@ -377,6 +378,7 @@ class DynamicRouteManager {
         published = true
         return branches
       } finally {
+        revokeBranchPathPairBinding(pair.pathBinding)
         if (!published && branches) branches.destroy()
         destroyConstructedBranch(lookup)
         destroyConstructedBranch(announce)

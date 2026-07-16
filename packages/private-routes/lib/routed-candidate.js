@@ -19,6 +19,7 @@ import {
 
 const EVIDENCE = new WeakMap()
 const EVIDENCE_PRODUCERS = new WeakMap()
+const ROUTED_CANDIDATE_DIRECTORIES = new WeakSet()
 const TAIL_RESPONSE_RESERVATIONS = new WeakMap()
 const MAX_ADVERTISEMENTS = 8
 const MAX_RESPONSE_BYTES = 4_449
@@ -684,6 +685,7 @@ class RoutedCandidateDirectory {
     this.#mutating = false
     this.#violated = false
     this.#lifecycle = Object.freeze({})
+    ROUTED_CANDIDATE_DIRECTORIES.add(this)
   }
 
   admit(capability) {
@@ -849,6 +851,7 @@ class RoutedCandidateDirectory {
     this.#live = 0
     this.#now = null
     this.#owner = null
+    ROUTED_CANDIDATE_DIRECTORIES.delete(this)
     return true
   }
 
@@ -912,6 +915,13 @@ class RoutedCandidateDirectory {
       if (request.deadline <= current) this.#requests.delete(key)
     }
   }
+}
+
+// Deep production check used by the manager-owned BranchPathAuthority. It
+// prevents a caller-supplied object with read()/consume() methods from minting
+// path-extension authority.
+export function isRoutedCandidateDirectory(value) {
+  return value !== null && typeof value === 'object' && ROUTED_CANDIDATE_DIRECTORIES.has(value)
 }
 
 export function createRoutedCandidateAuthority(options) {

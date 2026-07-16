@@ -122,9 +122,30 @@ test('paired authority gates the second branch on one immutable guard lease', (t
   api.completeBranchConstruction(announce, announceResource.value)
   const transfer = pair.takePair()
   t.alike(Object.keys(transfer), [])
+  const allocate = b4a.allocUnsafeSlow
+  const allocated = []
+  b4a.allocUnsafeSlow = (size) => {
+    const value = allocate(allocated.length === 1 ? size - 1 : size)
+    allocated.push(value)
+    return value
+  }
+  try {
+    t.exception(
+      () => api.consumeBranchConstructionPair(transfer),
+      'partial path-binding allocation fails before pair ownership moves'
+    )
+  } finally {
+    b4a.allocUnsafeSlow = allocate
+  }
+  t.is(allocated.length, 2)
+  t.ok(allocated.every((value) => b4a.equals(value, b4a.alloc(value.byteLength))))
   const moved = api.consumeBranchConstructionPair(transfer)
   t.is(moved.lookup, lookupResource.value)
   t.is(moved.announce, announceResource.value)
+  t.ok(Object.isFrozen(moved.pathBinding))
+  t.alike(Object.keys(moved.pathBinding), [])
+  t.is(api.revokeBranchPathPairBinding(moved.pathBinding), true)
+  t.is(api.revokeBranchPathPairBinding(moved.pathBinding), false)
   t.exception(() => api.consumeBranchConstructionPair(transfer), 'pair transfer is one-use')
   t.is(pair.destroy(), false, 'pair consumption terminally erases the authority')
   t.is(lookupResource.destroys, 0, 'consumed resource ownership moved to the manager')

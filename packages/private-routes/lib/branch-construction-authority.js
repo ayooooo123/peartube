@@ -16,6 +16,7 @@ const STATES = new WeakMap()
 const REQUESTS = new WeakMap()
 const SESSIONS = new WeakMap()
 const PAIR_TRANSFERS = new WeakMap()
+const PATH_BINDINGS = new WeakMap()
 const RESOURCE_OWNERS = new WeakMap()
 const byteLengthGetter = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
@@ -84,12 +85,15 @@ function fixed(value, size) {
 
 function copy(value, size) {
   if (!fixed(value, size)) invalid()
-  const result = b4a.allocUnsafeSlow(size)
+  let result = null
   try {
+    result = b4a.allocUnsafeSlow(size)
+    if (!fixed(result, size)) invalid()
     setIntrinsic.call(result, value)
     return result
-  } catch {
+  } catch (err) {
     clear(result)
+    if (err instanceof PrivateRouteError) throw err
     invalid()
   }
 }
@@ -280,6 +284,53 @@ function clearBranch(branch) {
   branch.generation = 0n
   branch.deadline = 0n
   branch.advertisementEpoch = null
+}
+
+function copyPathBranch(branch, linkBinding) {
+  const result = {
+    branchClass: branch.branchClass,
+    branchId: null,
+    circuitId: null,
+    generation: branch.generation,
+    currentTailAdvertisementDigest: null,
+    deadline: branch.deadline,
+    linkBinding
+  }
+  let complete = false
+  try {
+    result.branchId = copy(branch.branchId, 16)
+    result.circuitId = copy(branch.circuitId, 16)
+    result.currentTailAdvertisementDigest = copy(branch.advertisementDigest, 32)
+    complete = true
+    return result
+  } finally {
+    if (!complete) clearPathBranch(result)
+  }
+}
+
+function clearPathBranch(branch) {
+  if (!branch) return
+  clear(branch.branchId)
+  clear(branch.circuitId)
+  clear(branch.currentTailAdvertisementDigest)
+  branch.branchId = null
+  branch.circuitId = null
+  branch.currentTailAdvertisementDigest = null
+  branch.linkBinding = null
+  branch.generation = 0n
+  branch.deadline = 0n
+}
+
+function clearPathBinding(material) {
+  if (!material) return
+  clear(material.guardRelayIdentity)
+  clear(material.guardReachableEndpoint)
+  material.guardRelayIdentity = null
+  material.guardReachableEndpoint = null
+  clearPathBranch(material.lookup)
+  clearPathBranch(material.announce)
+  material.lookup = null
+  material.announce = null
 }
 
 function clearLease(lease) {
@@ -854,6 +905,42 @@ export function consumeBranchConstructionPair(transfer) {
   if (!owner || owner.destroyed || owner.transfer !== transfer) replay()
   const lookup = owner.lookup.resource.value
   const announce = owner.announce.resource.value
+  const pathBinding = Object.freeze({})
+  let material = null
+  let published = false
+  try {
+    material = {
+      guardRelayIdentity: null,
+      guardReachableEndpoint: null,
+      lookup: null,
+      announce: null
+    }
+    material.guardRelayIdentity = copy(owner.lease.relayIdentity, 32)
+    material.guardReachableEndpoint = copy(owner.lease.reachableEndpoint, 19)
+    material.lookup = copyPathBranch(owner.lookup, Object.freeze({}))
+    material.announce = copyPathBranch(owner.announce, Object.freeze({}))
+    PATH_BINDINGS.set(pathBinding, material)
+    published = true
+  } finally {
+    if (!published) clearPathBinding(material)
+  }
   terminalize(owner, { closeResources: false, type: 'pair-transferred' })
-  return Object.freeze({ lookup, announce })
+  return Object.freeze({ lookup, announce, pathBinding })
+}
+
+// Deep production transfer consumed only by BranchPathAuthority after both
+// authenticated index-zero branches have moved to RouteManager.
+export function takeBranchPathPairBinding(binding) {
+  const material = safeObject(binding) ? PATH_BINDINGS.get(binding) : null
+  if (!material) replay()
+  PATH_BINDINGS.delete(binding)
+  return material
+}
+
+export function revokeBranchPathPairBinding(binding) {
+  const material = safeObject(binding) ? PATH_BINDINGS.get(binding) : null
+  if (!material) return false
+  PATH_BINDINGS.delete(binding)
+  clearPathBinding(material)
+  return true
 }

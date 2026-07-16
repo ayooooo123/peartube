@@ -10,6 +10,7 @@ import {
   decodeRedactedResponderProof,
   revokeVerifiedRedactedResponderProof,
   signRedactedResponderProof,
+  verifyExpectedRedactedResponderProof,
   verifyRedactedResponderProof
 } from '../lib/redacted-responder-proof.js'
 import {
@@ -187,6 +188,29 @@ test('proof consumption binds every successor and client commitment', (t) => {
     t.ok(revokeVerifiedRedactedResponderProof(authority.consumer, verified), field)
     authority.destroy()
   }
+})
+
+test('proof verification can bind the exact successor projection before publication', (t) => {
+  const { identity, value } = fixture()
+  const authority = createRedactedResponderProofAuthority({ now: () => NOW })
+  const encoded = signRedactedResponderProof(value, identity.secretKey)
+
+  expectCode(
+    t,
+    () =>
+      verifyExpectedRedactedResponderProof(authority.verifier, encoded, {
+        ...value,
+        clientNonce: seed(0x7a)
+      }),
+    'ERR_AUTHENTICATION',
+    'a mismatch publishes no proof authority'
+  )
+  t.alike(authority.diagnostics(), { state: 'ACTIVE', live: 0, states: 0 })
+  const verified = verifyExpectedRedactedResponderProof(authority.verifier, encoded, value)
+  t.ok(Object.isFrozen(verified))
+  t.alike(Object.keys(verified), [])
+  t.alike(consumeVerifiedRedactedResponderProof(authority.consumer, verified, value), encoded)
+  authority.destroy()
 })
 
 test('proof verification rejects wrong signatures, expiry, and malformed commitments', (t) => {

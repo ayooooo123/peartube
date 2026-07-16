@@ -544,13 +544,14 @@ export function decodeRedactedResponderProof(encoded) {
   }
 }
 
-export function verifyRedactedResponderProof(verifier, encoded) {
+function verifyProof(verifier, encoded, expected) {
   const owner = safeObject(verifier) ? VERIFIERS.get(verifier) : null
   const operation = begin(owner, true)
   let key = null
   let state = null
   let object = null
   let projection = null
+  let expectedProjection = null
   let input = null
   let owned = null
   let nonceKey = null
@@ -579,6 +580,11 @@ export function verifyRedactedResponderProof(verifier, encoded) {
       !cryptoSuite.verify(input, object.authSuffix, projection.responderIdentity)
     ) {
       authentication()
+    }
+    if (expected !== null) {
+      expectedProjection = normalize(expected)
+      assertOwner(owner, operation.lifecycle)
+      if (!projectionsEqual(projection, expectedProjection)) authentication()
     }
     nonceKey = proofNonceKey(projection)
     if (owner.nonces.has(nonceKey)) replay()
@@ -619,10 +625,19 @@ export function verifyRedactedResponderProof(verifier, encoded) {
     clear(object && object.body)
     clear(object && object.authSuffix)
     clearProjection(projection)
+    clearProjection(expectedProjection)
     clear(input)
     clear(owned)
     end(owner, operation)
   }
+}
+
+export function verifyRedactedResponderProof(verifier, encoded) {
+  return verifyProof(verifier, encoded, null)
+}
+
+export function verifyExpectedRedactedResponderProof(verifier, encoded, expected) {
+  return verifyProof(verifier, encoded, expected)
 }
 
 export function consumeVerifiedRedactedResponderProof(consumer, capability, expected) {

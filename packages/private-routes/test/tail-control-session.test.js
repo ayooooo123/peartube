@@ -41,7 +41,8 @@ import {
   encodeExtendRequest,
   encodeExtended,
   encodeTailControlTranscript,
-  digestAdmittedLimits
+  digestAdmittedLimits,
+  takeAdmittedExtendRequest
 } from '../lib/tail-control.js'
 import { privateRoleIdentity } from './helpers.js'
 
@@ -727,11 +728,24 @@ test('current tail opens one EXTEND only for an advertisement it returned', (t) 
     randomBytes: (size) => seed(0xc4, size)
   })
   const encodedExtend = extendRequest(advertisement, 2)
+  expectCode(
+    t,
+    () => takeAdmittedExtendRequest(decodeExtendRequest(encodedExtend)),
+    'ERR_REPLAY',
+    'decoded request bytes do not carry dial authority'
+  )
   const extendEnvelope = resealForwardEnvelope(fixture, requestEnvelope, 0n, 1n, 1, encodedExtend)
-  const opened = fixture.responder.openExtendRequest(extendEnvelope)
+  const admitted = fixture.responder.openExtendRequest(extendEnvelope)
+  t.ok(Object.isFrozen(admitted))
+  t.alike(Object.keys(admitted), [])
+  const opened = takeAdmittedExtendRequest(admitted)
 
-  t.is(opened.extensionIndex, 2)
-  t.alike(opened.advertisement, advertisement)
+  t.is(opened.request.extensionIndex, 2)
+  t.alike(opened.request.advertisement, advertisement)
+  t.alike(opened.currentTailIdentity, fixture.identity.publicKey)
+  t.alike(opened.currentTailAdvertisementDigest, seed(0x15))
+  t.is(opened.deadline, 5_000n)
+  expectCode(t, () => takeAdmittedExtendRequest(admitted), 'ERR_REPLAY')
   t.exception(() => fixture.responder.openExtendRequest(extendEnvelope))
   t.is(fixture.responder.diagnostics().state, 'DESTROYED')
   t.alike(admissions.diagnostics(), {

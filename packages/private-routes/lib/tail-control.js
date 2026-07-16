@@ -77,6 +77,7 @@ const MAX_ROUTE_PAYLOAD = 1073
 const AEAD_TAG_SIZE = 16
 const SESSIONS = new WeakMap()
 const DESTROYED_SESSIONS = new WeakSet()
+const ADMITTED_EXTEND_REQUESTS = new WeakMap()
 const bufferByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength'
@@ -394,6 +395,66 @@ function clearExtendRequest(value) {
     value.extensionIndex = -1
     value.branchClass = -1
   } catch {}
+}
+
+function clearAdmittedExtendRequest(record) {
+  if (!record) return
+  try {
+    if (!Object.prototype.hasOwnProperty.call(record, 'status')) return
+  } catch {
+    return
+  }
+  if (record.capability) ADMITTED_EXTEND_REQUESTS.delete(record.capability)
+  clearExtendRequest(record.request)
+  clear(record.currentTailIdentity)
+  clear(record.currentTailAdvertisementDigest)
+  record.capability = null
+  record.request = null
+  record.currentTailIdentity = null
+  record.currentTailAdvertisementDigest = null
+  record.session = null
+  record.status = 'DESTROYED'
+  record.deadline = 0n
+  record.key = null
+  record.extensionNonce = null
+}
+
+function clearAdmittedExtendMaterial(value) {
+  if (!value) return
+  clearExtendRequest(value.request)
+  clear(value.currentTailIdentity)
+  clear(value.currentTailAdvertisementDigest)
+  value.request = null
+  value.currentTailIdentity = null
+  value.currentTailAdvertisementDigest = null
+  value.deadline = 0n
+}
+
+function publishAdmittedExtendRequest(state, session, request, key, deadline) {
+  const record = {
+    capability: null,
+    request: null,
+    currentTailIdentity: null,
+    currentTailAdvertisementDigest: null,
+    session,
+    status: 'LIVE',
+    deadline,
+    key,
+    extensionNonce: responseFragmentKey(request.extensionNonce)
+  }
+  let complete = false
+  try {
+    record.currentTailIdentity = copy(state.transcript.tailIdentity, 32)
+    record.currentTailAdvertisementDigest = copy(state.transcript.candidateAdvertisementDigest, 32)
+    record.capability = Object.freeze({})
+    record.request = request
+    ADMITTED_EXTEND_REQUESTS.set(record.capability, record)
+    state.extensionRequest = record
+    complete = true
+    return record.capability
+  } finally {
+    if (!complete) clearAdmittedExtendRequest(record)
+  }
 }
 
 export function encodeExtendRequest(value) {
@@ -1474,6 +1535,7 @@ function clearSessionState(state, session = null) {
   state.candidateAdmissionProducer = null
   clearCandidateAdmissions(state)
   state.candidateAdmissionConsumer = null
+  clearAdmittedExtendRequest(state.extensionRequest)
   state.extensionRequest = null
   state.now = null
   state.crypto = null
@@ -1605,6 +1667,42 @@ function openControlFrame(state, envelope, direction, minimumSize, maximumSize =
     clear(decodedEnvelope.frame)
     clear(associatedData)
     clear(plaintext)
+  }
+}
+
+export function takeAdmittedExtendRequest(capability) {
+  const record =
+    capability !== null && typeof capability === 'object'
+      ? ADMITTED_EXTEND_REQUESTS.get(capability)
+      : null
+  if (!record || record.status !== 'LIVE') replay()
+  const state = sessionState(record.session)
+  beginSessionMutation(record.session)
+  let material = null
+  let complete = false
+  try {
+    const current = sessionNow(state)
+    if (record.deadline <= current) replay()
+    material = {
+      request: null,
+      currentTailIdentity: copy(record.currentTailIdentity, 32),
+      currentTailAdvertisementDigest: copy(record.currentTailAdvertisementDigest, 32),
+      deadline: record.deadline
+    }
+    assertSessionMutation(state)
+    if (state.extensionRequest !== record || record.request === null) replay()
+    material.request = record.request
+    record.request = null
+    record.status = 'CONSUMED'
+    complete = true
+    return Object.freeze(material)
+  } catch (err) {
+    clearSessionState(state, record.session)
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    state.mutating = false
+    if (!complete) clearAdmittedExtendMaterial(material)
   }
 }
 
@@ -1949,12 +2047,8 @@ class TailControlSession {
       const key = responseFragmentKey(digest)
       const admission = state.candidateAdmissions.get(key)
       if (!admission || admission.deadline <= current) authentication()
+      const deadline = admission.deadline
       if (state.extensionRequest !== pending) invalid()
-      state.extensionRequest = Object.freeze({
-        key,
-        deadline: admission.deadline,
-        extensionNonce: responseFragmentKey(request.extensionNonce)
-      })
       if (
         !consumeCurrentTailCandidateAdmissionHandle(
           state.candidateAdmissionConsumer,
@@ -1965,8 +2059,10 @@ class TailControlSession {
       }
       assertSessionMutation(state)
       clearCandidateAdmissionRecord(state, key, admission, false)
+      const capability = publishAdmittedExtendRequest(state, this, request, key, deadline)
+      assertSessionMutation(state)
       transferred = true
-      return request
+      return capability
     } catch (err) {
       clearSessionState(state, this)
       if (err instanceof PrivateRouteError) throw err

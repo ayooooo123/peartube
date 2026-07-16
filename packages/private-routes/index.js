@@ -346,16 +346,20 @@ export {
   encodeTailControlTranscript
 } from './lib/tail-control.js'
 export {
+  DHT_EXIT_ACTIVATE_SIZE,
   EXIT_ORIGIN_SERVICE_POLICY,
   FINAL_EXIT_TRANSCRIPT_SIZE,
   PAYLOAD_PARAMETERS_SIZE,
   SERVICE_POLICY_ENTRY_SIZE,
   decodeExitOriginServicePolicy,
+  decodeDhtExitActivate,
   decodeFinalExitTranscript,
   decodePayloadParameters,
   digestExitOriginServicePolicy,
   digestPayloadParameters,
   encodeExitOriginServicePolicy,
+  encodeDhtExitActivate,
   encodeFinalExitTranscript,
   encodePayloadParameters
 } from './lib/final-exit.js'
+export { FinalExitActivationSession } from './lib/final-exit-activation.js'

@@ -8,12 +8,15 @@ import {
   DESTINATION_VALIDATION_CLASS,
   M3_MESSAGE_ID,
   M3_PROTOCOL_VERSION,
-  MUTATION_FLAG
+  MUTATION_FLAG,
+  decodeM3Object,
+  encodeM3Object
 } from './protocol.js'
 
 export const SERVICE_POLICY_ENTRY_SIZE = 32
 export const PAYLOAD_PARAMETERS_SIZE = 20
 export const FINAL_EXIT_TRANSCRIPT_SIZE = 287
+export const DHT_EXIT_ACTIVATE_SIZE = 104
 
 const MAX_UINT32 = 0xffff_ffff
 const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
@@ -258,6 +261,63 @@ function uint64(value) {
 function branchClass(value) {
   if (value !== BRANCH_CLASS.LOOKUP && value !== BRANCH_CLASS.ANNOUNCE) invalid()
   return value
+}
+
+export function encodeDhtExitActivate(value) {
+  let body = null
+  try {
+    object(value)
+    const fields = [
+      option(value, 'clientActivationNonce'),
+      option(value, 'exitOriginCommandPolicyDigest'),
+      option(value, 'payloadParametersDigest')
+    ]
+    if (fields.some((field) => !fixed(field, 32))) invalid()
+    body = b4a.allocUnsafeSlow(96)
+    for (let index = 0; index < fields.length; index++) set(body, fields[index], index * 32)
+    return encodeM3Object({ messageId: M3_MESSAGE_ID.DHT_EXIT_ACTIVATE_V1, body })
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(body)
+  }
+}
+
+export function decodeDhtExitActivate(encoded) {
+  let decoded = null
+  let result = null
+  let complete = false
+  try {
+    decoded = decodeM3Object(encoded)
+    if (
+      decoded.messageId !== M3_MESSAGE_ID.DHT_EXIT_ACTIVATE_V1 ||
+      !fixed(decoded.body, 96) ||
+      !fixed(decoded.authSuffix, 0)
+    ) {
+      invalid()
+    }
+    result = {
+      clientActivationNonce: copy(subarray(decoded.body, 0, 32)),
+      exitOriginCommandPolicyDigest: copy(subarray(decoded.body, 32, 64)),
+      payloadParametersDigest: copy(subarray(decoded.body, 64, 96))
+    }
+    complete = true
+    return result
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    if (decoded) {
+      clear(decoded.body)
+      clear(decoded.authSuffix)
+    }
+    if (!complete && result) {
+      clear(result.clientActivationNonce)
+      clear(result.exitOriginCommandPolicyDigest)
+      clear(result.payloadParametersDigest)
+    }
+  }
 }
 
 function writeUint16(buffer, value, offset) {

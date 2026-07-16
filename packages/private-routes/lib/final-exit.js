@@ -18,6 +18,8 @@ export const PAYLOAD_PARAMETERS_SIZE = 20
 export const FINAL_EXIT_TRANSCRIPT_SIZE = 287
 export const DHT_EXIT_ACTIVATE_SIZE = 104
 export const DHT_EXIT_READY_SIZE = 305
+export const DHT_EXIT_READY_ACK_SIZE = 113
+export const DHT_EXIT_OPEN_SIZE = 177
 
 const MAX_UINT32 = 0xffff_ffff
 const MAX_UINT64 = 0xffff_ffff_ffff_ffffn
@@ -26,7 +28,13 @@ const PARAMETERS_DOMAIN = b4a.from('hyperdht-private-routes/final-exit/payload-p
 const FINAL_DOMAIN = b4a.from('hyperdht-private-routes/final-exit/transcript/v1')
 const FINAL_DIGEST_DOMAIN = b4a.from('hyperdht-private-routes/m3/final-exit/transcript-digest/v1')
 const DHT_EXIT_READY_DOMAIN = b4a.from('hyperdht-private-routes/m3/dht-exit-ready/v1')
+const DHT_EXIT_READY_DIGEST_DOMAIN = b4a.from('hyperdht-private-routes/m3/dht-exit-ready-digest/v1')
+const DHT_EXIT_READY_ACK_DIGEST_DOMAIN = b4a.from(
+  'hyperdht-private-routes/m3/dht-exit-ready-ack-digest/v1'
+)
 const DHT_EXIT_READY_BODY_SIZE = 233
+const DHT_EXIT_READY_ACK_BODY_SIZE = 105
+const DHT_EXIT_OPEN_BODY_SIZE = 169
 const bufferByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength'
@@ -442,6 +450,186 @@ export function decodeDhtExitReady(encoded) {
       for (const value of Object.values(result)) clear(value)
     }
   }
+}
+
+export function encodeDhtExitReadyAck(value) {
+  let body = null
+  try {
+    object(value)
+    const selectedBranchClass = branchClass(option(value, 'branchClass'))
+    const branchId = option(value, 'branchId')
+    const circuitId = option(value, 'circuitId')
+    const generation = option(value, 'generation')
+    const clientActivationNonce = option(value, 'clientActivationNonce')
+    const readyDigest = option(value, 'readyDigest')
+    if (
+      !fixed(branchId, 16) ||
+      !fixed(circuitId, 16) ||
+      !uint64(generation) ||
+      !fixed(clientActivationNonce, 32) ||
+      !fixed(readyDigest, 32)
+    ) {
+      invalid()
+    }
+
+    body = b4a.allocUnsafeSlow(DHT_EXIT_READY_ACK_BODY_SIZE)
+    body[0] = selectedBranchClass
+    set(body, branchId, 1)
+    set(body, circuitId, 17)
+    writeUint64(body, generation, 33)
+    set(body, clientActivationNonce, 41)
+    set(body, readyDigest, 73)
+    return encodeM3Object({ messageId: M3_MESSAGE_ID.DHT_EXIT_READY_ACK_V1, body })
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(body)
+  }
+}
+
+export function decodeDhtExitReadyAck(encoded) {
+  let decoded = null
+  let result = null
+  let complete = false
+  try {
+    decoded = decodeM3Object(encoded)
+    if (
+      decoded.messageId !== M3_MESSAGE_ID.DHT_EXIT_READY_ACK_V1 ||
+      !fixed(decoded.body, DHT_EXIT_READY_ACK_BODY_SIZE) ||
+      !fixed(decoded.authSuffix, 0)
+    ) {
+      invalid()
+    }
+    branchClass(decoded.body[0])
+    result = {
+      branchClass: decoded.body[0],
+      branchId: copy(subarray(decoded.body, 1, 17)),
+      circuitId: copy(subarray(decoded.body, 17, 33)),
+      generation: readUint64(decoded.body, 33),
+      clientActivationNonce: copy(subarray(decoded.body, 41, 73)),
+      readyDigest: copy(subarray(decoded.body, 73, 105))
+    }
+    complete = true
+    return result
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    if (decoded) {
+      clear(decoded.body)
+      clear(decoded.authSuffix)
+    }
+    if (!complete && result) {
+      for (const value of Object.values(result)) clear(value)
+    }
+  }
+}
+
+export function encodeDhtExitOpen(value) {
+  let body = null
+  try {
+    object(value)
+    const selectedBranchClass = branchClass(option(value, 'branchClass'))
+    const branchId = option(value, 'branchId')
+    const circuitId = option(value, 'circuitId')
+    const generation = option(value, 'generation')
+    const fields = [
+      option(value, 'ackDigest'),
+      option(value, 'clientActivationNonce'),
+      option(value, 'exitOriginCommandPolicyDigest'),
+      option(value, 'payloadParametersDigest')
+    ]
+    if (!fixed(branchId, 16) || !fixed(circuitId, 16) || !uint64(generation)) invalid()
+    if (fields.some((field) => !fixed(field, 32))) invalid()
+
+    body = b4a.allocUnsafeSlow(DHT_EXIT_OPEN_BODY_SIZE)
+    body[0] = selectedBranchClass
+    set(body, branchId, 1)
+    set(body, circuitId, 17)
+    writeUint64(body, generation, 33)
+    let offset = 41
+    for (const field of fields) {
+      set(body, field, offset)
+      offset += 32
+    }
+    return encodeM3Object({ messageId: M3_MESSAGE_ID.DHT_EXIT_OPEN_V1, body })
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(body)
+  }
+}
+
+export function decodeDhtExitOpen(encoded) {
+  let decoded = null
+  let result = null
+  let complete = false
+  try {
+    decoded = decodeM3Object(encoded)
+    if (
+      decoded.messageId !== M3_MESSAGE_ID.DHT_EXIT_OPEN_V1 ||
+      !fixed(decoded.body, DHT_EXIT_OPEN_BODY_SIZE) ||
+      !fixed(decoded.authSuffix, 0)
+    ) {
+      invalid()
+    }
+    branchClass(decoded.body[0])
+    result = {
+      branchClass: decoded.body[0],
+      branchId: copy(subarray(decoded.body, 1, 17)),
+      circuitId: copy(subarray(decoded.body, 17, 33)),
+      generation: readUint64(decoded.body, 33),
+      ackDigest: copy(subarray(decoded.body, 41, 73)),
+      clientActivationNonce: copy(subarray(decoded.body, 73, 105)),
+      exitOriginCommandPolicyDigest: copy(subarray(decoded.body, 105, 137)),
+      payloadParametersDigest: copy(subarray(decoded.body, 137, 169))
+    }
+    complete = true
+    return result
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    if (decoded) {
+      clear(decoded.body)
+      clear(decoded.authSuffix)
+    }
+    if (!complete && result) {
+      for (const value of Object.values(result)) clear(value)
+    }
+  }
+}
+
+function digestCanonicalDhtExit(encoded, decode, domain) {
+  let canonical = null
+  let projection = null
+  let output = null
+  try {
+    canonical = copy(encoded)
+    projection = decode(canonical)
+    output = cryptoSuite.hash([domain, canonical])
+    if (!fixed(output, 32)) invalid()
+    return copy(output)
+  } catch (err) {
+    if (err instanceof PrivateRouteError && err.code === 'INVALID_ROUTE') throw err
+    invalid()
+  } finally {
+    clear(canonical)
+    if (projection) {
+      for (const value of Object.values(projection)) clear(value)
+    }
+    clear(output)
+  }
+}
+
+export function digestDhtExitReady(encoded) {
+  return digestCanonicalDhtExit(encoded, decodeDhtExitReady, DHT_EXIT_READY_DIGEST_DOMAIN)
+}
+
+export function digestDhtExitReadyAck(encoded) {
+  return digestCanonicalDhtExit(encoded, decodeDhtExitReadyAck, DHT_EXIT_READY_ACK_DIGEST_DOMAIN)
 }
 
 function writeUint16(buffer, value, offset) {

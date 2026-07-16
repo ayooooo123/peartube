@@ -3,15 +3,23 @@ import b4a from 'b4a'
 
 import {
   DHT_EXIT_ACTIVATE_SIZE,
+  DHT_EXIT_OPEN_SIZE,
   DHT_EXIT_READY_SIZE,
+  DHT_EXIT_READY_ACK_SIZE,
   decodeDhtExitActivate,
+  decodeDhtExitOpen,
   decodeDhtExitReady,
+  decodeDhtExitReadyAck,
   dhtExitReadySignatureInput,
+  digestDhtExitReady,
+  digestDhtExitReadyAck,
   digestFinalExitTranscript,
   digestExitOriginServicePolicy,
   digestPayloadParameters,
   encodeDhtExitActivate,
+  encodeDhtExitOpen,
   encodeDhtExitReady,
+  encodeDhtExitReadyAck,
   encodeDhtExitReadyBody,
   encodeFinalExitTranscript
 } from '../lib/final-exit.js'
@@ -143,6 +151,18 @@ function handoffPair(
       payloadParameters: PAYLOAD_PARAMETERS
     })
   }
+}
+
+function readyPair(...args) {
+  const pair = handoffPair(...args)
+  pair.exit.openActivate(pair.client.sealActivate({ randomBytes: (size) => seed(0xc1, size) }))
+  pair.client.openReady(
+    pair.exit.sealReady({
+      identitySecretKey: pair.identity.secretKey,
+      randomBytes: (size) => seed(0xc2, size)
+    })
+  )
+  return pair
 }
 
 test('DHT_EXIT_ACTIVATE_V1 has one canonical unsigned encoding', (t) => {
@@ -285,6 +305,124 @@ test('final-exit transcript digest is canonical and READY rejects malformed fram
       readyNonce: seed(0x48)
     })
   )
+})
+
+test('DHT_EXIT_READY_ACK_V1 has one canonical encoding and digest', (t) => {
+  const value = {
+    branchClass: BRANCH_CLASS.ANNOUNCE,
+    branchId: seed(0x51, 16),
+    circuitId: seed(0x52, 16),
+    generation: 0x0102_0304_0506_0708n,
+    clientActivationNonce: seed(0x53),
+    readyDigest: seed(0x54)
+  }
+  const expectedBody = b4a.alloc(105)
+  expectedBody[0] = value.branchClass
+  expectedBody.set(value.branchId, 1)
+  expectedBody.set(value.circuitId, 17)
+  writeUint64(expectedBody, value.generation, 33)
+  expectedBody.set(value.clientActivationNonce, 41)
+  expectedBody.set(value.readyDigest, 73)
+
+  const encoded = encodeDhtExitReadyAck(value)
+  t.is(encoded.byteLength, DHT_EXIT_READY_ACK_SIZE)
+  const object = decodeM3Object(encoded)
+  t.is(object.messageId, M3_MESSAGE_ID.DHT_EXIT_READY_ACK_V1)
+  t.alike(object.body, expectedBody)
+  t.is(object.authSuffix.byteLength, 0)
+  t.alike(decodeDhtExitReadyAck(encoded), value)
+
+  const domain = b4a.from('hyperdht-private-routes/m3/dht-exit-ready-ack-digest/v1')
+  t.alike(digestDhtExitReadyAck(encoded), cryptoSuite.hash([domain, encoded]))
+})
+
+test('DHT_EXIT_OPEN_V1 has one canonical encoding and READY digest is byte-exact', (t) => {
+  const ready = encodeM3Object({
+    messageId: M3_MESSAGE_ID.DHT_EXIT_READY_V1,
+    body: b4a.concat([b4a.from([BRANCH_CLASS.LOOKUP]), b4a.alloc(232)]),
+    authSuffix: seed(0x60, 64)
+  })
+  const readyDomain = b4a.from('hyperdht-private-routes/m3/dht-exit-ready-digest/v1')
+  t.alike(digestDhtExitReady(ready), cryptoSuite.hash([readyDomain, ready]))
+
+  const value = {
+    branchClass: BRANCH_CLASS.LOOKUP,
+    branchId: seed(0x61, 16),
+    circuitId: seed(0x62, 16),
+    generation: 0x1112_1314_1516_1718n,
+    ackDigest: seed(0x63),
+    clientActivationNonce: seed(0x64),
+    exitOriginCommandPolicyDigest: seed(0x65),
+    payloadParametersDigest: seed(0x66)
+  }
+  const expectedBody = b4a.alloc(169)
+  expectedBody[0] = value.branchClass
+  expectedBody.set(value.branchId, 1)
+  expectedBody.set(value.circuitId, 17)
+  writeUint64(expectedBody, value.generation, 33)
+  let offset = 41
+  for (const field of [
+    value.ackDigest,
+    value.clientActivationNonce,
+    value.exitOriginCommandPolicyDigest,
+    value.payloadParametersDigest
+  ]) {
+    expectedBody.set(field, offset)
+    offset += 32
+  }
+
+  const encoded = encodeDhtExitOpen(value)
+  t.is(encoded.byteLength, DHT_EXIT_OPEN_SIZE)
+  const object = decodeM3Object(encoded)
+  t.is(object.messageId, M3_MESSAGE_ID.DHT_EXIT_OPEN_V1)
+  t.alike(object.body, expectedBody)
+  t.is(object.authSuffix.byteLength, 0)
+  t.alike(decodeDhtExitOpen(encoded), value)
+})
+
+test('READY_ACK and OPEN reject non-canonical framing and fields', (t) => {
+  const ack = encodeM3Object({
+    messageId: M3_MESSAGE_ID.DHT_EXIT_READY_ACK_V1,
+    body: b4a.concat([b4a.from([BRANCH_CLASS.LOOKUP]), b4a.alloc(104)])
+  })
+  const open = encodeM3Object({
+    messageId: M3_MESSAGE_ID.DHT_EXIT_OPEN_V1,
+    body: b4a.concat([b4a.from([BRANCH_CLASS.LOOKUP]), b4a.alloc(168)])
+  })
+  const wrongAck = b4a.from(ack)
+  wrongAck.writeUInt16BE(M3_MESSAGE_ID.DHT_EXIT_OPEN_V1, 4)
+  const wrongOpen = b4a.from(open)
+  wrongOpen.writeUInt16BE(M3_MESSAGE_ID.DHT_EXIT_READY_ACK_V1, 4)
+  for (const operation of [
+    () => decodeDhtExitReadyAck(wrongAck),
+    () => decodeDhtExitReadyAck(b4a.concat([ack, b4a.from([0])])),
+    () => decodeDhtExitOpen(wrongOpen),
+    () => decodeDhtExitOpen(open.subarray(0, open.byteLength - 1)),
+    () => digestDhtExitReady(ack),
+    () => digestDhtExitReadyAck(open),
+    () =>
+      encodeDhtExitReadyAck({
+        branchClass: 0xff,
+        branchId: seed(0x71, 16),
+        circuitId: seed(0x72, 16),
+        generation: 1n,
+        clientActivationNonce: seed(0x73),
+        readyDigest: seed(0x74)
+      }),
+    () =>
+      encodeDhtExitOpen({
+        branchClass: BRANCH_CLASS.LOOKUP,
+        branchId: seed(0x75, 15),
+        circuitId: seed(0x76, 16),
+        generation: 1n,
+        ackDigest: seed(0x77),
+        clientActivationNonce: seed(0x78),
+        exitOriginCommandPolicyDigest: seed(0x79),
+        payloadParametersDigest: seed(0x7a)
+      })
+  ]) {
+    t.exception(operation)
+  }
 })
 
 test('client and exit exchange ACTIVATE on an independent tail-finalize datagram context', (t) => {
@@ -577,7 +715,7 @@ test('READY rejects direction substitution and a fresh-counter semantic conflict
   conflicting.exit.destroy()
 })
 
-test('tail-finalize contexts use inherited DATAGRAM delivery framing', (t) => {
+test('both finalization contexts use inherited DATAGRAM delivery framing', (t) => {
   const clientClasses = []
   const exitClasses = []
   const observedCrypto = (classes) => ({
@@ -602,8 +740,104 @@ test('tail-finalize contexts use inherited DATAGRAM delivery framing', (t) => {
       randomBytes: (size) => seed(0xb2, size)
     })
   )
-  t.alike(clientClasses, [2])
-  t.alike(exitClasses, [2])
+  const ack = pair.client.sealAck({ randomBytes: (size) => seed(0xb3, size) })
+  pair.client.openOpen(pair.exit.openAck(ack, { randomBytes: (size) => seed(0xb4, size) }))
+  t.alike(clientClasses, [2, 2])
+  t.alike(exitClasses, [2, 2])
   pair.client.destroy()
   pair.exit.destroy()
+})
+
+test('client ACK and exit OPEN use independent final-finalize contexts', (t) => {
+  const pair = readyPair()
+  const ackEnvelope = pair.client.sealAck({ randomBytes: (size) => seed(0xd1, size) })
+  const ackContext = decodeM3ContextEnvelope(ackEnvelope)
+  t.is(ackContext.contextClass, CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM)
+  t.is(ackContext.frame.readBigUInt64BE(0), 0n, 'final forward counter starts at zero')
+
+  const openEnvelope = pair.exit.openAck(ackEnvelope, {
+    randomBytes: (size) => seed(0xd2, size)
+  })
+  const openContext = decodeM3ContextEnvelope(openEnvelope)
+  t.is(openContext.contextClass, CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM)
+  t.is(openContext.frame.readBigUInt64BE(0), 0n, 'final reverse counter starts at zero')
+  t.alike(pair.exit.diagnostics(), { state: 'OPEN' })
+
+  const opened = pair.client.openOpen(openEnvelope)
+  t.alike(opened.branchId, seed(0x11, 16))
+  t.alike(opened.circuitId, seed(0x12, 16))
+  t.is(opened.generation, 7n)
+  t.alike(opened.clientActivationNonce, seed(0xc1))
+  t.alike(opened.exitOriginCommandPolicyDigest, digestExitOriginServicePolicy())
+  t.alike(opened.payloadParametersDigest, digestPayloadParameters(PAYLOAD_PARAMETERS))
+  t.alike(pair.client.diagnostics(), { state: 'OPEN' })
+  pair.client.destroy()
+  pair.exit.destroy()
+})
+
+test('ACK and OPEN retries preserve semantic bytes under fresh counters', (t) => {
+  const pair = readyPair()
+  const firstAck = pair.client.sealAck({ randomBytes: (size) => seed(0xe1, size) })
+  const firstOpen = pair.exit.openAck(firstAck, { randomBytes: (size) => seed(0xe2, size) })
+  t.is(pair.exit.openAck(firstAck, { randomBytes: (size) => seed(0xe3, size) }), null)
+
+  const retryAck = pair.client.retryAck({ randomBytes: (size) => seed(0xe4, size) })
+  t.is(decodeM3ContextEnvelope(retryAck).frame.readBigUInt64BE(0), 1n)
+  const retryOpen = pair.exit.openAck(retryAck, {
+    randomBytes: (size) => seed(0xe5, size)
+  })
+  t.is(decodeM3ContextEnvelope(retryOpen).frame.readBigUInt64BE(0), 1n)
+  const opened = pair.client.openOpen(retryOpen)
+  t.alike(pair.client.openOpen(firstOpen), opened, 'reordered semantic OPEN is identical')
+
+  const proactiveRetry = pair.exit.retryOpen({ randomBytes: (size) => seed(0xe6, size) })
+  t.is(decodeM3ContextEnvelope(proactiveRetry).frame.readBigUInt64BE(0), 2n)
+  t.alike(pair.client.openOpen(proactiveRetry), opened)
+  pair.client.destroy()
+  pair.exit.destroy()
+})
+
+test('final-finalize rejects class, role, and semantic substitution', (t) => {
+  const wrongClass = readyPair()
+  const ack = wrongClass.client.sealAck({ randomBytes: (size) => seed(0xf1, size) })
+  ack[0] = CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM
+  expectCode(
+    t,
+    () => wrongClass.exit.openAck(ack, { randomBytes: (size) => seed(0xf2, size) }),
+    'INVALID_ROUTE'
+  )
+  t.alike(wrongClass.exit.diagnostics(), { state: 'DESTROYED' })
+  wrongClass.client.destroy()
+
+  const wrongRole = readyPair()
+  expectCode(
+    t,
+    () => wrongRole.exit.sealAck({ randomBytes: (size) => seed(0xf3, size) }),
+    'ERR_AUTHENTICATION'
+  )
+  t.alike(wrongRole.exit.diagnostics(), { state: 'DESTROYED' })
+  wrongRole.client.destroy()
+
+  let seals = 0
+  const conflictingCrypto = {
+    open: (options) => cryptoSuite.open(options),
+    sign: (input, secretKey) => cryptoSuite.sign(input, secretKey),
+    verify: (input, signature, publicKey) => cryptoSuite.verify(input, signature, publicKey),
+    seal(options) {
+      const plaintext = b4a.from(options.plaintext)
+      if (seals++ === 2) plaintext[20] ^= 1
+      return cryptoSuite.seal({ ...options, plaintext })
+    }
+  }
+  const conflicting = readyPair(() => 1_000n, 5_000n, conflictingCrypto)
+  const first = conflicting.client.sealAck({ randomBytes: (size) => seed(0xf4, size) })
+  conflicting.exit.openAck(first, { randomBytes: (size) => seed(0xf5, size) })
+  const conflict = conflicting.client.retryAck({ randomBytes: (size) => seed(0xf6, size) })
+  expectCode(
+    t,
+    () => conflicting.exit.openAck(conflict, { randomBytes: (size) => seed(0xf7, size) }),
+    'ERR_AUTHENTICATION'
+  )
+  t.alike(conflicting.exit.diagnostics(), { state: 'DESTROYED' })
+  conflicting.client.destroy()
 })

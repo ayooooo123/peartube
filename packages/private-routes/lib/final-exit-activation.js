@@ -4,16 +4,24 @@ import { DatagramReplayWindow, SenderCounter } from './counters.js'
 import { PrivateRouteError } from './errors.js'
 import {
   DHT_EXIT_ACTIVATE_SIZE,
+  DHT_EXIT_OPEN_SIZE,
   DHT_EXIT_READY_SIZE,
+  DHT_EXIT_READY_ACK_SIZE,
   decodeDhtExitActivate,
+  decodeDhtExitOpen,
   decodeDhtExitReady,
+  decodeDhtExitReadyAck,
   deriveFinalExitTestVector,
   dhtExitReadySignatureInput,
+  digestDhtExitReady,
+  digestDhtExitReadyAck,
   digestFinalExitTranscript,
   digestExitOriginServicePolicy,
   digestPayloadParameters,
   encodeDhtExitActivate,
+  encodeDhtExitOpen,
   encodeDhtExitReady,
+  encodeDhtExitReadyAck,
   encodeDhtExitReadyBody,
   encodeFinalExitTranscript
 } from './final-exit.js'
@@ -169,9 +177,9 @@ function readUint64(target, offset = 0) {
   return value
 }
 
-function associatedData(state, counter, direction) {
+function associatedData(state, counter, contextClass, direction) {
   return encodeM3ContextAD({
-    contextClass: CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+    contextClass,
     branchId: state.transcript.branchId,
     circuitId: state.transcript.circuitId,
     generation: state.transcript.generation,
@@ -180,26 +188,42 @@ function associatedData(state, counter, direction) {
   })
 }
 
-function datagramState(state, direction, sending) {
+function datagramState(state, contextClass, direction, sending) {
+  const final = contextClass === CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM
+  if (!final && contextClass !== CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM) invalid()
+  const material = final ? state.finalMaterial : state.material
+  if (!material) authentication()
   if (direction === DIRECTION.FORWARD) {
     return {
-      counter: sending ? state.forwardTx : state.forwardRx,
-      key: state.material.finalizeForwardKey,
-      noncePrefix: state.material.finalizeForwardNoncePrefix
+      counter: sending
+        ? final
+          ? state.finalForwardTx
+          : state.forwardTx
+        : final
+          ? state.finalForwardRx
+          : state.forwardRx,
+      key: material.finalizeForwardKey,
+      noncePrefix: material.finalizeForwardNoncePrefix
     }
   }
   if (direction === DIRECTION.REVERSE) {
     return {
-      counter: sending ? state.reverseTx : state.reverseRx,
-      key: state.material.finalizeReverseKey,
-      noncePrefix: state.material.finalizeReverseNoncePrefix
+      counter: sending
+        ? final
+          ? state.finalReverseTx
+          : state.reverseTx
+        : final
+          ? state.finalReverseRx
+          : state.reverseRx,
+      key: material.finalizeReverseKey,
+      noncePrefix: material.finalizeReverseNoncePrefix
     }
   }
   invalid()
 }
 
-function sealFrame(state, encoded, randomBytes, direction) {
-  const selected = datagramState(state, direction, true)
+function sealFrame(state, encoded, randomBytes, contextClass, direction) {
+  const selected = datagramState(state, contextClass, direction, true)
   if (!selected.counter) authentication()
   const counter = selected.counter.next()
   let ad = null
@@ -208,7 +232,7 @@ function sealFrame(state, encoded, randomBytes, direction) {
   let ciphertext = null
   let frame = null
   try {
-    ad = associatedData(state, counter, direction)
+    ad = associatedData(state, counter, contextClass, direction)
     plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
     plaintext[0] = CELL_CLASS.DATAGRAM
     writeUint16(plaintext, encoded.byteLength, 1)
@@ -227,7 +251,7 @@ function sealFrame(state, encoded, randomBytes, direction) {
     writeUint64(frame, counter)
     set(frame, ciphertext, 8)
     return encodeM3ContextEnvelope({
-      contextClass: CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+      contextClass,
       frame
     })
   } finally {
@@ -239,18 +263,18 @@ function sealFrame(state, encoded, randomBytes, direction) {
   }
 }
 
-function openFrame(state, envelope, direction, expectedSize) {
+function openFrame(state, envelope, contextClass, direction, expectedSize) {
   let decoded = null
   let ad = null
   let plaintext = null
   let encoded = null
   try {
     decoded = decodeM3ContextEnvelope(envelope)
-    if (decoded.contextClass !== CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM) invalid()
-    const selected = datagramState(state, direction, false)
+    if (decoded.contextClass !== contextClass) invalid()
+    const selected = datagramState(state, contextClass, direction, false)
     if (!selected.counter) authentication()
     const counter = readUint64(decoded.frame)
-    ad = associatedData(state, counter, direction)
+    ad = associatedData(state, counter, contextClass, direction)
     plaintext = state.crypto.open({
       key: selected.key,
       noncePrefix: selected.noncePrefix,
@@ -334,6 +358,29 @@ function readyProjection(ready) {
   })
 }
 
+function clearAck(ack) {
+  if (!ack) return
+  for (const value of Object.values(ack)) clear(value)
+}
+
+function clearOpen(open) {
+  if (!open) return
+  for (const value of Object.values(open)) clear(value)
+}
+
+function openProjection(open) {
+  return Object.freeze({
+    branchClass: open.branchClass,
+    branchId: copy(open.branchId),
+    circuitId: copy(open.circuitId),
+    generation: open.generation,
+    ackDigest: copy(open.ackDigest),
+    clientActivationNonce: copy(open.clientActivationNonce),
+    exitOriginCommandPolicyDigest: copy(open.exitOriginCommandPolicyDigest),
+    payloadParametersDigest: copy(open.payloadParametersDigest)
+  })
+}
+
 function clearFinalMaterial(material) {
   if (!material) return
   for (const value of Object.values(material)) clear(value)
@@ -412,12 +459,18 @@ export class FinalExitActivationSession {
       policyDigest = digestExitOriginServicePolicy()
       payloadDigest = digestPayloadParameters(option(options, 'payloadParameters'))
       this.#state = {
+        ack: null,
+        ackEncoded: null,
         activation: null,
         activationEncoded: null,
         crypto,
         deadline: null,
         destroyed: false,
         finalMaterial: null,
+        finalForwardRx: material.initiator ? null : new DatagramReplayWindow({ window: 64 }),
+        finalForwardTx: material.initiator ? new SenderCounter() : null,
+        finalReverseRx: material.initiator ? new DatagramReplayWindow({ window: 64 }) : null,
+        finalReverseTx: material.initiator ? null : new SenderCounter(),
         finalTranscript: null,
         finalTranscriptDigest: null,
         forwardRx: material.initiator ? null : new DatagramReplayWindow({ window: 64 }),
@@ -425,6 +478,8 @@ export class FinalExitActivationSession {
         material,
         mutating: false,
         now,
+        open: null,
+        openEncoded: null,
         payloadDigest,
         policyDigest,
         ready: null,
@@ -470,7 +525,13 @@ export class FinalExitActivationSession {
         exitOriginCommandPolicyDigest: state.policyDigest,
         payloadParametersDigest: state.payloadDigest
       })
-      const envelope = sealFrame(state, encoded, randomBytes, DIRECTION.FORWARD)
+      const envelope = sealFrame(
+        state,
+        encoded,
+        randomBytes,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD
+      )
       this.#assertLive(state)
       state.activationEncoded = copy(encoded)
       state.activation = Object.freeze({
@@ -498,7 +559,13 @@ export class FinalExitActivationSession {
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
       this.#checkDeadline(state)
-      const envelope = sealFrame(state, state.activationEncoded, randomBytes, DIRECTION.FORWARD)
+      const envelope = sealFrame(
+        state,
+        state.activationEncoded,
+        randomBytes,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD
+      )
       this.#assertLive(state)
       return envelope
     } catch (err) {
@@ -522,7 +589,13 @@ export class FinalExitActivationSession {
         authentication()
       }
       this.#checkDeadline(state, state.state === 'TAIL_READY')
-      encoded = openFrame(state, envelope, DIRECTION.FORWARD, DHT_EXIT_ACTIVATE_SIZE)
+      encoded = openFrame(
+        state,
+        envelope,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD,
+        DHT_EXIT_ACTIVATE_SIZE
+      )
       this.#assertLive(state)
       if (encoded === null) return null
       activation = decodeDhtExitActivate(encoded)
@@ -621,7 +694,13 @@ export class FinalExitActivationSession {
         readyNonce,
         signature
       })
-      const envelope = sealFrame(state, encoded, randomBytes, DIRECTION.REVERSE)
+      const envelope = sealFrame(
+        state,
+        encoded,
+        randomBytes,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE
+      )
       this.#assertLive(state)
       ready = decodeDhtExitReady(encoded)
       state.readyEncoded = copy(encoded)
@@ -653,7 +732,13 @@ export class FinalExitActivationSession {
       const randomBytes = option(object(options), 'randomBytes')
       if (typeof randomBytes !== 'function') invalid()
       this.#checkDeadline(state)
-      const envelope = sealFrame(state, state.readyEncoded, randomBytes, DIRECTION.REVERSE)
+      const envelope = sealFrame(
+        state,
+        state.readyEncoded,
+        randomBytes,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE
+      )
       this.#assertLive(state)
       return envelope
     } catch (err) {
@@ -676,7 +761,13 @@ export class FinalExitActivationSession {
         authentication()
       }
       this.#checkDeadline(state)
-      encoded = openFrame(state, envelope, DIRECTION.REVERSE, DHT_EXIT_READY_SIZE)
+      encoded = openFrame(
+        state,
+        envelope,
+        CONTEXT_CLASS.TAIL_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE,
+        DHT_EXIT_READY_SIZE
+      )
       this.#assertLive(state)
       if (encoded === null) return null
       if (state.readyEncoded) {
@@ -725,6 +816,246 @@ export class FinalExitActivationSession {
         clear(finalTranscript.encoded)
         clear(finalTranscript.digest)
       }
+    }
+  }
+
+  sealAck(options) {
+    const state = this.#begin()
+    let readyDigest = null
+    let encoded = null
+    let ack = null
+    try {
+      if (!state.material.initiator || state.state !== 'ACKING' || state.ackEncoded) {
+        authentication()
+      }
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      this.#checkDeadline(state)
+      readyDigest = digestDhtExitReady(state.readyEncoded)
+      encoded = encodeDhtExitReadyAck({
+        branchClass: state.transcript.branchClass,
+        branchId: state.transcript.branchId,
+        circuitId: state.transcript.circuitId,
+        generation: state.transcript.generation,
+        clientActivationNonce: state.activation.clientActivationNonce,
+        readyDigest
+      })
+      const envelope = sealFrame(
+        state,
+        encoded,
+        randomBytes,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD
+      )
+      this.#assertLive(state)
+      ack = decodeDhtExitReadyAck(encoded)
+      state.ackEncoded = copy(encoded)
+      state.ack = ack
+      ack = null
+      return envelope
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(readyDigest)
+      clear(encoded)
+      clearAck(ack)
+    }
+  }
+
+  retryAck(options) {
+    const state = this.#begin()
+    try {
+      if (!state.material.initiator || state.state !== 'ACKING' || !state.ackEncoded) {
+        authentication()
+      }
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      this.#checkDeadline(state)
+      const envelope = sealFrame(
+        state,
+        state.ackEncoded,
+        randomBytes,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD
+      )
+      this.#assertLive(state)
+      return envelope
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+    }
+  }
+
+  openAck(envelope, options) {
+    const state = this.#begin()
+    let encoded = null
+    let ack = null
+    let readyDigest = null
+    let ackDigest = null
+    let openEncoded = null
+    let open = null
+    try {
+      if (state.material.initiator || (state.state !== 'FINALIZING' && state.state !== 'OPEN')) {
+        authentication()
+      }
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      this.#checkDeadline(state)
+      encoded = openFrame(
+        state,
+        envelope,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.FORWARD,
+        DHT_EXIT_READY_ACK_SIZE
+      )
+      this.#assertLive(state)
+      if (encoded === null) return null
+      ack = decodeDhtExitReadyAck(encoded)
+      readyDigest = digestDhtExitReady(state.readyEncoded)
+      if (
+        ack.branchClass !== state.transcript.branchClass ||
+        !same(ack.branchId, state.transcript.branchId) ||
+        !same(ack.circuitId, state.transcript.circuitId) ||
+        ack.generation !== state.transcript.generation ||
+        !same(ack.clientActivationNonce, state.activation.clientActivationNonce) ||
+        !same(ack.readyDigest, readyDigest) ||
+        (state.ackEncoded && !same(encoded, state.ackEncoded))
+      ) {
+        authentication()
+      }
+      if (!state.ackEncoded) {
+        ackDigest = digestDhtExitReadyAck(encoded)
+        openEncoded = encodeDhtExitOpen({
+          branchClass: state.transcript.branchClass,
+          branchId: state.transcript.branchId,
+          circuitId: state.transcript.circuitId,
+          generation: state.transcript.generation,
+          ackDigest,
+          clientActivationNonce: state.activation.clientActivationNonce,
+          exitOriginCommandPolicyDigest: state.policyDigest,
+          payloadParametersDigest: state.payloadDigest
+        })
+        open = decodeDhtExitOpen(openEncoded)
+      }
+      const semanticOpen = state.openEncoded || openEncoded
+      const response = sealFrame(
+        state,
+        semanticOpen,
+        randomBytes,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE
+      )
+      this.#assertLive(state)
+      if (!state.ackEncoded) {
+        state.ackEncoded = copy(encoded)
+        state.ack = ack
+        ack = null
+        state.openEncoded = copy(openEncoded)
+        state.open = open
+        open = null
+        state.state = 'OPEN'
+      }
+      return response
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(encoded)
+      clearAck(ack)
+      clear(readyDigest)
+      clear(ackDigest)
+      clear(openEncoded)
+      clearOpen(open)
+    }
+  }
+
+  retryOpen(options) {
+    const state = this.#begin()
+    try {
+      if (state.material.initiator || state.state !== 'OPEN' || !state.openEncoded) {
+        authentication()
+      }
+      const randomBytes = option(object(options), 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      this.#checkDeadline(state)
+      const envelope = sealFrame(
+        state,
+        state.openEncoded,
+        randomBytes,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE
+      )
+      this.#assertLive(state)
+      return envelope
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+    }
+  }
+
+  openOpen(envelope) {
+    const state = this.#begin()
+    let encoded = null
+    let open = null
+    let ackDigest = null
+    try {
+      if (!state.material.initiator || (state.state !== 'ACKING' && state.state !== 'OPEN')) {
+        authentication()
+      }
+      if (!state.ackEncoded) authentication()
+      this.#checkDeadline(state)
+      encoded = openFrame(
+        state,
+        envelope,
+        CONTEXT_CLASS.FINAL_EXIT_FINALIZE_DATAGRAM,
+        DIRECTION.REVERSE,
+        DHT_EXIT_OPEN_SIZE
+      )
+      this.#assertLive(state)
+      if (encoded === null) return null
+      if (state.openEncoded) {
+        if (!same(encoded, state.openEncoded)) authentication()
+        return openProjection(state.open)
+      }
+      open = decodeDhtExitOpen(encoded)
+      ackDigest = digestDhtExitReadyAck(state.ackEncoded)
+      if (
+        open.branchClass !== state.transcript.branchClass ||
+        !same(open.branchId, state.transcript.branchId) ||
+        !same(open.circuitId, state.transcript.circuitId) ||
+        open.generation !== state.transcript.generation ||
+        !same(open.ackDigest, ackDigest) ||
+        !same(open.clientActivationNonce, state.activation.clientActivationNonce) ||
+        !same(open.exitOriginCommandPolicyDigest, state.policyDigest) ||
+        !same(open.payloadParametersDigest, state.payloadDigest)
+      ) {
+        authentication()
+      }
+      state.openEncoded = copy(encoded)
+      state.open = open
+      open = null
+      state.state = 'OPEN'
+      return openProjection(state.open)
+    } catch (err) {
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(encoded)
+      clearOpen(open)
+      clear(ackDigest)
     }
   }
 
@@ -781,7 +1112,16 @@ export class FinalExitActivationSession {
     try {
       if (tailControl) tailControl.destroy()
     } catch {}
-    for (const counter of [state.forwardTx, state.forwardRx, state.reverseTx, state.reverseRx]) {
+    for (const counter of [
+      state.forwardTx,
+      state.forwardRx,
+      state.reverseTx,
+      state.reverseRx,
+      state.finalForwardTx,
+      state.finalForwardRx,
+      state.finalReverseTx,
+      state.finalReverseRx
+    ]) {
       try {
         if (counter) counter.destroy()
       } catch {}
@@ -793,6 +1133,10 @@ export class FinalExitActivationSession {
     clearActivation(state.activation)
     clear(state.readyEncoded)
     clearReady(state.ready)
+    clear(state.ackEncoded)
+    clearAck(state.ack)
+    clear(state.openEncoded)
+    clearOpen(state.open)
     clear(state.finalTranscript)
     clear(state.finalTranscriptDigest)
     clearFinalMaterial(state.finalMaterial)
@@ -803,6 +1147,10 @@ export class FinalExitActivationSession {
     state.activation = null
     state.readyEncoded = null
     state.ready = null
+    state.ackEncoded = null
+    state.ack = null
+    state.openEncoded = null
+    state.open = null
     state.finalTranscript = null
     state.finalTranscriptDigest = null
     state.finalMaterial = null
@@ -813,6 +1161,10 @@ export class FinalExitActivationSession {
     state.forwardRx = null
     state.reverseTx = null
     state.reverseRx = null
+    state.finalForwardTx = null
+    state.finalForwardRx = null
+    state.finalReverseTx = null
+    state.finalReverseRx = null
     state.state = 'DESTROYED'
     return true
   }

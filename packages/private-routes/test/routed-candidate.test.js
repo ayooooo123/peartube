@@ -334,13 +334,24 @@ test('current-tail digest admissions authorize only advertisements actually retu
     currentTailAdvertisementDigest: seed(0x85),
     requestDeadline: 5_000n
   }
-  api.reserveCurrentTailCandidateResponse(authority.producer, {
+  const reservation = api.reserveCurrentTailCandidateResponse(authority.producer, {
     ...request,
     advertisements: [included]
   })
   const includedDigest = routes.digestRelayCapabilityAdvertisement(included, { now: NOW })
   const omittedDigest = routes.digestRelayCapabilityAdvertisement(omitted, { now: NOW })
 
+  expectCode(
+    t,
+    () =>
+      api.consumeCurrentTailCandidateAdmission(authority.consumer, {
+        ...request,
+        candidateAdvertisementDigest: includedDigest
+      }),
+    'ERR_AUTHENTICATION',
+    'an uncommitted response cannot authorize a dial'
+  )
+  api.commitCurrentTailCandidateResponse(authority.producer, reservation)
   t.ok(
     api.consumeCurrentTailCandidateAdmission(authority.consumer, {
       ...request,
@@ -380,6 +391,7 @@ test('evidence and tail-admission brands are owner-bound split capabilities', (t
   second.directory.destroy()
 
   const tail = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  const otherTail = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
   t.alike(Object.keys(tail.producer), [])
   t.alike(Object.keys(tail.consumer), [])
   t.exception(
@@ -390,7 +402,40 @@ test('evidence and tail-admission brands are owner-bound split capabilities', (t
     () => api.consumeCurrentTailCandidateAdmission(tail.producer, {}),
     'producer cannot consume admissions'
   )
+  const request = tailRequest(0x99)
+  const reservation = api.reserveCurrentTailCandidateResponse(tail.producer, {
+    ...request,
+    advertisements: [advertisement({ byte: 47 })]
+  })
+  const admissions = api.commitCurrentTailCandidateResponse(tail.producer, reservation)
+  expectCode(
+    t,
+    () => api.consumeCurrentTailCandidateAdmissionHandle(otherTail.consumer, admissions[0]),
+    'ERR_AUTHENTICATION',
+    'another consumer cannot use the committed opaque handle'
+  )
+  t.ok(api.consumeCurrentTailCandidateAdmissionHandle(tail.consumer, admissions[0]))
   tail.destroy()
+  otherTail.destroy()
+})
+
+test('committed tail-admission handles expire at the original local deadline', (t) => {
+  let current = NOW
+  const authority = api.createCurrentTailCandidateAdmissionAuthority({ now: () => current })
+  const request = tailRequest(0x98)
+  const reservation = api.reserveCurrentTailCandidateResponse(authority.producer, {
+    ...request,
+    advertisements: [advertisement({ byte: 46 })]
+  })
+  const admissions = api.commitCurrentTailCandidateResponse(authority.producer, reservation)
+  current = request.requestDeadline
+  expectCode(
+    t,
+    () => api.consumeCurrentTailCandidateAdmissionHandle(authority.consumer, admissions[0]),
+    'ERR_AUTHENTICATION'
+  )
+  t.alike(authority.diagnostics(), { state: 'ACTIVE', live: 0, states: 0, requests: 0 })
+  authority.destroy()
 })
 
 test('unexposed evidence and response reservations can be revoked exactly once', (t) => {
@@ -449,21 +494,30 @@ test('tail response reservations terminalize on commit, consumption, and destroy
     ...committedRequest,
     advertisements: [committedAdvertisement]
   })
-  t.ok(
-    api.commitCurrentTailCandidateResponse(committed.producer, committedReservation),
-    'commit releases reservation metadata'
+  const committedAdmissions = api.commitCurrentTailCandidateResponse(
+    committed.producer,
+    committedReservation
   )
+  t.is(committedAdmissions.length, 1, 'commit publishes one opaque admission per advertisement')
+  t.ok(Object.isFrozen(committedAdmissions[0]))
+  t.alike(Object.keys(committedAdmissions[0]), [])
   t.is(api.commitCurrentTailCandidateResponse(committed.producer, committedReservation), false)
   t.is(api.rollbackCurrentTailCandidateResponse(committed.producer, committedReservation), false)
   t.ok(
-    api.consumeCurrentTailCandidateAdmission(committed.consumer, {
-      ...committedRequest,
-      candidateAdvertisementDigest: routes.digestRelayCapabilityAdvertisement(
-        committedAdvertisement,
-        { now: NOW }
-      )
-    }),
+    api.consumeCurrentTailCandidateAdmissionHandle(committed.consumer, committedAdmissions[0]),
     'commit preserves the published admission'
+  )
+  t.is(
+    api.revokeCurrentTailCandidateAdmissionHandle(committed.consumer, committedAdmissions[0]),
+    false,
+    'consumed handles retain their replay tombstone'
+  )
+  expectCode(
+    t,
+    () =>
+      api.consumeCurrentTailCandidateAdmissionHandle(committed.consumer, committedAdmissions[0]),
+    'ERR_REPLAY',
+    'published admission handles are one-use tombstones'
   )
   committed.destroy()
 
@@ -474,6 +528,7 @@ test('tail response reservations terminalize on commit, consumption, and destroy
     ...consumedRequest,
     advertisements: consumedAdvertisements
   })
+  api.commitCurrentTailCandidateResponse(consumed.producer, consumedReservation)
   t.ok(
     api.consumeCurrentTailCandidateAdmission(consumed.consumer, {
       ...consumedRequest,
@@ -486,7 +541,7 @@ test('tail response reservations terminalize on commit, consumption, and destroy
   t.is(
     api.rollbackCurrentTailCandidateResponse(consumed.producer, consumedReservation),
     false,
-    'first consumption terminalizes the reservation handle'
+    'commit terminalizes the reservation handle'
   )
   consumed.destroy()
 
@@ -520,10 +575,11 @@ test('tail response admission validates and digests one owned advertisement snap
     }
   })
 
-  api.reserveCurrentTailCandidateResponse(authority.producer, {
+  const reservation = api.reserveCurrentTailCandidateResponse(authority.producer, {
     ...request,
     advertisements
   })
+  api.commitCurrentTailCandidateResponse(authority.producer, reservation)
   t.is(indexReads, 1, 'the authority snapshots each caller-controlled index exactly once')
   t.ok(
     api.consumeCurrentTailCandidateAdmission(authority.consumer, {
@@ -679,14 +735,16 @@ test('deadlines are immutable and current-tail limits mirror three, sixteen, and
   const advertisements = uniqueAdvertisements(8, 210)
   const first = tailRequest(0xd1)
   const second = tailRequest(0xd2)
-  api.reserveCurrentTailCandidateResponse(authority.producer, {
+  const firstReservation = api.reserveCurrentTailCandidateResponse(authority.producer, {
     ...first,
     advertisements
   })
-  api.reserveCurrentTailCandidateResponse(authority.producer, {
+  const secondReservation = api.reserveCurrentTailCandidateResponse(authority.producer, {
     ...second,
     advertisements
   })
+  api.commitCurrentTailCandidateResponse(authority.producer, firstReservation)
+  api.commitCurrentTailCandidateResponse(authority.producer, secondReservation)
   t.alike(authority.diagnostics(), { state: 'ACTIVE', live: 16, states: 16, requests: 1 })
   t.exception(
     () =>
@@ -727,18 +785,22 @@ test('deadlines are immutable and current-tail limits mirror three, sixteen, and
   authority.destroy()
 
   const capped = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  let consumedTombstonesProtected = true
   for (let requestIndex = 0; requestIndex < 12; requestIndex++) {
     const request = tailRequest(0xe0 + requestIndex, 20 + requestIndex)
-    api.reserveCurrentTailCandidateResponse(capped.producer, { ...request, advertisements })
-    for (const advertisement of advertisements) {
-      api.consumeCurrentTailCandidateAdmission(capped.consumer, {
-        ...request,
-        candidateAdvertisementDigest: routes.digestRelayCapabilityAdvertisement(advertisement, {
-          now: NOW
-        })
-      })
+    const reservation = api.reserveCurrentTailCandidateResponse(capped.producer, {
+      ...request,
+      advertisements
+    })
+    const handles = api.commitCurrentTailCandidateResponse(capped.producer, reservation)
+    for (const handle of handles) {
+      api.consumeCurrentTailCandidateAdmissionHandle(capped.consumer, handle)
+      if (api.revokeCurrentTailCandidateAdmissionHandle(capped.consumer, handle)) {
+        consumedTombstonesProtected = false
+      }
     }
   }
+  t.ok(consumedTombstonesProtected, 'consumed handles cannot erase global-cap tombstones')
   t.alike(capped.diagnostics(), { state: 'ACTIVE', live: 0, states: 96, requests: 12 })
   t.exception(
     () =>

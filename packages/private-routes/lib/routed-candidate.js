@@ -1022,10 +1022,12 @@ function clearAdmissionRequest(value) {
 
 const TAIL_ADMISSION_PRODUCERS = new WeakMap()
 const TAIL_ADMISSION_CONSUMERS = new WeakMap()
+const TAIL_CANDIDATE_ADMISSIONS = new WeakMap()
 
 function sweepTailAdmissions(owner, current) {
   for (const [key, state] of owner.states) {
     if (state.deadline <= current) {
+      TAIL_CANDIDATE_ADMISSIONS.delete(state.admission)
       terminalizeTailReservation(state.reservation)
       if (!state.consumed) owner.live--
       owner.states.delete(key)
@@ -1075,6 +1077,10 @@ function destroyTailAuthority(owner) {
   owner.destroyed = true
   owner.lifecycle = Object.freeze({})
   for (const reservation of owner.reservations) terminalizeTailReservation(reservation)
+  for (const state of owner.states.values()) {
+    TAIL_CANDIDATE_ADMISSIONS.delete(state.admission)
+    state.admission = null
+  }
   owner.states.clear()
   owner.requests.clear()
   owner.live = 0
@@ -1129,6 +1135,18 @@ export function createCurrentTailCandidateAdmissionAuthority(options = {}) {
       return destroyTailAuthority(owner)
     }
   })
+}
+
+export function isCurrentTailCandidateAdmissionPair(producer, consumer) {
+  const producerOwner =
+    producer !== null && typeof producer === 'object'
+      ? TAIL_ADMISSION_PRODUCERS.get(producer)
+      : null
+  const consumerOwner =
+    consumer !== null && typeof consumer === 'object'
+      ? TAIL_ADMISSION_CONSUMERS.get(consumer)
+      : null
+  return !!producerOwner && producerOwner === consumerOwner && !producerOwner.destroyed
 }
 
 export function reserveCurrentTailCandidateResponse(producer, value) {
@@ -1214,8 +1232,11 @@ export function reserveCurrentTailCandidateResponse(producer, value) {
         const key = admissionKey(request, digest)
         if (owner.states.has(key)) replay()
         owner.states.set(key, {
+          admission: Object.freeze({}),
           consumed: false,
           deadline: request.requestDeadline,
+          key,
+          published: false,
           reservation: null
         })
         owner.live++
@@ -1239,6 +1260,7 @@ export function reserveCurrentTailCandidateResponse(producer, value) {
   } catch (err) {
     for (const key of inserted) {
       const state = owner && owner.states.get(key)
+      if (state) TAIL_CANDIDATE_ADMISSIONS.delete(state.admission)
       if (state && !state.consumed) owner.live--
       if (owner) owner.states.delete(key)
     }
@@ -1278,11 +1300,18 @@ export function commitCurrentTailCandidateResponse(producer, reservation) {
     owner.violated = true
     busy()
   }
+  const admissions = []
   for (const key of state.keys) {
     const admission = owner.states.get(key)
-    if (admission && admission.reservation === state) admission.reservation = null
+    if (admission && admission.reservation === state) {
+      admission.reservation = null
+      admission.published = true
+      TAIL_CANDIDATE_ADMISSIONS.set(admission.admission, { owner, state: admission })
+      admissions.push(admission.admission)
+    }
   }
-  return terminalizeTailReservation(state)
+  terminalizeTailReservation(state)
+  return Object.freeze(admissions)
 }
 
 export function rollbackCurrentTailCandidateResponse(producer, reservation) {
@@ -1311,6 +1340,8 @@ export function rollbackCurrentTailCandidateResponse(producer, reservation) {
       }
     }
     for (const key of state.keys) {
+      const admission = owner.states.get(key)
+      if (admission) TAIL_CANDIDATE_ADMISSIONS.delete(admission.admission)
       owner.states.delete(key)
       owner.live--
     }
@@ -1336,15 +1367,8 @@ export function consumeCurrentTailCandidateAdmission(consumer, value) {
     const state = owner.states.get(admissionKey(request, digest))
     if (!state) authentication()
     if (state.deadline !== request.requestDeadline) authentication()
+    if (!state.published || state.reservation) authentication()
     if (state.consumed) replay()
-    if (state.reservation) {
-      const reservation = state.reservation
-      for (const key of reservation.keys) {
-        const admission = owner.states.get(key)
-        if (admission && admission.reservation === reservation) admission.reservation = null
-      }
-      terminalizeTailReservation(reservation)
-    }
     state.consumed = true
     owner.live--
     return true
@@ -1353,4 +1377,52 @@ export function consumeCurrentTailCandidateAdmission(consumer, value) {
     clear(digest)
     endTailAuthority(owner)
   }
+}
+
+export function consumeCurrentTailCandidateAdmissionHandle(consumer, admission) {
+  const owner =
+    consumer !== null && typeof consumer === 'object'
+      ? TAIL_ADMISSION_CONSUMERS.get(consumer)
+      : null
+  const operation = beginTailAuthority(owner)
+  try {
+    const binding =
+      admission !== null && typeof admission === 'object'
+        ? TAIL_CANDIDATE_ADMISSIONS.get(admission)
+        : null
+    if (!binding || binding.owner !== owner || !binding.state.published) authentication()
+    const state = binding.state
+    if (state.deadline <= operation.current) authentication()
+    if (state.consumed) replay()
+    state.consumed = true
+    owner.live--
+    return true
+  } finally {
+    endTailAuthority(owner)
+  }
+}
+
+export function revokeCurrentTailCandidateAdmissionHandle(consumer, admission) {
+  const owner =
+    consumer !== null && typeof consumer === 'object'
+      ? TAIL_ADMISSION_CONSUMERS.get(consumer)
+      : null
+  const binding =
+    admission !== null && typeof admission === 'object'
+      ? TAIL_CANDIDATE_ADMISSIONS.get(admission)
+      : null
+  if (!owner || owner.destroyed || !binding || binding.owner !== owner) return false
+  if (owner.mutating) {
+    owner.violated = true
+    busy()
+  }
+  const state = binding.state
+  if (owner.states.get(state.key) !== state) return false
+  if (state.consumed) return false
+  TAIL_CANDIDATE_ADMISSIONS.delete(admission)
+  owner.states.delete(state.key)
+  if (!state.consumed) owner.live--
+  state.admission = null
+  state.published = false
+  return true
 }

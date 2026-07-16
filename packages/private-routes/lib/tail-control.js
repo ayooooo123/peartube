@@ -24,12 +24,16 @@ import {
 } from './protocol.js'
 import {
   commitCurrentTailCandidateResponse,
+  consumeCurrentTailCandidateAdmissionHandle,
   decodeRelayDiscoverResponse,
+  isCurrentTailCandidateAdmissionPair,
   publishAuthenticatedDiscoveryEvidence,
   reserveCurrentTailCandidateResponse,
+  revokeCurrentTailCandidateAdmissionHandle,
   revokeAuthenticatedDiscoveryEvidence,
   rollbackCurrentTailCandidateResponse
 } from './routed-candidate.js'
+import { digestRelayCapabilityAdvertisement } from './relay-capability.js'
 
 export const ADMITTED_LIMITS_SIZE = 26
 export const EXTENDED_SIZE = 494
@@ -272,17 +276,21 @@ function clearRelayDiscover(value) {
     'currentTailAdvertisementDigest'
   ]) {
     clear(value[field])
-    value[field] = null
+    try {
+      value[field] = null
+    } catch {}
   }
-  value.requestedCapabilityMask = 0
-  value.maximumResults = 0
-  value.branchClass = -1
-  value.generation = 0n
-  value.currentExtensionIndex = -1
-  value.extensionIndex = -1
-  value.requiredRole = -1
-  value.localAdmissionDeadline = 0n
-  value.tailExpiresAt = 0n
+  try {
+    value.requestedCapabilityMask = 0
+    value.maximumResults = 0
+    value.branchClass = -1
+    value.generation = 0n
+    value.currentExtensionIndex = -1
+    value.extensionIndex = -1
+    value.requiredRole = -1
+    value.localAdmissionDeadline = 0n
+    value.tailExpiresAt = 0n
+  } catch {}
 }
 
 function clearRelayDiscoverResponse(value) {
@@ -377,11 +385,15 @@ function clearExtendRequest(value) {
     'extensionNonce'
   ]) {
     clear(value[field])
-    value[field] = null
+    try {
+      value[field] = null
+    } catch {}
   }
-  value.generation = 0n
-  value.extensionIndex = -1
-  value.branchClass = -1
+  try {
+    value.generation = 0n
+    value.extensionIndex = -1
+    value.branchClass = -1
+  } catch {}
 }
 
 export function encodeExtendRequest(value) {
@@ -541,11 +553,15 @@ function clearExtended(value) {
     'extensionNonce'
   ]) {
     clear(value[field])
-    value[field] = null
+    try {
+      value[field] = null
+    } catch {}
   }
-  value.generation = 0n
-  value.extensionIndex = -1
-  value.branchClass = -1
+  try {
+    value.generation = 0n
+    value.extensionIndex = -1
+    value.branchClass = -1
+  } catch {}
 }
 
 export function encodeExtended(value) {
@@ -1241,6 +1257,34 @@ function consumeDiscovery(state, key) {
   return true
 }
 
+function clearCandidateAdmissionRecord(state, key, record, revoke = true) {
+  if (!record) return
+  if (revoke && record.admission) {
+    try {
+      revokeCurrentTailCandidateAdmissionHandle(state.candidateAdmissionConsumer, record.admission)
+    } catch {}
+  }
+  if (key !== null && state.candidateAdmissions) state.candidateAdmissions.delete(key)
+  record.admission = null
+  record.deadline = 0n
+}
+
+function clearCandidateAdmissions(state) {
+  if (!state.candidateAdmissions) return
+  for (const [key, record] of state.candidateAdmissions) {
+    clearCandidateAdmissionRecord(state, key, record)
+  }
+  state.candidateAdmissions.clear()
+  state.candidateAdmissions = null
+}
+
+function purgeCandidateAdmissions(state, current) {
+  for (const [key, record] of state.candidateAdmissions) {
+    if (record.deadline > current) continue
+    clearCandidateAdmissionRecord(state, key, record)
+  }
+}
+
 function discoveryBinding(state, record) {
   return {
     queryNonce: record.queryNonce,
@@ -1428,6 +1472,9 @@ function clearSessionState(state, session = null) {
   state.transcriptDigest = null
   state.evidenceProducer = null
   state.candidateAdmissionProducer = null
+  clearCandidateAdmissions(state)
+  state.candidateAdmissionConsumer = null
+  state.extensionRequest = null
   state.now = null
   state.crypto = null
   clearResponseReassemblies(state)
@@ -1473,6 +1520,7 @@ function sessionNow(state) {
   const current = nowValue(state.now)
   assertSessionMutation(state)
   purgeExpiredDiscoveries(state, current)
+  purgeCandidateAdmissions(state, current)
   return current
 }
 
@@ -1774,6 +1822,8 @@ class TailControlSession {
     const envelopes = []
     let reservation = null
     let admissionProducer = null
+    let admissions = null
+    const retained = []
     let complete = false
     try {
       if (state.initiator || !state.ready || state.transcript.extensionIndex === 2) invalid()
@@ -1808,9 +1858,26 @@ class TailControlSession {
       }
       sessionNow(state)
       if (!state.discoveries.has(found.key)) authentication()
-      if (!consumeDiscovery(state, found.key)) invalid()
-      if (!commitCurrentTailCandidateResponse(admissionProducer, reservation)) invalid()
+      admissions = commitCurrentTailCandidateResponse(admissionProducer, reservation)
+      if (!admissions || admissions.length !== response.advertisements.length) invalid()
       reservation = null
+      for (let index = 0; index < admissions.length; index++) {
+        let digest = null
+        try {
+          digest = digestRelayCapabilityAdvertisement(response.advertisements[index], {
+            now: current
+          })
+          const key = responseFragmentKey(digest)
+          const previous = state.candidateAdmissions.get(key)
+          if (previous) clearCandidateAdmissionRecord(state, key, previous)
+          const record = { admission: admissions[index], deadline: found.record.deadline }
+          state.candidateAdmissions.set(key, record)
+          retained.push({ key, record })
+        } finally {
+          clear(digest)
+        }
+      }
+      if (!consumeDiscovery(state, found.key)) invalid()
       complete = true
       return Object.freeze(envelopes)
     } catch (err) {
@@ -1818,6 +1885,16 @@ class TailControlSession {
         try {
           rollbackCurrentTailCandidateResponse(admissionProducer, reservation)
         } catch {}
+      }
+      for (const { key, record } of retained) {
+        clearCandidateAdmissionRecord(state, key, record)
+      }
+      if (admissions) {
+        for (const admission of admissions) {
+          try {
+            revokeCurrentTailCandidateAdmissionHandle(state.candidateAdmissionConsumer, admission)
+          } catch {}
+        }
       }
       clearSessionState(state, this)
       if (err instanceof PrivateRouteError) throw err
@@ -1828,6 +1905,77 @@ class TailControlSession {
       clearRelayDiscoverResponse(response)
       if (objects) for (const object of objects) clear(object)
       if (!complete) for (const envelope of envelopes) clear(envelope)
+    }
+  }
+
+  openExtendRequest(envelope) {
+    const state = beginSessionMutation(this)
+    const pending = Object.freeze({})
+    let opened = null
+    let request = null
+    let digest = null
+    let transferred = false
+    try {
+      if (
+        state.initiator ||
+        !state.ready ||
+        state.transcript.extensionIndex === 2 ||
+        state.extensionRequest !== null
+      ) {
+        invalid()
+      }
+      state.extensionRequest = pending
+      const current = sessionNow(state)
+      if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      opened = openControlFrame(
+        state,
+        envelope,
+        DIRECTION.FORWARD,
+        EXTEND_REQUEST_MIN_SIZE,
+        EXTEND_REQUEST_MAX_SIZE
+      )
+      assertSessionMutation(state)
+      request = decodeExtendRequest(opened.encoded)
+      if (
+        request.branchClass !== state.transcript.branchClass ||
+        !same(request.branchId, state.transcript.branchId) ||
+        !same(request.circuitId, state.transcript.circuitId) ||
+        request.generation !== state.transcript.generation ||
+        request.extensionIndex !== state.transcript.extensionIndex + 1
+      ) {
+        authentication()
+      }
+      digest = digestRelayCapabilityAdvertisement(request.advertisement, { now: current })
+      const key = responseFragmentKey(digest)
+      const admission = state.candidateAdmissions.get(key)
+      if (!admission || admission.deadline <= current) authentication()
+      if (state.extensionRequest !== pending) invalid()
+      state.extensionRequest = Object.freeze({
+        key,
+        deadline: admission.deadline,
+        extensionNonce: responseFragmentKey(request.extensionNonce)
+      })
+      if (
+        !consumeCurrentTailCandidateAdmissionHandle(
+          state.candidateAdmissionConsumer,
+          admission.admission
+        )
+      ) {
+        authentication()
+      }
+      assertSessionMutation(state)
+      clearCandidateAdmissionRecord(state, key, admission, false)
+      transferred = true
+      return request
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (opened) clear(opened.encoded)
+      clear(digest)
+      if (!transferred) clearExtendRequest(request)
     }
   }
 
@@ -1945,6 +2093,7 @@ export function createTailControlSession(capability, options = {}) {
     const crypto = option(options, 'crypto') || cryptoSuite
     const evidenceProducer = option(options, 'evidenceProducer')
     const candidateAdmissionProducer = option(options, 'candidateAdmissionProducer')
+    const candidateAdmissionConsumer = option(options, 'candidateAdmissionConsumer')
     if (
       typeof now !== 'function' ||
       !object(crypto) ||
@@ -1952,6 +2101,12 @@ export function createTailControlSession(capability, options = {}) {
       typeof crypto.verify !== 'function' ||
       typeof crypto.seal !== 'function' ||
       typeof crypto.open !== 'function'
+    ) {
+      invalid()
+    }
+    if (
+      (candidateAdmissionProducer !== undefined || candidateAdmissionConsumer !== undefined) &&
+      !isCurrentTailCandidateAdmissionPair(candidateAdmissionProducer, candidateAdmissionConsumer)
     ) {
       invalid()
     }
@@ -1998,6 +2153,9 @@ export function createTailControlSession(capability, options = {}) {
       responseReassemblies: new Map(),
       evidenceProducer,
       candidateAdmissionProducer,
+      candidateAdmissionConsumer,
+      candidateAdmissions: new Map(),
+      extensionRequest: null,
       ready: false,
       mutating: false,
       violated: false,

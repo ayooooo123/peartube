@@ -596,6 +596,10 @@ export function createBranchPathAuthority(options) {
   return new BranchPathAuthority(options)
 }
 
+export function isBranchPathAuthority(value) {
+  return safeObject(value) && STATES.has(value)
+}
+
 export function takeBranchPathAuthorization(authorization) {
   const state = safeObject(authorization) ? AUTHORIZATIONS.get(authorization) : null
   if (!state || state.status !== 'LIVE' || state.consumed) replay()
@@ -678,6 +682,19 @@ export function completeBranchPathReservation(reservation) {
 
 export function failBranchPathReservation(reservation) {
   const state = safeObject(reservation) ? RESERVATIONS.get(reservation) : null
+  if (!state || state.status !== 'LIVE') replay()
+  const owner = liveOwner(state.owner.authority)
+  begin(owner)
+  try {
+    releaseLive(state)
+    return true
+  } finally {
+    end(owner)
+  }
+}
+
+export function failBranchPathAuthorization(authorization) {
+  const state = safeObject(authorization) ? AUTHORIZATIONS.get(authorization) : null
   if (!state || state.status !== 'LIVE') replay()
   const owner = liveOwner(state.owner.authority)
   begin(owner)

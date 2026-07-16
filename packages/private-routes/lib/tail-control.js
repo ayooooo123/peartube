@@ -4,6 +4,14 @@ import sodium from 'sodium-universal'
 import { OrderedReceiver, SenderCounter } from './counters.js'
 import { cryptoSuite } from './crypto-suite.js'
 import { PrivateRouteError } from './errors.js'
+import { digestPayloadParameters } from './final-exit.js'
+import {
+  completeBranchPathReservation,
+  failBranchPathAuthorization,
+  failBranchPathReservation,
+  isBranchPathAuthority,
+  takeBranchPathAuthorization
+} from './branch-path-authority.js'
 import {
   isM3AdjacencyAuthority,
   revokeM3TailCapability,
@@ -19,7 +27,12 @@ import {
   installTailExtension,
   isTailExtensionCommitter
 } from './tail-extension-committer.js'
-import { consumeVerifiedRedactedResponderProof } from './redacted-responder-proof.js'
+import {
+  consumeVerifiedRedactedResponderProof,
+  createRedactedResponderProofAuthority,
+  decodeRedactedResponderProof,
+  verifyExpectedRedactedResponderProof
+} from './redacted-responder-proof.js'
 import {
   decodeM3ContextEnvelope,
   encodeM3ContextAD,
@@ -48,7 +61,10 @@ import {
   revokeAuthenticatedDiscoveryEvidence,
   rollbackCurrentTailCandidateResponse
 } from './routed-candidate.js'
-import { digestRelayCapabilityAdvertisement } from './relay-capability.js'
+import {
+  decodeRelayCapabilityAdvertisement,
+  digestRelayCapabilityAdvertisement
+} from './relay-capability.js'
 
 export const ADMITTED_LIMITS_SIZE = 26
 export const EXTENDED_SIZE = 494
@@ -93,6 +109,8 @@ const AEAD_TAG_SIZE = 16
 const SESSIONS = new WeakMap()
 const DESTROYED_SESSIONS = new WeakSet()
 const ADMITTED_EXTEND_REQUESTS = new WeakMap()
+const CLIENT_EXTENSION_COMPLETIONS = new WeakMap()
+const SPENT_CLIENT_EXTENSION_COMPLETIONS = new WeakSet()
 const bufferByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength'
@@ -443,6 +461,87 @@ function clearAdmittedExtendMaterial(value) {
   value.currentTailIdentity = null
   value.currentTailAdvertisementDigest = null
   value.deadline = 0n
+}
+
+function clearBranchPathMaterial(value) {
+  if (!value) return
+  for (const field of [
+    'advertisement',
+    'advertisementDigest',
+    'routeEncryptionPublicKey',
+    'currentTailIdentity',
+    'currentTailAdvertisementDigest',
+    'branchId',
+    'circuitId'
+  ]) {
+    clear(value[field])
+    try {
+      value[field] = null
+    } catch {}
+  }
+  try {
+    value.reservation = null
+  } catch {}
+}
+
+function rollbackClientExtension(record) {
+  if (!record) return false
+  const authorization = record.authorization
+  record.authorization = null
+  const reservation = record.reservation
+  record.reservation = null
+  if (authorization) {
+    try {
+      failBranchPathAuthorization(authorization)
+    } catch {}
+  } else if (reservation) {
+    try {
+      failBranchPathReservation(reservation)
+    } catch {}
+  }
+  for (const field of [
+    'advertisementDigest',
+    'routeEncryptionPublicKey',
+    'relayIdentity',
+    'branchId',
+    'circuitId',
+    'currentTailIdentity',
+    'currentTailAdvertisementDigest',
+    'clientTailEphemeralPublicKey',
+    'clientTailEphemeralSecretKey',
+    'clientNonce',
+    'extensionNonce'
+  ]) {
+    clear(record[field])
+    record[field] = null
+  }
+  record.generation = 0n
+  record.extensionIndex = -1
+  record.deadline = 0n
+  record.requestedExpiresAt = 0n
+  return true
+}
+
+function destroyClientExtensionCompletionState(state) {
+  if (!state || state.destroyed) return false
+  state.destroyed = true
+  try {
+    if (state.session) state.session.destroy()
+  } catch {}
+  state.session = null
+  if (state.reservation) {
+    try {
+      failBranchPathReservation(state.reservation)
+    } catch {}
+  }
+  state.reservation = null
+  return true
+}
+
+function createClientExtensionCompletion(session, reservation) {
+  const completion = Object.freeze({})
+  CLIENT_EXTENSION_COMPLETIONS.set(completion, { session, reservation, destroyed: false })
+  return completion
 }
 
 function publishAdmittedExtendRequest(state, session, request, key, deadline) {
@@ -1547,6 +1646,9 @@ function clearSessionState(state, session = null) {
   state.rxNoncePrefix = null
   state.transcriptDigest = null
   state.evidenceProducer = null
+  state.branchPathAuthority = null
+  rollbackClientExtension(state.clientExtension)
+  state.clientExtension = null
   state.candidateAdmissionProducer = null
   clearCandidateAdmissions(state)
   state.candidateAdmissionConsumer = null
@@ -2093,6 +2195,148 @@ class TailControlSession {
     }
   }
 
+  sealExtend(candidate, options) {
+    const state = beginSessionMutation(this)
+    const record = {
+      authorization: null,
+      reservation: null,
+      advertisementDigest: null,
+      routeEncryptionPublicKey: null,
+      relayIdentity: null,
+      branchId: null,
+      circuitId: null,
+      currentTailIdentity: null,
+      currentTailAdvertisementDigest: null,
+      clientTailEphemeralPublicKey: null,
+      clientTailEphemeralSecretKey: null,
+      clientNonce: null,
+      extensionNonce: null,
+      generation: 0n,
+      extensionIndex: -1,
+      deadline: 0n,
+      requestedExpiresAt: 0n
+    }
+    let authorizationMaterial = null
+    let decodedAdvertisement = null
+    let payloadParametersDigest = null
+    let seedBytes = null
+    let pair = null
+    let encoded = null
+    let decodedRequest = null
+    let complete = false
+    try {
+      if (
+        !state.initiator ||
+        !state.ready ||
+        !state.branchPathAuthority ||
+        state.transcript.extensionIndex === 2 ||
+        state.clientExtension !== null
+      ) {
+        invalid()
+      }
+      state.clientExtension = record
+      record.authorization = state.branchPathAuthority.reserve(candidate)
+      assertSessionMutation(state)
+      authorizationMaterial = takeBranchPathAuthorization(record.authorization)
+      record.authorization = null
+      record.reservation = authorizationMaterial.reservation
+      assertSessionMutation(state)
+      const current = sessionNow(state)
+      if (
+        current >= state.expiresAt ||
+        authorizationMaterial.deadline <= current ||
+        authorizationMaterial.deadline > state.expiresAt ||
+        authorizationMaterial.branchClass !== state.transcript.branchClass ||
+        !same(authorizationMaterial.branchId, state.transcript.branchId) ||
+        !same(authorizationMaterial.circuitId, state.transcript.circuitId) ||
+        authorizationMaterial.generation !== state.transcript.generation ||
+        authorizationMaterial.extensionIndex !== state.transcript.extensionIndex + 1 ||
+        authorizationMaterial.requiredRole !==
+          (state.transcript.extensionIndex === 0
+            ? M3_LINK_ROLE.SAFETY_RELAY
+            : M3_LINK_ROLE.DHT_EXIT) ||
+        !same(authorizationMaterial.currentTailIdentity, state.transcript.tailIdentity) ||
+        !same(
+          authorizationMaterial.currentTailAdvertisementDigest,
+          state.transcript.candidateAdvertisementDigest
+        )
+      ) {
+        authentication()
+      }
+      const selected = object(options)
+      const randomBytes = option(selected, 'randomBytes')
+      const requestedLimits = option(selected, 'requestedLimits')
+      if (typeof randomBytes !== 'function') invalid()
+      decodedAdvertisement = decodeRelayCapabilityAdvertisement(
+        authorizationMaterial.advertisement,
+        { now: current }
+      )
+      payloadParametersDigest = digestPayloadParameters(decodedAdvertisement)
+      seedBytes = copy(randomBytes(32), 32)
+      assertSessionMutation(state)
+      pair = state.crypto.encryptionKeyPair(seedBytes)
+      assertSessionMutation(state)
+      if (!fixed(pair.publicKey, 32) || !fixed(pair.secretKey, 32)) invalid()
+      record.clientNonce = copy(randomBytes(32), 32)
+      assertSessionMutation(state)
+      record.extensionNonce = copy(randomBytes(32), 32)
+      assertSessionMutation(state)
+      record.advertisementDigest = copy(authorizationMaterial.advertisementDigest, 32)
+      record.routeEncryptionPublicKey = copy(authorizationMaterial.routeEncryptionPublicKey, 32)
+      record.relayIdentity = copy(decodedAdvertisement.relayIdentity, 32)
+      record.branchId = copy(authorizationMaterial.branchId, 16)
+      record.circuitId = copy(authorizationMaterial.circuitId, 16)
+      record.currentTailIdentity = copy(authorizationMaterial.currentTailIdentity, 32)
+      record.currentTailAdvertisementDigest = copy(
+        authorizationMaterial.currentTailAdvertisementDigest,
+        32
+      )
+      record.clientTailEphemeralPublicKey = copy(pair.publicKey, 32)
+      record.clientTailEphemeralSecretKey = copy(pair.secretKey, 32)
+      record.generation = authorizationMaterial.generation
+      record.extensionIndex = authorizationMaterial.extensionIndex
+      record.deadline = authorizationMaterial.deadline
+      const request = {
+        branchClass: authorizationMaterial.branchClass,
+        branchId: record.branchId,
+        circuitId: record.circuitId,
+        generation: record.generation,
+        extensionIndex: record.extensionIndex,
+        advertisement: authorizationMaterial.advertisement,
+        clientTailEphemeralPublicKey: record.clientTailEphemeralPublicKey,
+        clientNonce: record.clientNonce,
+        payloadParametersDigest,
+        requestedLimits,
+        extensionNonce: record.extensionNonce
+      }
+      encoded = encodeExtendRequest(request)
+      decodedRequest = decodeExtendRequest(encoded)
+      record.requestedExpiresAt = decodedRequest.requestedLimits.expiresAtMs
+      if (record.requestedExpiresAt <= current) authentication()
+      const envelope = sealControlFrame(state, encoded, randomBytes, DIRECTION.FORWARD)
+      assertSessionMutation(state)
+      sessionNow(state)
+      complete = true
+      return envelope
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (!complete && state.clientExtension === record) state.clientExtension = null
+      if (!complete) rollbackClientExtension(record)
+      clearBranchPathMaterial(authorizationMaterial)
+      clearTailReady(decodedAdvertisement)
+      clear(payloadParametersDigest)
+      clear(seedBytes)
+      clear(pair && pair.publicKey)
+      clear(pair && pair.secretKey)
+      clear(encoded)
+      clearExtendRequest(decodedRequest)
+    }
+  }
+
   sealExtended(completion, options) {
     const state = beginSessionMutation(this)
     let material = null
@@ -2195,6 +2439,145 @@ class TailControlSession {
       clear(encodedProof)
       clear(encodedExtended)
       clear(envelope)
+    }
+  }
+
+  openExtended(envelope) {
+    const state = beginSessionMutation(this)
+    const record = state.clientExtension
+    let opened = null
+    let extended = null
+    let proof = null
+    let proofAuthority = null
+    let verifiedProof = null
+    let encodedProof = null
+    let sharedSecret = null
+    let nextTranscript = null
+    let nextSession = null
+    let reservation = null
+    let completion = null
+    let complete = false
+    try {
+      if (
+        !state.initiator ||
+        !state.ready ||
+        !state.branchPathAuthority ||
+        !record ||
+        !record.reservation
+      ) {
+        invalid()
+      }
+      const current = sessionNow(state)
+      if (current >= state.expiresAt || current >= record.deadline) authentication()
+      opened = openControlFrame(state, envelope, DIRECTION.REVERSE, EXTENDED_SIZE)
+      assertSessionMutation(state)
+      extended = decodeExtended(opened.encoded)
+      proof = decodeRedactedResponderProof(extended.redactedProof)
+      if (
+        extended.branchClass !== state.transcript.branchClass ||
+        !same(extended.branchId, record.branchId) ||
+        !same(extended.circuitId, record.circuitId) ||
+        extended.generation !== record.generation ||
+        extended.extensionIndex !== record.extensionIndex ||
+        !same(extended.responderAdvertisementDigest, record.advertisementDigest) ||
+        !same(extended.extensionNonce, record.extensionNonce) ||
+        !same(proof.responderAdvertisementDigest, record.advertisementDigest) ||
+        !same(proof.initiatorIdentity, record.currentTailIdentity) ||
+        !same(proof.responderIdentity, record.relayIdentity) ||
+        proof.branchClass !== state.transcript.branchClass ||
+        !same(proof.branchId, record.branchId) ||
+        !same(proof.circuitId, record.circuitId) ||
+        proof.generation !== record.generation ||
+        proof.extensionIndex !== record.extensionIndex ||
+        !same(proof.clientTailEphemeralPublicKey, record.clientTailEphemeralPublicKey) ||
+        !same(proof.clientNonce, record.clientNonce) ||
+        !same(proof.advertisedRouteEncryptionPublicKey, record.routeEncryptionPublicKey) ||
+        proof.expiresAtMs <= current ||
+        proof.expiresAtMs > record.deadline ||
+        proof.expiresAtMs > record.requestedExpiresAt
+      ) {
+        authentication()
+      }
+      proofAuthority = createRedactedResponderProofAuthority({ now: () => current })
+      verifiedProof = verifyExpectedRedactedResponderProof(
+        proofAuthority.verifier,
+        proofAuthority.consumer,
+        extended.redactedProof,
+        proof
+      )
+      assertSessionMutation(state)
+      encodedProof = consumeVerifiedRedactedResponderProof(
+        proofAuthority.consumer,
+        verifiedProof,
+        proof
+      )
+      verifiedProof = null
+      assertSessionMutation(state)
+      if (!same(encodedProof, extended.redactedProof)) authentication()
+      sharedSecret = state.crypto.keyAgreement(
+        record.clientTailEphemeralSecretKey,
+        record.routeEncryptionPublicKey
+      )
+      assertSessionMutation(state)
+      if (!fixed(sharedSecret, 32)) invalid()
+      nextTranscript = encodeTailControlTranscript({
+        branchClass: state.transcript.branchClass,
+        branchId: record.branchId,
+        circuitId: record.circuitId,
+        generation: record.generation,
+        extensionIndex: record.extensionIndex,
+        clientTailEphemeralPublicKey: record.clientTailEphemeralPublicKey,
+        advertisedTailRouteEncryptionPublicKey: record.routeEncryptionPublicKey,
+        candidateAdvertisementDigest: record.advertisementDigest,
+        clientNonce: record.clientNonce,
+        tailIdentity: record.relayIdentity,
+        admittedLimitsDigest: proof.admittedLimitsDigest
+      })
+      nextSession = createTailControlSessionFromMaterial(
+        {
+          initiator: true,
+          secret: sharedSecret,
+          transcript: nextTranscript,
+          expiresAt: proof.expiresAtMs
+        },
+        {
+          now: state.now,
+          crypto: state.crypto,
+          evidenceProducer: state.evidenceProducer,
+          branchPathAuthority: state.branchPathAuthority
+        }
+      )
+      sharedSecret = null
+      nextTranscript = null
+      reservation = record.reservation
+      record.reservation = null
+      state.clientExtension = null
+      rollbackClientExtension(record)
+      clearSessionState(state, this)
+      completion = createClientExtensionCompletion(nextSession, reservation)
+      nextSession = null
+      reservation = null
+      complete = true
+      return completion
+    } catch (err) {
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (!complete && nextSession) nextSession.destroy()
+      if (!complete && reservation) {
+        try {
+          failBranchPathReservation(reservation)
+        } catch {}
+      }
+      if (proofAuthority) proofAuthority.destroy()
+      if (opened) clear(opened.encoded)
+      clearExtended(extended)
+      clearTailReady(proof)
+      clear(encodedProof)
+      clear(sharedSecret)
+      clear(nextTranscript)
     }
   }
 
@@ -2301,37 +2684,115 @@ class TailControlSession {
   }
 }
 
-export function createTailControlSession(capability, options = {}) {
-  let material = null
+export function completeClientTailExtension(completion, readyEnvelope) {
+  const state = object(completion) ? CLIENT_EXTENSION_COMPLETIONS.get(completion) : null
+  if (!state || state.destroyed) {
+    if (object(completion) && SPENT_CLIENT_EXTENSION_COMPLETIONS.has(completion)) replay()
+    authentication()
+  }
+  CLIENT_EXTENSION_COMPLETIONS.delete(completion)
+  SPENT_CLIENT_EXTENSION_COMPLETIONS.add(completion)
+  let ready = null
+  let session = state.session
+  try {
+    ready = session.openReady(readyEnvelope)
+    if (!completeBranchPathReservation(state.reservation)) invalid()
+    state.reservation = null
+    state.session = null
+    state.destroyed = true
+    const result = session
+    session = null
+    return result
+  } catch (err) {
+    destroyClientExtensionCompletionState(state)
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (ready) {
+      clear(ready.encoded)
+      clear(ready.readyNonce)
+    }
+    if (session) {
+      try {
+        session.destroy()
+      } catch {}
+    }
+  }
+}
+
+export function abortClientTailExtension(completion) {
+  const state = object(completion) ? CLIENT_EXTENSION_COMPLETIONS.get(completion) : null
+  if (!state || state.destroyed) return false
+  CLIENT_EXTENSION_COMPLETIONS.delete(completion)
+  SPENT_CLIENT_EXTENSION_COMPLETIONS.add(completion)
+  return destroyClientExtensionCompletionState(state)
+}
+
+function tailControlOptions(options) {
+  const selected = object(options)
+  const values = {
+    now: option(selected, 'now'),
+    crypto: option(selected, 'crypto') || cryptoSuite,
+    evidenceProducer: option(selected, 'evidenceProducer'),
+    candidateAdmissionProducer: option(selected, 'candidateAdmissionProducer'),
+    candidateAdmissionConsumer: option(selected, 'candidateAdmissionConsumer'),
+    branchPathAuthority: option(selected, 'branchPathAuthority'),
+    adjacencyAuthority: option(selected, 'adjacencyAuthority'),
+    extensionCommitter: option(selected, 'extensionCommitter')
+  }
+  if (
+    typeof values.now !== 'function' ||
+    !object(values.crypto) ||
+    typeof values.crypto.sign !== 'function' ||
+    typeof values.crypto.verify !== 'function' ||
+    typeof values.crypto.seal !== 'function' ||
+    typeof values.crypto.open !== 'function'
+  ) {
+    invalid()
+  }
+  if (
+    (values.candidateAdmissionProducer !== undefined ||
+      values.candidateAdmissionConsumer !== undefined) &&
+    !isCurrentTailCandidateAdmissionPair(
+      values.candidateAdmissionProducer,
+      values.candidateAdmissionConsumer
+    )
+  ) {
+    invalid()
+  }
+  if (
+    values.branchPathAuthority !== undefined &&
+    !isBranchPathAuthority(values.branchPathAuthority)
+  ) {
+    invalid()
+  }
+  if (
+    (values.adjacencyAuthority !== undefined || values.extensionCommitter !== undefined) &&
+    (!isM3AdjacencyAuthority(values.adjacencyAuthority) ||
+      !isTailExtensionCommitter(values.extensionCommitter))
+  ) {
+    invalid()
+  }
+  return values
+}
+
+function createTailControlSessionFromMaterial(material, options = {}, normalized = null) {
   let transcript = null
   let derived = null
   let session = null
   let installed = false
   try {
-    const now = option(object(options), 'now')
-    const crypto = option(options, 'crypto') || cryptoSuite
-    const evidenceProducer = option(options, 'evidenceProducer')
-    const candidateAdmissionProducer = option(options, 'candidateAdmissionProducer')
-    const candidateAdmissionConsumer = option(options, 'candidateAdmissionConsumer')
-    const adjacencyAuthority = option(options, 'adjacencyAuthority')
-    const extensionCommitter = option(options, 'extensionCommitter')
-    if (
-      typeof now !== 'function' ||
-      !object(crypto) ||
-      typeof crypto.sign !== 'function' ||
-      typeof crypto.verify !== 'function' ||
-      typeof crypto.seal !== 'function' ||
-      typeof crypto.open !== 'function'
-    ) {
-      invalid()
-    }
-    if (
-      (candidateAdmissionProducer !== undefined || candidateAdmissionConsumer !== undefined) &&
-      !isCurrentTailCandidateAdmissionPair(candidateAdmissionProducer, candidateAdmissionConsumer)
-    ) {
-      invalid()
-    }
-    material = takeM3TailCapability(capability)
+    const values = normalized || tailControlOptions(options)
+    const {
+      now,
+      crypto,
+      evidenceProducer,
+      candidateAdmissionProducer,
+      candidateAdmissionConsumer,
+      branchPathAuthority,
+      adjacencyAuthority,
+      extensionCommitter
+    } = values
     if (
       typeof material.initiator !== 'boolean' ||
       !fixed(material.secret, 32) ||
@@ -2355,11 +2816,15 @@ export function createTailControlSession(capability, options = {}) {
     )
     const initiator = material.initiator
     if (
-      (adjacencyAuthority !== undefined || extensionCommitter !== undefined) &&
-      (!isM3AdjacencyAuthority(adjacencyAuthority) ||
-        !isTailExtensionCommitter(extensionCommitter) ||
-        initiator)
+      branchPathAuthority !== undefined &&
+      (!initiator ||
+        !isBranchPathAuthority(branchPathAuthority) ||
+        typeof crypto.encryptionKeyPair !== 'function' ||
+        typeof crypto.keyAgreement !== 'function')
     ) {
+      invalid()
+    }
+    if ((adjacencyAuthority !== undefined || extensionCommitter !== undefined) && initiator) {
       invalid()
     }
     session = new TailControlSession()
@@ -2381,6 +2846,8 @@ export function createTailControlSession(capability, options = {}) {
       discoveryAttempts: 0,
       responseReassemblies: new Map(),
       evidenceProducer,
+      branchPathAuthority: branchPathAuthority || null,
+      clientExtension: null,
       candidateAdmissionProducer,
       candidateAdmissionConsumer,
       adjacencyAuthority: adjacencyAuthority || null,
@@ -2411,6 +2878,27 @@ export function createTailControlSession(capability, options = {}) {
     if (!installed && session) {
       const state = SESSIONS.get(session)
       clearSessionState(state, session)
+    }
+  }
+}
+
+export function createTailControlSession(capability, options = {}) {
+  let material = null
+  try {
+    const normalized = tailControlOptions(options)
+    material = takeM3TailCapability(capability)
+    const session = createTailControlSessionFromMaterial(material, options, normalized)
+    material = null
+    return session
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (material) {
+      clear(material.secret)
+      clear(material.transcript)
+      material.secret = null
+      material.transcript = null
     }
   }
 }

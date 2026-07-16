@@ -2,6 +2,8 @@ import b4a from 'b4a'
 import test from 'brittle'
 
 import * as routes from '../index.js'
+import * as construction from '../lib/branch-construction-authority.js'
+import { createBranchPathAuthority } from '../lib/branch-path-authority.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
 import {
   LINK_ACCEPT_SIZE,
@@ -45,6 +47,8 @@ import {
   EXTEND_REQUEST_MIN_SIZE,
   RELAY_DISCOVER_SIZE,
   TAIL_READY_SIZE,
+  abortClientTailExtension,
+  completeClientTailExtension,
   createTailControlSession,
   decodeRelayDiscoverRequest,
   decodeExtendRequest,
@@ -106,9 +110,7 @@ function forwardingRecord() {
   })
 }
 
-function relayAdvertisement(byte, role = M3_LINK_ROLE.DHT_EXIT) {
-  const identity =
-    role === M3_LINK_ROLE.SAFETY_RELAY ? safetyRoleIdentity(byte) : privateRoleIdentity(byte)
+function relayAdvertisementForIdentity(identity, byte, role = M3_LINK_ROLE.DHT_EXIT) {
   const reachableEndpoint = endpoint(byte)
   const route = cryptoSuite.encryptionKeyPair(seed(byte + 1))
   const capabilityMask =
@@ -150,6 +152,12 @@ function relayAdvertisement(byte, role = M3_LINK_ROLE.DHT_EXIT) {
   )
 }
 
+function relayAdvertisement(byte, role = M3_LINK_ROLE.DHT_EXIT) {
+  const identity =
+    role === M3_LINK_ROLE.SAFETY_RELAY ? safetyRoleIdentity(byte) : privateRoleIdentity(byte)
+  return relayAdvertisementForIdentity(identity, byte, role)
+}
+
 function privateAdvertisement(byte) {
   return relayAdvertisement(byte)
 }
@@ -185,7 +193,12 @@ function privateAdvertisements(count, target, start = 40) {
   return advertisements.sort((left, right) => compareAdvertisements(left, right, target))
 }
 
-function transcript(identity, extensionIndex = 0, expiresAt = 5_000n) {
+function transcript(
+  identity,
+  extensionIndex = 0,
+  expiresAt = 5_000n,
+  candidateAdvertisementDigest = seed(0x15)
+) {
   return encodeTailControlTranscript({
     branchClass: BRANCH_CLASS.LOOKUP,
     branchId: seed(0x11, 16),
@@ -194,7 +207,7 @@ function transcript(identity, extensionIndex = 0, expiresAt = 5_000n) {
     extensionIndex,
     clientTailEphemeralPublicKey: seed(0x13),
     advertisedTailRouteEncryptionPublicKey: seed(0x14),
-    candidateAdvertisementDigest: seed(0x15),
+    candidateAdvertisementDigest,
     clientNonce: seed(0x16),
     tailIdentity: identity.publicKey,
     admittedLimitsDigest: digestAdmittedLimits({
@@ -216,7 +229,12 @@ function pair(
   options = {}
 ) {
   const identity = options.identity || cryptoSuite.keyPair(seed(0x21))
-  const encodedTranscript = transcript(identity, extensionIndex, expiresAt)
+  const encodedTranscript = transcript(
+    identity,
+    extensionIndex,
+    expiresAt,
+    options.candidateAdvertisementDigest
+  )
   const sharedSecret = seed(0x22)
   const initiatorTail = TEST_ONLY_M3_TAIL_ISSUER.issue({
     initiator: true,
@@ -247,6 +265,48 @@ function pair(
     }),
     sharedSecret
   }
+}
+
+function clientPathAuthority(routed, guardIdentity) {
+  const guardAdvertisement = relayAdvertisementForIdentity(
+    guardIdentity,
+    221,
+    M3_LINK_ROLE.SAFETY_RELAY
+  )
+  const guardDigest = routes.digestRelayCapabilityAdvertisement(guardAdvertisement, {
+    now: BigInt(NOW)
+  })
+  const branch = (branchClass, branchByte, circuitByte, generation, seedByte) =>
+    Object.freeze({
+      branchClass,
+      branchId: seed(branchByte, 16),
+      circuitId: seed(circuitByte, 16),
+      generation,
+      clientCircuitIdentity: cryptoSuite.keyPair(seed(seedByte)),
+      clientTailEphemeral: cryptoSuite.encryptionKeyPair(seed(seedByte + 1)),
+      deadline: 5_000n,
+      requestedLimits: Object.freeze({})
+    })
+  const authority = construction.createBranchConstructionAuthority({
+    lookup: branch(BRANCH_CLASS.LOOKUP, 0x11, 0x12, 7n, 0x71),
+    announce: branch(BRANCH_CLASS.ANNOUNCE, 0x31, 0x32, 8n, 0x81),
+    now: () => BigInt(NOW)
+  })
+  const lookup = construction.takeBranchConstructionRequest(authority.bootstrapRequest)
+  construction.initializeBranchGuardLease(lookup, guardAdvertisement)
+  const announce = construction.takeBranchConstructionRequest(authority.revalidationRequest)
+  construction.validateBranchGuardLease(announce, guardAdvertisement)
+  construction.completeBranchConstruction(lookup, Object.freeze({ destroy() {} }))
+  construction.completeBranchConstruction(announce, Object.freeze({ destroy() {} }))
+  const pair = construction.consumeBranchConstructionPair(authority.takePair())
+  const path = createBranchPathAuthority({
+    now: () => BigInt(NOW),
+    candidateDirectory: routed.directory,
+    pairBinding: pair.pathBinding
+  })
+  pair.lookup.destroy()
+  pair.announce.destroy()
+  return Object.freeze({ path, guardDigest })
 }
 
 function activate(fixture, byte = 0x31) {
@@ -1093,11 +1153,17 @@ test('an admitted EXTEND completes the exact successor OFFER ACCEPT PROOF exchan
 
 test('the first extension establishes a safety-relay successor over the same setup channel', (t) => {
   const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const currentTailIdentity = safetyRoleIdentity(221)
+  const clientPath = clientPathAuthority(routed, currentTailIdentity)
   const currentTailAuthority = new routes.M3AdjacencyAuthority({ now: () => NOW })
   const installedForwarding = forwardingRecord()
   let installedNextRuntime = null
+  let enqueuedExtended = null
   const extensionCommitter = createTailExtensionCommitter({
-    enqueue() {},
+    enqueue(envelope) {
+      enqueuedExtended = envelope
+    },
     install(runtime) {
       installedNextRuntime = runtime
       return installedForwarding
@@ -1110,7 +1176,12 @@ test('the first extension establishes a safety-relay successor over the same set
     0,
     5_000n,
     {
-      identity: safetyRoleIdentity(221),
+      identity: currentTailIdentity,
+      candidateAdvertisementDigest: clientPath.guardDigest,
+      client: {
+        evidenceProducer: routed.evidenceProducer,
+        branchPathAuthority: clientPath.path
+      },
       responder: {
         candidateAdmissionProducer: admissions.producer,
         candidateAdmissionConsumer: admissions.consumer,
@@ -1123,9 +1194,6 @@ test('the first extension establishes a safety-relay successor over the same set
   const randomTarget = seed(0xd1)
   const queryNonce = seed(0xd2)
   const advertisement = safetyAdvertisement(190)
-  const decodedAdvertisement = routes.decodeRelayCapabilityAdvertisement(advertisement, {
-    now: BigInt(NOW)
-  })
   const discoverEnvelope = fixture.client.sealDiscoverRequest({
     requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
     randomTarget,
@@ -1134,7 +1202,7 @@ test('the first extension establishes a safety-relay successor over the same set
     randomBytes: (size) => seed(0xd3, size)
   })
   fixture.responder.openDiscoverRequest(discoverEnvelope)
-  fixture.responder.sealDiscoverResponse({
+  const responseEnvelopes = fixture.responder.sealDiscoverResponse({
     encodedResponse: encodeRelayDiscoverResponse({
       queryNonce,
       responseTimeMs: BigInt(NOW),
@@ -1142,12 +1210,20 @@ test('the first extension establishes a safety-relay successor over the same set
     }),
     randomBytes: (size) => seed(0xd4, size)
   })
-  const encodedExtend = extendRequest(
-    advertisement,
-    1,
-    routes.digestPayloadParameters(decodedAdvertisement)
-  )
-  const envelope = resealForwardEnvelope(fixture, discoverEnvelope, 0n, 1n, 0, encodedExtend)
+  const evidence = fixture.client.openDiscoverResponse(responseEnvelopes[0])
+  const [candidate] = routed.directory.admit(evidence)
+  let clientRandomByte = 0xd8
+  const envelope = fixture.client.sealExtend(candidate, {
+    requestedLimits: {
+      cellSize: 1200,
+      maxCells: 64,
+      maxBytes: 65_536,
+      maxCommands: 10,
+      idleTimeoutMs: 5_000,
+      expiresAtMs: 9_000n
+    },
+    randomBytes: (size) => seed(clientRandomByte++, size)
+  })
   const admitted = fixture.responder.openExtendRequest(envelope)
   const extension = createExtensionLinkOffer(admitted, {
     initiatorIdentitySecretKey: fixture.identity.secretKey,
@@ -1194,6 +1270,25 @@ test('the first extension establishes a safety-relay successor over the same set
   const forwarding = fixture.responder.sealExtended(completed, {
     randomBytes: (size) => seed(0xd7, size)
   })
+  const clientCompletion = fixture.client.openExtended(enqueuedExtended)
+  t.ok(Object.isFrozen(clientCompletion))
+  t.alike(Object.keys(clientCompletion), [])
+  t.alike(clientPath.path.diagnostics(), {
+    state: 'ACTIVE',
+    liveReservations: 1,
+    retainedAuthorizations: 1,
+    lookupIndex: 0,
+    announceIndex: 0
+  })
+  const successorTail = createTailControlSession(successor.tail, {
+    now: () => NOW,
+    crypto: cryptoSuite
+  })
+  const ready = successorTail.sealReady({
+    identitySecretKey: safetyRoleIdentity(190).secretKey,
+    randomBytes: (size) => seed(0xda, size)
+  })
+  const nextClientTail = completeClientTailExtension(clientCompletion, ready)
 
   t.is(offer.body[96], M3_LINK_ROLE.SAFETY_RELAY)
   t.is(offer.body[97], M3_LINK_ROLE.SAFETY_RELAY)
@@ -1204,15 +1299,103 @@ test('the first extension establishes a safety-relay successor over the same set
   t.alike(installedNextRuntime.diagnostics(), { state: 'TAIL_ENDPOINT', expiresAt: 5_000n })
   t.alike(forwarding.diagnostics(), { state: 'CREATE', expiresAt: 5_000n })
   t.alike(proofAuthority.diagnostics(), { state: 'ACTIVE', live: 0, states: 1 })
+  t.alike(nextClientTail.diagnostics(), {
+    state: 'ACTIVE',
+    pendingDiscoveries: 0,
+    discoveryAttempts: 0,
+    responseReassemblies: 0
+  })
+  t.alike(clientPath.path.diagnostics(), {
+    state: 'ACTIVE',
+    liveReservations: 0,
+    retainedAuthorizations: 1,
+    lookupIndex: 1,
+    announceIndex: 0
+  })
+  t.is(abortClientTailExtension(clientCompletion), false)
+  expectCode(t, () => completeClientTailExtension(clientCompletion, ready), 'ERR_REPLAY')
 
   installedNextRuntime.destroy()
   forwarding.destroy()
+  nextClientTail.destroy()
+  successorTail.destroy()
   successor.runtime.destroy()
-  revokeM3TailCapability(successor.tail)
   responder.destroy()
   proofAuthority.destroy()
-  fixture.client.destroy()
+  t.is(fixture.client.destroy(), false)
   t.is(fixture.responder.destroy(), false)
+  clientPath.path.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
+})
+
+test('client EXTEND teardown rolls its uncommitted branch reservation back', (t) => {
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const currentTailIdentity = safetyRoleIdentity(222)
+  const clientPath = clientPathAuthority(routed, currentTailIdentity)
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    0,
+    5_000n,
+    {
+      identity: currentTailIdentity,
+      candidateAdvertisementDigest: clientPath.guardDigest,
+      client: {
+        evidenceProducer: routed.evidenceProducer,
+        branchPathAuthority: clientPath.path
+      },
+      responder: {
+        candidateAdmissionProducer: admissions.producer,
+        candidateAdmissionConsumer: admissions.consumer
+      }
+    }
+  )
+  activate(fixture, 0xdb)
+  const advertisement = safetyAdvertisement(191)
+  const randomTarget = seed(0xdc)
+  const queryNonce = seed(0xdd)
+  const discover = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget,
+    queryNonce,
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xde, size)
+  })
+  fixture.responder.openDiscoverRequest(discover)
+  const responses = fixture.responder.sealDiscoverResponse({
+    encodedResponse: encodeRelayDiscoverResponse({
+      queryNonce,
+      responseTimeMs: BigInt(NOW),
+      advertisements: [advertisement]
+    }),
+    randomBytes: (size) => seed(0xdf, size)
+  })
+  const evidence = fixture.client.openDiscoverResponse(responses[0])
+  const [candidate] = routed.directory.admit(evidence)
+  const extend = fixture.client.sealExtend(candidate, {
+    requestedLimits: {
+      cellSize: 1200,
+      maxCells: 64,
+      maxBytes: 65_536,
+      maxCommands: 10,
+      idleTimeoutMs: 5_000,
+      expiresAtMs: 5_000n
+    },
+    randomBytes: (size) => seed(0xe0, size)
+  })
+
+  t.is(extend.byteLength, M3_CONTEXT_ENVELOPE_SIZE)
+  t.is(clientPath.path.diagnostics().liveReservations, 1)
+  t.is(clientPath.path.diagnostics().lookupIndex, 0)
+  t.is(fixture.client.destroy(), true)
+  t.is(clientPath.path.diagnostics().liveReservations, 0)
+  t.is(clientPath.path.diagnostics().lookupIndex, 0)
+
+  fixture.responder.destroy()
+  clientPath.path.destroy()
+  routed.directory.destroy()
   admissions.destroy()
 })
 

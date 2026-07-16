@@ -11,6 +11,7 @@ import {
 import {
   completeBranchPathReservation,
   createBranchPathAuthority,
+  failBranchPathAuthorization,
   failBranchPathReservation,
   takeBranchPathAuthorization
 } from '../lib/branch-path-authority.js'
@@ -393,6 +394,18 @@ test('branch path authority enforces brands, expiry, rollback tombstones, and de
   expectCode(t, () => completeBranchPathReservation(Object.freeze({})), 'ERR_REPLAY')
 
   const identity = safetyRoleIdentity(80)
+  const authorizationOnly = f.authority.reserve(
+    f.candidate(
+      f.announce,
+      1,
+      advertisement(identity, 80, routes.M3_LINK_ROLE.SAFETY_RELAY),
+      f.guard.publicKey,
+      f.announce.currentTailAdvertisementDigest,
+      0x50
+    )
+  )
+  t.is(failBranchPathAuthorization(authorizationOnly), true)
+  expectCode(t, () => takeBranchPathAuthorization(authorizationOnly), 'ERR_REPLAY')
   const candidate = f.candidate(
     f.announce,
     1,

@@ -26,13 +26,20 @@ import {
   encodeRelayDiscoverResponse
 } from '../lib/routed-candidate.js'
 import {
+  EXTENDED_SIZE,
+  EXTEND_REQUEST_MAX_SIZE,
+  EXTEND_REQUEST_MIN_SIZE,
   RELAY_DISCOVER_SIZE,
   TAIL_READY_SIZE,
   createTailControlSession,
   decodeRelayDiscoverRequest,
+  decodeExtendRequest,
+  decodeExtended,
   decodeTailReady,
   deriveTailControlTestVector,
   encodeRelayDiscoverRequest,
+  encodeExtendRequest,
+  encodeExtended,
   encodeTailControlTranscript,
   digestAdmittedLimits
 } from '../lib/tail-control.js'
@@ -324,6 +331,174 @@ test('RELAY_DISCOVER_V1 has one canonical 77-byte encoding', (t) => {
     RELAY_CAPABILITY.DHT_EXIT_V1
   )
   t.exception(() => decodeRelayDiscoverRequest(encoded.subarray(0, 76)))
+})
+
+test('EXTEND_REQUEST_V1 and EXTENDED_V1 lock canonical Task 3 bytes', (t) => {
+  const advertisement = privateAdvertisement(0x91)
+  const requestedLimits = {
+    cellSize: 1200,
+    maxCells: 64,
+    maxBytes: 65_536,
+    maxCommands: 32,
+    idleTimeoutMs: 5_000,
+    expiresAtMs: 5_000n
+  }
+  const request = {
+    branchClass: BRANCH_CLASS.LOOKUP,
+    branchId: seed(0x11, 16),
+    circuitId: seed(0x12, 16),
+    generation: 7n,
+    extensionIndex: 1,
+    advertisement,
+    clientTailEphemeralPublicKey: seed(0x92),
+    clientNonce: seed(0x93),
+    payloadParametersDigest: seed(0x94),
+    requestedLimits,
+    extensionNonce: seed(0x95)
+  }
+  const encodedRequest = encodeExtendRequest(request)
+  const requestObject = decodeM3Object(encodedRequest)
+
+  t.is(encodedRequest.byteLength, 206 + advertisement.byteLength)
+  t.ok(
+    encodedRequest.byteLength >= EXTEND_REQUEST_MIN_SIZE &&
+      encodedRequest.byteLength <= EXTEND_REQUEST_MAX_SIZE
+  )
+  t.is(requestObject.messageId, M3_MESSAGE_ID.EXTEND_REQUEST_V1)
+  t.is(requestObject.body.byteLength, 198 + advertisement.byteLength)
+  t.is(requestObject.body[0], BRANCH_CLASS.LOOKUP)
+  t.is(requestObject.body.readBigUInt64BE(33), 7n)
+  t.is(requestObject.body[41], 1)
+  t.is(requestObject.body.readUInt16BE(42), advertisement.byteLength)
+  const decodedRequest = decodeExtendRequest(encodedRequest)
+  t.alike(decodedRequest.branchId, request.branchId)
+  t.alike(decodedRequest.circuitId, request.circuitId)
+  t.alike(decodedRequest.advertisement, advertisement)
+  t.alike(decodedRequest.requestedLimits, requestedLimits)
+  t.alike(decodedRequest.extensionNonce, request.extensionNonce)
+
+  const proof = encodeM3Object({
+    messageId: M3_MESSAGE_ID.REDACTED_RESPONDER_PROOF_V1,
+    body: seed(0x96, 306),
+    authSuffix: seed(0x97, 64)
+  })
+  const extended = {
+    branchClass: BRANCH_CLASS.LOOKUP,
+    branchId: seed(0x11, 16),
+    circuitId: seed(0x12, 16),
+    generation: 7n,
+    extensionIndex: 1,
+    responderAdvertisementDigest: seed(0x98),
+    redactedProof: proof,
+    extensionNonce: seed(0x95)
+  }
+  const encodedExtended = encodeExtended(extended)
+  const extendedObject = decodeM3Object(encodedExtended)
+
+  t.is(encodedExtended.byteLength, EXTENDED_SIZE)
+  t.is(extendedObject.messageId, M3_MESSAGE_ID.EXTENDED_V1)
+  t.is(extendedObject.body.byteLength, 486)
+  t.is(extendedObject.body.readUInt16BE(74), 378)
+  t.alike(decodeExtended(encodedExtended), extended)
+
+  t.exception(() => decodeExtendRequest(encodedRequest.subarray(0, encodedRequest.byteLength - 1)))
+  t.exception(() => encodeExtendRequest({ ...request, extensionIndex: 0 }))
+  t.exception(() =>
+    encodeExtendRequest({ ...request, requestedLimits: { ...requestedLimits, maxCells: 0 } })
+  )
+  t.exception(() =>
+    encodeExtendRequest({
+      ...request,
+      requestedLimits: { ...requestedLimits, expiresAtMs: 0n }
+    })
+  )
+  t.exception(() => decodeExtended(encodedExtended.subarray(0, EXTENDED_SIZE - 1)))
+  t.exception(() => encodeExtended({ ...extended, redactedProof: proof.subarray(0, 377) }))
+})
+
+test('extension codecs clear partial ownership and wrong-sized limits allocations', (t) => {
+  const advertisement = privateAdvertisement(0x99)
+  const requestedLimits = {
+    cellSize: 1200,
+    maxCells: 64,
+    maxBytes: 65_536,
+    maxCommands: 32,
+    idleTimeoutMs: 5_000,
+    expiresAtMs: 5_000n
+  }
+  const request = {
+    branchClass: BRANCH_CLASS.LOOKUP,
+    branchId: seed(0x11, 16),
+    circuitId: seed(0x12, 16),
+    generation: 7n,
+    extensionIndex: 1,
+    advertisement,
+    clientTailEphemeralPublicKey: seed(0x9a),
+    clientNonce: seed(0x9b),
+    payloadParametersDigest: seed(0x9c),
+    requestedLimits,
+    extensionNonce: seed(0x9d)
+  }
+  const encodedRequest = encodeExtendRequest(request)
+  const proof = encodeM3Object({
+    messageId: M3_MESSAGE_ID.REDACTED_RESPONDER_PROOF_V1,
+    body: seed(0x9e, 306),
+    authSuffix: seed(0x9f, 64)
+  })
+  const encodedExtended = encodeExtended({
+    branchClass: BRANCH_CLASS.LOOKUP,
+    branchId: seed(0x11, 16),
+    circuitId: seed(0x12, 16),
+    generation: 7n,
+    extensionIndex: 1,
+    responderAdvertisementDigest: seed(0xa0),
+    redactedProof: proof,
+    extensionNonce: seed(0x9d)
+  })
+  const allocate = b4a.allocUnsafeSlow
+  let wrongLimits = null
+  b4a.allocUnsafeSlow = (size) => {
+    if (size === 26 && wrongLimits === null) {
+      wrongLimits = allocate(25)
+      wrongLimits.fill(0xaa)
+      return wrongLimits
+    }
+    return allocate(size)
+  }
+  try {
+    t.exception(() => encodeExtendRequest(request))
+  } finally {
+    b4a.allocUnsafeSlow = allocate
+  }
+  t.ok(wrongLimits && wrongLimits.every((byte) => byte === 0))
+
+  for (const [name, operation, failingCopy] of [
+    ['request', () => decodeExtendRequest(encodedRequest), 3],
+    ['extended', () => decodeExtended(encodedExtended), 2]
+  ]) {
+    const owned = []
+    let copies = 0
+    b4a.allocUnsafeSlow = (size) => {
+      if (size === 16 || size === 32 || size === 378) {
+        if (size === 32) copies++
+        const output = allocate(size === 32 && copies === failingCopy ? 31 : size)
+        output.fill(0xaa)
+        owned.push(output)
+        return output
+      }
+      return allocate(size)
+    }
+    try {
+      t.exception(operation, name)
+    } finally {
+      b4a.allocUnsafeSlow = allocate
+    }
+    t.ok(owned.length > 0, name)
+    t.ok(
+      owned.every((buffer) => buffer.every((byte) => byte === 0)),
+      `${name} clears every staged owned buffer`
+    )
+  }
 })
 
 test('active tails authenticate forward relay discovery for only the next legal role', (t) => {

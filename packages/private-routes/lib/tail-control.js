@@ -32,6 +32,9 @@ import {
 } from './routed-candidate.js'
 
 export const ADMITTED_LIMITS_SIZE = 26
+export const EXTENDED_SIZE = 494
+export const EXTEND_REQUEST_MIN_SIZE = 466
+export const EXTEND_REQUEST_MAX_SIZE = 754
 export const RELAY_DISCOVER_SIZE = 77
 export const TAIL_CONTROL_TRANSCRIPT_SIZE = 290
 export const TAIL_READY_SIZE = 282
@@ -47,6 +50,9 @@ const TAIL_READY_TRANSCRIPT_DOMAIN = b4a.from(
 )
 const TAIL_READY_BODY_SIZE = 210
 const RELAY_DISCOVER_BODY_SIZE = 69
+const EXTEND_REQUEST_FIXED_BODY_SIZE = 198
+const EXTENDED_BODY_SIZE = 486
+const REDACTED_RESPONDER_PROOF_SIZE = 378
 const RELAY_DISCOVER_DEADLINE_MS = 5_000n
 const MAX_RELAY_DISCOVER_REQUESTS = 3
 const MAX_RELAY_DISCOVER_RESPONSE = 4_449
@@ -146,13 +152,12 @@ function subarray(value, start, end) {
   }
 }
 
-function copy(value) {
+function copy(value, size = bufferLength(value)) {
   let output = null
   try {
-    const length = bufferLength(value)
-    if (length < 0) invalid()
-    output = b4a.allocUnsafeSlow(length)
-    if (!fixed(output, length)) invalid()
+    if (size < 0 || !fixed(value, size)) invalid()
+    output = b4a.allocUnsafeSlow(size)
+    if (!fixed(output, size)) invalid()
     set(output, value)
     return output
   } catch (err) {
@@ -193,6 +198,19 @@ function branchClass(value) {
 function extensionIndex(value) {
   if (!Number.isSafeInteger(value) || value < 0 || value > 2) invalid()
   return value
+}
+
+function nextExtensionIndex(value) {
+  value = extensionIndex(value)
+  if (value === 0) invalid()
+  return value
+}
+
+function nonzero(value) {
+  const length = bufferLength(value)
+  if (length < 1) return false
+  for (let index = 0; index < length; index++) if (value[index] !== 0) return true
+  return false
 }
 
 function writeUint16(buffer, value, offset) {
@@ -272,6 +290,360 @@ function clearRelayDiscoverResponse(value) {
   clear(value.queryNonce)
   if (Array.isArray(value.advertisements)) {
     for (const advertisement of value.advertisements) clear(advertisement)
+  }
+}
+
+function encodeRequestedLimits(value) {
+  value = object(value)
+  const cellSize = option(value, 'cellSize')
+  const maxCells = option(value, 'maxCells')
+  const maxBytes = option(value, 'maxBytes')
+  const maxCommands = option(value, 'maxCommands')
+  const idleTimeoutMs = option(value, 'idleTimeoutMs')
+  const expiresAtMs = option(value, 'expiresAtMs')
+  if (
+    cellSize !== 1200 ||
+    !uint32(maxCells) ||
+    maxCells === 0 ||
+    !uint32(maxBytes) ||
+    maxBytes === 0 ||
+    !uint32(maxCommands) ||
+    maxCommands === 0 ||
+    !uint32(idleTimeoutMs) ||
+    idleTimeoutMs === 0 ||
+    !uint64(expiresAtMs) ||
+    expiresAtMs === 0n
+  ) {
+    invalid()
+  }
+  let encoded = null
+  let complete = false
+  try {
+    encoded = b4a.allocUnsafeSlow(ADMITTED_LIMITS_SIZE)
+    if (!fixed(encoded, ADMITTED_LIMITS_SIZE)) invalid()
+    writeUint16(encoded, cellSize, 0)
+    writeUint32(encoded, maxCells, 2)
+    writeUint32(encoded, maxBytes, 6)
+    writeUint32(encoded, maxCommands, 10)
+    writeUint32(encoded, idleTimeoutMs, 14)
+    writeUint64(encoded, expiresAtMs, 18)
+    complete = true
+    return encoded
+  } finally {
+    if (!complete) clear(encoded)
+  }
+}
+
+function decodeRequestedLimits(encoded) {
+  if (!fixed(encoded, ADMITTED_LIMITS_SIZE)) invalid()
+  const value = Object.freeze({
+    cellSize: readUint16(encoded, 0),
+    maxCells: readUint32(encoded, 2),
+    maxBytes: readUint32(encoded, 6),
+    maxCommands: readUint32(encoded, 10),
+    idleTimeoutMs: readUint32(encoded, 14),
+    expiresAtMs: readUint64(encoded, 18)
+  })
+  const canonical = encodeRequestedLimits(value)
+  clear(canonical)
+  return value
+}
+
+function assertNestedObject(encoded, messageId, bodySize, authSize) {
+  const nested = decodeM3Object(encoded)
+  try {
+    if (
+      nested.messageId !== messageId ||
+      !fixed(nested.body, bodySize) ||
+      !fixed(nested.authSuffix, authSize)
+    ) {
+      invalid()
+    }
+  } finally {
+    clear(nested.body)
+    clear(nested.authSuffix)
+  }
+}
+
+function clearExtendRequest(value) {
+  if (!value) return
+  for (const field of [
+    'branchId',
+    'circuitId',
+    'advertisement',
+    'clientTailEphemeralPublicKey',
+    'clientNonce',
+    'payloadParametersDigest',
+    'extensionNonce'
+  ]) {
+    clear(value[field])
+    value[field] = null
+  }
+  value.generation = 0n
+  value.extensionIndex = -1
+  value.branchClass = -1
+}
+
+export function encodeExtendRequest(value) {
+  value = object(value)
+  let branchId = null
+  let circuitId = null
+  let advertisement = null
+  let clientTailEphemeralPublicKey = null
+  let clientNonce = null
+  let payloadParametersDigest = null
+  let requestedLimits = null
+  let extensionNonce = null
+  let body = null
+  try {
+    const selectedBranchClass = branchClass(option(value, 'branchClass'))
+    branchId = copy(option(value, 'branchId'), 16)
+    circuitId = copy(option(value, 'circuitId'), 16)
+    const generation = option(value, 'generation')
+    const selectedExtensionIndex = nextExtensionIndex(option(value, 'extensionIndex'))
+    const suppliedAdvertisement = option(value, 'advertisement')
+    const advertisementLength = bufferLength(suppliedAdvertisement)
+    if (advertisementLength < 260 || advertisementLength > 548) invalid()
+    advertisement = copy(suppliedAdvertisement, advertisementLength)
+    clientTailEphemeralPublicKey = copy(option(value, 'clientTailEphemeralPublicKey'), 32)
+    clientNonce = copy(option(value, 'clientNonce'), 32)
+    payloadParametersDigest = copy(option(value, 'payloadParametersDigest'), 32)
+    requestedLimits = encodeRequestedLimits(option(value, 'requestedLimits'))
+    extensionNonce = copy(option(value, 'extensionNonce'), 32)
+    if (
+      !fixed(branchId, 16) ||
+      !fixed(circuitId, 16) ||
+      !uint64(generation) ||
+      generation === 0n ||
+      !nonzero(branchId) ||
+      !nonzero(circuitId) ||
+      !nonzero(clientTailEphemeralPublicKey) ||
+      !nonzero(clientNonce) ||
+      !nonzero(payloadParametersDigest) ||
+      !nonzero(extensionNonce)
+    ) {
+      invalid()
+    }
+    assertNestedObject(
+      advertisement,
+      M3_MESSAGE_ID.CAPABILITY_ADVERTISEMENT_V1,
+      bufferLength(advertisement) - 72,
+      64
+    )
+    body = b4a.allocUnsafeSlow(EXTEND_REQUEST_FIXED_BODY_SIZE + bufferLength(advertisement))
+    if (!fixed(body, EXTEND_REQUEST_FIXED_BODY_SIZE + bufferLength(advertisement))) invalid()
+    body[0] = selectedBranchClass
+    set(body, branchId, 1)
+    set(body, circuitId, 17)
+    writeUint64(body, generation, 33)
+    body[41] = selectedExtensionIndex
+    writeUint16(body, advertisement.byteLength, 42)
+    set(body, advertisement, 44)
+    let offset = 44 + advertisement.byteLength
+    for (const encoded of [
+      clientTailEphemeralPublicKey,
+      clientNonce,
+      payloadParametersDigest,
+      requestedLimits,
+      extensionNonce
+    ]) {
+      set(body, encoded, offset)
+      offset += encoded.byteLength
+    }
+    return encodeM3Object({ messageId: M3_MESSAGE_ID.EXTEND_REQUEST_V1, body })
+  } finally {
+    for (const encoded of [
+      branchId,
+      circuitId,
+      advertisement,
+      clientTailEphemeralPublicKey,
+      clientNonce,
+      payloadParametersDigest,
+      requestedLimits,
+      extensionNonce,
+      body
+    ]) {
+      clear(encoded)
+    }
+  }
+}
+
+export function decodeExtendRequest(encoded) {
+  const object = decodeM3Object(encoded)
+  let result = null
+  let complete = false
+  try {
+    if (
+      bufferLength(encoded) < EXTEND_REQUEST_MIN_SIZE ||
+      bufferLength(encoded) > EXTEND_REQUEST_MAX_SIZE ||
+      object.messageId !== M3_MESSAGE_ID.EXTEND_REQUEST_V1 ||
+      bufferLength(object.authSuffix) !== 0 ||
+      bufferLength(object.body) < EXTEND_REQUEST_FIXED_BODY_SIZE + 260
+    ) {
+      invalid()
+    }
+    const body = object.body
+    const advertisementLength = readUint16(body, 42)
+    if (
+      advertisementLength < 260 ||
+      advertisementLength > 548 ||
+      bufferLength(body) !== EXTEND_REQUEST_FIXED_BODY_SIZE + advertisementLength
+    ) {
+      invalid()
+    }
+    const advertisement = subarray(body, 44, 44 + advertisementLength)
+    assertNestedObject(
+      advertisement,
+      M3_MESSAGE_ID.CAPABILITY_ADVERTISEMENT_V1,
+      advertisementLength - 72,
+      64
+    )
+    let offset = 44 + advertisementLength
+    result = {}
+    result.branchClass = branchClass(body[0])
+    result.branchId = copy(subarray(body, 1, 17), 16)
+    result.circuitId = copy(subarray(body, 17, 33), 16)
+    result.generation = readUint64(body, 33)
+    result.extensionIndex = nextExtensionIndex(body[41])
+    result.advertisement = copy(advertisement, advertisementLength)
+    result.clientTailEphemeralPublicKey = copy(subarray(body, offset, offset + 32), 32)
+    result.clientNonce = copy(subarray(body, offset + 32, offset + 64), 32)
+    result.payloadParametersDigest = copy(subarray(body, offset + 64, offset + 96), 32)
+    result.requestedLimits = decodeRequestedLimits(subarray(body, offset + 96, offset + 122))
+    result.extensionNonce = copy(subarray(body, offset + 122, offset + 154), 32)
+    if (
+      result.generation === 0n ||
+      !nonzero(result.branchId) ||
+      !nonzero(result.circuitId) ||
+      !nonzero(result.clientTailEphemeralPublicKey) ||
+      !nonzero(result.clientNonce) ||
+      !nonzero(result.payloadParametersDigest) ||
+      !nonzero(result.extensionNonce)
+    ) {
+      invalid()
+    }
+    complete = true
+    return Object.freeze(result)
+  } finally {
+    clear(object.body)
+    clear(object.authSuffix)
+    if (!complete) clearExtendRequest(result)
+  }
+}
+
+function clearExtended(value) {
+  if (!value) return
+  for (const field of [
+    'branchId',
+    'circuitId',
+    'responderAdvertisementDigest',
+    'redactedProof',
+    'extensionNonce'
+  ]) {
+    clear(value[field])
+    value[field] = null
+  }
+  value.generation = 0n
+  value.extensionIndex = -1
+  value.branchClass = -1
+}
+
+export function encodeExtended(value) {
+  value = object(value)
+  let branchId = null
+  let circuitId = null
+  let responderAdvertisementDigest = null
+  let redactedProof = null
+  let extensionNonce = null
+  let body = null
+  try {
+    const selectedBranchClass = branchClass(option(value, 'branchClass'))
+    branchId = copy(option(value, 'branchId'), 16)
+    circuitId = copy(option(value, 'circuitId'), 16)
+    const generation = option(value, 'generation')
+    const selectedExtensionIndex = nextExtensionIndex(option(value, 'extensionIndex'))
+    responderAdvertisementDigest = copy(option(value, 'responderAdvertisementDigest'), 32)
+    redactedProof = copy(option(value, 'redactedProof'), REDACTED_RESPONDER_PROOF_SIZE)
+    extensionNonce = copy(option(value, 'extensionNonce'), 32)
+    if (
+      !fixed(branchId, 16) ||
+      !fixed(circuitId, 16) ||
+      !uint64(generation) ||
+      generation === 0n ||
+      !nonzero(branchId) ||
+      !nonzero(circuitId) ||
+      !nonzero(responderAdvertisementDigest) ||
+      !nonzero(extensionNonce)
+    ) {
+      invalid()
+    }
+    assertNestedObject(redactedProof, M3_MESSAGE_ID.REDACTED_RESPONDER_PROOF_V1, 306, 64)
+    body = b4a.allocUnsafeSlow(EXTENDED_BODY_SIZE)
+    if (!fixed(body, EXTENDED_BODY_SIZE)) invalid()
+    body[0] = selectedBranchClass
+    set(body, branchId, 1)
+    set(body, circuitId, 17)
+    writeUint64(body, generation, 33)
+    body[41] = selectedExtensionIndex
+    set(body, responderAdvertisementDigest, 42)
+    writeUint16(body, REDACTED_RESPONDER_PROOF_SIZE, 74)
+    set(body, redactedProof, 76)
+    set(body, extensionNonce, 454)
+    return encodeM3Object({ messageId: M3_MESSAGE_ID.EXTENDED_V1, body })
+  } finally {
+    for (const encoded of [
+      branchId,
+      circuitId,
+      responderAdvertisementDigest,
+      redactedProof,
+      extensionNonce,
+      body
+    ]) {
+      clear(encoded)
+    }
+  }
+}
+
+export function decodeExtended(encoded) {
+  const object = decodeM3Object(encoded)
+  let result = null
+  let complete = false
+  try {
+    if (
+      !fixed(encoded, EXTENDED_SIZE) ||
+      object.messageId !== M3_MESSAGE_ID.EXTENDED_V1 ||
+      !fixed(object.body, EXTENDED_BODY_SIZE) ||
+      bufferLength(object.authSuffix) !== 0 ||
+      readUint16(object.body, 74) !== REDACTED_RESPONDER_PROOF_SIZE
+    ) {
+      invalid()
+    }
+    const proof = subarray(object.body, 76, 454)
+    assertNestedObject(proof, M3_MESSAGE_ID.REDACTED_RESPONDER_PROOF_V1, 306, 64)
+    result = {}
+    result.branchClass = branchClass(object.body[0])
+    result.branchId = copy(subarray(object.body, 1, 17), 16)
+    result.circuitId = copy(subarray(object.body, 17, 33), 16)
+    result.generation = readUint64(object.body, 33)
+    result.extensionIndex = nextExtensionIndex(object.body[41])
+    result.responderAdvertisementDigest = copy(subarray(object.body, 42, 74), 32)
+    result.redactedProof = copy(proof, REDACTED_RESPONDER_PROOF_SIZE)
+    result.extensionNonce = copy(subarray(object.body, 454, 486), 32)
+    if (
+      result.generation === 0n ||
+      !nonzero(result.branchId) ||
+      !nonzero(result.circuitId) ||
+      !nonzero(result.responderAdvertisementDigest) ||
+      !nonzero(result.extensionNonce)
+    ) {
+      invalid()
+    }
+    complete = true
+    return Object.freeze(result)
+  } finally {
+    clear(object.body)
+    clear(object.authSuffix)
+    if (!complete) clearExtended(result)
   }
 }
 

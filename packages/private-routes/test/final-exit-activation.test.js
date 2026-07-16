@@ -25,6 +25,7 @@ import {
 } from '../lib/final-exit.js'
 import { FinalExitActivationSession } from '../lib/final-exit-activation.js'
 import { consumeOpenRouteHandoff, destroyOpenRouteMaterial } from '../lib/open-route-handoff.js'
+import { OpenRouteSession } from '../lib/open-route-session.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
 import { TEST_ONLY_M3_TAIL_ISSUER } from '../lib/m3-adjacency-runtime.js'
 import { decodeM3ContextEnvelope } from '../lib/m3-context.js'
@@ -949,5 +950,36 @@ test('destroy revokes an unconsumed OPEN handoff', (t) => {
   const handoff = pair.client.takeOpenHandoff()
   t.ok(pair.client.destroy())
   expectCode(t, () => consumeOpenRouteHandoff(handoff), 'ERR_REPLAY')
+  pair.exit.destroy()
+})
+
+test('completed final-exit handshake carries live payload and terminal control', (t) => {
+  const pair = readyPair()
+  const ack = pair.client.sealAck({ randomBytes: (size) => seed(0xd1, size) })
+  pair.client.openOpen(pair.exit.openAck(ack, { randomBytes: (size) => seed(0xd2, size) }))
+  const client = new OpenRouteSession(pair.client.takeOpenHandoff(), {
+    now: () => 1_000n,
+    crypto: cryptoSuite
+  })
+  const exit = new OpenRouteSession(pair.exit.takeOpenHandoff(), {
+    now: () => 1_000n,
+    crypto: cryptoSuite
+  })
+
+  const request = client.sealPayload(seed(0xd3, 1073), {
+    randomBytes: (size) => seed(0xd4, size)
+  })
+  t.alike(exit.openPayload(request), seed(0xd3, 1073))
+  const response = exit.sealPayload(seed(0xd5, 1073), {
+    randomBytes: (size) => seed(0xd6, size)
+  })
+  t.alike(client.openPayload(response), seed(0xd5, 1073))
+  const seeds = exit.sealControl(seed(0xd7, 1073), {
+    randomBytes: (size) => seed(0xd8, size)
+  })
+  t.alike(client.openControl(seeds), seed(0xd7, 1073))
+  client.destroy()
+  exit.destroy()
+  pair.client.destroy()
   pair.exit.destroy()
 })

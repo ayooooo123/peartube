@@ -377,3 +377,4 @@ export {
   encodePayloadParameters
 } from './lib/final-exit.js'
 export { FinalExitActivationSession } from './lib/final-exit-activation.js'
+export { OpenRouteSession } from './lib/open-route-session.js'

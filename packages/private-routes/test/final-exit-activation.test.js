@@ -576,3 +576,34 @@ test('READY rejects direction substitution and a fresh-counter semantic conflict
   t.alike(conflicting.client.diagnostics(), { state: 'DESTROYED' })
   conflicting.exit.destroy()
 })
+
+test('tail-finalize contexts use inherited DATAGRAM delivery framing', (t) => {
+  const clientClasses = []
+  const exitClasses = []
+  const observedCrypto = (classes) => ({
+    open: (options) => cryptoSuite.open(options),
+    sign: (input, secretKey) => cryptoSuite.sign(input, secretKey),
+    verify: (input, signature, publicKey) => cryptoSuite.verify(input, signature, publicKey),
+    seal(options) {
+      classes.push(options.plaintext[0])
+      return cryptoSuite.seal(options)
+    }
+  })
+  const pair = handoffPair(
+    () => 1_000n,
+    5_000n,
+    observedCrypto(clientClasses),
+    observedCrypto(exitClasses)
+  )
+  pair.exit.openActivate(pair.client.sealActivate({ randomBytes: (size) => seed(0xb1, size) }))
+  pair.client.openReady(
+    pair.exit.sealReady({
+      identitySecretKey: pair.identity.secretKey,
+      randomBytes: (size) => seed(0xb2, size)
+    })
+  )
+  t.alike(clientClasses, [2])
+  t.alike(exitClasses, [2])
+  pair.client.destroy()
+  pair.exit.destroy()
+})

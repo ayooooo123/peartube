@@ -210,7 +210,7 @@ function sealFrame(state, encoded, randomBytes, direction) {
   try {
     ad = associatedData(state, counter, direction)
     plaintext = b4a.allocUnsafeSlow(ROUTE_PLAINTEXT_SIZE)
-    plaintext[0] = CELL_CLASS.CONTROL
+    plaintext[0] = CELL_CLASS.DATAGRAM
     writeUint16(plaintext, encoded.byteLength, 1)
     set(plaintext, encoded, 3)
     padding = random(randomBytes, MAX_ROUTE_PAYLOAD - encoded.byteLength)
@@ -258,7 +258,7 @@ function openFrame(state, envelope, direction, expectedSize) {
       associatedData: ad,
       ciphertext: subarray(decoded.frame, 8, ROUTE_FRAME_SIZE)
     })
-    if (!fixed(plaintext, ROUTE_PLAINTEXT_SIZE) || plaintext[0] !== CELL_CLASS.CONTROL) invalid()
+    if (!fixed(plaintext, ROUTE_PLAINTEXT_SIZE) || plaintext[0] !== CELL_CLASS.DATAGRAM) invalid()
     const payloadLength = readUint16(plaintext, 1)
     if (payloadLength !== expectedSize) invalid()
     encoded = copy(subarray(plaintext, 3, 3 + payloadLength))

@@ -3,6 +3,11 @@ import test from 'brittle'
 
 import * as routes from '../index.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
+import {
+  LINK_OFFER_SIZE,
+  abortExtensionLinkOffer,
+  createExtensionLinkOffer
+} from '../lib/guard-link.js'
 import { TEST_ONLY_M3_TAIL_ISSUER, revokeM3TailCapability } from '../lib/m3-adjacency-runtime.js'
 import {
   M3_CONTEXT_ENVELOPE_SIZE,
@@ -44,7 +49,7 @@ import {
   digestAdmittedLimits,
   takeAdmittedExtendRequest
 } from '../lib/tail-control.js'
-import { privateRoleIdentity } from './helpers.js'
+import { privateRoleIdentity, safetyRoleIdentity } from './helpers.js'
 
 const NOW = 1_000
 const CORE_FRAGMENT_DOMAIN = b4a.from('hyperdht-private-routes/m3/core-fragment/object/v1')
@@ -169,7 +174,7 @@ function pair(
   expiresAt = 5_000n,
   options = {}
 ) {
-  const identity = cryptoSuite.keyPair(seed(0x21))
+  const identity = options.identity || cryptoSuite.keyPair(seed(0x21))
   const encodedTranscript = transcript(identity, extensionIndex, expiresAt)
   const sharedSecret = seed(0x22)
   const initiatorTail = TEST_ONLY_M3_TAIL_ISSUER.issue({
@@ -316,7 +321,7 @@ function resealForwardEnvelope(
   })
 }
 
-function extendRequest(advertisement, extensionIndex = 1) {
+function extendRequest(advertisement, extensionIndex = 1, payloadParametersDigest = seed(0xa3)) {
   return encodeExtendRequest({
     branchClass: BRANCH_CLASS.LOOKUP,
     branchId: seed(0x11, 16),
@@ -326,12 +331,12 @@ function extendRequest(advertisement, extensionIndex = 1) {
     advertisement,
     clientTailEphemeralPublicKey: seed(0xa1),
     clientNonce: seed(0xa2),
-    payloadParametersDigest: seed(0xa3),
+    payloadParametersDigest,
     requestedLimits: {
       cellSize: 1200,
       maxCells: 64,
       maxBytes: 65_536,
-      maxCommands: 32,
+      maxCommands: 10,
       idleTimeoutMs: 5_000,
       expiresAtMs: 5_000n
     },
@@ -701,6 +706,7 @@ test('current tail opens one EXTEND only for an advertisement it returned', (t) 
     1,
     5_000n,
     {
+      identity: safetyRoleIdentity(200),
       responder: {
         candidateAdmissionProducer: admissions.producer,
         candidateAdmissionConsumer: admissions.consumer
@@ -756,6 +762,107 @@ test('current tail opens one EXTEND only for an advertisement it returned', (t) 
   })
 
   fixture.client.destroy()
+  admissions.destroy()
+})
+
+test('only an admitted EXTEND can mint the exact successor LINK_OFFER', (t) => {
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    1,
+    5_000n,
+    {
+      identity: safetyRoleIdentity(220),
+      responder: {
+        candidateAdmissionProducer: admissions.producer,
+        candidateAdmissionConsumer: admissions.consumer
+      }
+    }
+  )
+  activate(fixture, 0xe0)
+  const randomTarget = seed(0xe1)
+  const queryNonce = seed(0xe2)
+  const advertisement = privateAdvertisements(1, randomTarget, 180)[0]
+  const decodedAdvertisement = routes.decodeRelayCapabilityAdvertisement(advertisement, {
+    now: BigInt(NOW)
+  })
+  const discoverEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+    randomTarget,
+    queryNonce,
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xe3, size)
+  })
+  fixture.responder.openDiscoverRequest(discoverEnvelope)
+  fixture.responder.sealDiscoverResponse({
+    encodedResponse: encodeRelayDiscoverResponse({
+      queryNonce,
+      responseTimeMs: BigInt(NOW),
+      advertisements: [advertisement]
+    }),
+    randomBytes: (size) => seed(0xe4, size)
+  })
+  const encodedExtend = extendRequest(
+    advertisement,
+    2,
+    routes.digestPayloadParameters(decodedAdvertisement)
+  )
+  const envelope = resealForwardEnvelope(fixture, discoverEnvelope, 0n, 1n, 1, encodedExtend)
+  const admitted = fixture.responder.openExtendRequest(envelope)
+  let reentryCode = null
+  let randomReentryCode = null
+  const options = {
+    initiatorIdentitySecretKey: fixture.identity.secretKey,
+    get now() {
+      try {
+        createExtensionLinkOffer(admitted, {
+          initiatorIdentitySecretKey: fixture.identity.secretKey,
+          now: BigInt(NOW),
+          randomBytes: (size) => seed(0xff, size)
+        })
+      } catch (err) {
+        reentryCode = err && err.code
+      }
+      return BigInt(NOW)
+    },
+    randomBytes(size) {
+      try {
+        createExtensionLinkOffer(admitted, {
+          initiatorIdentitySecretKey: fixture.identity.secretKey,
+          now: BigInt(NOW),
+          randomBytes: (nestedSize) => seed(0xfe, nestedSize)
+        })
+      } catch (err) {
+        randomReentryCode = err && err.code
+      }
+      return seed(0xe5, size)
+    }
+  }
+  const extension = createExtensionLinkOffer(admitted, options)
+  const object = decodeM3Object(extension.offer)
+
+  t.is(reentryCode, 'ERR_REPLAY', 'admission moves before hostile option getters')
+  t.is(randomReentryCode, 'ERR_REPLAY', 'admission moves before hostile randomness')
+  t.is(extension.offer.byteLength, LINK_OFFER_SIZE)
+  t.is(object.messageId, M3_MESSAGE_ID.LINK_OFFER_V1)
+  t.alike(object.body.subarray(32, 64), fixture.identity.publicKey)
+  t.alike(object.body.subarray(64, 96), decodedAdvertisement.relayIdentity)
+  t.is(object.body[96], M3_LINK_ROLE.SAFETY_RELAY)
+  t.is(object.body[97], M3_LINK_ROLE.DHT_EXIT)
+  t.is(object.body[139], 2)
+  t.alike(object.body.subarray(172, 204), seed(0xa1))
+  t.alike(object.body.subarray(204, 236), seed(0xa2))
+  t.alike(object.body.subarray(236, 268), routes.digestPayloadParameters(decodedAdvertisement))
+  t.is(object.body.readBigUInt64BE(294), 5_000n)
+  t.ok(Object.isFrozen(extension.pending))
+  t.alike(Object.keys(extension.pending), [])
+  expectCode(t, () => takeAdmittedExtendRequest(admitted), 'ERR_REPLAY')
+  t.is(abortExtensionLinkOffer(extension.pending), true)
+  t.is(abortExtensionLinkOffer(extension.pending), false)
+
+  fixture.client.destroy()
+  fixture.responder.destroy()
   admissions.destroy()
 })
 

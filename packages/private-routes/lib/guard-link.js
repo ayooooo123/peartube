@@ -17,10 +17,16 @@ import {
   M3_LINK_ROLE,
   M3_MESSAGE_ID,
   M3_PROTOCOL_VERSION,
+  ROLE,
   decodeM3Object,
-  encodeM3Object
+  encodeM3Object,
+  roleForIdentity
 } from './protocol.js'
-import { digestAdmittedLimits, encodeTailControlTranscript } from './tail-control.js'
+import {
+  digestAdmittedLimits,
+  encodeTailControlTranscript,
+  takeAdmittedExtendRequest
+} from './tail-control.js'
 
 export const LINK_OFFER_SIZE = 374
 export const LINK_ACCEPT_SIZE = 285
@@ -40,8 +46,13 @@ const PENDING_TOKENS = new Set()
 const SPENT = new WeakSet()
 const ESTABLISHED = new WeakMap()
 const SPENT_ESTABLISHED = new WeakSet()
+const EXTENSION_PENDING = new WeakMap()
+const EXTENSION_PENDING_TOKENS = new Set()
+const SPENT_EXTENSION_PENDING = new WeakSet()
 const MAX_PENDING_OFFERS = 4096
 const MAX_RESPONDER_REPLAYS = 4096
+const dateNowIntrinsic = Date.now
+let lastExtensionResourceTime = 0n
 
 // Deep test import only. Synthetic states still pass through the production
 // one-shot established-link adoption boundary.
@@ -107,10 +118,21 @@ function exactKeys(value, expected) {
 }
 
 function copy(value, size = length(value)) {
-  if (!fixed(value, size)) invalid()
-  const output = b4a.allocUnsafeSlow(size)
-  setIntrinsic.call(output, value)
-  return output
+  let output = null
+  let complete = false
+  try {
+    if (!fixed(value, size)) invalid()
+    output = b4a.allocUnsafeSlow(size)
+    if (!fixed(output, size)) invalid()
+    setIntrinsic.call(output, value)
+    complete = true
+    return output
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (!complete) clear(output)
+  }
 }
 
 function subarray(value, start, end) {
@@ -298,6 +320,61 @@ function clearPending(state) {
   clear(state.advertisementDigest)
   clear(state.ephemeralSecretKey)
   clearDecoded(state.offer)
+}
+
+function clearAdmittedExtensionMaterial(material) {
+  if (!material) return
+  const request = material.request
+  if (request) {
+    for (const field of [
+      'branchId',
+      'circuitId',
+      'advertisement',
+      'clientTailEphemeralPublicKey',
+      'clientNonce',
+      'payloadParametersDigest',
+      'extensionNonce'
+    ]) {
+      clear(request[field])
+    }
+  }
+  clear(material.currentTailIdentity)
+  clear(material.currentTailAdvertisementDigest)
+}
+
+function clearExtensionPending(state) {
+  if (!state) return
+  clear(state.advertisementDigest)
+  clear(state.advertisedRouteEncryptionPublicKey)
+  clear(state.ephemeralSecretKey)
+  clear(state.extensionNonce)
+  clearDecoded(state.offer)
+  state.advertisementDigest = null
+  state.advertisedRouteEncryptionPublicKey = null
+  state.ephemeralSecretKey = null
+  state.extensionNonce = null
+  state.offer = null
+  state.deadline = 0n
+  state.resourceDeadline = 0n
+}
+
+function extensionResourceTime() {
+  const current = dateNowIntrinsic()
+  if (!Number.isSafeInteger(current) || current < 0) invalid()
+  const value = BigInt(current)
+  if (value > lastExtensionResourceTime) lastExtensionResourceTime = value
+  return lastExtensionResourceTime
+}
+
+function pruneExtensionPending(current) {
+  for (const token of EXTENSION_PENDING_TOKENS) {
+    const state = EXTENSION_PENDING.get(token)
+    if (!state || state.resourceDeadline > current) continue
+    EXTENSION_PENDING.delete(token)
+    EXTENSION_PENDING_TOKENS.delete(token)
+    SPENT_EXTENSION_PENDING.add(token)
+    clearExtensionPending(state)
+  }
 }
 
 function prunePending(now) {
@@ -668,6 +745,157 @@ export function createIndexZeroGuardLinkOffer(options = {}) {
     clear(input)
     clear(signature)
   }
+}
+
+export function createExtensionLinkOffer(admittedRequest, options = {}) {
+  let material = null
+  let initiatorSecretKey = null
+  let identitySeed = null
+  let identityPair = null
+  let decodedAdvertisement = null
+  let advertisementDigest = null
+  let expectedPayloadParametersDigest = null
+  let requestedLimits = null
+  let seed = null
+  let pair = null
+  let body = null
+  let input = null
+  let signature = null
+  let offer = null
+  let pendingState = null
+  const pending = Object.freeze({})
+  let reserved = false
+  let installed = false
+  let complete = false
+  try {
+    const resourceDeadline = extensionResourceTime() + 5_000n
+    pruneExtensionPending(resourceDeadline - 5_000n)
+    if (EXTENSION_PENDING_TOKENS.size >= MAX_PENDING_OFFERS) {
+      throw PrivateRouteError.ERR_BUSY()
+    }
+    EXTENSION_PENDING_TOKENS.add(pending)
+    reserved = true
+    material = takeAdmittedExtendRequest(admittedRequest)
+    const now = safe(options, 'now')
+    const randomBytes = safe(options, 'randomBytes') || cryptoSuite.randomBytes
+    const suppliedSecretKey = safe(options, 'initiatorIdentitySecretKey')
+    if (!u64(now) || typeof randomBytes !== 'function' || !fixed(suppliedSecretKey, 64)) {
+      invalid()
+    }
+    const request = material.request
+    initiatorSecretKey = copy(suppliedSecretKey, 64)
+    identitySeed = copy(subarray(initiatorSecretKey, 0, 32), 32)
+    identityPair = cryptoSuite.keyPair(identitySeed)
+    decodedAdvertisement = decodeRelayCapabilityAdvertisement(request.advertisement, { now })
+    advertisementDigest = digestRelayCapabilityAdvertisement(request.advertisement, { now })
+    expectedPayloadParametersDigest = digestPayloadParameters(decodedAdvertisement)
+    requestedLimits = encodeLimits(request.requestedLimits)
+    const limits = decodeLimits(requestedLimits)
+    const expectedResponderRole =
+      request.extensionIndex === 1 ? M3_LINK_ROLE.SAFETY_RELAY : M3_LINK_ROLE.DHT_EXIT
+    const expectedIdentityRole = request.extensionIndex === 1 ? ROLE.SAFETY : ROLE.PRIVATE
+    if (
+      (request.extensionIndex !== 1 && request.extensionIndex !== 2) ||
+      !equal(identityPair.publicKey, material.currentTailIdentity) ||
+      roleForIdentity(material.currentTailIdentity) !== ROLE.SAFETY ||
+      roleForIdentity(decodedAdvertisement.relayIdentity) !== expectedIdentityRole ||
+      equal(material.currentTailIdentity, decodedAdvertisement.relayIdentity) ||
+      !equal(request.payloadParametersDigest, expectedPayloadParametersDigest) ||
+      !limitsWithinAdvertisement(limits, decodedAdvertisement, now) ||
+      !nonzero(material.currentTailAdvertisementDigest)
+    ) {
+      authentication()
+    }
+    let deadline = material.deadline
+    if (now + 5_000n < deadline) deadline = now + 5_000n
+    if (limits.expiresAtMs < deadline) deadline = limits.expiresAtMs
+    if (decodedAdvertisement.expiresAtMs < deadline) {
+      deadline = decodedAdvertisement.expiresAtMs
+    }
+    if (deadline <= now) authentication()
+    seed = copy(randomBytes(32), 32)
+    pair = cryptoSuite.encryptionKeyPair(seed)
+    body = b4a.allocUnsafeSlow(LINK_OFFER_BODY_SIZE)
+    if (!fixed(body, LINK_OFFER_BODY_SIZE)) invalid()
+    setIntrinsic.call(body, advertisementDigest, 0)
+    setIntrinsic.call(body, material.currentTailIdentity, 32)
+    setIntrinsic.call(body, decodedAdvertisement.relayIdentity, 64)
+    body[96] = M3_LINK_ROLE.SAFETY_RELAY
+    body[97] = expectedResponderRole
+    body[98] = request.branchClass
+    setIntrinsic.call(body, request.branchId, 99)
+    setIntrinsic.call(body, request.circuitId, 115)
+    writeU64(body, request.generation, 131)
+    body[139] = request.extensionIndex
+    setIntrinsic.call(body, pair.publicKey, 140)
+    setIntrinsic.call(body, request.clientTailEphemeralPublicKey, 172)
+    setIntrinsic.call(body, request.clientNonce, 204)
+    setIntrinsic.call(body, request.payloadParametersDigest, 236)
+    setIntrinsic.call(body, requestedLimits, 268)
+    writeU64(body, deadline, 294)
+    input = signatureInput(LINK_OFFER_DOMAIN, M3_MESSAGE_ID.LINK_OFFER_V1, body)
+    signature = cryptoSuite.sign(input, initiatorSecretKey)
+    if (
+      !fixed(signature, 64) ||
+      !cryptoSuite.verify(input, signature, material.currentTailIdentity)
+    ) {
+      authentication()
+    }
+    offer = encodeM3Object({
+      messageId: M3_MESSAGE_ID.LINK_OFFER_V1,
+      body,
+      authSuffix: signature
+    })
+    if (!fixed(offer, LINK_OFFER_SIZE)) invalid()
+    pendingState = {
+      advertisementDigest: copy(advertisementDigest, 32),
+      advertisedRouteEncryptionPublicKey: copy(decodedAdvertisement.routeEncryptionPublicKey, 32),
+      ephemeralSecretKey: copy(pair.secretKey, 32),
+      extensionNonce: copy(request.extensionNonce, 32),
+      offer: decodeOffer(offer),
+      deadline,
+      resourceDeadline
+    }
+    EXTENSION_PENDING.set(pending, pendingState)
+    installed = true
+    pendingState = null
+    complete = true
+    return Object.freeze({ offer, pending })
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (reserved && !installed) EXTENSION_PENDING_TOKENS.delete(pending)
+    clearAdmittedExtensionMaterial(material)
+    clear(initiatorSecretKey)
+    clear(identitySeed)
+    clear(identityPair && identityPair.publicKey)
+    clear(identityPair && identityPair.secretKey)
+    clearDecoded(decodedAdvertisement)
+    clear(advertisementDigest)
+    clear(expectedPayloadParametersDigest)
+    clear(requestedLimits)
+    clear(seed)
+    clear(pair && pair.publicKey)
+    clear(pair && pair.secretKey)
+    clear(body)
+    clear(input)
+    clear(signature)
+    if (!complete) clear(offer)
+    clearExtensionPending(pendingState)
+  }
+}
+
+export function abortExtensionLinkOffer(pending) {
+  pruneExtensionPending(extensionResourceTime())
+  const state =
+    pending !== null && typeof pending === 'object' ? EXTENSION_PENDING.get(pending) : null
+  if (!state) return false
+  EXTENSION_PENDING.delete(pending)
+  EXTENSION_PENDING_TOKENS.delete(pending)
+  SPENT_EXTENSION_PENDING.add(pending)
+  clearExtensionPending(state)
+  return true
 }
 
 function receiveGuardOffer(receiveOffer) {

@@ -378,3 +378,13 @@ export {
 } from './lib/final-exit.js'
 export { FinalExitActivationSession } from './lib/final-exit-activation.js'
 export { OpenRouteSession } from './lib/open-route-session.js'
+export {
+  DESTINATION_REF_SIZE,
+  ROUTED_REQUEST_FIXED_BODY_SIZE,
+  clearRoutedRequest,
+  decodeDestinationRef,
+  decodeRoutedRequest,
+  encodeDestinationRef,
+  encodeRoutedRequest,
+  validateRoutedRequestForExit
+} from './lib/routed-dht.js'

@@ -31,6 +31,11 @@ import {
   encodeM3ContextAD,
   encodeM3ContextEnvelope
 } from './m3-context.js'
+import {
+  createOpenRouteHandoff,
+  destroyOpenRouteMaterial,
+  revokeOpenRouteHandoff
+} from './open-route-handoff.js'
 import { CELL_CLASS, CONTEXT_CLASS, DIRECTION } from './protocol.js'
 import { decodeTailControlTranscript, digestTailControlTranscript } from './tail-control.js'
 
@@ -471,6 +476,38 @@ function eraseRetiredFinalizationState(state) {
   state.graceRetired = true
 }
 
+function buildOpenRouteMaterial(state) {
+  const material = {}
+  let complete = false
+  try {
+    material.initiator = state.initiator
+    material.expiresAt = state.material.expiresAt
+    material.branchClass = state.transcript.branchClass
+    material.branchId = copy(state.transcript.branchId)
+    material.circuitId = copy(state.transcript.circuitId)
+    material.generation = state.transcript.generation
+    material.exitIdentity = copy(state.transcript.tailIdentity)
+    material.policyDigest = copy(state.policyDigest)
+    material.payloadDigest = copy(state.payloadDigest)
+    for (const name of [
+      'payloadForwardKey',
+      'payloadReverseKey',
+      'payloadForwardNoncePrefix',
+      'payloadReverseNoncePrefix',
+      'controlForwardKey',
+      'controlReverseKey',
+      'controlForwardNoncePrefix',
+      'controlReverseNoncePrefix'
+    ]) {
+      material[name] = copy(state.finalMaterial[name])
+    }
+    complete = true
+    return material
+  } finally {
+    if (!complete) destroyOpenRouteMaterial(material)
+  }
+}
+
 function buildFinalTranscript(state, activation) {
   let tailDigest = null
   let encoded = null
@@ -568,6 +605,7 @@ export class FinalExitActivationSession {
         now,
         open: null,
         openEncoded: null,
+        openHandoff: null,
         payloadDigest,
         policyDigest,
         ready: null,
@@ -1212,6 +1250,30 @@ export class FinalExitActivationSession {
     }
   }
 
+  takeOpenHandoff(...args) {
+    if (args.length !== 0) invalid()
+    const state = this.#begin()
+    let material = null
+    let handoff = null
+    try {
+      if (state.state !== 'OPEN' || state.openHandoff || !state.finalMaterial) {
+        authentication()
+      }
+      material = buildOpenRouteMaterial(state)
+      handoff = createOpenRouteHandoff(this, material)
+      material = null
+      state.openHandoff = handoff
+      return handoff
+    } catch (err) {
+      destroyOpenRouteMaterial(material)
+      this.#terminate()
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+    }
+  }
+
   diagnostics() {
     const state = this.#state
     return Object.freeze({ state: !state || state.destroyed ? 'DESTROYED' : state.state })
@@ -1281,6 +1343,7 @@ export class FinalExitActivationSession {
     const state = this.#state
     if (!state || state.destroyed) return false
     state.destroyed = true
+    revokeOpenRouteHandoff(this)
     const tailControl = state.material && state.material.tailControl
     destroyFinalExitHandoffMaterial(state.material)
     state.material = null
@@ -1326,6 +1389,7 @@ export class FinalExitActivationSession {
     state.ack = null
     state.openEncoded = null
     state.open = null
+    state.openHandoff = null
     state.finalTranscript = null
     state.finalTranscriptDigest = null
     state.finalMaterial = null

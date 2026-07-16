@@ -24,6 +24,7 @@ import {
   encodeFinalExitTranscript
 } from '../lib/final-exit.js'
 import { FinalExitActivationSession } from '../lib/final-exit-activation.js'
+import { consumeOpenRouteHandoff, destroyOpenRouteMaterial } from '../lib/open-route-handoff.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
 import { TEST_ONLY_M3_TAIL_ISSUER } from '../lib/m3-adjacency-runtime.js'
 import { decodeM3ContextEnvelope } from '../lib/m3-context.js'
@@ -893,5 +894,60 @@ test('OPEN erases ordered tail state and retains finalization only for exact gra
   t.alike(pair.client.diagnostics(), { state: 'OPEN' })
   t.alike(pair.exit.diagnostics(), { state: 'OPEN' })
   pair.client.destroy()
+  pair.exit.destroy()
+})
+
+test('OPEN issues a single-use route-only handoff independent of setup teardown', (t) => {
+  const pair = readyPair()
+  const ack = pair.client.sealAck({ randomBytes: (size) => seed(0xb1, size) })
+  pair.client.openOpen(pair.exit.openAck(ack, { randomBytes: (size) => seed(0xb2, size) }))
+
+  const clientHandoff = pair.client.takeOpenHandoff()
+  const exitHandoff = pair.exit.takeOpenHandoff()
+  t.alike(Reflect.ownKeys(clientHandoff), [], 'the public handoff is opaque')
+  t.ok(Object.isFrozen(clientHandoff))
+  const client = consumeOpenRouteHandoff(clientHandoff)
+  const exit = consumeOpenRouteHandoff(exitHandoff)
+  t.is(client.initiator, true)
+  t.is(exit.initiator, false)
+  t.alike(client.branchId, seed(0x11, 16))
+  t.alike(client.circuitId, seed(0x12, 16))
+  t.is(client.generation, 7n)
+  t.alike(client.exitIdentity, pair.identity.publicKey)
+  for (const name of [
+    'payloadForwardKey',
+    'payloadReverseKey',
+    'payloadForwardNoncePrefix',
+    'payloadReverseNoncePrefix',
+    'controlForwardKey',
+    'controlReverseKey',
+    'controlForwardNoncePrefix',
+    'controlReverseNoncePrefix'
+  ]) {
+    t.alike(client[name], exit[name], name)
+  }
+  t.absent(
+    Reflect.ownKeys(client).some((name) => String(name).includes('finalize')),
+    'finalization keys never cross the OPEN handoff'
+  )
+  expectCode(t, () => consumeOpenRouteHandoff(clientHandoff), 'ERR_REPLAY')
+
+  const retainedKey = client.payloadForwardKey
+  pair.client.destroy()
+  pair.exit.destroy()
+  t.unlike(retainedKey, b4a.alloc(32), 'consumed route keys outlive setup teardown')
+  t.ok(destroyOpenRouteMaterial(client))
+  t.alike(retainedKey, b4a.alloc(32), 'route teardown erases consumed key ownership')
+  t.absent(destroyOpenRouteMaterial(client))
+  t.ok(destroyOpenRouteMaterial(exit))
+})
+
+test('destroy revokes an unconsumed OPEN handoff', (t) => {
+  const pair = readyPair()
+  const ack = pair.client.sealAck({ randomBytes: (size) => seed(0xc1, size) })
+  pair.client.openOpen(pair.exit.openAck(ack, { randomBytes: (size) => seed(0xc2, size) }))
+  const handoff = pair.client.takeOpenHandoff()
+  t.ok(pair.client.destroy())
+  expectCode(t, () => consumeOpenRouteHandoff(handoff), 'ERR_REPLAY')
   pair.exit.destroy()
 })

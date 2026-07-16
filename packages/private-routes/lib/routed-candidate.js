@@ -19,6 +19,7 @@ import {
 
 const EVIDENCE = new WeakMap()
 const EVIDENCE_PRODUCERS = new WeakMap()
+const TAIL_RESPONSE_RESERVATIONS = new WeakMap()
 const MAX_ADVERTISEMENTS = 8
 const MAX_RESPONSE_BYTES = 4_449
 const MAX_LIVE_CANDIDATES = 16
@@ -214,6 +215,49 @@ function compareAdvertisement(left, right, target) {
   return left.epoch < right.epoch ? -1 : left.epoch > right.epoch ? 1 : 0
 }
 
+function validateAdvertisementCollection(advertisements, material, current) {
+  if (!Array.isArray(advertisements)) invalid()
+  const advertisementCount = option(advertisements, 'length')
+  if (
+    !Number.isInteger(advertisementCount) ||
+    advertisementCount < 0 ||
+    advertisementCount > material.maximumResults ||
+    advertisementCount > MAX_ADVERTISEMENTS
+  ) {
+    authentication()
+  }
+  const decoded = []
+  let complete = false
+  try {
+    const identities = new Set()
+    const endpoints = new Set()
+    let previous = null
+    for (let index = 0; index < advertisementCount; index++) {
+      const advertisement = decodeRelayCapabilityAdvertisement(option(advertisements, index), {
+        now: current
+      })
+      decoded.push(advertisement)
+      const identity = b4a.toString(advertisement.relayIdentity, 'hex')
+      const endpoint = b4a.toString(advertisement.reachableEndpoint, 'hex')
+      if (
+        identities.has(identity) ||
+        endpoints.has(endpoint) ||
+        !compatible(advertisement, material) ||
+        (previous && compareAdvertisement(previous, advertisement, material.randomTarget) >= 0)
+      ) {
+        authentication()
+      }
+      identities.add(identity)
+      endpoints.add(endpoint)
+      previous = advertisement
+    }
+    complete = true
+    return decoded
+  } finally {
+    if (!complete) for (const advertisement of decoded) clearAdvertisement(advertisement)
+  }
+}
+
 function clearAdvertisement(value) {
   if (!value) return
   for (const field of [
@@ -353,6 +397,28 @@ export function publishAuthenticatedDiscoveryEvidence(producer, value) {
     }
     owner.publishing = false
   }
+}
+
+export function revokeAuthenticatedDiscoveryEvidence(producer, capability) {
+  const owner =
+    producer !== null && typeof producer === 'object' ? EVIDENCE_PRODUCERS.get(producer) : null
+  const state =
+    capability !== null && typeof capability === 'object' ? EVIDENCE.get(capability) : null
+  if (!owner || !owner.active || !state || state.owner !== owner || !state.active) return false
+  if (owner.publishing) {
+    owner.publishViolated = true
+    busy()
+  }
+  EVIDENCE.delete(capability)
+  owner.evidence.delete(state)
+  owner.evidenceLive--
+  clearEvidence(state.material)
+  state.material = null
+  state.active = false
+  state.capability = null
+  state.owner = null
+  state.deadline = 0n
+  return true
 }
 
 function assertEvidenceOwner(owner, lifecycle) {
@@ -625,7 +691,7 @@ class RoutedCandidateDirectory {
     const current = operation.current
     let material = null
     let response = null
-    const decoded = []
+    let decoded = []
     const candidates = []
     let inserted = false
     try {
@@ -660,28 +726,7 @@ class RoutedCandidateDirectory {
         }
         authentication()
       }
-      const identities = new Set()
-      const endpoints = new Set()
-      let previous = null
-      for (const encodedAdvertisement of response.advertisements) {
-        const advertisement = decodeRelayCapabilityAdvertisement(encodedAdvertisement, {
-          now: current
-        })
-        decoded.push(advertisement)
-        const identity = b4a.toString(advertisement.relayIdentity, 'hex')
-        const endpoint = b4a.toString(advertisement.reachableEndpoint, 'hex')
-        if (
-          identities.has(identity) ||
-          endpoints.has(endpoint) ||
-          !compatible(advertisement, material) ||
-          (previous && compareAdvertisement(previous, advertisement, material.randomTarget) >= 0)
-        ) {
-          authentication()
-        }
-        identities.add(identity)
-        endpoints.add(endpoint)
-        previous = advertisement
-      }
+      decoded = validateAdvertisementCollection(response.advertisements, material, current)
       for (let index = 0; index < decoded.length; index++) {
         const advertisement = decoded[index]
         const deadline = [
@@ -971,6 +1016,7 @@ const TAIL_ADMISSION_CONSUMERS = new WeakMap()
 function sweepTailAdmissions(owner, current) {
   for (const [key, state] of owner.states) {
     if (state.deadline <= current) {
+      terminalizeTailReservation(state.reservation)
       if (!state.consumed) owner.live--
       owner.states.delete(key)
     }
@@ -1018,6 +1064,7 @@ function destroyTailAuthority(owner) {
   if (!owner || owner.destroyed) return false
   owner.destroyed = true
   owner.lifecycle = Object.freeze({})
+  for (const reservation of owner.reservations) terminalizeTailReservation(reservation)
   owner.states.clear()
   owner.requests.clear()
   owner.live = 0
@@ -1039,6 +1086,7 @@ export function createCurrentTailCandidateAdmissionAuthority(options = {}) {
     now,
     states: new Map(),
     requests: new Map(),
+    reservations: new Set(),
     live: 0,
     destroyed: false,
     mutating: false,
@@ -1081,29 +1129,65 @@ export function reserveCurrentTailCandidateResponse(producer, value) {
   const operation = beginTailAuthority(owner)
   let request = null
   const inserted = []
+  let requestKeyValue = null
+  let previousRequest = null
+  let randomTarget = null
+  let decoded = null
+  const ownedAdvertisements = []
   try {
     request = normalizeAdmissionRequest(value)
     assertTailAuthority(owner, operation.lifecycle)
     const advertisements = option(object(value), 'advertisements')
+    randomTarget = copy(option(value, 'randomTarget'), 32)
+    const requestedCapabilityMask = option(value, 'requestedCapabilityMask')
+    const maximumResults = option(value, 'maximumResults')
     assertTailAuthority(owner, operation.lifecycle)
     if (!Array.isArray(advertisements)) invalid()
-    const advertisementCount = option(advertisements, 'length')
+    const sourceAdvertisementCount = option(advertisements, 'length')
     assertTailAuthority(owner, operation.lifecycle)
     if (
       request.requestDeadline <= operation.current ||
-      !Number.isInteger(advertisementCount) ||
-      advertisementCount < 0 ||
-      advertisementCount > MAX_ADVERTISEMENTS
+      !uint32(requestedCapabilityMask) ||
+      requestedCapabilityMask === 0 ||
+      !Number.isInteger(maximumResults) ||
+      maximumResults < 1 ||
+      maximumResults > MAX_ADVERTISEMENTS ||
+      !Number.isInteger(sourceAdvertisementCount) ||
+      sourceAdvertisementCount < 0 ||
+      sourceAdvertisementCount > MAX_ADVERTISEMENTS
     ) {
       invalid()
     }
-    const requestKeyValue = requestKey(request)
-    const previous = owner.requests.get(requestKeyValue)
-    if (previous && previous.deadline !== request.requestDeadline) authentication()
-    if (previous && previous.count >= MAX_REQUESTS_PER_INDEX) busy()
+    for (let index = 0; index < sourceAdvertisementCount; index++) {
+      let encoded = null
+      try {
+        encoded = copy(option(advertisements, index))
+        assertTailAuthority(owner, operation.lifecycle)
+        ownedAdvertisements.push(encoded)
+        encoded = null
+      } finally {
+        clear(encoded)
+      }
+    }
+    decoded = validateAdvertisementCollection(
+      ownedAdvertisements,
+      {
+        randomTarget,
+        requestedCapabilityMask,
+        maximumResults,
+        requiredRole: request.requiredRole
+      },
+      operation.current
+    )
+    assertTailAuthority(owner, operation.lifecycle)
+    const advertisementCount = ownedAdvertisements.length
+    requestKeyValue = requestKey(request)
+    previousRequest = owner.requests.get(requestKeyValue) || null
+    if (previousRequest && previousRequest.deadline !== request.requestDeadline) authentication()
+    if (previousRequest && previousRequest.count >= MAX_REQUESTS_PER_INDEX) busy()
     owner.requests.set(requestKeyValue, {
-      count: previous ? previous.count + 1 : 1,
-      deadline: previous ? previous.deadline : request.requestDeadline
+      count: previousRequest ? previousRequest.count + 1 : 1,
+      deadline: previousRequest ? previousRequest.deadline : request.requestDeadline
     })
     if (
       owner.live + advertisementCount > MAX_LIVE_CANDIDATES ||
@@ -1112,23 +1196,36 @@ export function reserveCurrentTailCandidateResponse(producer, value) {
       busy()
     }
     for (let index = 0; index < advertisementCount; index++) {
-      const encoded = copy(option(advertisements, index))
+      const encoded = ownedAdvertisements[index]
       let digest = null
       try {
         assertTailAuthority(owner, operation.lifecycle)
         digest = digestRelayCapabilityAdvertisement(encoded, { now: operation.current })
         const key = admissionKey(request, digest)
         if (owner.states.has(key)) replay()
-        owner.states.set(key, { consumed: false, deadline: request.requestDeadline })
+        owner.states.set(key, {
+          consumed: false,
+          deadline: request.requestDeadline,
+          reservation: null
+        })
         owner.live++
         inserted.push(key)
       } finally {
-        clear(encoded)
         clear(digest)
       }
     }
     assertTailAuthority(owner, operation.lifecycle)
-    return true
+    const reservation = Object.freeze({})
+    const reservationState = {
+      reservation,
+      owner,
+      keys: inserted.slice(),
+      active: true
+    }
+    TAIL_RESPONSE_RESERVATIONS.set(reservation, reservationState)
+    owner.reservations.add(reservationState)
+    for (const key of inserted) owner.states.get(key).reservation = reservationState
+    return reservation
   } catch (err) {
     for (const key of inserted) {
       const state = owner && owner.states.get(key)
@@ -1138,7 +1235,78 @@ export function reserveCurrentTailCandidateResponse(producer, value) {
     throw err
   } finally {
     clearAdmissionRequest(request)
+    clear(randomTarget)
+    for (const advertisement of ownedAdvertisements) clear(advertisement)
+    if (decoded) for (const advertisement of decoded) clearAdvertisement(advertisement)
     endTailAuthority(owner)
+  }
+}
+
+function terminalizeTailReservation(state) {
+  if (!state || !state.active) return false
+  const owner = state.owner
+  TAIL_RESPONSE_RESERVATIONS.delete(state.reservation)
+  if (owner) owner.reservations.delete(state)
+  state.active = false
+  state.owner = null
+  state.reservation = null
+  state.keys.length = 0
+  return true
+}
+
+export function commitCurrentTailCandidateResponse(producer, reservation) {
+  const owner =
+    producer !== null && typeof producer === 'object'
+      ? TAIL_ADMISSION_PRODUCERS.get(producer)
+      : null
+  const state =
+    reservation !== null && typeof reservation === 'object'
+      ? TAIL_RESPONSE_RESERVATIONS.get(reservation)
+      : null
+  if (!owner || owner.destroyed || !state || !state.active || state.owner !== owner) return false
+  if (owner.mutating) {
+    owner.violated = true
+    busy()
+  }
+  for (const key of state.keys) {
+    const admission = owner.states.get(key)
+    if (admission && admission.reservation === state) admission.reservation = null
+  }
+  return terminalizeTailReservation(state)
+}
+
+export function rollbackCurrentTailCandidateResponse(producer, reservation) {
+  const owner =
+    producer !== null && typeof producer === 'object'
+      ? TAIL_ADMISSION_PRODUCERS.get(producer)
+      : null
+  const state =
+    reservation !== null && typeof reservation === 'object'
+      ? TAIL_RESPONSE_RESERVATIONS.get(reservation)
+      : null
+  if (!owner || owner.destroyed || !state || !state.active || state.owner !== owner) return false
+  if (owner.mutating) {
+    owner.violated = true
+    busy()
+  }
+  owner.mutating = true
+  const lifecycle = owner.lifecycle
+  try {
+    assertTailAuthority(owner, lifecycle)
+    for (const key of state.keys) {
+      const admission = owner.states.get(key)
+      if (!admission || admission.consumed) {
+        terminalizeTailReservation(state)
+        return false
+      }
+    }
+    for (const key of state.keys) {
+      owner.states.delete(key)
+      owner.live--
+    }
+    return terminalizeTailReservation(state)
+  } finally {
+    owner.mutating = false
   }
 }
 
@@ -1159,6 +1327,14 @@ export function consumeCurrentTailCandidateAdmission(consumer, value) {
     if (!state) authentication()
     if (state.deadline !== request.requestDeadline) authentication()
     if (state.consumed) replay()
+    if (state.reservation) {
+      const reservation = state.reservation
+      for (const key of reservation.keys) {
+        const admission = owner.states.get(key)
+        if (admission && admission.reservation === reservation) admission.reservation = null
+      }
+      terminalizeTailReservation(reservation)
+    }
     state.consumed = true
     owner.live--
     return true

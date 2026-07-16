@@ -22,6 +22,14 @@ import {
   decodeM3Object,
   encodeM3Object
 } from './protocol.js'
+import {
+  commitCurrentTailCandidateResponse,
+  decodeRelayDiscoverResponse,
+  publishAuthenticatedDiscoveryEvidence,
+  reserveCurrentTailCandidateResponse,
+  revokeAuthenticatedDiscoveryEvidence,
+  rollbackCurrentTailCandidateResponse
+} from './routed-candidate.js'
 
 export const ADMITTED_LIMITS_SIZE = 26
 export const RELAY_DISCOVER_SIZE = 77
@@ -41,6 +49,15 @@ const TAIL_READY_BODY_SIZE = 210
 const RELAY_DISCOVER_BODY_SIZE = 69
 const RELAY_DISCOVER_DEADLINE_MS = 5_000n
 const MAX_RELAY_DISCOVER_REQUESTS = 3
+const MAX_RELAY_DISCOVER_RESPONSE = 4_449
+const CORE_FRAGMENT_BODY_SIZE = 48
+const ROUTED_FRAGMENT_DATA = 1_017
+const MAX_ROUTED_RESPONSE_FRAGMENTS = 5
+const MAX_RESPONSE_REASSEMBLIES = 3
+const RESPONSE_MODE_NONE = 0
+const RESPONSE_MODE_FRAGMENT = 1
+const RESPONSE_MODE_DIRECT = 2
+const CORE_FRAGMENT_DOMAIN = b4a.from('hyperdht-private-routes/m3/core-fragment/object/v1')
 const RELAY_DISCOVER_NONCE_DOMAIN = b4a.from(
   'hyperdht-private-routes/m3/tail-control/discovery-nonce/v1'
 )
@@ -82,6 +99,10 @@ function busy() {
 
 function replay() {
   throw PrivateRouteError.ERR_REPLAY()
+}
+
+function authentication() {
+  throw PrivateRouteError.ERR_AUTHENTICATION()
 }
 
 function object(value) {
@@ -244,6 +265,54 @@ function clearRelayDiscover(value) {
   value.requiredRole = -1
   value.localAdmissionDeadline = 0n
   value.tailExpiresAt = 0n
+}
+
+function clearRelayDiscoverResponse(value) {
+  if (!value) return
+  clear(value.queryNonce)
+  if (Array.isArray(value.advertisements)) {
+    for (const advertisement of value.advertisements) clear(advertisement)
+  }
+}
+
+function encodeRoutedResponseObjects(encoded) {
+  const totalObjectBytes = bufferLength(encoded)
+  if (totalObjectBytes < 49 || totalObjectBytes > MAX_RELAY_DISCOVER_RESPONSE) invalid()
+  if (totalObjectBytes <= MAX_ROUTE_PAYLOAD) return [encoded]
+  const fragmentCount = Math.ceil(totalObjectBytes / ROUTED_FRAGMENT_DATA)
+  if (fragmentCount < 2 || fragmentCount > MAX_ROUTED_RESPONSE_FRAGMENTS) invalid()
+  let digest = null
+  let body = null
+  const objects = []
+  try {
+    digest = cryptoSuite.hash([CORE_FRAGMENT_DOMAIN, encoded])
+    if (!fixed(digest, 32)) invalid()
+    for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex++) {
+      const fragmentOffset = fragmentIndex * ROUTED_FRAGMENT_DATA
+      const fragmentDataBytes = Math.min(ROUTED_FRAGMENT_DATA, totalObjectBytes - fragmentOffset)
+      body = b4a.allocUnsafeSlow(CORE_FRAGMENT_BODY_SIZE + fragmentDataBytes)
+      if (!fixed(body, CORE_FRAGMENT_BODY_SIZE + fragmentDataBytes)) invalid()
+      writeUint16(body, M3_MESSAGE_ID.RELAY_DISCOVER_RESPONSE_V1, 0)
+      set(body, digest, 2)
+      writeUint32(body, totalObjectBytes, 34)
+      writeUint16(body, fragmentIndex, 38)
+      writeUint16(body, fragmentCount, 40)
+      writeUint32(body, fragmentOffset, 42)
+      writeUint16(body, fragmentDataBytes, 46)
+      set(body, subarray(encoded, fragmentOffset, fragmentOffset + fragmentDataBytes), 48)
+      objects.push(encodeM3Object({ messageId: M3_MESSAGE_ID.CORE_FRAGMENT_V1, body }))
+      clear(body)
+      body = null
+    }
+    return objects
+  } catch (err) {
+    for (const object of objects) clear(object)
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    clear(digest)
+    clear(body)
+  }
 }
 
 export function encodeRelayDiscoverRequest(value) {
@@ -682,11 +751,35 @@ function clearDiscoveryRecord(record) {
   if (!record) return
   clear(record.randomTarget)
   clear(record.queryNonce)
+  clear(record.responseDigest)
   record.randomTarget = null
   record.queryNonce = null
+  record.responseDigest = null
   record.deadline = 0n
   record.requestedCapabilityMask = 0
   record.maximumResults = 0
+  record.responseMode = RESPONSE_MODE_NONE
+}
+
+function clearResponseReassembly(reassembly) {
+  if (!reassembly) return
+  clear(reassembly.bytes)
+  clear(reassembly.digest)
+  reassembly.bytes = null
+  reassembly.digest = null
+  reassembly.discoveryKey = null
+  reassembly.totalObjectBytes = 0
+  reassembly.fragmentCount = 0
+  reassembly.nextFragmentIndex = 0
+}
+
+function clearResponseReassemblies(state) {
+  if (!state.responseReassemblies) return
+  for (const reassembly of state.responseReassemblies.values()) {
+    clearResponseReassembly(reassembly)
+  }
+  state.responseReassemblies.clear()
+  state.responseReassemblies = null
 }
 
 function clearDiscoveries(state) {
@@ -705,6 +798,11 @@ function purgeExpiredDiscoveries(state, current) {
     if (record.deadline > current) continue
     state.discoveries.delete(key)
     clearDiscoveryRecord(record)
+    for (const [digestKey, reassembly] of state.responseReassemblies) {
+      if (reassembly.discoveryKey !== key) continue
+      state.responseReassemblies.delete(digestKey)
+      clearResponseReassembly(reassembly)
+    }
   }
 }
 
@@ -731,6 +829,8 @@ function registerDiscovery(state, request, current) {
     randomTarget: null,
     queryNonce: null,
     maximumResults: request.maximumResults,
+    responseMode: RESPONSE_MODE_NONE,
+    responseDigest: null,
     deadline
   }
   try {
@@ -746,6 +846,187 @@ function registerDiscovery(state, request, current) {
     clearDiscoveryRecord(record)
     if (err instanceof PrivateRouteError) throw err
     invalid()
+  }
+}
+
+function findDiscovery(state, queryNonce) {
+  const key = discoveryNonceKey(queryNonce)
+  const record = state.discoveries.get(key)
+  if (!record) authentication()
+  return { key, record }
+}
+
+function consumeDiscovery(state, key) {
+  const record = state.discoveries.get(key)
+  if (!record) return false
+  state.discoveries.delete(key)
+  clearDiscoveryRecord(record)
+  for (const [digestKey, reassembly] of state.responseReassemblies) {
+    if (reassembly.discoveryKey !== key) continue
+    state.responseReassemblies.delete(digestKey)
+    clearResponseReassembly(reassembly)
+  }
+  return true
+}
+
+function discoveryBinding(state, record) {
+  return {
+    queryNonce: record.queryNonce,
+    randomTarget: record.randomTarget,
+    requestedCapabilityMask: record.requestedCapabilityMask,
+    maximumResults: record.maximumResults,
+    currentTailIdentity: state.transcript.tailIdentity,
+    currentTailAdvertisementDigest: state.transcript.candidateAdvertisementDigest,
+    branchClass: state.transcript.branchClass,
+    branchId: state.transcript.branchId,
+    circuitId: state.transcript.circuitId,
+    generation: state.transcript.generation,
+    extensionIndex: state.transcript.extensionIndex + 1,
+    requiredRole:
+      state.transcript.extensionIndex === 0 ? M3_LINK_ROLE.SAFETY_RELAY : M3_LINK_ROLE.DHT_EXIT,
+    requestDeadline: record.deadline,
+    tailExpiresAt: state.expiresAt
+  }
+}
+
+function responseFragmentKey(digest) {
+  try {
+    return b4a.toString(digest, 'hex')
+  } catch {
+    invalid()
+  }
+}
+
+function acceptResponseFragment(state, encoded, current) {
+  let decoded = null
+  let created = null
+  let inserted = false
+  let complete = null
+  let completeReturned = false
+  let calculatedDigest = null
+  try {
+    decoded = decodeM3Object(encoded)
+    const body = decoded.body
+    if (
+      decoded.messageId !== M3_MESSAGE_ID.CORE_FRAGMENT_V1 ||
+      bufferLength(decoded.authSuffix) !== 0 ||
+      bufferLength(body) < CORE_FRAGMENT_BODY_SIZE
+    ) {
+      invalid()
+    }
+    const objectMessageId = readUint16(body, 0)
+    const objectDigest = subarray(body, 2, 34)
+    const totalObjectBytes = readUint32(body, 34)
+    const fragmentIndex = readUint16(body, 38)
+    const fragmentCount = readUint16(body, 40)
+    const fragmentOffset = readUint32(body, 42)
+    const fragmentDataBytes = readUint16(body, 46)
+    const expectedFragmentCount = Math.ceil(totalObjectBytes / ROUTED_FRAGMENT_DATA)
+    const expectedFragmentBytes =
+      fragmentIndex + 1 === fragmentCount ? totalObjectBytes - fragmentOffset : ROUTED_FRAGMENT_DATA
+    if (
+      objectMessageId !== M3_MESSAGE_ID.RELAY_DISCOVER_RESPONSE_V1 ||
+      totalObjectBytes <= MAX_ROUTE_PAYLOAD ||
+      totalObjectBytes > MAX_RELAY_DISCOVER_RESPONSE ||
+      fragmentCount !== expectedFragmentCount ||
+      fragmentCount < 2 ||
+      fragmentCount > MAX_ROUTED_RESPONSE_FRAGMENTS ||
+      fragmentIndex >= fragmentCount ||
+      fragmentOffset !== fragmentIndex * ROUTED_FRAGMENT_DATA ||
+      fragmentDataBytes !== expectedFragmentBytes ||
+      fragmentDataBytes < 1 ||
+      bufferLength(body) !== CORE_FRAGMENT_BODY_SIZE + fragmentDataBytes
+    ) {
+      invalid()
+    }
+    const key = responseFragmentKey(objectDigest)
+    let reassembly = state.responseReassemblies.get(key)
+    const data = subarray(body, CORE_FRAGMENT_BODY_SIZE)
+    if (!reassembly) {
+      if (
+        fragmentIndex !== 0 ||
+        state.responseReassemblies.size >= MAX_RESPONSE_REASSEMBLIES ||
+        readUint32(data, 0) !== M3_PROTOCOL_VERSION ||
+        readUint16(data, 4) !== M3_MESSAGE_ID.RELAY_DISCOVER_RESPONSE_V1 ||
+        readUint16(data, 6) !== totalObjectBytes - 8
+      ) {
+        invalid()
+      }
+      const queryNonce = subarray(data, 8, 40)
+      const found = findDiscovery(state, queryNonce)
+      if (found.record.deadline <= current) authentication()
+      if (found.record.responseMode === RESPONSE_MODE_NONE) {
+        found.record.responseMode = RESPONSE_MODE_FRAGMENT
+        found.record.responseDigest = copy(objectDigest)
+      } else if (
+        found.record.responseMode !== RESPONSE_MODE_FRAGMENT ||
+        !same(found.record.responseDigest, objectDigest)
+      ) {
+        authentication()
+      }
+      created = {
+        bytes: null,
+        digest: null,
+        discoveryKey: found.key,
+        totalObjectBytes,
+        fragmentCount,
+        nextFragmentIndex: 0
+      }
+      created.bytes = b4a.allocUnsafeSlow(totalObjectBytes)
+      if (!fixed(created.bytes, totalObjectBytes)) invalid()
+      created.digest = copy(objectDigest)
+      state.responseReassemblies.set(key, created)
+      inserted = true
+      reassembly = created
+    }
+    const discovery = state.discoveries.get(reassembly.discoveryKey)
+    if (
+      !discovery ||
+      discovery.deadline <= current ||
+      reassembly.totalObjectBytes !== totalObjectBytes ||
+      reassembly.fragmentCount !== fragmentCount ||
+      !same(reassembly.digest, objectDigest)
+    ) {
+      authentication()
+    }
+    if (fragmentIndex < reassembly.nextFragmentIndex) {
+      if (
+        !same(subarray(reassembly.bytes, fragmentOffset, fragmentOffset + fragmentDataBytes), data)
+      ) {
+        authentication()
+      }
+      return null
+    }
+    if (fragmentIndex > reassembly.nextFragmentIndex) authentication()
+    set(reassembly.bytes, data, fragmentOffset)
+    reassembly.nextFragmentIndex++
+    if (reassembly.nextFragmentIndex !== fragmentCount) return null
+    complete = copy(reassembly.bytes)
+    calculatedDigest = cryptoSuite.hash([CORE_FRAGMENT_DOMAIN, complete])
+    if (
+      !fixed(calculatedDigest, 32) ||
+      !same(calculatedDigest, reassembly.digest) ||
+      readUint32(complete, 0) !== M3_PROTOCOL_VERSION ||
+      readUint16(complete, 4) !== M3_MESSAGE_ID.RELAY_DISCOVER_RESPONSE_V1 ||
+      readUint16(complete, 6) !== totalObjectBytes - 8
+    ) {
+      authentication()
+    }
+    state.responseReassemblies.delete(key)
+    clearResponseReassembly(reassembly)
+    completeReturned = true
+    return complete
+  } catch (err) {
+    if (err instanceof PrivateRouteError) throw err
+    invalid()
+  } finally {
+    if (decoded) {
+      clear(decoded.body)
+      clear(decoded.authSuffix)
+    }
+    if (created && !inserted) clearResponseReassembly(created)
+    clear(calculatedDigest)
+    if (!completeReturned) clear(complete)
   }
 }
 
@@ -773,8 +1054,11 @@ function clearSessionState(state, session = null) {
   state.txNoncePrefix = null
   state.rxNoncePrefix = null
   state.transcriptDigest = null
+  state.evidenceProducer = null
+  state.candidateAdmissionProducer = null
   state.now = null
   state.crypto = null
+  clearResponseReassemblies(state)
   clearDiscoveries(state)
   clear(txKey)
   clear(rxKey)
@@ -864,7 +1148,7 @@ function sealControlFrame(state, encoded, randomBytes, direction) {
   }
 }
 
-function openControlFrame(state, envelope, direction, expectedSize) {
+function openControlFrame(state, envelope, direction, minimumSize, maximumSize = minimumSize) {
   const decodedEnvelope = decodeM3ContextEnvelope(envelope)
   let associatedData = null
   let plaintext = null
@@ -882,7 +1166,13 @@ function openControlFrame(state, envelope, direction, expectedSize) {
     assertSessionMutation(state)
     if (!fixed(plaintext, ROUTE_PLAINTEXT_SIZE) || plaintext[0] !== CELL_CLASS.CONTROL) invalid()
     const payloadLength = readUint16(plaintext, 1)
-    if (payloadLength !== expectedSize || payloadLength > MAX_ROUTE_PAYLOAD) invalid()
+    if (
+      payloadLength < minimumSize ||
+      payloadLength > maximumSize ||
+      payloadLength > MAX_ROUTE_PAYLOAD
+    ) {
+      invalid()
+    }
     const encoded = copy(subarray(plaintext, 3, 3 + payloadLength))
     const delivered = state.rx.pushAuthenticated(counter, encoded)
     assertSessionMutation(state)
@@ -1104,13 +1394,146 @@ class TailControlSession {
     }
   }
 
+  sealDiscoverResponse(options) {
+    const state = beginSessionMutation(this)
+    let encoded = null
+    let response = null
+    let objects = null
+    const envelopes = []
+    let reservation = null
+    let admissionProducer = null
+    let complete = false
+    try {
+      if (state.initiator || !state.ready || state.transcript.extensionIndex === 2) invalid()
+      const current = sessionNow(state)
+      if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      const selectedOptions = object(options)
+      const randomBytes = option(selectedOptions, 'randomBytes')
+      if (typeof randomBytes !== 'function') invalid()
+      encoded = copy(option(selectedOptions, 'encodedResponse'))
+      if (bufferLength(encoded) < 49 || bufferLength(encoded) > MAX_RELAY_DISCOVER_RESPONSE) {
+        invalid()
+      }
+      response = decodeRelayDiscoverResponse(encoded)
+      const found = findDiscovery(state, response.queryNonce)
+      if (
+        response.responseTimeMs > current ||
+        response.advertisements.length > found.record.maximumResults
+      ) {
+        authentication()
+      }
+      const binding = discoveryBinding(state, found.record)
+      admissionProducer = state.candidateAdmissionProducer
+      reservation = reserveCurrentTailCandidateResponse(admissionProducer, {
+        ...binding,
+        advertisements: response.advertisements
+      })
+      assertSessionMutation(state)
+      objects = encodeRoutedResponseObjects(encoded)
+      for (const object of objects) {
+        envelopes.push(sealControlFrame(state, object, randomBytes, DIRECTION.REVERSE))
+        assertSessionMutation(state)
+      }
+      sessionNow(state)
+      if (!state.discoveries.has(found.key)) authentication()
+      if (!consumeDiscovery(state, found.key)) invalid()
+      if (!commitCurrentTailCandidateResponse(admissionProducer, reservation)) invalid()
+      reservation = null
+      complete = true
+      return Object.freeze(envelopes)
+    } catch (err) {
+      if (reservation) {
+        try {
+          rollbackCurrentTailCandidateResponse(admissionProducer, reservation)
+        } catch {}
+      }
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      clear(encoded)
+      clearRelayDiscoverResponse(response)
+      if (objects) for (const object of objects) clear(object)
+      if (!complete) for (const envelope of envelopes) clear(envelope)
+    }
+  }
+
+  openDiscoverResponse(envelope) {
+    const state = beginSessionMutation(this)
+    let opened = null
+    let controlObject = null
+    let reassembled = null
+    let response = null
+    let evidence = null
+    let evidenceProducer = null
+    try {
+      if (!state.initiator || !state.ready || state.transcript.extensionIndex === 2) invalid()
+      const current = sessionNow(state)
+      if (current >= state.expiresAt) throw PrivateRouteError.ERR_PRIVACY_UNAVAILABLE()
+      opened = openControlFrame(state, envelope, DIRECTION.REVERSE, 49, MAX_ROUTE_PAYLOAD)
+      assertSessionMutation(state)
+      controlObject = decodeM3Object(opened.encoded)
+      const controlMessageId = controlObject.messageId
+      clear(controlObject.body)
+      clear(controlObject.authSuffix)
+      controlObject = null
+      if (controlMessageId === M3_MESSAGE_ID.CORE_FRAGMENT_V1) {
+        reassembled = acceptResponseFragment(state, opened.encoded, current)
+        assertSessionMutation(state)
+        if (reassembled === null) return null
+      } else if (controlMessageId !== M3_MESSAGE_ID.RELAY_DISCOVER_RESPONSE_V1) {
+        invalid()
+      }
+      const encodedResponse = reassembled || opened.encoded
+      response = decodeRelayDiscoverResponse(encodedResponse)
+      const found = findDiscovery(state, response.queryNonce)
+      if (!reassembled) {
+        if (found.record.responseMode !== RESPONSE_MODE_NONE) authentication()
+        found.record.responseMode = RESPONSE_MODE_DIRECT
+      }
+      if (
+        response.responseTimeMs > current ||
+        response.advertisements.length > found.record.maximumResults
+      ) {
+        authentication()
+      }
+      const binding = discoveryBinding(state, found.record)
+      binding.encodedResponse = encodedResponse
+      evidenceProducer = state.evidenceProducer
+      evidence = publishAuthenticatedDiscoveryEvidence(evidenceProducer, binding)
+      assertSessionMutation(state)
+      if (!consumeDiscovery(state, found.key)) invalid()
+      return evidence
+    } catch (err) {
+      if (evidence) {
+        try {
+          revokeAuthenticatedDiscoveryEvidence(evidenceProducer, evidence)
+        } catch {}
+      }
+      clearSessionState(state, this)
+      if (err instanceof PrivateRouteError) throw err
+      invalid()
+    } finally {
+      state.mutating = false
+      if (opened) clear(opened.encoded)
+      if (controlObject) {
+        clear(controlObject.body)
+        clear(controlObject.authSuffix)
+      }
+      clear(reassembled)
+      clearRelayDiscoverResponse(response)
+    }
+  }
+
   diagnostics() {
     const state = SESSIONS.get(this)
     if (!state || state.destroyed || DESTROYED_SESSIONS.has(this)) {
       return Object.freeze({
         state: 'DESTROYED',
         pendingDiscoveries: 0,
-        discoveryAttempts: 0
+        discoveryAttempts: 0,
+        responseReassemblies: 0
       })
     }
     beginSessionMutation(this)
@@ -1119,7 +1542,8 @@ class TailControlSession {
       return Object.freeze({
         state: state.ready ? 'ACTIVE' : 'WAITING_READY',
         pendingDiscoveries: state.discoveries.size,
-        discoveryAttempts: state.discoveryAttempts
+        discoveryAttempts: state.discoveryAttempts,
+        responseReassemblies: state.responseReassemblies.size
       })
     } catch (err) {
       clearSessionState(state, this)
@@ -1147,6 +1571,8 @@ export function createTailControlSession(capability, options = {}) {
   try {
     const now = option(object(options), 'now')
     const crypto = option(options, 'crypto') || cryptoSuite
+    const evidenceProducer = option(options, 'evidenceProducer')
+    const candidateAdmissionProducer = option(options, 'candidateAdmissionProducer')
     if (
       typeof now !== 'function' ||
       !object(crypto) ||
@@ -1197,6 +1623,9 @@ export function createTailControlSession(capability, options = {}) {
       discoveries: new Map(),
       discoveryNonces: new Set(),
       discoveryAttempts: 0,
+      responseReassemblies: new Map(),
+      evidenceProducer,
+      candidateAdmissionProducer,
       ready: false,
       mutating: false,
       violated: false,

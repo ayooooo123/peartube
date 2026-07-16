@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 import test from 'brittle'
 
+import * as routes from '../index.js'
 import { cryptoSuite } from '../lib/crypto-suite.js'
 import { TEST_ONLY_M3_TAIL_ISSUER, revokeM3TailCapability } from '../lib/m3-adjacency-runtime.js'
 import {
@@ -16,8 +17,14 @@ import {
   M3_LINK_ROLE,
   M3_MESSAGE_ID,
   RELAY_CAPABILITY,
-  decodeM3Object
+  decodeM3Object,
+  encodeM3Object
 } from '../lib/protocol.js'
+import {
+  createCurrentTailCandidateAdmissionAuthority,
+  createRoutedCandidateAuthority,
+  encodeRelayDiscoverResponse
+} from '../lib/routed-candidate.js'
 import {
   RELAY_DISCOVER_SIZE,
   TAIL_READY_SIZE,
@@ -29,11 +36,89 @@ import {
   encodeTailControlTranscript,
   digestAdmittedLimits
 } from '../lib/tail-control.js'
+import { privateRoleIdentity } from './helpers.js'
 
 const NOW = 1_000
+const CORE_FRAGMENT_DOMAIN = b4a.from('hyperdht-private-routes/m3/core-fragment/object/v1')
 
 function seed(byte, size = 32) {
   return b4a.alloc(size, byte)
+}
+
+function endpoint(last) {
+  return routes.encodeCanonicalEndpoint({
+    addressFamily: 4,
+    addressBytes: b4a.from([192, 0, 2, last]),
+    port: 44_000 + last
+  })
+}
+
+function privateAdvertisement(byte) {
+  const identity = privateRoleIdentity(byte)
+  const reachableEndpoint = endpoint(byte)
+  const route = cryptoSuite.encryptionKeyPair(seed(byte + 1))
+  const capabilityMask =
+    RELAY_CAPABILITY.CIRCUIT_RELAY_V1 |
+    RELAY_CAPABILITY.DHT_EXIT_V1 |
+    RELAY_CAPABILITY.PRIVATE_RECORDS_V1
+  return routes.encodeRelayCapabilityAdvertisement(
+    routes.signRelayCapabilityAdvertisement(
+      {
+        relayIdentity: identity.publicKey,
+        currentDhtNodeId: routes.deriveM3DhtNodeId(reachableEndpoint),
+        reachableEndpoint,
+        routeEncryptionPublicKey: route.publicKey,
+        capabilityMask,
+        minimumProtocolVersion: 1,
+        maximumProtocolVersion: 1,
+        cellSize: 1200,
+        maxCellPayload: 1146,
+        contextEnvelopeSize: 1101,
+        routeFrameSize: 1100,
+        maxRoutePayload: 1073,
+        datagramReplayWindow: 64,
+        maxConcurrentCircuits: 8,
+        capacityClass: routes.CAPACITY_CLASS.SMALL,
+        maxCellsPerCircuit: 100,
+        maxBytesPerCircuit: 100_000,
+        maxCommandsPerCircuit: 10,
+        idleTimeoutMs: 30_000,
+        maxQueuedBytes: 65_536,
+        epoch: 1n,
+        issuedAtMs: BigInt(NOW),
+        expiresAtMs: 10_000n,
+        providerServicePolicyEntries: routes.providerServicePolicyForCapabilities(capabilityMask)
+      },
+      identity.secretKey
+    )
+  )
+}
+
+function compareAdvertisements(left, right, target) {
+  const a = routes.decodeRelayCapabilityAdvertisement(left, { now: BigInt(NOW) })
+  const b = routes.decodeRelayCapabilityAdvertisement(right, { now: BigInt(NOW) })
+  for (let index = 0; index < 32; index++) {
+    const leftDistance = a.currentDhtNodeId[index] ^ target[index]
+    const rightDistance = b.currentDhtNodeId[index] ^ target[index]
+    if (leftDistance !== rightDistance) return leftDistance - rightDistance
+  }
+  return b4a.compare(a.relayIdentity, b.relayIdentity)
+}
+
+function privateAdvertisements(count, target, start = 40) {
+  const advertisements = []
+  const identities = new Set()
+  for (let byte = start; advertisements.length < count; byte++) {
+    const encoded = privateAdvertisement(byte)
+    const advertisement = routes.decodeRelayCapabilityAdvertisement(encoded, {
+      now: BigInt(NOW)
+    })
+    const identity = b4a.toString(advertisement.relayIdentity, 'hex')
+    if (identities.has(identity)) continue
+    identities.add(identity)
+    advertisements.push(encoded)
+  }
+  return advertisements.sort((left, right) => compareAdvertisements(left, right, target))
 }
 
 function transcript(identity, extensionIndex = 0, expiresAt = 5_000n) {
@@ -59,7 +144,13 @@ function transcript(identity, extensionIndex = 0, expiresAt = 5_000n) {
   })
 }
 
-function pair(now = () => NOW, responderNow = () => NOW, extensionIndex = 0, expiresAt = 5_000n) {
+function pair(
+  now = () => NOW,
+  responderNow = () => NOW,
+  extensionIndex = 0,
+  expiresAt = 5_000n,
+  options = {}
+) {
   const identity = cryptoSuite.keyPair(seed(0x21))
   const encodedTranscript = transcript(identity, extensionIndex, expiresAt)
   const sharedSecret = seed(0x22)
@@ -75,11 +166,21 @@ function pair(now = () => NOW, responderNow = () => NOW, extensionIndex = 0, exp
     transcript: encodedTranscript,
     expiresAt
   })
+  const clientOptions = options.client || {}
+  const responderOptions = options.responder || {}
   return {
-    client: createTailControlSession(initiatorTail, { now, crypto: cryptoSuite }),
+    client: createTailControlSession(initiatorTail, {
+      now,
+      crypto: cryptoSuite,
+      ...clientOptions
+    }),
     encodedTranscript,
     identity,
-    responder: createTailControlSession(responderTail, { now: responderNow, crypto: cryptoSuite }),
+    responder: createTailControlSession(responderTail, {
+      now: responderNow,
+      crypto: cryptoSuite,
+      ...responderOptions
+    }),
     sharedSecret
   }
 }
@@ -97,6 +198,71 @@ function writeUint64(target, value, offset = 0) {
     target[offset + index] = Number(value & 0xffn)
     value >>= 8n
   }
+}
+
+function resealReverseEnvelope(
+  fixture,
+  envelope,
+  sourceCounter,
+  targetCounter,
+  extensionIndex,
+  replacement = null
+) {
+  const decoded = decodeM3ContextEnvelope(envelope)
+  const vector = deriveTailControlTestVector(
+    fixture.sharedSecret,
+    fixture.encodedTranscript,
+    extensionIndex
+  )
+  const context = (counter) =>
+    encodeM3ContextAD({
+      contextClass: CONTEXT_CLASS.TAIL_CONTROL_ORDERED,
+      branchId: seed(0x11, 16),
+      circuitId: seed(0x12, 16),
+      generation: 7n,
+      direction: DIRECTION.REVERSE,
+      innerCounter: counter
+    })
+  const plaintext = cryptoSuite.open({
+    key: vector.reverseKey,
+    noncePrefix: vector.reverseNoncePrefix,
+    counter: sourceCounter,
+    associatedData: context(sourceCounter),
+    ciphertext: decoded.frame.subarray(8)
+  })
+  if (replacement) {
+    plaintext.writeUInt16BE(replacement.byteLength, 1)
+    plaintext.set(replacement, 3)
+  }
+  const ciphertext = cryptoSuite.seal({
+    key: vector.reverseKey,
+    noncePrefix: vector.reverseNoncePrefix,
+    counter: targetCounter,
+    associatedData: context(targetCounter),
+    plaintext
+  })
+  const frame = b4a.alloc(1100)
+  writeUint64(frame, targetCounter)
+  frame.set(ciphertext, 8)
+  return encodeM3ContextEnvelope({
+    contextClass: CONTEXT_CLASS.TAIL_CONTROL_ORDERED,
+    frame
+  })
+}
+
+function firstResponseFragment(encodedResponse) {
+  const fragmentDataBytes = 1_017
+  const body = b4a.alloc(48 + fragmentDataBytes)
+  const digest = cryptoSuite.hash([CORE_FRAGMENT_DOMAIN, encodedResponse])
+  body.writeUInt16BE(M3_MESSAGE_ID.RELAY_DISCOVER_RESPONSE_V1, 0)
+  body.set(digest, 2)
+  body.writeUInt32BE(encodedResponse.byteLength, 34)
+  body.writeUInt16BE(0, 38)
+  body.writeUInt16BE(Math.ceil(encodedResponse.byteLength / fragmentDataBytes), 40)
+  body.writeUInt32BE(0, 42)
+  body.writeUInt16BE(fragmentDataBytes, 46)
+  body.set(encodedResponse.subarray(0, fragmentDataBytes), 48)
+  return encodeM3Object({ messageId: M3_MESSAGE_ID.CORE_FRAGMENT_V1, body })
 }
 
 test('index-zero tail session signs, seals, and verifies exactly one TAIL_READY', (t) => {
@@ -214,6 +380,390 @@ test('active tails authenticate forward relay discovery for only the next legal 
   )
   indexOne.client.destroy()
   indexOne.responder.destroy()
+})
+
+test('current tail authenticates one direct discovery response into client evidence', (t) => {
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    0,
+    5_000n,
+    {
+      client: { evidenceProducer: routed.evidenceProducer },
+      responder: { candidateAdmissionProducer: admissions.producer }
+    }
+  )
+  activate(fixture, 0xd0)
+  const requestEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xd1),
+    queryNonce: seed(0xd2),
+    maximumResults: 8,
+    randomBytes: (size) => seed(0xd3, size)
+  })
+  fixture.responder.openDiscoverRequest(requestEnvelope)
+  const encodedResponse = encodeRelayDiscoverResponse({
+    queryNonce: seed(0xd2),
+    responseTimeMs: BigInt(NOW),
+    advertisements: []
+  })
+  const envelopes = fixture.responder.sealDiscoverResponse({
+    encodedResponse,
+    randomBytes: (size) => seed(0xd4, size)
+  })
+
+  t.is(envelopes.length, 1)
+  t.is(decodeM3ContextEnvelope(envelopes[0]).frame.readBigUInt64BE(0), 1n)
+  const evidence = fixture.client.openDiscoverResponse(envelopes[0])
+  t.alike(routed.directory.admit(evidence), [])
+  t.alike(admissions.diagnostics(), {
+    state: 'ACTIVE',
+    live: 0,
+    states: 0,
+    requests: 1
+  })
+  t.is(fixture.client.diagnostics().pendingDiscoveries, 0)
+  t.is(fixture.responder.diagnostics().pendingDiscoveries, 0)
+
+  fixture.client.destroy()
+  fixture.responder.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
+})
+
+test('maximum routed discovery response uses five canonical authenticated fragments', (t) => {
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    1,
+    5_000n,
+    {
+      client: { evidenceProducer: routed.evidenceProducer },
+      responder: { candidateAdmissionProducer: admissions.producer }
+    }
+  )
+  activate(fixture, 0xd5)
+  const randomTarget = seed(0xd6)
+  const advertisements = privateAdvertisements(8, randomTarget)
+  const requestEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+    randomTarget,
+    queryNonce: seed(0xd7),
+    maximumResults: 8,
+    randomBytes: (size) => seed(0xd8, size)
+  })
+  fixture.responder.openDiscoverRequest(requestEnvelope)
+  const encodedResponse = encodeRelayDiscoverResponse({
+    queryNonce: seed(0xd7),
+    responseTimeMs: BigInt(NOW),
+    advertisements
+  })
+  t.is(encodedResponse.byteLength, 4_449)
+  const envelopes = fixture.responder.sealDiscoverResponse({
+    encodedResponse,
+    randomBytes: (size) => seed(0xd9, size)
+  })
+  t.is(envelopes.length, 5)
+  for (let index = 0; index < envelopes.length; index++) {
+    t.is(decodeM3ContextEnvelope(envelopes[index]).frame.readBigUInt64BE(0), BigInt(index + 1))
+  }
+  const delivered = [
+    envelopes[0],
+    resealReverseEnvelope(fixture, envelopes[0], 1n, 2n, 1),
+    ...envelopes
+      .slice(1)
+      .map((envelope, index) =>
+        resealReverseEnvelope(fixture, envelope, BigInt(index + 2), BigInt(index + 3), 1)
+      )
+  ]
+  t.is(fixture.client.openDiscoverResponse(delivered[0]), null)
+  const beforeDuplicate = fixture.client.diagnostics()
+  t.is(fixture.client.openDiscoverResponse(delivered[1]), null)
+  t.alike(fixture.client.diagnostics(), beforeDuplicate)
+  for (let index = 2; index < delivered.length - 1; index++) {
+    t.is(fixture.client.openDiscoverResponse(delivered[index]), null)
+  }
+  const evidence = fixture.client.openDiscoverResponse(delivered[5])
+  t.is(routed.directory.admit(evidence).length, 8)
+  t.alike(admissions.diagnostics(), {
+    state: 'ACTIVE',
+    live: 8,
+    states: 8,
+    requests: 1
+  })
+
+  fixture.client.destroy()
+  fixture.responder.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
+})
+
+test('partial discovery response reassembly expires at the client request deadline', (t) => {
+  let current = NOW
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(current) })
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => current,
+    () => NOW,
+    1,
+    10_000n,
+    {
+      client: { evidenceProducer: routed.evidenceProducer },
+      responder: { candidateAdmissionProducer: admissions.producer }
+    }
+  )
+  activate(fixture, 0xda)
+  const randomTarget = seed(0xdb)
+  const requestEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+    randomTarget,
+    queryNonce: seed(0xdc),
+    maximumResults: 4,
+    randomBytes: (size) => seed(0xdd, size)
+  })
+  fixture.responder.openDiscoverRequest(requestEnvelope)
+  const envelopes = fixture.responder.sealDiscoverResponse({
+    encodedResponse: encodeRelayDiscoverResponse({
+      queryNonce: seed(0xdc),
+      responseTimeMs: BigInt(NOW),
+      advertisements: privateAdvertisements(4, randomTarget, 70)
+    }),
+    randomBytes: (size) => seed(0xde, size)
+  })
+  t.ok(envelopes.length > 1)
+  t.is(fixture.client.openDiscoverResponse(envelopes[0]), null)
+  t.is(fixture.client.diagnostics().responseReassemblies, 1)
+  current = 6_000
+  t.is(fixture.client.diagnostics().pendingDiscoveries, 0)
+  t.is(fixture.client.diagnostics().responseReassemblies, 0)
+  t.exception(() => fixture.client.openDiscoverResponse(envelopes[1]))
+  t.is(fixture.client.diagnostics().state, 'DESTROYED')
+
+  fixture.responder.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
+})
+
+test('one discovery binds exactly one fragmented response object and mode', (t) => {
+  for (const conflict of ['digest', 'direct']) {
+    const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+    const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+    const fixture = pair(
+      () => NOW,
+      () => NOW,
+      1,
+      5_000n,
+      {
+        client: { evidenceProducer: routed.evidenceProducer },
+        responder: { candidateAdmissionProducer: admissions.producer }
+      }
+    )
+    activate(fixture, 0xea)
+    const randomTarget = seed(0xeb)
+    const queryNonce = seed(0xec)
+    const requestEnvelope = fixture.client.sealDiscoverRequest({
+      requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+      randomTarget,
+      queryNonce,
+      maximumResults: 4,
+      randomBytes: (size) => seed(0xed, size)
+    })
+    fixture.responder.openDiscoverRequest(requestEnvelope)
+    const encodedResponse = encodeRelayDiscoverResponse({
+      queryNonce,
+      responseTimeMs: BigInt(NOW),
+      advertisements: privateAdvertisements(4, randomTarget, 100)
+    })
+    const envelopes = fixture.responder.sealDiscoverResponse({
+      encodedResponse,
+      randomBytes: (size) => seed(0xee, size)
+    })
+    t.is(fixture.client.openDiscoverResponse(envelopes[0]), null, conflict)
+
+    const replacement =
+      conflict === 'digest'
+        ? firstResponseFragment(
+            encodeRelayDiscoverResponse({
+              queryNonce,
+              responseTimeMs: BigInt(NOW + 1),
+              advertisements: privateAdvertisements(4, randomTarget, 100)
+            })
+          )
+        : encodeRelayDiscoverResponse({
+            queryNonce,
+            responseTimeMs: BigInt(NOW),
+            advertisements: []
+          })
+    const conflictingEnvelope = resealReverseEnvelope(fixture, envelopes[0], 1n, 2n, 1, replacement)
+    t.exception(() => fixture.client.openDiscoverResponse(conflictingEnvelope), conflict)
+    t.is(fixture.client.diagnostics().state, 'DESTROYED', conflict)
+
+    fixture.responder.destroy()
+    routed.directory.destroy()
+    admissions.destroy()
+  }
+})
+
+test('current tail rejects a noncanonical response before sealing or reserving', (t) => {
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    1,
+    5_000n,
+    {
+      client: { evidenceProducer: routed.evidenceProducer },
+      responder: { candidateAdmissionProducer: admissions.producer }
+    }
+  )
+  activate(fixture, 0xef)
+  const randomTarget = seed(0xf0)
+  const queryNonce = seed(0xf1)
+  const requestEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+    randomTarget,
+    queryNonce,
+    maximumResults: 2,
+    randomBytes: (size) => seed(0xf2, size)
+  })
+  fixture.responder.openDiscoverRequest(requestEnvelope)
+  const reversed = privateAdvertisements(2, randomTarget, 120).reverse()
+
+  t.exception(() =>
+    fixture.responder.sealDiscoverResponse({
+      encodedResponse: encodeRelayDiscoverResponse({
+        queryNonce,
+        responseTimeMs: BigInt(NOW),
+        advertisements: reversed
+      }),
+      randomBytes: (size) => seed(0xf3, size)
+    })
+  )
+  t.is(fixture.responder.diagnostics().state, 'DESTROYED')
+  t.alike(admissions.diagnostics(), {
+    state: 'ACTIVE',
+    live: 0,
+    states: 0,
+    requests: 0
+  })
+
+  fixture.client.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
+})
+
+test('tail response reservation rolls admissions back after callback destruction', (t) => {
+  let responder = null
+  let trigger = false
+  const routed = createRoutedCandidateAuthority({ now: () => BigInt(NOW) })
+  const admissions = createCurrentTailCandidateAdmissionAuthority({
+    now() {
+      if (trigger) responder.destroy()
+      return BigInt(NOW)
+    }
+  })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    1,
+    5_000n,
+    {
+      client: { evidenceProducer: routed.evidenceProducer },
+      responder: { candidateAdmissionProducer: admissions.producer }
+    }
+  )
+  responder = fixture.responder
+  activate(fixture, 0xdf)
+  const randomTarget = seed(0xe0)
+  const requestEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1 | RELAY_CAPABILITY.DHT_EXIT_V1,
+    randomTarget,
+    queryNonce: seed(0xe1),
+    maximumResults: 1,
+    randomBytes: (size) => seed(0xe2, size)
+  })
+  fixture.responder.openDiscoverRequest(requestEnvelope)
+  trigger = true
+  t.exception(() =>
+    fixture.responder.sealDiscoverResponse({
+      encodedResponse: encodeRelayDiscoverResponse({
+        queryNonce: seed(0xe1),
+        responseTimeMs: BigInt(NOW),
+        advertisements: privateAdvertisements(1, randomTarget, 90)
+      }),
+      randomBytes: (size) => seed(0xe3, size)
+    })
+  )
+  t.is(fixture.responder.diagnostics().state, 'DESTROYED')
+  t.alike(admissions.diagnostics(), {
+    state: 'ACTIVE',
+    live: 0,
+    states: 0,
+    requests: 1
+  })
+
+  fixture.client.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
+})
+
+test('client teardown during evidence publication revokes the unexposed capability', (t) => {
+  let client = null
+  let trigger = false
+  const routed = createRoutedCandidateAuthority({
+    now() {
+      if (trigger) client.destroy()
+      return BigInt(NOW)
+    }
+  })
+  const admissions = createCurrentTailCandidateAdmissionAuthority({ now: () => BigInt(NOW) })
+  const fixture = pair(
+    () => NOW,
+    () => NOW,
+    0,
+    5_000n,
+    {
+      client: { evidenceProducer: routed.evidenceProducer },
+      responder: { candidateAdmissionProducer: admissions.producer }
+    }
+  )
+  client = fixture.client
+  activate(fixture, 0xe4)
+  const requestEnvelope = fixture.client.sealDiscoverRequest({
+    requestedCapabilityMask: RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    randomTarget: seed(0xe5),
+    queryNonce: seed(0xe6),
+    maximumResults: 8,
+    randomBytes: (size) => seed(0xe7, size)
+  })
+  fixture.responder.openDiscoverRequest(requestEnvelope)
+  const envelopes = fixture.responder.sealDiscoverResponse({
+    encodedResponse: encodeRelayDiscoverResponse({
+      queryNonce: seed(0xe6),
+      responseTimeMs: BigInt(NOW),
+      advertisements: []
+    }),
+    randomBytes: (size) => seed(0xe8, size)
+  })
+
+  trigger = true
+  t.exception(() => fixture.client.openDiscoverResponse(envelopes[0]))
+  t.is(fixture.client.diagnostics().state, 'DESTROYED')
+  t.alike(routed.directory.diagnostics(), {
+    state: 'ACTIVE',
+    live: 0,
+    states: 0,
+    requests: 0
+  })
+
+  fixture.responder.destroy()
+  routed.directory.destroy()
+  admissions.destroy()
 })
 
 test('relay discovery fixes local deadlines and rejects role substitution, replay, and reentry', (t) => {

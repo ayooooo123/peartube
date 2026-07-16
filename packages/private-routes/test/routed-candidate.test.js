@@ -68,7 +68,7 @@ function uniqueAdvertisements(count, start = 30, options = {}) {
     identities.add(identity)
     advertisements.push(encoded)
   }
-  return advertisements
+  return advertisements.sort((left, right) => compare(left, right, seed(0x7b)))
 }
 
 function compare(left, right, target) {
@@ -135,6 +135,9 @@ function candidateFixture(now = () => NOW) {
 function tailRequest(nonceByte, branchByte = 0x82) {
   return {
     queryNonce: seed(nonceByte),
+    randomTarget: seed(0x7b),
+    requestedCapabilityMask: routes.RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    maximumResults: 8,
     branchClass: routes.BRANCH_CLASS.ANNOUNCE,
     branchId: b4a.alloc(16, branchByte),
     circuitId: b4a.alloc(16, branchByte + 1),
@@ -318,6 +321,9 @@ test('current-tail digest admissions authorize only advertisements actually retu
   const omitted = advertisement({ byte: 42 })
   const request = {
     queryNonce: seed(0x81),
+    randomTarget: seed(0x7b),
+    requestedCapabilityMask: routes.RELAY_CAPABILITY.CIRCUIT_RELAY_V1,
+    maximumResults: 8,
     branchClass: routes.BRANCH_CLASS.ANNOUNCE,
     branchId: b4a.alloc(16, 0x82),
     circuitId: b4a.alloc(16, 0x83),
@@ -385,6 +391,162 @@ test('evidence and tail-admission brands are owner-bound split capabilities', (t
     'producer cannot consume admissions'
   )
   tail.destroy()
+})
+
+test('unexposed evidence and response reservations can be revoked exactly once', (t) => {
+  const routed = api.createRoutedCandidateAuthority({ now: () => NOW })
+  const evidence = api.publishAuthenticatedDiscoveryEvidence(
+    routed.evidenceProducer,
+    evidenceMaterial()
+  )
+
+  t.ok(api.revokeAuthenticatedDiscoveryEvidence(routed.evidenceProducer, evidence))
+  t.is(api.revokeAuthenticatedDiscoveryEvidence(routed.evidenceProducer, evidence), false)
+  expectCode(
+    t,
+    () => routed.directory.admit(evidence),
+    'ERR_AUTHENTICATION',
+    'revoked evidence cannot mint candidates'
+  )
+  t.alike(routed.directory.diagnostics(), {
+    state: 'ACTIVE',
+    live: 0,
+    states: 0,
+    requests: 0
+  })
+  routed.directory.destroy()
+
+  const tail = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  const request = tailRequest(0x9a)
+  const included = advertisement({ byte: 48 })
+  const reservation = api.reserveCurrentTailCandidateResponse(tail.producer, {
+    ...request,
+    advertisements: [included]
+  })
+  const digest = routes.digestRelayCapabilityAdvertisement(included, { now: NOW })
+
+  t.ok(api.rollbackCurrentTailCandidateResponse(tail.producer, reservation))
+  t.is(api.rollbackCurrentTailCandidateResponse(tail.producer, reservation), false)
+  expectCode(
+    t,
+    () =>
+      api.consumeCurrentTailCandidateAdmission(tail.consumer, {
+        ...request,
+        candidateAdvertisementDigest: digest
+      }),
+    'ERR_AUTHENTICATION',
+    'rolled-back advertisements cannot authorize a dial'
+  )
+  t.alike(tail.diagnostics(), { state: 'ACTIVE', live: 0, states: 0, requests: 1 })
+  tail.destroy()
+})
+
+test('tail response reservations terminalize on commit, consumption, and destroy', (t) => {
+  const committed = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  const committedRequest = tailRequest(0x9b)
+  const committedAdvertisement = advertisement({ byte: 49 })
+  const committedReservation = api.reserveCurrentTailCandidateResponse(committed.producer, {
+    ...committedRequest,
+    advertisements: [committedAdvertisement]
+  })
+  t.ok(
+    api.commitCurrentTailCandidateResponse(committed.producer, committedReservation),
+    'commit releases reservation metadata'
+  )
+  t.is(api.commitCurrentTailCandidateResponse(committed.producer, committedReservation), false)
+  t.is(api.rollbackCurrentTailCandidateResponse(committed.producer, committedReservation), false)
+  t.ok(
+    api.consumeCurrentTailCandidateAdmission(committed.consumer, {
+      ...committedRequest,
+      candidateAdvertisementDigest: routes.digestRelayCapabilityAdvertisement(
+        committedAdvertisement,
+        { now: NOW }
+      )
+    }),
+    'commit preserves the published admission'
+  )
+  committed.destroy()
+
+  const consumed = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  const consumedRequest = tailRequest(0x9c)
+  const consumedAdvertisements = uniqueAdvertisements(2, 50)
+  const consumedReservation = api.reserveCurrentTailCandidateResponse(consumed.producer, {
+    ...consumedRequest,
+    advertisements: consumedAdvertisements
+  })
+  t.ok(
+    api.consumeCurrentTailCandidateAdmission(consumed.consumer, {
+      ...consumedRequest,
+      candidateAdvertisementDigest: routes.digestRelayCapabilityAdvertisement(
+        consumedAdvertisements[0],
+        { now: NOW }
+      )
+    })
+  )
+  t.is(
+    api.rollbackCurrentTailCandidateResponse(consumed.producer, consumedReservation),
+    false,
+    'first consumption terminalizes the reservation handle'
+  )
+  consumed.destroy()
+
+  const destroyed = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  const destroyedRequest = tailRequest(0x9d)
+  const destroyedReservation = api.reserveCurrentTailCandidateResponse(destroyed.producer, {
+    ...destroyedRequest,
+    advertisements: [advertisement({ byte: 52 })]
+  })
+  destroyed.destroy()
+  t.is(
+    api.rollbackCurrentTailCandidateResponse(destroyed.producer, destroyedReservation),
+    false,
+    'authority destroy synchronously invalidates retained reservations'
+  )
+})
+
+test('tail response admission validates and digests one owned advertisement snapshot', (t) => {
+  const authority = api.createCurrentTailCandidateAdmissionAuthority({ now: () => NOW })
+  const request = tailRequest(0x9e)
+  const validated = advertisement({ byte: 53 })
+  const substituted = advertisement({ byte: 54 })
+  let indexReads = 0
+  const advertisements = new Proxy([validated], {
+    get(target, name, receiver) {
+      if (name === '0') {
+        indexReads++
+        return indexReads === 1 ? validated : substituted
+      }
+      return Reflect.get(target, name, receiver)
+    }
+  })
+
+  api.reserveCurrentTailCandidateResponse(authority.producer, {
+    ...request,
+    advertisements
+  })
+  t.is(indexReads, 1, 'the authority snapshots each caller-controlled index exactly once')
+  t.ok(
+    api.consumeCurrentTailCandidateAdmission(authority.consumer, {
+      ...request,
+      candidateAdvertisementDigest: routes.digestRelayCapabilityAdvertisement(validated, {
+        now: NOW
+      })
+    }),
+    'the validated snapshot receives the admission'
+  )
+  expectCode(
+    t,
+    () =>
+      api.consumeCurrentTailCandidateAdmission(authority.consumer, {
+        ...request,
+        candidateAdvertisementDigest: routes.digestRelayCapabilityAdvertisement(substituted, {
+          now: NOW
+        })
+      }),
+    'ERR_AUTHENTICATION',
+    'a second-read substitution receives no admission'
+  )
+  authority.destroy()
 })
 
 test('evidence producer independently enforces replay and three, sixteen, ninety-six caps', (t) => {

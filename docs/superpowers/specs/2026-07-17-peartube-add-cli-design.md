@@ -148,9 +148,9 @@ The capability matrix distinguishes at least:
 - `list`: can enumerate recent public items from that profile
 - `download`: can resolve and download a selected content URL
 
-A platform is only advertised for a capability after a fixture-backed probe proves that capability. Generic supported-site lists are not enough. Unsupported search or listing does not produce an empty result screen; the TUI focuses `Paste creator URL`, `Paste content URL`, or `Choose local file` and explains the limitation once.
+A fixture-backed adapter test proves normalization and safe command construction for a capability; it does not guarantee that a live platform extractor still works. At runtime, every advertised operation may degrade to direct input with a specific error. Generic supported-site lists are not enough. Unsupported or newly broken search/listing does not produce an empty result screen; the TUI focuses `Paste creator URL`, `Paste content URL`, or `Choose local file` and explains the limitation once.
 
-`yt-dlp` extraction is best-effort per extractor. Platforms change. The direct content URL path is the reliable fallback contract.
+All `yt-dlp` operations, including direct content URLs, are best-effort per extractor. Platforms change. Direct URLs are the broadest fallback path, not a guarantee; inspection or download failure returns to source selection without losing the draft.
 
 ### Creator identity across platforms
 
@@ -234,9 +234,11 @@ The fixed channel and public video schemas gain optional fields for:
 - local content fingerprint
 - imported thumbnail URL plus existing thumbnail blob coordinates
 - provenance version sufficient to explain which resolver supplied the metadata
-- `publicationState`: `replicationPending` or `published` for newly staged imports
+- `publicationState`: `replicationPending`, `durabilityVerified`, or `published` for newly staged imports
 
-Interactive imports use a two-phase channel write. The backend stores the item in the private writable channel with `publicationState: replicationPending` and suppresses public-channel synchronization. This keeps the record visible to `getVideoData` and the existing offload assessment without advertising it. After durability verification, one explicit publish transition changes the state and synchronizes the public projection. Public projection must also filter pending records defensively.
+Interactive imports use a two-phase channel write. The backend stores the item in the private writable channel with `publicationState: replicationPending` and suppresses public-channel synchronization. This keeps the record visible to `getVideoData` and durability assessment without advertising it. Public projection must filter pending records defensively.
+
+Channel profile changes are staged with the durable job rather than applied immediately. The staged patch contains channel metadata, channel-source records, and artwork refs. For a new channel, no public profile is created before the first item is durable. For an existing channel, its previous public profile remains unchanged. Newly referenced item and profile artwork is part of the same required durability set as the media. Once durability passes, one idempotent projection operation applies the staged profile/source patch, projects the content, and records its checkpoint. A crash between its internal writes is repaired by replaying that operation before announcement; all referenced blobs are already durable at that point.
 
 The upload manager must accept and persist these fields. Passing them through the CLI publisher without extending `uploadFromPath` is insufficient because the current upload path destructures a fixed option set and would silently drop them.
 
@@ -256,8 +258,11 @@ Before upload, duplicate detection checks:
 - provider + source video ID
 - local file fingerprint
 - an already completed or active durable job row
+- replicated import claims for the target channel
 
-These checks are scoped to the target writable channel and local import state. Network-wide duplicates may still exist under independently owned channels.
+An `importClaims` collection records contenders under deterministic identity keys before media transfer. A claim row is keyed by identity key plus claimant ID, where claimant ID is derived from writer key and durable job ID. An index groups contenders by identity key; the lexicographically lowest claimant ID is the deterministic winner. Claims move through `reserved`, `published`, and `released`. A claim cannot expire after media transfer begins until the job explicitly publishes or cleans it up.
+
+This prevents duplicate bytes within one importer and across currently synchronized channel writers. A partitioned multi-writer channel cannot provide a global pre-upload lock: two disconnected devices may upload concurrently. After replication, the deterministic resolver suppresses the losing pending draft before projection; if both were already projected while partitioned, catalog/public reconciliation marks the loser as a duplicate, removes it from canonical listings, and schedules safe cleanup. The specification does not claim impossible partition-wide mutual exclusion. Network-wide duplicates may also exist under independently owned channels.
 
 ## Structured Catalog Protocol
 
@@ -269,6 +274,19 @@ Conceptual operations:
 
 - `getContentCatalog(channelKey)` returns the normalized channel profile and group summaries
 - `getContentItems(channelKey, groupId, cursor, limit)` returns a page of fully structured content items
+
+Pagination semantics are part of the protocol:
+
+- default limit is 50 and maximum limit is 200; zero, negative, or oversized limits are rejected
+- TV season groups sort by episode number ascending, effective publication time ascending, then content ID ascending
+- `latest`, creator video/stream, movie, trailer, and extras groups sort by effective publication time descending, then content ID ascending
+- effective publication time is `sourcePublishedAt` when present, otherwise `uploadedAt`; all timestamps are UTC Unix milliseconds
+- group IDs are stable (`season:<number>`, `latest`, `videos`, `streams`, `movie`, `trailers`, `extras`)
+- cursors are opaque base64url-encoded versioned values containing protocol cursor version, channel key, group ID, and the last complete sort tuple
+- a malformed cursor or one used with another channel/group returns `INVALID_CURSOR`
+- keyset pagination returns items strictly after the cursor tuple
+
+Grouping identity and sort fields are immutable after publication. Newer inserts sort before an existing descending cursor and appear on refresh rather than later pages; deletions are skipped. These rules avoid duplicates within a traversal without requiring an unbounded snapshot. Metadata fields that do not affect grouping/order may be edited normally.
 
 Group summaries are derived from persisted fields:
 
@@ -350,17 +368,19 @@ Assignment states:
 - `exact`: strong unique evidence; ready
 - `review`: plausible but not safe; user confirmation required
 - `conflict`: multiple sources or targets claim the same identity
-- `unassigned`: no safe candidate
-- `excluded`: deliberately omitted by the user
-- `alreadyAdded`: duplicate target/source; skipped
+- `sourceUnassigned`: an included source has no safe target
+- `targetMissing`: a selected, non-duplicate target has no source
+- `excluded`: a source or target deliberately omitted by the user
+- `alreadyAdded`: duplicate target/source; satisfied and skipped
 
 Invariants:
 
 - each included source maps to exactly one target item
-- each target item maps to at most one source
-- no duplicate source identity exists in the manifest or target channel
-- no duplicate season/episode coordinate exists in the manifest or target channel
-- every `review`, `conflict`, and `unassigned` row is resolved or excluded
+- each selected, non-duplicate target maps to exactly one included source or has an explicit target exclusion
+- each duplicate target is explicitly represented as `alreadyAdded`
+- no duplicate source identity exists in the manifest or synchronized target channel
+- no duplicate season/episode coordinate exists in the manifest or synchronized target channel
+- every `review`, `conflict`, `sourceUnassigned`, and `targetMissing` row is resolved or explicitly excluded
 
 Filename ordering alone can never produce `exact`. Manual assignments are recorded in the manifest and survive backward navigation.
 
@@ -368,17 +388,19 @@ Extras are explicitly classified as `trailer` or `extra`; they are not silently 
 
 ### Durable execution
 
-The verified manifest extends the existing archive job storage and manager rather than introducing a second queue. Each row has a deterministic job identity and states such as `pending`, `resolving`, `downloading`, `uploading`, `replicationPending`, `verifyingDurability`, `published`, `failed`, and `skipped`.
+The verified manifest extends the existing archive job storage and manager rather than introducing a second queue. Each row has a deterministic job identity and resumable states: `pending`, `resolving`, `downloading`, `uploading`, `replicationPending`, `durabilityVerified`, `projecting`, `projected`, `announcing`, `published`, `failed`, and `skipped`.
 
 Execution is sequential by default to bound disk usage, bandwidth, backend contention, and terminal complexity. Metadata and lightweight artwork fetches may be concurrent before the upload phase when bounded.
 
-Checkpoint after every state transition that changes external effects. On restart:
+Checkpoint after every state transition that changes external effects. `published` is terminal only after public projection and feed announcement succeed. Projection and announcement are idempotent by channel/content identity. On restart:
 
-- published rows are not repeated
+- `published` rows are not repeated
+- `projecting` or `projected` rows replay/continue projection safely
+- `announcing` rows retry only idempotent announcement
 - downloaded artifacts may be reused when present and verified
 - failed rows can be retried independently
-- pending rows preserve their frozen assignment
-- duplicate checks run again before writing media
+- pending assignments remain frozen
+- duplicate claims and checks run again before writing media
 
 A partial failure never reassigns subsequent rows. The final report lists published, skipped, failed, and pending items.
 
@@ -390,9 +412,13 @@ An upload is not complete merely because its bytes reached the uploader's local 
 
 The backend reuses the policy and evidence in `packages/backend/src/upload-offload.js`:
 
-- one configured trusted relay holding the complete required ranges is sufficient
-- one paired own device holding the complete ranges is sufficient
-- otherwise at least the configured number of independent ordinary full-copy peers is required; the current default is two
+- one configured trusted relay holding every required range is sufficient
+- one paired own device holding every required range is sufficient
+- otherwise the configured number of independent ordinary peers must each hold every required range; the current default is two
+
+Eligibility is item-level, not per-range. For each required blob ref, the backend collects stable full-copy holder identities, intersects those identity sets across all refs, and applies the trust/count policy once to the intersection. Anonymous peers that cannot be correlated across refs do not count toward aggregate durability. This prevents media on peers A/B and artwork on peers C/D from falsely qualifying an item that no acceptable holder set possesses completely.
+
+Required refs are the media blob, an item thumbnail when the published record references one, and any newly staged channel artwork referenced by the same profile commit. Artwork that failed to fetch and was explicitly omitted is not required; a remote URL alone never counts as durable artwork.
 
 A single untrusted peer cannot satisfy durability. `ctx.trustedRelayKeys` is empty by default, so a deployment that promises immediate one-peer handoff must configure and operate a trusted relay/blind seeder with a stable swarm key and enough admitted storage. Without that infrastructure, the CLI honestly remains at `replicationPending`.
 
@@ -400,23 +426,39 @@ A single untrusted peer cannot satisfy durability. `ctx.trustedRelayKeys` is emp
 
 For each verified manifest row:
 
-1. Upload media and artwork to local blobs.
-2. Write a private channel draft with `publicationState: replicationPending`.
-3. Send a full-copy pin request to connected seed-capable peers.
-4. Prioritize complete media, thumbnail, and required channel-artwork ranges.
+1. Upload media and selected artwork to local blobs.
+2. Write a private channel draft with `publicationState: replicationPending`; keep channel profile/source changes staged in the job.
+3. Send an idempotent full-copy pin request to connected seed-capable peers.
+4. Prioritize every complete required range.
 5. Observe remote bitfield/contiguous-range progress.
-6. Verify every required range against the durability policy.
-7. Transition the draft to `published`.
-8. Synchronize the public channel and announce it to the feed.
-9. Optionally invoke the existing `offloadUpload` path for media bytes, or simply allow the uploader to exit.
+6. Intersect full-copy holder identities across all required refs and apply the durability policy.
+7. Set the private draft to `durabilityVerified` and checkpoint the job.
+8. Enter `projecting`; idempotently apply staged channel changes and public projection.
+9. Checkpoint `projected`, enter `announcing`, and announce idempotently.
+10. Mark the channel item and job `published` only after announcement succeeds.
+11. Optionally invoke the existing `offloadUpload` path for media bytes, or allow the uploader to exit.
 
-Peer acknowledgements are progress hints only. They never replace bitfield-based full-range verification.
+Peer acknowledgements are progress hints only. They never replace bitfield-based aggregate verification.
 
-The low-level durability calculation should accept a direct blob reference (`blobsCoreKey` plus normalized blob range) and be reused by `assessUploadOffload`. This permits the queue to verify media and artwork refs explicitly while preserving the current video-oriented API. The private draft also remains readable by `getVideoData`, so existing upload-offload behavior continues to work after publication.
+A low-level `assessBlobSetDurability(refs, policy)` accepts direct normalized blob refs and returns the intersected holder set plus policy result. Existing `assessUploadOffload` delegates to the single-ref form, preserving its API, while the import queue uses the set form for media and artwork. The private draft remains readable by `getVideoData`, so existing video offload continues to work after publication.
 
 ### Peer seeding request
 
-Automatic replication alone does not guarantee that another peer will request an entire newly uploaded blob. Seed-capable relay/peer code therefore needs an explicit bounded pin request carrying the channel identity and required blob refs. The receiving peer applies its admission and capacity policy, downloads each accepted range linearly, keeps the ranges pinned, and exposes normal Hypercore availability. Rejection or capacity exhaustion is visible to the queue and never counts as durability.
+The control transport is a versioned Protomux protocol named `peartube/seed-pin/1` on existing authenticated backend swarm connections; it does not depend on PublicBee or feed discovery. A configured trusted relay must already be connected through deployment peer configuration/known-peer reconnect before it can receive a pending draft request.
+
+Logical units are:
+
+- `packages/backend/src/seed-pin/client.js`: sends requests, correlates responses, and resumes status after reconnect
+- `packages/backend/src/seed-pin/server.js`: registers the shared Node/Bare-compatible Protomux receiver
+- `packages/backend/src/seed-pin/worker.js`: opens requested blob cores, downloads accepted ranges linearly, and keeps them pinned
+- `packages/cli/src/seed-pin-admission.js`: supplies relay admission, capacity, retention, and trusted-key policy
+- relay metadata storage: persists request state and accepted pins across restart
+
+`PIN_REQUEST` carries a deterministic request ID, channel key, signed channel-root descriptor, sorted normalized blob refs with roles, retention request, expiry, and an identity signature over the canonical payload. The request ID is the SHA-256 digest of channel key, durable manifest row ID, and sorted refs, making replay idempotent. The Noise connection binds the remote swarm identity; the relay also verifies the signed channel descriptor/signature and applies channel/owner admission plus storage capacity before accepting.
+
+Responses are correlated by request ID and have `accepted`, `rejected`, `progress`, or `complete` state with reason codes. The receiver persists acceptance before starting the worker. Repeated requests return the existing state. A `complete` response is still only a hint: the uploader independently verifies remote bitfields. All codecs and handlers live in the universal backend path and avoid Node-only APIs so relay and Bare runtimes share one protocol.
+
+Pending drafts are absent from the public feed by design; therefore no part of pin dispatch relies on feed mirroring. Rejection, expiry, capacity exhaustion, or disconnect is visible to the queue and never counts as durability.
 
 ### Bulk behavior
 
@@ -518,7 +560,8 @@ The new protocol operations require a clean protocol-version cutover across host
 ### Discovery and normalization
 
 - fixture-backed TMDB TV/movie/show/season/episode normalization
-- fixture-backed `yt-dlp` search, profile, list, and download capabilities
+- fixture-backed `yt-dlp` adapter normalization and argument construction for search, profile, list, and download
+- runtime extractor failure degrades to source selection with the draft intact
 - unsupported capability routes to direct input rather than an empty picker
 - creator candidate deduplication
 - stable provider/source IDs
@@ -528,10 +571,11 @@ The new protocol operations require a clean protocol-version cutover across host
 
 - exact `SxxExx` and `NxNN` matches
 - title/date suggestions remain review-required when not strongly unique
-- duplicate file, source ID, episode coordinate, and active-job detection
-- unmatched sources
-- missing selected episodes
-- manual assignments and exclusions
+- duplicate file, source ID, episode coordinate, active-job, and replicated-claim detection
+- `sourceUnassigned` and `targetMissing` are distinct
+- every selected target is mapped, already added, or explicitly excluded
+- manual assignments and source/target exclusions
+- deterministic replicated claim winner and losing-draft suppression
 - extras classification
 - manifest serialization and restoration
 - no valid manifest when any unresolved state remains
@@ -546,11 +590,18 @@ Property-oriented tests should enforce one-to-one mapping invariants across gene
 - public projection preserves rich fields
 - source and season indexes return correct records
 - duplicate checks remain correct after restart and replication
+- channel profile/source changes remain staged and publicly invisible before durability
+- draft, durability, projection, announcement, and terminal publication transitions resume idempotently after a crash at every checkpoint
+- aggregate durability intersects the same stable peer identities across media and artwork refs
+- anonymous or disjoint per-range holders cannot satisfy item durability
+- `peartube/seed-pin/1` authentication, admission, idempotent replay, restart persistence, rejection, and disconnect behavior
 
 ### Protocol and clients
 
 - rich and legacy catalog responses
 - catalog pagination and stable ordering
+- cursor limit bounds and `INVALID_CURSOR` behavior
+- keyset pagination mutation behavior and no duplicate items across a traversal
 - protocol-version mismatch rejection
 - Expo/Electrobun creator and TV grouping smoke checks
 - native macOS creator and TV grouping smoke checks
@@ -567,21 +618,33 @@ Property-oriented tests should enforce one-to-one mapping invariants across gene
 8. Upload without a trusted relay or enough ordinary peers and verify the draft remains local, pending, and unannounced.
 9. Disconnect a seeding peer mid-transfer and verify no soft receipt promotes the draft.
 10. Restart during `replicationPending`, reconnect the relay, and verify publication resumes without media re-upload.
+11. Crash after setting `durabilityVerified`, after public projection, and after feed announcement; verify each restart reaches one terminal publication without duplicate side effects.
+12. Stage new channel artwork on an existing public channel and verify the old profile remains public until the media and artwork share a qualifying durable holder set.
+13. Put media and artwork on disjoint peers and verify aggregate durability fails.
+14. Create concurrent claims from paired writers, merge them, and verify the deterministic loser is suppressed from canonical catalogs.
 
-## Rollout Order
+## Planning and Rollout
 
-1. Rich backend/channel/public schemas, draft publication state, and upload persistence.
-2. Direct blob-range durability assessment and trusted relay configuration.
-3. Seed-capable peer pin requests and verified two-phase publication.
-4. Schema-first protocol catalog and platform exposure.
-5. Client rendering for structured and legacy catalogs.
-6. Node-only `peartube` executable and TUI state machine.
-7. TMDB and `yt-dlp` discovery/normalization.
-8. Single-item verified import.
-9. Bulk verifier and durable manifest execution.
-10. End-to-end smoke verification across CLI, backend, relay, and clients.
+This specification is one product program but should be implemented through four dependent plans with explicit verification gates:
 
-The CLI depends on the structured persistence contract. Shipping the interactive shell before the backend can retain and expose its metadata would create polished data loss, so schema and persistence come first.
+1. **Persistence and publication state machine**
+   - evolve channel/public schemas, channel sources, artwork, import claims, rich video fields, and indexes
+   - extend upload persistence
+   - implement private drafts, staged channel patches, idempotent projection, announcement checkpoints, and legacy compatibility
+2. **Pin transport and durability**
+   - implement direct blob-set holder intersection
+   - configure trusted relay keys/connections
+   - implement `peartube/seed-pin/1`, admission, persistent pins, progress, restart, and offload handoff
+3. **Catalog protocol and clients**
+   - add schema-first paginated catalog RPCs
+   - regenerate and atomically cut over host, protocol, platform, and Swift consumers
+   - render structured and legacy channels in Expo/Electrobun and native macOS
+4. **CLI discovery and import execution**
+   - add the Node-only `peartube` executable and TUI state machine
+   - add TMDB and `yt-dlp` normalization
+   - add single-item import, verified bulk mapping, durable queue execution, and end-to-end smoke scenarios
+
+Each plan starts only after the preceding plan's focused smoke gate passes. The CLI depends on structured persistence and verified seeding; shipping the interactive shell before those contracts work would create polished data loss or falsely claim durability.
 
 ## Alternatives Rejected
 
@@ -601,15 +664,15 @@ Dedicated platform adapters can improve discovery but create continuous maintena
 
 A native creator directory is a strong long-term direction, but it cold-starts empty and requires a new discovery protocol. Remembered local creators and rich channel source records create useful seed data without blocking the CLI.
 
-## Open Implementation Decisions
+## Locked Implementation Contracts
 
-The implementation plan should settle these details against current package conventions:
-
-- exact generated HyperDB field ordering and compatible schema evolution mechanics
-- whether channel artwork uses fixed profile fields or a dedicated artwork collection
-- exact HRPC pagination request/response names
-- where interactive non-relay config values live within the existing `PEARTUBE_CONFIG` conventions
-- the initial tested `yt-dlp` capability allowlist
-- the local file fingerprint algorithm balancing duplicate detection with large-file cost
-
-These decisions may change internal representation but must preserve the product invariants in this specification.
+- HyperDB evolution appends optional fields where an existing record evolves, introduces explicit `channelSources`, `channelArtwork`, and `importClaims` collections where records have independent identity, regenerates channel/public outputs together, and keeps a legacy decode fixture.
+- Channel artwork uses a dedicated collection keyed by role (`avatar`, `poster`, `banner`, `backdrop`) with MIME type, remote provenance URL, and blob coordinates. Published profile responses normalize that collection.
+- HRPC operations are `get-content-catalog` and `get-content-items`, with the pagination semantics in this specification. Their host/protocol/platform/generated-JS/generated-Swift release and shared protocol-version bump are one atomic cutover.
+- Interactive settings use the existing `PEARTUBE_CONFIG` file under a `content` section, with `TMDB_API_KEY` as the environment override. Secret entry disables echo, logging redacts it, and a newly created secret-bearing config is mode `0600`.
+- The source capability matrix is an allowlist in code. V1 must support fixture-backed YouTube text search and generic direct-URL inspection; any additional search/profile/list capability is enabled only with a committed adapter fixture. Live failures still degrade at runtime.
+- Local file identity is file size plus a streaming SHA-256 of the complete file, computed during preflight before the claim is finalized. Partial sampling cannot block a duplicate as exact.
+- Canonical URLs lowercase scheme/host, remove fragments and default ports, strip known tracking parameters, preserve semantically meaningful query parameters, and defer provider-specific identity normalization to the adapter. Stable provider/source IDs take precedence over URL identity.
+- Every persisted timestamp in the new contracts is UTC Unix milliseconds in `uint64` fields.
+- Required durability refs include media and every local blob referenced by the same item/profile commit. Explicitly omitted optional artwork is absent from both the commit and required set.
+- Trusted relay swarm keys and connection hints use existing relay configuration and populate `ctx.trustedRelayKeys`; one-peer immediate handoff is unavailable until that trust configuration is active.

@@ -630,6 +630,31 @@ Property-oriented tests should enforce one-to-one mapping invariants across gene
 13. Put media and artwork on disjoint peers and verify aggregate durability fails.
 14. Create concurrent claims from paired writers, merge them, and verify the deterministic loser is suppressed from canonical catalogs.
 
+## First Deliverable: Single-Item URL Import
+
+The first implementation slice exposes a complete, testable URL workflow without discarding the richer catalog design:
+
+```text
+peartube add <url>
+peartube add <url> --type episode --provider tmdb --show-id <id> --season <n> --episode <n> --yes
+peartube config
+peartube help
+```
+
+Interactive mode searches TMDB, selects a show or movie and, for TV, a season and episode, then reviews normalized metadata before import. Scripted mode resolves the same normalized record from explicit provider coordinates. The provider interface supports search plus show, season, episode, and movie lookup. TMDB is the first implementation. TVDB remains a future adapter and must report that it is unavailable rather than silently substituting another provider.
+
+The Node-only `peartube` entry point lazily imports terminal and metadata-provider dependencies so the existing Node and Bare relay/peer executables remain unchanged. It reuses the existing archive downloader, publisher, backend runtime, identity manager, upload manager, feed publication, thumbnail attachment, and seeding paths rather than introducing a second backend.
+
+TV episodes reuse or create one channel keyed by media provider plus stable show ID. Movies use provider plus stable movie ID. Name equality alone never reuses a channel. The upload path and private/public channel builders must explicitly preserve the normalized content kind, provider IDs, show/movie identity, season and episode coordinates, air/release date, source identity, sanitized canonical URL, provenance, and artwork blob coordinates; passing extra options to the current fixed `uploadFromPath` option set is insufficient.
+
+Before source inspection or media download, the CLI searches local writable channels, locally cached or replicated channels, and the public PearTube catalog. Exact movie identity (`provider + movie ID`) or episode identity (`provider + show ID + season + episode`) is a successful no-op. Human output identifies the existing channel, item, and availability source. JSON output returns `status: "already-exists"` with stable identifiers. Fuzzy title/year matches are advisory and never block. `--force` may bypass local job or source duplicates but cannot create a duplicate of an exact published structured identity.
+
+Tokenized source URLs are runtime-only. Human output, errors, configuration, job logs, and persisted provenance must not contain query strings or fragments. `yt-dlp` still receives the original URL as an argument. The persisted canonical source URL is sanitized. CLI flags override environment, which overrides user configuration. `TMDB_API_KEY` supplies the first metadata provider credential.
+
+Diagnostics and progress use stderr. The final human or `--json` result uses stdout. A non-interactive invocation without all required coordinates fails instead of prompting. Ctrl-C cancels download without creating a published record. Publication failure after a successful local import retains the local identifiers and a resumable job checkpoint so retry does not download or upload the media again.
+
+The slice is complete only when focused tests prove interactive and scripted parsing, URL redaction, TMDB normalization and failures, exact local/network duplicate detection before download, advisory fuzzy matches, structured field round trips through upload and public projection, provider-identity channel reuse, successful download/upload/publication orchestration, and unchanged relay/Bare entry-point loading. Its smoke gate imports an openly licensed small video through isolated temporary storage and observes the structured published result.
+
 ## Planning and Rollout
 
 This specification is one product program but should be implemented through four dependent plans with explicit verification gates:

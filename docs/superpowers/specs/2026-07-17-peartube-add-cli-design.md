@@ -390,13 +390,17 @@ Extras are explicitly classified as `trailer` or `extra`; they are not silently 
 
 ### Durable execution
 
-The verified manifest extends the existing archive job storage and manager rather than introducing a second queue. Each row has a deterministic job identity and resumable states: `pending`, `resolving`, `downloading`, `uploading`, `replicationPending`, `durabilityVerified`, `projecting`, `projected`, `announcing`, `announced`, `finalizing`, `published`, `failed`, and `skipped`.
+The verified manifest extends the existing archive job storage and manager rather than introducing a second queue. Each row has a deterministic job identity and resumable states: `pending`, `resolving`, `downloading`, `uploading`, `uploaded`, `replicationPending`, `durabilityVerified`, `projecting`, `projected`, `announcing`, `announced`, `finalizing`, `published`, `failed`, and `skipped`.
 
 Execution is sequential by default to bound disk usage, bandwidth, backend contention, and terminal complexity. Metadata and lightweight artwork fetches may be concurrent before the upload phase when bounded.
 
 Checkpoint after every state transition that changes external effects. `published` is terminal only after public projection, feed announcement, and final private/public item-state synchronization succeed. Projection, announcement, and finalization are idempotent by channel/content identity. On restart:
 
+Before calling `uploadFromPath`, the queue checkpoints `uploading` with a deterministic video ID derived from the writable channel and durable job identity, the verified artifact hash/path, and the intended structured metadata. `uploadFromPath` accepts that video ID as an idempotency key. After it returns, the queue checkpoints `uploaded` with the resulting media/artwork blob refs before creating the pending draft. On restart from `uploading`, the queue first looks up that deterministic video ID in the private channel: if the completed record exists, it reconstructs and checkpoints `uploaded` without invoking the downloader or `uploadFromPath`; otherwise it resumes the idempotent upload from the verified artifact. A crash inside the upload may leave unreachable blob blocks, but cannot create a second video record; normal orphan cleanup may reclaim those blocks.
+
 - `published` rows are not repeated
+- `uploaded` rows create or reconcile the private pending draft without repeating download or upload
+- `uploading` rows reconcile the deterministic private video ID before deciding whether the idempotent upload must resume
 - `projecting` or `projected` rows replay/continue projection safely
 - `announcing` rows retry idempotent announcement
 - `announced` or `finalizing` rows retry only final item-state synchronization
@@ -429,8 +433,8 @@ A single untrusted peer cannot satisfy durability. `ctx.trustedRelayKeys` is emp
 
 For each verified manifest row:
 
-1. Upload media and selected artwork to local blobs.
-2. Write a private channel draft with `publicationState: replicationPending`; keep channel profile/source changes staged in the job.
+1. Checkpoint the deterministic upload intent, then idempotently upload media and selected artwork to local blobs.
+2. Checkpoint `uploaded` with stable channel, video, and blob identifiers, then idempotently write the private channel draft with `publicationState: replicationPending`; keep channel profile/source changes staged in the job.
 3. Send an idempotent full-copy pin request to connected seed-capable peers.
 4. Prioritize every complete required range.
 5. Observe remote bitfield/contiguous-range progress.
@@ -650,7 +654,7 @@ The package maps the `peartube` bin to a dedicated Node entry point, `peartube.j
 
 TV episodes reuse or create one channel keyed by media provider plus stable show ID. Movies use provider plus stable movie ID. Name equality alone never reuses a channel. The upload path and private/public channel builders must explicitly preserve the normalized content kind, provider IDs, show/movie identity, season and episode coordinates, air/release date, source identity, canonical identity URL, provenance, and artwork blob coordinates; passing extra options to the current fixed `uploadFromPath` option set is insufficient.
 
-Before source inspection or media download, the CLI checks the target writable channel, local durable jobs, and synchronized claims already observed for that channel. An exact movie identity (`provider + movie ID`) or episode identity (`provider + show ID + season + episode`) in that authority is a successful no-op. Human output identifies the existing channel, item, and availability source. JSON output returns `status: "already-exists"` with stable identifiers. `--force` may bypass a failed local source job but cannot duplicate an exact identity already published or pending in the writable target channel.
+Before source inspection or media download, the CLI refreshes claims for the target writable channel, reserves a deterministic `importClaims` contender, and checks the target channel plus local durable jobs. An exact movie identity (`provider + movie ID`) or episode identity (`provider + show ID + season + episode`) already won, published, or pending in that authority is a successful no-op. Concurrent single-item writers use claim creation, synchronization, deterministic winner resolution, and losing-draft suppression from this specification. Human output identifies the existing channel, item, and availability source. JSON output returns `status: "already-exists"` with stable identifiers. `--force` may bypass a failed local source job but cannot override the winning claim or duplicate an exact identity already published or pending in the writable target channel.
 
 The CLI also searches locally cached/replicated catalogs and the public PearTube feed for possible existing content. Network results are advisory because unrelated publishers are separate authorities and the current feed preview does not carry a complete identity index. Exact structured network matches are reported first when observable; fuzzy title/year matches follow as warnings. Neither blocks publication. A future bounded identity-index protocol with defined freshness is required before network-wide exact matches can become authoritative blockers.
 
@@ -658,11 +662,11 @@ Source URL handling has three explicit forms produced by one central normalizer.
 
 CLI flags override environment, which overrides user configuration. `TMDB_API_KEY` supplies the first metadata provider credential. Diagnostics and progress use stderr. The final human or `--json` result uses stdout. The backend path used by this command must route diagnostics through an injected logger rather than direct `console.log`; a process-level test requires `--json` stdout to contain exactly one parseable JSON value. Ctrl-C cancels download without creating a published record.
 
-Publication failure after a successful local import retains the same channel, video, blob identifiers, verified local artifact, and resumable job checkpoint. Restart from persisted-upload, projection, announcement, or finalization checkpoints must not invoke the downloader or `uploadFromPath` again. Focused crash tests reopen storage at each checkpoint and assert stable identifiers and one terminal publication.
+Publication failure after a successful local import retains the same channel, video, blob identifiers, verified local artifact, and resumable job checkpoint. Restart from `uploaded`, projection, announcement, or finalization checkpoints must not invoke the downloader or `uploadFromPath` again. A crash after `uploadFromPath` commits the deterministic private video but before the `uploaded` checkpoint is repaired from that record while reopening `uploading`. Focused crash tests reopen storage at the pre-upload intent, post-upload/pre-checkpoint, `uploaded`, projection, announcement, and finalization boundaries and assert stable identifiers, no duplicate video record, no repeated completed upload, and one terminal publication.
 
 The first-deliverable smoke fixture starts isolated uploader storage plus a configured trusted relay, imports an openly licensed small video, waits for the relay to hold every required media/artwork range, and then observes the structured published result. A separate no-peer smoke check must remain at `replicationPending` and must not announce the item.
 
-The first deliverable is one vertical implementation plan: rich optional schema fields and upload/public projection round trips; single-item draft and resumable publication checkpoints; required blob-set durability and the trusted-relay pin path; target-authority duplicate lookup plus advisory network search; the dedicated Node CLI, TMDB normalization, review, and URL download; and the two smoke gates above. It excludes bulk mapping, creator discovery, network-wide authoritative identity indexing, and client catalog rendering. Those remain later plans and cannot block delivery of the single-item command.
+The first deliverable is one vertical implementation plan: rich optional schema fields and upload/public projection round trips; deterministic upload intent plus single-item draft and resumable publication checkpoints; single-item `importClaims` creation, synchronization, winner resolution, and losing-draft suppression; required blob-set durability and the trusted-relay pin path; target-authority duplicate lookup plus advisory network search; the dedicated Node CLI, TMDB normalization, review, and URL download; and the two smoke gates above. It excludes bulk mapping, creator discovery, network-wide authoritative identity indexing, and client catalog rendering. Those remain later plans and cannot block delivery of the single-item command.
 
 The slice is complete only when focused tests prove interactive and scripted parsing, the complete coordinate matrix, centralized URL redaction, TMDB normalization and failures, authoritative local duplicate no-ops before download, advisory network results, structured field round trips through upload and public projection, provider-identity channel reuse, one-value JSON stdout, restart without re-download/re-upload at every publication checkpoint, successful trusted-relay publication, safe no-peer pending behavior, and unchanged relay/Bare entry-point loading.
 
@@ -676,7 +680,7 @@ After the first vertical deliverable, the remaining product program proceeds thr
    - render structured and legacy channels in Expo/Electrobun and native macOS
 2. **Bulk and creator import**
    - add creator discovery and cross-platform source attachment
-   - add verified bulk mapping, distributed import claims, and durable queue execution
+   - add verified bulk mapping, extend import claims to bulk rows, and extend durable queue execution
    - extend end-to-end smoke scenarios across seasons, playlists, and creator catalogs
 
 Each later plan starts only after the preceding plan's focused smoke gate passes. Rich persistence, verified seeding, and resumable single-item publication are part of the first vertical slice rather than hidden prerequisites or deferred cleanup.

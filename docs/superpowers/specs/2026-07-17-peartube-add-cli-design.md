@@ -260,9 +260,9 @@ Before upload, duplicate detection checks:
 - an already completed or active durable job row
 - replicated import claims for the target channel
 
-An `importClaims` collection records contenders under deterministic identity keys before media transfer. A claim row is keyed by identity key plus claimant ID, where claimant ID is derived from writer key and durable job ID. An index groups contenders by identity key; the lexicographically lowest claimant ID is the deterministic winner. Claims move through `reserved`, `published`, and `released`. A claim cannot expire after media transfer begins until the job explicitly publishes or cleans it up.
+An `importClaims` collection records contenders under deterministic identity keys before media transfer. A claim row is keyed by identity key plus claimant ID, where claimant ID is derived from writer key and durable job ID. An index groups contenders by identity key; the lexicographically lowest non-released claimant ID is the deterministic winner. Claims move through `reserved`, `published`, and `released`. A claim cannot expire after media transfer begins until the job explicitly publishes or cleans it up. Released rows are excluded from winner selection and may be compacted only after their retention window, when no active job refers to them and a published winner exists or the identity has no remaining contender.
 
-This prevents duplicate bytes within one importer and across currently synchronized channel writers. A partitioned multi-writer channel cannot provide a global pre-upload lock: two disconnected devices may upload concurrently. After replication, the deterministic resolver suppresses the losing pending draft before projection; if both were already projected while partitioned, catalog/public reconciliation marks the loser as a duplicate, removes it from canonical listings, and schedules safe cleanup. The specification does not claim impossible partition-wide mutual exclusion. Network-wide duplicates may also exist under independently owned channels.
+The pre-transfer guarantee covers one importer and claims already observed in synchronized channel state. Replication is refreshed before the claim check, but two writers racing concurrently—or operating across a partition—may both begin upload before observing the other claim; no coordinator-free check can prevent that. After replication, the deterministic resolver suppresses the losing pending draft before projection. If both were already projected, catalog/public reconciliation marks the loser as a duplicate, removes it from canonical listings, and schedules safe cleanup. Network-wide duplicates may also exist under independently owned channels.
 
 ## Structured Catalog Protocol
 
@@ -295,7 +295,7 @@ Group summaries are derived from persisted fields:
 - movie: `movie`, `trailers`, `extras`
 - standard channel: `latest`
 
-Clients do not parse filenames or titles. Legacy content without rich fields falls into `latest` or an ungrouped section.
+Clients do not parse filenames or titles. All legacy or otherwise ungrouped content uses the stable `latest` group and its descending effective-publication-time ordering.
 
 Native clients continue to validate the universal protocol version before applying returned data. Introducing the catalog contract requires the appropriate shared protocol version update and regenerated Swift outputs.
 
@@ -388,15 +388,16 @@ Extras are explicitly classified as `trailer` or `extra`; they are not silently 
 
 ### Durable execution
 
-The verified manifest extends the existing archive job storage and manager rather than introducing a second queue. Each row has a deterministic job identity and resumable states: `pending`, `resolving`, `downloading`, `uploading`, `replicationPending`, `durabilityVerified`, `projecting`, `projected`, `announcing`, `published`, `failed`, and `skipped`.
+The verified manifest extends the existing archive job storage and manager rather than introducing a second queue. Each row has a deterministic job identity and resumable states: `pending`, `resolving`, `downloading`, `uploading`, `replicationPending`, `durabilityVerified`, `projecting`, `projected`, `announcing`, `announced`, `finalizing`, `published`, `failed`, and `skipped`.
 
 Execution is sequential by default to bound disk usage, bandwidth, backend contention, and terminal complexity. Metadata and lightweight artwork fetches may be concurrent before the upload phase when bounded.
 
-Checkpoint after every state transition that changes external effects. `published` is terminal only after public projection and feed announcement succeed. Projection and announcement are idempotent by channel/content identity. On restart:
+Checkpoint after every state transition that changes external effects. `published` is terminal only after public projection, feed announcement, and final private/public item-state synchronization succeed. Projection, announcement, and finalization are idempotent by channel/content identity. On restart:
 
 - `published` rows are not repeated
 - `projecting` or `projected` rows replay/continue projection safely
-- `announcing` rows retry only idempotent announcement
+- `announcing` rows retry idempotent announcement
+- `announced` or `finalizing` rows retry only final item-state synchronization
 - downloaded artifacts may be reused when present and verified
 - failed rows can be retried independently
 - pending assignments remain frozen
@@ -433,10 +434,11 @@ For each verified manifest row:
 5. Observe remote bitfield/contiguous-range progress.
 6. Intersect full-copy holder identities across all required refs and apply the durability policy.
 7. Set the private draft to `durabilityVerified` and checkpoint the job.
-8. Enter `projecting`; idempotently apply staged channel changes and public projection.
+8. Enter `projecting`; idempotently apply staged channel changes and project a public item whose state is `durabilityVerified`.
 9. Checkpoint `projected`, enter `announcing`, and announce idempotently.
-10. Mark the channel item and job `published` only after announcement succeeds.
-11. Optionally invoke the existing `offloadUpload` path for media bytes, or allow the uploader to exit.
+10. After successful announcement, checkpoint `announced` before entering `finalizing`.
+11. Idempotently update both private and public item records to `published`, then checkpoint terminal job state `published`.
+12. Optionally invoke the existing `offloadUpload` path for media bytes, or allow the uploader to exit.
 
 Peer acknowledgements are progress hints only. They never replace bitfield-based aggregate verification.
 
@@ -454,7 +456,9 @@ Logical units are:
 - `packages/cli/src/seed-pin-admission.js`: supplies relay admission, capacity, retention, and trusted-key policy
 - relay metadata storage: persists request state and accepted pins across restart
 
-`PIN_REQUEST` carries a deterministic request ID, channel key, signed channel-root descriptor, sorted normalized blob refs with roles, retention request, expiry, and an identity signature over the canonical payload. The request ID is the SHA-256 digest of channel key, durable manifest row ID, and sorted refs, making replay idempotent. The Noise connection binds the remote swarm identity; the relay also verifies the signed channel descriptor/signature and applies channel/owner admission plus storage capacity before accepting.
+`registerSeedPinProtocol(ctx)` is called by `packages/backend/src/orchestrator.js` after storage has created the Corestore/swarm and before public discovery or relay service start. It attaches the receiver to existing connections and subscribes to future swarm connections, while Corestore replication continues on the same authenticated streams.
+
+`PIN_REQUEST` carries a deterministic request ID, requester swarm key, channel key, signed channel-root descriptor, sorted normalized blob refs with roles, retention request, expiry, and an identity signature over the canonical payload. The request ID is the SHA-256 digest of channel key, durable manifest row ID, and sorted refs, making replay idempotent. The requester swarm key is inside the signed payload and must equal the Noise connection's remote public key. The signature public key must equal the verified descriptor's identity public key, binding the request to both the channel identity and the live transport peer. The relay then applies channel/owner admission and storage capacity before accepting.
 
 Responses are correlated by request ID and have `accepted`, `rejected`, `progress`, or `complete` state with reason codes. The receiver persists acceptance before starting the worker. Repeated requests return the existing state. A `complete` response is still only a hint: the uploader independently verifies remote bitfields. All codecs and handlers live in the universal backend path and avoid Node-only APIs so relay and Bare runtimes share one protocol.
 
@@ -511,10 +515,11 @@ Debug logs remain available behind existing debug conventions but do not corrupt
 - Artwork failure: allow publication after a visible warning.
 - Source inspection failure: remain on source selection with retry/change/cancel.
 - Disk or upload failure: checkpoint and retain the frozen manifest.
-- Announcement failure after media publication: preserve the published record and retry announcement; do not re-upload media.
+- Announcement failure after durable public projection: preserve the public `durabilityVerified` record, keep the job in `announcing`, and retry announcement without re-uploading media.
 - No trusted relay or sufficient peers: retain a private `replicationPending` draft and local bytes; resume when eligible peers reconnect.
 - Pin request rejected or peer disconnects: continue seeking another eligible peer and never count a soft acknowledgement as durability.
 - Durability passes but public projection fails: retain the durable draft and retry only the publish transition.
+- Final private/public state synchronization fails after announcement: keep the `announced` checkpoint and retry only idempotent finalization.
 - Schema/protocol mismatch: reject rich catalog operations before applying or publishing incompatible data.
 
 Errors are attached to their current state. Navigating back does not discard metadata drafts or manual bulk assignments.

@@ -154,6 +154,8 @@ test('normalizes channel profiles with explicit fields and safe bounds', async (
   t.is(input.profileKind, 'TV_SHOW', 'caller input remains unchanged')
 
   await rejects(t, () => normalizeChannelProfile({ ...input, releaseDate: Number.MAX_SAFE_INTEGER + 1 }), /releaseDate/)
+  await rejects(t, () => normalizeChannelProfile({ ...input, releaseDate: Number.MAX_SAFE_INTEGER }), /releaseDate/)
+  await rejects(t, () => normalizeChannelProfile({ ...input, releaseYear: Number.MAX_SAFE_INTEGER }), /releaseYear/)
   await rejects(t, () => normalizeChannelProfile({ ...input, releaseYear: -1 }), /releaseYear/)
   await rejects(t, () => normalizeChannelProfile({ ...input, mediaProvider: 'p'.repeat(65) }), /mediaProvider/)
   await rejects(t, () => normalizeChannelProfile({ ...input, mediaProvider: 'TMDB' }), /mediaProvider/)
@@ -194,6 +196,10 @@ test('rejects invalid content coordinates, timestamps, states, claimant IDs, and
     [{ ...base, episodeNumber: -1 }, /episodeNumber/],
     [{ ...base, episodeNumber: 2.5 }, /episodeNumber/],
     [{ ...base, sourcePublishedAt: -1 }, /sourcePublishedAt/],
+    [{ ...base, sourcePublishedAt: Number.MAX_SAFE_INTEGER }, /sourcePublishedAt/],
+    [{ ...base, seasonNumber: Number.MAX_SAFE_INTEGER }, /seasonNumber/],
+    [{ ...base, episodeNumber: Number.MAX_SAFE_INTEGER }, /episodeNumber/],
+    [{ ...base, originalAirDate: Number.MAX_SAFE_INTEGER }, /originalAirDate/],
     [{ ...base, originalAirDate: Number.MAX_SAFE_INTEGER + 1 }, /originalAirDate/],
     [{ ...base, publicationState: 'queued' }, /publication state/],
     [{ ...base, importClaimantId: 'ABC'.repeat(22) }, /importClaimantId/],
@@ -253,6 +259,8 @@ test('normalizes channel sources, derives their keys, and rejects every source b
     [{ provider: 'web', sourceId: '1', handle: 'h'.repeat(257) }, /handle/],
     [{ provider: 'web', sourceId: '1', displayName: 'd'.repeat(257) }, /displayName/],
     [{ provider: 'web', sourceId: '1', createdAt: Number.MAX_SAFE_INTEGER + 1 }, /createdAt/],
+    [{ provider: 'web', sourceId: '1', createdAt: Number.MAX_SAFE_INTEGER }, /createdAt/],
+    [{ provider: 'web', sourceId: '1', updatedAt: Number.MAX_SAFE_INTEGER }, /updatedAt/],
     [{ provider: 'web', sourceId: '1', identityKey: 'id:wrong' }, /identityKey/]
   ]
   for (const [value, pattern] of invalid) await rejects(t, () => normalizeChannelSource(value), pattern)
@@ -275,6 +283,7 @@ test('normalizes artwork and rejects invalid roles, timestamps, and bounded fiel
   await rejects(t, () => normalizeChannelArtwork({ ...input, mimeType: 'm'.repeat(129) }), /mimeType/)
   await rejects(t, () => normalizeChannelArtwork({ ...input, remoteUrl: 'u'.repeat(2049) }), /remoteUrl/)
   await rejects(t, () => normalizeChannelArtwork({ ...input, updatedAt: -1 }), /updatedAt/)
+  await rejects(t, () => normalizeChannelArtwork({ ...input, updatedAt: Number.MAX_SAFE_INTEGER }), /updatedAt/)
 })
 
 test('derives stable domain-separated claimant IDs from exact writer and job bytes', async (t) => {
@@ -314,6 +323,7 @@ test('normalizes authenticated import claims and rejects malformed or mismatched
   await rejects(t, () => normalizeImportClaim({ ...claim, jobId: 'j'.repeat(257) }), /jobId/)
   await rejects(t, () => normalizeImportClaim({ ...claim, state: 'expired' }), /state/)
   await rejects(t, () => normalizeImportClaim({ ...claim, releasedAt: Number.MAX_SAFE_INTEGER + 1 }), /releasedAt/)
+  await rejects(t, () => normalizeImportClaim({ ...claim, state: 'released' }), /releasedAt/)
 })
 
 test('all persistence normalizers reject ephemeral, secret, and arbitrary keys', async (t) => {

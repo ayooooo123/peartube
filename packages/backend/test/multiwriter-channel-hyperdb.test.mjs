@@ -87,6 +87,14 @@ test('MultiWriterChannel video CRUD uses HyperDB collections and uploadedAt inde
     await channel.deleteVideo('new')
     assert.equal(await channel.getVideo('new'), null)
     assert.deepEqual((await channel.listVideos()).map((video) => video.id), ['old'])
+    assert.equal(await channel.publicBee.getVideo('new'), null, 'delete removes the matching public row')
+    assert.equal((await channel.publicBee.getVideo('old')).title, 'Old Updated', 'delete preserves unrelated public rows')
+
+    await channel.publicBee.putVideo('new', { title: 'Stale retry', uploadedAt: 200 })
+    await channel.deleteVideo('new')
+    assert.equal(await channel.getVideo('new'), null, 'delete retry remains idempotent privately')
+    assert.equal(await channel.publicBee.getVideo('new'), null, 'delete retry suppresses a stale public row')
+    assert.equal((await channel.publicBee.getVideo('old')).title, 'Old Updated')
   })
 })
 
@@ -123,5 +131,198 @@ test('MultiWriterChannel comments and reactions live in the same HyperDB channel
       counts: {},
       userReaction: null,
     })
+  })
+})
+
+test('MultiWriterChannel stores structured channel records in private sidecars without public sync', async () => {
+  await withChannel(async (channel) => {
+    let publicSyncs = 0
+    channel._syncPublicBeeFromFeedChannel = async () => { publicSyncs++ }
+
+    await channel.putChannelProfile({
+      profileKind: 'tvShow',
+      mediaProvider: 'tmdb',
+      mediaId: '1399',
+      originalLanguage: 'en',
+      releaseYear: 2011,
+    })
+    await channel.putChannelSource({
+      provider: 'youtube',
+      sourceId: 'UC1',
+      identityUrl: 'https://youtube.example/channel/UC1',
+      displayName: 'Example channel',
+    })
+    await channel.putChannelSource({
+      provider: 'web',
+      identityUrl: 'https://example.test/creator',
+    })
+    await channel.putChannelArtwork({
+      role: 'poster',
+      blobId: '1:2:0:20',
+      blobsCoreKey: 'ab'.repeat(32),
+      mimeType: 'image/jpeg',
+    })
+
+    assert.equal(publicSyncs, 0, 'private sidecar mutations never sync public state')
+    const profile = await channel.getChannelProfile()
+    assert.equal(profile.id, 'profile')
+    assert.equal(profile.profileKind, 'tvShow')
+    assert.equal(profile.mediaProvider, 'tmdb')
+    assert.equal(profile.mediaId, '1399')
+    assert.equal(profile.originalLanguage, 'en')
+    assert.equal(profile.releaseYear, 2011)
+    assert.equal('releaseDate' in profile, false, 'omitted profile integers stay absent')
+    const metadata = await channel.getMetadata()
+    assert.equal(metadata.key, 'meta', 'logical metadata retains legacy fields')
+    assert.equal(metadata.profileKind, 'tvShow', 'logical metadata merges the profile')
+    assert.equal(metadata.mediaId, '1399')
+    const physicalMetadata = await channel.db.get('@peartubeChannel/metadata', { key: 'meta' })
+    assert.equal(physicalMetadata.profileKind, undefined, 'legacy metadata remains physically unchanged')
+
+    const sources = await channel.listChannelSources()
+    assert.equal(sources.length, 2)
+    assert.equal(sources.find((source) => source.provider === 'youtube').identityKey, 'id:UC1')
+    assert.match(sources.find((source) => source.provider === 'web').identityKey, /^url:sha256:[0-9a-f]{64}$/)
+    const webSource = sources.find((source) => source.provider === 'web')
+    assert.equal('handle' in webSource, false, 'omitted source strings stay absent')
+    assert.equal('createdAt' in webSource, false, 'omitted source integers stay absent')
+    const poster = await channel.getChannelArtwork('poster')
+    assert.equal(poster.role, 'poster')
+    assert.equal(poster.blobId, '1:2:0:20')
+    assert.equal(poster.blobsCoreKey, 'ab'.repeat(32))
+    assert.equal(poster.mimeType, 'image/jpeg')
+    assert.equal('remoteUrl' in poster, false, 'omitted artwork strings stay absent')
+    assert.equal('updatedAt' in poster, false, 'omitted artwork integers stay absent')
+    assert.deepEqual((await channel.listChannelArtwork()).map((artwork) => artwork.role), ['poster'])
+  })
+})
+
+test('MultiWriterChannel splits structured videos physically and joins logical reads', async () => {
+  await withChannel(async (channel) => {
+    await channel.addVideo({
+      id: 'draft-1',
+      title: 'Pilot',
+      description: 'private draft',
+      uploadedAt: 100,
+      contentKind: 'episode',
+      sourceProvider: 'youtube',
+      sourceVideoId: 'source-1',
+      mediaProvider: 'tmdb',
+      mediaId: '1399',
+      seasonNumber: 1,
+      episodeNumber: 1,
+      publicationState: 'replicationPending',
+      unknownInput: 'not persisted',
+    })
+
+    const physicalVideo = await channel.db.get('@peartubeChannel/videos', { id: 'draft-1' })
+    const physicalDetails = await channel.db.get('@peartubeChannel/contentDetails', { id: 'draft-1' })
+    assert.equal(physicalVideo.contentKind, undefined)
+    assert.equal(physicalVideo.publicationState, undefined)
+    assert.equal(physicalVideo.unknownInput, undefined)
+    assert.equal(physicalDetails.id, 'draft-1')
+    assert.equal(physicalDetails.contentKind, 'episode')
+    assert.equal(physicalDetails.sourceProvider, 'youtube')
+    assert.equal(physicalDetails.sourceVideoId, 'source-1')
+    assert.equal(physicalDetails.mediaProvider, 'tmdb')
+    assert.equal(physicalDetails.mediaId, '1399')
+    assert.equal(physicalDetails.seasonNumber, 1)
+    assert.equal(physicalDetails.episodeNumber, 1)
+    assert.equal(physicalDetails.publicationState, 'replicationPending')
+
+    const draft = await channel.getVideo('draft-1')
+    assert.equal(draft.title, 'Pilot')
+    assert.equal(draft.publicationState, 'replicationPending')
+    assert.equal('identityUrl' in draft, false, 'omitted structured strings stay absent')
+    assert.equal('originalAirDate' in draft, false, 'omitted structured integers stay absent')
+    assert.equal((await channel.listVideos())[0].episodeNumber, 1)
+    assert.equal(await channel.publicBee.getVideo('draft-1'), null, 'pending draft stays private by default')
+    await channel.addVideo({ id: 'public-trigger', title: 'Published legacy video', uploadedAt: 75 })
+    assert.equal(
+      await channel.publicBee.getVideo('draft-1'),
+      null,
+      'an unrelated later public sync cannot expose a pending draft',
+    )
+    await channel.addVideo({ id: 'public-unrelated', title: 'Remain public', uploadedAt: 76 })
+    await channel.updateVideo('public-trigger', { publicationState: 'replicationPending' })
+    assert.equal(
+      await channel.publicBee.getVideo('public-trigger'),
+      null,
+      'public-to-pending transition is suppressed immediately',
+    )
+    assert.equal((await channel.publicBee.getVideo('public-unrelated')).title, 'Remain public')
+    await channel.addVideo({ id: 'public-add-upsert', title: 'Initially public', uploadedAt: 77 })
+    await channel.addVideo({
+      id: 'public-add-upsert',
+      title: 'Now private',
+      publicationState: 'replicationPending',
+      uploadedAt: 78,
+    }, { syncPublic: false })
+    assert.equal(
+      await channel.publicBee.getVideo('public-add-upsert'),
+      null,
+      'pending add upsert suppresses an existing public row immediately',
+    )
+    assert.equal((await channel.publicBee.getVideo('public-unrelated')).title, 'Remain public')
+
+    await channel.updateVideo('draft-1', { title: 'Pilot revised', episodeNumber: 2 }, { syncPublic: false })
+    const revised = await channel.getVideo('draft-1')
+    assert.equal(revised.title, 'Pilot revised')
+    assert.equal(revised.contentKind, 'episode', 'omitted sidecar fields are preserved')
+    assert.equal(revised.sourceVideoId, 'source-1')
+    assert.equal(revised.episodeNumber, 2)
+    await channel.addVideo({
+      id: 'draft-1',
+      title: 'Pilot retried',
+      episodeNumber: 3,
+    }, { syncPublic: false })
+    const retried = await channel.getVideo('draft-1')
+    assert.equal(retried.contentKind, 'episode', 'partial add upsert preserves omitted details')
+    assert.equal(retried.sourceVideoId, 'source-1')
+    assert.equal(retried.episodeNumber, 3)
+
+    await channel.addVideo({ id: 'legacy', title: 'Legacy', uploadedAt: 50 }, { syncPublic: false })
+    await channel.addVideo({
+      id: 'reused',
+      title: 'Structured original',
+      contentKind: 'video',
+    }, { syncPublic: false })
+    await channel.deleteVideo('reused')
+    await channel.addVideo({ id: 'reused', title: 'Legacy replacement' }, { syncPublic: false })
+    assert.equal('contentKind' in await channel.getVideo('reused'), false, 'delete removes the structured sidecar')
+
+    const legacy = await channel.getVideo('legacy')
+    assert.equal(legacy.title, 'Legacy')
+    assert.equal('publicationState' in legacy, false, 'legacy reads gain no synthetic structured fields')
+    assert.equal(await channel.db.get('@peartubeChannel/contentDetails', { id: 'legacy' }), null)
+  })
+})
+
+test('MultiWriterChannel preserves legacy public sync defaults and honors explicit sync control', async () => {
+  await withChannel(async (channel) => {
+    let publicSyncs = 0
+    channel._syncPublicBeeFromFeedChannel = async () => { publicSyncs++ }
+
+    await channel.addVideo({ id: 'legacy', title: 'Legacy' })
+    assert.equal(publicSyncs, 1, 'legacy add syncs by default')
+    await channel.updateVideo('legacy', { title: 'Legacy revised' })
+    assert.equal(publicSyncs, 2, 'legacy update syncs by default')
+
+    await channel.addVideo({
+      id: 'pending',
+      title: 'Pending',
+      publicationState: 'replicationPending',
+    })
+    assert.equal(publicSyncs, 2, 'pending add does not sync by default')
+    await channel.updateVideo('pending', {
+      publicationState: 'durabilityVerified',
+    })
+    assert.equal(publicSyncs, 3, 'non-pending structured update syncs by default')
+
+    await channel.addVideo({ id: 'explicit-private', title: 'Private' }, { syncPublic: false })
+    await channel.updateVideo('legacy', { title: 'No sync' }, { syncPublic: false })
+    assert.equal(publicSyncs, 3, 'explicit false suppresses sync')
+    await channel.updateVideo('explicit-private', { title: 'Forced sync' }, { syncPublic: true })
+    assert.equal(publicSyncs, 4, 'explicit true forces sync')
   })
 })

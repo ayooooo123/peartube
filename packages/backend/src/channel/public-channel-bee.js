@@ -330,9 +330,15 @@ export class PublicChannelBee extends ReadyResource {
 
     // Add/update videos from source
     const sourceIds = new Set()
+    const pendingIds = new Set()
     const now = Date.now()
     for (const video of videos) {
       if (!video.id) continue
+      if (video.publicationState === 'replicationPending') {
+        pendingIds.add(video.id)
+        batch.push(['@peartubePublic/videos', { id: video.id }, { type: 'delete' }])
+        continue
+      }
       sourceIds.add(video.id)
       batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
         ...video,
@@ -344,7 +350,7 @@ export class PublicChannelBee extends ReadyResource {
     // source snapshots. syncFromChannel intentionally disables this path.
     if (destructive) {
       for (const id of existing) {
-        if (!sourceIds.has(id)) {
+        if (!sourceIds.has(id) && !pendingIds.has(id)) {
           batch.push(['@peartubePublic/videos', { id }, { type: 'delete' }])
         }
       }
@@ -377,8 +383,8 @@ export class PublicChannelBee extends ReadyResource {
       // Sync videos non-destructively. The channel DB may be stale or partial
       // partially materialized (especially after bounded replication waits), so
       // absence from this read must not delete already-published public videos.
-      const videos = await channel.listVideos()
-      await this.syncVideos(videos || [], { destructive: false })
+      const videos = (await channel.listVideos()) || []
+      await this.syncVideos(videos, { destructive: false })
 
       console.log('[PublicBee] Synced from channel:', channel.keyHex?.slice(0, 16))
     } catch (err) {

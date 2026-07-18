@@ -83,6 +83,14 @@ function assignInteger (out, input, field) {
   if (value !== undefined) out[field] = value
 }
 
+function assignPersistedInteger (out, input, field) {
+  const value = optionalSafeInteger(input[field], field)
+  if (value === Number.MAX_SAFE_INTEGER) {
+    throw new Error(`${field} must be less than Number.MAX_SAFE_INTEGER`)
+  }
+  if (value !== undefined) out[field] = value
+}
+
 function normalizeSetValue (value, values, name) {
   if (typeof value !== 'string' || !values.has(value)) throw new Error(`invalid ${name}: ${String(value)}`)
   return value
@@ -123,8 +131,8 @@ export function normalizeChannelProfile (profile) {
   assignString(out, input, 'mediaProvider', MAX_PROVIDER_LENGTH, PROVIDER_PATTERN)
   assignString(out, input, 'mediaId', MAX_ID_LENGTH)
   assignString(out, input, 'originalLanguage', MAX_LANGUAGE_LENGTH)
-  assignInteger(out, input, 'releaseDate')
-  assignInteger(out, input, 'releaseYear')
+  assignPersistedInteger(out, input, 'releaseDate')
+  assignPersistedInteger(out, input, 'releaseYear')
   return out
 }
 
@@ -160,12 +168,12 @@ export function normalizeContentDetails (details) {
   assignString(out, input, 'identityUrl', MAX_URL_LENGTH)
   assignString(out, input, 'sourceCreatorId', MAX_ID_LENGTH)
   assignString(out, input, 'sourceCreatorUrl', MAX_URL_LENGTH)
-  assignInteger(out, input, 'sourcePublishedAt')
+  assignPersistedInteger(out, input, 'sourcePublishedAt')
   assignString(out, input, 'mediaProvider', MAX_PROVIDER_LENGTH, PROVIDER_PATTERN)
   assignString(out, input, 'mediaId', MAX_ID_LENGTH)
-  assignInteger(out, input, 'seasonNumber')
-  assignInteger(out, input, 'episodeNumber')
-  assignInteger(out, input, 'originalAirDate')
+  assignPersistedInteger(out, input, 'seasonNumber')
+  assignPersistedInteger(out, input, 'episodeNumber')
+  assignPersistedInteger(out, input, 'originalAirDate')
   assignString(out, input, 'thumbnailUrl', MAX_URL_LENGTH)
   assignString(out, input, 'provenanceVersion', MAX_PROVENANCE_LENGTH)
   if (input.publicationState !== undefined && input.publicationState !== null) {
@@ -293,8 +301,8 @@ export function normalizeChannelSource (source) {
   if (identityUrl !== undefined) out.identityUrl = identityUrl
   assignString(out, input, 'handle', MAX_HANDLE_LENGTH)
   assignString(out, input, 'displayName', MAX_DISPLAY_LENGTH)
-  assignInteger(out, input, 'createdAt')
-  assignInteger(out, input, 'updatedAt')
+  assignPersistedInteger(out, input, 'createdAt')
+  assignPersistedInteger(out, input, 'updatedAt')
   return out
 }
 
@@ -314,7 +322,7 @@ export function normalizeChannelArtwork (artwork) {
   assignString(out, input, 'blobsCoreKey', MAX_ID_LENGTH)
   assignString(out, input, 'mimeType', MAX_MIME_TYPE_LENGTH)
   assignString(out, input, 'remoteUrl', MAX_URL_LENGTH)
-  assignInteger(out, input, 'updatedAt')
+  assignPersistedInteger(out, input, 'updatedAt')
   return out
 }
 
@@ -366,6 +374,9 @@ export function normalizeImportClaim (claim) {
   assignInteger(out, input, 'createdAt')
   assignInteger(out, input, 'updatedAt')
   assignInteger(out, input, 'releasedAt')
+  if (out.state === 'released' && out.releasedAt === undefined) {
+    throw new Error('releasedAt is required for a released import claim')
+  }
   return out
 }
 

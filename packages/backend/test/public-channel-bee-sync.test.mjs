@@ -78,8 +78,9 @@ test('listVideos returns promptly when a PublicBee video scan stalls', async (t)
   const stream = makeDelayedTimeoutStream(250)
   const publicBee = Object.create(PublicChannelBee.prototype)
   publicBee.waitForSync = async () => {}
-  publicBee.bee = {
-    createReadStream() {
+  publicBee.db = {
+    update() {},
+    find() {
       return stream
     },
   }
@@ -153,6 +154,51 @@ test('syncFromChannel merges partial channel views without deleting missing publ
     t.is(videos.length, 2)
     t.is(byId.get('video-1')?.title, 'Updated from partial view')
     t.is(byId.get('video-2')?.title, 'Second existing public video')
+  })
+})
+
+test('syncFromChannel excludes replication-pending private drafts', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    await publicBee.putVideo('pending', { title: 'Previously public', uploadedAt: 0 })
+    await publicBee.syncFromChannel({
+      keyHex: 'cc'.repeat(32),
+      async getMetadata() {
+        return { name: 'Private drafts' }
+      },
+      async listVideos() {
+        return [
+          { id: 'pending', title: 'Pending', publicationState: 'replicationPending', uploadedAt: 1 },
+          { id: 'legacy', title: 'Legacy public default', uploadedAt: 2 },
+          { id: 'published', title: 'Published', publicationState: 'published', uploadedAt: 3 },
+        ]
+      },
+    })
+
+    const videos = await publicBee.listVideos()
+    t.alike(videos.map((video) => video.id), ['published', 'legacy'])
+    t.absent(await publicBee.getVideo('pending'))
+  })
+})
+
+test('syncVideos never stores replication-pending rows for direct snapshots', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    await publicBee.putVideo('pending', { title: 'Previously public', uploadedAt: 1 })
+    await publicBee.putVideo('unrelated', { title: 'Keep on partial sync', uploadedAt: 2 })
+
+    await publicBee.syncVideos([
+      { id: 'pending', title: 'Now private', publicationState: 'replicationPending', uploadedAt: 3 },
+      { id: 'new-public', title: 'New public', uploadedAt: 4 },
+    ], { destructive: false })
+
+    t.alike((await publicBee.listVideos()).map((video) => video.id), ['new-public', 'unrelated'])
+    t.absent(await publicBee.getVideo('pending'))
+
+    await publicBee.syncVideos([
+      { id: 'pending-direct', title: 'Never public', publicationState: 'replicationPending', uploadedAt: 5 },
+      { id: 'complete-public', title: 'Complete public snapshot', uploadedAt: 6 },
+    ])
+    t.alike((await publicBee.listVideos()).map((video) => video.id), ['complete-public'])
+    t.absent(await publicBee.getVideo('pending-direct'))
   })
 })
 

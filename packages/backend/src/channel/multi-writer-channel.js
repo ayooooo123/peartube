@@ -13,10 +13,115 @@ import { WatchEventLogger } from '../recommendations/watch-events.js'
 import { PublicChannelBee } from './public-channel-bee.js'
 import { normalizeBlobRefInput } from '../blob-ref.js'
 import channelDbDefinition from './channel-hyperdb-spec/hyperdb/index.js'
+import {
+  normalizeArtworkRole,
+  normalizeChannelArtwork,
+  normalizeChannelProfile,
+  normalizeChannelSource,
+  normalizeContentDetails,
+  normalizeImportClaim,
+  resolveClaimWinner
+} from './structured-content.js'
 
 const CURRENT_SCHEMA_VERSION = 1
 const VALID_WRITER_ROLES = new Set(['device', 'moderator', 'owner'])
 const MAX_SAFE_RANGE = Number.MAX_SAFE_INTEGER
+const DEFAULT_IMPORT_CLAIM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+const IMPORT_CLAIM_STATE_RANK = Object.freeze({
+  reserved: 0,
+  published: 1,
+  released: 2
+})
+const LEGACY_VIDEO_FIELDS = [
+  'title',
+  'description',
+  'path',
+  'duration',
+  'thumbnail',
+  'thumbnailBlobId',
+  'thumbnailBlobsCoreKey',
+  'thumbnailMimeType',
+  'blobId',
+  'blobsCoreKey',
+  'blobDriveKey',
+  'mimeType',
+  'size',
+  'category',
+  'views',
+  'uploadedAt',
+  'uploadedBy',
+  'updatedAt',
+  'updatedBy',
+  'schemaVersion',
+  'logicalClock'
+]
+const CHANNEL_PROFILE_FIELDS = [
+  'id',
+  'profileKind',
+  'mediaProvider',
+  'mediaId',
+  'originalLanguage',
+  'releaseDate',
+  'releaseYear'
+]
+const CHANNEL_PROFILE_STORAGE_DEFAULTS = {
+  releaseDate: MAX_SAFE_RANGE,
+  releaseYear: MAX_SAFE_RANGE
+}
+const CHANNEL_SOURCE_FIELDS = [
+  'provider',
+  'identityKey',
+  'sourceId',
+  'identityUrl',
+  'handle',
+  'displayName',
+  'createdAt',
+  'updatedAt'
+]
+const CHANNEL_SOURCE_STORAGE_DEFAULTS = {
+  createdAt: MAX_SAFE_RANGE,
+  updatedAt: MAX_SAFE_RANGE
+}
+const CHANNEL_ARTWORK_FIELDS = [
+  'role',
+  'blobId',
+  'blobsCoreKey',
+  'mimeType',
+  'remoteUrl',
+  'updatedAt'
+]
+const CHANNEL_ARTWORK_STORAGE_DEFAULTS = {
+  updatedAt: MAX_SAFE_RANGE
+}
+const CONTENT_DETAIL_FIELDS = [
+  'contentKind',
+  'sourceProvider',
+  'sourceVideoId',
+  'identityUrl',
+  'sourceCreatorId',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'mediaProvider',
+  'mediaId',
+  'seasonNumber',
+  'episodeNumber',
+  'originalAirDate',
+  'thumbnailUrl',
+  'provenanceVersion',
+  'publicationState',
+  'contentFingerprint',
+  'importIdentityKey',
+  'importClaimantId'
+]
+const CONTENT_STORAGE_DEFAULTS = {
+  contentKind: '',
+  sourceProvider: '',
+  sourceVideoId: '',
+  sourcePublishedAt: MAX_SAFE_RANGE,
+  seasonNumber: MAX_SAFE_RANGE,
+  episodeNumber: MAX_SAFE_RANGE,
+  originalAirDate: MAX_SAFE_RANGE
+}
 
 function toBuffer(value) {
   if (!value) return null
@@ -37,6 +142,45 @@ function stripUndefined(obj) {
     if (value !== undefined) out[key] = value
   }
   return out
+}
+
+function pickDefinedFields(value, fields) {
+  const out = {}
+  if (!value || typeof value !== 'object') return out
+  for (const field of fields) {
+    if (value[field] !== undefined) out[field] = value[field]
+  }
+  return out
+}
+
+function encodeStoredRecord(record, defaults) {
+  return { ...defaults, ...record }
+}
+
+function decodeStoredRecord(record, fields, defaults) {
+  if (!record) return null
+  const decoded = { ...record }
+  for (const field of fields) {
+    if (decoded[field] === null) delete decoded[field]
+  }
+  for (const [field, sentinel] of Object.entries(defaults)) {
+    if (decoded[field] === sentinel) delete decoded[field]
+  }
+  return decoded
+}
+
+function encodeContentDetails(details) {
+  return encodeStoredRecord(details, CONTENT_STORAGE_DEFAULTS)
+}
+
+function decodeContentDetails(details) {
+  return decodeStoredRecord(details, CONTENT_DETAIL_FIELDS, CONTENT_STORAGE_DEFAULTS)
+}
+
+function assertFiniteNonnegative(value, name) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a finite non-negative number`)
+  }
 }
 
 function makeCoreName(keyHex) {
@@ -67,6 +211,7 @@ export class MultiWriterChannel extends ReadyResource {
     this._lastVideoLogicalClock = 0
     this._localRateLimits = new Map()
     this._pairingSetupDone = false
+    this._claimWriteTail = Promise.resolve()
 
     this.ready().catch(() => {})
   }
@@ -248,6 +393,11 @@ export class MultiWriterChannel extends ReadyResource {
     await this.publicBee.syncFromChannel(this)
   }
 
+  async _suppressPublicVideo(id) {
+    if (!this.publicBee?.writable) return
+    await this.publicBee.applyVideoChanges([{ type: 'del', id }])
+  }
+
   async _close() {
     const closeResource = async (resource) => {
       if (!resource || typeof resource.close !== 'function') return
@@ -344,9 +494,18 @@ export class MultiWriterChannel extends ReadyResource {
 
   async getMetadata() {
     await this._update()
-    const meta = await this.db.get('@peartubeChannel/metadata', { key: 'meta' })
+    const [meta, profile] = await Promise.all([
+      this.db.get('@peartubeChannel/metadata', { key: 'meta' }),
+      this.db.get('@peartubeChannel/channelProfiles', { id: 'profile' })
+    ])
+    const logicalProfile = decodeStoredRecord(
+      profile,
+      CHANNEL_PROFILE_FIELDS,
+      CHANNEL_PROFILE_STORAGE_DEFAULTS
+    )
     if (meta && !meta.schemaVersion) meta.schemaVersion = CURRENT_SCHEMA_VERSION
-    return meta || null
+    if (!meta) return logicalProfile
+    return logicalProfile ? { ...meta, ...logicalProfile } : meta
   }
 
   async updateMetadata(updates = {}) {
@@ -374,6 +533,240 @@ export class MultiWriterChannel extends ReadyResource {
     await this.db.insert('@peartubeChannel/metadata', meta)
     await this._flush()
     await this._syncPublicBeeFromFeedChannel()
+  }
+
+  async putChannelProfile(profile) {
+    const normalized = normalizeChannelProfile({ ...(profile || {}), id: 'profile' })
+    await this.db.insert('@peartubeChannel/channelProfiles',
+      encodeStoredRecord(normalized, CHANNEL_PROFILE_STORAGE_DEFAULTS))
+    await this._flush()
+  }
+
+  async getChannelProfile() {
+    await this._update()
+    const profile = await this.db.get('@peartubeChannel/channelProfiles', { id: 'profile' })
+    return decodeStoredRecord(profile, CHANNEL_PROFILE_FIELDS, CHANNEL_PROFILE_STORAGE_DEFAULTS)
+  }
+
+  async putChannelSource(source) {
+    const normalized = normalizeChannelSource(source)
+    await this.db.insert('@peartubeChannel/channelSources',
+      encodeStoredRecord(normalized, CHANNEL_SOURCE_STORAGE_DEFAULTS))
+    await this._flush()
+  }
+
+  async listChannelSources() {
+    await this._update()
+    const sources = await this.db.find('@peartubeChannel/channelSources', {}).toArray()
+    return sources.map((source) =>
+      decodeStoredRecord(source, CHANNEL_SOURCE_FIELDS, CHANNEL_SOURCE_STORAGE_DEFAULTS))
+  }
+
+  async putChannelArtwork(artwork) {
+    const normalized = normalizeChannelArtwork(artwork)
+    await this.db.insert('@peartubeChannel/channelArtwork',
+      encodeStoredRecord(normalized, CHANNEL_ARTWORK_STORAGE_DEFAULTS))
+    await this._flush()
+  }
+
+  async getChannelArtwork(role) {
+    await this._update()
+    const artwork = await this.db.get('@peartubeChannel/channelArtwork', { role: normalizeArtworkRole(role) })
+    return decodeStoredRecord(artwork, CHANNEL_ARTWORK_FIELDS, CHANNEL_ARTWORK_STORAGE_DEFAULTS)
+  }
+
+  async listChannelArtwork() {
+    await this._update()
+    const artwork = await this.db.find('@peartubeChannel/channelArtwork', {}).toArray()
+    return artwork.map((record) =>
+      decodeStoredRecord(record, CHANNEL_ARTWORK_FIELDS, CHANNEL_ARTWORK_STORAGE_DEFAULTS))
+  }
+
+  async _withClaimWriteLock(operation) {
+    const previous = this._claimWriteTail
+    let unlock
+    this._claimWriteTail = new Promise((resolve) => { unlock = resolve })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      unlock()
+    }
+  }
+
+  async putImportClaim(claim) {
+    return this._withClaimWriteLock(() => this._putImportClaim(claim))
+  }
+
+  async _putImportClaim(claim) {
+    const normalized = normalizeImportClaim(claim)
+    if (normalized.writerKey !== this.localWriterKeyHex) {
+      throw new Error('Import claim writerKey must match the authenticated writer')
+    }
+    await this._update()
+    const existing = await this.db.get('@peartubeChannel/importClaims', {
+      identityKey: normalized.identityKey,
+      claimantId: normalized.claimantId
+    })
+    const writerClaims = await this.db.find('@peartubeChannel/claims-by-writer', {
+      identityKey: normalized.identityKey,
+      writerKey: normalized.writerKey
+    }).toArray()
+    if (writerClaims.some((candidate) =>
+      candidate.identityKey === normalized.identityKey &&
+      candidate.writerKey === normalized.writerKey &&
+      candidate.claimantId !== normalized.claimantId &&
+      candidate.state !== 'released')) {
+      throw new Error('Active import claim already exists for the same writer and identity')
+    }
+
+    const now = Date.now()
+    const incomingUpdatedAt = normalized.updatedAt ?? now
+    if (!existing) {
+      if (normalized.state === 'released' && normalized.releasedAt < incomingUpdatedAt) {
+        throw new Error('releasedAt cannot precede the claim update time')
+      }
+      const next = normalizeImportClaim({
+        ...normalized,
+        state: normalized.state ?? 'reserved',
+        createdAt: normalized.createdAt ?? now,
+        updatedAt: incomingUpdatedAt
+      })
+      await this.db.insert('@peartubeChannel/importClaims', next)
+      await this._flush()
+      return next
+    }
+
+    for (const field of ['identityKey', 'claimantId', 'jobId', 'writerKey']) {
+      if (normalized[field] !== existing[field]) {
+        throw new Error(`Import claim ${field} cannot change`)
+      }
+    }
+    if (normalized.createdAt !== undefined && normalized.createdAt !== existing.createdAt) {
+      throw new Error('Import claim createdAt cannot change')
+    }
+    const existingVideoId = existing.videoId || undefined
+    if (existingVideoId !== undefined &&
+        normalized.videoId !== undefined &&
+        normalized.videoId !== existingVideoId) {
+      throw new Error('Import claim videoId cannot change once assigned')
+    }
+    if (existing.state !== 'released' &&
+        normalized.state === 'released' &&
+        normalized.releasedAt < Math.max(existing.updatedAt ?? 0, incomingUpdatedAt)) {
+      throw new Error('releasedAt cannot precede the claim update time')
+    }
+    if (existing.state === 'released' || incomingUpdatedAt < (existing.updatedAt ?? 0)) {
+      return existing
+    }
+    if (incomingUpdatedAt === (existing.updatedAt ?? 0)) {
+      const conflicts = (
+        (normalized.videoId !== undefined && normalized.videoId !== existingVideoId) ||
+        (normalized.state !== undefined && normalized.state !== existing.state) ||
+        (normalized.releasedAt !== undefined && normalized.releasedAt !== existing.releasedAt)
+      )
+      if (conflicts) throw new Error('Import claim equal timestamp payload conflict')
+      return existing
+    }
+
+    const nextState = normalized.state ?? existing.state
+    if (IMPORT_CLAIM_STATE_RANK[nextState] < IMPORT_CLAIM_STATE_RANK[existing.state]) {
+      throw new Error(`Invalid import claim state transition from ${existing.state} to ${nextState}`)
+    }
+    const next = normalizeImportClaim({
+      ...existing,
+      state: nextState,
+      videoId: existingVideoId ?? normalized.videoId,
+      updatedAt: incomingUpdatedAt,
+      releasedAt: nextState === 'released' ? normalized.releasedAt : existing.releasedAt
+    })
+    await this.db.insert('@peartubeChannel/importClaims', next)
+    await this._flush()
+    return next
+  }
+
+  async listImportClaims(identityKey) {
+    if (typeof identityKey !== 'string' || identityKey.length === 0) {
+      throw new Error('Import identity key required')
+    }
+    await this._update()
+    const claims = await this.db.find('@peartubeChannel/claims-by-identity', { identityKey }).toArray()
+    return claims.filter((claim) => claim.identityKey === identityKey)
+  }
+
+  async resolveImportClaim(identityKey) {
+    return resolveClaimWinner(await this.listImportClaims(identityKey))
+  }
+
+  async releaseImportClaim(identityKey, claimantId, releasedAt = Date.now()) {
+    return this._withClaimWriteLock(() => this._releaseImportClaim(identityKey, claimantId, releasedAt))
+  }
+
+  async _releaseImportClaim(identityKey, claimantId, releasedAt) {
+    const claims = await this.listImportClaims(identityKey)
+    const existing = claims.find((claim) => claim.claimantId === claimantId)
+    if (!existing) throw new Error('Import claim not found')
+    if (existing.writerKey !== this.localWriterKeyHex) {
+      throw new Error('Import claim writerKey must match the authenticated writer')
+    }
+    if (existing.state !== 'released' && releasedAt < (existing.updatedAt ?? 0)) {
+      throw new Error('releasedAt cannot precede the claim update time')
+    }
+    const effectiveReleasedAt = existing.state === 'released'
+      ? existing.releasedAt
+      : releasedAt
+    const released = normalizeImportClaim({
+      ...existing,
+      state: 'released',
+      updatedAt: Math.max(existing.updatedAt ?? 0, effectiveReleasedAt),
+      releasedAt: effectiveReleasedAt
+    })
+    await this.db.insert('@peartubeChannel/importClaims', released)
+    await this._flush()
+    return released
+  }
+
+  async compactReleasedImportClaims(options = {}) {
+    return this._withClaimWriteLock(() => this._compactReleasedImportClaims(options))
+  }
+
+  async _compactReleasedImportClaims({
+    now,
+    retentionMs = DEFAULT_IMPORT_CLAIM_RETENTION_MS,
+    isJobActive
+  } = {}) {
+    assertFiniteNonnegative(now, 'now')
+    assertFiniteNonnegative(retentionMs, 'retentionMs')
+    if (typeof isJobActive !== 'function') throw new Error('isJobActive must be a function')
+
+    await this._update()
+    const claims = await this.db.find('@peartubeChannel/importClaims', {}).toArray()
+    const byIdentity = new Map()
+    for (const claim of claims) {
+      const group = byIdentity.get(claim.identityKey)
+      if (group) group.push(claim)
+      else byIdentity.set(claim.identityKey, [claim])
+    }
+
+    let deleted = 0
+    for (const claim of claims) {
+      if (claim.state !== 'released' || claim.releasedAt === undefined) continue
+      if (now - claim.releasedAt < retentionMs) continue
+      if (await isJobActive(claim.jobId, claim)) continue
+
+      const identityClaims = byIdentity.get(claim.identityKey)
+      const contenders = identityClaims.filter((candidate) => candidate.state !== 'released')
+      const winner = resolveClaimWinner(identityClaims)
+      if (contenders.length > 0 && winner?.state !== 'published') continue
+
+      await this.db.delete('@peartubeChannel/importClaims', {
+        identityKey: claim.identityKey,
+        claimantId: claim.claimantId
+      })
+      deleted++
+    }
+    if (deleted > 0) await this._flush()
+    return { deleted }
   }
 
   async listWriters() {
@@ -470,21 +863,35 @@ export class MultiWriterChannel extends ReadyResource {
 
   async listVideos() {
     await this._update()
-    return this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray()
+    const [videos, details] = await Promise.all([
+      this.db.find('@peartubeChannel/videos-by-uploaded-at', {}, { reverse: true }).toArray(),
+      this.db.find('@peartubeChannel/contentDetails', {}).toArray()
+    ])
+    if (details.length === 0) return videos
+    const detailsById = new Map(details.map((record) => [record.id, decodeContentDetails(record)]))
+    return videos.map((video) => {
+      const sidecar = detailsById.get(video.id)
+      return sidecar ? { ...video, ...sidecar } : video
+    })
   }
 
   async getVideo(id) {
     if (!id) return null
     await this._update()
-    return this.db.get('@peartubeChannel/videos', { id })
+    const [video, details] = await Promise.all([
+      this.db.get('@peartubeChannel/videos', { id }),
+      this.db.get('@peartubeChannel/contentDetails', { id })
+    ])
+    if (!video) return null
+    return details ? { ...video, ...decodeContentDetails(details) } : video
   }
 
-  async addVideo(meta) {
-    const id = meta.id
+  async addVideo(meta, { syncPublic = meta?.publicationState !== 'replicationPending' } = {}) {
+    const id = meta?.id
     if (!id) throw new Error('Video id required')
     const nextClock = this._nextVideoLogicalClock()
     const videoMeta = stripUndefined({
-      ...cloneWithoutInternalVideoFields(meta),
+      ...pickDefinedFields(meta, LEGACY_VIDEO_FIELDS),
       id,
       title: typeof meta.title === 'string' ? meta.title : String(meta.title ?? ''),
       description: typeof meta.description === 'string' ? meta.description : '',
@@ -493,35 +900,67 @@ export class MultiWriterChannel extends ReadyResource {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock
     })
+    const detailsInput = pickDefinedFields(meta, CONTENT_DETAIL_FIELDS)
+    let details = null
+    if (Object.keys(detailsInput).length > 0) {
+      await this._update()
+      const existingDetails = await this.db.get('@peartubeChannel/contentDetails', { id })
+      details = normalizeContentDetails({
+        ...(decodeContentDetails(existingDetails) || {}),
+        ...detailsInput,
+        id
+      })
+    }
+
     await this.db.insert('@peartubeChannel/videos', videoMeta)
+    if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
     await this._flush()
-    await this._syncPublicBeeFromFeedChannel()
+    if (details?.publicationState === 'replicationPending') {
+      await this._suppressPublicVideo(id)
+    } else if (syncPublic) {
+      await this._syncPublicBeeFromFeedChannel()
+    }
   }
 
-  async updateVideo(id, updates) {
+  async updateVideo(id, updates, { syncPublic = updates?.publicationState !== 'replicationPending' } = {}) {
     if (!id) throw new Error('Video id required')
-    const existing = await this.getVideo(id)
+    await this._update()
+    const [existing, existingDetails] = await Promise.all([
+      this.db.get('@peartubeChannel/videos', { id }),
+      this.db.get('@peartubeChannel/contentDetails', { id })
+    ])
     if (!existing) throw new Error('Video not found: ' + id)
     const nextClock = this._nextVideoLogicalClock()
     const videoMeta = stripUndefined({
       ...existing,
-      ...cloneWithoutInternalVideoFields(updates),
+      ...pickDefinedFields(updates, LEGACY_VIDEO_FIELDS),
       id,
-      updatedAt: updates.updatedAt || Date.now(),
-      updatedBy: updates.updatedBy || this.localWriterKeyHex,
+      updatedAt: updates?.updatedAt || Date.now(),
+      updatedBy: updates?.updatedBy || this.localWriterKeyHex,
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock
     })
+    const detailsPatch = pickDefinedFields(updates, CONTENT_DETAIL_FIELDS)
+    const details = Object.keys(detailsPatch).length > 0
+      ? normalizeContentDetails({ ...(decodeContentDetails(existingDetails) || {}), ...detailsPatch, id })
+      : null
+
     await this.db.insert('@peartubeChannel/videos', videoMeta)
+    if (details) await this.db.insert('@peartubeChannel/contentDetails', encodeContentDetails(details))
     await this._flush()
-    await this._syncPublicBeeFromFeedChannel()
+    if (details?.publicationState === 'replicationPending') {
+      await this._suppressPublicVideo(id)
+    } else if (syncPublic) {
+      await this._syncPublicBeeFromFeedChannel()
+    }
   }
 
   async deleteVideo(id) {
     if (!this.writable) throw new Error('Channel is not writable')
     await this.db.delete('@peartubeChannel/videos', { id })
+    await this.db.delete('@peartubeChannel/contentDetails', { id })
     await this._flush()
-    await this._syncPublicBeeFromFeedChannel()
+    await this._suppressPublicVideo(id)
   }
 
   async putBlob(data) {

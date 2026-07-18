@@ -396,10 +396,10 @@ Execution is sequential by default to bound disk usage, bandwidth, backend conte
 
 Checkpoint after every state transition that changes external effects. `published` is terminal only after public projection, feed announcement, and final private/public item-state synchronization succeed. Projection, announcement, and finalization are idempotent by channel/content identity. On restart:
 
-Before calling `uploadFromPath`, the queue checkpoints `uploading` with a deterministic video ID derived from the writable channel and durable job identity, the verified artifact hash/path, and the intended structured metadata. `uploadFromPath` accepts that video ID as an idempotency key. After it returns, the queue checkpoints `uploaded` with the resulting media/artwork blob refs before creating the pending draft. On restart from `uploading`, the queue first looks up that deterministic video ID in the private channel: if the completed record exists, it reconstructs and checkpoints `uploaded` without invoking the downloader or `uploadFromPath`; otherwise it resumes the idempotent upload from the verified artifact. A crash inside the upload may leave unreachable blob blocks, but cannot create a second video record; normal orphan cleanup may reclaim those blocks.
+Before calling `uploadFromPath`, the queue checkpoints `uploading` with a deterministic video ID derived from the writable channel and durable job identity, the verified artifact hash/path, and the intended structured metadata. `uploadFromPath` accepts that video ID as an idempotency key and atomically commits the resulting private video record as the `replicationPending` draft; there is no second draft record or later draft-creation step. After it returns, the queue checkpoints `uploaded` with the stable media/artwork blob refs already referenced by that draft. On restart from `uploading`, the queue first looks up that deterministic private video ID: if the `replicationPending` record exists, it reconstructs and checkpoints `uploaded` without invoking the downloader or `uploadFromPath`; otherwise it resumes the idempotent upload from the verified artifact. A crash inside the upload may leave unreachable blob blocks, but cannot create a second video record; normal orphan cleanup may reclaim those blocks.
 
 - `published` rows are not repeated
-- `uploaded` rows create or reconcile the private pending draft without repeating download or upload
+- `uploaded` rows reconcile the existing private `replicationPending` draft and begin pinning without repeating download or upload
 - `uploading` rows reconcile the deterministic private video ID before deciding whether the idempotent upload must resume
 - `projecting` or `projected` rows replay/continue projection safely
 - `announcing` rows retry idempotent announcement
@@ -433,8 +433,8 @@ A single untrusted peer cannot satisfy durability. `ctx.trustedRelayKeys` is emp
 
 For each verified manifest row:
 
-1. Checkpoint the deterministic upload intent, then idempotently upload media and selected artwork to local blobs.
-2. Checkpoint `uploaded` with stable channel, video, and blob identifiers, then idempotently write the private channel draft with `publicationState: replicationPending`; keep channel profile/source changes staged in the job.
+1. Checkpoint the deterministic upload intent, then idempotently upload media and selected artwork; `uploadFromPath` atomically commits the deterministic private video as `replicationPending`.
+2. Checkpoint `uploaded` with the stable channel, video, and blob identifiers already held by that draft; keep channel profile/source changes staged in the job.
 3. Send an idempotent full-copy pin request to connected seed-capable peers.
 4. Prioritize every complete required range.
 5. Observe remote bitfield/contiguous-range progress.

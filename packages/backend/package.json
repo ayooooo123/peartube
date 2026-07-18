@@ -91,6 +91,7 @@
     "protomux": "^3.10.1",
     "protomux-wakeup": "^2.9.0",
     "ready-resource": "^1.2.0",
+    "sodium-universal": "^5.0.1",
     "sub-encoder": "^2.1.3",
     "z32": "^1.1.0"
   },

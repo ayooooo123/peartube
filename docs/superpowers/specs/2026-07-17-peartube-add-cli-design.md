@@ -291,11 +291,13 @@ Grouping identity and sort fields are immutable after publication. Newer inserts
 Group summaries are derived from persisted fields:
 
 - creator: `latest`, `videos`, `streams`, `extras`
-- TV show: one group per season plus `extras`
-- movie: `movie`, `trailers`, `extras`
+- TV show: one group per season plus `extras`, and a conditional `latest` group when ungrouped items exist
+- movie: `movie`, `trailers`, `extras`, and a conditional `latest` group when ungrouped items exist
 - standard channel: `latest`
 
 Clients do not parse filenames or titles. All legacy or otherwise ungrouped content uses the stable `latest` group and its descending effective-publication-time ordering.
+
+Group-summary order is stable. Creator groups use `latest`, `videos`, `streams`, `extras`; TV uses numeric seasons ascending, then `extras`, then conditional `latest`; movie uses `movie`, `trailers`, `extras`, then conditional `latest`; standard channels use `latest`. Empty optional groups are omitted without changing the relative order of groups that remain.
 
 Native clients continue to validate the universal protocol version before applying returned data. Introducing the catalog contract requires the appropriate shared protocol version update and regenerated Swift outputs.
 
@@ -458,7 +460,7 @@ Logical units are:
 
 `registerSeedPinProtocol(ctx)` is called by `packages/backend/src/orchestrator.js` after storage has created the Corestore/swarm and before public discovery or relay service start. It attaches the receiver to existing connections and subscribes to future swarm connections, while Corestore replication continues on the same authenticated streams.
 
-`PIN_REQUEST` carries a deterministic request ID, requester swarm key, channel key, signed channel-root descriptor, sorted normalized blob refs with roles, retention request, expiry, and an identity signature over the canonical payload. The request ID is the SHA-256 digest of channel key, durable manifest row ID, and sorted refs, making replay idempotent. The requester swarm key is inside the signed payload and must equal the Noise connection's remote public key. The signature public key must equal the verified descriptor's identity public key, binding the request to both the channel identity and the live transport peer. The relay then applies channel/owner admission and storage capacity before accepting.
+`PIN_REQUEST` carries a deterministic request ID, requester swarm key, channel key, signed channel-root descriptor, sorted normalized blob refs with roles, retention request, expiry, and a device attestation over the canonical request payload. The request ID is the SHA-256 digest of channel key, durable manifest row ID, and sorted refs, making replay idempotent. The requester creates the attestation with `IdentityKey.attestData(payload, ctx.swarm.keyPair, descriptorProof)`, reusing the identity proof already present in the signed descriptor; no persisted identity secret key is required. Verification uses `IdentityKey.verify` with the descriptor identity as `expectedIdentity`, requires the returned device public key to equal both the verified descriptor device key and the signed requester swarm key, and requires that swarm key to equal the Noise connection's remote public key. The relay then applies channel/owner admission and storage capacity before accepting.
 
 Responses are correlated by request ID and have `accepted`, `rejected`, `progress`, or `complete` state with reason codes. The receiver persists acceptance before starting the worker. Repeated requests return the existing state. A `complete` response is still only a hint: the uploader independently verifies remote bitfields. All codecs and handlers live in the universal backend path and avoid Node-only APIs so relay and Bare runtimes share one protocol.
 
@@ -675,6 +677,7 @@ A native creator directory is a strong long-term direction, but it cold-starts e
 - Channel artwork uses a dedicated collection keyed by role (`avatar`, `poster`, `banner`, `backdrop`) with MIME type, remote provenance URL, and blob coordinates. Published profile responses normalize that collection.
 - HRPC operations are `get-content-catalog` and `get-content-items`, with the pagination semantics in this specification. Their host/protocol/platform/generated-JS/generated-Swift release and shared protocol-version bump are one atomic cutover.
 - Interactive settings use the existing `PEARTUBE_CONFIG` file under a `content` section, with `TMDB_API_KEY` as the environment override. Secret entry disables echo, logging redacts it, and a newly created secret-bearing config is mode `0600`.
+- Released import claims use a configurable retention window with a 30-day default. Compaction still requires no active job reference and either a published winner or no remaining contender.
 - The source capability matrix is an allowlist in code. V1 must support fixture-backed YouTube text search and generic direct-URL inspection; any additional search/profile/list capability is enabled only with a committed adapter fixture. Live failures still degrade at runtime.
 - Local file identity is file size plus a streaming SHA-256 of the complete file, computed during preflight before the claim is finalized. Partial sampling cannot block a duplicate as exact.
 - Canonical URLs lowercase scheme/host, remove fragments and default ports, strip known tracking parameters, preserve semantically meaningful query parameters, and defer provider-specific identity normalization to the adapter. Stable provider/source IDs take precedence over URL identity.

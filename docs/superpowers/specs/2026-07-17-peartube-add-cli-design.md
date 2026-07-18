@@ -637,46 +637,49 @@ The first implementation slice exposes a complete, testable URL workflow without
 ```text
 peartube add <url>
 peartube add <url> --type episode --provider tmdb --show-id <id> --season <n> --episode <n> --yes
+peartube add <url> --type movie --provider tmdb --movie-id <id> --yes
 peartube config
 peartube help
 ```
 
-Interactive mode searches TMDB, selects a show or movie and, for TV, a season and episode, then reviews normalized metadata before import. Scripted mode resolves the same normalized record from explicit provider coordinates. The provider interface supports search plus show, season, episode, and movie lookup. TMDB is the first implementation. TVDB remains a future adapter and must report that it is unavailable rather than silently substituting another provider.
+Interactive mode searches TMDB, selects a show or movie and, for TV, a season and episode, then reviews normalized metadata before import. Scripted mode resolves the same normalized record from explicit provider coordinates. V1 accepts `episode` and `movie`. An episode requires `--provider`, `--show-id`, `--season`, and `--episode` and forbids `--movie-id`. A movie requires `--provider` and `--movie-id` and forbids show, season, and episode flags. `--provider tmdb` is the only implemented V1 provider. Missing or contradictory coordinates are usage errors. Missing coordinates may open the picker only when stdin and stderr are TTYs and `--no-input` is absent; otherwise the command fails without prompting.
 
-The Node-only `peartube` entry point lazily imports terminal and metadata-provider dependencies so the existing Node and Bare relay/peer executables remain unchanged. It reuses the existing archive downloader, publisher, backend runtime, identity manager, upload manager, feed publication, thumbnail attachment, and seeding paths rather than introducing a second backend.
+The provider interface supports search plus show, season, episode, and movie lookup. TMDB is the first implementation. TVDB remains a future adapter and must report that it is unavailable rather than silently substituting another provider.
 
-TV episodes reuse or create one channel keyed by media provider plus stable show ID. Movies use provider plus stable movie ID. Name equality alone never reuses a channel. The upload path and private/public channel builders must explicitly preserve the normalized content kind, provider IDs, show/movie identity, season and episode coordinates, air/release date, source identity, sanitized canonical URL, provenance, and artwork blob coordinates; passing extra options to the current fixed `uploadFromPath` option set is insufficient.
+The package maps the `peartube` bin to a dedicated Node entry point, `peartube.js`. That entry point lazily imports terminal and metadata-provider dependencies. It does not import or dispatch through `bin.js`; `bare-bin.js` may continue to import the existing relay/peer graph without acquiring Node-only dependencies. The new path reuses the existing archive downloader, publisher, backend runtime, identity manager, upload manager, feed publication, thumbnail attachment, and seeding components rather than introducing a second backend.
 
-Before source inspection or media download, the CLI searches local writable channels, locally cached or replicated channels, and the public PearTube catalog. Exact movie identity (`provider + movie ID`) or episode identity (`provider + show ID + season + episode`) is a successful no-op. Human output identifies the existing channel, item, and availability source. JSON output returns `status: "already-exists"` with stable identifiers. Fuzzy title/year matches are advisory and never block. `--force` may bypass local job or source duplicates but cannot create a duplicate of an exact published structured identity.
+TV episodes reuse or create one channel keyed by media provider plus stable show ID. Movies use provider plus stable movie ID. Name equality alone never reuses a channel. The upload path and private/public channel builders must explicitly preserve the normalized content kind, provider IDs, show/movie identity, season and episode coordinates, air/release date, source identity, canonical identity URL, provenance, and artwork blob coordinates; passing extra options to the current fixed `uploadFromPath` option set is insufficient.
 
-Tokenized source URLs are runtime-only. Human output, errors, configuration, job logs, and persisted provenance must not contain query strings or fragments. `yt-dlp` still receives the original URL as an argument. The persisted canonical source URL is sanitized. CLI flags override environment, which overrides user configuration. `TMDB_API_KEY` supplies the first metadata provider credential.
+Before source inspection or media download, the CLI checks the target writable channel, local durable jobs, and synchronized claims already observed for that channel. An exact movie identity (`provider + movie ID`) or episode identity (`provider + show ID + season + episode`) in that authority is a successful no-op. Human output identifies the existing channel, item, and availability source. JSON output returns `status: "already-exists"` with stable identifiers. `--force` may bypass a failed local source job but cannot duplicate an exact identity already published or pending in the writable target channel.
 
-Diagnostics and progress use stderr. The final human or `--json` result uses stdout. A non-interactive invocation without all required coordinates fails instead of prompting. Ctrl-C cancels download without creating a published record. Publication failure after a successful local import retains the local identifiers and a resumable job checkpoint so retry does not download or upload the media again.
+The CLI also searches locally cached/replicated catalogs and the public PearTube feed for possible existing content. Network results are advisory because unrelated publishers are separate authorities and the current feed preview does not carry a complete identity index. Exact structured network matches are reported first when observable; fuzzy title/year matches follow as warnings. Neither blocks publication. A future bounded identity-index protocol with defined freshness is required before network-wide exact matches can become authoritative blockers.
 
-The slice is complete only when focused tests prove interactive and scripted parsing, URL redaction, TMDB normalization and failures, exact local/network duplicate detection before download, advisory fuzzy matches, structured field round trips through upload and public projection, provider-identity channel reuse, successful download/upload/publication orchestration, and unchanged relay/Bare entry-point loading. Its smoke gate imports an openly licensed small video through isolated temporary storage and observes the structured published result.
+Source URL handling has three explicit forms produced by one central normalizer. `fetchUrl` is the original runtime value passed only to `yt-dlp` and retained in memory. `identityUrl` lowercases scheme/host, removes fragments/default ports and known secret or tracking parameters, preserves provider-declared identity-bearing parameters, and is the only source URL persisted as provenance. `displayUrl` additionally removes user info and all query values and is safe for diagnostics. Job state never persists `fetchUrl`; a failure before a verified download artifact exists requires the user to supply the URL again. After download, resume uses the verified artifact path and no longer needs the fetch URL. Errors from the downloader, archive manager, and backend pass through the same central redactor before logging or persistence.
+
+CLI flags override environment, which overrides user configuration. `TMDB_API_KEY` supplies the first metadata provider credential. Diagnostics and progress use stderr. The final human or `--json` result uses stdout. The backend path used by this command must route diagnostics through an injected logger rather than direct `console.log`; a process-level test requires `--json` stdout to contain exactly one parseable JSON value. Ctrl-C cancels download without creating a published record.
+
+Publication failure after a successful local import retains the same channel, video, blob identifiers, verified local artifact, and resumable job checkpoint. Restart from persisted-upload, projection, announcement, or finalization checkpoints must not invoke the downloader or `uploadFromPath` again. Focused crash tests reopen storage at each checkpoint and assert stable identifiers and one terminal publication.
+
+The first-deliverable smoke fixture starts isolated uploader storage plus a configured trusted relay, imports an openly licensed small video, waits for the relay to hold every required media/artwork range, and then observes the structured published result. A separate no-peer smoke check must remain at `replicationPending` and must not announce the item.
+
+The first deliverable is one vertical implementation plan: rich optional schema fields and upload/public projection round trips; single-item draft and resumable publication checkpoints; required blob-set durability and the trusted-relay pin path; target-authority duplicate lookup plus advisory network search; the dedicated Node CLI, TMDB normalization, review, and URL download; and the two smoke gates above. It excludes bulk mapping, creator discovery, network-wide authoritative identity indexing, and client catalog rendering. Those remain later plans and cannot block delivery of the single-item command.
+
+The slice is complete only when focused tests prove interactive and scripted parsing, the complete coordinate matrix, centralized URL redaction, TMDB normalization and failures, authoritative local duplicate no-ops before download, advisory network results, structured field round trips through upload and public projection, provider-identity channel reuse, one-value JSON stdout, restart without re-download/re-upload at every publication checkpoint, successful trusted-relay publication, safe no-peer pending behavior, and unchanged relay/Bare entry-point loading.
 
 ## Planning and Rollout
 
-This specification is one product program but should be implemented through four dependent plans with explicit verification gates:
+After the first vertical deliverable, the remaining product program proceeds through dependent plans:
 
-1. **Persistence and publication state machine**
-   - evolve channel/public schemas, channel sources, artwork, import claims, rich video fields, and indexes
-   - extend upload persistence
-   - implement private drafts, staged channel patches, idempotent projection, announcement checkpoints, and legacy compatibility
-2. **Pin transport and durability**
-   - implement direct blob-set holder intersection
-   - configure trusted relay keys/connections
-   - implement `peartube/seed-pin/1`, admission, persistent pins, progress, restart, and offload handoff
-3. **Catalog protocol and clients**
-   - add schema-first paginated catalog RPCs
+1. **Catalog protocol and clients**
+   - add schema-first paginated catalog RPCs and a bounded identity-search contract if network-wide authoritative lookup is desired
    - regenerate and atomically cut over host, protocol, platform, and Swift consumers
    - render structured and legacy channels in Expo/Electrobun and native macOS
-4. **CLI discovery and import execution**
-   - add the Node-only `peartube` executable and TUI state machine
-   - add TMDB and `yt-dlp` normalization
-   - add single-item import, verified bulk mapping, durable queue execution, and end-to-end smoke scenarios
+2. **Bulk and creator import**
+   - add creator discovery and cross-platform source attachment
+   - add verified bulk mapping, distributed import claims, and durable queue execution
+   - extend end-to-end smoke scenarios across seasons, playlists, and creator catalogs
 
-Each plan starts only after the preceding plan's focused smoke gate passes. The CLI depends on structured persistence and verified seeding; shipping the interactive shell before those contracts work would create polished data loss or falsely claim durability.
+Each later plan starts only after the preceding plan's focused smoke gate passes. Rich persistence, verified seeding, and resumable single-item publication are part of the first vertical slice rather than hidden prerequisites or deferred cleanup.
 
 ## Alternatives Rejected
 

@@ -12,6 +12,7 @@ import { ReactionsManager } from './reactions.js'
 import { WatchEventLogger } from '../recommendations/watch-events.js'
 import { PublicChannelBee } from './public-channel-bee.js'
 import { normalizeBlobRefInput } from '../blob-ref.js'
+import { compareSignedChannelRootDescriptors } from '../channel-descriptor.js'
 import channelDbDefinition from './channel-hyperdb-spec/hyperdb/index.js'
 import {
   normalizeArtworkRole,
@@ -183,6 +184,62 @@ function assertFiniteNonnegative(value, name) {
   }
 }
 
+
+function mergeEqualRevisionRecords(left, right) {
+  const current = stripUndefined(left)
+  const candidate = stripUndefined(right)
+  const merged = {}
+  for (const field of new Set([...Object.keys(current), ...Object.keys(candidate)])) {
+    const currentValue = current[field]
+    const candidateValue = candidate[field]
+    if (currentValue === undefined) {
+      merged[field] = candidateValue
+    } else if (candidateValue === undefined) {
+      merged[field] = currentValue
+    } else {
+      merged[field] = JSON.stringify(candidateValue) > JSON.stringify(currentValue)
+        ? candidateValue
+        : currentValue
+    }
+  }
+  return merged
+}
+
+function mergeStagedRecords(existing, incoming, keyOf) {
+  const records = new Map()
+  for (const record of existing || []) records.set(keyOf(record), { ...record })
+  for (const candidate of incoming || []) {
+    const key = keyOf(candidate)
+    const current = records.get(key)
+    if (!current) {
+      records.set(key, { ...candidate })
+      continue
+    }
+    const currentUpdatedAt = Number.isFinite(current.updatedAt) ? current.updatedAt : -1
+    const candidateUpdatedAt = Number.isFinite(candidate?.updatedAt) ? candidate.updatedAt : -1
+    let merged
+    if (candidateUpdatedAt > currentUpdatedAt) {
+      merged = { ...current, ...stripUndefined(candidate) }
+    } else if (currentUpdatedAt > candidateUpdatedAt) {
+      merged = { ...stripUndefined(candidate), ...current }
+    } else {
+      merged = mergeEqualRevisionRecords(current, candidate)
+    }
+    records.set(key, merged)
+  }
+  return [...records.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, record]) => record)
+}
+
+function channelSourceStageKey(source) {
+  return `${source?.provider || ''}\u0000${source?.identityKey || ''}`
+}
+
+function channelArtworkStageKey(artwork) {
+  return artwork?.role || ''
+}
+
 function makeCoreName(keyHex) {
   return `peartube-channel-hyperdb-${keyHex || 'default'}`
 }
@@ -201,6 +258,15 @@ export class MultiWriterChannel extends ReadyResource {
     this.pairing = null
     this.pairingMember = null
     this.publicBee = null
+    this._publicDiscovery = null
+    const deferredProjection = opts.deferPublicProjection === true
+    this._publicProjectionActive =
+      !deferredProjection || opts.publicProjectionState === 'active'
+    this._publicProjectionCommitState = this._publicProjectionActive ? 'active' : 'pending'
+    this._stagedPublicProjection = {}
+    this._inFlightPublicProjection = null
+    this._publicActivation = null
+    this._publicProjectionClosing = false
     this.comments = null
     this.reactions = null
     this.watchLogger = null
@@ -254,6 +320,10 @@ export class MultiWriterChannel extends ReadyResource {
 
   get publicBeeKey() {
     return this.publicBee?.keyHex || null
+  }
+
+  get publicProjectionActive() {
+    return this._publicProjectionActive
   }
 
   async _open() {
@@ -366,22 +436,17 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.writable) return
     const existingMeta = await this.getMetadata().catch(() => null)
     const existingPublicBeeKey = existingMeta?.publicBeeKey || null
-    const isValidPublicBeeKey = (k) => typeof k === 'string' && /^[0-9a-f]{64}$/i.test(k)
+    const isValidPublicBeeKey = (key) =>
+      typeof key === 'string' && /^[0-9a-f]{64}$/i.test(key)
 
     this.publicBee = isValidPublicBeeKey(existingPublicBeeKey)
       ? new PublicChannelBee(this.store, { key: existingPublicBeeKey })
       : new PublicChannelBee(this.store, { name: `peartube-public-${this.keyHex}` })
 
     await this.publicBee.ready()
+    if (!this._publicProjectionActive) return
 
-    if (this.swarm && this.publicBee.discoveryKey) {
-      try {
-        this.swarm.join(this.publicBee.discoveryKey)?.flushed?.().catch(() => {})
-      } catch {
-        // best effort
-      }
-    }
-
+    await this._joinPublicDiscovery()
     if (this.publicBee.keyHex && existingMeta?.publicBeeKey !== this.publicBee.keyHex) {
       await this.updateMetadata({ publicBeeKey: this.publicBee.keyHex })
     }
@@ -389,8 +454,214 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async _syncPublicBeeFromFeedChannel() {
-    if (!this.publicBee?.writable) return
+    if (!this._publicProjectionActive || !this.publicBee?.writable) return
     await this.publicBee.syncFromChannel(this)
+  }
+ 
+  async _flushPublicDiscovery(discovery) {
+    const flushed = discovery?.flushed?.()
+    if (!flushed || typeof flushed.then !== 'function') return
+    const configured = Number(this.opts.publicDiscoveryFlushTimeoutMs)
+    const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 5000
+    let timer = null
+    try {
+      await Promise.race([
+        flushed,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`Public discovery flush timed out after ${timeoutMs}ms`)),
+            timeoutMs
+          )
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  async _joinPublicDiscovery({ strict = false } = {}) {
+    if (this._publicProjectionClosing || this.closing) {
+      if (strict) throw new Error('Channel is closing')
+      return this._publicDiscovery
+    }
+    if (this._publicDiscovery) {
+      if (strict) await this._flushPublicDiscovery(this._publicDiscovery)
+      return this._publicDiscovery
+    }
+    if (!this.swarm || !this.publicBee?.discoveryKey) {
+      if (strict) throw new Error('Public discovery is unavailable')
+      return null
+    }
+
+    let discovery = null
+    try {
+      discovery = this.swarm.join(this.publicBee.discoveryKey)
+      if (strict) {
+        await this._flushPublicDiscovery(discovery)
+        if (this._publicProjectionClosing || this.closing) {
+          throw new Error('Channel is closing')
+        }
+      } else {
+        discovery?.flushed?.().catch(() => {})
+      }
+      this._publicDiscovery = discovery
+      return discovery
+    } catch (err) {
+      try { await discovery?.destroy?.() } catch { /* best effort */ }
+      try { await discovery?.close?.() } catch { /* best effort */ }
+      if (this._publicDiscovery === discovery) this._publicDiscovery = null
+      if (strict) throw err
+      return null
+    }
+  }
+
+  stagePublicProjection({
+    stagedDescriptor,
+    stagedProfile,
+    stagedSources,
+    stagedArtwork
+  } = {}) {
+    if (stagedDescriptor !== undefined) {
+      const currentDescriptor = this.getStagedPublicProjection().stagedDescriptor
+      if (
+        currentDescriptor === undefined ||
+        compareSignedChannelRootDescriptors(stagedDescriptor, currentDescriptor) > 0
+      ) {
+        this._stagedPublicProjection.stagedDescriptor = stagedDescriptor
+      }
+    }
+    if (stagedProfile !== undefined) {
+      this._stagedPublicProjection.stagedProfile = {
+        ...(this._stagedPublicProjection.stagedProfile || {}),
+        ...stagedProfile
+      }
+    }
+    if (stagedSources !== undefined) {
+      this._stagedPublicProjection.stagedSources = mergeStagedRecords(
+        this._stagedPublicProjection.stagedSources,
+        stagedSources,
+        channelSourceStageKey
+      )
+    }
+    if (stagedArtwork !== undefined) {
+      this._stagedPublicProjection.stagedArtwork = mergeStagedRecords(
+        this._stagedPublicProjection.stagedArtwork,
+        stagedArtwork,
+        channelArtworkStageKey
+      )
+    }
+    return this.getStagedPublicProjection()
+  }
+
+  getStagedPublicProjection() {
+    const inFlight = this._inFlightPublicProjection || {}
+    const queued = this._stagedPublicProjection
+    const stagedProfile = inFlight.stagedProfile || queued.stagedProfile
+      ? {
+          ...(inFlight.stagedProfile || {}),
+          ...(queued.stagedProfile || {})
+        }
+      : undefined
+    const stagedSources = inFlight.stagedSources || queued.stagedSources
+      ? mergeStagedRecords(
+          inFlight.stagedSources,
+          queued.stagedSources,
+          channelSourceStageKey
+        )
+      : undefined
+    const stagedArtwork = inFlight.stagedArtwork || queued.stagedArtwork
+      ? mergeStagedRecords(
+          inFlight.stagedArtwork,
+          queued.stagedArtwork,
+          channelArtworkStageKey
+        )
+      : undefined
+    return {
+      ...inFlight,
+      ...queued,
+      stagedProfile,
+      stagedSources: stagedSources ? [...stagedSources] : undefined,
+      stagedArtwork: stagedArtwork ? [...stagedArtwork] : undefined
+    }
+  }
+
+  async activatePublicProjection(staged = {}) {
+    if (this._publicProjectionClosing || this.closing || this.closed) {
+      throw new Error('Channel is closing')
+    }
+    if (this._publicActivation) {
+      try {
+        await this._publicActivation
+      } catch {
+        // The queued call below retries a failed partial projection.
+      }
+      return this.activatePublicProjection(staged)
+    }
+
+    this.stagePublicProjection(staged)
+    const projection = this.getStagedPublicProjection()
+    // Stages added while this snapshot is in flight belong to the next replay.
+    this._inFlightPublicProjection = projection
+    this._stagedPublicProjection = {}
+    const activation = (async () => {
+      if (!this.publicBee?.writable) throw new Error('Public projection is not writable')
+      if (
+        !this._publicProjectionActive &&
+        typeof this.opts.setPublicProjectionState === 'function'
+      ) {
+        // The durable pending marker must precede any private key exposure.
+        this._publicProjectionCommitState = 'pending'
+        await this.opts.setPublicProjectionState('pending')
+      }
+      await this.publicBee.activatePublicProjection({
+        channel: this,
+        ...projection
+      })
+      if (!this._publicProjectionActive) {
+        // Commit point: every fallible durable/private write completes before
+        // discovery is allowed to expose the public core.
+        this._publicProjectionCommitState = 'committing'
+        try {
+          await this.updateMetadata({ publicBeeKey: this.publicBee.keyHex })
+        } catch (err) {
+          this._publicProjectionCommitState = 'committed'
+          throw err
+        }
+        this._publicProjectionCommitState = 'committed'
+      }
+      await this._joinPublicDiscovery({ strict: true })
+      // Discovery is now exposed. Runtime activation cannot fail from here;
+      // a failed durable marker write leaves reload fail-closed and replayable.
+      this._publicProjectionActive = true
+      this._publicProjectionCommitState = 'active'
+      if (typeof this.opts.setPublicProjectionState === 'function') {
+        try {
+          await this.opts.setPublicProjectionState('active')
+        } catch (err) {
+          console.warn(
+            '[Channel] Public projection active marker repair deferred:',
+            err?.message || err
+          )
+        }
+      }
+      return this.publicBee.keyHex
+    })()
+    this._publicActivation = activation
+    try {
+      return await activation
+    } catch (err) {
+      const queued = this._stagedPublicProjection
+      this._stagedPublicProjection = {}
+      this._inFlightPublicProjection = null
+      this.stagePublicProjection(projection)
+      this.stagePublicProjection(queued)
+      throw err
+    } finally {
+      if (this._inFlightPublicProjection === projection) {
+        this._inFlightPublicProjection = null
+      }
+      if (this._publicActivation === activation) this._publicActivation = null
+    }
   }
 
   async _suppressPublicVideo(id) {
@@ -399,6 +670,7 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async _close() {
+    this._publicProjectionClosing = true
     const closeResource = async (resource) => {
       if (!resource || typeof resource.close !== 'function') return
       try {
@@ -421,10 +693,22 @@ export class MultiWriterChannel extends ReadyResource {
       await closeResource(this.wakeupSession)
       this.wakeupSession = null
     }
+    if (this._publicActivation) {
+      try {
+        await this._publicActivation
+      } catch {
+        // Activation failures do not prevent resource cleanup.
+      }
+    }
     if (this._channelDiscovery) {
       await destroyResource(this._channelDiscovery)
       await closeResource(this._channelDiscovery)
       this._channelDiscovery = null
+    }
+    if (this._publicDiscovery) {
+      await destroyResource(this._publicDiscovery)
+      await closeResource(this._publicDiscovery)
+      this._publicDiscovery = null
     }
     if (this.publicBee) {
       await closeResource(this.publicBee)
@@ -504,8 +788,15 @@ export class MultiWriterChannel extends ReadyResource {
       CHANNEL_PROFILE_STORAGE_DEFAULTS
     )
     if (meta && !meta.schemaVersion) meta.schemaVersion = CURRENT_SCHEMA_VERSION
-    if (!meta) return logicalProfile
-    return logicalProfile ? { ...meta, ...logicalProfile } : meta
+    const logical = !meta
+      ? logicalProfile
+      : logicalProfile
+        ? { ...meta, ...logicalProfile }
+        : meta
+    if (logical?.publicBeeKey && this._publicProjectionCommitState !== 'active') {
+      return { ...logical, publicBeeKey: null }
+    }
+    return logical
   }
 
   async updateMetadata(updates = {}) {
@@ -520,7 +811,8 @@ export class MultiWriterChannel extends ReadyResource {
       name: 'name' in patch ? patch.name : currentMeta?.name || '',
       description: 'description' in patch ? patch.description : currentMeta?.description || '',
       avatar: 'avatar' in patch ? patch.avatar : currentMeta?.avatar || null,
-      publicBeeKey: patch.publicBeeKey || currentMeta?.publicBeeKey || this.publicBee?.keyHex || null,
+      publicBeeKey: patch.publicBeeKey || currentMeta?.publicBeeKey ||
+        (this._publicProjectionActive ? this.publicBee?.keyHex : null),
       commentsDbKey: patch.commentsDbKey || currentMeta?.commentsDbKey || this.keyHex || null,
       commentsAdminKey: patch.commentsAdminKey || currentMeta?.commentsAdminKey || null,
       createdAt: 'createdAt' in patch ? patch.createdAt : (currentMeta?.createdAt || now),
@@ -692,6 +984,11 @@ export class MultiWriterChannel extends ReadyResource {
     await this._update()
     const claims = await this.db.find('@peartubeChannel/claims-by-identity', { identityKey }).toArray()
     return claims.filter((claim) => claim.identityKey === identityKey)
+  }
+
+  async listAllImportClaims() {
+    await this._update()
+    return this.db.find('@peartubeChannel/importClaims', {}).toArray()
   }
 
   async resolveImportClaim(identityKey) {

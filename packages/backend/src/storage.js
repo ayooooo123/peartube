@@ -1878,8 +1878,68 @@ export async function initializeStorage(config) {
  */
 // Track in-progress channel loads to prevent duplicate concurrent loads
 const loadingChannels = new Map()
+const publicProjectionStateWrites = new WeakMap()
+
+
+function identityChannelKey(identity) {
+  return identity?.channelKey?.toLowerCase?.() || identity?.driveKey?.toLowerCase?.() || null
+}
+
+function createPublicProjectionStateWriter(ctx, channelKeyHex) {
+  const states = ctx.metaSubspaces?.publicProjectionStates
+  if (!states || typeof states.get !== 'function' || typeof states.put !== 'function') return null
+  const canonicalChannelKey = channelKeyHex.toLowerCase()
+  return async (state) => {
+    if (state !== 'pending' && state !== 'active') {
+      throw new Error(`Invalid public projection state: ${state}`)
+    }
+    let queues = publicProjectionStateWrites.get(ctx.metaDb)
+    if (!queues) {
+      queues = new Map()
+      publicProjectionStateWrites.set(ctx.metaDb, queues)
+    }
+    const previous = queues.get(canonicalChannelKey) || Promise.resolve()
+    const write = previous.catch(() => {}).then(async () => {
+      const current = await states.get(canonicalChannelKey)
+      if (current?.value?.state === 'active') return 'active'
+      if (current?.value?.state === state) return state
+      await states.put(canonicalChannelKey, { state, updatedAt: Date.now() })
+      return state
+    })
+    queues.set(canonicalChannelKey, write)
+    try {
+      return await write
+    } finally {
+      if (queues.get(canonicalChannelKey) === write) queues.delete(canonicalChannelKey)
+    }
+  }
+}
+
+async function resolveChannelLoadOptions(ctx, channelKeyHex, options) {
+  if (typeof ctx.metaDb?.get !== 'function') return options
+  try {
+    const stored = await ctx.metaDb.get('identities')
+    const identity = (stored?.value || []).find((candidate) =>
+      identityChannelKey(candidate) === channelKeyHex)
+    const deferPublicProjection =
+      options?.deferPublicProjection === true ||
+      identity?.deferPublicProjection === true
+    if (!deferPublicProjection) return options
+    const marker = await ctx.metaSubspaces?.publicProjectionStates?.get?.(channelKeyHex)
+    return {
+      ...options,
+      deferPublicProjection: true,
+      publicProjectionState: marker?.value?.state === 'active' ? 'active' : 'pending',
+      setPublicProjectionState: createPublicProjectionStateWriter(ctx, channelKeyHex),
+    }
+  } catch (err) {
+    throw new Error('Unable to resolve channel public projection mode', { cause: err })
+  }
+}
 
 export async function loadChannel(ctx, channelKeyHex, options = {}) {
+  channelKeyHex = channelKeyHex.toLowerCase()
+  options = await resolveChannelLoadOptions(ctx, channelKeyHex, options)
   if (!ctx.channels) ctx.channels = new Map()
   if (ctx.channels.has(channelKeyHex)) {
     const cached = ctx.channels.get(channelKeyHex)
@@ -1955,19 +2015,27 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
         key: b4a.from(channelKeyHex, 'hex'),
         encryptionKey: options.encryptionKeyHex ? b4a.from(options.encryptionKeyHex, 'hex') : null,
         keyPair: writerKeyPair || undefined,
-        swarm: ctx.swarm
+        swarm: ctx.swarm,
+        deferPublicProjection: options.deferPublicProjection === true,
+        publicProjectionState: options.publicProjectionState,
+        setPublicProjectionState: options.setPublicProjectionState,
       })
 
       const readyTimeoutMs = options.preferWritable ? 25000 : 10000
       const readyStart = Date.now()
+      let readyTimer = null
       try {
         await Promise.race([
           ch.ready(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel ready timeout')), readyTimeoutMs))
+          new Promise((_, reject) => {
+            readyTimer = setTimeout(() => reject(new Error('Channel ready timeout')), readyTimeoutMs)
+          })
         ])
       } catch (err) {
         try { await ch.close() } catch { /* best effort */ }
         throw err
+      } finally {
+        clearTimeout(readyTimer)
       }
 
       console.log('[Storage] Channel ready in', Date.now() - readyStart, 'ms:', channelKeyHex.slice(0, 16));
@@ -1996,14 +2064,19 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     // Ensure we join the channel topic so this device can find peers and replicate HyperDB cores.
     // Even non-writable peers must join; pairing setup is only for writable members.
     if (ctx.swarm) {
+      let pairingTimer = null
       try {
         if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
         await Promise.race([
           ch.setupPairing(ctx.swarm),
-          new Promise(resolve => setTimeout(resolve, 15000))
+          new Promise((resolve) => {
+            pairingTimer = setTimeout(resolve, 15000)
+          })
         ])
       } catch (err) {
         console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+      } finally {
+        clearTimeout(pairingTimer)
       }
     }
 
@@ -2157,7 +2230,12 @@ export async function createChannel(ctx, options = {}) {
     encryptionKey: derivedEncryptionKeyHex ? b4a.from(derivedEncryptionKeyHex, 'hex') : null,
     encrypt: Boolean(options.encrypt),
     keyPair: writerKeyPair || undefined,
-    swarm: ctx.swarm // Pass swarm for early replication setup
+    swarm: ctx.swarm, // Pass swarm for early replication setup
+    deferPublicProjection: options.deferPublicProjection === true,
+    publicProjectionState: options.deferPublicProjection === true ? 'pending' : 'active',
+    setPublicProjectionState: derivedChannelKeyHex
+      ? createPublicProjectionStateWriter(ctx, derivedChannelKeyHex)
+      : null,
   })
   await ch.ready()
 
@@ -2170,6 +2248,9 @@ export async function createChannel(ctx, options = {}) {
   const encryptionKeyHex = ch.encryptionKey
     ? b4a.toString(ch.encryptionKey, 'hex')
     : derivedEncryptionKeyHex
+  if (options.deferPublicProjection === true && !ch.opts.setPublicProjectionState) {
+    ch.opts.setPublicProjectionState = createPublicProjectionStateWriter(ctx, channelKeyHex)
+  }
 
   ctx.channels.set(channelKeyHex, ch)
 

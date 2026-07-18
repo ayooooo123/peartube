@@ -39,6 +39,22 @@ export function encodeCanonicalJson (value) {
   return Buffer.from(JSON.stringify(sortPlain(value)))
 }
 
+export function compareSignedChannelRootDescriptors (left, right) {
+  const leftSeq = Number.isSafeInteger(left?.descriptor?.seq) ? left.descriptor.seq : -1
+  const rightSeq = Number.isSafeInteger(right?.descriptor?.seq) ? right.descriptor.seq : -1
+  if (leftSeq !== rightSeq) return leftSeq - rightSeq
+
+  const leftUpdatedAt = Number.isSafeInteger(left?.descriptor?.updatedAt)
+    ? left.descriptor.updatedAt
+    : -1
+  const rightUpdatedAt = Number.isSafeInteger(right?.descriptor?.updatedAt)
+    ? right.descriptor.updatedAt
+    : -1
+  if (leftUpdatedAt !== rightUpdatedAt) return leftUpdatedAt - rightUpdatedAt
+
+  return Buffer.compare(encodeCanonicalJson(left ?? null), encodeCanonicalJson(right ?? null))
+}
+
 export function createChannelRootDescriptor ({
   identityPublicKey,
   channelId,

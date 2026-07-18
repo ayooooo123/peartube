@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import Corestore from 'corestore'
-import { PublicChannelBee } from '../src/channel/public-channel-bee.js'
+import * as publicChannelModule from '../src/channel/public-channel-bee.js'
 import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
 
+
+const { PublicChannelBee, isPubliclyProjectable } = publicChannelModule
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
 }
@@ -74,6 +76,51 @@ function makeDelayedTimeoutStream(delayMs) {
   return stream
 }
 
+test('isPubliclyProjectable gates durability and exact claim winners', (t) => {
+  t.is(typeof isPubliclyProjectable, 'function')
+  if (typeof isPubliclyProjectable !== 'function') return
+
+  const winner = {
+    identityKey: 'youtube:video-1',
+    claimantId: 'a'.repeat(64),
+    videoId: 'winner',
+  }
+  t.ok(isPubliclyProjectable({ id: 'legacy' }, null), 'legacy rows remain projectable')
+  t.ok(isPubliclyProjectable({ id: 'durable', publicationState: 'durabilityVerified' }, null))
+  t.ok(isPubliclyProjectable({ id: 'published', publicationState: 'published' }, null))
+  t.absent(isPubliclyProjectable({ id: 'pending', publicationState: 'replicationPending' }, null))
+  t.ok(isPubliclyProjectable({
+    id: 'winner',
+    publicationState: 'durabilityVerified',
+    importIdentityKey: 'youtube:video-1',
+    importClaimantId: winner.claimantId,
+  }, winner))
+  t.absent(isPubliclyProjectable({
+    id: 'loser',
+    publicationState: 'durabilityVerified',
+    importIdentityKey: 'youtube:video-1',
+    importClaimantId: 'b'.repeat(64),
+  }, winner))
+  t.absent(isPubliclyProjectable({
+    id: 'forged-winner',
+    publicationState: 'durabilityVerified',
+    importIdentityKey: winner.identityKey,
+    importClaimantId: winner.claimantId,
+  }, winner), 'same claimant with a different immutable video binding fails closed')
+  t.absent(isPubliclyProjectable({
+    id: winner.videoId,
+    publicationState: 'durabilityVerified',
+    importIdentityKey: winner.identityKey,
+    importClaimantId: winner.claimantId,
+  }, { identityKey: winner.identityKey, claimantId: winner.claimantId }), 'missing winner video binding fails closed')
+  t.absent(isPubliclyProjectable({
+    id: 'unresolved',
+    publicationState: 'published',
+    importIdentityKey: 'youtube:video-1',
+    importClaimantId: winner.claimantId,
+  }, null))
+})
+
 test('listVideos returns promptly when a PublicBee video scan stalls', async (t) => {
   const stream = makeDelayedTimeoutStream(250)
   const publicBee = Object.create(PublicChannelBee.prototype)
@@ -86,13 +133,99 @@ test('listVideos returns promptly when a PublicBee video scan stalls', async (t)
   }
 
   const started = Date.now()
-  const videos = await publicBee.listVideos({ timeoutMs: 20 })
+  const outcome = await publicBee.listVideosWithStatus({ timeoutMs: 20 })
   const elapsed = Date.now() - started
 
-  t.alike(videos, [])
+  t.alike(outcome, { status: 'uncertain', videos: [], filteredCount: 0 })
   t.ok(stream.destroyed, 'stalled stream is destroyed')
   t.is(stream.destroyError?.message, 'PublicBee listVideos timed out after 20ms')
   t.ok(elapsed < 150, `listVideos returned after ${elapsed}ms`)
+})
+
+test('listVideos keeps compact rows when bounded sidecar reads hang or reject', async (t) => {
+  const compactVideos = [
+    { id: 'rejected-sidecar', uploadedAt: 2 },
+    { id: 'hanging-sidecar', uploadedAt: 1 },
+  ]
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee.waitForSync = async () => {}
+  publicBee.db = {
+    update() {},
+    find() {
+      return {
+        index: 0,
+        [Symbol.asyncIterator]() {
+          return this
+        },
+        async next() {
+          if (this.index >= compactVideos.length) return { done: true }
+          return { done: false, value: compactVideos[this.index++] }
+        },
+      }
+    },
+    async get(_collection, { id }) {
+      if (id === 'hanging-sidecar') return new Promise(() => {})
+      throw new Error('sidecar block unavailable')
+    },
+  }
+
+  const started = Date.now()
+  const outcome = await Promise.race([
+    publicBee.listVideos({ timeoutMs: 20 }),
+    new Promise((resolve) => setTimeout(() => resolve('outer-timeout'), 120)),
+  ])
+  const elapsed = Date.now() - started
+
+  t.alike(outcome, [], 'default canonical listing fails closed on uncertain visibility')
+  t.ok(elapsed < 100, `bounded logical merge returned after ${elapsed}ms`)
+  t.alike(
+    await publicBee.listVideos({ timeoutMs: 20, includeSuppressed: true }),
+    compactVideos,
+    'internal reconciliation retains compact rows whose sidecars are unavailable',
+  )
+})
+
+test('listVideos only reconciles sidecars for bounded video candidates', async (t) => {
+  const videoStream = {
+    emitted: false,
+    [Symbol.asyncIterator]() {
+      return this
+    },
+    async next() {
+      if (this.emitted) return { done: true }
+      this.emitted = true
+      return { done: false, value: { id: 'bounded-video', uploadedAt: 1 } }
+    },
+  }
+  let fullDetailsScans = 0
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee.waitForSync = async () => {}
+  publicBee.db = {
+    update() {},
+    find(collection) {
+      if (collection === '@peartubePublic/videos-by-uploaded-at') return videoStream
+      fullDetailsScans++
+      return {
+        async toArray() {
+          await new Promise((resolve) => setTimeout(resolve, 200))
+          return []
+        },
+      }
+    },
+    async get(collection, { id }) {
+      t.is(collection, '@peartubePublic/contentDetails')
+      t.is(id, 'bounded-video')
+      return null
+    },
+  }
+
+  const started = Date.now()
+  const videos = await publicBee.listVideos({ timeoutMs: 20, includeSuppressed: true })
+  const elapsed = Date.now() - started
+
+  t.alike(videos, [{ id: 'bounded-video', uploadedAt: 1 }])
+  t.is(fullDetailsScans, 0, 'logical merge does not start an unbounded sidecar collection scan')
+  t.ok(elapsed < 150, `logical merge returned after ${elapsed}ms`)
 })
 
 test('syncFromChannel keeps existing public videos when a channel unexpectedly reads empty', async (t) => {

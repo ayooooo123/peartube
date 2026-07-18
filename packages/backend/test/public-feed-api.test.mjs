@@ -222,6 +222,9 @@ test('listVideos uses feed previews instead of slow channel fallback when keyed 
         async listVideos() {
           return []
         },
+        async listVideosWithStatus() {
+          return { status: 'authoritative', videos: [], filteredCount: 0 }
+        },
         async getVideo() {
           return null
         },
@@ -241,6 +244,46 @@ test('listVideos uses feed previews instead of slow channel fallback when keyed 
   t.is(videos[0]?.id, 'video-1')
   t.is(videos[0]?.channelKey, 'aa'.repeat(32))
   t.is(videos[0]?.publicBeeKey, 'bb'.repeat(32))
+})
+
+test('listVideos never restores previews after uncertain or suppressed public filtering', async (t) => {
+  const driveKey = 'ac'.repeat(32)
+  const publicBeeKey = 'bd'.repeat(32)
+  for (const readStatus of [
+    { status: 'uncertain', videos: [], filteredCount: 0 },
+    { status: 'authoritative', videos: [], filteredCount: 1 },
+  ]) {
+    const api = createApi({
+      ctx: {
+        semanticFinder: { hasVideo() { return true } },
+        metaDb: { async get() { return null }, async put() {} },
+      },
+      publicFeed: {
+        getFeed() {
+          return [{
+            driveKey,
+            publicBeeKey,
+            source: 'peer',
+            peerCount: 1,
+            previewVideos: [{
+              id: 'stale-preview',
+              title: 'Must stay hidden',
+              blobId: '0:8:0:1024',
+              blobsCoreKey: 'ce'.repeat(32),
+            }],
+          }]
+        },
+      },
+      loadPublicBee: async () => ({
+        async listVideos() { return [] },
+        async listVideosWithStatus() { return readStatus },
+      }),
+      loadChannel: async () => {
+        throw new Error('public filtering must be authoritative')
+      },
+    })
+    t.alike(await api.listVideos(driveKey, publicBeeKey), [])
+  }
 })
 
 test('listVideos uses legacy previewVideos from relay feed entries', async (t) => {
@@ -929,6 +972,51 @@ test('submitToFeed fails closed when the channel cannot provide a publicBeeKey',
   t.ok(/publicBeeKey/i.test(result.error || ''))
 })
 
+test('submitToFeed cannot expose an inactive deferred public projection', async (t) => {
+  let keyReads = 0
+  let metadataWrites = 0
+  let submitted = false
+  const api = createApi({
+    ctx: {
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async submitChannel() {
+        submitted = true
+      },
+    },
+    loadChannel: async () => ({
+      publicProjectionActive: false,
+      publicBeeKey: 'ab'.repeat(32),
+      keyHex: 'cd'.repeat(32),
+      async getPublicBeeKey() {
+        keyReads++
+        return 'ab'.repeat(32)
+      },
+      publicBee: {
+        writable: true,
+        async getMetadata() {
+          return {}
+        },
+        async setMetadata() {
+          metadataWrites++
+        },
+      },
+    }),
+  })
+
+  const result = await api.submitToFeed('ef'.repeat(32))
+
+  t.is(result.success, false)
+  t.ok(/inactive|activation|projection/i.test(result.error || ''))
+  t.is(keyReads, 0, 'inactive projection does not expose its allocated public key')
+  t.is(metadataWrites, 0, 'inactive projection does not mutate public metadata')
+  t.is(submitted, false)
+})
+
 
 test('listVideos uses relay catalog preview refs without channel load when PublicBee is empty', async (t) => {
   let publicBeeLoads = 0
@@ -1014,7 +1102,10 @@ test('getVideoData resolves relay catalog preview refs without channel load', as
         }]
       },
     },
-    loadPublicBee: async () => ({ async getVideo() { return null } }),
+    loadPublicBee: async () => ({
+      async getVideo() { return null },
+      async getVideoWithStatus() { return { status: 'notFound', video: null } },
+    }),
     loadChannel: async () => {
       channelLoads += 1
       throw new Error('loadChannel should not be called')
@@ -1027,6 +1118,40 @@ test('getVideoData resolves relay catalog preview refs without channel load', as
   t.is(video.blobId, '0:4:0:512')
   t.is(video.blobsCoreKey, 'fa'.repeat(32))
   t.is(video.relayBacked, true)
+})
+
+test('getVideoData never restores a suppressed public row from feed previews', async (t) => {
+  let channelLoads = 0
+  const driveKey = 'df'.repeat(32)
+  const publicBeeKey = 'e0'.repeat(32)
+  const api = createApi({
+    ctx: { metaDb: { async get() { return null }, async put() {} } },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey,
+          publicBeeKey,
+          previewVideos: [{
+            id: 'suppressed-preview',
+            title: 'Stale suppressed preview',
+            blobId: '0:4:0:512',
+            blobsCoreKey: 'fa'.repeat(32),
+          }],
+        }]
+      },
+    },
+    loadPublicBee: async () => ({
+      async getVideo() { return null },
+      async getVideoWithStatus() { return { status: 'suppressed', video: null } },
+    }),
+    loadChannel: async () => {
+      channelLoads++
+      throw new Error('suppressed public result is authoritative')
+    },
+  })
+
+  t.is(await api.getVideoData(driveKey, 'suppressed-preview', publicBeeKey), null)
+  t.is(channelLoads, 0)
 })
 
 test('getPublicFeed exposes relay catalog fields', (t) => {

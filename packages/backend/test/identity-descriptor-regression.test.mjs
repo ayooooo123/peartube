@@ -9,6 +9,7 @@ test('identity manager creates and stores a signed channel root descriptor for n
   assert.match(sourceText, /signChannelRootDescriptor/)
   assert.match(sourceText, /signedDescriptor/)
   assert.match(sourceText, /const mediaKey = channel\.blobsKeyHex/)
-  assert.match(sourceText, /channel\.publicBee\.bee\.put\('channel\/root'/)
+  assert.match(sourceText, /channel\.publicBee\.setRootDescriptor\(signedDescriptor\)/)
+  assert.match(sourceText, /channel\.stagePublicProjection\(\{ stagedDescriptor: signedDescriptor \}\)/)
   assert.ok(identitySource.createIdentityManager)
 })

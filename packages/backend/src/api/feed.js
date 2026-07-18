@@ -77,6 +77,12 @@ export function createFeedApi({ ctx, publicFeed, loadChannel, isValidHypercoreHe
         let publicBeeKey = null
         try {
           const channel = await loadChannel(ctx, driveKey)
+          if (channel?.publicProjectionActive === false) {
+            return {
+              success: false,
+              error: 'Unable to publish channel: public projection is inactive',
+            }
+          }
           publicBeeKey = channel?.publicBeeKey || await channel?.getPublicBeeKey()
           console.log('[API] submitToFeed: got publicBeeKey:', publicBeeKey?.slice(0, 16))
 

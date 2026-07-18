@@ -138,9 +138,10 @@ export function createIdentityManager({ ctx }) {
      * Create a new identity with associated channel
      * @param {string} name - Display name for the identity
      * @param {boolean} [generateMnem=true] - Whether to generate mnemonic
+     * @param {{deferPublicProjection?: boolean}} [options]
      * @returns {Promise<{success: boolean, publicKey: string, driveKey: string, mnemonic?: string}>}
      */
-    async createIdentity(name, generateMnem = true) {
+    async createIdentity(name, generateMnem = true, { deferPublicProjection = false } = {}) {
       log.info(' Creating identity:', name);
 
       // Check if corestore is in a valid state
@@ -176,33 +177,33 @@ export function createIdentityManager({ ctx }) {
       log.info(' Creating channel for identity writer:', writerKeyName.slice(0, 32))
       const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, {
         encrypt: false,
-        writerKeyName
+        writerKeyName,
+        deferPublicProjection
       })
       const createdAt = Date.now()
+      const stagedProfile = {
+        name,
+        description: '',
+        avatar: null,
+        createdAt,
+        createdBy: publicKey
+      }
       log.info(' Channel created:', channelKeyHex.slice(0, 16))
-      if (isEmbeddedBareKitRuntime()) {
+      if (deferPublicProjection) {
+        await channel.updateMetadata(stagedProfile)
+        channel.stagePublicProjection({ stagedProfile })
+        log.info(' Deferred public projection staged')
+      } else if (isEmbeddedBareKitRuntime()) {
         try {
           if (channel.publicBee?.writable) {
-            await channel.publicBee.setMetadata({
-              name,
-              description: '',
-              avatar: null,
-              createdAt,
-              createdBy: publicKey
-            })
+            await channel.publicBee.setMetadata(stagedProfile)
           }
         } catch (err) {
           log.warn(' Embedded identity metadata publish skipped:', err?.message)
         }
       } else {
         log.info(' Updating channel metadata for identity')
-        await channel.updateMetadata({
-          name,
-          description: '',
-          avatar: null,
-          createdAt,
-          createdBy: publicKey
-        })
+        await channel.updateMetadata(stagedProfile)
         log.info(' Channel metadata updated')
         log.info(' Ensuring local blob drive for identity')
         await channel.ensureLocalBlobDrive({ deviceName: name })
@@ -217,6 +218,9 @@ export function createIdentityManager({ ctx }) {
       try {
         const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
         const mediaKey = channel.blobsKeyHex
+        if (!metadataKey || !mediaKey) {
+          throw new Error('Channel metadata and media keys are required')
+        }
         if (metadataKey && mediaKey) {
           const descriptor = createChannelRootDescriptor({
             identityPublicKey: publicKey,
@@ -237,18 +241,19 @@ export function createIdentityManager({ ctx }) {
             deviceKeyPair: ctx.swarm.keyPair,
             deviceProof
           })
-          if (channel.publicBee?.writable) {
-            await channel.publicBee.bee.put('channel/root', signedDescriptor)
+          if (deferPublicProjection) {
+            channel.stagePublicProjection({ stagedDescriptor: signedDescriptor })
+          } else if (channel.publicBee?.writable) {
+            await channel.publicBee.setRootDescriptor(signedDescriptor)
             await channel.publicBee.setMetadata({
-              channelId: descriptor.channelId,
-              identityPublicKey: publicKey,
-              mediaKey,
-              signedDescriptor
+              name: descriptor.profile?.name
             })
           }
         }
       } catch (err) {
-        log.warn(' Signed channel root descriptor skipped:', err?.message)
+        try { await channel.close() } catch { /* best effort */ }
+        ctx.channels?.delete?.(channelKeyHex)
+        throw new Error('Signed channel root descriptor creation failed', { cause: err })
       }
 
       // Create identity record
@@ -268,6 +273,7 @@ export function createIdentityManager({ ctx }) {
         isActive: false,
         hdDerived,
         channelId: signedDescriptor?.descriptor?.channelId || publicKey,
+        deferPublicProjection,
         signedDescriptor
       };
 
@@ -553,7 +559,8 @@ export function createIdentityManager({ ctx }) {
           try {
             await loadChannel(ctx, identity.channelKey, {
               encryptionKeyHex: identity.channelEncryptionKey || null,
-              writerKeyName: identity.channelWriterKeyName || null
+              writerKeyName: identity.channelWriterKeyName || null,
+              deferPublicProjection: identity.deferPublicProjection === true,
             })
           } catch (err) {
             log.error(' Failed to load channel:', identity.channelKey?.slice(0, 16), err.message)
@@ -577,7 +584,8 @@ export function createIdentityManager({ ctx }) {
         return await loadChannel(ctx, channelKey, {
           encryptionKeyHex: full?.channelEncryptionKey || null,
           writerKeyName: full?.channelWriterKeyName || null,
-          preferWritable: true
+          preferWritable: true,
+          deferPublicProjection: full?.deferPublicProjection === true,
         })
       } catch (err) {
         if (!full?.channelWriterKeyName) throw err
@@ -587,7 +595,8 @@ export function createIdentityManager({ ctx }) {
         const fallback = await loadChannel(ctx, channelKey, {
           encryptionKeyHex: full?.channelEncryptionKey || null,
           writerKeyName: null,
-          preferWritable: true
+          preferWritable: true,
+          deferPublicProjection: full?.deferPublicProjection === true,
         })
 
         identities = identities.map(i =>
@@ -631,7 +640,8 @@ export function createIdentityManager({ ctx }) {
           const channel = await loadChannel(ctx, channelKey, {
             encryptionKeyHex: identity.channelEncryptionKey || null,
             writerKeyName: identity.channelWriterKeyName || null,
-            preferWritable: true
+            preferWritable: true,
+            deferPublicProjection: identity.deferPublicProjection === true
           })
           if (!channel?.publicBee?.writable) {
             summary.skipped++
@@ -645,8 +655,11 @@ export function createIdentityManager({ ctx }) {
             continue
           }
 
-          const existing = await channel.publicBee.bee.get('channel/root').catch(() => null)
-          const existingSigned = existing?.value || null
+          const deferredInactive =
+            identity.deferPublicProjection === true && !channel.publicProjectionActive
+          const publishedSigned = await channel.publicBee.getRootDescriptor().catch(() => null)
+          const existingSigned = publishedSigned ||
+            (deferredInactive ? identity.signedDescriptor || null : null)
           if (existingSigned) {
             const verified = await verifySignedChannelRootDescriptor(existingSigned)
             if (
@@ -654,6 +667,12 @@ export function createIdentityManager({ ctx }) {
               verified.descriptor?.channelId === channelKey.toLowerCase() &&
               verified.descriptor?.metadataKey === metadataKey.toLowerCase()
             ) {
+              if (deferredInactive) {
+                channel.stagePublicProjection({
+                  stagedDescriptor: existingSigned,
+                  stagedProfile: existingSigned.descriptor?.profile || { name: identity.name || 'Channel' }
+                })
+              }
               summary.ok++
               continue
             }
@@ -693,16 +712,14 @@ export function createIdentityManager({ ctx }) {
             continue
           }
 
-          await channel.publicBee.bee.put('channel/root', signed)
-          try {
-            await channel.publicBee.setMetadata({
-              channelId: descriptor.channelId,
-              identityPublicKey: identity.publicKey,
-              mediaKey,
-              signedDescriptor: signed
+          if (deferredInactive) {
+            channel.stagePublicProjection({
+              stagedDescriptor: signed,
+              stagedProfile: descriptor.profile || { name: identity.name || 'Channel' }
             })
-          } catch (err) {
-            log.warn(' Descriptor backfill: metadata update skipped:', err?.message)
+          } else {
+            await channel.publicBee.setRootDescriptor(signed)
+            await channel.publicBee.setMetadata({ name: descriptor.profile?.name })
           }
 
           identity.signedDescriptor = signed

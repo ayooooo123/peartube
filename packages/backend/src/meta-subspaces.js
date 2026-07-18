@@ -32,6 +32,8 @@ export const META_SUBSPACE_COLLECTIONS = [
   { name: 'channelKinds', namespace: 'mw-channel', legacyPrefix: 'mw-channel:' },
   // `playback-profile!${blobsCoreKey}!${blobId}` -> sub key `${blobsCoreKey}!${blobId}`
   { name: 'playbackProfiles', namespace: 'playback-profile', legacyPrefix: 'playback-profile!' },
+  // Durable deferred-publication activation marker keyed by canonical channel key.
+  { name: 'publicProjectionStates', namespace: 'public-projection-state', legacyPrefix: 'public-projection-state:' },
 ]
 
 // Smallest string strictly greater than every key starting with `prefix`:

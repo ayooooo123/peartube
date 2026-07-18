@@ -21,7 +21,10 @@ import { encodeIndexKey } from './index-encoder.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
 import { peerHasFullRange, collectFullCopyPeers, assessOffloadEligibility } from './upload-offload.js'
-import { verifySignedChannelRootDescriptor } from './channel-descriptor.js'
+import {
+  compareSignedChannelRootDescriptors,
+  verifySignedChannelRootDescriptor
+} from './channel-descriptor.js'
 import { createCommentsApi } from './api/comments.js'
 import { createPersonalApi } from './api/personal.js'
 import { createTranscodeApi } from './api/transcode.js'
@@ -200,33 +203,42 @@ export function createApi({
 
   const listPublicBeeVideosBounded = async ({ publicBee, driveKey, publicBeeKey, timeoutMs = 1500 }) => {
     try {
-      return await withTimeout(publicBee.listVideos(), timeoutMs, `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`)
+      const operation = typeof publicBee.listVideosWithStatus === 'function'
+        ? publicBee.listVideosWithStatus()
+        : publicBee.listVideos().then((videos) => ({ status: 'authoritative', videos }))
+      return await withTimeout(operation, timeoutMs, `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`)
     } catch (err) {
       console.warn('[API] PublicBee listVideos bounded timeout/failure:', driveKey?.slice?.(0, 16), publicBeeKey?.slice?.(0, 16), err?.message)
-      return []
+      return { status: 'uncertain', videos: [] }
     }
   }
 
-  const loadChannelBounded = async (channelKey, timeoutMs = 2500) => {
+  const getPublicBeeVideoWithStatus = async (publicBee, videoId) => {
+    if (typeof publicBee?.getVideoWithStatus === 'function') {
+      return publicBee.getVideoWithStatus(videoId)
+    }
+    const video = await publicBee.getVideo(videoId)
+    return { status: video ? 'found' : 'notFound', video }
+  }
+
+  const loadChannelBounded = async (channelKey, timeoutMs = 2500, options = undefined) => {
     const label = `loadChannel ${channelKey?.slice?.(0, 16) || ''}`
     // Already-loaded channels resolve from the in-memory cache — no timeout needed.
     if (ctx.channels?.has?.(channelKey)) {
-      return loadChannel(ctx, channelKey)
+      return loadChannel(ctx, channelKey, options)
     }
     try {
-      return await withTimeout(loadChannel(ctx, channelKey), timeoutMs, label)
+      return await withTimeout(loadChannel(ctx, channelKey, options), timeoutMs, label)
     } catch (err) {
       if (!/timeout/i.test(err?.message || '')) throw err
       // Slow networks routinely blow the first deadline while the underlying
       // load keeps going (loadChannel dedupes concurrent loads), so retry once
       // with a doubled budget instead of failing hard.
       console.warn(`[API] ${label} timed out after ${timeoutMs}ms, retrying once`)
-      return withTimeout(loadChannel(ctx, channelKey), timeoutMs * 2, `${label} retry`)
+      return withTimeout(loadChannel(ctx, channelKey, options), timeoutMs * 2, `${label} retry`)
     }
   }
 
-  /** @type {Map<string, {value: object|null, at: number}>} driveKey → cached signed channel root descriptor (misses retried after 60s) */
-  const signedDescriptorCache = new Map()
 
   /**
    * Recent preparePlayback timing breakdowns (per-stage ms offsets from request
@@ -1589,7 +1601,7 @@ export function createApi({
         }
 
         const cached = listVideosCache.get(driveKey)
-        if (cached) {
+        if (cached && !publicBeeKey) {
           const ttl = Array.isArray(cached.value) && cached.value.length === 0
             ? LIST_VIDEOS_EMPTY_CACHE_TTL_MS
             : LIST_VIDEOS_CACHE_TTL_MS
@@ -1609,9 +1621,22 @@ export function createApi({
           await markAsMultiWriterChannel(driveKey)
           try {
             const publicBee = await loadPublicBee(ctx, publicBeeKey)
-            const videos = await publicBee.listVideos()
-            console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
-            if ((videos?.length || 0) === 0) {
+            let listing
+            try {
+              listing = typeof publicBee.listVideosWithStatus === 'function'
+                ? await publicBee.listVideosWithStatus()
+                : { status: 'authoritative', videos: await publicBee.listVideos() }
+            } catch (readErr) {
+              console.log('[API] LIST_VIDEOS: PublicBee visibility is uncertain:', readErr.message)
+              return []
+            }
+            const videos = listing?.videos || []
+            console.log('[API] LIST_VIDEOS: PublicBee returned', videos.length, 'videos')
+            if (videos.length === 0) {
+              if (listing?.status !== 'authoritative' || Number(listing?.filteredCount || 0) > 0) {
+                console.log('[API] LIST_VIDEOS: PublicBee visibility is uncertain, suppressing preview fallback')
+                return []
+              }
               const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)
               if (previewVideos.length > 0) {
                 console.log('[API] LIST_VIDEOS: PublicBee empty, using relay/feed preview direct refs')
@@ -1656,13 +1681,14 @@ export function createApi({
         let resolvedPublicBeeKey = null
         if ((videos?.length || 0) === 0 && channel?.publicBee && typeof channel.publicBee.listVideos === 'function') {
           try {
-            const publicBeeVideos = await listPublicBeeVideosBounded({
+            const publicListing = await listPublicBeeVideosBounded({
               publicBee: channel.publicBee,
               driveKey,
               publicBeeKey: channel.publicBeeKey || null,
               timeoutMs: 1200,
             })
-            if ((publicBeeVideos?.length || 0) > 0) {
+            const publicBeeVideos = publicListing.videos || []
+            if (publicBeeVideos.length > 0) {
               videos = publicBeeVideos
               usedOwnerPublicBeeFallback = true
               resolvedPublicBeeKey =
@@ -1932,10 +1958,15 @@ export function createApi({
         if (publicBeeKey) {
           console.log('[API] GET_VIDEO_DATA: using PublicBee fast path')
           const publicBee = await loadPublicBee(ctx, publicBeeKey)
-          const v = await publicBee.getVideo(id)
-          console.log('[API] GET_VIDEO_DATA PublicBee result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
-          if (v) return { ...v, channelKey: driveKey }
-          // Fall through to feed previews/channel methods if not found
+          const result = await getPublicBeeVideoWithStatus(publicBee, id)
+          const v = result.video
+          console.log('[API] GET_VIDEO_DATA PublicBee result:', v?.id, 'status:', result.status, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
+          if (result.status === 'found' && v) return { ...v, channelKey: driveKey }
+          if (result.status !== 'notFound') {
+            console.log('[API] GET_VIDEO_DATA: public visibility is uncertain or suppressed, skipping stale fallbacks')
+            return null
+          }
+          // Fall through to feed previews/channel methods only for authoritative absence
         }
 
         const previewVideo = getPreviewVideoFromFeed(driveKey, id, publicBeeKey)
@@ -2217,14 +2248,28 @@ export function createApi({
      */
     async getChannelSignedDescriptor(driveKey) {
       if (!driveKey || !/^[a-f0-9]{64}$/i.test(driveKey)) return null
-      const cached = signedDescriptorCache.get(driveKey)
-      if (cached && (cached.value || Date.now() - cached.at < 60_000)) return cached.value
+      // Locally staged descriptors can advance between calls. Re-read the
+      // channel boundary instead of serving an indefinitely stale positive.
 
       let value = null
       try {
-        const channel = await loadChannelBounded(driveKey)
-        const root = await channel?.publicBee?.bee?.get('channel/root').catch(() => null)
-        const signed = root?.value || null
+        const storedIdentities = typeof ctx.metaDb?.get === 'function'
+          ? await ctx.metaDb.get('identities').catch(() => null)
+          : null
+        const identities = storedIdentities?.value || []
+        const ownedIdentity = identities.find((identity) =>
+          identity?.channelKey === driveKey || identity?.driveKey === driveKey)
+        const loadOptions = ownedIdentity?.deferPublicProjection === true
+          ? { deferPublicProjection: true }
+          : undefined
+        const channel = await loadChannelBounded(driveKey, 2500, loadOptions)
+        const root = typeof channel?.publicBee?.getRootDescriptor === 'function'
+          ? await channel.publicBee.getRootDescriptor().catch(() => null)
+          : null
+        const staged = typeof channel?.getStagedPublicProjection === 'function'
+          ? channel.getStagedPublicProjection()?.stagedDescriptor || null
+          : null
+        const signed = compareSignedChannelRootDescriptors(staged, root) > 0 ? staged : root
         if (signed) {
           const verified = await verifySignedChannelRootDescriptor(signed)
           if (verified?.valid && verified.descriptor?.channelId === driveKey.toLowerCase()) {
@@ -2233,7 +2278,6 @@ export function createApi({
         }
       } catch { /* unavailable channels simply stay unsigned */ }
 
-      signedDescriptorCache.set(driveKey, { value, at: Date.now() })
       return value
     },
 

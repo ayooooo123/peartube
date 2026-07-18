@@ -54,6 +54,75 @@ publicSchema.register({
   ],
 })
 
+publicSchema.register({
+  name: 'channelProfile',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'profileKind', type: 'string' },
+    { name: 'mediaProvider', type: 'string' },
+    { name: 'mediaId', type: 'string' },
+    { name: 'originalLanguage', type: 'string' },
+    { name: 'releaseDate', type: 'uint64' },
+    { name: 'releaseYear', type: 'uint64' },
+    { name: 'canonicalRevision', type: 'string' },
+  ],
+})
+
+publicSchema.register({
+  name: 'contentDetails',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'contentKind', type: 'string' },
+    { name: 'sourceProvider', type: 'string' },
+    { name: 'sourceVideoId', type: 'string' },
+    { name: 'identityUrl', type: 'string' },
+    { name: 'sourceCreatorId', type: 'string' },
+    { name: 'sourceCreatorUrl', type: 'string' },
+    { name: 'sourcePublishedAt', type: 'uint64' },
+    { name: 'mediaProvider', type: 'string' },
+    { name: 'mediaId', type: 'string' },
+    { name: 'seasonNumber', type: 'uint64' },
+    { name: 'episodeNumber', type: 'uint64' },
+    { name: 'originalAirDate', type: 'uint64' },
+    { name: 'thumbnailUrl', type: 'string' },
+    { name: 'provenanceVersion', type: 'string' },
+    { name: 'publicationState', type: 'string' },
+    { name: 'contentFingerprint', type: 'string' },
+    { name: 'importIdentityKey', type: 'string' },
+    { name: 'importClaimantId', type: 'string' },
+    { name: 'canonicalVisibility', type: 'string' },
+    { name: 'duplicateOfClaimantId', type: 'string' },
+  ],
+})
+
+publicSchema.register({
+  name: 'channelSource',
+  compact: true,
+  fields: [
+    { name: 'provider', type: 'string', required: true },
+    { name: 'identityKey', type: 'string', required: true },
+    { name: 'sourceId', type: 'string' },
+    { name: 'identityUrl', type: 'string' },
+    { name: 'handle', type: 'string' },
+    { name: 'displayName', type: 'string' },
+    { name: 'createdAt', type: 'uint64' },
+    { name: 'updatedAt', type: 'uint64' }
+  ]
+})
+
+publicSchema.register({
+  name: 'channelArtwork',
+  compact: true,
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'blobId', type: 'string' },
+    { name: 'blobsCoreKey', type: 'string' },
+    { name: 'mimeType', type: 'string' },
+    { name: 'remoteUrl', type: 'string' },
+    { name: 'updatedAt', type: 'uint64' }
+  ]
+})
+
 Hyperschema.toDisk(schema)
 
 const db = HyperDB.from(SCHEMA_DIR, DB_DIR)
@@ -70,6 +139,30 @@ publicDb.collections.register({
   schema: '@peartubePublic/video',
   key: ['id'],
 })
+publicDb.collections.register({
+  name: 'channelProfiles',
+  schema: '@peartubePublic/channelProfile',
+  key: ['id'],
+})
+
+publicDb.collections.register({
+  name: 'contentDetails',
+  schema: '@peartubePublic/contentDetails',
+  key: ['id'],
+})
+
+publicDb.collections.register({
+  name: 'channelSources',
+  schema: '@peartubePublic/channelSource',
+  key: ['provider', 'identityKey'],
+})
+
+publicDb.collections.register({
+  name: 'channelArtwork',
+  schema: '@peartubePublic/channelArtwork',
+  key: ['role'],
+})
+
 
 publicDb.indexes.register({
   name: 'videos-by-uploaded-at',
@@ -77,5 +170,26 @@ publicDb.indexes.register({
   unique: false,
   key: ['uploadedAt'],
 })
+publicDb.indexes.register({
+  name: 'videos-by-season-episode',
+  collection: '@peartubePublic/contentDetails',
+  unique: false,
+  key: ['seasonNumber', 'episodeNumber', 'id'],
+})
+
+publicDb.indexes.register({
+  name: 'videos-by-source',
+  collection: '@peartubePublic/contentDetails',
+  unique: false,
+  key: ['sourceProvider', 'sourceVideoId', 'id'],
+})
+
+publicDb.indexes.register({
+  name: 'videos-by-kind-published',
+  collection: '@peartubePublic/contentDetails',
+  unique: false,
+  key: ['contentKind', 'sourcePublishedAt', 'id'],
+})
+
 
 HyperDB.toDisk(db, DB_DIR, { esm: true })

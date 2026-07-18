@@ -80,6 +80,88 @@ ns.register({
 })
 
 ns.register({
+  name: 'channelProfile',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'profileKind', type: 'string' },
+    { name: 'mediaProvider', type: 'string' },
+    { name: 'mediaId', type: 'string' },
+    { name: 'originalLanguage', type: 'string' },
+    { name: 'releaseDate', type: 'uint64' },
+    { name: 'releaseYear', type: 'uint64' }
+  ]
+})
+
+ns.register({
+  name: 'contentDetails',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'contentKind', type: 'string' },
+    { name: 'sourceProvider', type: 'string' },
+    { name: 'sourceVideoId', type: 'string' },
+    { name: 'identityUrl', type: 'string' },
+    { name: 'sourceCreatorId', type: 'string' },
+    { name: 'sourceCreatorUrl', type: 'string' },
+    { name: 'sourcePublishedAt', type: 'uint64' },
+    { name: 'mediaProvider', type: 'string' },
+    { name: 'mediaId', type: 'string' },
+    { name: 'seasonNumber', type: 'uint64' },
+    { name: 'episodeNumber', type: 'uint64' },
+    { name: 'originalAirDate', type: 'uint64' },
+    { name: 'thumbnailUrl', type: 'string' },
+    { name: 'provenanceVersion', type: 'string' },
+    { name: 'publicationState', type: 'string' },
+    { name: 'contentFingerprint', type: 'string' },
+    { name: 'importIdentityKey', type: 'string' },
+    { name: 'importClaimantId', type: 'string' }
+  ]
+})
+
+ns.register({
+  name: 'channelSource',
+  compact: true,
+  fields: [
+    { name: 'provider', type: 'string', required: true },
+    { name: 'identityKey', type: 'string', required: true },
+    { name: 'sourceId', type: 'string' },
+    { name: 'identityUrl', type: 'string' },
+    { name: 'handle', type: 'string' },
+    { name: 'displayName', type: 'string' },
+    { name: 'createdAt', type: 'uint64' },
+    { name: 'updatedAt', type: 'uint64' }
+  ]
+})
+
+ns.register({
+  name: 'channelArtwork',
+  compact: true,
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'blobId', type: 'string' },
+    { name: 'blobsCoreKey', type: 'string' },
+    { name: 'mimeType', type: 'string' },
+    { name: 'remoteUrl', type: 'string' },
+    { name: 'updatedAt', type: 'uint64' }
+  ]
+})
+
+ns.register({
+  name: 'importClaim',
+  compact: true,
+  fields: [
+    { name: 'identityKey', type: 'string', required: true },
+    { name: 'claimantId', type: 'string', required: true },
+    { name: 'jobId', type: 'string' },
+    { name: 'writerKey', type: 'string' },
+    { name: 'videoId', type: 'string' },
+    { name: 'state', type: 'string' },
+    { name: 'createdAt', type: 'uint64' },
+    { name: 'updatedAt', type: 'uint64' },
+    { name: 'releasedAt', type: 'uint64' }
+  ]
+})
+
+ns.register({
   name: 'comment',
   compact: true,
   fields: [
@@ -161,11 +243,21 @@ ch.collections.register({ name: 'reactions', schema: '@peartubeChannel/reaction'
 ch.collections.register({ name: 'invites', schema: '@peartubeChannel/invite', key: ['idHex'] })
 ch.collections.register({ name: 'watchEvents', schema: '@peartubeChannel/watchEvent', key: ['videoId', 'eventId'] })
 ch.collections.register({ name: 'vectorIndexes', schema: '@peartubeChannel/vectorIndex', key: ['videoId'] })
+ch.collections.register({ name: 'channelProfiles', schema: '@peartubeChannel/channelProfile', key: ['id'] })
+ch.collections.register({ name: 'contentDetails', schema: '@peartubeChannel/contentDetails', key: ['id'] })
+ch.collections.register({ name: 'channelSources', schema: '@peartubeChannel/channelSource', key: ['provider', 'identityKey'] })
+ch.collections.register({ name: 'channelArtwork', schema: '@peartubeChannel/channelArtwork', key: ['role'] })
+ch.collections.register({ name: 'importClaims', schema: '@peartubeChannel/importClaim', key: ['identityKey', 'claimantId'] })
 
 ch.indexes.register({ name: 'writers-by-role', collection: '@peartubeChannel/writers', unique: false, key: ['role'] })
 ch.indexes.register({ name: 'videos-by-uploaded-at', collection: '@peartubeChannel/videos', unique: false, key: ['uploadedAt'] })
 ch.indexes.register({ name: 'comments-by-video-timestamp', collection: '@peartubeChannel/comments', unique: false, key: ['videoId', 'timestamp'] })
 ch.indexes.register({ name: 'reactions-by-video-type', collection: '@peartubeChannel/reactions', unique: false, key: ['videoId', 'reactionType'] })
 ch.indexes.register({ name: 'watch-events-by-video-timestamp', collection: '@peartubeChannel/watchEvents', unique: false, key: ['videoId', 'timestamp'] })
+ch.indexes.register({ name: 'claims-by-writer', collection: '@peartubeChannel/importClaims', unique: false, key: ['identityKey', 'writerKey', 'claimantId'] })
+ch.indexes.register({ name: 'claims-by-identity', collection: '@peartubeChannel/importClaims', unique: false, key: ['identityKey', 'claimantId'] })
+ch.indexes.register({ name: 'videos-by-season-episode', collection: '@peartubeChannel/contentDetails', unique: false, key: ['seasonNumber', 'episodeNumber', 'id'] })
+ch.indexes.register({ name: 'videos-by-source', collection: '@peartubeChannel/contentDetails', unique: false, key: ['sourceProvider', 'sourceVideoId', 'id'] })
+ch.indexes.register({ name: 'videos-by-kind-published', collection: '@peartubeChannel/contentDetails', unique: false, key: ['contentKind', 'sourcePublishedAt', 'id'] })
 
 HyperDB.toDisk(db, DB_DIR, { esm: true })

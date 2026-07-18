@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "metadata",
@@ -463,6 +463,298 @@
           "name": "indexedAt",
           "type": "uint64",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "channelProfile",
+      "namespace": "peartubeChannel",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "profileKind",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "mediaProvider",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "mediaId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "originalLanguage",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "releaseDate",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "releaseYear",
+          "type": "uint64",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "contentDetails",
+      "namespace": "peartubeChannel",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "contentKind",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceProvider",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceVideoId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "identityUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceCreatorId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourcePublishedAt",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "mediaProvider",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "mediaId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "seasonNumber",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "episodeNumber",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "originalAirDate",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "thumbnailUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "provenanceVersion",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "publicationState",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "contentFingerprint",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "importIdentityKey",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "importClaimantId",
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "channelSource",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "provider",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "identityKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "sourceId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "identityUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "handle",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "displayName",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "createdAt",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "channelArtwork",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "role",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "blobId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "blobsCoreKey",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "mimeType",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "remoteUrl",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "importClaim",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "identityKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "claimantId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "jobId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "writerKey",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "videoId",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "createdAt",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 2
+        },
+        {
+          "name": "releasedAt",
+          "type": "uint64",
+          "version": 2
         }
       ]
     }

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "offset": 0,
   "schema": [
     {
@@ -201,6 +201,164 @@
       "key": [
         "videoId",
         "timestamp"
+      ]
+    },
+    {
+      "name": "channelProfiles",
+      "namespace": "peartubeChannel",
+      "id": 13,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/channelProfile",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "contentDetails",
+      "namespace": "peartubeChannel",
+      "id": 14,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/videos-by-season-episode",
+        "@peartubeChannel/videos-by-source",
+        "@peartubeChannel/videos-by-kind-published"
+      ],
+      "schema": "@peartubeChannel/contentDetails",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "channelSources",
+      "namespace": "peartubeChannel",
+      "id": 15,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/channelSource",
+      "derived": false,
+      "key": [
+        "provider",
+        "identityKey"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "channelArtwork",
+      "namespace": "peartubeChannel",
+      "id": 16,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/channelArtwork",
+      "derived": false,
+      "key": [
+        "role"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "importClaims",
+      "namespace": "peartubeChannel",
+      "id": 17,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/claims-by-writer",
+        "@peartubeChannel/claims-by-identity"
+      ],
+      "schema": "@peartubeChannel/importClaim",
+      "derived": false,
+      "key": [
+        "identityKey",
+        "claimantId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "claims-by-writer",
+      "namespace": "peartubeChannel",
+      "id": 18,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeChannel/importClaims",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "identityKey",
+        "writerKey",
+        "claimantId"
+      ]
+    },
+    {
+      "name": "claims-by-identity",
+      "namespace": "peartubeChannel",
+      "id": 19,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeChannel/importClaims",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "identityKey",
+        "claimantId"
+      ]
+    },
+    {
+      "name": "videos-by-season-episode",
+      "namespace": "peartubeChannel",
+      "id": 20,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeChannel/contentDetails",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "seasonNumber",
+        "episodeNumber",
+        "id"
+      ]
+    },
+    {
+      "name": "videos-by-source",
+      "namespace": "peartubeChannel",
+      "id": 21,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeChannel/contentDetails",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "sourceProvider",
+        "sourceVideoId",
+        "id"
+      ]
+    },
+    {
+      "name": "videos-by-kind-published",
+      "namespace": "peartubeChannel",
+      "id": 22,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubeChannel/contentDetails",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "contentKind",
+        "sourcePublishedAt",
+        "id"
       ]
     }
   ]

@@ -4,7 +4,7 @@
 import { IndexEncoder, c, b4a } from 'hyperdb/runtime'
 import { version, getEncoding, setVersion } from './messages.js'
 
-const versions = { schema: version, db: 1 }
+const versions = { schema: version, db: 2 }
 
 // '@peartubeChannel/metadata' collection key
 const collection0_key = new IndexEncoder([
@@ -838,6 +838,650 @@ const index12 = {
 }
 collection6.indexes.push(index12)
 
+// '@peartubeChannel/channelProfiles' collection key
+const collection13_key = new IndexEncoder([
+  IndexEncoder.STRING
+], { prefix: 13 })
+
+function collection13_indexify (record) {
+  const a = record.id
+  return a === undefined ? [] : [a]
+}
+
+// '@peartubeChannel/channelProfiles' value encoding
+const collection13_enc = getEncoding('@peartubeChannel/channelProfile/hyperdb#13')
+
+// '@peartubeChannel/channelProfiles' reconstruction function
+function collection13_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection13_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection13.decodedVersion = c.uint.decode(state)
+  const record = collection13_enc.decode(state)
+  record.id = key[0]
+  return record
+}
+// '@peartubeChannel/channelProfiles' key reconstruction function
+function collection13_reconstruct_key (keyBuf) {
+  const key = collection13_key.decode(keyBuf)
+  return {
+    id: key[0]
+  }
+}
+
+// '@peartubeChannel/channelProfiles'
+const collection13 = {
+  name: '@peartubeChannel/channelProfiles',
+  id: 13,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.id]
+    return collection13_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection13_key.encodeRange({
+      gt: gt ? collection13_indexify(gt) : null,
+      lt: lt ? collection13_indexify(lt) : null,
+      gte: gte ? collection13_indexify(gte) : null,
+      lte: lte ? collection13_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection13_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection13_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection13_reconstruct,
+  reconstructKey: collection13_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeChannel/contentDetails' collection key
+const collection14_key = new IndexEncoder([
+  IndexEncoder.STRING
+], { prefix: 14 })
+
+function collection14_indexify (record) {
+  const a = record.id
+  return a === undefined ? [] : [a]
+}
+
+// '@peartubeChannel/contentDetails' value encoding
+const collection14_enc = getEncoding('@peartubeChannel/contentDetails/hyperdb#14')
+
+// '@peartubeChannel/contentDetails' reconstruction function
+function collection14_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection14_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection14.decodedVersion = c.uint.decode(state)
+  const record = collection14_enc.decode(state)
+  record.id = key[0]
+  return record
+}
+// '@peartubeChannel/contentDetails' key reconstruction function
+function collection14_reconstruct_key (keyBuf) {
+  const key = collection14_key.decode(keyBuf)
+  return {
+    id: key[0]
+  }
+}
+
+// '@peartubeChannel/contentDetails'
+const collection14 = {
+  name: '@peartubeChannel/contentDetails',
+  id: 14,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.id]
+    return collection14_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection14_key.encodeRange({
+      gt: gt ? collection14_indexify(gt) : null,
+      lt: lt ? collection14_indexify(lt) : null,
+      gte: gte ? collection14_indexify(gte) : null,
+      lte: lte ? collection14_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection14_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection14_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection14_reconstruct,
+  reconstructKey: collection14_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeChannel/channelSources' collection key
+const collection15_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 15 })
+
+function collection15_indexify (record) {
+  const arr = []
+
+  const a0 = record.provider
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.identityKey
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  return arr
+}
+
+// '@peartubeChannel/channelSources' value encoding
+const collection15_enc = getEncoding('@peartubeChannel/channelSource/hyperdb#15')
+
+// '@peartubeChannel/channelSources' reconstruction function
+function collection15_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection15_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection15.decodedVersion = c.uint.decode(state)
+  const record = collection15_enc.decode(state)
+  record.provider = key[0]
+  record.identityKey = key[1]
+  return record
+}
+// '@peartubeChannel/channelSources' key reconstruction function
+function collection15_reconstruct_key (keyBuf) {
+  const key = collection15_key.decode(keyBuf)
+  return {
+    provider: key[0],
+    identityKey: key[1]
+  }
+}
+
+// '@peartubeChannel/channelSources'
+const collection15 = {
+  name: '@peartubeChannel/channelSources',
+  id: 15,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.provider, record.identityKey]
+    return collection15_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection15_key.encodeRange({
+      gt: gt ? collection15_indexify(gt) : null,
+      lt: lt ? collection15_indexify(lt) : null,
+      gte: gte ? collection15_indexify(gte) : null,
+      lte: lte ? collection15_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection15_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection15_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection15_reconstruct,
+  reconstructKey: collection15_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeChannel/channelArtwork' collection key
+const collection16_key = new IndexEncoder([
+  IndexEncoder.STRING
+], { prefix: 16 })
+
+function collection16_indexify (record) {
+  const a = record.role
+  return a === undefined ? [] : [a]
+}
+
+// '@peartubeChannel/channelArtwork' value encoding
+const collection16_enc = getEncoding('@peartubeChannel/channelArtwork/hyperdb#16')
+
+// '@peartubeChannel/channelArtwork' reconstruction function
+function collection16_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection16_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection16.decodedVersion = c.uint.decode(state)
+  const record = collection16_enc.decode(state)
+  record.role = key[0]
+  return record
+}
+// '@peartubeChannel/channelArtwork' key reconstruction function
+function collection16_reconstruct_key (keyBuf) {
+  const key = collection16_key.decode(keyBuf)
+  return {
+    role: key[0]
+  }
+}
+
+// '@peartubeChannel/channelArtwork'
+const collection16 = {
+  name: '@peartubeChannel/channelArtwork',
+  id: 16,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.role]
+    return collection16_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection16_key.encodeRange({
+      gt: gt ? collection16_indexify(gt) : null,
+      lt: lt ? collection16_indexify(lt) : null,
+      gte: gte ? collection16_indexify(gte) : null,
+      lte: lte ? collection16_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection16_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection16_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection16_reconstruct,
+  reconstructKey: collection16_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeChannel/importClaims' collection key
+const collection17_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 17 })
+
+function collection17_indexify (record) {
+  const arr = []
+
+  const a0 = record.identityKey
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.claimantId
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  return arr
+}
+
+// '@peartubeChannel/importClaims' value encoding
+const collection17_enc = getEncoding('@peartubeChannel/importClaim/hyperdb#17')
+
+// '@peartubeChannel/importClaims' reconstruction function
+function collection17_reconstruct (schemaVersion, keyBuf, valueBuf) {
+  const key = collection17_key.decode(keyBuf)
+  setVersion(schemaVersion)
+  const state = { start: 0, end: valueBuf.byteLength, buffer: valueBuf }
+  const type = c.uint.decode(state)
+  if (type !== 0) throw new Error('Unknown collection type: ' + type)
+  collection17.decodedVersion = c.uint.decode(state)
+  const record = collection17_enc.decode(state)
+  record.identityKey = key[0]
+  record.claimantId = key[1]
+  return record
+}
+// '@peartubeChannel/importClaims' key reconstruction function
+function collection17_reconstruct_key (keyBuf) {
+  const key = collection17_key.decode(keyBuf)
+  return {
+    identityKey: key[0],
+    claimantId: key[1]
+  }
+}
+
+// '@peartubeChannel/importClaims'
+const collection17 = {
+  name: '@peartubeChannel/importClaims',
+  id: 17,
+  version: 2,
+  encodeKey (record) {
+    const key = [record.identityKey, record.claimantId]
+    return collection17_key.encode(key)
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return collection17_key.encodeRange({
+      gt: gt ? collection17_indexify(gt) : null,
+      lt: lt ? collection17_indexify(lt) : null,
+      gte: gte ? collection17_indexify(gte) : null,
+      lte: lte ? collection17_indexify(lte) : null
+    })
+  },
+  encodeValue (schemaVersion, collectionVersion, record) {
+    setVersion(schemaVersion)
+    const state = { start: 0, end: 2, buffer: null }
+    collection17_enc.preencode(state, record)
+    state.buffer = b4a.allocUnsafe(state.end)
+    state.buffer[state.start++] = 0
+    state.buffer[state.start++] = collectionVersion
+    collection17_enc.encode(state, record)
+    return state.buffer
+  },
+  trigger: null,
+  reconstruct: collection17_reconstruct,
+  reconstructKey: collection17_reconstruct_key,
+  indexes: [],
+  decodedVersion: 0
+}
+
+// '@peartubeChannel/claims-by-writer' collection key
+const index18_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 18 })
+
+function index18_indexify (record) {
+  const arr = []
+
+  const a0 = record.identityKey
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.writerKey
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.claimantId
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  const a3 = record.identityKey
+  if (a3 === undefined) return arr
+  arr.push(a3)
+
+  const a4 = record.claimantId
+  if (a4 === undefined) return arr
+  arr.push(a4)
+
+  return arr
+}
+
+// '@peartubeChannel/claims-by-writer'
+const index18 = {
+  name: '@peartubeChannel/claims-by-writer',
+  version: 2,
+  id: 18,
+  encodeKey (record) {
+    return index18_key.encode(index18_indexify(record))
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return index18_key.encodeRange({
+      gt: gt ? index18_indexify(gt) : null,
+      lt: lt ? index18_indexify(lt) : null,
+      gte: gte ? index18_indexify(gte) : null,
+      lte: lte ? index18_indexify(lte) : null
+    })
+  },
+  encodeValue: (record) => index18.collection.encodeKey(record),
+  encodeIndexKeys (record, context) {
+    return [index18_key.encode([record.identityKey, record.writerKey, record.claimantId, record.identityKey, record.claimantId])]
+  },
+  reconstruct: (keyBuf, valueBuf) => valueBuf,
+  offset: collection17.indexes.length,
+  collection: collection17
+}
+collection17.indexes.push(index18)
+
+// '@peartubeChannel/claims-by-identity' collection key
+const index19_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 19 })
+
+function index19_indexify (record) {
+  const arr = []
+
+  const a0 = record.identityKey
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.claimantId
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.identityKey
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  const a3 = record.claimantId
+  if (a3 === undefined) return arr
+  arr.push(a3)
+
+  return arr
+}
+
+// '@peartubeChannel/claims-by-identity'
+const index19 = {
+  name: '@peartubeChannel/claims-by-identity',
+  version: 2,
+  id: 19,
+  encodeKey (record) {
+    return index19_key.encode(index19_indexify(record))
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return index19_key.encodeRange({
+      gt: gt ? index19_indexify(gt) : null,
+      lt: lt ? index19_indexify(lt) : null,
+      gte: gte ? index19_indexify(gte) : null,
+      lte: lte ? index19_indexify(lte) : null
+    })
+  },
+  encodeValue: (record) => index19.collection.encodeKey(record),
+  encodeIndexKeys (record, context) {
+    return [index19_key.encode([record.identityKey, record.claimantId, record.identityKey, record.claimantId])]
+  },
+  reconstruct: (keyBuf, valueBuf) => valueBuf,
+  offset: collection17.indexes.length,
+  collection: collection17
+}
+collection17.indexes.push(index19)
+
+// '@peartubeChannel/videos-by-season-episode' collection key
+const index20_key = new IndexEncoder([
+  IndexEncoder.UINT,
+  IndexEncoder.UINT,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 20 })
+
+function index20_indexify (record) {
+  const arr = []
+
+  const a0 = record.seasonNumber
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.episodeNumber
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.id
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  const a3 = record.id
+  if (a3 === undefined) return arr
+  arr.push(a3)
+
+  return arr
+}
+
+// '@peartubeChannel/videos-by-season-episode'
+const index20 = {
+  name: '@peartubeChannel/videos-by-season-episode',
+  version: 2,
+  id: 20,
+  encodeKey (record) {
+    return index20_key.encode(index20_indexify(record))
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return index20_key.encodeRange({
+      gt: gt ? index20_indexify(gt) : null,
+      lt: lt ? index20_indexify(lt) : null,
+      gte: gte ? index20_indexify(gte) : null,
+      lte: lte ? index20_indexify(lte) : null
+    })
+  },
+  encodeValue: (record) => index20.collection.encodeKey(record),
+  encodeIndexKeys (record, context) {
+    return [index20_key.encode([record.seasonNumber, record.episodeNumber, record.id, record.id])]
+  },
+  reconstruct: (keyBuf, valueBuf) => valueBuf,
+  offset: collection14.indexes.length,
+  collection: collection14
+}
+collection14.indexes.push(index20)
+
+// '@peartubeChannel/videos-by-source' collection key
+const index21_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 21 })
+
+function index21_indexify (record) {
+  const arr = []
+
+  const a0 = record.sourceProvider
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.sourceVideoId
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.id
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  const a3 = record.id
+  if (a3 === undefined) return arr
+  arr.push(a3)
+
+  return arr
+}
+
+// '@peartubeChannel/videos-by-source'
+const index21 = {
+  name: '@peartubeChannel/videos-by-source',
+  version: 2,
+  id: 21,
+  encodeKey (record) {
+    return index21_key.encode(index21_indexify(record))
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return index21_key.encodeRange({
+      gt: gt ? index21_indexify(gt) : null,
+      lt: lt ? index21_indexify(lt) : null,
+      gte: gte ? index21_indexify(gte) : null,
+      lte: lte ? index21_indexify(lte) : null
+    })
+  },
+  encodeValue: (record) => index21.collection.encodeKey(record),
+  encodeIndexKeys (record, context) {
+    return [index21_key.encode([record.sourceProvider, record.sourceVideoId, record.id, record.id])]
+  },
+  reconstruct: (keyBuf, valueBuf) => valueBuf,
+  offset: collection14.indexes.length,
+  collection: collection14
+}
+collection14.indexes.push(index21)
+
+// '@peartubeChannel/videos-by-kind-published' collection key
+const index22_key = new IndexEncoder([
+  IndexEncoder.STRING,
+  IndexEncoder.UINT,
+  IndexEncoder.STRING,
+  IndexEncoder.STRING
+], { prefix: 22 })
+
+function index22_indexify (record) {
+  const arr = []
+
+  const a0 = record.contentKind
+  if (a0 === undefined) return arr
+  arr.push(a0)
+
+  const a1 = record.sourcePublishedAt
+  if (a1 === undefined) return arr
+  arr.push(a1)
+
+  const a2 = record.id
+  if (a2 === undefined) return arr
+  arr.push(a2)
+
+  const a3 = record.id
+  if (a3 === undefined) return arr
+  arr.push(a3)
+
+  return arr
+}
+
+// '@peartubeChannel/videos-by-kind-published'
+const index22 = {
+  name: '@peartubeChannel/videos-by-kind-published',
+  version: 2,
+  id: 22,
+  encodeKey (record) {
+    return index22_key.encode(index22_indexify(record))
+  },
+  encodeKeyRange ({ gt, lt, gte, lte } = {}) {
+    return index22_key.encodeRange({
+      gt: gt ? index22_indexify(gt) : null,
+      lt: lt ? index22_indexify(lt) : null,
+      gte: gte ? index22_indexify(gte) : null,
+      lte: lte ? index22_indexify(lte) : null
+    })
+  },
+  encodeValue: (record) => index22.collection.encodeKey(record),
+  encodeIndexKeys (record, context) {
+    return [index22_key.encode([record.contentKind, record.sourcePublishedAt, record.id, record.id])]
+  },
+  reconstruct: (keyBuf, valueBuf) => valueBuf,
+  offset: collection14.indexes.length,
+  collection: collection14
+}
+collection14.indexes.push(index22)
+
 const collections = [
   collection0,
   collection1,
@@ -846,7 +1490,12 @@ const collections = [
   collection4,
   collection5,
   collection6,
-  collection7
+  collection7,
+  collection13,
+  collection14,
+  collection15,
+  collection16,
+  collection17
 ]
 
 const indexes = [
@@ -854,7 +1503,12 @@ const indexes = [
   index9,
   index10,
   index11,
-  index12
+  index12,
+  index18,
+  index19,
+  index20,
+  index21,
+  index22
 ]
 
 export default { versions, collections, indexes, resolveCollection, resolveIndex }
@@ -869,6 +1523,11 @@ function resolveCollection (name) {
     case '@peartubeChannel/invites': return collection5
     case '@peartubeChannel/watchEvents': return collection6
     case '@peartubeChannel/vectorIndexes': return collection7
+    case '@peartubeChannel/channelProfiles': return collection13
+    case '@peartubeChannel/contentDetails': return collection14
+    case '@peartubeChannel/channelSources': return collection15
+    case '@peartubeChannel/channelArtwork': return collection16
+    case '@peartubeChannel/importClaims': return collection17
     default: return null
   }
 }
@@ -880,6 +1539,11 @@ function resolveIndex (name) {
     case '@peartubeChannel/comments-by-video-timestamp': return index10
     case '@peartubeChannel/reactions-by-video-type': return index11
     case '@peartubeChannel/watch-events-by-video-timestamp': return index12
+    case '@peartubeChannel/claims-by-writer': return index18
+    case '@peartubeChannel/claims-by-identity': return index19
+    case '@peartubeChannel/videos-by-season-episode': return index20
+    case '@peartubeChannel/videos-by-source': return index21
+    case '@peartubeChannel/videos-by-kind-published': return index22
     default: return null
   }
 }

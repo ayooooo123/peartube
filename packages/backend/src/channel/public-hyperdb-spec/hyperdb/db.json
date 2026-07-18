@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "offset": 0,
   "schema": [
     {
@@ -45,6 +45,116 @@
       "deprecated": false,
       "key": [
         "uploadedAt"
+      ]
+    },
+    {
+      "name": "channelProfiles",
+      "namespace": "peartubePublic",
+      "id": 3,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubePublic/channelProfile",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "contentDetails",
+      "namespace": "peartubePublic",
+      "id": 4,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [
+        "@peartubePublic/videos-by-season-episode",
+        "@peartubePublic/videos-by-source",
+        "@peartubePublic/videos-by-kind-published"
+      ],
+      "schema": "@peartubePublic/contentDetails",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "channelSources",
+      "namespace": "peartubePublic",
+      "id": 5,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubePublic/channelSource",
+      "derived": false,
+      "key": [
+        "provider",
+        "identityKey"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "channelArtwork",
+      "namespace": "peartubePublic",
+      "id": 6,
+      "type": 1,
+      "version": 2,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubePublic/channelArtwork",
+      "derived": false,
+      "key": [
+        "role"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "videos-by-season-episode",
+      "namespace": "peartubePublic",
+      "id": 7,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubePublic/contentDetails",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "seasonNumber",
+        "episodeNumber",
+        "id"
+      ]
+    },
+    {
+      "name": "videos-by-source",
+      "namespace": "peartubePublic",
+      "id": 8,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubePublic/contentDetails",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "sourceProvider",
+        "sourceVideoId",
+        "id"
+      ]
+    },
+    {
+      "name": "videos-by-kind-published",
+      "namespace": "peartubePublic",
+      "id": 9,
+      "type": 2,
+      "version": 2,
+      "collection": "@peartubePublic/contentDetails",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "contentKind",
+        "sourcePublishedAt",
+        "id"
       ]
     }
   ]

@@ -15,6 +15,7 @@ import b4a from 'b4a';
 
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
+import { normalizeContentDetails } from './channel/structured-content.js';
 
 /**
  * Detect MIME type from file magic bytes
@@ -125,6 +126,89 @@ function getExtensionForMime(mimeType) {
  * @typedef {import('./types.js').VideoMetadata} VideoMetadata
  */
 
+function normalizeVideoMetadata(options, videoId) {
+  const title = options.title;
+  const description = options.description;
+  const providedMimeType = options.mimeType;
+  const duration = options.duration;
+  const thumbnail = options.thumbnail;
+  const thumbnailUrl = options.thumbnailUrl;
+  const thumbnailBlobId = options.thumbnailBlobId;
+  const thumbnailBlobsCoreKey = options.thumbnailBlobsCoreKey;
+  const thumbnailMimeType = options.thumbnailMimeType;
+  const category = options.category;
+  const width = options.width;
+  const height = options.height;
+  const contentKind = options.contentKind;
+  const sourceProvider = options.sourceProvider;
+  const sourceVideoId = options.sourceVideoId;
+  const identityUrl = options.identityUrl;
+  const sourceCreatorId = options.sourceCreatorId;
+  const sourceCreatorUrl = options.sourceCreatorUrl;
+  const sourcePublishedAt = options.sourcePublishedAt;
+  const mediaProvider = options.mediaProvider;
+  const mediaId = options.mediaId;
+  const seasonNumber = options.seasonNumber;
+  const episodeNumber = options.episodeNumber;
+  const originalAirDate = options.originalAirDate;
+  const provenanceVersion = options.provenanceVersion;
+  const publicationState = options.publicationState;
+  const contentFingerprint = options.contentFingerprint;
+  const importIdentityKey = options.importIdentityKey;
+  const importClaimantId = options.importClaimantId;
+
+  const metadata = normalizeContentDetails({
+    id: videoId,
+    contentKind,
+    sourceProvider,
+    sourceVideoId,
+    identityUrl,
+    sourceCreatorId,
+    sourceCreatorUrl,
+    sourcePublishedAt,
+    mediaProvider,
+    mediaId,
+    seasonNumber,
+    episodeNumber,
+    originalAirDate,
+    thumbnailUrl,
+    provenanceVersion,
+    publicationState,
+    contentFingerprint,
+    importIdentityKey,
+    importClaimantId
+  });
+  Object.assign(metadata, {
+    title: String(title || ''),
+    description: String(description || ''),
+    mimeType: providedMimeType,
+    duration,
+    thumbnail,
+    category: String(category || ''),
+    width: width === undefined ? 0 : width,
+    height: height === undefined ? 0 : height
+  });
+  if (thumbnailBlobId !== undefined) metadata.thumbnailBlobId = thumbnailBlobId;
+  if (thumbnailBlobsCoreKey !== undefined) metadata.thumbnailBlobsCoreKey = thumbnailBlobsCoreKey;
+  if (thumbnailMimeType !== undefined) metadata.thumbnailMimeType = thumbnailMimeType;
+  return metadata;
+}
+
+function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
+  const playbackSupport = getPlaybackSupportForMimeType(mimeType);
+  Object.assign(metadata, {
+    mimeType: String(mimeType || 'video/mp4'),
+    size: fileSize,
+    uploadedAt: Date.now(),
+    uploadedBy: channel.localWriterKeyHex,
+    blobId: blobResult.id,
+    blobsCoreKey: channel.blobsKeyHex,
+    availability: playbackSupport.availability,
+    playbackSupport: playbackSupport.playbackSupport
+  });
+  return metadata;
+}
+
 /**
  * @typedef {Object} UploadOptions
  * @property {string} title - Video title
@@ -132,9 +216,30 @@ function getExtensionForMime(mimeType) {
  * @property {string} [mimeType] - MIME type (defaults to video/mp4)
  * @property {number} [duration] - Video duration in seconds
  * @property {string} [thumbnail] - Thumbnail blob ID
+ * @property {string} [thumbnailUrl] - Persistable thumbnail source URL
+ * @property {string} [thumbnailBlobId] - Thumbnail Hyperblobs ID
+ * @property {string} [thumbnailBlobsCoreKey] - Thumbnail blobs core key
+ * @property {string} [thumbnailMimeType] - Thumbnail MIME type
  * @property {string} [category] - Video category
  * @property {number} [width] - Video width in pixels
  * @property {number} [height] - Video height in pixels
+ * @property {string} [contentKind] - Structured content kind
+ * @property {string} [sourceProvider] - Source provider
+ * @property {string} [sourceVideoId] - Stable source video ID
+ * @property {string} [identityUrl] - Normalized canonical source URL
+ * @property {string} [sourceCreatorId] - Stable source creator ID
+ * @property {string} [sourceCreatorUrl] - Canonical source creator URL
+ * @property {number} [sourcePublishedAt] - Source publication timestamp
+ * @property {string} [mediaProvider] - Media metadata provider
+ * @property {string} [mediaId] - Stable media provider ID
+ * @property {number} [seasonNumber] - Season number
+ * @property {number} [episodeNumber] - Episode number
+ * @property {number} [originalAirDate] - Original air date timestamp
+ * @property {string} [provenanceVersion] - Metadata resolver version
+ * @property {string} [publicationState] - Private/public publication state
+ * @property {string} [contentFingerprint] - Stable content fingerprint
+ * @property {string} [importIdentityKey] - Normalized import identity
+ * @property {string} [importClaimantId] - Import claim contender ID
  */
 
 /**
@@ -205,7 +310,6 @@ export function createUploadManager({ ctx }) {
      * @returns {Promise<UploadResult>}
      */
     async uploadFromPath(channel, filePath, options, fs, onProgress) {
-      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, thumbnailUrl, category = '', width = 0, height = 0 } = options;
 
       try {
         if (!channel.blobs) {
@@ -213,6 +317,7 @@ export function createUploadManager({ ctx }) {
         }
 
         const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
+        const metadata = normalizeVideoMetadata(options, videoId);
 
         // Get file size
         const stat = fs.statSync(filePath);
@@ -245,7 +350,7 @@ export function createUploadManager({ ctx }) {
         }
 
         const detectedMimeType = detectMimeType(headerBuffer);
-        const mimeType = detectedMimeType || providedMimeType || 'video/mp4';
+        const mimeType = detectedMimeType || metadata.mimeType || 'video/mp4';
 
         console.log(`[Upload] Starting: ${filePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
 
@@ -295,31 +400,19 @@ export function createUploadManager({ ctx }) {
 
         await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
 
-        // Create video metadata and store in channel HyperDB
-        // Ensure all string fields are actually strings to pass validation
-        const playbackSupport = getPlaybackSupportForMimeType(mimeType);
-        const metadata = {
-          id: videoId,
-          title: String(title || ''),
-          description: String(description || ''),
-          mimeType: String(mimeType || 'video/mp4'),
-          size: fileSize,
-          uploadedAt: Date.now(),
-          uploadedBy: channel.localWriterKeyHex,
-          blobId: blobResult.id,
-          blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
-          duration,
-          thumbnail,
-          thumbnailUrl,
-          category: String(category || ''),
-          width,
-          height,
-          availability: playbackSupport.availability,
-          playbackSupport: playbackSupport.playbackSupport
-        };
+        // Complete the validated metadata with generated upload values
+        buildVideoMetadata(
+          metadata,
+          blobResult,
+          channel,
+          fileSize,
+          mimeType
+        );
 
         // Store metadata in channel HyperDB
-        await channel.addVideo(metadata);
+        await channel.addVideo(metadata, {
+          syncPublic: metadata.publicationState !== 'replicationPending'
+        });
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 
@@ -347,7 +440,6 @@ export function createUploadManager({ ctx }) {
      * @returns {Promise<UploadResult>}
      */
     async uploadFromBuffer(channel, buffer, options, onProgress) {
-      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '', width = 0, height = 0 } = options;
 
       try {
         if (!channel.blobs) {
@@ -355,12 +447,13 @@ export function createUploadManager({ ctx }) {
         }
 
         const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
+        const metadata = normalizeVideoMetadata(options, videoId);
         const fileSize = buffer.length;
 
         // Detect MIME type from buffer magic bytes
         const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
         const detectedMimeType = detectMimeType(headerBuffer);
-        const mimeType = detectedMimeType || providedMimeType || 'video/mp4';
+        const mimeType = detectedMimeType || metadata.mimeType || 'video/mp4';
 
         console.log(`[Upload] Starting buffer upload (${(fileSize / 1024 / 1024).toFixed(2)} MB), MIME: ${mimeType}`);
 
@@ -373,30 +466,19 @@ export function createUploadManager({ ctx }) {
 
         await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
 
-        // Create video metadata and store in channel HyperDB
-        // Ensure all string fields are actually strings to pass validation
-        const playbackSupport = getPlaybackSupportForMimeType(mimeType);
-        const metadata = {
-          id: videoId,
-          title: String(title || ''),
-          description: String(description || ''),
-          mimeType: String(mimeType || 'video/mp4'),
-          size: fileSize,
-          uploadedAt: Date.now(),
-          uploadedBy: channel.localWriterKeyHex,
-          blobId: blobResult.id,
-          blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
-          duration,
-          thumbnail,
-          category: String(category || ''),
-          width,
-          height,
-          availability: playbackSupport.availability,
-          playbackSupport: playbackSupport.playbackSupport
-        };
+        // Complete the validated metadata with generated upload values
+        buildVideoMetadata(
+          metadata,
+          blobResult,
+          channel,
+          fileSize,
+          mimeType
+        );
 
         // Store metadata in channel HyperDB
-        await channel.addVideo(metadata);
+        await channel.addVideo(metadata, {
+          syncPublic: metadata.publicationState !== 'replicationPending'
+        });
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 

@@ -21,6 +21,17 @@ discovery:
   maxChannels: 500
   maxChannelsPerOwner: 20
 
+# Optional: interactive `peartube add` content-import preferences.
+# Environment variables always override these (TMDB_API_KEY, PEARTUBE_YTDLP_PATH,
+# PEARTUBE_YTDLP_COOKIES) and secret-bearing files are written with mode 0600.
+content:
+  storagePath: ~/.peartube/content
+  tmdbApiKey: ""          # TMDB read token; leave blank to use TMDB_API_KEY
+  ytDlpPath: yt-dlp       # yt-dlp executable path or PATH name
+  ytDlpCookiesPath: ""    # optional cookies file, validated but never logged
+  searchLimit: 12
+  claimRetentionDays: 30
+
 # Optional: archive YouTube channels into PearTube channels owned by this relay.
 # Each source URL maps to one PearTube channel (deterministic per relay identity).
 # yt-dlp must be available in PATH (the relay Docker image bundles it).

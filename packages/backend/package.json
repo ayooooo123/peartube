@@ -21,6 +21,7 @@
     "./seeding": "./src/seeding.js",
     "./seed-pin": "./src/seed-pin/index.js",
     "./api": "./src/api.js",
+    "./structured-content": "./src/channel/structured-content.js",
     "./identity": "./src/identity.js",
     "./upload": "./src/upload.js",
     "./src/backend-entry.js": "./src/backend-entry.js",

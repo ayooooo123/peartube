@@ -134,7 +134,13 @@ export const APP_RPC_METADATA = Object.freeze({
       "response": "@peartube/get-content-items-response",
       "send": false,
       "requestStream": false,
-      "responseStream": false
+      "responseStream": false,
+      "presenceFields": [
+        {
+          "field": "limit",
+          "flag": "limitProvided"
+        }
+      ]
     },
     {
       "id": 12,
@@ -1782,7 +1788,13 @@ export const APP_RPC_METADATA = Object.freeze({
         "response": "@peartube/get-content-items-response",
         "send": false,
         "requestStream": false,
-        "responseStream": false
+        "responseStream": false,
+        "presenceFields": [
+          {
+            "field": "limit",
+            "flag": "limitProvided"
+          }
+        ]
       },
       {
         "id": 9,
@@ -3002,13 +3014,25 @@ export const APP_RPC_COMMANDS = Object.freeze(APP_RPC_METADATA.appCommands)
 export const PLATFORM_ONLY_COMMANDS = Object.freeze(APP_RPC_METADATA.platformOnlyCommands.map((command) => command.command))
 export const RUNTIME_ONLY_METHODS = Object.freeze(APP_RPC_METADATA.runtimeOnlyMethods)
 
-function createMethodCaller(rpc, ready, methodName, createMissingMethodError, normalizeError) {
+function normalizePresenceFields(request, presenceFields) {
+  if (!request || typeof request !== 'object' || Array.isArray(request) || !presenceFields?.length) return request
+  let normalized = request
+  for (const { field, flag } of presenceFields) {
+    if (!Object.hasOwn(request, field) || Object.hasOwn(request, flag)) continue
+    if (normalized === request) normalized = { ...request }
+    normalized[flag] = true
+  }
+  return normalized
+}
+
+function createMethodCaller(rpc, ready, methodMetadata, createMissingMethodError, normalizeError) {
   return async (request = {}) => {
     await ready()
+    const methodName = methodMetadata.method
     const method = rpc?.[methodName]
     if (typeof method !== 'function') throw createMissingMethodError(methodName)
     try {
-      return await method.call(rpc, request)
+      return await method.call(rpc, normalizePresenceFields(request, methodMetadata.presenceFields))
     } catch (error) {
       throw normalizeError(error)
     }
@@ -3025,7 +3049,7 @@ export function createGeneratedAppRpcClient({ rpc, ready, createMissingMethodErr
       namespace,
       Object.fromEntries(methods.map((method) => [
         method.method,
-        createMethodCaller(rpc, ready, method.method, createMissingMethodError, normalizeError)
+        createMethodCaller(rpc, ready, method, createMissingMethodError, normalizeError)
       ]))
     ])
   )

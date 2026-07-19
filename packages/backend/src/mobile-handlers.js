@@ -111,6 +111,8 @@ export function attachMobileHandlers(B, deps) {
   }
 
   B.getChannel = async (r) => ({ channel: await api.getChannel(r.publicKey || '') })
+  B.getContentCatalog = async (r) => api.getContentCatalog(r)
+  B.getContentItems = async (r) => api.getContentItems(r)
   B.updateChannel = async (r) => {
     const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }
     try { return await api.updateChannel(a.driveKey, { name: r.name, description: r.description, avatar: r.avatar }) } catch (err) { return { success: false, error: err?.message } }

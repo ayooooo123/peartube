@@ -45,6 +45,7 @@ function makeDelayedTimeoutStream(delayMs) {
 
   const stream = {
     destroyed: false,
+    destroyCalls: 0,
     destroyError: null,
     [Symbol.asyncIterator]() {
       return this
@@ -59,6 +60,7 @@ function makeDelayedTimeoutStream(delayMs) {
       })
     },
     destroy(err) {
+      this.destroyCalls += 1
       this.destroyed = true
       this.destroyError = err || null
       if (timer) {
@@ -74,6 +76,23 @@ function makeDelayedTimeoutStream(delayMs) {
   }
 
   return stream
+}
+
+function makeFiniteRecordStream(records) {
+  return {
+    index: 0,
+    destroyCalls: 0,
+    [Symbol.asyncIterator]() {
+      return this
+    },
+    async next() {
+      if (this.index >= records.length) return { done: true }
+      return { done: false, value: records[this.index++] }
+    },
+    destroy() {
+      this.destroyCalls += 1
+    },
+  }
 }
 
 test('isPubliclyProjectable gates durability and exact claim winners', (t) => {
@@ -226,6 +245,131 @@ test('listVideos only reconciles sidecars for bounded video candidates', async (
   t.alike(videos, [{ id: 'bounded-video', uploadedAt: 1 }])
   t.is(fullDetailsScans, 0, 'logical merge does not start an unbounded sidecar collection scan')
   t.ok(elapsed < 150, `logical merge returned after ${elapsed}ms`)
+})
+
+test('bounded catalog collection reads cancel only their snapshot and recover after a sparse timeout', async (t) => {
+  const stalled = makeDelayedTimeoutStream(250)
+  const recovered = makeFiniteRecordStream([
+    { provider: 'youtube', identityKey: 'channel:recovered' },
+  ])
+  const streams = [stalled, recovered]
+  let snapshotCloses = 0
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee.db = {
+    update() {},
+    snapshot() {
+      const stream = streams.shift()
+      return {
+        find() {
+          return stream
+        },
+        async close() {
+          snapshotCloses += 1
+        },
+      }
+    },
+  }
+
+  await t.exception(
+    publicBee.listChannelSources({ bounded: true, timeoutMs: 20, limit: 2 }),
+    /timed out/i,
+  )
+  t.is(stalled.destroyCalls, 1, 'timed-out request stream is destroyed once')
+  t.is(snapshotCloses, 1, 'timed-out request snapshot is closed')
+
+  t.alike(await publicBee.listChannelSources({ bounded: true, timeoutMs: 20, limit: 2 }), [
+    { provider: 'youtube', identityKey: 'channel:recovered' },
+  ])
+  t.is(snapshotCloses, 2, 'later reads use and close a fresh snapshot')
+  t.is(recovered.destroyCalls, 0, 'completed streams are not redundantly destroyed')
+})
+
+test('bounded catalog collection overflow fails instead of truncating', async (t) => {
+  const overflow = makeFiniteRecordStream([
+    { role: 'avatar' },
+    { role: 'banner' },
+    { role: 'poster' },
+  ])
+  let snapshotCloses = 0
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee.db = {
+    update() {},
+    snapshot() {
+      return {
+        find() {
+          return overflow
+        },
+        async close() {
+          snapshotCloses += 1
+        },
+      }
+    },
+  }
+
+  await t.exception(
+    publicBee.listChannelArtwork({ bounded: true, timeoutMs: 50, limit: 2 }),
+    /exceeds|overflow|limit/i,
+  )
+  t.is(overflow.destroyCalls, 1, 'overflow stream is destroyed once')
+  t.is(snapshotCloses, 1, 'overflow snapshot is closed')
+})
+
+test('bounded catalog point reads close stalled snapshots and leave the parent database usable', async (t) => {
+  const values = [
+    new Promise(() => {}),
+    { key: 'meta', name: 'Recovered metadata' },
+    new Promise(() => {}),
+    { id: 'profile', profileKind: 'creator' },
+  ]
+  let snapshotCloses = 0
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee._sanitizePublicMetadata = PublicChannelBee.prototype._sanitizePublicMetadata
+  publicBee.db = {
+    update() {},
+    snapshot() {
+      const value = values.shift()
+      return {
+        get() {
+          return value
+        },
+        async close() {
+          snapshotCloses += 1
+        },
+      }
+    },
+  }
+
+  await t.exception(publicBee.getMetadata({ bounded: true, timeoutMs: 20 }), /timed out/i)
+  t.alike(await publicBee.getMetadata({ bounded: true, timeoutMs: 20 }), {
+    name: 'Recovered metadata',
+  })
+  await t.exception(publicBee.getChannelProfile({ bounded: true, timeoutMs: 20 }), /timed out/i)
+  t.alike(await publicBee.getChannelProfile({ bounded: true, timeoutMs: 20 }), {
+    id: 'profile',
+    profileKind: 'creator',
+  })
+  t.is(snapshotCloses, 4, 'every request-owned point-read snapshot is closed')
+})
+
+test('bounded catalog reads use real HyperDB snapshots without closing the PublicBee', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    await publicBee.setMetadata({ name: 'Snapshot Channel' })
+    await publicBee.putChannelProfile({ profileKind: 'creator' })
+    await publicBee.putChannelSource({ provider: 'youtube', identityKey: 'snapshot-channel' })
+    await publicBee.putChannelArtwork({ role: 'avatar', remoteUrl: 'https://example.test/avatar.jpg' })
+
+    t.is((await publicBee.getMetadata({ bounded: true, timeoutMs: 200 })).name, 'Snapshot Channel')
+    t.is((await publicBee.getChannelProfile({ bounded: true, timeoutMs: 200 })).profileKind, 'creator')
+    t.alike(await publicBee.listChannelSources({ bounded: true, timeoutMs: 200 }), [{
+      provider: 'youtube',
+      identityKey: 'snapshot-channel',
+    }])
+    t.alike(await publicBee.listChannelArtwork({ bounded: true, timeoutMs: 200 }), [{
+      role: 'avatar',
+      remoteUrl: 'https://example.test/avatar.jpg',
+    }])
+    t.absent(publicBee.closing, 'bounded request snapshots leave the cached parent usable')
+  })
 })
 
 test('syncFromChannel keeps existing public videos when a channel unexpectedly reads empty', async (t) => {

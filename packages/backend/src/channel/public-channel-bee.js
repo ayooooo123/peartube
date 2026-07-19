@@ -137,6 +137,10 @@ function projectionClaimKey(videoId) {
 
 const DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS = 1500
 const DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS = 1200
+const DEFAULT_CATALOG_READ_TIMEOUT_MS = 1200
+const MAX_CATALOG_READ_TIMEOUT_MS = 5000
+const MAX_CATALOG_CHANNEL_SOURCES = 64
+const MAX_CATALOG_CHANNEL_ARTWORK = 16
 
 function normalizeTimeoutMs(value, fallback) {
   const timeout = Number(value)
@@ -156,6 +160,20 @@ async function withTimeout(promise, timeoutMs, message) {
   } finally {
     if (timeout) clearTimeout(timeout)
   }
+}
+
+function normalizeCatalogReadOptions(options = {}, maxItems = null) {
+  const requestedTimeout = Number(options?.timeoutMs)
+  const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+    ? Math.min(requestedTimeout, MAX_CATALOG_READ_TIMEOUT_MS)
+    : DEFAULT_CATALOG_READ_TIMEOUT_MS
+  if (maxItems === null) return { timeoutMs }
+
+  const requestedLimit = options?.limit
+  const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0
+    ? Math.min(requestedLimit, maxItems)
+    : maxItems
+  return { timeoutMs, limit }
 }
 
 function pickDefinedFields(value, fields) {
@@ -367,7 +385,93 @@ export class PublicChannelBee extends ReadyResource {
     return out
   }
 
-  async getMetadata() {
+  _openCatalogReadSnapshot() {
+    if (!this.db || typeof this.db.snapshot !== 'function') {
+      throw new Error('PublicBee bounded catalog snapshot is unavailable')
+    }
+    this.db.update?.()
+    const snapshot = this.db.snapshot()
+    if (!snapshot || typeof snapshot.close !== 'function') {
+      throw new Error('PublicBee bounded catalog snapshot is unavailable')
+    }
+    return snapshot
+  }
+
+  async _withBoundedCatalogSnapshot(operation, { timeoutMs, label, onFailure = null }) {
+    const snapshot = this._openCatalogReadSnapshot()
+    try {
+      const read = Promise.resolve().then(async () => {
+        await snapshot.ready?.()
+        return operation(snapshot)
+      })
+      return await withTimeout(read, timeoutMs, `${label} timed out after ${timeoutMs}ms`)
+    } catch (error) {
+      onFailure?.(error)
+      throw error
+    } finally {
+      await snapshot.close()
+    }
+  }
+
+  async _getBoundedCatalogRecord(collection, key, options, label) {
+    const { timeoutMs } = normalizeCatalogReadOptions(options)
+    return this._withBoundedCatalogSnapshot(
+      (snapshot) => snapshot.get(collection, key),
+      { timeoutMs, label },
+    )
+  }
+
+  async _listBoundedCatalogRecords(collection, fields, defaults, options, maxItems, label) {
+    const { timeoutMs, limit } = normalizeCatalogReadOptions(options, maxItems)
+    let stream = null
+    let streamDestroyed = false
+    const destroyStreamOnce = (error) => {
+      if (streamDestroyed || !stream || typeof stream.destroy !== 'function') return
+      streamDestroyed = true
+      try {
+        stream.destroy(error)
+      } catch {
+        // The request-owned snapshot close below is the final cancellation boundary.
+      }
+    }
+
+    return this._withBoundedCatalogSnapshot(async (snapshot) => {
+      stream = snapshot.find(collection, {})
+      const records = []
+      for await (const entry of stream) {
+        records.push(entry?.value ?? entry)
+        if (records.length > limit) {
+          const error = new Error(`${label} exceeds limit ${limit}`)
+          destroyStreamOnce(error)
+          throw error
+        }
+      }
+      return records.map((record) => decodeStoredRecord(record, fields, defaults))
+    }, {
+      timeoutMs,
+      label,
+      onFailure: destroyStreamOnce,
+    })
+  }
+
+  async getMetadata(options = {}) {
+    if (options?.bounded === true) {
+      const { timeoutMs } = normalizeCatalogReadOptions(options)
+      const deadline = Date.now() + timeoutMs
+      await this.waitForSync(Math.min(timeoutMs, DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS))
+      const remainingMs = deadline - Date.now()
+      if (remainingMs <= 0) {
+        throw new Error(`PublicBee catalog metadata timed out after ${timeoutMs}ms`)
+      }
+      const meta = await this._getBoundedCatalogRecord(
+        '@peartubePublic/metadata',
+        { key: 'meta' },
+        { ...options, timeoutMs: remainingMs },
+        'PublicBee catalog metadata',
+      )
+      return this._sanitizePublicMetadata(meta || null)
+    }
+
     await this.waitForSync(1500)
     if (!this.db) return null
     this.db.update?.()
@@ -570,7 +674,17 @@ export class PublicChannelBee extends ReadyResource {
     await this.db.flush()
   }
 
-  async getChannelProfile() {
+  async getChannelProfile(options = {}) {
+    if (options?.bounded === true) {
+      const record = await this._getBoundedCatalogRecord(
+        '@peartubePublic/channelProfiles',
+        { id: 'profile' },
+        options,
+        'PublicBee catalog profile',
+      )
+      return decodeStoredRecord(record, CHANNEL_PROFILE_FIELDS, CHANNEL_PROFILE_STORAGE_DEFAULTS)
+    }
+
     if (!this.db) return null
     this.db.update?.()
     const record = await this.db.get('@peartubePublic/channelProfiles', { id: 'profile' })
@@ -605,7 +719,18 @@ export class PublicChannelBee extends ReadyResource {
     await this.db.flush()
   }
 
-  async listChannelSources() {
+  async listChannelSources(options = {}) {
+    if (options?.bounded === true) {
+      return this._listBoundedCatalogRecords(
+        '@peartubePublic/channelSources',
+        CHANNEL_SOURCE_FIELDS,
+        CHANNEL_SOURCE_STORAGE_DEFAULTS,
+        options,
+        MAX_CATALOG_CHANNEL_SOURCES,
+        'PublicBee catalog sources',
+      )
+    }
+
     if (!this.db) return []
     this.db.update?.()
     const records = await this.db.find('@peartubePublic/channelSources', {}).toArray()
@@ -637,7 +762,18 @@ export class PublicChannelBee extends ReadyResource {
     await this.db.flush()
   }
 
-  async listChannelArtwork() {
+  async listChannelArtwork(options = {}) {
+    if (options?.bounded === true) {
+      return this._listBoundedCatalogRecords(
+        '@peartubePublic/channelArtwork',
+        CHANNEL_ARTWORK_FIELDS,
+        CHANNEL_ARTWORK_STORAGE_DEFAULTS,
+        options,
+        MAX_CATALOG_CHANNEL_ARTWORK,
+        'PublicBee catalog artwork',
+      )
+    }
+
     if (!this.db) return []
     this.db.update?.()
     const records = await this.db.find('@peartubePublic/channelArtwork', {}).toArray()

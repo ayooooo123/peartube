@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -1097,6 +1097,12 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "limitProvided",
+          "required": false,
+          "type": "bool",
+          "version": 2
         }
       ]
     },

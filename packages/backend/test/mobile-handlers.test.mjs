@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { attachMobileHandlers } from '../src/mobile-handlers.js'
+import { registerSharedHandlers, SHARED_HANDLER_NAMES } from '../src/hrpc-handlers.js'
 
 function createDeps(overrides = {}) {
   return {
@@ -290,4 +291,58 @@ test('getVideoThumbnail surfaces a retryable miss when the API can not localize 
   const result = await backend.getVideoThumbnail({ channelKey: 'channel-key', videoId: 'video-1' })
 
   assert.deepEqual(result, { url: null, exists: false, dataUrl: null })
+})
+
+test('catalog handlers delegate once and shared HRPC registration exposes both methods', async () => {
+  const backend = {}
+  const calls = []
+  const catalogRequest = { channelKey: 'channel-key' }
+  const itemsRequest = { channelKey: 'channel-key', groupId: 'latest', limit: 24 }
+  const omittedLimitRequest = { channelKey: 'channel-key', groupId: 'latest', limit: 0, limitProvided: false }
+  const explicitZeroRequest = { channelKey: 'channel-key', groupId: 'latest', limit: 0, limitProvided: true }
+  const catalogResponse = { success: true, profile: { channelKey: 'channel-key', name: 'Channel' }, groups: [] }
+  const itemsResponse = { success: true, group: { id: 'latest' }, items: [] }
+  const deps = createDeps({
+    api: {
+      async getContentCatalog(request) {
+        calls.push(['catalog', request])
+        return catalogResponse
+      },
+      async getContentItems(request) {
+        calls.push(['items', request])
+        return itemsResponse
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  assert.equal(typeof backend.getContentCatalog, 'function')
+  assert.equal(typeof backend.getContentItems, 'function')
+  assert.equal(await backend.getContentCatalog(catalogRequest), catalogResponse)
+  assert.equal(await backend.getContentItems(itemsRequest), itemsResponse)
+  assert.equal(await backend.getContentItems(omittedLimitRequest), itemsResponse)
+  assert.equal(await backend.getContentItems(explicitZeroRequest), itemsResponse)
+  assert.deepEqual(calls, [
+    ['catalog', catalogRequest],
+    ['items', itemsRequest],
+    ['items', omittedLimitRequest],
+    ['items', explicitZeroRequest],
+  ])
+
+  assert.equal(SHARED_HANDLER_NAMES.filter(name => name === 'GetContentCatalog').length, 1)
+  assert.equal(SHARED_HANDLER_NAMES.filter(name => name === 'GetContentItems').length, 1)
+
+  const registrations = []
+  registerSharedHandlers({
+    onGetContentCatalog(handler) {
+      registrations.push(['GetContentCatalog', handler])
+    },
+    onGetContentItems(handler) {
+      registrations.push(['GetContentItems', handler])
+    },
+  }, backend)
+  assert.deepEqual(registrations.map(([name]) => name), ['GetContentCatalog', 'GetContentItems'])
+  assert.equal(typeof registrations[0][1], 'function')
+  assert.equal(typeof registrations[1][1], 'function')
 })

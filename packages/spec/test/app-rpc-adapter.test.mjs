@@ -90,6 +90,36 @@ test('generated app RPC facade invokes namespaced HRPC methods after ready', asy
   await t.exception(() => client.video.getVideoUrl({}), /missing:getVideoUrl/)
 })
 
+test('generated app RPC facade marks explicitly provided optional request fields', async (t) => {
+  let captured = null
+  const client = createGeneratedAppRpcClient({
+    rpc: {
+      getContentItems(request) {
+        captured = request
+        return { success: false, errorCode: 'INVALID_LIMIT', items: [] }
+      }
+    },
+    async ready() {},
+    createMissingMethodError(methodName) {
+      return new Error(`missing:${methodName}`)
+    },
+    normalizeError(error) {
+      return error
+    }
+  })
+
+  await client.channel.getContentItems({
+    channelKey: '',
+    publicBeeKey: 'public-bee-key',
+    groupId: 'latest',
+    limit: 0
+  })
+
+  t.ok(Object.hasOwn(captured, 'limit'))
+  t.is(captured.limit, 0)
+  t.is(captured.limitProvided, true)
+})
+
 test('package exports resolve generated HRPC and schema entry points', async (t) => {
   const hrpc = await import('@peartube/spec')
   const messages = await import('@peartube/spec/messages')

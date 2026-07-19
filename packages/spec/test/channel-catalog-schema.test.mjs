@@ -14,6 +14,40 @@ function roundTrip(name, value) {
   return c.decode(encoding, c.encode(encoding, value))
 }
 
+const legacyContentItemsRequest = {
+  preencode(state, message) {
+    c.string.preencode(state, message.channelKey)
+    state.end++
+    if (message.publicBeeKey) c.string.preencode(state, message.publicBeeKey)
+    c.string.preencode(state, message.groupId)
+    if (message.cursor) c.string.preencode(state, message.cursor)
+    if (message.limit) c.uint.preencode(state, message.limit)
+  },
+  encode(state, message) {
+    const flags =
+      (message.publicBeeKey ? 1 : 0) |
+      (message.cursor ? 2 : 0) |
+      (message.limit ? 4 : 0)
+    c.string.encode(state, message.channelKey)
+    c.uint.encode(state, flags)
+    if (message.publicBeeKey) c.string.encode(state, message.publicBeeKey)
+    c.string.encode(state, message.groupId)
+    if (message.cursor) c.string.encode(state, message.cursor)
+    if (message.limit) c.uint.encode(state, message.limit)
+  },
+  decode(state) {
+    const channelKey = c.string.decode(state)
+    const flags = c.uint.decode(state)
+    return {
+      channelKey,
+      publicBeeKey: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      groupId: c.string.decode(state),
+      cursor: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      limit: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+    }
+  },
+}
+
 const artwork = [
   {
     role: 'avatar',
@@ -169,13 +203,71 @@ test('catalog request codecs retain bounded pagination inputs', (t) => {
     publicBeeKey: 'public-bee-key',
     groupId: 'latest',
     cursor: 'opaque:latest:page-2',
-    limit: 200
+    limit: 200,
+    limitProvided: true
   }), {
     channelKey: 'channel-key',
     publicBeeKey: 'public-bee-key',
     groupId: 'latest',
     cursor: 'opaque:latest:page-2',
-    limit: 200
+    limit: 200,
+    limitProvided: true
+  })
+
+  t.alike(roundTrip('@peartube/get-content-items-request', {
+    channelKey: 'channel-key',
+    groupId: 'latest'
+  }), {
+    channelKey: 'channel-key',
+    publicBeeKey: null,
+    groupId: 'latest',
+    cursor: null,
+    limit: 0,
+    limitProvided: false
+  })
+
+  t.alike(roundTrip('@peartube/get-content-items-request', {
+    channelKey: 'channel-key',
+    groupId: 'latest',
+    limit: 0,
+    limitProvided: true
+  }), {
+    channelKey: 'channel-key',
+    publicBeeKey: null,
+    groupId: 'latest',
+    cursor: null,
+    limit: 0,
+    limitProvided: true
+  })
+})
+
+test('catalog limit presence remains wire-compatible with legacy peers', (t) => {
+  const current = schema.getEncoding('@peartube/get-content-items-request')
+  const legacyPayload = c.encode(legacyContentItemsRequest, {
+    channelKey: 'channel-key',
+    groupId: 'latest',
+  })
+  t.alike(c.decode(current, legacyPayload), {
+    channelKey: 'channel-key',
+    publicBeeKey: null,
+    groupId: 'latest',
+    cursor: null,
+    limit: 0,
+    limitProvided: false,
+  })
+
+  const explicitZeroPayload = c.encode(current, {
+    channelKey: 'channel-key',
+    groupId: 'latest',
+    limit: 0,
+    limitProvided: true,
+  })
+  t.alike(c.decode(legacyContentItemsRequest, explicitZeroPayload), {
+    channelKey: 'channel-key',
+    publicBeeKey: null,
+    groupId: 'latest',
+    cursor: null,
+    limit: 0,
   })
 })
 

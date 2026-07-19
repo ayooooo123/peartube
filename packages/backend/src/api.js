@@ -42,6 +42,118 @@ import { createSubscriptionsApi } from './api/subscriptions.js'
 import { createLiveApi } from './api/live.js'
 import { createStatusApi } from './api/status.js'
 import { createNetworkLifecycleApi } from './api/network-lifecycle.js'
+import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
+
+const CATALOG_PROFILE_FIELDS = Object.freeze([
+  'name',
+  'description',
+  'profileKind',
+  'mediaProvider',
+  'mediaId',
+  'originalLanguage',
+  'releaseDate',
+  'releaseYear',
+  'createdAt',
+  'updatedAt',
+])
+const CATALOG_SOURCE_FIELDS = Object.freeze([
+  'provider',
+  'identityKey',
+  'sourceId',
+  'identityUrl',
+  'handle',
+  'displayName',
+])
+const CATALOG_ARTWORK_FIELDS = Object.freeze([
+  'role',
+  'blobId',
+  'blobsCoreKey',
+  'mimeType',
+  'remoteUrl',
+])
+const CATALOG_ITEM_FIELDS = Object.freeze([
+  'id',
+  'title',
+  'description',
+  'contentKind',
+  'sourceProvider',
+  'sourceVideoId',
+  'identityUrl',
+  'sourceCreatorId',
+  'sourceCreatorUrl',
+  'sourcePublishedAt',
+  'mediaProvider',
+  'mediaId',
+  'seasonNumber',
+  'episodeNumber',
+  'originalAirDate',
+  'duration',
+  'uploadedAt',
+  'blobId',
+  'blobsCoreKey',
+  'mimeType',
+  'thumbnailUrl',
+  'thumbnailBlobId',
+  'thumbnailBlobsCoreKey',
+  'thumbnailMimeType',
+  'provenanceVersion',
+  'contentFingerprint',
+  'publicationState',
+])
+const CATALOG_ERROR_CODES = new Set([
+  'INVALID_CURSOR',
+  'INVALID_LIMIT',
+  'INVALID_CATALOG_INPUT',
+  'UNKNOWN_CATALOG_GROUP',
+  'CHANNEL_NOT_FOUND',
+  'CHANNEL_MISMATCH',
+  'CATALOG_UNAVAILABLE',
+])
+const CATALOG_PUBLIC_READ_TIMEOUT_MS = 1200
+const CATALOG_REQUEST_READ_TIMEOUT_MS = 3500
+const MAX_CATALOG_CHANNEL_SOURCES = 64
+const MAX_CATALOG_CHANNEL_ARTWORK = 16
+
+function snapshotCatalogRecord(record, fields) {
+  if (record === undefined || record === null) return {}
+  if (typeof record !== 'object' || Array.isArray(record)) return record
+  const snapshot = {}
+  for (const field of fields) {
+    const value = record[field]
+    if (value !== undefined && value !== null) snapshot[field] = value
+  }
+  return snapshot
+}
+
+function snapshotCatalogRecords(records, fields) {
+  if (records === undefined || records === null) return []
+  if (!Array.isArray(records)) return records
+  const snapshots = new Array(records.length)
+  for (let index = 0; index < records.length; index++) {
+    snapshots[index] = snapshotCatalogRecord(records[index], fields)
+  }
+  return snapshots
+}
+
+function isCatalogStorageKey(value) {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)
+}
+
+function isCatalogKey(value) {
+  if (typeof value !== 'string' || value.length === 0 || b4a.byteLength(value) > 256) return false
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(value)) return false
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (++index >= value.length) return false
+      const low = value.charCodeAt(index)
+      if (low < 0xdc00 || low > 0xdfff) return false
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false
+    }
+  }
+  return true
+}
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -684,6 +796,210 @@ export function createApi({
       // with a doubled budget instead of failing hard.
       console.warn(`[API] ${label} timed out after ${timeoutMs}ms, retrying once`)
       return withTimeout(loadChannel(ctx, channelKey, options), timeoutMs * 2, `${label} retry`)
+    }
+  }
+
+  function throwCatalogError(code, message) {
+    const error = new Error(message)
+    error.code = code
+    throw error
+  }
+
+  function assertBoundedCatalogCollection(records, limit, label) {
+    if (Array.isArray(records) && records.length > limit) {
+      throwCatalogError('CATALOG_UNAVAILABLE', `${label} exceeds limit ${limit}`)
+    }
+    return records
+  }
+
+  function readCatalogRequestKey(request, field) {
+    const value = request?.[field]
+    if (value === undefined || value === null || value === '') return null
+    if (!isCatalogStorageKey(value)) {
+      throwCatalogError('INVALID_CATALOG_INPUT', `Catalog request.${field} is invalid`)
+    }
+    return value.toLowerCase()
+  }
+
+  function normalizeCatalogRequestLimit(request) {
+    const hasLimit = Object.hasOwn(request, 'limit')
+    if (request.limitProvided === true) return hasLimit ? request.limit : undefined
+    if (request.limitProvided === false) return request.limit > 0 ? request.limit : undefined
+    return hasLimit ? request.limit : undefined
+  }
+
+  async function verifiedPublicCatalogDescriptor(publicBee, publicBeeKey) {
+    if (typeof publicBee?.getRootDescriptor !== 'function') {
+      throwCatalogError('CHANNEL_NOT_FOUND', 'Channel not found')
+    }
+    const signed = await withTimeout(
+      Promise.resolve(publicBee.getRootDescriptor()),
+      1500,
+      `PublicBee root descriptor ${publicBeeKey.slice(0, 16)}`,
+    )
+    if (!signed) throwCatalogError('CHANNEL_NOT_FOUND', 'Channel not found')
+
+    const verification = await verifySignedChannelRootDescriptor(signed)
+    if (!verification?.valid) {
+      throwCatalogError('CATALOG_UNAVAILABLE', 'Catalog unavailable')
+    }
+    if (verification.descriptor?.metadataKey !== publicBeeKey.toLowerCase()) {
+      throwCatalogError('CHANNEL_MISMATCH', 'Public catalog descriptor does not match publicBeeKey')
+    }
+    return verification.descriptor
+  }
+
+  async function resolveCatalogChannel(request = {}) {
+    if (request === null || typeof request !== 'object' || Array.isArray(request)) {
+      throwCatalogError('INVALID_CATALOG_INPUT', 'Catalog request must be an object')
+    }
+
+    const requestedChannelKey = readCatalogRequestKey(request, 'channelKey')
+    const publicBeeKey = readCatalogRequestKey(request, 'publicBeeKey')
+    if (!requestedChannelKey && !publicBeeKey) {
+      throwCatalogError('INVALID_CATALOG_INPUT', 'Catalog request requires channelKey or publicBeeKey')
+    }
+
+    if (publicBeeKey) {
+      const publicBee = await withTimeout(
+        Promise.resolve(loadPublicBee(ctx, publicBeeKey)),
+        5000,
+        `loadPublicBee ${publicBeeKey.slice(0, 16)}`,
+      )
+      if (!publicBee) throwCatalogError('CHANNEL_NOT_FOUND', 'Channel not found')
+
+      const descriptor = await verifiedPublicCatalogDescriptor(publicBee, publicBeeKey)
+      const channelKey = descriptor.channelId.toLowerCase()
+      if (requestedChannelKey && requestedChannelKey !== channelKey) {
+        throwCatalogError('CHANNEL_MISMATCH', 'Catalog channel does not match signed descriptor')
+      }
+      return { channelKey, publicBeeKey, store: publicBee, isPublic: true }
+    }
+
+    const channelKey = requestedChannelKey
+    const channel = await loadChannelBounded(channelKey)
+    if (!channel) throwCatalogError('CHANNEL_NOT_FOUND', 'Channel not found')
+    const channelPublicBeeKey = channel.publicBeeKey
+    const resolvedPublicBeeKey = isCatalogStorageKey(channelPublicBeeKey)
+      ? channelPublicBeeKey.toLowerCase()
+      : null
+    return {
+      channelKey,
+      publicBeeKey: resolvedPublicBeeKey,
+      store: channel,
+      isPublic: false,
+    }
+  }
+
+  async function callCatalogStore(store, method, fallback, options = undefined) {
+    if (typeof store?.[method] !== 'function') return fallback
+    return options === undefined ? store[method]() : store[method](options)
+  }
+
+  async function listCatalogVideos({ channelKey, publicBeeKey, store, isPublic }) {
+    let records
+    if (isPublic) {
+      if (typeof store?.listVideosWithStatus !== 'function') {
+        throwCatalogError('CATALOG_UNAVAILABLE', 'Catalog unavailable')
+      }
+      const options = { syncTimeoutMs: 1500, timeoutMs: 1200 }
+      const operation = Promise.resolve(store.listVideosWithStatus(options))
+      const listing = await withTimeout(
+        operation,
+        3500,
+        `PublicBee catalog videos ${channelKey.slice(0, 16)} ${publicBeeKey?.slice?.(0, 16) || ''}`,
+      )
+      if (listing?.status !== 'authoritative' || !Array.isArray(listing.videos)) {
+        throwCatalogError('CATALOG_UNAVAILABLE', 'Catalog unavailable')
+      }
+      records = listing.videos
+    } else {
+      records = await withTimeout(
+        Promise.resolve(callCatalogStore(store, 'listVideos', [])),
+        3500,
+        `Channel catalog videos ${channelKey.slice(0, 16)}`,
+      )
+    }
+
+    if (!Array.isArray(records)) return records ?? []
+    const visible = []
+    for (const record of records) {
+      if (record?.publicationState === 'replicationPending') continue
+      if (record?.canonicalVisibility === 'suppressed') continue
+      visible.push(record)
+    }
+    return snapshotCatalogRecords(visible, CATALOG_ITEM_FIELDS)
+  }
+
+  async function readCatalogData(resolved, { includePresentation = false } = {}) {
+    const { store, isPublic, channelKey } = resolved
+    const pointReadOptions = isPublic
+      ? { bounded: true, timeoutMs: CATALOG_PUBLIC_READ_TIMEOUT_MS }
+      : undefined
+
+    if (!includePresentation) {
+      const reads = Promise.all([
+        callCatalogStore(store, 'getChannelProfile', {}, pointReadOptions),
+        listCatalogVideos(resolved),
+      ])
+      const [storedProfile, videos] = await withTimeout(
+        reads,
+        CATALOG_REQUEST_READ_TIMEOUT_MS,
+        `Channel catalog item data ${channelKey.slice(0, 16)}`,
+      )
+      return {
+        profile: snapshotCatalogRecord(storedProfile, CATALOG_PROFILE_FIELDS),
+        videos,
+      }
+    }
+
+    const reads = Promise.all([
+      callCatalogStore(store, 'getMetadata', {}, pointReadOptions),
+      callCatalogStore(store, 'getChannelProfile', {}, pointReadOptions),
+      callCatalogStore(store, 'listChannelSources', [], isPublic
+        ? { ...pointReadOptions, limit: MAX_CATALOG_CHANNEL_SOURCES }
+        : undefined),
+      callCatalogStore(store, 'listChannelArtwork', [], isPublic
+        ? { ...pointReadOptions, limit: MAX_CATALOG_CHANNEL_ARTWORK }
+        : undefined),
+
+      listCatalogVideos(resolved),
+    ])
+    const [metadata, storedProfile, sources, artwork, videos] = await withTimeout(
+      reads,
+      CATALOG_REQUEST_READ_TIMEOUT_MS,
+      `Channel catalog presentation data ${channelKey.slice(0, 16)}`,
+    )
+    return {
+      profile: {
+        ...snapshotCatalogRecord(metadata, CATALOG_PROFILE_FIELDS),
+        ...snapshotCatalogRecord(storedProfile, CATALOG_PROFILE_FIELDS),
+      },
+      sources: snapshotCatalogRecords(
+        assertBoundedCatalogCollection(sources, MAX_CATALOG_CHANNEL_SOURCES, 'Catalog sources'),
+        CATALOG_SOURCE_FIELDS,
+      ),
+      artwork: snapshotCatalogRecords(
+        assertBoundedCatalogCollection(artwork, MAX_CATALOG_CHANNEL_ARTWORK, 'Catalog artwork'),
+        CATALOG_ARTWORK_FIELDS,
+      ),
+      videos,
+    }
+  }
+
+  function catalogFailureResponse(error, collectionField) {
+    const errorCode = CATALOG_ERROR_CODES.has(error?.code) ? error.code : 'CATALOG_UNAVAILABLE'
+    const message = errorCode === 'CATALOG_UNAVAILABLE'
+      ? 'Catalog unavailable'
+      : error?.message || 'Catalog request failed'
+    if (errorCode === 'CATALOG_UNAVAILABLE' && error?.code !== 'CATALOG_UNAVAILABLE') {
+      console.error('[API] catalog read failed:', error?.message || error)
+    }
+    return {
+      success: false,
+      errorCode,
+      error: message,
+      [collectionField]: [],
     }
   }
 
@@ -1662,6 +1978,57 @@ export function createApi({
       } catch (err) {
         console.error('[API] GET_CHANNEL error:', err.message);
         return { name: 'Unknown Channel', error: err.message };
+      }
+    },
+
+    async getContentCatalog(request = {}) {
+      try {
+        const resolved = await resolveCatalogChannel(request)
+        const data = await readCatalogData(resolved, { includePresentation: true })
+        const catalog = buildChannelCatalog({
+          channelKey: resolved.channelKey,
+          profile: data.profile,
+          sources: data.sources,
+          artwork: data.artwork,
+          videos: data.videos,
+        })
+        await markAsMultiWriterChannel(resolved.channelKey)
+        return {
+          success: true,
+          profile: catalog.profile,
+          groups: catalog.groups,
+        }
+      } catch (error) {
+        return catalogFailureResponse(error, 'groups')
+      }
+    },
+
+    async getContentItems(request = {}) {
+      try {
+        const groupId = request?.groupId
+        if (!isCatalogKey(groupId) || b4a.byteLength(groupId) > 64) {
+          throwCatalogError('INVALID_CATALOG_INPUT', 'Catalog item request requires groupId')
+        }
+        const resolved = await resolveCatalogChannel(request)
+        const data = await readCatalogData(resolved)
+        const page = buildCatalogGroupPage({
+          channelKey: resolved.channelKey,
+          publicBeeKey: resolved.publicBeeKey ?? undefined,
+          profile: data.profile,
+          videos: data.videos,
+          groupId,
+          cursor: request.cursor ?? undefined,
+          limit: normalizeCatalogRequestLimit(request),
+        })
+        await markAsMultiWriterChannel(resolved.channelKey)
+        return {
+          success: true,
+          group: page.group,
+          items: page.items,
+          nextCursor: page.nextCursor,
+        }
+      } catch (error) {
+        return catalogFailureResponse(error, 'items')
       }
     },
 

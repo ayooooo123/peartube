@@ -372,7 +372,8 @@ ns.register({
     { name: 'publicBeeKey', type: 'string', required: false },
     { name: 'groupId', type: 'string', required: true },
     { name: 'cursor', type: 'string', required: false },
-    { name: 'limit', type: 'uint', required: false }
+    { name: 'limit', type: 'uint', required: false },
+    { name: 'limitProvided', type: 'bool', required: false }
   ]
 })
 
@@ -3677,6 +3678,7 @@ HRPCBuilder.toDisk(builder)
 const { writeAppRpcAdapter } = require('./lib/app-rpc-adapter-codegen.cjs')
 const appRpcMetadata = writeAppRpcAdapter({
   hrpcJsonPath: require('path').join(HRPC_DIR, 'hrpc.json'),
+  schemaJsonPath: require('path').join(SCHEMA_DIR, 'schema.json'),
   outputPath: require('path').join(HRPC_DIR, 'app-rpc-adapter.mjs')
 })
 

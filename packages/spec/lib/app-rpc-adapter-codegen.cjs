@@ -183,21 +183,43 @@ function toPascalCase(commandName) {
   return `${camel.slice(0, 1).toUpperCase()}${camel.slice(1)}`
 }
 
-function readHrpcSchema(hrpcJsonPath) {
+function readHrpcSchema(hrpcJsonPath, schemaJsonPath) {
   const hrpc = JSON.parse(fs.readFileSync(hrpcJsonPath, 'utf8'))
+  const presenceFieldsByRequest = new Map()
+  if (schemaJsonPath) {
+    const messages = JSON.parse(fs.readFileSync(schemaJsonPath, 'utf8'))
+    for (const message of messages.schema || []) {
+      const fieldNames = new Set((message.fields || []).map((field) => field.name))
+      const presenceFields = []
+      for (const field of message.fields || []) {
+        if (field.type !== 'bool' || !field.name.endsWith('Provided')) continue
+        const valueField = field.name.slice(0, -'Provided'.length)
+        if (!fieldNames.has(valueField)) continue
+        presenceFields.push({ field: valueField, flag: field.name })
+      }
+      if (presenceFields.length > 0) {
+        presenceFieldsByRequest.set(`@${message.namespace}/${message.name}`, presenceFields)
+      }
+    }
+  }
+
   return hrpc.schema.map((entry) => {
     const command = stripNamespace(entry.name)
-    return {
+    const request = entry.request?.name ?? null
+    const metadata = {
       id: entry.id,
       command,
       method: toCamelCase(command),
       handler: toPascalCase(command),
-      request: entry.request?.name ?? null,
+      request,
       response: entry.response?.name ?? null,
       send: Boolean(entry.request?.send),
       requestStream: Boolean(entry.request?.stream),
       responseStream: Boolean(entry.response?.stream)
     }
+    const presenceFields = presenceFieldsByRequest.get(request)
+    if (presenceFields) metadata.presenceFields = presenceFields
+    return metadata
   })
 }
 
@@ -253,13 +275,24 @@ function generateAppRpcAdapterSource(metadata) {
     `export const APP_RPC_COMMANDS = Object.freeze(APP_RPC_METADATA.appCommands)\n` +
     `export const PLATFORM_ONLY_COMMANDS = Object.freeze(APP_RPC_METADATA.platformOnlyCommands.map((command) => command.command))\n` +
     `export const RUNTIME_ONLY_METHODS = Object.freeze(APP_RPC_METADATA.runtimeOnlyMethods)\n\n` +
-    `function createMethodCaller(rpc, ready, methodName, createMissingMethodError, normalizeError) {\n` +
+    `function normalizePresenceFields(request, presenceFields) {\n` +
+    `  if (!request || typeof request !== 'object' || Array.isArray(request) || !presenceFields?.length) return request\n` +
+    `  let normalized = request\n` +
+    `  for (const { field, flag } of presenceFields) {\n` +
+    `    if (!Object.hasOwn(request, field) || Object.hasOwn(request, flag)) continue\n` +
+    `    if (normalized === request) normalized = { ...request }\n` +
+    `    normalized[flag] = true\n` +
+    `  }\n` +
+    `  return normalized\n` +
+    `}\n\n` +
+    `function createMethodCaller(rpc, ready, methodMetadata, createMissingMethodError, normalizeError) {\n` +
     `  return async (request = {}) => {\n` +
     `    await ready()\n` +
+    `    const methodName = methodMetadata.method\n` +
     `    const method = rpc?.[methodName]\n` +
     `    if (typeof method !== 'function') throw createMissingMethodError(methodName)\n` +
     `    try {\n` +
-    `      return await method.call(rpc, request)\n` +
+    `      return await method.call(rpc, normalizePresenceFields(request, methodMetadata.presenceFields))\n` +
     `    } catch (error) {\n` +
     `      throw normalizeError(error)\n` +
     `    }\n` +
@@ -274,15 +307,15 @@ function generateAppRpcAdapterSource(metadata) {
     `      namespace,\n` +
     `      Object.fromEntries(methods.map((method) => [\n` +
     `        method.method,\n` +
-    `        createMethodCaller(rpc, ready, method.method, createMissingMethodError, normalizeError)\n` +
+    `        createMethodCaller(rpc, ready, method, createMissingMethodError, normalizeError)\n` +
     `      ]))\n` +
     `    ])\n` +
     `  )\n` +
     `}\n`
 }
 
-function writeAppRpcAdapter({ hrpcJsonPath, outputPath }) {
-  const entries = readHrpcSchema(hrpcJsonPath)
+function writeAppRpcAdapter({ hrpcJsonPath, schemaJsonPath, outputPath }) {
+  const entries = readHrpcSchema(hrpcJsonPath, schemaJsonPath)
   const metadata = createAppRpcMetadata(entries)
   const source = generateAppRpcAdapterSource(metadata)
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })

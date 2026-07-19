@@ -40,6 +40,16 @@ export {
   evaluateDurabilityPolicy,
   intersectFullCopyHolders
 } from './durability/aggregate-assessment.js';
+export {
+  buildCatalogGroupPage,
+  buildChannelCatalog,
+  buildGroupSummaries,
+  classifyCatalogItem,
+  compareCatalogItems,
+  decodeCatalogCursor,
+  encodeCatalogCursor,
+  normalizeCatalogProfile
+} from './catalog/channel-catalog.js';
 
 // Identity Management
 export {

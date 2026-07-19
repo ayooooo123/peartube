@@ -15,6 +15,7 @@
     "./public-feed": "./src/public-feed.js",
     "./content-publication": "./src/content-publication.js",
     "./content-replication": "./src/content-replication.js",
+    "./catalog": "./src/catalog/channel-catalog.js",
     "./relay-blind-peer": "./src/relay-blind-peer.js",
     "./video-stats": "./src/video-stats.js",
     "./seeding": "./src/seeding.js",

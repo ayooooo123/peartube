@@ -39,3 +39,13 @@ export {
   SeedPinTransportError,
 } from './client.js'
 export { SeedPinServer } from './server.js'
+export {
+  MAX_RESUMABLE_SEED_PINS,
+  PinStore,
+  createPinStore,
+} from './pin-store.js'
+export {
+  PinWorker,
+  PinWorkerError,
+  createPinWorker,
+} from './pin-worker.js'

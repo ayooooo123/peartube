@@ -2,7 +2,7 @@ export type HostReadyData = {
   blobServerPort: number | null
   blobServerReady?: boolean
   blobServerError?: string | null
-  protocolVersion: 3
+  protocolVersion: 4
 }
 
 export type HostLifecycleEvent =
@@ -10,7 +10,7 @@ export type HostLifecycleEvent =
   | { type: 'host.error'; code: string; message: string; retryable: boolean }
   | { type: 'transport.closed'; reason?: string }
 
-export const PROTOCOL_VERSION: 3
+export const PROTOCOL_VERSION: 4
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'
@@ -35,7 +35,7 @@ export function createHostError(
 
 export type ProtocolReadyData = {
   blobServerPort: number | null
-  protocolVersion: 3
+  protocolVersion: 4
 }
 
 export type ProtocolNetworkStatus = {

@@ -4,6 +4,7 @@ import test from 'node:test'
 import { createApi } from '../src/api.js'
 import { buildSharedSystemHandlers } from '../src/runtime.js'
 import { attachMobileHandlers } from '../src/mobile-handlers.js'
+import { PROTOCOL_VERSION } from '../../host/src/contracts.js'
 
 const FULL_SWARM_STATUS = {
   swarmConnections: 0,
@@ -39,7 +40,7 @@ const FULL_SWARM_STATUS = {
 test('shared runtime GetSwarmStatus forwards full transport diagnostics', async () => {
   const handlers = buildSharedSystemHandlers(
     { api: { getSwarmStatus: () => FULL_SWARM_STATUS } },
-    { protocolVersion: 3 }
+    { protocolVersion: PROTOCOL_VERSION }
   )
   const result = await handlers.GetSwarmStatus()
 

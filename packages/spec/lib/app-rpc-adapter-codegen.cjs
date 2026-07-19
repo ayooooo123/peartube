@@ -42,6 +42,8 @@ const APP_RPC_NAMESPACES = Object.freeze({
   channel: [
     'get-channel',
     'get-channel-meta',
+    'get-content-catalog',
+    'get-content-items',
     'update-channel',
     'update-channel-avatar'
   ],

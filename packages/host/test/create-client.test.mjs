@@ -1,7 +1,7 @@
 import test from 'brittle'
 import { EventEmitter } from 'node:events'
 
-import { createProtocolClient, HOST_ERROR_CODES, PROTOCOL_EVENTS } from '../src/index.js'
+import { createProtocolClient, HOST_ERROR_CODES, PROTOCOL_EVENTS, PROTOCOL_VERSION } from '../src/index.js'
 
 class FakeHRPC {
   static instances = []
@@ -17,7 +17,7 @@ class FakeHRPC {
           blobServerPort: 9999,
           blobServerReady: true,
           blobServerError: null,
-          protocolVersion: 3
+          protocolVersion: PROTOCOL_VERSION
         }
       })
   }
@@ -97,7 +97,7 @@ test('createProtocolClient remaps feed update events', async (t) => {
 
   const ready = await client.ready()
 
-  t.alike(ready, { blobServerPort: 9999, blobServerReady: true, blobServerError: null, protocolVersion: 3 })
+  t.alike(ready, { blobServerPort: 9999, blobServerReady: true, blobServerError: null, protocolVersion: PROTOCOL_VERSION })
   t.alike(readyEvents[0], ready)
 
   FakeHRPC.instances[0].handlers.feedUpdate({ action: 'update', channelKey: 'abc' })
@@ -116,7 +116,7 @@ test('createProtocolClient propagates degraded blob server readiness and does no
           blobServerPort: null,
           blobServerReady: false,
           blobServerError: 'listen failed',
-          protocolVersion: 3
+          protocolVersion: PROTOCOL_VERSION
         }
       })
     }
@@ -137,25 +137,25 @@ test('createProtocolClient propagates degraded blob server readiness and does no
 
   const ready = await client.ready()
 
-  t.alike(ready, { blobServerPort: null, blobServerReady: false, blobServerError: 'listen failed', protocolVersion: 3 })
+  t.alike(ready, { blobServerPort: null, blobServerReady: false, blobServerError: 'listen failed', protocolVersion: PROTOCOL_VERSION })
   t.alike(readyEvents, [ready])
 
   FakeHRPC.instances[0].handlers.ready({
     blobServerPort: null,
     blobServerReady: false,
     blobServerError: 'listen failed',
-    protocolVersion: 3
+    protocolVersion: PROTOCOL_VERSION
   })
   FakeHRPC.instances[0].handlers.ready({
     blobServerPort: 4545,
     blobServerReady: true,
     blobServerError: null,
-    protocolVersion: 3
+    protocolVersion: PROTOCOL_VERSION
   })
 
   t.alike(readyEvents, [
     ready,
-    { blobServerPort: 4545, blobServerReady: true, blobServerError: null, protocolVersion: 3 }
+    { blobServerPort: 4545, blobServerReady: true, blobServerError: null, protocolVersion: PROTOCOL_VERSION }
   ])
 })
 
@@ -258,7 +258,7 @@ test('createProtocolClient fails fast on protocol version mismatch', async (t) =
       return Promise.resolve({
         status: {
           blobServerPort: 9999,
-          protocolVersion: 1
+          protocolVersion: PROTOCOL_VERSION + 1
         }
       })
     }
@@ -347,7 +347,7 @@ test('createProtocolClient treats transient backend-not-ready status probes as s
     blobServerPort: 9999,
     blobServerReady: true,
     blobServerError: null,
-    protocolVersion: 3
+    protocolVersion: PROTOCOL_VERSION
   })
 
   const ready = await readyPromise
@@ -357,7 +357,7 @@ test('createProtocolClient treats transient backend-not-ready status probes as s
     blobServerPort: 9999,
     blobServerReady: true,
     blobServerError: null,
-    protocolVersion: 3
+    protocolVersion: PROTOCOL_VERSION
   })
   t.alike(warnCalls, [])
 })

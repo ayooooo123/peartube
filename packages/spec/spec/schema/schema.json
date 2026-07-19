@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "schema": [
     {
       "name": "empty",
@@ -618,6 +618,528 @@
           "name": "channel",
           "required": true,
           "type": "@peartube/channel",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "content-artwork",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "role",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "remoteUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "channel-source",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "provider",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identityKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identityUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "handle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "displayName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "channel-catalog-profile",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "name",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "profileKind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaProvider",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "originalLanguage",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "releaseDate",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "releaseYear",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sources",
+          "array": true,
+          "type": "@peartube/channel-source",
+          "version": 1
+        },
+        {
+          "name": "artwork",
+          "array": true,
+          "type": "@peartube/content-artwork",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "channel-catalog-group-summary",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "itemCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "channel-catalog-item",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "contentKind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceProvider",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceVideoId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identityUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourceCreatorUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "sourcePublishedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "mediaProvider",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episodeNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "originalAirDate",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "duration",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailBlobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailBlobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailMimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "provenanceVersion",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "contentFingerprint",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationState",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-content-catalog-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-content-catalog-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "profile",
+          "required": false,
+          "type": "@peartube/channel-catalog-profile",
+          "version": 1
+        },
+        {
+          "name": "groups",
+          "array": true,
+          "type": "@peartube/channel-catalog-group-summary",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-content-items-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "groupId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-content-items-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "group",
+          "required": false,
+          "type": "@peartube/channel-catalog-group-summary",
+          "version": 1
+        },
+        {
+          "name": "items",
+          "array": true,
+          "type": "@peartube/channel-catalog-item",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]
@@ -3685,6 +4207,127 @@
           "name": "success",
           "required": false,
           "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "relay-link",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "mirrorKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "addedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "add-relay-link-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "mirrorKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "add-relay-link-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "mirrorKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "label",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remove-relay-link-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "mirrorKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remove-relay-link-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-relay-links-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-relay-links-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "links",
+          "array": true,
+          "type": "@peartube/relay-link",
           "version": 1
         }
       ]
@@ -7366,127 +8009,6 @@
           "required": false,
           "type": "string",
           "version": 1
-        }
-      ]
-    },
-    {
-      "name": "relay-link",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "mirrorKey",
-          "required": true,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "label",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "addedAt",
-          "required": false,
-          "type": "uint",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "add-relay-link-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "mirrorKey",
-          "required": true,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "label",
-          "required": false,
-          "type": "string",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "add-relay-link-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 2
-        },
-        {
-          "name": "mirrorKey",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "label",
-          "required": false,
-          "type": "string",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "remove-relay-link-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "mirrorKey",
-          "required": true,
-          "type": "string",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "remove-relay-link-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "get-relay-links-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": []
-    },
-    {
-      "name": "get-relay-links-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "links",
-          "array": true,
-          "type": "@peartube/relay-link",
-          "version": 2
         }
       ]
     }

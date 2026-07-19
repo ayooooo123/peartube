@@ -259,6 +259,135 @@ ns.register({
   ]
 })
 
+ns.register({
+  name: 'content-artwork',
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false },
+    { name: 'remoteUrl', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-source',
+  fields: [
+    { name: 'provider', type: 'string', required: true },
+    { name: 'identityKey', type: 'string', required: true },
+    { name: 'sourceId', type: 'string', required: false },
+    { name: 'identityUrl', type: 'string', required: false },
+    { name: 'handle', type: 'string', required: false },
+    { name: 'displayName', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-catalog-profile',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'name', type: 'string', required: true },
+    { name: 'description', type: 'string', required: false },
+    { name: 'profileKind', type: 'string', required: false },
+    { name: 'mediaProvider', type: 'string', required: false },
+    { name: 'mediaId', type: 'string', required: false },
+    { name: 'originalLanguage', type: 'string', required: false },
+    { name: 'releaseDate', type: 'uint', required: false },
+    { name: 'releaseYear', type: 'uint', required: false },
+    { name: 'createdAt', type: 'uint', required: false },
+    { name: 'updatedAt', type: 'uint', required: false },
+    { name: 'sources', type: '@peartube/channel-source', array: true },
+    { name: 'artwork', type: '@peartube/content-artwork', array: true }
+  ]
+})
+
+ns.register({
+  name: 'channel-catalog-group-summary',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'kind', type: 'string', required: true },
+    { name: 'title', type: 'string', required: true },
+    { name: 'itemCount', type: 'uint', required: true },
+    { name: 'seasonNumber', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-catalog-item',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'title', type: 'string', required: true },
+    { name: 'description', type: 'string', required: false },
+    { name: 'contentKind', type: 'string', required: false },
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'sourceProvider', type: 'string', required: false },
+    { name: 'sourceVideoId', type: 'string', required: false },
+    { name: 'identityUrl', type: 'string', required: false },
+    { name: 'sourceCreatorId', type: 'string', required: false },
+    { name: 'sourceCreatorUrl', type: 'string', required: false },
+    { name: 'sourcePublishedAt', type: 'uint', required: false },
+    { name: 'mediaProvider', type: 'string', required: false },
+    { name: 'mediaId', type: 'string', required: false },
+    { name: 'seasonNumber', type: 'uint', required: false },
+    { name: 'episodeNumber', type: 'uint', required: false },
+    { name: 'originalAirDate', type: 'uint', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false },
+    { name: 'thumbnailUrl', type: 'string', required: false },
+    { name: 'thumbnailBlobId', type: 'string', required: false },
+    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
+    { name: 'thumbnailMimeType', type: 'string', required: false },
+    { name: 'provenanceVersion', type: 'string', required: false },
+    { name: 'contentFingerprint', type: 'string', required: false },
+    { name: 'publicationState', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-content-catalog-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-content-catalog-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'profile', type: '@peartube/channel-catalog-profile', required: false },
+    { name: 'groups', type: '@peartube/channel-catalog-group-summary', array: true }
+  ]
+})
+
+ns.register({
+  name: 'get-content-items-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'groupId', type: 'string', required: true },
+    { name: 'cursor', type: 'string', required: false },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-content-items-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'group', type: '@peartube/channel-catalog-group-summary', required: false },
+    { name: 'items', type: '@peartube/channel-catalog-item', array: true },
+    { name: 'nextCursor', type: 'string', required: false }
+  ]
+})
+
 // ============================================
 // Video Types
 // ============================================
@@ -2794,6 +2923,18 @@ rpcNs.register({
   name: 'update-channel',
   request: { name: '@peartube/update-channel-request', stream: false },
   response: { name: '@peartube/update-channel-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-content-catalog',
+  request: { name: '@peartube/get-content-catalog-request', stream: false },
+  response: { name: '@peartube/get-content-catalog-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-content-items',
+  request: { name: '@peartube/get-content-items-request', stream: false },
+  response: { name: '@peartube/get-content-items-response', stream: false }
 })
 
 // Video commands

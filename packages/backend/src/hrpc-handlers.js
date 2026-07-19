@@ -71,6 +71,8 @@ export const SHARED_HANDLER_NAMES = [
   'GetChannel',
   'GetChannelMeta',
   'GetCanonicalFeed',
+  'GetContentCatalog',
+  'GetContentItems',
   'GetIdentities',
   'GetIdentity',
   'GetPinnedChannels',

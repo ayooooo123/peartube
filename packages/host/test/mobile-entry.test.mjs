@@ -1,6 +1,7 @@
 import test from 'brittle'
 
 import { startHost } from '../src/start-host.js'
+import { PROTOCOL_VERSION } from '../src/contracts.js'
 import { startMobileBackend } from '../../app/backend/mobile-entry.mjs'
 
 function createFakeStream() {
@@ -50,7 +51,7 @@ test('startMobileBackend delegates startup through the shared host contract', as
 
   const ready = await session.waitUntilReady()
   t.is(ready.blobServerPort, 6123)
-  t.is(ready.protocolVersion, 3)
+  t.is(ready.protocolVersion, PROTOCOL_VERSION)
   t.is(attachedBackend?.mobileHandlersAttached, true)
   t.is(attachedBackend?.castHandlersAttached, true)
   t.alike(capturedBackendOptions.args, ['backend.bundle.js'])
@@ -87,7 +88,7 @@ test('startMobileBackend preserves serialized launch options for runtime backend
 
   const ready = await session.waitUntilReady()
   t.is(ready.blobServerPort, 6123)
-  t.is(ready.protocolVersion, 3)
+  t.is(ready.protocolVersion, PROTOCOL_VERSION)
   t.alike(capturedBackendOptions.args, [JSON.stringify(launchOptions), 'downloader-worker.bundle.js'])
 
   await session.terminate()

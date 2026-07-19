@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 
 import b4a from 'b4a'
 import test from 'brittle'
+import c from 'compact-encoding'
 import crypto from 'hypercore-crypto'
 import IdentityKey from 'keet-identity-key'
+import IdentityEncoding from 'keet-identity-key/lib/encoding.js'
 
 import {
   createChannelRootDescriptor,
@@ -19,6 +21,7 @@ import {
   encodeSeedPinRequestPayload,
   verifySeedPinRequest,
 } from '../src/seed-pin/auth.js'
+import { canonicalSeedPinProofBytes } from '../src/seed-pin/proof.js'
 
 const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 const OTHER_MNEMONIC = 'legal winner thank year wave sausage worth useful legal winner thank yellow'
@@ -674,6 +677,70 @@ test('verification rejects altered auth payload, attestation, descriptor proof, 
   cases.push(changedDescriptor)
 
   for (const candidate of cases) await invalid(candidate, device.publicKey)
+})
+
+test('request and descriptor proof counts are bounded before package decode', async (t) => {
+  const { identity, request, device, proof, signedDescriptor, manifest } = await fixture()
+  const hostileProof = b4a.concat([
+    c.encode(c.uint, 1),
+    c.encode(c.uint64, Math.floor(NOW / 1000)),
+    c.encode(c.fixed32, identity.identityPublicKey),
+    c.encode(c.uint, 0x100000),
+  ])
+  const hostileHex = b4a.toString(hostileProof, 'hex')
+  const originalDecode = IdentityEncoding.ProofEncoding.decode
+  let decodeCalls = 0
+  IdentityEncoding.ProofEncoding.decode = (state) => {
+    decodeCalls++
+    return originalDecode(state)
+  }
+  try {
+    for (const name of [
+      'deviceProof',
+      'signedDescriptor.proof',
+      'signedDescriptor.attestation',
+      'attestation',
+    ]) {
+      decodeCalls = 0
+      assert.throws(() => canonicalSeedPinProofBytes(hostileProof, name))
+      t.is(decodeCalls, 0)
+    }
+
+    const rejectCreate = async (deviceProof, descriptor) => {
+      decodeCalls = 0
+      await assert.rejects(createSeedPinRequest({
+        manifest,
+        expiresAt: EXPIRES_AT,
+        deviceKeyPair: device,
+        deviceProof,
+        signedDescriptor: descriptor,
+      }))
+      return decodeCalls
+    }
+    t.is(await rejectCreate(hostileProof, signedDescriptor), 0)
+    await rejectCreate(proof, { ...signedDescriptor, proof: hostileHex })
+    await rejectCreate(proof, { ...signedDescriptor, attestation: hostileHex })
+
+    const rejectVerify = async (hostileRequest) => {
+      decodeCalls = 0
+      t.is((await verifySeedPinRequest(hostileRequest, {
+        remotePublicKey: device.publicKey,
+        now: NOW,
+      })).valid, false)
+      return decodeCalls
+    }
+    t.is(await rejectVerify({
+      ...request,
+      signedDescriptor: { ...request.signedDescriptor, proof: hostileHex },
+    }), 0)
+    await rejectVerify({
+      ...request,
+      signedDescriptor: { ...request.signedDescriptor, attestation: hostileHex },
+    })
+    await rejectVerify({ ...request, attestation: hostileHex })
+  } finally {
+    IdentityEncoding.ProofEncoding.decode = originalDecode
+  }
 })
 
 test('identity proofs and attestations reject trailing alternate encodings', async (t) => {

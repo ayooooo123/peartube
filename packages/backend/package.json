@@ -17,6 +17,7 @@
     "./relay-blind-peer": "./src/relay-blind-peer.js",
     "./video-stats": "./src/video-stats.js",
     "./seeding": "./src/seeding.js",
+    "./seed-pin": "./src/seed-pin/index.js",
     "./api": "./src/api.js",
     "./identity": "./src/identity.js",
     "./upload": "./src/upload.js",

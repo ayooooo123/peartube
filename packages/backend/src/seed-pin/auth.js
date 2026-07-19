@@ -1,7 +1,6 @@
 import b4a from 'b4a'
 import IdentityKey from 'keet-identity-key'
 import c from 'compact-encoding'
-import IdentityEncoding from 'keet-identity-key/lib/encoding.js'
 
 import {
   CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
@@ -15,14 +14,16 @@ import {
   createDurableManifest,
   encodeDurableManifest,
 } from './manifest.js'
+import {
+  MAX_SEED_PIN_PROOF_BYTES,
+  canonicalSeedPinProofBytes,
+} from './proof.js'
 
 export const SEED_PIN_REQUEST_VERSION = 1
 
 const AUTH_DOMAIN = b4a.from('peartube.seed-pin.request/v1\0')
 const LOWERCASE_HEX_32_PATTERN = /^[0-9a-f]{64}$/
 const LOWERCASE_HEX_PATTERN = /^(?:[0-9a-f]{2})+$/
-const MAX_ATTESTATION_BYTES = 16 * 1024
-const { ProofEncoding } = IdentityEncoding
 const REQUEST_FIELDS = new Set([
   'version',
   'manifest',
@@ -89,29 +90,14 @@ function normalizeHexBytes (value, name) {
     throw new TypeError(`${name} must be nonempty lowercase hex bytes`)
   }
   const byteLength = value.length / 2
-  if (byteLength > MAX_ATTESTATION_BYTES) {
-    throw new RangeError(`${name} exceeds ${MAX_ATTESTATION_BYTES} bytes`)
+  if (byteLength > MAX_SEED_PIN_PROOF_BYTES) {
+    throw new RangeError(`${name} exceeds ${MAX_SEED_PIN_PROOF_BYTES} bytes`)
   }
   return value
 }
 
 function canonicalIdentityProofBytes (value, name) {
-  if (!isByteArray(value)) throw new TypeError(`${name} must be bytes`)
-  if (value.byteLength === 0 || value.byteLength > MAX_ATTESTATION_BYTES) {
-    throw new RangeError(`${name} has an invalid size`)
-  }
-  const bytes = b4a.from(value)
-  let canonical
-  try {
-    const decoded = c.decode(ProofEncoding, bytes)
-    canonical = c.encode(ProofEncoding, decoded)
-  } catch (error) {
-    throw new TypeError(`${name} has invalid compact encoding: ${error?.message || String(error)}`)
-  }
-  if (!b4a.equals(bytes, canonical)) {
-    throw new TypeError(`${name} must use canonical compact encoding without trailing bytes`)
-  }
-  return bytes
+  return canonicalSeedPinProofBytes(value, name)
 }
 
 function canonicalIdentityProofHex (value, name) {

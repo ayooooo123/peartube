@@ -30,6 +30,8 @@ const TEST_FILES = [
   'creators.test.mjs',
   'local-drive-mirror.test.mjs',
   'relay-seeding.test.mjs',
+  'seed-pin-admission.test.mjs',
+  'seed-pin-runtime.test.mjs',
   'service.test.mjs',
   'status.test.mjs',
   'trusted-clients.test.mjs'

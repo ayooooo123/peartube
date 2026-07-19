@@ -956,28 +956,15 @@ export function createApi({
   // "live peer has it" into a trusted "the relay / one of your own devices has
   // it".
   //
-  // Relay anchor: swarm/Noise keys of always-on relay/blind peers a deployment
-  // trusts as a durable full-copy holder. A host can populate ctx.trustedRelayKeys
-  // (e.g. from its own config) to enable single-relay offload. Left empty by
-  // default — there's no automatic client-side relay-key discovery yet (that
-  // needs a feed announcement), so default deployments lean on the
-  // independent-live-peers redundancy threshold.
+  // Relay anchor: authenticated swarm/Noise keys from the one canonical trust
+  // union assembled by the orchestrator (configured keys + persisted links).
+  // A live or feed-discovered blind mirror is useful for dialing/delegation but
+  // is not durable trust unless it is present in this explicit union.
   function getKnownDurableRelayKeys() {
-    // Durable relay anchors come from two sources: host-provided config
-    // (ctx.trustedRelayKeys) and the live blind-peering mirror set (config +
-    // feed-discovered relays). A core mirrored to one of these blind peers is a
-    // durable full copy, so it satisfies offload eligibility on its own.
-    const sources = [
-      ctx?.trustedRelayKeys,
-      ctx?.blindPeering?.getActiveMirrorKeys?.(),
-    ]
     const keys = new Set()
-    for (const raw of sources) {
-      if (!Array.isArray(raw)) continue
-      for (const k of raw) {
-        const hex = typeof k === 'string' ? k.toLowerCase() : null
-        if (hex && /^[a-f0-9]{64}$/.test(hex)) keys.add(hex)
-      }
+    for (const value of Array.isArray(ctx?.trustedRelayKeys) ? ctx.trustedRelayKeys : []) {
+      const key = typeof value === 'string' ? value.toLowerCase() : null
+      if (key && /^[a-f0-9]{64}$/.test(key)) keys.add(key)
     }
     return Array.from(keys)
   }
@@ -3696,8 +3683,12 @@ export function createApi({
       try { ctx.blindPeering?.addMirrorKeys?.(record.mirrorKey); } catch (err) {
         console.warn('[API] addRelayLink live mirror apply failed:', err?.message || String(err));
       }
-      if (!Array.isArray(ctx.trustedRelayKeys)) ctx.trustedRelayKeys = [];
-      if (!ctx.trustedRelayKeys.includes(record.mirrorKey)) ctx.trustedRelayKeys.push(record.mirrorKey);
+      if (typeof ctx.refreshTrustedRelayKeys === 'function') {
+        await ctx.refreshTrustedRelayKeys();
+      } else {
+        if (!Array.isArray(ctx.trustedRelayKeys)) ctx.trustedRelayKeys = [];
+        if (!ctx.trustedRelayKeys.includes(record.mirrorKey)) ctx.trustedRelayKeys.push(record.mirrorKey);
+      }
       try { seedingManager?.remirrorAllSeeds?.(); } catch (err) {
         console.warn('[API] addRelayLink remirror failed:', err?.message || String(err));
       }
@@ -3712,7 +3703,9 @@ export function createApi({
     async removeRelayLink(req = {}) {
       const mirrorKey = typeof req === 'string' ? req : req?.mirrorKey;
       const removed = await persistRemoveRelayLink(ctx.metaDb, mirrorKey);
-      if (removed && Array.isArray(ctx.trustedRelayKeys)) {
+      if (removed && typeof ctx.refreshTrustedRelayKeys === 'function') {
+        await ctx.refreshTrustedRelayKeys();
+      } else if (removed && Array.isArray(ctx.trustedRelayKeys)) {
         const key = String(mirrorKey || '').toLowerCase();
         ctx.trustedRelayKeys = ctx.trustedRelayKeys.filter((k) => k !== key);
       }

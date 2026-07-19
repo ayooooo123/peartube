@@ -607,6 +607,62 @@ test('valid pin admission returns a stable accepted status over paired Protomux'
   }
 })
 
+test('paired client rotates auth in place, rejects stale pending calls, and resumes without reconnect', async (t) => {
+  const base = await fixture()
+  let resolveGate
+  const gate = {
+    promise: new Promise(resolve => { resolveGate = resolve }),
+    resolve: () => resolveGate(),
+  }
+  let holdAdmission = false
+  const pair = await createPair(base, {
+    admission: async () => {
+      if (holdAdmission) await gate.promise
+      return true
+    },
+  })
+  const channel = pair.client.channel
+  try {
+    await pair.client.pin(base.request)
+    holdAdmission = true
+    const pendingA = pair.client.pin(await requestFor(base, 'video/seed-pin/pending-a'))
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    pair.client.updateAuth(null)
+    let pendingError = null
+    try { await pendingA } catch (error) { pendingError = error }
+    t.is(pendingError.code, 'AUTH_REFRESHED')
+    t.is(pendingError.retryable, true)
+    t.is(pair.client.channel, channel)
+    t.is(pair.client.channel.closed, false)
+    let unavailableError = null
+    try { await pair.client.status(base.request.requestId) } catch (error) { unavailableError = error }
+    t.is(unavailableError.code, 'AUTH_UNAVAILABLE')
+    t.is(unavailableError.retryable, true)
+
+    pair.client.updateAuth({
+      identityPublicKey: base.otherIdentity.identityPublicKey,
+      deviceKeyPair: base.device,
+      deviceProof: base.otherIdentityProof,
+      signedDescriptor: base.otherIdentityDescriptor,
+    })
+    gate.resolve()
+    holdAdmission = false
+    const requestB = await requestFor(base, 'video/seed-pin/identity-b', {
+      deviceProof: base.otherIdentityProof,
+      signedDescriptor: base.otherIdentityDescriptor,
+    })
+    const acceptedB = await pair.client.pin(requestB)
+    t.is(acceptedB.state, 'accepted')
+    t.is((await pair.client.status(requestB.requestId)).state, 'accepted')
+    t.is(pair.client.channel, channel)
+    t.is(pair.server.closed, false)
+  } finally {
+    gate.resolve()
+    await closePair(pair)
+  }
+})
+
 test('owned status reports progress and completion', async (t) => {
   const base = await fixture()
   const pair = await createPair(base)

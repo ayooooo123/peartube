@@ -561,3 +561,31 @@ test('backend root exports aggregate durability helpers', async (t) => {
   t.is(backend.evaluateDurabilityPolicy, evaluateDurabilityPolicy)
   t.is(backend.assessDurableManifest, assessDurableManifest)
 })
+
+test('active blind mirrors are durable-trusted only when present in canonical relay links/config union', async (t) => {
+  const core = {
+    peers: [peerWithBlocks(PEER_A, [4, 5])],
+    async ready () {},
+    async close () {},
+  }
+  const ctx = {
+    channels: new Map([['drive', { async listWriters () { return [] } }]]),
+    trustedRelayKeys: [],
+    blindPeering: { getActiveMirrorKeys () { return [PEER_A] } },
+    store: { get () { return core } },
+  }
+  const api = createApi({ ctx })
+  api.getVideoData = async () => ({
+    blobsCoreKey: CORE_A,
+    blobId: { blockOffset: 4, blockLength: 2, byteOffset: 0, byteLength: 1234 },
+  })
+
+  const unconfigured = await api.assessUploadOffload('drive', 'videos/example.mp4')
+  t.is(unconfigured.eligible, false)
+  t.is(unconfigured.relayHasFullCopy, false, 'being a live blind mirror alone is not authorization')
+
+  ctx.trustedRelayKeys = [PEER_A]
+  const configured = await api.assessUploadOffload('drive', 'videos/example.mp4')
+  t.is(configured.eligible, true)
+  t.is(configured.relayHasFullCopy, true, 'configured/persisted union remains durable trust')
+})

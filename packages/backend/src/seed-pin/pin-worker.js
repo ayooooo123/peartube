@@ -14,7 +14,7 @@ const DEFAULT_PROGRESS_CHUNK_BLOCKS = 64
 const DEFAULT_MAX_BLOCKS_PER_REQUEST = 1_000_000
 const DEFAULT_IDLE_TIMEOUT = 30_000
 const MAX_TIMER_DELAY = 0x7fffffff
-const MAX_CONCURRENCY = 64
+export const MAX_PIN_WORKER_CONCURRENCY = 64
 const MAX_QUEUE_LIMIT = 1024
 const RESUMABLE_STATES = new Set(['accepted', 'pinning', 'retryable'])
 const ACTIVE_STATES = new Set([...RESUMABLE_STATES, 'complete'])
@@ -64,13 +64,14 @@ export class PinWorker {
         typeof pinStore.listResumable !== 'function' ||
         typeof pinStore.listActive !== 'function' ||
         typeof pinStore.reopenCompleteForRepair !== 'function' ||
+        typeof pinStore.reserveWorkerCapacity !== 'function' ||
         typeof pinStore.updateWorkerStatus !== 'function') {
       throw new TypeError(
         'pinStore must provide getByRequestId, listResumable, listActive, ' +
-        'reopenCompleteForRepair, and updateWorkerStatus',
+        'reopenCompleteForRepair, reserveWorkerCapacity, and updateWorkerStatus',
       )
     }
-    this.concurrency = boundedInteger(concurrency, 'concurrency', MAX_CONCURRENCY)
+    this.concurrency = boundedInteger(concurrency, 'concurrency', MAX_PIN_WORKER_CONCURRENCY)
     this.queueLimit = boundedInteger(queueLimit, 'queueLimit', MAX_QUEUE_LIMIT)
     this.rangeTimeout = boundedInteger(rangeTimeout, 'rangeTimeout', MAX_TIMER_DELAY)
     this.downloadTimeout = boundedInteger(downloadTimeout, 'downloadTimeout', MAX_TIMER_DELAY)
@@ -107,6 +108,10 @@ export class PinWorker {
     this.stopping = false
     this.idleWaiters = new Set()
     this.lifecycleListeners = new Set()
+    this.pendingCapacityReleases = new Set()
+    this.completedCapacityReleases = new Set()
+    this.capacityReleaseTasks = new Map()
+    this.capacityReleaseError = null
   }
 
   async start (requestId) {
@@ -346,7 +351,7 @@ export class PinWorker {
       }
       const estimateAllowed = await runJobOperation(
         job,
-        Promise.resolve().then(() => this.capacityPolicy(Object.freeze({
+        Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
           phase: 'estimate',
           requestId: job.requestId,
           manifest: cloneManifest(current.manifest),
@@ -356,6 +361,9 @@ export class PinWorker {
           knownBytes: current.progress.downloadedBytes,
           downloadedBlocks: current.progress.downloadedBlocks,
           downloadedBytes: current.progress.downloadedBytes,
+          persistedReservedBytes: current.progress.reservedBytes,
+          persistedDownloadedBytes: current.progress.downloadedBytes,
+          persistedUsageBytes: Math.max(current.progress.reservedBytes, current.progress.downloadedBytes),
         }))),
         this.downloadTimeout,
         () => new WorkerFault('capacity-policy'),
@@ -389,7 +397,7 @@ export class PinWorker {
       }
       this.retentions.set(job.requestId, retention)
       this._throwIfInterrupted(job)
-      await this._preflightCapacity(job, retention, totalBlocks)
+      job.record = await this._preflightCapacity(job, retention, totalBlocks)
       this._throwIfInterrupted(job)
 
       let downloadedBlocks = 0
@@ -489,7 +497,7 @@ export class PinWorker {
 
           const allowed = await runJobOperation(
             job,
-            Promise.resolve().then(() => this.capacityPolicy(Object.freeze({
+            Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
               phase: 'progress',
               requestId: job.requestId,
               manifest: cloneManifest(job.record.manifest),
@@ -499,6 +507,9 @@ export class PinWorker {
               knownBytes: downloadedBytes,
               downloadedBlocks,
               downloadedBytes,
+              persistedReservedBytes: job.record.progress.reservedBytes,
+              persistedDownloadedBytes: job.record.progress.downloadedBytes,
+              persistedUsageBytes: Math.max(job.record.progress.reservedBytes, job.record.progress.downloadedBytes),
             }))),
             this.downloadTimeout,
             () => new WorkerFault('capacity-policy'),
@@ -551,6 +562,7 @@ export class PinWorker {
         downloadedBytes,
         updatedAt: this._now(),
       })
+      await this._capacityPersisted(job.requestId)
     } catch (error) {
       if (retention) {
         await closeRetention(retention)
@@ -575,11 +587,69 @@ export class PinWorker {
             downloadedBytes: current.progress.downloadedBytes,
             updatedAt: this._now(),
           })
+          if (fault.state === 'failed') {
+            await this._releaseCapacityReservation(job.requestId)
+          }
         }
       } catch {
         // The metadata store is authoritative. A failed checkpoint remains visible
         // as its last durable active state rather than being fabricated here.
       }
+    }
+  }
+
+  async _runCapacityPolicy (context) {
+    await this._retryPendingCapacityReleases()
+    const allowed = await this.capacityPolicy(context)
+    if (allowed === true && context.phase === 'reserve') {
+      this.pendingCapacityReleases.delete(context.requestId)
+      this.completedCapacityReleases.delete(context.requestId)
+    }
+    return allowed
+  }
+
+  async _capacityPersisted (requestId) {
+    if (typeof this.capacityPolicy.persisted === 'function') {
+      await this.capacityPolicy.persisted(requestId)
+    }
+  }
+
+  async _retryPendingCapacityReleases () {
+    for (const requestId of [...this.pendingCapacityReleases]) {
+      await this._releaseCapacityReservation(requestId)
+    }
+  }
+
+  _releaseCapacityReservation (requestId) {
+    if (this.completedCapacityReleases.has(requestId)) return Promise.resolve(true)
+    const existing = this.capacityReleaseTasks.get(requestId)
+    if (existing) return existing
+    const task = this._performCapacityRelease(requestId)
+    this.capacityReleaseTasks.set(requestId, task)
+    return task.finally(() => {
+      if (this.capacityReleaseTasks.get(requestId) === task) {
+        this.capacityReleaseTasks.delete(requestId)
+      }
+    })
+  }
+
+  async _performCapacityRelease (requestId) {
+    if (typeof this.capacityPolicy.release !== 'function') return true
+    try {
+      await runBoundedOperation(
+        Promise.resolve().then(() => this.capacityPolicy.release(requestId)),
+        this.releaseTimeout,
+      )
+      this.pendingCapacityReleases.delete(requestId)
+      this.completedCapacityReleases.add(requestId)
+      if (this.pendingCapacityReleases.size === 0) this.capacityReleaseError = null
+      return true
+    } catch (error) {
+      this.pendingCapacityReleases.add(requestId)
+      this.capacityReleaseError = error instanceof Error
+        ? error
+        : new Error('seed pin capacity release failed')
+      return false
     }
   }
 
@@ -594,7 +664,7 @@ export class PinWorker {
     }
     const allowed = await runJobOperation(
       job,
-      Promise.resolve().then(() => this.capacityPolicy(Object.freeze({
+      Promise.resolve().then(() => this._runCapacityPolicy(Object.freeze({
         phase: 'reserve',
         requestId: job.requestId,
         manifest: cloneManifest(job.record.manifest),
@@ -605,6 +675,9 @@ export class PinWorker {
         knownBytes: job.record.progress.downloadedBytes,
         downloadedBlocks: job.record.progress.downloadedBlocks,
         downloadedBytes: job.record.progress.downloadedBytes,
+        persistedReservedBytes: job.record.progress.reservedBytes,
+        persistedDownloadedBytes: job.record.progress.downloadedBytes,
+        persistedUsageBytes: Math.max(job.record.progress.reservedBytes, job.record.progress.downloadedBytes),
       }))),
       this.downloadTimeout,
       () => new WorkerFault('capacity-policy'),
@@ -616,6 +689,14 @@ export class PinWorker {
         errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
       })
     }
+    const updated = await this.pinStore.reserveWorkerCapacity({
+      requestId: job.requestId,
+      reservedBlocks: totalBlocks,
+      reservedBytes,
+      updatedAt: this._now(),
+    })
+    await this._capacityPersisted(job.requestId)
+    return updated
   }
 
   async _openCore (job, retention, coreKey) {
@@ -712,7 +793,7 @@ export class PinWorker {
       return { ...ref }
     })
     const updatedAt = this._now()
-    return this.pinStore.updateWorkerStatus({
+    const updated = await this.pinStore.updateWorkerStatus({
       requestId: record.requestId,
       state: 'pinning',
       refs,
@@ -723,6 +804,8 @@ export class PinWorker {
       downloadedBytes,
       updatedAt,
     })
+    await this._capacityPersisted(record.requestId)
+    return updated
   }
 
   async _rangeIsLocal (job, core, ref) {
@@ -835,6 +918,7 @@ export class PinWorker {
       this._notifyCapacity()
       this._notifyIdle()
     }
+    await this._releaseCapacityReservation(id)
     return updated
   }
 
@@ -1007,6 +1091,27 @@ function runLifecycleOperation (worker, promise, timeout) {
       timeout,
     )
     worker.lifecycleListeners.add(onInterrupt)
+    Promise.resolve(promise).then(
+      value => finish(null, value),
+      error => finish(error),
+    )
+  })
+}
+
+function runBoundedOperation (promise, timeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve(value)
+    }
+    const timer = setTimeout(
+      () => finish(new WorkerFault('capacity-release-timeout')),
+      timeout,
+    )
     Promise.resolve(promise).then(
       value => finish(null, value),
       error => finish(error),

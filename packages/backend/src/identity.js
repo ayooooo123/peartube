@@ -472,6 +472,60 @@ export function createIdentityManager({ ctx }) {
     },
 
     /**
+     * Return current local authorization facts for seed-pin admission without
+     * opening a channel or mutating metadata. Paired identity placeholders are
+     * never treated as identities this runtime owns.
+     */
+    getSeedPinOwnershipFacts({ identityPublicKey, channelKey } = {}) {
+      const keyPattern = /^[0-9a-f]{64}$/
+      if (!keyPattern.test(identityPublicKey) || !keyPattern.test(channelKey)) {
+        return { identityOwned: false, channelAccess: null }
+      }
+      const identityOwned = identities.some(identity =>
+        identity?.publicKey === identityPublicKey && identity?.paired !== true
+      )
+      let channelAccess = null
+      for (const identity of identities) {
+        const candidateChannel = identity?.channelKey || identity?.driveKey
+        if (candidateChannel !== channelKey) continue
+        if (identity?.paired === true) {
+          if (channelAccess === null) channelAccess = 'paired'
+        } else {
+          channelAccess = 'owned'
+          break
+        }
+      }
+      return { identityOwned, channelAccess }
+    },
+
+    /**
+     * Public-only active sender prerequisites. The device keypair remains on
+     * ctx.swarm and is never persisted with the identity record.
+     */
+    getActiveSeedPinCandidate() {
+      const identity = identities.find(candidate =>
+        candidate?.publicKey === activeIdentity && candidate?.paired !== true
+      )
+      const identityPublicKey = identity?.publicKey
+      const channelKey = identity?.channelKey || identity?.driveKey
+      const signedDescriptor = identity?.signedDescriptor
+      const proofHex = identity?.attestationProof || signedDescriptor?.proof
+      if (!/^[0-9a-f]{64}$/.test(identityPublicKey) ||
+          !/^[0-9a-f]{64}$/.test(channelKey) ||
+          !signedDescriptor || typeof signedDescriptor !== 'object' ||
+          typeof proofHex !== 'string' ||
+          !/^(?:[0-9a-f]{2})+$/.test(proofHex)) {
+        return null
+      }
+      return {
+        identityPublicKey,
+        channelKey,
+        deviceProof: b4a.from(proofHex, 'hex'),
+        signedDescriptor,
+      }
+    },
+
+    /**
      * Get list of all identities
      * @returns {Identity[]}
      */

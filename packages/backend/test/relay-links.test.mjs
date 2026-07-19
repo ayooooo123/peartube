@@ -5,6 +5,7 @@ import {
   addRelayLink,
   removeRelayLink,
   relayLinkKeys,
+  mergeTrustedRelayKeys,
 } from '../src/relay-links.js'
 
 const A = 'a'.repeat(64)
@@ -61,4 +62,14 @@ test('loadRelayLinks tolerates corrupt/missing entries', async (t) => {
   const list = await loadRelayLinks(db)
   t.is(list.length, 1)
   t.is(list[0].mirrorKey, A)
+})
+
+test('trusted relay union canonicalizes configured and persisted keys with overlap and malformed rejection', (t) => {
+  t.alike(mergeTrustedRelayKeys([A], []), [A], 'configured-only')
+  t.alike(mergeTrustedRelayKeys([], [{ mirrorKey: B }]), [B], 'persisted-only')
+  t.alike(
+    mergeTrustedRelayKeys([A.toUpperCase(), 'bad'], [{ mirrorKey: A }, { mirrorKey: B }, { mirrorKey: 'nope' }]),
+    [A, B],
+    'overlap is deduplicated and malformed keys are omitted',
+  )
 })

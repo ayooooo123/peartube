@@ -1,3 +1,4 @@
+import b4a from 'b4a'
 import Protomux from 'protomux'
 
 import {
@@ -42,9 +43,10 @@ export class SeedPinTransportError extends Error {
 export class SeedPinClient {
   constructor (streamOrMux, options = {}) {
     this.mux = Protomux.from(streamOrMux)
-    this.identityPublicKey = options.identityPublicKey
-    this.deviceKeyPair = options.deviceKeyPair
-    this.deviceProof = options.deviceProof
+    this.identityPublicKey = null
+    this.deviceKeyPair = null
+    this.deviceProof = null
+    this.signedDescriptor = null
     this.requestTimeout = normalizeBoundedPositiveInteger(
       options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT,
       'requestTimeout',
@@ -59,6 +61,7 @@ export class SeedPinClient {
     this.pending = new Map()
     this.nextCorrelationId = 1
     this.closed = false
+    this.updateAuth(options, { rejectPending: false })
 
     this._onTransportCloseBound = this._onTransportClose.bind(this)
     this._onTransportErrorBound = this._onTransportError.bind(this)
@@ -68,6 +71,7 @@ export class SeedPinClient {
 
     this.channel = this.mux.createChannel({
       protocol: SEED_PIN_PROTOCOL,
+      id: options.channelId || null,
       messages: [
         { encoding: PIN_REQUEST_ENCODING },
         { encoding: PIN_RESPONSE_ENCODING, onmessage: (message) => this._onResponse('pin', message) },
@@ -93,6 +97,25 @@ export class SeedPinClient {
     return this.channel.fullyOpened()
   }
 
+  get authEnabled () {
+    return this.identityPublicKey !== null
+  }
+
+  updateAuth (auth, { rejectPending = true } = {}) {
+    const normalized = normalizeClientAuth(auth)
+    if (rejectPending) {
+      this._rejectAll(new SeedPinTransportError(
+        'AUTH_REFRESHED',
+        'Seed pin client authentication changed',
+      ))
+    }
+    this.identityPublicKey = normalized?.identityPublicKey || null
+    this.deviceKeyPair = normalized?.deviceKeyPair || null
+    this.deviceProof = normalized?.deviceProof || null
+    this.signedDescriptor = normalized?.signedDescriptor || null
+    return this.authEnabled
+  }
+
   pin (request, options = {}) {
     if (!request || typeof request !== 'object') {
       return Promise.reject(new TypeError('request is required'))
@@ -105,6 +128,12 @@ export class SeedPinClient {
   }
 
   status (requestId, options = {}) {
+    if (!this.authEnabled) {
+      return Promise.reject(new SeedPinTransportError(
+        'AUTH_UNAVAILABLE',
+        'Seed pin client authentication is unavailable',
+      ))
+    }
     const now = normalizeNonnegativeInteger(this.now(), 'now')
     const expiresAt = options.expiresAt ?? now + this.statusTtl
     const request = createSeedPinStatusRequest({
@@ -140,6 +169,12 @@ export class SeedPinClient {
   _call (messageType, kind, body, timeout) {
     if (this.closed || this.channel.closed || this.mux.stream.destroyed) {
       return Promise.reject(new SeedPinTransportError('TRANSPORT_CLOSED', 'Seed pin transport is closed'))
+    }
+    if (!this.authEnabled) {
+      return Promise.reject(new SeedPinTransportError(
+        'AUTH_UNAVAILABLE',
+        'Seed pin client authentication is unavailable',
+      ))
     }
     const requestTimeout = normalizeBoundedPositiveInteger(
       timeout ?? this.requestTimeout,
@@ -236,6 +271,42 @@ export class SeedPinClient {
     this.mux.stream.off('close', this._onTransportCloseBound)
     this.mux.stream.off('end', this._onTransportCloseBound)
     this.mux.stream.off('error', this._onTransportErrorBound)
+  }
+}
+
+function normalizeClientAuth (auth) {
+  if (auth === null) return null
+  if (!auth || typeof auth !== 'object') throw new TypeError('client auth must be an object')
+  const identityPublicKey = typeof auth.identityPublicKey === 'string'
+    ? auth.identityPublicKey
+    : ((b4a.isBuffer(auth.identityPublicKey) || auth.identityPublicKey instanceof Uint8Array) &&
+        auth.identityPublicKey.byteLength === 32
+        ? b4a.toString(auth.identityPublicKey, 'hex')
+        : '')
+  if (!/^[0-9a-f]{64}$/.test(identityPublicKey)) {
+    throw new TypeError('client identityPublicKey must be a lowercase 32-byte key')
+  }
+  const publicKey = auth.deviceKeyPair?.publicKey
+  const secretKey = auth.deviceKeyPair?.secretKey
+  if (!(b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) || publicKey.byteLength !== 32 ||
+      !(b4a.isBuffer(secretKey) || secretKey instanceof Uint8Array) || secretKey.byteLength !== 64) {
+    throw new TypeError('client deviceKeyPair must contain a 32-byte public and 64-byte secret key')
+  }
+  if (!(b4a.isBuffer(auth.deviceProof) || auth.deviceProof instanceof Uint8Array) ||
+      auth.deviceProof.byteLength === 0) {
+    throw new TypeError('client deviceProof must be bytes')
+  }
+  const signedDescriptor = auth.signedDescriptor && typeof auth.signedDescriptor === 'object'
+    ? JSON.parse(JSON.stringify(auth.signedDescriptor))
+    : null
+  return {
+    identityPublicKey,
+    deviceKeyPair: {
+      publicKey: b4a.from(publicKey),
+      secretKey: b4a.from(secretKey),
+    },
+    deviceProof: b4a.from(auth.deviceProof),
+    signedDescriptor,
   }
 }
 

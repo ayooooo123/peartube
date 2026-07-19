@@ -66,6 +66,7 @@ export class SeedPinServer {
 
     this.channel = this.mux.createChannel({
       protocol: SEED_PIN_PROTOCOL,
+      id: options.channelId || null,
       messages: [
         { encoding: PIN_REQUEST_ENCODING, onmessage: (message) => { void this._handlePin(message) } },
         { encoding: PIN_RESPONSE_ENCODING },

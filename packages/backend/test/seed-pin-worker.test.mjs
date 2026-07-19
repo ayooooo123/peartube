@@ -333,6 +333,116 @@ test('PinStore records survive real Corestore and Hyperbee close/reopen', async 
   }
 })
 
+
+test('PinStore active usage ledger persists exact reservation deltas and terminal removal', async (t) => {
+  const dir = makeTempDir('peartube-seed-pin-usage-')
+  let resources = await openMetadata(dir)
+  t.teardown(async () => {
+    await closeMetadata(resources)
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const requestA = requestFor('usage/a')
+  const requestB = requestFor('usage/b')
+  let store = new PinStore({ db: resources.db, now: () => START + 5 })
+  await acceptRequest(store, requestA)
+  await acceptRequest(store, requestB)
+  t.alike(await store.getActiveUsage(), {
+    version: 1,
+    activeCount: 2,
+    reservedBytes: 0,
+    downloadedBytes: 0,
+    usedBytes: 0,
+  })
+
+  await store.reserveWorkerCapacity({
+    requestId: requestA.requestId,
+    reservedBlocks: 3,
+    reservedBytes: 10,
+    updatedAt: START + 2,
+  })
+  const currentA = await store.getByRequestId(requestA.requestId)
+  await store.updateWorkerStatus({
+    requestId: requestA.requestId,
+    state: 'pinning',
+    refs: currentA.status.refs,
+    errorCode: null,
+    error: null,
+    completedAt: null,
+    downloadedBlocks: 1,
+    downloadedBytes: 4,
+    updatedAt: START + 3,
+  })
+  t.alike(await store.getActiveUsage(), {
+    version: 1,
+    activeCount: 2,
+    reservedBytes: 10,
+    downloadedBytes: 4,
+    usedBytes: 10,
+  })
+
+  const pinningA = await store.getByRequestId(requestA.requestId)
+  await store.updateWorkerStatus({
+    requestId: requestA.requestId,
+    state: 'failed',
+    refs: pinningA.status.refs,
+    errorCode: SEED_PIN_ERROR_CODES.CAPACITY_EXCEEDED,
+    error: 'capacity',
+    completedAt: null,
+    downloadedBlocks: 1,
+    downloadedBytes: 4,
+    updatedAt: START + 4,
+  })
+  t.alike(await store.getActiveUsage(), {
+    version: 1,
+    activeCount: 1,
+    reservedBytes: 0,
+    downloadedBytes: 0,
+    usedBytes: 0,
+  })
+
+  await closeMetadata(resources)
+  resources = await openMetadata(dir)
+  store = new PinStore({ db: resources.db })
+  t.alike(await store.getActiveUsage(), {
+    version: 1,
+    activeCount: 1,
+    reservedBytes: 0,
+    downloadedBytes: 0,
+    usedBytes: 0,
+  })
+})
+
+test('PinStore active usage remains O(1) and exact beyond resumable page bounds', async (t) => {
+  const { store } = await createStoreHarness(t)
+  for (let index = 0; index < 1025; index++) {
+    const request = requestFor(`usage/large/${index}`)
+    await acceptRequest(store, request)
+    await store.reserveWorkerCapacity({
+      requestId: request.requestId,
+      reservedBlocks: 1,
+      reservedBytes: 1,
+      updatedAt: START + 2,
+    })
+  }
+  store.listActive = async () => { throw new Error('getActiveUsage must not scan active indexes') }
+  t.alike(await store.getActiveUsage(), {
+    version: 1,
+    activeCount: 1025,
+    reservedBytes: 1025,
+    downloadedBytes: 0,
+    usedBytes: 1025,
+  })
+})
+
+test('PinStore active usage fails closed when an active database loses its ledger', async (t) => {
+  const { store, db } = await createStoreHarness(t)
+  const request = requestFor('usage/missing-ledger')
+  await acceptRequest(store, request)
+  const batch = db.batch({ keyEncoding: 'utf-8', valueEncoding: c.raw })
+  await batch.del('seed-pin/v1/usage')
+  await batch.flush()
+  await assert.rejects(store.getActiveUsage(), /usage ledger is missing/)
+})
 test('concurrent wrappers atomically claim exact replay once and conflict on owner, digest, or body', async (t) => {
   const { db } = await createStoreHarness(t)
   const left = new PinStore({ db })
@@ -1350,6 +1460,68 @@ test('exact byte reservation rejects quota before downloads and missing tree siz
   assert.equal(unavailableRecord.status.error, 'capacity')
 })
 
+test('terminal failure releases exact quota, retries cleanup, and never releases one reservation twice', async (t) => {
+  const { store } = await createStoreHarness(t)
+  const broken = new FakeCore(MEDIA_KEY, ['aa'])
+  broken.get = async () => { throw new Error('corrupt local block') }
+  const healthy = new FakeCore(OTHER_MEDIA_KEY, ['bb'])
+  const failedRequest = requestFor('worker/terminal-capacity-release', [
+    { coreKey: MEDIA_KEY, start: 0, end: 1, kind: 'media' },
+  ])
+  const nextRequest = requestFor('worker/capacity-after-terminal-release', [
+    { coreKey: OTHER_MEDIA_KEY, start: 0, end: 1, kind: 'media' },
+  ])
+  await acceptRequest(store, failedRequest)
+  await acceptRequest(store, nextRequest)
+
+  const reservations = new Map()
+  const releaseCalls = []
+  const capacityPolicy = context => {
+    if (context.phase === 'estimate') return true
+    const current = reservations.get(context.requestId) || 0
+    const requested = context.phase === 'reserve'
+      ? context.reservedBytes
+      : Math.max(current, context.downloadedBytes)
+    const total = [...reservations.entries()].reduce(
+      (sum, [requestId, bytes]) => sum + (requestId === context.requestId ? 0 : bytes),
+      requested,
+    )
+    if (total > 2) return false
+    reservations.set(context.requestId, requested)
+    return true
+  }
+  capacityPolicy.release = async requestId => {
+    releaseCalls.push(requestId)
+    if (releaseCalls.length === 1) throw new Error('transient capacity cleanup failure')
+    reservations.delete(requestId)
+  }
+
+  const worker = new PinWorker({
+    corestore: new FakeCorestore([broken, healthy]),
+    pinStore: store,
+    capacityPolicy,
+    releasePolicy: () => true,
+    releaseTimeout: 50,
+  })
+  t.teardown(() => worker.stop())
+
+  await worker.start(failedRequest.requestId)
+  await worker.waitForIdle()
+  assert.equal((await store.getByRequestId(failedRequest.requestId)).status.state, 'failed')
+  assert.deepEqual(releaseCalls, [failedRequest.requestId])
+  assert.equal(reservations.get(failedRequest.requestId), 2)
+
+  await worker.start(nextRequest.requestId)
+  await worker.waitForIdle()
+  assert.equal((await store.getByRequestId(nextRequest.requestId)).status.state, 'complete')
+  assert.deepEqual(releaseCalls, [failedRequest.requestId, failedRequest.requestId])
+  assert.equal(reservations.has(failedRequest.requestId), false)
+  assert.equal(reservations.get(nextRequest.requestId), 2)
+
+  await worker.cancel(failedRequest.requestId)
+  assert.deepEqual(releaseCalls, [failedRequest.requestId, failedRequest.requestId])
+})
+
 test('summed overlapping ref traversal is bounded before opening a session', async (t) => {
   const { store } = await createStoreHarness(t)
   const refs = [
@@ -1378,11 +1550,15 @@ test('release refusal is explicit and unchanged; allowed cancel destroys once, c
   const request = requestFor('worker/release', [{ coreKey: MEDIA_KEY, start: 0, end: 1, kind: 'media' }])
   await acceptRequest(store, request)
   let permitted = false
+  const releasedCapacity = []
+  const capacityPolicy = () => true
+  capacityPolicy.release = async (requestId) => { releasedCapacity.push(requestId) }
   const fakeCorestore = new FakeCorestore([core])
   const worker = new PinWorker({
     corestore: fakeCorestore,
     pinStore: store,
     releasePolicy: () => permitted,
+    capacityPolicy,
   })
   t.teardown(() => worker.stop())
   await worker.start(request.requestId)
@@ -1393,6 +1569,7 @@ test('release refusal is explicit and unchanged; allowed cancel destroys once, c
   assert.deepEqual(unchanged, before)
   assert.equal(core.downloads[0].destroyed, 0)
   assert.equal(fakeCorestore.sessions[0].closed, 0)
+  assert.deepEqual(releasedCapacity, [])
 
   permitted = true
   const released = await worker.cancel(request.requestId, { reason: 'owner' })
@@ -1400,6 +1577,7 @@ test('release refusal is explicit and unchanged; allowed cancel destroys once, c
   assert.equal(core.downloads[0].destroyed, 1)
   assert.equal(fakeCorestore.sessions[0].closed, 1)
   assert.equal((await store.getByRequestId(request.requestId)).status.state, 'cancelled')
+  assert.deepEqual(releasedCapacity, [request.requestId])
 })
 
 test('release policy timeout is unchanged and stop interrupts a pending policy callback', async (t) => {

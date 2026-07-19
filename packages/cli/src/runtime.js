@@ -45,15 +45,8 @@ function buildNetworkDoctor({
   return doctor
 }
 
-export async function createRelayRuntime({ config, logger } = {}) {
-  const [
-    { initializeStorage, loadChannel, loadPublicBee, getNetworkStats },
-    { PublicFeedManager },
-    { CacheManager },
-    { createRelaySeeder },
-    { createRelayBlindPeer },
-    { readPrimaryKeyFile, writePrimaryKeyFile }
-  ] = await Promise.all([
+export async function createRelayRuntime({ config, logger, dependencies = null } = {}) {
+  const modules = dependencies ? null : await Promise.all([
     import('@peartube/backend/storage'),
     import('@peartube/backend/public-feed'),
     import('./cache-manager.js'),
@@ -61,6 +54,18 @@ export async function createRelayRuntime({ config, logger } = {}) {
     import('@peartube/backend/relay-blind-peer'),
     import('../../backend/src/identity-key-file.js')
   ])
+  const storageModule = dependencies || modules[0]
+  const publicFeedModule = dependencies || modules[1]
+  const cacheModule = dependencies || modules[2]
+  const seedingModule = dependencies || modules[3]
+  const blindPeerModule = dependencies || modules[4]
+  const identityKeyFileModule = dependencies || modules[5]
+  const { initializeStorage, loadChannel, loadPublicBee, getNetworkStats } = storageModule
+  const { PublicFeedManager } = publicFeedModule
+  const { CacheManager } = cacheModule
+  const { createRelaySeeder } = seedingModule
+  const { createRelayBlindPeer } = blindPeerModule
+  const { readPrimaryKeyFile, writePrimaryKeyFile } = identityKeyFileModule
 
   const storageRoot = config.storage.path
 
@@ -184,13 +189,18 @@ export async function createRelayRuntime({ config, logger } = {}) {
     }
   })
 
-  return {
+  let closed = false
+  let started = false
+  const runtime = {
     ctx,
     publicFeed,
     cacheManager,
     seeder,
     identityManager: null,
     uploadManager: null,
+    seedPin: null,
+    seedPinClients: null,
+    uninstallSeedPinIdentityMutationHooks: null,
     async publishRelayCatalogEntry(entry) {
       if (!entry?.driveKey || !entry?.publicBeeKey) return null
       const catalogEntry = {
@@ -214,57 +224,123 @@ export async function createRelayRuntime({ config, logger } = {}) {
       candidateHandler = handler
     },
     async start() {
+      if (started) return
+      if (closed) throw new Error('relay runtime is closed')
       logger.runtime?.info('Initializing relay runtime', {
         storagePath: config.storage.path,
         storageRoot,
         mode: config.mode,
         policy: config.policy
       })
-      await cacheManager.init()
+      try {
+        await cacheManager.init()
 
-      const [{ createIdentityManager }, { createUploadManager }, { createApi }] = await Promise.all([
-        import('@peartube/backend/identity'),
-        import('@peartube/backend/upload'),
-        import('@peartube/backend/api')
-      ])
-      this.identityManager = createIdentityManager({ ctx })
-      await this.identityManager.loadIdentities()
-      this.uploadManager = createUploadManager({ ctx })
-      this.api = createApi({ ctx, publicFeed, seedingManager: null, videoStats: null })
+        let runtimeModules = dependencies
+        if (!runtimeModules) {
+          const loaded = await Promise.all([
+            import('@peartube/backend/identity'),
+            import('@peartube/backend/upload'),
+            import('@peartube/backend/api'),
+            import('@peartube/backend/seed-pin'),
+            import('./seed-pin-admission.js'),
+          ])
+          runtimeModules = Object.assign({}, ...loaded)
+        }
+        const {
+          createIdentityManager,
+          createUploadManager,
+          createApi,
+          registerSeedPinProtocol,
+          installSeedPinIdentityMutationHooks,
+          resolveSeedPinClientAuth,
+          createRelaySeedPinAdmission,
+          createRelaySeedPinCapacityPolicy,
+          createRelaySeedPinReleasePolicy,
+        } = runtimeModules
+        this.identityManager = createIdentityManager({ ctx })
+        await this.identityManager.loadIdentities()
+        this.uploadManager = createUploadManager({ ctx })
+        this.api = createApi({ ctx, publicFeed, seedingManager: null, videoStats: null })
 
-      // Use the same feed snapshot and availability-hint plumbing as the normal
-      // PearTube backend before joining the feed swarm. Otherwise initial
-      // HAVE_FEED messages can omit playable relay-cache preview refs.
-      if (typeof this.api.getAvailabilityHints === 'function') {
-        publicFeed.setAvailabilityHintProvider((requests, conn) => this.api.getAvailabilityHints(requests, conn))
-      }
-      if (typeof this.api.getFeedSnapshotEntries === 'function') {
-        publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
-      }
-      if (typeof this.api.getChannelSignedDescriptor === 'function') {
-        publicFeed.setSignedDescriptorProvider((driveKey) => this.api.getChannelSignedDescriptor(driveKey))
-      }
+        // Use the same feed snapshot and availability-hint plumbing as the normal
+        // PearTube backend before joining the feed swarm. Otherwise initial
+        // HAVE_FEED messages can omit playable relay-cache preview refs.
+        if (typeof this.api.getAvailabilityHints === 'function') {
+          publicFeed.setAvailabilityHintProvider((requests, conn) => this.api.getAvailabilityHints(requests, conn))
+        }
+        if (typeof this.api.getFeedSnapshotEntries === 'function') {
+          publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
+        }
+        if (typeof this.api.getChannelSignedDescriptor === 'function') {
+          publicFeed.setSignedDescriptorProvider((driveKey) => this.api.getChannelSignedDescriptor(driveKey))
+        }
 
-      // Relay-owned channels created before descriptor signing (or with the
-      // descriptor bound to the identity key) gossip entries strict peers
-      // reject. Re-sign them before announcing.
-      const descriptorSummary = await this.identityManager.ensureSignedChannelDescriptors?.()
-        .catch((err) => {
-          logger.runtime?.warn('Descriptor backfill failed', { error: err?.message || String(err) })
-          return null
+        // Relay-owned channels created before descriptor signing (or with the
+        // descriptor bound to the identity key) gossip entries strict peers
+        // reject. Re-sign them before announcing.
+        const descriptorSummary = await this.identityManager.ensureSignedChannelDescriptors?.()
+          .catch((err) => {
+            logger.runtime?.warn('Descriptor backfill failed', { error: err?.message || String(err) })
+            return null
+          })
+        if (descriptorSummary) {
+          logger.runtime?.info('Descriptor backfill complete', descriptorSummary)
+        }
+
+        if (config.seedPin.enabled) {
+          const admission = createRelaySeedPinAdmission({ config })
+          const releasePolicy = createRelaySeedPinReleasePolicy({
+            retentionDays: config.seedPin.retentionDays,
+          })
+          this.seedPin = registerSeedPinProtocol(ctx, {
+            enabled: true,
+            admission,
+            resolveClientAuth: () => resolveSeedPinClientAuth({ ctx, identityManager: this.identityManager }),
+            verificationLimiterOptions: { maxConcurrent: config.seedPin.maxConcurrent },
+            pinWorkerOptions: pinStore => ({
+              concurrency: config.seedPin.maxConcurrent,
+              capacityPolicy: createRelaySeedPinCapacityPolicy({
+                pinStore,
+                maxBytes: config.seedPin.maxBytes,
+              }),
+              releasePolicy,
+            }),
+          })
+          this.seedPinClients = this.seedPin.clients
+          ctx.seedPinRegistration = this.seedPin
+          await this.seedPin.ready
+          this.uninstallSeedPinIdentityMutationHooks = installSeedPinIdentityMutationHooks({
+            identityManager: this.identityManager,
+            onMutation: async ({ label }) => {
+              try {
+                await this.seedPin.refreshClientAuth?.()
+              } catch (error) {
+                try { await this.seedPin.refreshClientAuth?.({ failClosed: true }) } catch {}
+                logger.runtime?.warn('Seed pin identity refresh failed', {
+                  operation: label,
+                  error: error?.message || String(error),
+                })
+              }
+            },
+          })
+          await this.seedPin.refreshClientAuth?.()
+        }
+
+        // Seed-pin owns a sibling Protomux channel and must see existing/future
+        // authenticated streams before feed discovery starts creating more.
+        await publicFeed.start()
+
+        logger.runtime?.info('Relay runtime started', this.getNetworkStats())
+        await seeder.seedCachedChannels(cacheManager).catch((err) => {
+          logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
         })
-      if (descriptorSummary) {
-        logger.runtime?.info('Descriptor backfill complete', descriptorSummary)
+        await seedFeedEntries('startup')
+        emitFeedEntries()
+        started = true
+      } catch (error) {
+        await this.close()
+        throw error
       }
-
-      await publicFeed.start()
-
-      logger.runtime?.info('Relay runtime started', this.getNetworkStats())
-      await seeder.seedCachedChannels(cacheManager).catch((err) => {
-        logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
-      })
-      await seedFeedEntries('startup')
-      emitFeedEntries()
     },
     requestFeedSync() {
       try {
@@ -369,12 +445,19 @@ export async function createRelayRuntime({ config, logger } = {}) {
       }
     },
     async close() {
-      try { publicFeed.stop() } catch (err) { logger.runtime?.debug('Public feed close failed', { error: err?.message || String(err) }) }
+      if (closed) return
+      closed = true
+      this.uninstallSeedPinIdentityMutationHooks?.()
+      this.uninstallSeedPinIdentityMutationHooks = null
+      try { await this.seedPin?.unregister?.() } catch (err) { logger.runtime?.debug('Seed pin close failed', { error: err?.message || String(err) }) }
+      if (ctx.seedPinRegistration === this.seedPin) ctx.seedPinRegistration = null
+      try { await publicFeed.stop() } catch (err) { logger.runtime?.debug('Public feed close failed', { error: err?.message || String(err) }) }
       try { await seeder.close() } catch (err) { logger.runtime?.debug('Relay seeder close failed', { error: err?.message || String(err) }) }
       try { await blindPeer.close?.() } catch (err) { logger.runtime?.debug('Relay blind peer close failed', { error: err?.message || String(err) }) }
       try { await ctx.swarm.destroy() } catch (err) { logger.runtime?.debug('Swarm close failed', { error: err?.message || String(err) }) }
-      try { ctx.blobServer?.close?.() } catch (err) { logger.runtime?.debug('Blob server close failed', { error: err?.message || String(err) }) }
+      try { await ctx.blobServer?.close?.() } catch (err) { logger.runtime?.debug('Blob server close failed', { error: err?.message || String(err) }) }
       try { await ctx.store.close() } catch (err) { logger.runtime?.debug('Store close failed', { error: err?.message || String(err) }) }
     }
   }
+  return runtime
 }

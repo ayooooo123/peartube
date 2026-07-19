@@ -9,6 +9,13 @@ admission:
   channels: []
   owners: []
 
+seedPin:
+  enabled: true
+  maxBytes: 536870912000
+  maxConcurrent: 2
+  retentionDays: 30       # 0 allows immediate release; disable reception with enabled: false
+  trustedClients: []     # exact 32-byte identity public keys (hex), never device/transport keys
+
 discovery:
   enabled: true
   maxChannels: 500

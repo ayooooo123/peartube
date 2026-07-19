@@ -16,7 +16,10 @@ import {
   DEFAULT_CLASSIFICATION_CONFIG,
   DEFAULT_TMDB_BASE_URL,
   DEFAULT_TMDB_LANGUAGE,
+  DEFAULT_SEED_PIN_CONFIG,
   DEFAULT_RELAY_CONFIG,
+  MAX_SEED_PIN_CONCURRENT,
+  MAX_SEED_PIN_TRUSTED_CLIENTS,
   RELAY_CATALOG_FILENAME,
   RELAY_CLASSIFICATION_FILENAME,
   RELAY_CREATORS_FILENAME,
@@ -585,6 +588,53 @@ function resolveClassificationConfig(rawClassification) {
   }
 }
 
+function resolveSeedPinConfig(rawSeedPin) {
+  if (!isPlainObject(rawSeedPin)) throw new Error('seedPin must be an object')
+  const merged = deepMerge(DEFAULT_SEED_PIN_CONFIG, rawSeedPin)
+  if (typeof merged.enabled !== 'boolean') {
+    throw new Error('seedPin.enabled must be a boolean')
+  }
+  if (typeof merged.maxBytes !== 'number' ||
+      !Number.isSafeInteger(merged.maxBytes) ||
+      merged.maxBytes <= 0) {
+    throw new Error('seedPin.maxBytes must be a positive safe integer; use seedPin.enabled=false to disable')
+  }
+  if (typeof merged.maxConcurrent !== 'number' ||
+      !Number.isSafeInteger(merged.maxConcurrent) ||
+      merged.maxConcurrent <= 0 ||
+      merged.maxConcurrent > MAX_SEED_PIN_CONCURRENT) {
+    throw new Error(`seedPin.maxConcurrent must be an integer between 1 and ${MAX_SEED_PIN_CONCURRENT}`)
+  }
+  if (typeof merged.retentionDays !== 'number' ||
+      !Number.isSafeInteger(merged.retentionDays) ||
+      merged.retentionDays < 0 ||
+      merged.retentionDays > Math.floor(Number.MAX_SAFE_INTEGER / 86400000)) {
+    throw new Error('seedPin.retentionDays must be a bounded non-negative safe integer')
+  }
+  if (!Array.isArray(merged.trustedClients) ||
+      merged.trustedClients.length > MAX_SEED_PIN_TRUSTED_CLIENTS) {
+    throw new Error(`seedPin.trustedClients must be an array of at most ${MAX_SEED_PIN_TRUSTED_CLIENTS} identity keys`)
+  }
+  const trustedClients = []
+  const seen = new Set()
+  for (const value of merged.trustedClients) {
+    if (typeof value !== 'string' || !/^[0-9a-fA-F]{64}$/.test(value)) {
+      throw new Error('seedPin.trustedClients entries must be exact 32-byte identity public keys')
+    }
+    const identityPublicKey = value.toLowerCase()
+    if (seen.has(identityPublicKey)) continue
+    seen.add(identityPublicKey)
+    trustedClients.push(identityPublicKey)
+  }
+  return {
+    enabled: merged.enabled,
+    maxBytes: merged.maxBytes,
+    maxConcurrent: merged.maxConcurrent,
+    retentionDays: merged.retentionDays,
+    trustedClients,
+  }
+}
+
 export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
   const requestedMode = input.mode
   const requestedPolicy = input.policy
@@ -636,6 +686,8 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   if (!Number.isFinite(config.discovery.maxChannelsPerOwner) || config.discovery.maxChannelsPerOwner < 0) {
     throw new Error('discovery.maxChannelsPerOwner must be a non-negative number')
   }
+
+  config.seedPin = resolveSeedPinConfig(config.seedPin)
 
   config.retention = deepMerge(DEFAULT_RELAY_CONFIG.retention, config.retention || {})
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
@@ -704,6 +756,23 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     }
   } else {
     lines.push('  owners: []')
+  }
+
+  const seedPin = config.seedPin || DEFAULT_SEED_PIN_CONFIG
+  lines.push(
+    'seedPin:',
+    `  enabled: ${seedPin.enabled}`,
+    `  maxBytes: ${seedPin.maxBytes}`,
+    `  maxConcurrent: ${seedPin.maxConcurrent}`,
+    `  retentionDays: ${seedPin.retentionDays}`
+  )
+  if (seedPin.trustedClients?.length) {
+    lines.push('  trustedClients:')
+    for (const identityPublicKey of seedPin.trustedClients) {
+      lines.push(`    - ${identityPublicKey}`)
+    }
+  } else {
+    lines.push('  trustedClients: []')
   }
 
   lines.push(

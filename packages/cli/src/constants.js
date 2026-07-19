@@ -16,6 +16,16 @@ export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
 export const DEFAULT_DISCOVERY_MAX_CHANNELS = 0
 export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 0
 
+export const MAX_SEED_PIN_CONCURRENT = 64
+export const MAX_SEED_PIN_TRUSTED_CLIENTS = 256
+export const DEFAULT_SEED_PIN_CONFIG = {
+  enabled: true,
+  maxBytes: 536870912000,
+  maxConcurrent: 2,
+  retentionDays: 30,
+  trustedClients: []
+}
+
 export const RELAY_CATALOG_FILENAME = 'relay-catalog.json'
 export const RELAY_STATUS_FILENAME = 'relay-status.json'
 export const RELAY_CREATORS_FILENAME = 'relay-creators.json'
@@ -103,6 +113,7 @@ export const DEFAULT_RELAY_CONFIG = {
     maxChannels: DEFAULT_DISCOVERY_MAX_CHANNELS,
     maxChannelsPerOwner: DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER
   },
+  seedPin: DEFAULT_SEED_PIN_CONFIG,
   retention: {
     protectPrivate: true,
     protectAllowlist: true

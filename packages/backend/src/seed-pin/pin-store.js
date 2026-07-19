@@ -17,6 +17,9 @@ const REQUEST_PREFIX = 'seed-pin/v1/request/'
 const CHANNEL_PREFIX = 'seed-pin/v1/channel/'
 const ACTIVE_PREFIX = 'seed-pin/v1/active/'
 const RESUMABLE_PREFIX = 'seed-pin/v1/resumable/'
+const USAGE_KEY = 'seed-pin/v1/usage'
+const USAGE_VERSION = 1
+const USAGE_MAGIC = b4a.from([0x50, 0x55, USAGE_VERSION, 0x00])
 const HEX_32 = /^[0-9a-f]{64}$/
 const MAX_BODY_BYTES = 512 * 1024
 const MAX_PIN_RECORD_BYTES = 512 * 1024
@@ -134,9 +137,14 @@ export class PinStore {
           error: null,
           refs,
         },
-        progress: existing?.progress || { downloadedBlocks: 0, downloadedBytes: 0 },
+        progress: existing?.progress || {
+          reservedBlocks: 0,
+          reservedBytes: 0,
+          downloadedBlocks: 0,
+          downloadedBytes: 0,
+        },
       })
-      await this._write(record)
+      await this._write(record, existing)
       return claimResult('claimed', record, claimToken)
     })
   }
@@ -177,7 +185,7 @@ export class PinStore {
           error: normalizedDecision.error,
         },
       })
-      await this._write(record)
+      await this._write(record, existing)
       return finalizeResult('finalized', record)
     })
   }
@@ -215,6 +223,48 @@ export class PinStore {
       states: ACTIVE_STATES,
       name: 'active',
       captureError: true,
+    })
+  }
+
+  async getActiveUsage () {
+    return withFeedLock(this.db, async () => {
+      const usage = await this._readUsage()
+      if (usage !== null) return { ...usage }
+      const initialized = emptyUsage()
+      const batch = this.db.batch({ keyEncoding: 'utf-8', valueEncoding: c.raw })
+      try {
+        await batch.put(USAGE_KEY, encodeUsage(initialized))
+        await batch.flush()
+      } catch (error) {
+        await batch.close().catch(() => {})
+        throw error
+      }
+      return { ...initialized }
+    })
+  }
+
+  async reserveWorkerCapacity ({ requestId, reservedBlocks, reservedBytes, updatedAt } = {}) {
+    const id = normalizeHex32(requestId, 'requestId')
+    const blocks = normalizeTimestamp(reservedBlocks, 'reservedBlocks')
+    const bytes = normalizeTimestamp(reservedBytes, 'reservedBytes')
+    const updated = normalizeTimestamp(updatedAt, 'updatedAt')
+    return withFeedLock(this.db, async () => {
+      const existing = await this._read(id)
+      if (existing === null) throw new Error('seed pin record not found')
+      if (!ACTIVE_STATES.has(existing.status.state)) {
+        throw new Error(`seed pin record is not active: ${existing.status.state}`)
+      }
+      const record = normalizeRecord({
+        ...existing,
+        updatedAt: Math.max(existing.updatedAt, updated),
+        progress: {
+          ...existing.progress,
+          reservedBlocks: blocks,
+          reservedBytes: bytes,
+        },
+      })
+      await this._write(record, existing)
+      return cloneRecord(record)
     })
   }
 
@@ -266,9 +316,9 @@ export class PinStore {
           error: normalized.error,
           refs,
         },
-        progress: { downloadedBlocks, downloadedBytes },
+        progress: { ...existing.progress, downloadedBlocks, downloadedBytes },
       })
-      await this._write(record)
+      await this._write(record, existing)
       return cloneRecord(record)
     })
   }
@@ -303,7 +353,7 @@ export class PinStore {
           refs,
         },
       })
-      await this._write(record)
+      await this._write(record, existing)
       return cloneRecord(record)
     })
   }
@@ -317,6 +367,24 @@ export class PinStore {
     const record = decodeRecord(node.value)
     if (record.requestId !== requestId) throw new Error('malformed seed pin record requestId')
     return record
+  }
+
+  async _readUsage () {
+    const node = await this.db.get(USAGE_KEY, {
+      keyEncoding: 'utf-8',
+      valueEncoding: c.raw,
+    })
+    if (node !== null) return decodeUsage(node.value)
+    for await (const _node of this.db.createReadStream({
+      gte: ACTIVE_PREFIX,
+      lt: `${ACTIVE_PREFIX}\xff`,
+      limit: 1,
+      keyEncoding: 'utf-8',
+      valueEncoding: c.raw,
+    })) {
+      throw new Error('seed pin active usage ledger is missing')
+    }
+    return null
   }
 
   async _readIndexPage ({
@@ -365,13 +433,16 @@ export class PinStore {
     }
   }
 
-  async _write (record) {
+  async _write (record, previous = null) {
     const normalized = normalizeRecord(record)
     const encoded = encodeRecord(normalized)
+    const usage = (await this._readUsage()) || emptyUsage()
+    const nextUsage = applyUsageTransition(usage, previous, normalized)
     const batch = this.db.batch({ keyEncoding: 'utf-8', valueEncoding: c.raw })
     try {
       await batch.put(requestKey(normalized.requestId), encoded)
       await batch.put(channelIndexKey(normalized.manifest), encoded)
+      await batch.put(USAGE_KEY, encodeUsage(nextUsage))
       if (ACTIVE_STATES.has(normalized.status.state)) {
         await batch.put(activeIndexKey(normalized.requestId), encoded)
       } else {
@@ -621,8 +692,12 @@ function normalizeRecord (record) {
   const status = normalizeStatus(record.status, manifest, requestId, acceptedAt)
   if (status.updatedAt > updatedAt) throw new Error('record status updatedAt exceeds record updatedAt')
   assertPlainObject(record.progress, 'record.progress')
-  assertExactFields(record.progress, ['downloadedBlocks', 'downloadedBytes'], 'record.progress')
+  assertExactFields(record.progress, [
+    'reservedBlocks', 'reservedBytes', 'downloadedBlocks', 'downloadedBytes',
+  ], 'record.progress')
   const progress = {
+    reservedBlocks: normalizeTimestamp(record.progress.reservedBlocks, 'record.progress.reservedBlocks'),
+    reservedBytes: normalizeTimestamp(record.progress.reservedBytes, 'record.progress.reservedBytes'),
     downloadedBlocks: normalizeTimestamp(record.progress.downloadedBlocks, 'record.progress.downloadedBlocks'),
     downloadedBytes: normalizeTimestamp(record.progress.downloadedBytes, 'record.progress.downloadedBytes'),
   }
@@ -757,6 +832,88 @@ function decodeRecord (value) {
     throw new Error('malformed seed pin record encoding')
   }
   return normalizeRecord(decoded)
+}
+
+function emptyUsage () {
+  return {
+    version: USAGE_VERSION,
+    activeCount: 0,
+    reservedBytes: 0,
+    downloadedBytes: 0,
+    usedBytes: 0,
+  }
+}
+
+function encodeUsage (usage) {
+  const normalized = normalizeUsage(usage)
+  return b4a.concat([USAGE_MAGIC, b4a.from(JSON.stringify(normalized))])
+}
+
+function decodeUsage (value) {
+  if (!(value instanceof Uint8Array) && !b4a.isBuffer(value)) {
+    throw new Error('malformed seed pin active usage ledger')
+  }
+  if (value.byteLength <= USAGE_MAGIC.byteLength ||
+      !b4a.equals(value.subarray(0, USAGE_MAGIC.byteLength), USAGE_MAGIC)) {
+    throw new Error('malformed or unsupported seed pin active usage ledger')
+  }
+  let decoded
+  try {
+    decoded = JSON.parse(b4a.toString(value.subarray(USAGE_MAGIC.byteLength)))
+  } catch {
+    throw new Error('malformed seed pin active usage ledger')
+  }
+  return normalizeUsage(decoded)
+}
+
+function normalizeUsage (usage) {
+  assertPlainObject(usage, 'active usage')
+  assertExactFields(usage, [
+    'version', 'activeCount', 'reservedBytes', 'downloadedBytes', 'usedBytes',
+  ], 'active usage')
+  if (usage.version !== USAGE_VERSION) throw new Error('unsupported seed pin active usage version')
+  return {
+    version: USAGE_VERSION,
+    activeCount: normalizeTimestamp(usage.activeCount, 'active usage activeCount'),
+    reservedBytes: normalizeTimestamp(usage.reservedBytes, 'active usage reservedBytes'),
+    downloadedBytes: normalizeTimestamp(usage.downloadedBytes, 'active usage downloadedBytes'),
+    usedBytes: normalizeTimestamp(usage.usedBytes, 'active usage usedBytes'),
+  }
+}
+
+function applyUsageTransition (usage, previous, next) {
+  const oldUsage = recordActiveUsage(previous)
+  const newUsage = recordActiveUsage(next)
+  return normalizeUsage({
+    version: USAGE_VERSION,
+    activeCount: replaceUsageValue(usage.activeCount, oldUsage.activeCount, newUsage.activeCount),
+    reservedBytes: replaceUsageValue(usage.reservedBytes, oldUsage.reservedBytes, newUsage.reservedBytes),
+    downloadedBytes: replaceUsageValue(usage.downloadedBytes, oldUsage.downloadedBytes, newUsage.downloadedBytes),
+    usedBytes: replaceUsageValue(usage.usedBytes, oldUsage.usedBytes, newUsage.usedBytes),
+  })
+}
+
+function recordActiveUsage (record) {
+  if (!record || !ACTIVE_STATES.has(record.status.state)) {
+    return { activeCount: 0, reservedBytes: 0, downloadedBytes: 0, usedBytes: 0 }
+  }
+  const reservedBytes = record.progress.reservedBytes
+  const downloadedBytes = record.progress.downloadedBytes
+  return {
+    activeCount: 1,
+    reservedBytes,
+    downloadedBytes,
+    usedBytes: Math.max(reservedBytes, downloadedBytes),
+  }
+}
+
+function replaceUsageValue (total, previous, next) {
+  if (previous > total) throw new Error('seed pin active usage ledger underflow')
+  const remaining = total - previous
+  if (next > Number.MAX_SAFE_INTEGER - remaining) {
+    throw new RangeError('seed pin active usage ledger overflow')
+  }
+  return remaining + next
 }
 
 function digestRequestBody (request) {

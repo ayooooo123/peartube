@@ -45,7 +45,14 @@ export {
   createPinStore,
 } from './pin-store.js'
 export {
+  MAX_PIN_WORKER_CONCURRENCY,
   PinWorker,
   PinWorkerError,
   createPinWorker,
 } from './pin-worker.js'
+export { createBackendSeedPinAdmission } from './admission.js'
+export {
+  registerSeedPinProtocol,
+  installSeedPinIdentityMutationHooks,
+  resolveSeedPinClientAuth,
+} from './registration.js'

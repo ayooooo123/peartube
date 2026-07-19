@@ -2537,6 +2537,15 @@ export async function shutdownBackend(ctx) {
   }
 
   const shutdownBody = async () => {
+    if (ctx.seedPinRegistration) {
+      const registration = ctx.seedPinRegistration
+      console.log('[Backend] Shutdown: unregistering seed-pin protocol...')
+      await runShutdownStep('seed-pin unregister', async () => {
+        await registration.unregister?.()
+      }, 2000)
+      if (ctx.seedPinRegistration === registration) ctx.seedPinRegistration = null
+    }
+
     if (ctx.publicFeed) {
       console.log('[Backend] Shutdown: persisting public feed cache...')
       try {

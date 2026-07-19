@@ -86,3 +86,16 @@ export async function removeRelayLink(metaDb, mirrorKey) {
 export function relayLinkKeys(list) {
   return (Array.isArray(list) ? list : []).map((link) => link?.mirrorKey).filter(Boolean)
 }
+
+export function mergeTrustedRelayKeys(configuredKeys, persistedLinks) {
+  const keys = new Set()
+  for (const value of Array.isArray(configuredKeys) ? configuredKeys : []) {
+    const key = normalizeRelayKey(value)
+    if (key) keys.add(key)
+  }
+  for (const link of Array.isArray(persistedLinks) ? persistedLinks : []) {
+    const key = normalizeRelayKey(link?.mirrorKey)
+    if (key) keys.add(key)
+  }
+  return Array.from(keys)
+}

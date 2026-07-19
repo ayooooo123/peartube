@@ -9,19 +9,32 @@
  *   const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
  */
 
-import { initializeStorage, isPlaybackActive, loadChannel, retainPublicBeeContentDiscovery, retainSwarmDiscovery } from './storage.js';
+import {
+  initializeStorage,
+  isPlaybackActive,
+  loadChannel,
+  retainPublicBeeContentDiscovery,
+  retainSwarmDiscovery,
+  shutdownBackend,
+} from './storage.js';
 import { PublicFeedManager } from './public-feed.js';
 import { createContentPublication } from './content-publication.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createBlindPeeringClient } from './blind-peering-client.js';
-import { loadRelayLinks, relayLinkKeys } from './relay-links.js';
+import { loadRelayLinks, mergeTrustedRelayKeys } from './relay-links.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
+import {
+  createBackendSeedPinAdmission,
+  registerSeedPinProtocol,
+  installSeedPinIdentityMutationHooks,
+  resolveSeedPinClientAuth,
+} from './seed-pin/index.js'
 import {
   readIdentityKeyFile,
   readPrimaryKeyFile,
@@ -315,38 +328,83 @@ export function installOwnedContentPublicationIdentityHooks({
   identityManager,
   publicFeed,
   refreshActivePersonalStore = async () => {},
+  refreshSeedPinClientAuth = async () => {},
   log = console,
 } = {}) {
-  const installed = []
-  const wrap = (method, label) => {
-    const original = identityManager?.[method]
-    if (typeof original !== 'function') return
-    const wrapped = async (...args) => {
-      const result = await original.apply(identityManager, args)
-      const activePublicKey = identityManager.getActivePublicKey?.()
-      if (activePublicKey) await refreshActivePersonalStore(activePublicKey)
-      await reconcileOwnedContentPublications({
-        ctx,
-        identityManager,
-        publicFeed,
-        log,
-      }).catch((err) => {
-        log.warn?.(`[Orchestrator] ${label} reconciliation failed:`, err?.message || err)
-      })
-      return result
-    }
-    identityManager[method] = wrapped
-    installed.push({ method, original, wrapped })
-  }
-  wrap('createIdentity', 'New identity')
-  wrap('recoverIdentity', 'Recovered identity')
-  return () => {
-    for (const { method, original, wrapped } of installed) {
-      if (identityManager[method] === wrapped) identityManager[method] = original
-    }
-  }
+  return installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async ({ label, reconcile }) => {
+      const activePublicKey = identityManager.getActivePublicKey?.() || null
+      let personalFailed = false
+      if (activePublicKey) {
+        try {
+          await refreshActivePersonalStore(activePublicKey)
+        } catch (error) {
+          personalFailed = true
+          log.warn?.(`[Orchestrator] ${label} personal store refresh failed:`, error?.message || error)
+        }
+      }
+      try {
+        await refreshSeedPinClientAuth({
+          failClosed: personalFailed || activePublicKey === null,
+        })
+      } catch (error) {
+        log.warn?.(`[Orchestrator] ${label} seed-pin auth refresh failed:`, error?.message || error)
+      }
+      if (reconcile) {
+        await reconcileOwnedContentPublications({
+          ctx,
+          identityManager,
+          publicFeed,
+          log,
+        }).catch((error) => {
+          log.warn?.(`[Orchestrator] ${label} reconciliation failed:`, error?.message || error)
+        })
+      }
+    },
+  })
 }
 
+export async function startBackendSeedPinBeforeDiscovery({
+  ctx,
+  identityManager,
+  publicFeed,
+  seedPin = {},
+  register = registerSeedPinProtocol,
+  resolveClientAuth = resolveSeedPinClientAuth,
+  createAdmission = createBackendSeedPinAdmission,
+} = {}) {
+  if (!publicFeed || typeof publicFeed.start !== 'function') {
+    throw new TypeError('publicFeed.start is required')
+  }
+  const enabled = seedPin?.enabled !== false
+  let registration = null
+  if (enabled) {
+    const clientAuthResolver = () => resolveClientAuth({ ctx, identityManager })
+    const admission = typeof seedPin?.admission === 'function'
+      ? seedPin.admission
+      : createAdmission({ identityManager })
+    const { enabled: _enabled, admission: _admission, ...registrationOptions } = seedPin || {}
+    registration = register(ctx, {
+      ...registrationOptions,
+      enabled: true,
+      admission,
+      resolveClientAuth: clientAuthResolver,
+    })
+    ctx.seedPinRegistration = registration
+    await registration?.ready
+    await registration?.refreshClientAuth?.()
+  }
+
+  const discovery = Promise.resolve()
+    .then(() => publicFeed.start())
+    .catch(async error => {
+      await registration?.unregister?.()
+      if (ctx?.seedPinRegistration === registration) ctx.seedPinRegistration = null
+      throw error
+    })
+  return { registration, discovery }
+}
 
 /**
  * Create and initialize the complete backend context.
@@ -373,6 +431,7 @@ export async function createBackendContext(config) {
     network = {},
     swarmOptions = {},
     peerScorer = null,
+    seedPin = {},
     ipcLog: _ipcLog
   } = config;
 
@@ -557,11 +616,12 @@ export async function createBackendContext(config) {
   // are persisted and re-applied on boot: delegate uploads to them and treat
   // them as durable offload anchors (ctx.trustedRelayKeys, read by api.js
   // getKnownDurableRelayKeys).
-  const linkedRelayKeys = relayLinkKeys(await loadRelayLinks(ctx.metaDb).catch(() => []))
-  ctx.trustedRelayKeys = Array.from(new Set([
-    ...(Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys : []),
-    ...linkedRelayKeys,
-  ].map((k) => String(k).toLowerCase()).filter((k) => /^[0-9a-f]{64}$/.test(k))))
+  ctx.refreshTrustedRelayKeys = async () => {
+    const persistedLinks = await loadRelayLinks(ctx.metaDb)
+    ctx.trustedRelayKeys = mergeTrustedRelayKeys(network.trustedRelayKeys, persistedLinks)
+    return ctx.trustedRelayKeys
+  }
+  await ctx.refreshTrustedRelayKeys()
   const configuredMirrorKeys = [
     ...(Array.isArray(network.blindPeerMirrors) ? network.blindPeerMirrors : []),
     ...ctx.trustedRelayKeys,
@@ -572,9 +632,8 @@ export async function createBackendContext(config) {
     enabled: network.blindPeering !== false,
     logger: { info: (...a) => console.log(...a), warn: (...a) => console.warn(...a) },
   })
-  // The upload-offload durability check reads the *live* mirror set via
-  // ctx.blindPeering (see api.js getKnownDurableRelayKeys) so a blind-peer full
-  // copy counts as a durable anchor — no static snapshot to go stale.
+  // Dialing/delegation can also use feed-discovered mirrors, but only the live
+  // canonical ctx.trustedRelayKeys union is durability authorization.
 
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
@@ -590,23 +649,15 @@ export async function createBackendContext(config) {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
     ctx.personal = null
-    try {
-      await personalManager.setActive(pk)
-    } catch (err) {
-      ipcLog('[orchestrator] personal store switch failed: ' + (err?.message || err))
-    }
-  }
-  const origSetActiveIdentity = identityManager.setActiveIdentity.bind(identityManager)
-  identityManager.setActiveIdentity = async (publicKey) => {
-    const result = await origSetActiveIdentity(publicKey)
-    await refreshActivePersonalStore(publicKey)
-    return result
+    await personalManager.setActive(pk)
   }
   installOwnedContentPublicationIdentityHooks({
     ctx,
     identityManager,
     publicFeed,
     refreshActivePersonalStore,
+    refreshSeedPinClientAuth: options =>
+      ctx.seedPinRegistration?.refreshClientAuth?.(options),
     log: console,
   })
 
@@ -684,13 +735,6 @@ export async function createBackendContext(config) {
       console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
     }
   });
-  // Start public feed discovery before slower local managers/API wiring so DHT
-  // lookup, socket setup, and Protomux feed opening overlap backend warm-up.
-  ipcLog('[orchestrator] publicFeed.start starting early')
-  await appendDebugLine('[orchestrator] publicFeed.start starting early')
-  const publicFeedStartPromise = publicFeed.start().catch((e) => {
-    console.error('[Orchestrator] Public feed start failed:', e?.message);
-  })
 
   ipcLog('[orchestrator] seedingManager.init starting')
   await appendDebugLine('[orchestrator] seedingManager.init starting')
@@ -754,18 +798,39 @@ export async function createBackendContext(config) {
     publicFeed.setSignedDescriptorProvider((driveKey) => api.getChannelSignedDescriptor(driveKey))
   }
 
-  // Re-sign channel root descriptors for locally owned channels in the
-  // background. Strict peers reject gossip entries whose descriptor is
-  // missing or bound to the identity key instead of the channel key.
-  void identityManager.ensureSignedChannelDescriptors?.()
-    .then((summary) => {
-      if (summary) ipcLog('[orchestrator] descriptor backfill: ' + JSON.stringify(summary))
-    })
-    .catch((err) => ipcLog('[orchestrator] descriptor backfill failed: ' + (err?.message || err)))
+  // Sender auth requires the stored descriptor proof, so backfill completes
+  // before seed-pin registration and discovery.
+  try {
+    const descriptorSummary = await identityManager.ensureSignedChannelDescriptors?.()
+    if (descriptorSummary) ipcLog('[orchestrator] descriptor backfill: ' + JSON.stringify(descriptorSummary))
+  } catch (err) {
+    ipcLog('[orchestrator] descriptor backfill failed: ' + (err?.message || err))
+  }
 
-  // The early start may still be restoring cached feed entries. Await it before
-  // exposing backend-ready so initial feed/status snapshots are consistent.
-  await publicFeedStartPromise
+  let seedPinStartup
+  try {
+    seedPinStartup = await startBackendSeedPinBeforeDiscovery({
+      ctx,
+      identityManager,
+      publicFeed,
+      seedPin,
+    })
+  } catch (error) {
+    await shutdownBackend(ctx).catch(() => {})
+    throw error
+  }
+  const seedPinRegistration = seedPinStartup.registration
+  const publicFeedStartPromise = seedPinStartup.discovery
+
+
+  // Registration is live before discovery. A discovery failure first tears down
+  // seed-pin, then the remaining runtime, so no mux/listener/store resources leak.
+  try {
+    await publicFeedStartPromise
+  } catch (error) {
+    await shutdownBackend(ctx).catch(() => {})
+    throw error
+  }
   await appendDebugLine('[orchestrator] publicFeed.start done')
   ipcLog('[orchestrator] publicFeed.start done')
 
@@ -779,6 +844,8 @@ export async function createBackendContext(config) {
     identityManager,
     personalManager,
     uploadManager,
+    seedPin: seedPinRegistration,
+    seedPinClients: seedPinRegistration?.clients || null,
     async initializeIdentityFromMnemonic(mnemonic) {
       const pk = await derivePrimaryKey(mnemonic);
       const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic);

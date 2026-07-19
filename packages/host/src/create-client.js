@@ -1,7 +1,7 @@
 /* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from './contracts.js'
 import DefaultHRPC from '@peartube/spec'
-import { APP_RPC_METHODS } from '@peartube/spec/app-rpc-adapter'
+import { createGeneratedAppRpcClient } from '@peartube/spec/app-rpc-adapter'
 
 import { PROTOCOL_EVENT_BINDINGS, PROTOCOL_EVENTS } from './event-map.js'
 
@@ -21,7 +21,6 @@ async function appendDebugLine(line) {
   } catch {}
 }
 
-const NAMESPACE_METHODS = APP_RPC_METHODS
 
 function createEmitter() {
   const listeners = new Map()
@@ -151,11 +150,6 @@ function createNetworkStatusCaller(rpc, ready, events) {
   }
 }
 
-function createNamespace(rpc, ready, definitions) {
-  return Object.fromEntries(
-    Object.entries(definitions).map(([name, methodName]) => [name, createMethodCaller(rpc, ready, methodName)])
-  )
-}
 
 function bindTransport(stream, events, emitHostError) {
   if (!stream || typeof stream.on !== 'function') return
@@ -320,6 +314,18 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     return readyPromise
   }
 
+  const appRpc = createGeneratedAppRpcClient({
+    rpc,
+    ready,
+    createMissingMethodError(methodName) {
+      return createHostError(
+        HOST_ERROR_CODES.CAPABILITY_UNAVAILABLE,
+        `Missing HRPC method: ${methodName}`
+      )
+    },
+    normalizeError: normalizeProtocolError
+  })
+
   return {
     stream,
     rpc,
@@ -333,13 +339,13 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
       getSwarmStatus: createNetworkStatusCaller(rpc, ready, events),
       getBlobServerPort: createMethodCaller(rpc, ready, 'getBlobServerPort')
     },
-    identity: createNamespace(rpc, ready, NAMESPACE_METHODS.identity),
-    feed: createNamespace(rpc, ready, NAMESPACE_METHODS.feed),
-    channel: createNamespace(rpc, ready, NAMESPACE_METHODS.channel),
-    video: createNamespace(rpc, ready, NAMESPACE_METHODS.video),
-    watch: createNamespace(rpc, ready, NAMESPACE_METHODS.watch),
-    transfer: createNamespace(rpc, ready, NAMESPACE_METHODS.transfer),
-    search: createNamespace(rpc, ready, NAMESPACE_METHODS.search),
-    shell: createNamespace(rpc, ready, NAMESPACE_METHODS.shell)
+    identity: appRpc.identity,
+    feed: appRpc.feed,
+    channel: appRpc.channel,
+    video: appRpc.video,
+    watch: appRpc.watch,
+    transfer: appRpc.transfer,
+    search: appRpc.search,
+    shell: appRpc.shell
   }
 }

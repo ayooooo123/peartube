@@ -9,7 +9,7 @@
  */
 
 import { createProtocolClient } from '@peartube/host';
-import { createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
+import { createChannelCatalogRpc, createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
@@ -268,6 +268,12 @@ function ensureRPC() {
   return rpc;
 }
 
+function ensureProtocolClient() {
+  const client = mainBridge.getClient();
+  if (!client) throw new Error('Platform RPC not initialized');
+  return client;
+}
+
 // Helper to normalize string or object params
 function normalizeParam<T extends string>(
   arg: T | { [K in T]: string },
@@ -288,6 +294,9 @@ function normalizeParam<T extends string>(
 export const rpc = {
   // Personal sync (playlists / history / settings / encryption)
   ...createPersonalRpc(ensureRPC),
+  // Structured channel catalog
+  ...createChannelCatalogRpc(ensureProtocolClient),
+
 
   // Identity
   async createIdentity(nameOrReq: string | { name: string }) {

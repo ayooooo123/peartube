@@ -1,4 +1,116 @@
+import type { PROTOCOL_VERSION } from '@peartube/host'
 import { PROTOCOL_EVENTS } from '@peartube/host/events'
+
+export type HostProtocolVersion = typeof PROTOCOL_VERSION
+
+export type ContentArtwork = {
+  role: string
+  blobId: string | null
+  blobsCoreKey: string | null
+  mimeType: string | null
+  remoteUrl: string | null
+}
+
+export type ChannelSource = {
+  provider: string
+  identityKey: string
+  sourceId: string | null
+  identityUrl: string | null
+  handle: string | null
+  displayName: string | null
+}
+
+export type ChannelCatalogProfile = {
+  channelKey: string
+  name: string
+  description: string | null
+  profileKind: string | null
+  mediaProvider: string | null
+  mediaId: string | null
+  originalLanguage: string | null
+  releaseDate: number
+  releaseYear: number
+  createdAt: number
+  updatedAt: number
+  sources: ChannelSource[] | null
+  artwork: ContentArtwork[] | null
+}
+
+export type ChannelCatalogGroupSummary = {
+  id: string
+  kind: string
+  title: string
+  itemCount: number
+  seasonNumber: number
+}
+
+export type ChannelCatalogItem = {
+  id: string
+  title: string
+  description: string | null
+  contentKind: string | null
+  channelKey: string
+  publicBeeKey: string | null
+  sourceProvider: string | null
+  sourceVideoId: string | null
+  identityUrl: string | null
+  sourceCreatorId: string | null
+  sourceCreatorUrl: string | null
+  sourcePublishedAt: number
+  mediaProvider: string | null
+  mediaId: string | null
+  seasonNumber: number
+  episodeNumber: number
+  originalAirDate: number
+  duration: number
+  blobId: string | null
+  blobsCoreKey: string | null
+  mimeType: string | null
+  thumbnailUrl: string | null
+  thumbnailBlobId: string | null
+  thumbnailBlobsCoreKey: string | null
+  thumbnailMimeType: string | null
+  provenanceVersion: string | null
+  contentFingerprint: string | null
+  publicationState: string | null
+}
+
+export type ContentCatalogRequest = {
+  channelKey: string
+  publicBeeKey?: string
+}
+
+export type ContentCatalogResponse = {
+  success: boolean
+  errorCode: string | null
+  error: string | null
+  profile: ChannelCatalogProfile | null
+  groups: ChannelCatalogGroupSummary[] | null
+}
+
+export type ContentItemsRequest = {
+  channelKey: string
+  publicBeeKey?: string
+  groupId: string
+  cursor?: string
+  limit?: number
+}
+
+type ContentItemsProtocolRequest = ContentItemsRequest & {
+  limitProvided?: boolean
+}
+
+export type ChannelCatalogPage = {
+  group: ChannelCatalogGroupSummary | null
+  items: ChannelCatalogItem[] | null
+  nextCursor: string | null
+}
+
+export type ContentItemsResponse = ChannelCatalogPage & {
+  success: boolean
+  errorCode: string | null
+  error: string | null
+}
 
 type BlobServerStatus = {
   blobServerPort: number | null
@@ -7,7 +119,7 @@ type BlobServerStatus = {
 }
 
 export type HostReadyData = BlobServerStatus & {
-  protocolVersion: 3
+  protocolVersion: HostProtocolVersion
 }
 
 export type HostErrorData = {
@@ -51,10 +163,10 @@ type PlatformRunner = {
     args?: string[]
   }): Promise<{
     stream: any
-    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 3 }>
+    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: HostProtocolVersion }>
     terminate(): Promise<void>
     onLifecycle(cb: (event:
-      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 3 } }
+      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: HostProtocolVersion } }
       | { type: 'host.error', code: string, message: string, retryable: boolean }
       | { type: 'transport.closed', reason?: string }
     ) => void): () => void
@@ -77,13 +189,21 @@ export type PlatformRunnerSession = {
   terminate(): Promise<void>
   onLifecycle(cb: (event: PlatformLifecycleEvent) => void): () => void
 }
+type ChannelCatalogMethods = {
+  getContentCatalog(request: ContentCatalogRequest): Promise<ContentCatalogResponse>
+  getContentItems(request: ContentItemsProtocolRequest): Promise<ContentItemsResponse>
+}
 
-export type ProtocolClientLike = {
+type ChannelCatalogProtocolClient = {
+  ready(): Promise<HostReadyData>
+  channel: Partial<ChannelCatalogMethods> & Record<string, (request?: unknown) => Promise<unknown>>
+}
+
+export type ProtocolClientLike = ChannelCatalogProtocolClient & {
   rpc: any
   events: {
     on(event: string, listener: (payload: any) => void): () => void
   }
-  ready(): Promise<HostReadyData>
   system?: {
     getSwarmStatus?(request?: any): Promise<NetworkStatusData>
   }
@@ -382,6 +502,28 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
 
     getRpc() {
       return client?.rpc ?? null
+    }
+  }
+}
+
+export function createChannelCatalogRpc(ensureClient: () => ChannelCatalogProtocolClient) {
+  return {
+    async getContentCatalog(request: ContentCatalogRequest): Promise<ContentCatalogResponse> {
+      const client = ensureClient()
+      await client.ready()
+      const channel = client.channel
+      if (!channel.getContentCatalog) throw new Error('Host protocol client does not expose channel.getContentCatalog')
+      return channel.getContentCatalog(request)
+    },
+    async getContentItems(request: ContentItemsRequest): Promise<ContentItemsResponse> {
+      const client = ensureClient()
+      await client.ready()
+      const channel = client.channel
+      if (!channel.getContentItems) throw new Error('Host protocol client does not expose channel.getContentItems')
+      const protocolRequest: ContentItemsProtocolRequest = Object.hasOwn(request, 'limit')
+        ? { ...request, limitProvided: true }
+        : request
+      return channel.getContentItems(protocolRequest)
     }
   }
 }

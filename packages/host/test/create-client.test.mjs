@@ -195,6 +195,92 @@ test('createProtocolClient exposes generated app RPC namespace methods', async (
   })
 })
 
+test('createProtocolClient catalog methods wait for ready and preserve request presence and structured errors', async (t) => {
+  FakeHRPC.instances.length = 0
+  let resolveStatus
+
+  class CatalogHRPC extends FakeHRPC {
+    constructor() {
+      super()
+      this.calls = []
+    }
+
+    getStatus() {
+      return new Promise((resolve) => {
+        resolveStatus = resolve
+      })
+    }
+
+    getContentCatalog(request) {
+      this.calls.push(['catalog', request])
+      return Promise.resolve({
+        success: true,
+        profile: { channelKey: request.channelKey, name: 'Catalog' },
+        groups: []
+      })
+    }
+
+    getContentItems(request) {
+      this.calls.push(['items', request])
+      if (request.cursor === 'invalid') {
+        return Promise.resolve({
+          success: false,
+          errorCode: 'INVALID_CURSOR',
+          error: 'Invalid catalog cursor',
+          items: []
+        })
+      }
+      return Promise.resolve({
+        success: true,
+        group: { id: request.groupId, kind: 'latest', title: 'Latest', itemCount: 0 },
+        items: []
+      })
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: CatalogHRPC
+  })
+  const rpc = FakeHRPC.instances[0]
+  const catalogRequest = { channelKey: 'abc' }
+  const explicitZeroRequest = { channelKey: 'abc', groupId: 'latest', limit: 0 }
+  const omittedLimitRequest = { channelKey: 'abc', publicBeeKey: 'def', groupId: 'latest' }
+
+  const catalogPromise = client.channel.getContentCatalog(catalogRequest)
+  const explicitZeroPromise = client.channel.getContentItems(explicitZeroRequest)
+  const omittedLimitPromise = client.channel.getContentItems(omittedLimitRequest)
+  await Promise.resolve()
+  t.alike(rpc.calls, [])
+
+  resolveStatus({
+    status: {
+      blobServerPort: 9999,
+      blobServerReady: true,
+      blobServerError: null,
+      protocolVersion: PROTOCOL_VERSION
+    }
+  })
+
+  t.is((await catalogPromise).success, true)
+  t.is((await explicitZeroPromise).success, true)
+  t.is((await omittedLimitPromise).success, true)
+  t.alike(rpc.calls, [
+    ['catalog', catalogRequest],
+    ['items', { ...explicitZeroRequest, limitProvided: true }],
+    ['items', omittedLimitRequest]
+  ])
+  t.alike(
+    await client.channel.getContentItems({ channelKey: 'abc', groupId: 'latest', cursor: 'invalid' }),
+    {
+      success: false,
+      errorCode: 'INVALID_CURSOR',
+      error: 'Invalid catalog cursor',
+      items: []
+    }
+  )
+})
+
 test('createProtocolClient forwards transcode progress events through the shared event map', async (t) => {
   FakeHRPC.instances.length = 0
   const progressEvents = []

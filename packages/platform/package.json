@@ -21,6 +21,7 @@
     "./ipc-json-framing": "./src/ipc-json-framing.js"
   },
   "scripts": {
+    "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

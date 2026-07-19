@@ -1,0 +1,26 @@
+{
+  "_type": "playlist",
+  "entries": [
+    {
+      "id": "vid1",
+      "title": "First Video",
+      "description": "An intro clip.",
+      "webpage_url": "https://www.youtube.com/watch?v=vid1",
+      "duration": 12,
+      "upload_date": "20260101",
+      "uploader": "Maker",
+      "channel_id": "UC123",
+      "channel_url": "https://www.youtube.com/channel/UC123",
+      "thumbnail": "https://img/vid1.jpg",
+      "ie_key": "Youtube"
+    },
+    {
+      "id": "vid2",
+      "title": "Second Video",
+      "url": "https://www.youtube.com/watch?v=vid2",
+      "duration": 34,
+      "uploader": "Maker",
+      "extractor_key": "Youtube"
+    }
+  ]
+}

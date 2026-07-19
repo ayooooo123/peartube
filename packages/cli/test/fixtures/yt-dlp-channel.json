@@ -1,0 +1,31 @@
+{
+  "_type": "playlist",
+  "id": "UC123",
+  "title": "Maker Channel",
+  "description": "Videos by Maker.",
+  "uploader": "Maker",
+  "uploader_id": "@maker",
+  "channel": "Maker",
+  "channel_id": "UC123",
+  "channel_url": "https://www.youtube.com/channel/UC123",
+  "webpage_url": "https://www.youtube.com/@maker",
+  "extractor_key": "YoutubeTab",
+  "thumbnails": [
+    { "url": "https://img/avatar.jpg", "id": "avatar", "width": 88 },
+    { "url": "https://img/banner.jpg", "id": "banner", "width": 2048 }
+  ],
+  "entries": [
+    {
+      "id": "vid1",
+      "title": "First Video",
+      "url": "https://www.youtube.com/watch?v=vid1",
+      "duration": 12
+    },
+    {
+      "id": "vid2",
+      "title": "Second Video",
+      "url": "https://www.youtube.com/watch?v=vid2",
+      "duration": 34
+    }
+  ]
+}

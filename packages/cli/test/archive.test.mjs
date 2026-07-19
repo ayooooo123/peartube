@@ -5,6 +5,8 @@ import { buildSourceId, buildWriterKeyName, classifySourceUrl } from '../src/arc
 import { ARCHIVE_STATUS, createArchiveState } from '../src/archive/state.js'
 import { createArchiver } from '../src/archive/index.js'
 import { announceArchiveChannel, createArchivePublisher } from '../src/archive/publisher.js'
+import { createYtDlpDownloader } from '../src/archive-manager.js'
+import { buildDownloadArgs } from '../src/media/yt-dlp.js'
 
 function makeFakeMetaDb() {
   const map = new Map()
@@ -725,4 +727,44 @@ test('createArchiver stop clears staggered initial poll timers', async (t) => {
   t.is(cleared.filter((timer) => timer.type === 'timeout').length, 2)
   for (const timer of scheduled) timer.fn()
   t.is(listed, 0)
+})
+
+test('createYtDlpDownloader builds the canonical download argv via the shared media module', async (t) => {
+  const spawned = []
+  const spawnFn = (bin, args) => {
+    spawned.push({ bin, args })
+    return {
+      stdout: { on (event, cb) { if (event === 'data') cb('/tmp/out/dir/Clip [abc].mp4\n') } },
+      stderr: { on () {} },
+      on (event, cb) { if (event === 'close') cb(0) }
+    }
+  }
+  const files = { '/tmp/out/dir/Clip [abc].info.json': JSON.stringify({ title: 'Clip', uploader: 'Maker', duration: 42 }) }
+  const fs = {
+    mkdirSync () {},
+    rmSync () {},
+    existsSync (path) { return path in files || path === '/tmp/out/dir/Clip [abc].mp4' },
+    readFileSync (path) { return files[path] || '{}' }
+  }
+  const downloader = createYtDlpDownloader({
+    bin: '/bin/yt-dlp',
+    outputDir: '/tmp/out',
+    format: 'bv*+ba/b',
+    ffmpegPath: '/opt/ffmpeg',
+    cookiesPath: '/data/cookies.txt',
+    spawnFn,
+    fs,
+    path: { join: (...parts) => parts.join('/') }
+  })
+  const result = await downloader.download({ id: 'dir', url: 'https://vimeo.com/9', title: 'Clip' })
+
+  t.alike(spawned[0].args, buildDownloadArgs({
+    format: 'bv*+ba/b',
+    outputTemplate: '/tmp/out/dir/%(title).200B [%(id)s].%(ext)s',
+    ffmpegPath: '/opt/ffmpeg',
+    cookiesPath: '/data/cookies.txt',
+    sourceUrl: 'https://vimeo.com/9'
+  }))
+  t.is(result.filePath, '/tmp/out/dir/Clip [abc].mp4')
+  t.is(result.mimeType, 'video/mp4')
 })

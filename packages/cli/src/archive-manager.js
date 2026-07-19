@@ -3,6 +3,13 @@ import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import { mkdirSync, rmSync, existsSync, readFileSync } from '#fs'
 import { join } from '#path'
+import {
+  runYtDlp,
+  parseReportedFilePath,
+  isSupportedVideoPath,
+  getVideoMimeType,
+  buildDownloadArgs
+} from './media/yt-dlp.js'
 
 const JOBS_KEY = 'relay-archive-jobs'
 const PRIVATE_INPUTS_KEY = 'relay-archive-job-inputs'
@@ -63,29 +70,6 @@ function buildInvidiousFallbackUrls(sourceUrl, instance) {
     `${normalizedInstance}/latest_version?id=${encoded}&itag=18&local=true`,
     `${normalizedInstance}/watch?v=${encoded}`
   ]
-}
-
-function parseReportedFilePath(stdout) {
-  const lines = String(stdout || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]
-    if (line === 'filepath') continue
-    if (line.startsWith('filepath ')) return line.slice('filepath '.length).trim()
-    return line
-  }
-  return null
-}
-
-function isSupportedArchiveVideoPath(filePath) {
-  return /\.(mp4|m4v|mov|webm|mkv)$/i.test(String(filePath || '').split('?')[0])
-}
-
-function getArchiveMimeType(filePath) {
-  const ext = String(filePath || '').split('?')[0].toLowerCase().split('.').pop()
-  if (ext === 'webm') return 'video/webm'
-  if (ext === 'mkv') return 'video/x-matroska'
-  if (ext === 'mov') return 'video/quicktime'
-  return 'video/mp4'
 }
 
 function sanitizeName(value) {
@@ -232,22 +216,15 @@ export function createYtDlpDownloader({
       const targetDir = path.join(outputDir, id)
       fs.mkdirSync(targetDir, { recursive: true })
       const outputTemplate = path.join(targetDir, '%(title).200B [%(id)s].%(ext)s')
-      const buildArgs = (extraArgs = [], sourceUrl = input.url) => {
-        const args = [
-          '--no-playlist',
-          '--restrict-filenames',
-          '--write-info-json',
-          '--print', 'after_move:filepath',
-          '-f', format,
-          '-o', outputTemplate
-        ]
-        if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath)
-        if (cookiesPath) args.push('--cookies', cookiesPath)
-        if (jsRuntime) args.push('--js-runtimes', jsRuntime)
-        if (Array.isArray(extraArgs) && extraArgs.length) args.push(...extraArgs)
-        args.push(sourceUrl)
-        return args
-      }
+      const buildArgs = (extraArgs = [], sourceUrl = input.url) => buildDownloadArgs({
+        format,
+        outputTemplate,
+        ffmpegPath,
+        cookiesPath,
+        jsRuntime,
+        extraArgs,
+        sourceUrl
+      })
 
       const invidiousFallbackUrls = buildInvidiousFallbackUrls(input.url, input.invidiousInstance)
       const attempts = [
@@ -261,22 +238,11 @@ export function createYtDlpDownloader({
       for (let attempt = 0; attempt < attempts.length; attempt += 1) {
         const args = buildArgs(attempts[attempt].args, attempts[attempt].url)
         try {
-          const result = await new Promise((resolve, reject) => {
-            const child = spawnFn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-            let out = ''
-            let err = ''
-            child.stdout?.on('data', (chunk) => { out += String(chunk) })
-            child.stderr?.on('data', (chunk) => { err += String(chunk) })
-            child.on('error', reject)
-            child.on('close', (code) => {
-              if (code === 0) resolve({ stdout: out, stderr: err })
-              else reject(new Error(`yt-dlp failed (${code}): ${err || out}`))
-            })
-          })
+          const result = await runYtDlp(bin, args, { spawnFn })
           stdout = result.stdout
           filePath = parseReportedFilePath(stdout)
           if (!filePath) throw new Error('yt-dlp did not report an output file')
-          if (!attempts[attempt].allowUnknownExtension && !isSupportedArchiveVideoPath(filePath)) {
+          if (!attempts[attempt].allowUnknownExtension && !isSupportedVideoPath(filePath)) {
             throw new Error(`yt-dlp reported unsupported archive output file: ${filePath}`)
           }
           break
@@ -330,7 +296,7 @@ export function createYtDlpDownloader({
         thumbnailUrl,
         thumbnailFile,
         creatorName,
-        mimeType: getArchiveMimeType(filePath),
+        mimeType: getVideoMimeType(filePath),
         cleanup() {
           try {
             fs.rmSync(targetDir, { recursive: true, force: true })

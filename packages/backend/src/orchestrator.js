@@ -11,6 +11,7 @@
 
 import { initializeStorage, isPlaybackActive, loadChannel, retainPublicBeeContentDiscovery, retainSwarmDiscovery } from './storage.js';
 import { PublicFeedManager } from './public-feed.js';
+import { createContentPublication } from './content-publication.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createBlindPeeringClient } from './blind-peering-client.js';
@@ -141,6 +142,211 @@ async function warmChannels(ctx, channelKeys, label) {
     }
   }
 }
+
+const OWNED_PUBLICATION_RECONCILER = Symbol('owned-content-publication-reconciler')
+
+function createOwnedPublicationReconciler({
+  ctx,
+  publicFeed,
+  log,
+  retryBaseMs,
+  retryMaxMs,
+}) {
+  const entries = new Map()
+  const timers = new Map()
+  const attempts = new Map()
+  const state = {
+    stopped: false,
+    publicFeed,
+    log,
+    retryBaseMs,
+    retryMaxMs,
+    removeStopHook: null,
+    async execute(entry) {
+      const pending = timers.get(entry.channelKey)
+      if (pending) {
+        clearTimeout(pending)
+        timers.delete(entry.channelKey)
+      }
+      try {
+        const result = await entry.publication.reconcileCanonicalClaims({
+          channelKey: entry.channelKey,
+          publicBeeKey: entry.channel.publicBee.keyHex,
+        })
+        attempts.delete(entry.channelKey)
+        return result
+      } catch (err) {
+        state.schedule(entry)
+        throw err
+      }
+    },
+    schedule(entry) {
+      if (state.stopped || timers.has(entry.channelKey)) return
+      const attempt = (attempts.get(entry.channelKey) || 0) + 1
+      attempts.set(entry.channelKey, attempt)
+      const delay = Math.min(
+        state.retryMaxMs,
+        state.retryBaseMs * (2 ** Math.min(attempt - 1, 16)),
+      )
+      const timer = setTimeout(async () => {
+        timers.delete(entry.channelKey)
+        if (state.stopped) return
+        try {
+          await state.execute(entry)
+        } catch (err) {
+          state.log.warn?.(
+            '[Orchestrator] Retried canonical reconciliation failed:',
+            entry.channelKey.slice(0, 16),
+            err?.message || err,
+          )
+        }
+      }, delay)
+      timer.unref?.()
+      timers.set(entry.channelKey, timer)
+    },
+    stop() {
+      if (state.stopped) return
+      state.stopped = true
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+      attempts.clear()
+      for (const entry of entries.values()) {
+        entry.publicBee?.setOnCanonicalClaimsSynchronized?.(null)
+      }
+      entries.clear()
+      if (ctx?.[OWNED_PUBLICATION_RECONCILER] === state) {
+        delete ctx[OWNED_PUBLICATION_RECONCILER]
+      }
+    },
+    entries,
+    timers,
+    attempts,
+  }
+  state.removeStopHook = publicFeed?.addStopHook?.(() => state.stop()) || null
+  return state
+}
+
+export async function reconcileOwnedContentPublications({
+  ctx,
+  identityManager,
+  publicFeed,
+  log = console,
+  retryBaseMs = 250,
+  retryMaxMs = 30000,
+} = {}) {
+  const summary = { checked: 0, reconciled: 0, deferred: 0, failed: 0 }
+  let coordinator = ctx?.[OWNED_PUBLICATION_RECONCILER]
+  if (!coordinator || coordinator.stopped || coordinator.publicFeed !== publicFeed) {
+    coordinator?.stop()
+    coordinator = createOwnedPublicationReconciler({
+      ctx,
+      publicFeed,
+      log,
+      retryBaseMs: Math.max(1, Number(retryBaseMs) || 250),
+      retryMaxMs: Math.max(1, Number(retryMaxMs) || 30000),
+    })
+    ctx[OWNED_PUBLICATION_RECONCILER] = coordinator
+  } else {
+    coordinator.log = log
+    coordinator.retryBaseMs = Math.max(1, Number(retryBaseMs) || coordinator.retryBaseMs)
+    coordinator.retryMaxMs = Math.max(
+      coordinator.retryBaseMs,
+      Number(retryMaxMs) || coordinator.retryMaxMs,
+    )
+  }
+
+  const identities = identityManager?.getIdentities?.() || []
+  const ownedKeys = Array.from(new Set(identities
+    .map((identity) => identity?.channelKey || identity?.driveKey)
+    .filter((key) => typeof key === 'string' && key.length > 0)
+    .map((key) => key.toLowerCase())))
+
+  for (const channelKey of ownedKeys) {
+    summary.checked++
+    const channel = ctx?.channels?.get?.(channelKey)
+    if (!channel?.publicBee) {
+      summary.failed++
+      log.warn?.('[Orchestrator] Owned-channel reconciliation skipped: channel unavailable', channelKey.slice(0, 16))
+      continue
+    }
+
+    let entry = coordinator.entries.get(channelKey)
+    if (!entry || entry.channel !== channel || entry.publicBee !== channel.publicBee) {
+      entry?.publicBee?.setOnCanonicalClaimsSynchronized?.(null)
+      entry = {
+        channelKey,
+        channel,
+        publicBee: channel.publicBee,
+        publication: createContentPublication({ channel, publicFeed }),
+        handler: null,
+      }
+      coordinator.entries.set(channelKey, entry)
+    }
+    entry.handler = async () => {
+      try {
+        await coordinator.execute(entry)
+      } catch (err) {
+        log.warn?.(
+          '[Orchestrator] Post-sync canonical reconciliation failed:',
+          channelKey.slice(0, 16),
+          err?.message || err,
+        )
+      }
+    }
+    channel.publicBee.setOnCanonicalClaimsSynchronized?.(entry.handler)
+
+    try {
+      const result = await coordinator.execute(entry)
+      if (result.status === 'deferred') summary.deferred++
+      else summary.reconciled++
+    } catch (err) {
+      summary.failed++
+      log.warn?.(
+        '[Orchestrator] Startup canonical reconciliation failed:',
+        channelKey.slice(0, 16),
+        err?.message || err,
+      )
+    }
+  }
+  return summary
+}
+export function installOwnedContentPublicationIdentityHooks({
+  ctx,
+  identityManager,
+  publicFeed,
+  refreshActivePersonalStore = async () => {},
+  log = console,
+} = {}) {
+  const installed = []
+  const wrap = (method, label) => {
+    const original = identityManager?.[method]
+    if (typeof original !== 'function') return
+    const wrapped = async (...args) => {
+      const result = await original.apply(identityManager, args)
+      const activePublicKey = identityManager.getActivePublicKey?.()
+      if (activePublicKey) await refreshActivePersonalStore(activePublicKey)
+      await reconcileOwnedContentPublications({
+        ctx,
+        identityManager,
+        publicFeed,
+        log,
+      }).catch((err) => {
+        log.warn?.(`[Orchestrator] ${label} reconciliation failed:`, err?.message || err)
+      })
+      return result
+    }
+    identityManager[method] = wrapped
+    installed.push({ method, original, wrapped })
+  }
+  wrap('createIdentity', 'New identity')
+  wrap('recoverIdentity', 'Recovered identity')
+  return () => {
+    for (const { method, original, wrapped } of installed) {
+      if (identityManager[method] === wrapped) identityManager[method] = original
+    }
+  }
+}
+
 
 /**
  * Create and initialize the complete backend context.
@@ -396,12 +602,13 @@ export async function createBackendContext(config) {
     await refreshActivePersonalStore(publicKey)
     return result
   }
-  const origCreateIdentity = identityManager.createIdentity.bind(identityManager)
-  identityManager.createIdentity = async (...args) => {
-    const result = await origCreateIdentity(...args)
-    await refreshActivePersonalStore(result?.publicKey)
-    return result
-  }
+  installOwnedContentPublicationIdentityHooks({
+    ctx,
+    identityManager,
+    publicFeed,
+    refreshActivePersonalStore,
+    log: console,
+  })
 
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
@@ -617,6 +824,18 @@ export async function createBackendContext(config) {
         await identityManager.loadChannelDrives()
       } catch (e) {
         console.error('[Orchestrator] Identity background init error:', e?.message)
+      }
+      const publicationReconciliation = await reconcileOwnedContentPublications({
+        ctx,
+        identityManager,
+        publicFeed,
+        log: console,
+      }).catch((err) => {
+        console.warn('[Orchestrator] Owned-channel startup reconciliation failed:', err?.message || err)
+        return null
+      })
+      if (publicationReconciliation) {
+        ipcLog('[orchestrator] canonical reconciliation: ' + JSON.stringify(publicationReconciliation))
       }
 
       // Start public feed discovery

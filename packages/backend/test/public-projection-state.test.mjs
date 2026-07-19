@@ -1787,3 +1787,104 @@ test('storage fails closed when persisted projection mode cannot be resolved', a
   t.is(ctx.channels.size, 0, 'an unresolved mode never opens or caches a channel')
 })
 
+test('canonical validation indexes a large claim set once without per-video filters', async (t) => {
+  const count = 2000
+  const claims = Array.from({ length: count }, (_, index) => ({
+    identityKey: `identity-${index}`,
+    claimantId: `claimant-${index}`,
+    videoId: `video-${index}`,
+    state: 'published',
+  }))
+  const videos = claims.map((claim) => ({
+    id: claim.videoId,
+    importIdentityKey: claim.identityKey,
+    importClaimantId: claim.claimantId,
+  }))
+  let filterCalls = 0
+  Object.defineProperty(claims, 'filter', {
+    value(...args) {
+      filterCalls++
+      return Array.prototype.filter.apply(this, args)
+    },
+  })
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee._enqueueSerialized = (_field, operation) => operation()
+  publicBee._syncFromChannelUnlocked = async () => ({
+    claims,
+    blockAllClaimPromotions: false,
+  })
+  publicBee.listVideosWithStatus = async () => ({ status: 'authoritative', videos })
+  publicBee._setCanonicalReconciliationRevisionUnlocked = async () => true
+
+  const result = await publicBee.reconcileCanonicalClaims({}, {
+    revisionForVideos(listing) {
+      t.is(listing.length, count)
+      return `sha256:${'c'.repeat(64)}`
+    },
+  })
+  t.is(result.status, 'authoritative')
+  t.is(filterCalls, 0, 'claim evidence is grouped once instead of filtered for every video')
+})
+
+test('canonical reconciliation revision fails closed when partial claims do not prove the visible contender', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    const identityKey = 'youtube:partial-canonical-revision'
+    const claimantA = 'a'.repeat(64)
+    const claimantB = 'b'.repeat(64)
+    const videos = [
+      {
+        id: 'partial-a',
+        title: 'Established contender',
+        uploadedAt: 1,
+        publicationState: 'durabilityVerified',
+        importIdentityKey: identityKey,
+        importClaimantId: claimantA,
+      },
+      {
+        id: 'partial-b',
+        title: 'Observed contender',
+        uploadedAt: 2,
+        publicationState: 'durabilityVerified',
+        importIdentityKey: identityKey,
+        importClaimantId: claimantB,
+      },
+    ]
+    await publicBee.putVideo(videos[0].id, videos[0])
+    const channel = {
+      keyHex: '44'.repeat(32),
+      async getMetadata() { return null },
+      async getChannelProfile() { return null },
+      async listChannelSources() { return [] },
+      async listChannelArtwork() { return [] },
+      async listVideos() { return videos },
+      async listImportClaims() {
+        return [{
+          identityKey,
+          claimantId: claimantB,
+          videoId: videos[1].id,
+          state: 'published',
+        }]
+      },
+    }
+
+    const result = await publicBee.reconcileCanonicalClaims(channel, {
+      revisionForVideos() {
+        return `sha256:${'c'.repeat(64)}`
+      },
+    })
+    t.is(result.status, 'uncertain')
+    t.absent(await publicBee.getCanonicalReconciliationRevision())
+    t.alike(ids(await publicBee.listVideos()), ['partial-a'])
+    publicBee.setOnCanonicalClaimsSynchronized(async () => {
+      throw new Error('simulated feed reconciliation failure')
+    })
+    let syncBlocked = false
+    try {
+      await publicBee.syncFromChannel(channel, { throwOnError: true })
+    } catch {
+      syncBlocked = true
+    }
+    t.is(syncBlocked, false, 'feed reconciliation failure cannot fail the owned-channel sync')
+    publicBee.setOnCanonicalClaimsSynchronized(null)
+  })
+})

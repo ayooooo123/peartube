@@ -129,6 +129,7 @@ const CONTENT_STORAGE_DEFAULTS = {
 }
 const ROOT_DESCRIPTOR_KEY = b4a.from('channel/root')
 const PROJECTION_FORMAT_KEY = b4a.from('channel/projection-format')
+const CANONICAL_RECONCILIATION_REVISION_KEY = b4a.from('channel/canonical-reconciliation-revision')
 const PROJECTION_FORMATS = new Set(['legacy', 'modern'])
 function projectionClaimKey(videoId) {
   return b4a.from(`channel/projection-claim/${b4a.toString(b4a.from(videoId), 'hex')}`)
@@ -266,6 +267,7 @@ export class PublicChannelBee extends ReadyResource {
     this.bee = null
     this.core = null
     this._explicitlyDeletedVideoIds = new Set()
+    this._onCanonicalClaimsSynchronized = null
 
     this.ready().catch(() => {})
   }
@@ -314,7 +316,12 @@ export class PublicChannelBee extends ReadyResource {
   }
 
   async _close() {
+    this._onCanonicalClaimsSynchronized = null
     if (this.db) await this.db.close()
+  }
+
+  setOnCanonicalClaimsSynchronized(callback) {
+    this._onCanonicalClaimsSynchronized = typeof callback === 'function' ? callback : null
   }
 
   get key() {
@@ -426,6 +433,23 @@ export class PublicChannelBee extends ReadyResource {
       return null
     }
   }
+  async getVerifiedRootDescriptor({ channelKey, publicBeeKey } = {}) {
+    const signed = await this.getRootDescriptor()
+    const verification = await verifySignedChannelRootDescriptor(signed)
+    if (!verification?.valid) {
+      throw new Error(`Public projection root descriptor is invalid: ${verification?.error || 'missing descriptor'}`)
+    }
+    const expectedChannelKey = typeof channelKey === 'string' ? channelKey.toLowerCase() : ''
+    const expectedPublicBeeKey = typeof publicBeeKey === 'string' ? publicBeeKey.toLowerCase() : ''
+    if (verification.descriptor?.channelId !== expectedChannelKey) {
+      throw new Error('Public projection root descriptor channel binding mismatch')
+    }
+    if (verification.descriptor?.metadataKey !== expectedPublicBeeKey) {
+      throw new Error('Public projection root descriptor metadata binding mismatch')
+    }
+    return { ...signed, descriptor: verification.descriptor }
+  }
+
 
   async getProjectionFormat() {
     await this.waitForSync(1500)
@@ -1229,10 +1253,18 @@ export class PublicChannelBee extends ReadyResource {
   }
 
   async syncFromChannel(channel, options = {}) {
-    return this._enqueueSerialized(
+    const result = await this._enqueueSerialized(
       '_projectionWriteTail',
       () => this._syncFromChannelUnlocked(channel, options)
     )
+    if (this._onCanonicalClaimsSynchronized && options.notifyCanonicalSync !== false) {
+      try {
+        await this._onCanonicalClaimsSynchronized(channel)
+      } catch (err) {
+        console.warn('[PublicBee] Post-sync canonical reconciliation failed:', err?.message || err)
+      }
+    }
+    return result
   }
 
   async _syncFromChannelUnlocked(channel, { throwOnError = false } = {}) {
@@ -1332,10 +1364,84 @@ export class PublicChannelBee extends ReadyResource {
       })
       await this._suppressResolvedLosers(videos, publicCandidates, groupedClaims, claimWinners)
       console.log('[PublicBee] Synced from channel:', channel.keyHex?.slice(0, 16))
+      return { claims, blockAllClaimPromotions }
     } catch (err) {
       console.error('[PublicBee] Sync error:', err.message)
       if (throwOnError) throw err
     }
+  }
+
+  async getCanonicalReconciliationRevision() {
+    await this.waitForSync(1500)
+    if (!this.db?.db || typeof this.db.db.get !== 'function') return null
+    const node = await this.db.db.get(CANONICAL_RECONCILIATION_REVISION_KEY)
+    if (!node?.value) return null
+    const revision = b4a.toString(node.value)
+    return /^sha256:[0-9a-f]{64}$/.test(revision) ? revision : null
+  }
+
+  async _setCanonicalReconciliationRevisionUnlocked(revision) {
+    if (!this.writable) throw new Error('Not writable')
+    if (!this.db?.db) throw new Error('Public HyperDB not ready')
+    if (!/^sha256:[0-9a-f]{64}$/.test(revision || '')) {
+      throw new Error('Canonical reconciliation revision must be a lowercase SHA-256 revision')
+    }
+    const current = await this.getCanonicalReconciliationRevision()
+    if (current === revision) return false
+    await this.db.db.put(CANONICAL_RECONCILIATION_REVISION_KEY, b4a.from(revision))
+    this.db.update?.()
+    return true
+  }
+
+  async reconcileCanonicalClaims(channel, { revisionForVideos } = {}) {
+    if (typeof revisionForVideos !== 'function') {
+      throw new Error('revisionForVideos must be a function')
+    }
+    return this._enqueueSerialized('_projectionWriteTail', async () => {
+      const evidence = await this._syncFromChannelUnlocked(channel, { throwOnError: true })
+      const listing = await this.listVideosWithStatus()
+      let claimsAuthoritative = Boolean(evidence) && evidence.blockAllClaimPromotions !== true
+      const claimsByIdentity = groupClaimsByIdentity(evidence?.claims || [])
+      const visibleByIdentity = new Set()
+      for (const video of listing.videos || []) {
+        const hasIdentity = typeof video?.importIdentityKey === 'string' && video.importIdentityKey.length > 0
+        const hasClaimant = typeof video?.importClaimantId === 'string' && video.importClaimantId.length > 0
+        if (hasIdentity !== hasClaimant) {
+          claimsAuthoritative = false
+          continue
+        }
+        if (!hasIdentity) continue
+        if (visibleByIdentity.has(video.importIdentityKey)) {
+          claimsAuthoritative = false
+          continue
+        }
+        visibleByIdentity.add(video.importIdentityKey)
+        const winner = resolveClaimWinner(claimsByIdentity.get(video.importIdentityKey) || [])
+        if (
+          !winner ||
+          winner.claimantId !== video.importClaimantId ||
+          winner.videoId !== video.id
+        ) {
+          claimsAuthoritative = false
+        }
+      }
+      if (listing.status !== 'authoritative' || !claimsAuthoritative) {
+        return {
+          status: 'uncertain',
+          videos: listing.videos || [],
+          revision: await this.getCanonicalReconciliationRevision(),
+          revisionChanged: false
+        }
+      }
+      const revision = revisionForVideos(listing.videos)
+      const revisionChanged = await this._setCanonicalReconciliationRevisionUnlocked(revision)
+      return {
+        status: 'authoritative',
+        videos: listing.videos,
+        revision,
+        revisionChanged
+      }
+    })
   }
 
   async activatePublicProjection(options = {}) {

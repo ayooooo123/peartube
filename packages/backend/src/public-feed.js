@@ -33,6 +33,7 @@ const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
 const PUBLIC_FEED_RELAY_CATALOG_KEY = 'public-feed-relay-catalog-v1'
 const PUBLIC_FEED_HIDDEN_CHANNELS_KEY = 'hidden-channels-v1'
+const PUBLIC_FEED_CHANNEL_SNAPSHOTS_KEY = 'public-feed-channel-snapshots-v1'
 const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
 const NETWORK_TOPIC_HEX = b4a.toString(NETWORK_TOPIC, 'hex')
 
@@ -143,6 +144,8 @@ export class PublicFeed {
     this._persistMaxEntries = Math.max(1, Number(options.maxFeedEntries || 500) || 500)
     /** @type {boolean} */
     this.requireSignedPeerEntries = options.requireSignedPeerEntries !== false
+    this._channelSnapshotWriteTail = Promise.resolve()
+    this._stopHooks = new Set()
 
     /** @type {number} */
     this.maxPeers = Math.max(1, Number(options.maxDiscoveredPeers || options.maxPeers || this.swarm?.maxPeers || 48) || 48)
@@ -514,10 +517,17 @@ export class PublicFeed {
       version: Number(entry.version || 0) || 0,
     }
     if (entry.channelName) serialized.channelName = entry.channelName
-    if (Number(entry.videoCount || 0) > 0) serialized.videoCount = Number(entry.videoCount || 0)
-    if (Number(entry.manifestUpdatedAt || 0) > 0) serialized.manifestUpdatedAt = Number(entry.manifestUpdatedAt || 0)
+    const reconciliationBound = /^sha256:[0-9a-f]{64}$/.test(entry.reconciliationRevision || '')
     const previewVideos = this._sanitizePreviewVideos(entry.previewVideos)
-    if (previewVideos.length > 0) serialized.previewVideos = previewVideos
+    if (reconciliationBound) {
+      serialized.reconciliationRevision = entry.reconciliationRevision
+      serialized.videoCount = Number(entry.videoCount || 0) || 0
+      serialized.previewVideos = previewVideos
+    } else {
+      if (Number(entry.videoCount || 0) > 0) serialized.videoCount = Number(entry.videoCount || 0)
+      if (previewVideos.length > 0) serialized.previewVideos = previewVideos
+    }
+    if (Number(entry.manifestUpdatedAt || 0) > 0) serialized.manifestUpdatedAt = Number(entry.manifestUpdatedAt || 0)
     const previewVideosHash = entry.previewVideosHash || hashPreviewVideos(previewVideos)
     if (previewVideosHash) serialized.previewVideosHash = previewVideosHash
     // liveUpdatedAt is always serialized once set so peers can apply a
@@ -587,23 +597,43 @@ export class PublicFeed {
       entry.restoredFrom = snapshot.restoredFrom
       changed = true
     }
-    if (Number.isFinite(snapshot.videoCount) && Number(snapshot.videoCount) !== Number(entry.videoCount || 0)) {
-      entry.videoCount = Number(snapshot.videoCount)
-      changed = true
-    }
 
     const nextManifestUpdatedAt = Number(snapshot.manifestUpdatedAt || 0) || 0
     const incomingPreviewVideos = Array.isArray(snapshot.previewVideos)
       ? this._sanitizePreviewVideos(snapshot.previewVideos)
       : null
+    const suppliedReconciliationRevision = /^sha256:[0-9a-f]{64}$/.test(snapshot.reconciliationRevision || '')
+      ? snapshot.reconciliationRevision
+      : null
+    const revisionSnapshotComplete = Boolean(
+      suppliedReconciliationRevision &&
+      Array.isArray(snapshot.previewVideos) &&
+      Number.isFinite(snapshot.videoCount))
+    const nextReconciliationRevision = revisionSnapshotComplete
+      ? suppliedReconciliationRevision
+      : null
+    const reconciliationChanged = Boolean(
+      nextReconciliationRevision &&
+      nextReconciliationRevision !== entry.reconciliationRevision)
+    const revisionAllowsManifest = !entry.reconciliationRevision || Boolean(nextReconciliationRevision)
     const canApplyManifest =
+      revisionAllowsManifest &&
       incomingPreviewVideos &&
       (
+        reconciliationChanged ||
         nextManifestUpdatedAt === 0 ||
         Number(entry.manifestUpdatedAt || 0) === 0 ||
         nextManifestUpdatedAt >= Number(entry.manifestUpdatedAt || 0)
       )
 
+    if (
+      revisionAllowsManifest &&
+      Number.isFinite(snapshot.videoCount) &&
+      Number(snapshot.videoCount) !== Number(entry.videoCount || 0)
+    ) {
+      entry.videoCount = Number(snapshot.videoCount)
+      changed = true
+    }
     if (canApplyManifest) {
       const currentPreviewVideosHash = entry.previewVideosHash || hashPreviewVideos(this._sanitizePreviewVideos(entry.previewVideos))
       const nextPreviewVideosHash = hashPreviewVideos(incomingPreviewVideos)
@@ -619,6 +649,10 @@ export class PublicFeed {
         entry.manifestUpdatedAt = Date.now()
         changed = true
       }
+    }
+    if (nextReconciliationRevision && nextReconciliationRevision !== entry.reconciliationRevision) {
+      entry.reconciliationRevision = nextReconciliationRevision
+      changed = true
     }
 
     // Live announcements are last-writer-wins on the broadcaster's clock:
@@ -1509,6 +1543,20 @@ export class PublicFeed {
       }
     }
 
+    // Canonical publication snapshots are restored last so their deterministic
+    // winner set supersedes older append-style cache and published-channel rows.
+    if (this.metaDb) {
+      try {
+        const snapshots = await this._readChannelSnapshotCatalog()
+        for (const snapshot of snapshots) this._applyChannelSnapshot(snapshot)
+        if (snapshots.length > 0) {
+          console.log('[PublicFeed] Restored', snapshots.length, 'stable channel snapshots')
+        }
+      } catch (err) {
+        console.log('[PublicFeed] Stable channel snapshot restore skipped:', err?.message)
+      }
+    }
+
     // If we loaded any entries from disk, notify listeners so UIs don't stay empty until the first peer message arrives.
     if (this.entries.size > 0) {
       console.log('[PublicFeed] Notifying listeners of', this.entries.size, 'restored entries');
@@ -1537,8 +1585,18 @@ export class PublicFeed {
    * Stop public feed discovery (best-effort).
    * Not currently used by the app, but helpful for tests / future lifecycle hooks.
    */
+  addStopHook(callback) {
+    if (typeof callback !== 'function') throw new Error('PublicFeed stop hook must be a function')
+    this._stopHooks.add(callback)
+    return () => this._stopHooks.delete(callback)
+  }
+
   stop() {
     this.started = false;
+    for (const hook of this._stopHooks) {
+      try { hook() } catch {}
+    }
+    this._stopHooks.clear()
     this.wiredConnections.clear();
     this.peerChannels.clear();
     this.peerFeedKeys.clear();
@@ -1607,6 +1665,9 @@ export class PublicFeed {
           channelName: e.channelName || null,
           videoCount: Number(e.videoCount || 0) || 0,
           manifestUpdatedAt: Number(e.manifestUpdatedAt || 0) || 0,
+          reconciliationRevision: /^sha256:[0-9a-f]{64}$/.test(e.reconciliationRevision || '')
+            ? e.reconciliationRevision
+            : null,
           previewVideos: this._sanitizePreviewVideos(e.previewVideos),
           signedDescriptor: this._normalizeSignedDescriptor(e.signedDescriptor),
           signedDescriptorVerified: e.signedDescriptorVerified === true,
@@ -2144,6 +2205,146 @@ export class PublicFeed {
     return true;
   }
 
+  _normalizeChannelSnapshot(snapshot = {}) {
+    const channelKey = typeof snapshot.channelKey === 'string'
+      ? snapshot.channelKey.toLowerCase()
+      : ''
+    const publicBeeKey = typeof snapshot.publicBeeKey === 'string'
+      ? snapshot.publicBeeKey.toLowerCase()
+      : ''
+    const revision = typeof snapshot.revision === 'string'
+      ? snapshot.revision.toLowerCase()
+      : ''
+    if (!/^[0-9a-f]{64}$/.test(channelKey)) throw new Error('Stable feed snapshot channelKey is invalid')
+    if (!/^[0-9a-f]{64}$/.test(publicBeeKey)) throw new Error('Stable feed snapshot publicBeeKey is invalid')
+    if (!/^sha256:[0-9a-f]{64}$/.test(revision)) throw new Error('Stable feed snapshot revision is invalid')
+    const previewVideos = this._sanitizePreviewVideos(snapshot.previewVideos)
+    const videoIds = Array.isArray(snapshot.videoIds)
+      ? Array.from(new Set(snapshot.videoIds
+        .filter((videoId) => typeof videoId === 'string' && videoId.length > 0)))
+        .sort()
+      : []
+    const normalized = {
+      channelKey,
+      publicBeeKey,
+      revision,
+      channelName: typeof snapshot.channelName === 'string' && snapshot.channelName
+        ? snapshot.channelName
+        : null,
+      videoCount: Number.isFinite(snapshot.videoCount)
+        ? Math.max(0, Number(snapshot.videoCount))
+        : previewVideos.length,
+      manifestUpdatedAt: Number(snapshot.manifestUpdatedAt || 0) || 0,
+      previewVideos,
+      videoIds,
+    }
+    const signedDescriptor = this._normalizeSignedDescriptor(snapshot.signedDescriptor)
+    if (signedDescriptor) normalized.signedDescriptor = signedDescriptor
+    return normalized
+  }
+
+  async _readChannelSnapshotCatalog() {
+    if (!this.metaDb) return []
+    const stored = await this.metaDb.get(PUBLIC_FEED_CHANNEL_SNAPSHOTS_KEY)
+    const entries = Array.isArray(stored?.value?.entries) ? stored.value.entries : []
+    const snapshots = []
+    for (const entry of entries) {
+      try {
+        snapshots.push(this._normalizeChannelSnapshot(entry))
+      } catch {
+        // Ignore malformed historical entries without discarding valid peers.
+      }
+    }
+    return snapshots
+  }
+
+  _applyChannelSnapshot(snapshot) {
+    const normalized = this._normalizeChannelSnapshot(snapshot)
+    const feedSnapshot = {
+      ...normalized,
+      driveKey: normalized.channelKey,
+      relayRole: 'publisher',
+      relayServing: true,
+      reconciliationRevision: normalized.revision,
+    }
+    const added = this.addEntry(
+      normalized.channelKey,
+      'local',
+      normalized.publicBeeKey,
+      feedSnapshot,
+    )
+    const updated = !added && this._applyEntrySnapshot(normalized.channelKey, feedSnapshot)
+    const entry = this.entries.get(normalized.channelKey)
+    if (entry) {
+      entry.source = 'local'
+      entry.peerCount = Math.max(1, Number(entry.peerCount || 0))
+      entry.reconciliationRevision = normalized.revision
+    }
+    this.publishedChannels.add(normalized.channelKey)
+    return added || updated
+  }
+
+  async getChannelSnapshot(channelKey, publicBeeKey) {
+    const identity = this._normalizeChannelSnapshot({
+      channelKey,
+      publicBeeKey,
+      revision: `sha256:${'0'.repeat(64)}`,
+      previewVideos: [],
+    })
+    const snapshots = await this._readChannelSnapshotCatalog()
+    return snapshots.find((snapshot) =>
+      snapshot.channelKey === identity.channelKey &&
+      snapshot.publicBeeKey === identity.publicBeeKey) || null
+  }
+
+  async getChannelSnapshotRevision(channelKey, publicBeeKey) {
+    const identity = this._normalizeChannelSnapshot({
+      channelKey,
+      publicBeeKey,
+      revision: `sha256:${'0'.repeat(64)}`,
+      previewVideos: [],
+    })
+    return (await this.getChannelSnapshot(identity.channelKey, identity.publicBeeKey))?.revision || null
+  }
+
+  async upsertChannelSnapshot(snapshot = {}) {
+    const normalized = this._normalizeChannelSnapshot(snapshot)
+    const operation = this._channelSnapshotWriteTail.then(async () => {
+      if (!this.metaDb) throw new Error('Stable feed snapshot persistence is unavailable')
+      const snapshots = await this._readChannelSnapshotCatalog()
+      const index = snapshots.findIndex((candidate) =>
+        candidate.channelKey === normalized.channelKey &&
+        candidate.publicBeeKey === normalized.publicBeeKey)
+      const previous = index >= 0 ? snapshots[index] : null
+      const changed = JSON.stringify(previous) !== JSON.stringify(normalized)
+      if (changed) {
+        if (index >= 0) snapshots[index] = normalized
+        else snapshots.push(normalized)
+        snapshots.sort((left, right) =>
+          left.channelKey.localeCompare(right.channelKey) ||
+          left.publicBeeKey.localeCompare(right.publicBeeKey))
+        await this.metaDb.put(PUBLIC_FEED_CHANNEL_SNAPSHOTS_KEY, {
+          version: 1,
+          entries: snapshots,
+        })
+      }
+
+      const memoryChanged = this._applyChannelSnapshot(normalized)
+      if (changed || memoryChanged) this.onFeedUpdate?.()
+      if (changed) {
+        this.broadcastSubmitChannel(
+          normalized.channelKey,
+          null,
+          normalized.publicBeeKey,
+          this._serializeEntry(this.entries.get(normalized.channelKey)),
+        )
+      }
+      return { changed, snapshot: normalized }
+    })
+    this._channelSnapshotWriteTail = operation.catch(() => {})
+    return operation
+  }
+
   /**
    * Submit a channel to the public feed
    * @param {string} driveKey - The Autobase channel key
@@ -2367,6 +2568,9 @@ export class PublicFeed {
       channelName: snapshot?.channelName || null,
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
+      reconciliationRevision: /^sha256:[0-9a-f]{64}$/.test(snapshot?.reconciliationRevision || '')
+        ? snapshot.reconciliationRevision
+        : null,
       previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
       liveUpdatedAt: Number(snapshot?.liveUpdatedAt || 0) || 0,
       liveStreams: this._sanitizeLiveStreams(snapshot?.liveStreams),

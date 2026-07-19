@@ -1,0 +1,25 @@
+{
+  "id": 3572,
+  "season_number": 1,
+  "name": "Season 1",
+  "episodes": [
+    {
+      "id": 62085,
+      "episode_number": 2,
+      "season_number": 1,
+      "name": "Cat's in the Bag...",
+      "overview": "The aftermath of the first cook.",
+      "air_date": "2008-01-27",
+      "still_path": "/still-102.jpg"
+    },
+    {
+      "id": 62089,
+      "episode_number": 1,
+      "season_number": 1,
+      "name": "Pilot",
+      "overview": "Walter White starts cooking.",
+      "air_date": "2008-01-20",
+      "still_path": "/still-101.jpg"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": 1396,
+  "name": "Breaking Bad",
+  "overview": "A high school chemistry teacher turned methamphetamine producer.",
+  "first_air_date": "2008-01-20",
+  "poster_path": "/poster-bb.jpg",
+  "backdrop_path": "/backdrop-bb.jpg",
+  "original_language": "en",
+  "seasons": [
+    { "season_number": 0, "name": "Specials", "episode_count": 3, "air_date": "2009-02-17" },
+    { "season_number": 2, "name": "Season 2", "episode_count": 13, "air_date": "2009-03-08" },
+    { "season_number": 1, "name": "Season 1", "episode_count": 7, "air_date": "2008-01-20" }
+  ]
+}

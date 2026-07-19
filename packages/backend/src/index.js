@@ -29,7 +29,13 @@ export { VideoStatsTracker } from './video-stats.js';
 export { SeedingManager } from './seeding.js';
 
 // API - Shared backend methods
-export { createApi } from './api.js';
+export { assessDurableManifest, createApi } from './api.js';
+export {
+  canonicalDurabilityRefKey,
+  canonicalizeDurabilityRefs,
+  evaluateDurabilityPolicy,
+  intersectFullCopyHolders
+} from './durability/aggregate-assessment.js';
 
 // Identity Management
 export {

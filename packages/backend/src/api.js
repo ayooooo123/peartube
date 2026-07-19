@@ -20,7 +20,11 @@ import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, par
 import { encodeIndexKey } from './index-encoder.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
-import { peerHasFullRange, collectFullCopyPeers, assessOffloadEligibility } from './upload-offload.js'
+import { DEFAULT_OFFLOAD_POLICY, peerHasFullRange } from './upload-offload.js'
+import {
+  canonicalizeDurabilityRefs,
+  evaluateDurabilityPolicy
+} from './durability/aggregate-assessment.js'
 import {
   compareSignedChannelRootDescriptors,
   verifySignedChannelRootDescriptor
@@ -67,6 +71,156 @@ function extractPeerKeyHex(peer) {
     return /^[a-f0-9]{64}$/i.test(hex) ? hex.toLowerCase() : null
   } catch {
     return null
+  }
+}
+
+const MAX_DURABILITY_REFS = 256
+const MAX_DURABILITY_PEERS_PER_CORE = 1024
+
+function failClosedDurabilityAssessment(error = null) {
+  return {
+    eligible: false,
+    trusted: [],
+    paired: [],
+    ordinary: [],
+    status: error === null ? 'ok' : 'error',
+    error
+  }
+}
+
+function completedDurabilityAssessment(assessment) {
+  return { ...assessment, status: 'ok', error: null }
+}
+
+function durabilityErrorMessage(error) {
+  return error?.message || String(error || 'assess-failed')
+}
+
+function authenticatedPeerKeyHex(peer) {
+  const key = peer?.remotePublicKey
+  const isBytes =
+    key instanceof Uint8Array ||
+    (typeof b4a.isBuffer === 'function' && b4a.isBuffer(key))
+  if (!isBytes || key.byteLength !== 32) return null
+  return b4a.toString(key, 'hex')
+}
+
+function peerBitfieldHasFullRange(peer, start, end) {
+  const firstUnset = peer?.remoteBitfield?.firstUnset
+  if (typeof firstUnset !== 'function') return false
+  const missing = firstUnset.call(peer.remoteBitfield, start)
+  return Number.isSafeInteger(missing) && missing >= end
+}
+
+function durabilityPeerIterable(core, getCorePeers) {
+  const peers = typeof getCorePeers === 'function' ? getCorePeers(core) : core?.peers
+  if (!peers || typeof peers[Symbol.iterator] !== 'function') return null
+  return peers
+}
+
+async function openDurabilityCore(coreKey, deps) {
+  if (typeof deps?.openCore === 'function') return deps.openCore(coreKey)
+  if (typeof deps?.store?.get === 'function') {
+    return deps.store.get(b4a.from(coreKey, 'hex'))
+  }
+  return null
+}
+
+/**
+ * Verify that the same authenticated peer holds every required Hypercore range,
+ * then evaluate that complete-item holder set under the durability policy.
+ * Missing or malformed runtime evidence always fails closed.
+ */
+export async function assessDurableManifest(refs, trust = {}, deps = {}) {
+  if (!Array.isArray(refs)) {
+    return failClosedDurabilityAssessment('refs must be an array')
+  }
+  if (refs.length > MAX_DURABILITY_REFS) {
+    return failClosedDurabilityAssessment(`refs exceeds maximum of ${MAX_DURABILITY_REFS}`)
+  }
+  if (refs.length === 0) return failClosedDurabilityAssessment()
+
+  let canonicalRefs
+  try {
+    canonicalRefs = canonicalizeDurabilityRefs(refs)
+    if (!trust || typeof trust !== 'object') {
+      return failClosedDurabilityAssessment('trust must be an object')
+    }
+    // Validate trust keys and the threshold before opening any sessions.
+    evaluateDurabilityPolicy({
+      holderKeys: [],
+      trustedRelayKeys: trust.trustedRelayKeys,
+      pairedDeviceKeys: trust.pairedDeviceKeys,
+      ordinaryRequired: trust.ordinaryRequired
+    })
+  } catch (error) {
+    return failClosedDurabilityAssessment(durabilityErrorMessage(error))
+  }
+
+  const refsByCore = new Map()
+  for (const durabilityRef of canonicalRefs) {
+    const coreRefs = refsByCore.get(durabilityRef.coreKey)
+    if (coreRefs) coreRefs.push(durabilityRef)
+    else refsByCore.set(durabilityRef.coreKey, [durabilityRef])
+  }
+
+  let holderKeys = null
+  try {
+    for (const [coreKey, coreRefs] of refsByCore) {
+      let core = null
+      try {
+        core = await openDurabilityCore(coreKey, deps)
+        if (!core) throw new Error('durability core unavailable')
+        if (typeof core.ready === 'function') await core.ready()
+
+        const iterable = durabilityPeerIterable(core, deps?.getCorePeers)
+        if (!iterable) return failClosedDurabilityAssessment()
+
+        const peers = []
+        for (const peer of iterable) {
+          peers.push(peer)
+          if (peers.length > MAX_DURABILITY_PEERS_PER_CORE) {
+            throw new Error(`peer count exceeds maximum of ${MAX_DURABILITY_PEERS_PER_CORE}`)
+          }
+        }
+
+        for (const durabilityRef of coreRefs) {
+          const holders = new Set()
+          for (const peer of peers) {
+            const holderKey = authenticatedPeerKeyHex(peer)
+            if (!holderKey || (holderKeys !== null && !holderKeys.has(holderKey))) continue
+            if (peerBitfieldHasFullRange(peer, durabilityRef.start, durabilityRef.end)) {
+              holders.add(holderKey)
+            }
+          }
+
+          if (holderKeys === null) {
+            holderKeys = holders
+          } else {
+            for (const holderKey of holderKeys) {
+              if (!holders.has(holderKey)) holderKeys.delete(holderKey)
+            }
+          }
+
+          // Returning here still executes the current core's finally block.
+          if (holderKeys.size === 0) return failClosedDurabilityAssessment()
+        }
+      } finally {
+        try { await core?.close?.() } catch { /* session release is best effort */ }
+      }
+    }
+
+    if (holderKeys === null || holderKeys.size === 0) {
+      return failClosedDurabilityAssessment()
+    }
+    return completedDurabilityAssessment(evaluateDurabilityPolicy({
+      holderKeys,
+      trustedRelayKeys: trust.trustedRelayKeys,
+      pairedDeviceKeys: trust.pairedDeviceKeys,
+      ordinaryRequired: trust.ordinaryRequired
+    }))
+  } catch (error) {
+    return failClosedDurabilityAssessment(durabilityErrorMessage(error))
   }
 }
 const PLAYBACK_STATS_HANDOFF_TIMEOUT_MS = 250
@@ -3619,25 +3773,46 @@ export function createApi({
         const range = normalizeBlobRefInput(v?.blobId ?? v)
         if (!blobsCoreKey || !range) return { ...empty, reason: 'missing-blob-metadata' }
 
-        const core = ctx.store.get(b4a.from(blobsCoreKey, 'hex'))
-        try {
-          await core.ready?.()
-          const { fullCopyKeys, fullCopyAnonymous } = collectFullCopyPeers(getCorePeerObjects(core), range)
-          const assessment = assessOffloadEligibility({
-            fullCopyKeys,
-            fullCopyAnonymous,
-            relayKeys: getKnownDurableRelayKeys(),
-            deviceKeys: await getOwnDeviceSwarmKeys(driveKey)
-          })
-          return {
-            ...assessment,
-            blobsCoreKey,
-            byteLength: Math.max(0, Number(range.byteLength) || 0),
-            reason: assessment.eligible ? null : 'not-durably-replicated'
-          }
-        } finally {
-          // store.get() opened a fresh session; release it.
-          try { await core.close?.() } catch { /* best effort */ }
+        const minFullCopyPeers = DEFAULT_OFFLOAD_POLICY.minFullCopyPeers
+        const assessment = await assessDurableManifest([{
+          coreKey: blobsCoreKey,
+          start: range.blockOffset,
+          end: range.blockOffset + range.blockLength,
+          kind: 'media'
+        }], {
+          trustedRelayKeys: getKnownDurableRelayKeys(),
+          pairedDeviceKeys: await getOwnDeviceSwarmKeys(driveKey),
+          ordinaryRequired: minFullCopyPeers
+        }, {
+          openCore: (coreKey) => ctx.store.get(b4a.from(coreKey, 'hex'))
+        })
+
+        if (assessment.status === 'error') {
+          return { ...empty, reason: assessment.error || 'assess-failed' }
+        }
+
+        const fullCopyPeers =
+          assessment.trusted.length +
+          assessment.paired.length +
+          assessment.ordinary.length
+        const relayHasFullCopy = assessment.trusted.length > 0
+        const ownDeviceHasFullCopy = assessment.paired.length > 0
+        const meetsRedundancy = fullCopyPeers >= minFullCopyPeers
+        const reasons = []
+        if (relayHasFullCopy) reasons.push('relay-full-copy')
+        if (ownDeviceHasFullCopy) reasons.push('own-device-full-copy')
+        if (meetsRedundancy) reasons.push(`peer-redundancy:${fullCopyPeers}`)
+
+        return {
+          eligible: assessment.eligible,
+          fullCopyPeers,
+          relayHasFullCopy,
+          ownDeviceHasFullCopy,
+          minFullCopyPeers,
+          reasons,
+          blobsCoreKey,
+          byteLength: Math.max(0, Number(range.byteLength) || 0),
+          reason: assessment.eligible ? null : 'not-durably-replicated'
         }
       } catch (err) {
         return { ...empty, reason: err?.message || 'assess-failed' }

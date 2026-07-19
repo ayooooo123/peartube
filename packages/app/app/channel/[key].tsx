@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Modal,
   ScrollView,
+  FlatList,
   Text,
   View,
   ActivityIndicator,
@@ -24,24 +25,103 @@ import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
-import { withChannelPageTimeout, isTimedOutResult } from '@/lib/channel-page'
+import { withChannelPageTimeout } from '@/lib/channel-page'
+import { createChannelCatalogState } from '@/lib/channel-catalog-state.js'
+import { createChannelPlaybackPayload } from '@/lib/channel-playback-handoff.js'
+import { CHANNEL_ARTWORK_RESOLUTION_MS, resolveArtworkCandidates } from '@/lib/channel-artwork.js'
 
-type ChannelMeta = {
+type ChannelProfile = {
   name?: string
-  description?: string
-  avatar?: string
+  description?: string | null
 }
 
 type ChannelVideo = {
   id: string
   title: string
-  description?: string
-  uploadedAt?: number
-  createdAt?: number
+  description?: string | null
+  sourcePublishedAt?: number
+  originalAirDate?: number
   thumbnailUrl?: string | null
-  thumbnail?: string | null
+  thumbnailBlobId?: string | null
+  thumbnailBlobsCoreKey?: string | null
+  thumbnailMimeType?: string | null
+  blobId?: string | null
+  blobsCoreKey?: string | null
+  mimeType?: string | null
+  publicBeeKey?: string | null
   duration?: number
 }
+
+
+type ArtworkCandidate =
+  | { kind: 'blob'; role: string; blobId: string; blobsCoreKey: string; mimeType: string | null }
+  | { kind: 'remote'; role: string; url: string }
+
+type CatalogCard = {
+  id: string
+  item: ChannelVideo
+  artworkCandidates: ArtworkCandidate[]
+}
+type ArtworkResolution = {
+  url: string | null
+  nextIndex: number
+  provisional: boolean
+  failedUrls: string[]
+}
+
+
+type CatalogTab = {
+  id: string
+  label: string
+  sectionLabel: string
+  itemCount: number
+}
+
+type CatalogView = {
+  profile: ChannelProfile | null
+  badge: string | null
+  tabs: CatalogTab[]
+  profileArtwork: {
+    avatar: ArtworkCandidate[]
+    banner: ArtworkCandidate[]
+    card: ArtworkCandidate[]
+  }
+}
+
+type GroupPageState = {
+  cards: CatalogCard[]
+  nextCursor: string | null
+  loaded: boolean
+  loading: boolean
+  loadingMore: boolean
+  error: string
+}
+
+type CatalogStateSnapshot = {
+  catalog: CatalogView | null
+  selectedGroupId: string
+  pages: Record<string, GroupPageState>
+  catalogLoading: boolean
+  catalogError: string
+}
+
+const EMPTY_GROUP_PAGE: GroupPageState = {
+  cards: [],
+  nextCursor: null,
+  loaded: false,
+  loading: false,
+  loadingMore: false,
+  error: '',
+}
+
+const INITIAL_CATALOG_STATE: CatalogStateSnapshot = {
+  catalog: null,
+  selectedGroupId: '',
+  pages: {},
+  catalogLoading: true,
+  catalogError: '',
+}
+
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
@@ -101,17 +181,20 @@ function ChannelVideoCard({
   video,
   channelName,
   onPress,
+  onThumbnailError,
 }: {
   video: ChannelVideo
   channelName: string
   onPress: () => void
+  onThumbnailError?: () => void
 }) {
   return (
     <PressableFeedback className="mb-4" onPress={onPress} accessibilityRole="button" enableMotion={false}>
       <ThumbnailImage
-        thumbnailUrl={video.thumbnailUrl || video.thumbnail}
+        thumbnailUrl={video.thumbnailUrl}
         duration={video.duration}
         channelInitial={channelName.charAt(0).toUpperCase() || 'P'}
+        onError={onThumbnailError}
       />
       <View className="flex-row mt-3 px-3">
         <View className="w-10 h-10 rounded-full bg-pear-primary items-center justify-center mr-3">
@@ -120,7 +203,7 @@ function ChannelVideoCard({
         <View className="flex-1">
           <Text className="text-label text-pear-text" numberOfLines={2}>{video.title || 'Untitled video'}</Text>
           <Text className="text-caption text-pear-text-secondary mt-1" numberOfLines={1}>
-            {channelName} · {formatVideoTime(video.uploadedAt || video.createdAt)}
+            {channelName} · {formatVideoTime(video.sourcePublishedAt || video.originalAirDate)}
           </Text>
         </View>
       </View>
@@ -153,13 +236,22 @@ export default function ChannelScreen() {
   const channelPublicBeeKey = useMemo(() => (Array.isArray(publicBeeKey) ? publicBeeKey[0] : publicBeeKey) || '', [publicBeeKey])
 
   const { rpc: appRpc, blobServerPort } = useApp()
-  const [channelMeta, setChannelMeta] = useState<ChannelMeta | null>(null)
-  const [channelVideos, setChannelVideos] = useState<ChannelVideo[]>([])
-  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
+  const [catalogState, setCatalogState] = useState<CatalogStateSnapshot>(INITIAL_CATALOG_STATE)
+  const catalogController = useMemo(() => createChannelCatalogState({
+    rpc,
+    bound: withChannelPageTimeout,
+    onChange: (nextState: CatalogStateSnapshot) => setCatalogState(nextState),
+  }), [])
+  const [thumbnailCache, setThumbnailCache] = useState<Record<string, ArtworkResolution>>({})
+  const thumbnailCacheRef = useRef<Record<string, ArtworkResolution>>({})
+  const [profileArtworkCache, setProfileArtworkCache] = useState<Record<string, ArtworkResolution>>({})
+  const profileArtworkCacheRef = useRef<Record<string, ArtworkResolution>>({})
   const [identityDriveKey, setIdentityDriveKey] = useState('')
-  const [isLoading, setIsLoading] = useState(true)
-  const [screenError, setScreenError] = useState('')
-  const [videosDegradedMessage, setVideosDegradedMessage] = useState('')
+
+  const thumbnailRequestGeneration = useRef(0)
+  const profileArtworkRequestGeneration = useRef(0)
+  const thumbnailAttempt = useRef<Record<string, number>>({})
+  const profileArtworkAttempt = useRef<Record<string, number>>({})
 
   const [isSubscribed, setIsSubscribed] = useState(false)
   const [subscribeBusy, setSubscribeBusy] = useState(false)
@@ -174,111 +266,188 @@ export default function ChannelScreen() {
   const [saveError, setSaveError] = useState('')
   const nativeFormButtonStyle = { flex: 1 }
 
+  const catalogView = catalogState.catalog
+  const channelProfile = catalogView?.profile || null
+  const selectedGroupId = catalogState.selectedGroupId
+  const selectedTab = catalogView?.tabs.find((tab) => tab.id === selectedGroupId) || null
+  const selectedPage = catalogState.pages[selectedGroupId] || EMPTY_GROUP_PAGE
   const isOwner = identityDriveKey === channelKey
-  const activeAvatarUrl = avatarPreviewUrl || channelMeta?.avatar || ''
-  const channelDisplayName = channelMeta?.name?.trim() || `Channel ${channelKey.slice(0, 8)}`
-  const channelDescription = channelMeta?.description?.trim() || 'No channel description yet.'
-  const channelVideoCountText = `${channelVideos.length} ${channelVideos.length === 1 ? 'video' : 'videos'}`
+  const mappedAvatarUrl = profileArtworkCache.avatar?.url || ''
+  const activeAvatarUrl = avatarPreviewUrl || mappedAvatarUrl
+  const bannerUrl = profileArtworkCache.banner?.url || ''
+  const channelDisplayName = channelProfile?.name?.trim() || `Channel ${channelKey.slice(0, 8)}`
+  const channelDescription = channelProfile?.description?.trim() || 'No channel description yet.'
+  const selectedItemCount = selectedTab?.itemCount || selectedPage.cards.length
+  const channelVideoCountText = `${selectedItemCount} ${selectedItemCount === 1 ? 'video' : 'videos'}`
 
-  const resolveChannelThumbnails = useCallback((videosToResolve: ChannelVideo[]) => {
-    if (!appRpc || !channelKey || videosToResolve.length === 0) return
+  const loadCatalog = useCallback(() => {
+    thumbnailCacheRef.current = {}
+    setThumbnailCache({})
+    setProfileArtworkCache({})
+    profileArtworkCacheRef.current = {}
+    thumbnailAttempt.current = {}
+    profileArtworkAttempt.current = {}
+    setAvatarPreviewUrl('')
+    thumbnailRequestGeneration.current += 1
+    profileArtworkRequestGeneration.current += 1
+    return catalogController.loadCatalog({
+      channelKey,
+      publicBeeKey: channelPublicBeeKey,
+    })
+  }, [catalogController, channelKey, channelPublicBeeKey])
 
-    for (const video of videosToResolve) {
-      if (!video?.id) continue
-      const cacheKey = `${channelKey}:${video.id}`
-      if (video.thumbnailUrl || video.thumbnail) continue
-
-      void fetchThumbnailUrlWithRetry({
-        rpc: appRpc,
-        channelKey,
-        videoId: video.id,
-        expectedPort: blobServerPort,
-        blobRefs: {
-          thumbnailBlobId: (video as any).thumbnailBlobId || null,
-          thumbnailBlobsCoreKey: (video as any).thumbnailBlobsCoreKey || null,
-          thumbnailMimeType: (video as any).thumbnailMimeType || null,
-        },
-      }).then((url) => {
-        if (!url) return
-        setThumbnailCache((prev) => {
-          if (prev[cacheKey] === url) return prev
-          return { ...prev, [cacheKey]: url }
-        })
-      })
+  useEffect(() => {
+    void loadCatalog()
+    return () => {
+      catalogController.dispose()
+      thumbnailRequestGeneration.current += 1
+      profileArtworkRequestGeneration.current += 1
     }
+  }, [catalogController, loadCatalog])
+  const resolveCardArtwork = useCallback((
+    card: CatalogCard,
+    startIndex = 0,
+    initialProvisional = false,
+    failedUrls: string[] = [],
+  ) => {
+    const cacheKey = `${channelKey}:${card.id}`
+    const requestGeneration = thumbnailRequestGeneration.current
+    const attempt = (thumbnailAttempt.current[cacheKey] || 0) + 1
+    thumbnailAttempt.current[cacheKey] = attempt
+    return resolveArtworkCandidates(
+      card.artworkCandidates,
+      (candidate: Extract<ArtworkCandidate, { kind: 'blob' }>) => {
+        if (!appRpc) return null
+        return fetchThumbnailUrlWithRetry({
+          rpc: appRpc,
+          channelKey,
+          videoId: card.id,
+          expectedPort: blobServerPort,
+          blobRefs: {
+            thumbnailBlobId: candidate.blobId,
+            thumbnailBlobsCoreKey: candidate.blobsCoreKey,
+            thumbnailMimeType: candidate.mimeType,
+          },
+        })
+      },
+      {
+        deadline: Date.now() + CHANNEL_ARTWORK_RESOLUTION_MS,
+        startIndex,
+        initialProvisional,
+        blobResolverAvailable: Boolean(appRpc),
+        failedUrls,
+      },
+    ).then((resolution) => {
+      if (
+        !resolution ||
+        requestGeneration !== thumbnailRequestGeneration.current ||
+        thumbnailAttempt.current[cacheKey] !== attempt
+      ) return
+      setThumbnailCache((previous) => {
+        const next = { ...previous, [cacheKey]: resolution }
+        thumbnailCacheRef.current = next
+        return next
+      })
+    })
   }, [appRpc, blobServerPort, channelKey])
 
-  const fetchChannelPage = useCallback(async () => {
-    if (!channelKey) {
-      setScreenError('Missing channel key.')
-      setIsLoading(false)
-      return
+  useEffect(() => {
+    if (!channelKey || selectedPage.cards.length === 0) return
+    const requestGeneration = ++thumbnailRequestGeneration.current
+
+    for (const card of selectedPage.cards) {
+      const current = thumbnailCacheRef.current[`${channelKey}:${card.id}`]
+      if (current && !(current.provisional && appRpc)) continue
+      void resolveCardArtwork(card, 0, false, current?.failedUrls || [])
     }
 
-    try {
-      setScreenError('')
-      setIsLoading(true)
-      setVideosDegradedMessage('')
-      const [channelMetaSettled, channelVideosSettled] = await Promise.allSettled([
-        withChannelPageTimeout(rpc.getChannelMeta({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any)),
-        withChannelPageTimeout(rpc.listVideos({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any)),
-      ])
-
-      const metaResult = channelMetaSettled.status === 'fulfilled' ? channelMetaSettled.value : null
-      if (!isTimedOutResult(metaResult) && metaResult) {
-        setChannelMeta(metaResult)
+    return () => {
+      if (thumbnailRequestGeneration.current === requestGeneration) {
+        thumbnailRequestGeneration.current += 1
       }
-
-      const videosResult = channelVideosSettled.status === 'fulfilled' ? channelVideosSettled.value : null
-      if (isTimedOutResult(videosResult)) {
-        setVideosDegradedMessage('Video list is taking longer than expected. Showing any cached channel details; retry to refresh videos.')
-      } else if (channelVideosSettled.status === 'rejected') {
-        setVideosDegradedMessage(channelVideosSettled.reason?.message || 'Failed to load videos. Retry to refresh this channel.')
-      } else if ((videosResult as any)?.success === false) {
-        setVideosDegradedMessage((videosResult as any)?.error || 'Failed to load videos. Retry to refresh this channel.')
-      } else {
-        const loadedVideos = Array.isArray((videosResult as any)?.videos) ? (videosResult as any).videos : []
-        setChannelVideos(loadedVideos)
-        resolveChannelThumbnails(loadedVideos)
-      }
-
-      if (channelMetaSettled.status === 'rejected' && channelVideosSettled.status === 'rejected') {
-        setScreenError(channelMetaSettled.reason?.message || channelVideosSettled.reason?.message || 'Failed to load channel page.')
-      }
-    } catch (channelFetchError: any) {
-      setScreenError(channelFetchError?.message || 'Failed to load channel page.')
-    } finally {
-      setIsLoading(false)
     }
-  }, [channelKey, channelPublicBeeKey, resolveChannelThumbnails])
+  }, [appRpc, channelKey, resolveCardArtwork, selectedPage.cards])
+
+  const resolveProfileArtwork = useCallback((
+    placement: 'avatar' | 'banner',
+    startIndex = 0,
+    initialProvisional = false,
+    failedUrls: string[] = [],
+  ) => {
+    const candidates = catalogView?.profileArtwork[placement]
+    if (!candidates) return Promise.resolve()
+    const requestGeneration = profileArtworkRequestGeneration.current
+    const attempt = (profileArtworkAttempt.current[placement] || 0) + 1
+    profileArtworkAttempt.current[placement] = attempt
+    return resolveArtworkCandidates(
+      candidates,
+      (candidate: Extract<ArtworkCandidate, { kind: 'blob' }>) => {
+        if (!appRpc) return null
+        return fetchThumbnailUrlWithRetry({
+          rpc: appRpc,
+          channelKey,
+          videoId: `profile:${placement}`,
+          expectedPort: blobServerPort,
+          blobRefs: {
+            thumbnailBlobId: candidate.blobId,
+            thumbnailBlobsCoreKey: candidate.blobsCoreKey,
+            thumbnailMimeType: candidate.mimeType,
+          },
+        })
+      },
+      {
+        deadline: Date.now() + CHANNEL_ARTWORK_RESOLUTION_MS,
+        startIndex,
+        initialProvisional,
+        blobResolverAvailable: Boolean(appRpc),
+        failedUrls,
+      },
+    ).then((resolution) => {
+      if (
+        !resolution ||
+        requestGeneration !== profileArtworkRequestGeneration.current ||
+        profileArtworkAttempt.current[placement] !== attempt
+      ) return
+      setProfileArtworkCache((previous) => {
+        const next = { ...previous, [placement]: resolution }
+        profileArtworkCacheRef.current = next
+        return next
+      })
+    })
+  }, [appRpc, blobServerPort, catalogView, channelKey])
+
+  useEffect(() => {
+    if (!channelKey || !catalogView) return
+    const requestGeneration = ++profileArtworkRequestGeneration.current
+
+    for (const placement of ['avatar', 'banner'] as const) {
+      const current = profileArtworkCacheRef.current[placement]
+      if (current && !(current.provisional && appRpc)) continue
+      void resolveProfileArtwork(placement, 0, false, current?.failedUrls || [])
+    }
+    return () => {
+      if (profileArtworkRequestGeneration.current === requestGeneration) {
+        profileArtworkRequestGeneration.current += 1
+      }
+    }
+  }, [appRpc, catalogView, channelKey, resolveProfileArtwork])
 
   useEffect(() => {
     let isMounted = true
-
     const loadIdentity = async () => {
       try {
         const currentIdentity = await rpc.getIdentity()
-        if (isMounted) {
-          setIdentityDriveKey(currentIdentity?.driveKey || '')
-        }
+        if (isMounted) setIdentityDriveKey(currentIdentity?.driveKey || '')
       } catch {
-        if (isMounted) {
-          setIdentityDriveKey('')
-        }
+        if (isMounted) setIdentityDriveKey('')
       }
     }
-
-    loadIdentity()
+    void loadIdentity()
     return () => {
       isMounted = false
     }
   }, [])
 
-  useEffect(() => {
-    fetchChannelPage()
-  }, [fetchChannelPage])
-
-  // Subscription + keep-online state (best-effort; buttons stay usable either way)
   useEffect(() => {
     if (!channelKey) return
     let isMounted = true
@@ -286,18 +455,33 @@ export default function ChannelScreen() {
       try {
         const subs = await (rpc as any).getSubscriptions?.({})
         if (isMounted && Array.isArray(subs?.subscriptions)) {
-          setIsSubscribed(subs.subscriptions.some((s: any) => s.channelKey === channelKey))
+          setIsSubscribed(subs.subscriptions.some((subscription: any) => subscription.channelKey === channelKey))
         }
-      } catch { /* best-effort: leave subscribe state at default */ }
+      } catch {}
       try {
         const pinned = await (rpc as any).getPinnedChannels?.()
         if (isMounted && Array.isArray(pinned?.channels)) {
           setIsPinned(pinned.channels.includes(channelKey))
         }
-      } catch { /* best-effort: leave pin state at default */ }
+      } catch {}
     })()
-    return () => { isMounted = false }
+    return () => {
+      isMounted = false
+    }
   }, [channelKey])
+
+  const selectGroup = useCallback((groupId: string) => {
+    thumbnailRequestGeneration.current += 1
+    void catalogController.selectGroup(groupId)
+  }, [catalogController])
+
+  const retrySelectedGroup = useCallback(() => {
+    void catalogController.retrySelectedGroup()
+  }, [catalogController])
+
+  const loadMore = useCallback(() => {
+    void catalogController.loadMore()
+  }, [catalogController])
 
   const toggleSubscribe = useCallback(async () => {
     if (!channelKey || subscribeBusy) return
@@ -337,11 +521,11 @@ export default function ChannelScreen() {
   const openEditModal = useCallback(() => {
     setSaveError('')
     setAvatarBase64('')
-    setAvatarPreviewUrl(channelMeta?.avatar || '')
-    setEditName(channelMeta?.name || '')
-    setEditDescription(channelMeta?.description || '')
+    setAvatarPreviewUrl(activeAvatarUrl)
+    setEditName(channelProfile?.name || '')
+    setEditDescription(channelProfile?.description || '')
     setIsEditModalVisible(true)
-  }, [channelMeta?.avatar, channelMeta?.description, channelMeta?.name])
+  }, [activeAvatarUrl, channelProfile?.description, channelProfile?.name])
 
   const closeEditModal = useCallback(() => {
     if (isSaving) return
@@ -361,45 +545,34 @@ export default function ChannelScreen() {
       mediaTypes: ['images'],
       base64: true,
     })
-
-    if (pickerResult.canceled || !pickerResult.assets?.[0]) {
-      return
-    }
+    if (pickerResult.canceled || !pickerResult.assets?.[0]) return
 
     const selectedAsset = pickerResult.assets[0]
     if (!selectedAsset.base64) {
       setSaveError('Unable to read selected image.')
       return
     }
-
     setAvatarBase64(selectedAsset.base64)
     setAvatarPreviewUrl(selectedAsset.uri)
   }, [])
 
   const saveChannelChanges = useCallback(async () => {
     if (isSaving) return
-
     setIsSaving(true)
     setSaveError('')
-
     try {
       if (avatarBase64) {
         const avatarUpdateResponse = await (rpc as any).updateChannelAvatar({
           imageData: avatarBase64,
           mimeType: 'image/jpeg',
         })
-
-        if (avatarUpdateResponse?.avatarUrl) {
-          setAvatarPreviewUrl(avatarUpdateResponse.avatarUrl)
-        }
+        if (avatarUpdateResponse?.avatarUrl) setAvatarPreviewUrl(avatarUpdateResponse.avatarUrl)
       }
-
       await (rpc as any).updateChannel({
         name: editName.trim(),
         description: editDescription.trim(),
       })
-
-      await fetchChannelPage()
+      await loadCatalog()
       setIsEditModalVisible(false)
       setAvatarBase64('')
     } catch (channelSaveError: any) {
@@ -407,7 +580,44 @@ export default function ChannelScreen() {
     } finally {
       setIsSaving(false)
     }
-  }, [avatarBase64, editDescription, editName, fetchChannelPage, isSaving])
+  }, [avatarBase64, editDescription, editName, isSaving, loadCatalog])
+
+  const renderCatalogCard = useCallback(({ item: card }: { item: CatalogCard }) => {
+    const channelVideo = card.item
+    const artwork = thumbnailCache[`${channelKey}:${card.id}`]
+    const thumbnailUrl = artwork?.url || null
+    const failedThumbnailUrl = artwork?.url || ''
+    const playbackPayload = createChannelPlaybackPayload({
+      item: channelVideo,
+      channelKey,
+      publicBeeKey: channelPublicBeeKey,
+      thumbnailUrl,
+      channelName: channelDisplayName,
+    })
+    return (
+      <ChannelVideoCard
+        video={{ ...channelVideo, thumbnailUrl }}
+        channelName={channelDisplayName}
+        onThumbnailError={artwork && failedThumbnailUrl ? () => {
+          void resolveCardArtwork(
+            card,
+            artwork.nextIndex,
+            artwork.provisional,
+            [...artwork.failedUrls, failedThumbnailUrl],
+          )
+        } : undefined}
+        onPress={() => router.push({
+          pathname: '/video/[id]',
+          params: {
+            id: channelVideo.id,
+            channel: channelKey,
+            publicBeeKey: playbackPayload.publicBeeKey,
+            videoData: JSON.stringify(playbackPayload),
+          },
+        })}
+      />
+    )
+  }, [channelDisplayName, channelKey, channelPublicBeeKey, resolveCardArtwork, router, thumbnailCache])
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -423,39 +633,73 @@ export default function ChannelScreen() {
         <Text style={styles.topBarTitle} numberOfLines={1}>Channel</Text>
       </View>
 
-      {isLoading ? (
+      {catalogState.catalogLoading ? (
         <ScrollView contentInsetAdjustmentBehavior="automatic" showsVerticalScrollIndicator={false}>
           <ChannelPageSkeleton />
         </ScrollView>
-      ) : screenError ? (
+      ) : catalogState.catalogError && !catalogView ? (
         <View className="flex-1 px-8 items-center justify-center">
           <Feather name="alert-circle" size={36} color={colors.error} />
-          <Text className="text-body text-pear-text mt-4 text-center" selectable>{screenError}</Text>
-          <PressableFeedback
-            onPress={fetchChannelPage}
-            className="mt-5 bg-pear-primary rounded-lg px-5 py-3"
-            accessibilityRole="button"
-          >
+          <Text className="text-body text-pear-text mt-4 text-center" selectable>{catalogState.catalogError}</Text>
+          <PressableFeedback onPress={loadCatalog} className="mt-5 bg-pear-primary rounded-lg px-5 py-3" accessibilityRole="button">
             <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
           </PressableFeedback>
         </View>
       ) : (
-            <ScrollView
-              contentInsetAdjustmentBehavior="automatic"
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.scrollContent}
-            >
+        <FlatList
+          data={selectedPage.cards}
+          keyExtractor={(card) => card.id}
+          renderItem={renderCatalogCard}
+          contentInsetAdjustmentBehavior="automatic"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+          ListHeaderComponent={(
+            <>
+              {bannerUrl ? (
+                <Image
+                  source={{ uri: bannerUrl }}
+                  style={styles.bannerImage}
+                  resizeMode="cover"
+                  onError={() => {
+                    const artwork = profileArtworkCache.banner
+                    if (!artwork?.url) return
+                    void resolveProfileArtwork(
+                      'banner',
+                      artwork.nextIndex,
+                      artwork.provisional,
+                      [...artwork.failedUrls, artwork.url],
+                    )
+                  }}
+                />
+              ) : null}
               <View style={styles.hero}>
                 <View style={styles.avatarShell}>
                   {activeAvatarUrl ? (
-                    <Image source={{ uri: activeAvatarUrl }} style={styles.avatarImage} resizeMode="cover" />
+                    <Image
+                      source={{ uri: activeAvatarUrl }}
+                      style={styles.avatarImage}
+                      resizeMode="cover"
+                      onError={avatarPreviewUrl ? undefined : () => {
+                        const artwork = profileArtworkCache.avatar
+                        if (!artwork?.url) return
+                        void resolveProfileArtwork(
+                          'avatar',
+                          artwork.nextIndex,
+                          artwork.provisional,
+                          [...artwork.failedUrls, artwork.url],
+                        )
+                      }}
+                    />
                   ) : (
                     <Text style={styles.avatarInitial}>{channelDisplayName.charAt(0).toUpperCase() || 'P'}</Text>
                   )}
                 </View>
 
                 <View style={styles.heroCopy}>
-                  <Text style={styles.channelTitle} numberOfLines={2} selectable>{channelDisplayName}</Text>
+                  <View style={styles.profileTitleRow}>
+                    <Text style={styles.channelTitle} numberOfLines={2} selectable>{channelDisplayName}</Text>
+                    {catalogView?.badge ? <Text style={styles.profileBadge}>{catalogView.badge}</Text> : null}
+                  </View>
                   <Text style={styles.channelDescription} numberOfLines={3} selectable>{channelDescription}</Text>
                   <View style={styles.heroMetaRow}>
                     <View style={styles.videoCountPill}>
@@ -467,11 +711,7 @@ export default function ChannelScreen() {
                 </View>
 
                 {isOwner ? (
-                  <PressableFeedback
-                    onPress={openEditModal}
-                    className="mt-5 rounded-full px-4 py-3 flex-row items-center justify-center gap-2"
-                    accessibilityRole="button"
-                  >
+                  <PressableFeedback onPress={openEditModal} className="mt-5 rounded-full px-4 py-3 flex-row items-center justify-center gap-2" accessibilityRole="button">
                     <Feather name="edit-2" size={16} color={colors.text} />
                     <Text style={styles.editButtonText}>Edit Channel</Text>
                   </PressableFeedback>
@@ -488,11 +728,7 @@ export default function ChannelScreen() {
                         (pressed || subscribeBusy) && { opacity: 0.75 },
                       ]}
                     >
-                      <Feather
-                        name={isSubscribed ? 'check' : 'user-plus'}
-                        size={15}
-                        color={isSubscribed ? colors.textSecondary : colors.onPrimary}
-                      />
+                      <Feather name={isSubscribed ? 'check' : 'user-plus'} size={15} color={isSubscribed ? colors.textSecondary : colors.onPrimary} />
                       <Text style={[styles.subscribeLabel, isSubscribed && styles.subscribeLabelActive]}>
                         {isSubscribed ? 'Subscribed' : 'Subscribe'}
                       </Text>
@@ -509,70 +745,70 @@ export default function ChannelScreen() {
                 )}
               </View>
 
-              <View style={styles.videoListSection}>
-            {videosDegradedMessage ? (
-              <View className="mb-4 rounded-xl bg-pear-bg-card border border-pear-border px-4 py-3">
-                <Text className="text-body text-pear-text-secondary" selectable>{videosDegradedMessage}</Text>
-                <PressableFeedback
-                  onPress={fetchChannelPage}
-                  className="mt-3 self-start bg-pear-primary rounded-lg px-4 py-2"
-                  accessibilityRole="button"
-                >
-                  <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
-                </PressableFeedback>
+              {catalogView?.tabs.length ? (
+                <View style={styles.tabRow}>
+                  {catalogView.tabs.map((tab) => {
+                    const active = tab.id === selectedGroupId
+                    return (
+                      <Pressable
+                        key={tab.id}
+                        onPress={() => selectGroup(tab.id)}
+                        accessibilityRole="tab"
+                        accessibilityState={{ selected: active }}
+                        style={[styles.tabButton, active && styles.tabButtonActive]}
+                      >
+                        <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{tab.label}</Text>
+                        <Text style={[styles.tabCount, active && styles.tabLabelActive]}>{tab.itemCount}</Text>
+                      </Pressable>
+                    )
+                  })}
+                </View>
+              ) : null}
+
+              <View style={styles.sectionHeading}>
+                <Text style={styles.sectionTitle}>{selectedTab?.sectionLabel || 'Latest'}</Text>
               </View>
-            ) : null}
-            {channelVideos.length === 0 && !videosDegradedMessage ? (
-              <View className="py-16 items-center justify-center rounded-xl bg-pear-bg-card border border-pear-border">
-                <Feather name="video-off" size={30} color={colors.textMuted} />
-                <Text className="text-body text-pear-text-secondary mt-3">No videos yet</Text>
-              </View>
-            ) : (
-              channelVideos.map((channelVideo) => {
-                const thumbnailUrl = thumbnailCache[`${channelKey}:${channelVideo.id}`] || channelVideo.thumbnailUrl || channelVideo.thumbnail || null
-                return (
-                  <ChannelVideoCard
-                    key={channelVideo.id}
-                    video={{ ...channelVideo, thumbnailUrl }}
-                    channelName={channelDisplayName}
-                    onPress={() => router.push({
-                      pathname: '/video/[id]',
-                      params: {
-                        id: channelVideo.id,
-                        channel: channelKey,
-                        publicBeeKey: channelPublicBeeKey || undefined,
-                        videoData: JSON.stringify({
-                          ...channelVideo,
-                          thumbnailUrl,
-                          channelKey,
-                          publicBeeKey: channelPublicBeeKey || undefined,
-                          channel: { name: channelDisplayName },
-                        }),
-                      },
-                    })}
-                  />
-                )
-              })
-            )}
-          </View>
-        </ScrollView>
+              {selectedPage.error ? (
+                <View style={styles.inlineError}>
+                  <Text className="text-body text-pear-text-secondary" selectable>{selectedPage.error}</Text>
+                  <PressableFeedback onPress={retrySelectedGroup} className="mt-3 self-start bg-pear-primary rounded-lg px-4 py-2" accessibilityRole="button">
+                    <Text className="text-label" style={{ color: colors.onPrimary }}>Retry</Text>
+                  </PressableFeedback>
+                </View>
+              ) : null}
+            </>
+          )}
+          ListEmptyComponent={selectedPage.loading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator color={colors.primary} />
+              <Text className="text-body text-pear-text-secondary mt-3">Loading {selectedTab?.label || 'videos'}...</Text>
+            </View>
+          ) : selectedPage.error ? null : (
+            <View style={styles.emptyState}>
+              <Feather name="video-off" size={30} color={colors.textMuted} />
+              <Text className="text-body text-pear-text-secondary mt-3">No videos yet</Text>
+            </View>
+          )}
+          ListFooterComponent={selectedPage.nextCursor ? (
+            <Pressable
+              onPress={loadMore}
+              disabled={selectedPage.loadingMore}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.loadMoreButton, (pressed || selectedPage.loadingMore) && { opacity: 0.75 }]}
+            >
+              {selectedPage.loadingMore ? <ActivityIndicator size="small" color={colors.onPrimary} /> : null}
+              <Text style={styles.loadMoreLabel}>{selectedPage.loadingMore ? 'Loading...' : 'Load more'}</Text>
+            </Pressable>
+          ) : null}
+        />
       )}
 
-      <Modal
-        visible={isEditModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={closeEditModal}
-      >
+      <Modal visible={isEditModalVisible} animationType="slide" transparent onRequestClose={closeEditModal}>
         <View className="flex-1 bg-black/70 justify-end">
           <View className="bg-pear-bg-card rounded-t-3xl max-h-[90%] border-t border-pear-border">
             <View className="px-5 py-4 border-b border-pear-border flex-row items-center justify-between">
               <Text className="text-headline text-pear-text">Edit Channel</Text>
-              <PressableFeedback
-                onPress={closeEditModal}
-                className="w-9 h-9 rounded-full bg-pear-bg-input items-center justify-center"
-                accessibilityRole="button"
-              >
+              <PressableFeedback onPress={closeEditModal} className="w-9 h-9 rounded-full bg-pear-bg-input items-center justify-center" accessibilityRole="button">
                 <Feather name="x" size={18} color={colors.text} />
               </PressableFeedback>
             </View>
@@ -603,33 +839,15 @@ export default function ChannelScreen() {
               </View>
 
               <View className="mt-4">
-                <NativeButton
-                  label="Choose Avatar"
-                  onPress={pickAvatar}
-                  variant="outlined"
-                  style={nativeFormButtonStyle}
-                />
+                <NativeButton label="Choose Avatar" onPress={pickAvatar} variant="outlined" style={nativeFormButtonStyle} />
               </View>
 
               {saveError ? <Text className="text-pear-error text-caption mt-3">{saveError}</Text> : null}
             </ScrollView>
 
             <View className="px-5 py-4 border-t border-pear-border flex-row gap-3">
-              <NativeButton
-                label="Cancel"
-                onPress={closeEditModal}
-                disabled={isSaving}
-                variant="outlined"
-                style={nativeFormButtonStyle}
-              />
-
-              <NativeButton
-                label={isSaving ? 'Saving...' : 'Save'}
-                onPress={saveChannelChanges}
-                disabled={isSaving}
-                variant="filled"
-                style={nativeFormButtonStyle}
-              />
+              <NativeButton label="Cancel" onPress={closeEditModal} disabled={isSaving} variant="outlined" style={nativeFormButtonStyle} />
+              <NativeButton label={isSaving ? 'Saving...' : 'Save'} onPress={saveChannelChanges} disabled={isSaving} variant="filled" style={nativeFormButtonStyle} />
             </View>
           </View>
         </View>
@@ -781,7 +999,102 @@ const styles = StyleSheet.create({
     backgroundColor: colors.swarm,
     borderColor: colors.swarm,
   },
-  videoListSection: {
+  bannerImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: 20,
+    marginBottom: 12,
+    backgroundColor: colors.bgElevated,
+  },
+  profileTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  profileBadge: {
+    color: colors.onPrimary,
+    backgroundColor: colors.primary,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: '700',
+    overflow: 'hidden',
+  },
+  tabRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     paddingTop: 18,
+  },
+  tabButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  tabButtonActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  tabLabel: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  tabLabelActive: {
+    color: colors.onPrimary,
+  },
+  tabCount: {
+    color: colors.textMuted,
+    fontSize: 11,
+  },
+  sectionHeading: {
+    paddingTop: 24,
+    paddingBottom: 12,
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 20,
+    fontFamily: fonts.heading,
+  },
+  inlineError: {
+    marginBottom: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 14,
+  },
+  emptyState: {
+    minHeight: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  loadMoreButton: {
+    minHeight: 44,
+    marginTop: 4,
+    marginBottom: 20,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  loadMoreLabel: {
+    color: colors.onPrimary,
+    fontSize: 14,
+    fontWeight: '700',
   },
 })

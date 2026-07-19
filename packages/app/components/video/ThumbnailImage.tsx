@@ -15,6 +15,7 @@ interface ThumbnailImageProps {
   duration?: number // in seconds
   channelInitial?: string
   style?: any
+  onError?: () => void
 }
 
 const MAX_IMAGE_RETRIES = 2
@@ -23,7 +24,8 @@ function ThumbnailImageComponent({
   thumbnailUrl,
   duration,
   channelInitial = 'P',
-  style
+  style,
+  onError,
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
@@ -76,7 +78,8 @@ function ThumbnailImageComponent({
 
     setImageError(true)
     setImageLoading(false)
-  }, [retryAttempt])
+    onError?.()
+  }, [onError, retryAttempt])
 
   // Timeout for loading - give up after 8 seconds
   useEffect(() => {
@@ -146,7 +149,8 @@ function arePropsEqual(
     prevProps.thumbnailUrl === nextProps.thumbnailUrl &&
     prevProps.duration === nextProps.duration &&
     prevProps.channelInitial === nextProps.channelInitial &&
-    prevProps.style === nextProps.style
+    prevProps.style === nextProps.style &&
+    prevProps.onError === nextProps.onError
   )
 }
 

@@ -39,6 +39,7 @@ import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMseBackendForWatch } from '@/lib/watch-page-mse-backend-mode.mjs'
+import { consumeStagedWebChannelPlayback } from '@/lib/channel-playback-handoff.js'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -2025,19 +2026,18 @@ export default function HomeScreen() {
       setCurrentRoute(route)
 
       if (route.type === 'watch') {
-        const allVideos = [...videosRef.current, ...channelVideosRef.current, ...feedVideosRef.current]
-        const foundVideo = allVideos.find(
-          v => v.id === route.videoId && (v.channelKey === route.channelKey || !v.channelKey)
+        const selectedVideo = consumeStagedWebChannelPlayback(
+          window,
+          route.channelKey,
+          route.videoId,
+          videosRef.current,
+          channelVideosRef.current,
+          feedVideosRef.current,
         )
-        if (foundVideo) {
-          setWatchVideo({ ...foundVideo, channelKey: route.channelKey })
+        if (selectedVideo) {
+          setWatchVideo(selectedVideo)
         } else {
-          const pendingVideo = (window as any).__peartubePendingWatchVideo
-          if (pendingVideo?.id === route.videoId && (pendingVideo.channelKey === route.channelKey || pendingVideo.driveKey === route.channelKey)) {
-            setWatchVideo({ ...pendingVideo, channelKey: route.channelKey })
-          } else {
-            loadVideoInfoRef.current(route.channelKey, route.videoId)
-          }
+          loadVideoInfoRef.current(route.channelKey, route.videoId)
         }
       } else {
         setWatchVideo(null)

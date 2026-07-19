@@ -15,6 +15,10 @@ export {
 // Public Feed - P2P channel discovery
 export { PublicFeed, PublicFeed as PublicFeedManager } from './public-feed.js';
 export { createContentPublication } from './content-publication.js';
+export {
+  CONTENT_REPLICATION_CHECKPOINT_VERSION,
+  createContentReplication
+} from './content-replication.js';
 
 // Modular facades for smaller backend surfaces
 export * as feed from './feed.js';

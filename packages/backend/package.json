@@ -14,6 +14,7 @@
     "./swarm": "./src/swarm.js",
     "./public-feed": "./src/public-feed.js",
     "./content-publication": "./src/content-publication.js",
+    "./content-replication": "./src/content-replication.js",
     "./relay-blind-peer": "./src/relay-blind-peer.js",
     "./video-stats": "./src/video-stats.js",
     "./seeding": "./src/seeding.js",

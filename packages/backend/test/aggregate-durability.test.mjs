@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import b4a from 'b4a'
+import Corestore from 'corestore'
+import hypercoreWants from 'hypercore/lib/wants.js'
 import test from 'brittle'
 
 import {
@@ -275,6 +280,310 @@ test('assessDurableManifest accepts one authenticated peer holding every ref wit
   t.alike(result, assessedPolicy({ eligible: true, trusted: [PEER_A], paired: [], ordinary: [] }))
   t.alike(harness.opened, [CORE_A, CORE_B])
   t.alike(harness.closed, [CORE_A, CORE_B])
+})
+
+test('assessDurableManifest actively refreshes real sparse remote bitfields before policy evaluation', async (t) => {
+  const sourceDir = mkdtempSync(join(tmpdir(), 'peartube-durability-source-'))
+  const relayDir = mkdtempSync(join(tmpdir(), 'peartube-durability-relay-'))
+  const sourceStore = new Corestore(sourceDir)
+  const relayStore = new Corestore(relayDir)
+  let sourceReplication = null
+  let relayReplication = null
+  let assessmentSession = null
+  try {
+    await Promise.all([sourceStore.ready(), relayStore.ready()])
+    const source = sourceStore.get({ name: 'durability-sparse-source' })
+    await source.ready()
+    await source.append(Array.from({ length: 8 }, (_, index) => b4a.alloc(32 + index, index + 1)))
+    const relay = relayStore.get({ key: source.key })
+    await relay.ready()
+    sourceReplication = sourceStore.replicate(true, { live: true })
+    relayReplication = relayStore.replicate(false, { live: true })
+    sourceReplication.pipe(relayReplication).pipe(sourceReplication)
+    await relay.update({ wait: true })
+    const download = relay.download({ start: 2, end: 8, linear: true })
+    await download.done()
+
+    const peer = source.peers[0]
+    peer.remotePublicKey = b4a.from(PEER_A, 'hex')
+    t.is(peer.remoteBitfield.firstUnset(2), 2, 'source does not learn sparse downloader availability passively')
+
+    assessmentSession = sourceStore.session()
+    const assessmentCore = assessmentSession.get({ key: source.key })
+    await assessmentCore.ready()
+    const result = await assessDurableManifest([
+      ref(b4a.toString(source.key, 'hex'), 2, 8, 'media'),
+    ], {
+      trustedRelayKeys: [PEER_A],
+    }, {
+      openCore: async () => assessmentCore,
+      bitfieldRefreshTimeoutMs: 1_000,
+    })
+
+    t.alike(result, assessedPolicy({ eligible: true, trusted: [PEER_A], paired: [], ordinary: [] }))
+    t.ok(peer.remoteBitfield.firstUnset(2) >= 8, 'WANT/BITFIELD refresh proves every sparse block')
+
+    const prefixDownload = relay.download({ start: 0, end: 2, linear: true })
+    await prefixDownload.done()
+    t.is(peer.remoteBitfield.firstUnset(0), 0, 'completed prefix remains unknown after the sparse WANT is released')
+    const prefixAssessmentCore = assessmentSession.get({ key: source.key })
+    await prefixAssessmentCore.ready()
+    const prefixResult = await assessDurableManifest([
+      ref(b4a.toString(source.key, 'hex'), 0, 8, 'media'),
+    ], {
+      trustedRelayKeys: [PEER_A],
+    }, {
+      openCore: async () => prefixAssessmentCore,
+      bitfieldRefreshTimeoutMs: 1_000,
+    })
+    t.is(prefixResult.eligible, true, 'fresh real RANGE proves the now-contiguous relay prefix')
+  } finally {
+    sourceReplication?.destroy()
+    relayReplication?.destroy()
+    await assessmentSession?.close().catch(() => {})
+    await relayStore.close().catch(() => {})
+    await sourceStore.close().catch(() => {})
+    rmSync(sourceDir, { recursive: true, force: true })
+    rmSync(relayDir, { recursive: true, force: true })
+  }
+})
+
+test('assessDurableManifest refreshes every deduplicated WANT batch crossing a ref boundary', async (t) => {
+  const batchLength = hypercoreWants.WANT_BATCH
+  const probeLength = batchLength / 2
+  const start = batchLength - 2
+  const end = batchLength + 2
+
+  function boundaryPeer ({ missingSecond = false } = {}) {
+    const known = new Set()
+    const active = new Set()
+    const calls = []
+    const peer = {
+      remotePublicKey: b4a.from(PEER_A, 'hex'),
+      remoteBitfield: {
+        firstUnset (index) {
+          let cursor = index
+          while (true) {
+            const batchStart = Math.floor(cursor / probeLength) * probeLength
+            if (!known.has(batchStart)) return cursor
+            const availableEnd = missingSecond && batchStart === batchLength
+              ? batchLength + 1
+              : batchStart + probeLength
+            if (cursor < availableEnd) cursor = availableEnd
+            if (availableEnd < batchStart + probeLength) return cursor
+          }
+        },
+      },
+      onrange: async () => {},
+      onbitfield (message) {
+        known.add(message.start)
+      },
+      wireWant: {
+        send (message) {
+          calls.push(message.start)
+          active.add(message.start)
+          queueMicrotask(() => peer.onbitfield({
+            start: message.start,
+            bitfield: b4a.alloc(message.length / 8),
+          }))
+        },
+      },
+      wireUnwant: { send: message => active.delete(message.start) },
+      isActive: () => true,
+    }
+    return { peer, calls, active }
+  }
+
+  const complete = boundaryPeer()
+  const overlappingRefs = [
+    ref(CORE_A, start, end, 'media'),
+    ref(CORE_A, start + 1, end, 'thumbnail'),
+  ]
+  const completeHarness = createCoreHarness(new Map([[CORE_A, [complete.peer]]]))
+  const completeResult = await assessDurableManifest(overlappingRefs, {
+    trustedRelayKeys: [PEER_A],
+  }, {
+    ...completeHarness.deps,
+    bitfieldRefreshTimeoutMs: 50,
+  })
+  t.is(completeResult.eligible, true, 'both batch bitfields prove the crossing range')
+  t.alike(complete.calls, [probeLength, batchLength], 'overlapping refs issue one isolated WANT per intersecting half-batch')
+  t.is(complete.active.size, 0, 'every complete-path WANT handle is released')
+
+  const partial = boundaryPeer({ missingSecond: true })
+  const partialHarness = createCoreHarness(new Map([[CORE_A, [partial.peer]]]))
+  const partialResult = await assessDurableManifest([overlappingRefs[0]], {
+    trustedRelayKeys: [PEER_A],
+  }, {
+    ...partialHarness.deps,
+    bitfieldRefreshTimeoutMs: 20,
+  })
+  t.is(partialResult.eligible, false, 'a known missing block in the second batch fails closed')
+  t.alike(partial.calls, [probeLength, batchLength], 'missing second-probe data still requires both isolated WANTs')
+  t.is(partial.active.size, 0, 'failed refresh also releases its WANT handle')
+})
+
+test('assessDurableManifest accepts only a matching freshly solicited RANGE proof', async (t) => {
+  function rangePeer ({ response = 'matching', existingDownloader = false } = {}) {
+    const wants = []
+    const unwants = []
+    const active = new Set()
+    const originalOnRange = async () => {}
+    const downloaderHandle = { id: 'downloader' }
+    const localWant = { start: 0, handles: new Set(existingDownloader ? [downloaderHandle] : []) }
+    const peer = {
+      remotePublicKey: b4a.from(PEER_A, 'hex'),
+      remoteContiguousLength: 8,
+      remoteBitfield: { firstUnset: start => start },
+      wants: {
+        add (_index, handle) {
+          const existed = localWant.handles.size > 0
+          localWant.handles.add(handle)
+          active.add(handle)
+          handle.addWant(localWant)
+          return existed
+            ? null
+            : { want: { start: 0, length: hypercoreWants.WANT_BATCH, any: false } }
+        },
+        removeBatch (_batch, handle) {
+          active.delete(handle)
+          localWant.handles.delete(handle)
+          handle.removeWant(localWant)
+        },
+      },
+      onrange: originalOnRange,
+      onbitfield () {},
+      wireWant: {
+        send (message) {
+          wants.push(message)
+          if (response === 'none') return
+          const range = response === 'matching'
+            ? { drop: false, start: 0, length: 8 }
+            : response === 'partial'
+              ? { drop: false, start: 2, length: 2 }
+              : { drop: false, start: 20, length: 1 }
+          queueMicrotask(() => peer.onrange(range))
+        },
+      },
+      wireUnwant: { send: message => unwants.push(message) },
+      isActive: () => true,
+    }
+    return { peer, wants, unwants, active, localWant, downloaderHandle, originalOnRange }
+  }
+
+  const durabilityRef = ref(CORE_A, 2, 6, 'media')
+  const matching = rangePeer()
+  const matchingHarness = createCoreHarness(new Map([[CORE_A, [matching.peer]]]))
+  const [first, concurrent] = await Promise.all([
+    assessDurableManifest([durabilityRef], { trustedRelayKeys: [PEER_A] }, {
+      ...matchingHarness.deps,
+      bitfieldRefreshTimeoutMs: 50,
+    }),
+    assessDurableManifest([durabilityRef], { trustedRelayKeys: [PEER_A] }, {
+      ...matchingHarness.deps,
+      bitfieldRefreshTimeoutMs: 50,
+    }),
+  ])
+  t.is(first.eligible, true, 'fresh matching RANGE is assessment-local hard evidence')
+  t.is(concurrent.eligible, true, 'concurrent assessment deduplicates the same refresh')
+  t.is(matching.wants.length, 1, 'one explicit WANT bypasses stale contiguous short-circuit')
+  t.alike(matching.unwants, matching.wants, 'isolated raw WANT is symmetrically released')
+  t.is(matching.peer.onrange, matching.originalOnRange, 'temporary RANGE hook is restored')
+  t.is(matching.active.size, 0, 'assessment probe leaves no active ownership')
+
+  const shared = rangePeer({ existingDownloader: true })
+  const sharedHarness = createCoreHarness(new Map([[CORE_A, [shared.peer]]]))
+  const sharedResult = await assessDurableManifest([durabilityRef], {
+    trustedRelayKeys: [PEER_A],
+  }, {
+    ...sharedHarness.deps,
+    bitfieldRefreshTimeoutMs: 50,
+  })
+  t.is(sharedResult.eligible, true, 'assessment probes beside an existing downloader WANT')
+  t.is(shared.localWant.handles.has(shared.downloaderHandle), true, 'downloader handle remains registered')
+  t.is(shared.localWant.handles.size, 1, 'assessment never joins full-batch LocalWants ownership')
+  t.alike(shared.unwants, shared.wants, 'isolated half-probe UNWANT cannot cancel the downloader batch')
+
+  const partial = rangePeer({ response: 'partial' })
+  const partialHarness = createCoreHarness(new Map([[CORE_A, [partial.peer]]]))
+  const [held, absent] = await Promise.all([
+    assessDurableManifest([ref(CORE_A, 2, 4, 'media')], {
+      trustedRelayKeys: [PEER_A],
+    }, { ...partialHarness.deps, bitfieldRefreshTimeoutMs: 50 }),
+    assessDurableManifest([ref(CORE_A, 4, 6, 'media')], {
+      trustedRelayKeys: [PEER_A],
+    }, { ...partialHarness.deps, bitfieldRefreshTimeoutMs: 50 }),
+  ])
+  t.is(held.eligible, true, 'structured RANGE evidence proves the covered concurrent ref')
+  t.is(absent.eligible, false, 'same-batch waiter independently rejects its uncovered ref')
+  t.is(partial.wants.length, 1, 'same-batch disjoint waiters deduplicate one WANT')
+
+  for (const response of ['none', 'unrelated']) {
+    const stale = rangePeer({ response })
+    const harness = createCoreHarness(new Map([[CORE_A, [stale.peer]]]))
+    const result = await assessDurableManifest([durabilityRef], {
+      trustedRelayKeys: [PEER_A],
+    }, {
+      ...harness.deps,
+      bitfieldRefreshTimeoutMs: 10,
+    })
+    t.is(result.eligible, false, `${response} response cannot bless stale contiguous state`)
+    t.is(stale.peer.onrange, stale.originalOnRange, `${response} response leaves no hook`)
+  }
+})
+
+test('isolated assessment probes preserve downloader wants across repeated assessments', async (t) => {
+  const remoteWants = new hypercoreWants.RemoteWants()
+  const localWants = new hypercoreWants.LocalWants({})
+  const downloaderHandle = {
+    wants: null,
+    addWant (want) {
+      if (this.wants === null) this.wants = new Set()
+      this.wants.add(want)
+    },
+    removeWant (want) {
+      this.wants?.delete(want)
+      if (this.wants?.size === 0) this.wants = null
+    },
+  }
+  const downloaderRegistration = localWants.add(2, downloaderHandle)
+  t.ok(downloaderRegistration?.want, 'real LocalWants creates the downloader batch')
+  remoteWants.add(downloaderRegistration.want)
+
+  const peer = {
+    remotePublicKey: b4a.from(PEER_A, 'hex'),
+    remoteContiguousLength: 0,
+    remoteBitfield: { firstUnset: start => start },
+    wants: localWants,
+    onrange: async () => {},
+    onbitfield () {},
+    wireWant: {
+      send (message) {
+        remoteWants.add(message)
+        queueMicrotask(() => peer.onrange({ drop: false, start: 2, length: 4 }))
+      },
+    },
+    wireUnwant: { send: message => remoteWants.remove(message) },
+    isActive: () => true,
+  }
+  const harness = createCoreHarness(new Map([[CORE_A, [peer]]]))
+  let result = null
+  for (let i = 0; i < 600; i++) {
+    result = await assessDurableManifest([ref(CORE_A, 2, 6, 'media')], {
+      trustedRelayKeys: [PEER_A],
+    }, {
+      ...harness.deps,
+      bitfieldRefreshTimeoutMs: 50,
+    })
+    if (!result.eligible) break
+  }
+
+  t.is(result?.eligible, true, 'all 600 fresh assessments remain eligible')
+  t.is(remoteWants.size, 1, 'remote WANT count returns to the downloader baseline')
+  t.is(remoteWants.all, false, 'repeated probes never degrade RemoteWants to all=true')
+  t.is(remoteWants.has(2), true, 'the downloader range remains remotely requested')
+  t.is(localWants.wants.size, 1, 'real LocalWants retains the downloader registration')
+  t.is(downloaderHandle.wants?.size, 1, 'the downloader handle remains attached and responsive')
 })
 
 test('assessDurableManifest rejects peers split across refs and partial ranges', async (t) => {

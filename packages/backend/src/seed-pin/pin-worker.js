@@ -739,16 +739,35 @@ export class PinWorker {
         )
         byteLength = typeof range === 'number' ? range : range?.byteLength
       } else if (core.state) {
-        const offsets = await runJobOperation(
-          job,
-          Promise.all([
-            MerkleTree.byteOffset(core.state, 2 * start),
-            MerkleTree.byteOffset(core.state, 2 * end),
-          ]),
-          this.rangeTimeout,
-          () => capacityFault(),
-        )
-        const padding = Number.isSafeInteger(core.padding) && core.padding >= 0 ? core.padding : 0
+        let offsets
+        let offsetsIncludePadding = true
+        const deadline = Date.now() + this.rangeTimeout
+        const metadataRemaining = deadline - Date.now()
+        if (metadataRemaining <= 0) throw capacityFault()
+        try {
+          offsets = await runJobOperation(
+            job,
+            Promise.all([
+              MerkleTree.byteOffset(core.state, 2 * start),
+              MerkleTree.byteOffset(core.state, 2 * end),
+            ]),
+            metadataRemaining,
+            () => capacityFault(),
+          )
+        } catch (error) {
+          this._throwIfInterrupted(job)
+          if (error instanceof WorkerFault || typeof core.seek !== 'function') throw error
+          offsets = await Promise.all([
+            this._seekByteOffset(job, core, start, deadline),
+            this._seekByteOffset(job, core, end, deadline),
+          ])
+          // Hypercore seek offsets already exclude per-block encryption padding.
+          offsetsIncludePadding = false
+        }
+        const padding = offsetsIncludePadding &&
+          Number.isSafeInteger(core.padding) && core.padding >= 0
+          ? core.padding
+          : 0
         byteLength = offsets[1] - offsets[0] - (end - start) * padding
       }
       if (!Number.isSafeInteger(byteLength) || byteLength < 0) throw capacityFault()
@@ -758,6 +777,76 @@ export class PinWorker {
       if (error instanceof WorkerFault) throw error
       throw capacityFault()
     }
+  }
+
+  async _seekByteOffset (job, core, index, deadline = Date.now() + this.rangeTimeout) {
+    const length = core.length
+    const byteLength = core.byteLength
+    if (!Number.isSafeInteger(length) || length < 0 ||
+        !Number.isSafeInteger(byteLength) || byteLength < 0 ||
+        !Number.isSafeInteger(index) || index < 0 || index > length) {
+      throw capacityFault()
+    }
+    if (index === 0) return 0
+    if (index === length) return byteLength
+    if (byteLength === 0) return 0
+
+    let lower = 0
+    let upper = byteLength
+    let candidateOffset = -1
+    let candidate = null
+    while (lower < upper) {
+      this._throwIfInterrupted(job)
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw capacityFault()
+      const offset = lower + Math.floor((upper - lower) / 2)
+      const found = await runJobOperation(
+        job,
+        Promise.resolve().then(() => core.seek(offset, {
+          wait: true,
+          timeout: remaining,
+        })),
+        remaining,
+        () => capacityFault(),
+      )
+      if (!Array.isArray(found) || !Number.isSafeInteger(found[0]) ||
+          found[0] < 0 || found[0] > length ||
+          !Number.isSafeInteger(found[1]) || found[1] < 0 || found[1] > offset) {
+        throw capacityFault()
+      }
+      if (found[0] < index) {
+        lower = offset + 1
+      } else {
+        upper = offset
+        candidateOffset = offset
+        candidate = found
+      }
+    }
+    if (candidateOffset !== lower) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw capacityFault()
+      candidate = await runJobOperation(
+        job,
+        Promise.resolve().then(() => core.seek(lower, {
+          wait: true,
+          timeout: remaining,
+        })),
+        remaining,
+        () => capacityFault(),
+      )
+    }
+    if (!Array.isArray(candidate) || !Number.isSafeInteger(candidate[0]) ||
+        candidate[0] < index || candidate[0] > length ||
+        !Number.isSafeInteger(candidate[1]) || candidate[1] < 0 ||
+        candidate[1] > lower) {
+      throw capacityFault()
+    }
+    const blockStart = lower - candidate[1]
+    if (!Number.isSafeInteger(blockStart) || blockStart < 0 ||
+        blockStart > byteLength) {
+      throw capacityFault()
+    }
+    return blockStart
   }
 
   async _setPinning (record) {

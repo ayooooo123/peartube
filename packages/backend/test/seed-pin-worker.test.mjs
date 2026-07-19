@@ -878,6 +878,89 @@ test('PinWorker factory uses real Corestore cores, requests exact ranges, verifi
   assert.equal(sessionCloses, 0, 'complete pins remain retained until stop/release')
 })
 
+test('PinWorker pins an exact sparse range from a real remote Corestore', async () => {
+  const sourceDir = makeTempDir('peartube-seed-pin-sparse-source-')
+  const relayDir = makeTempDir('peartube-seed-pin-sparse-relay-')
+  const sourceStore = new Corestore(sourceDir)
+  let relay = null
+  let worker = null
+  let sourceReplication = null
+  let relayReplication = null
+  try {
+    await sourceStore.ready()
+    relay = await openMetadata(relayDir)
+    const source = sourceStore.get({ name: 'sparse-source' })
+    await source.ready()
+    const blocks = [b4a.alloc(0), b4a.alloc(10, 1), b4a.alloc(0), b4a.alloc(12, 2)]
+    await source.append(blocks)
+
+    const remote = relay.corestore.get({ key: source.key })
+    await remote.ready()
+    sourceReplication = sourceStore.replicate(true, { live: true })
+    relayReplication = relay.corestore.replicate(false, { live: true })
+    sourceReplication.pipe(relayReplication).pipe(sourceReplication)
+    await remote.update({ wait: true })
+
+    const request = requestFor('worker/real-sparse', [{
+      coreKey: b4a.toString(source.key, 'hex'),
+      start: 1,
+      end: 4,
+      kind: 'media',
+    }])
+    const store = new PinStore({ db: relay.db })
+    await acceptRequest(store, request)
+    worker = new PinWorker({
+      corestore: relay.corestore,
+      pinStore: store,
+      concurrency: 1,
+      rangeTimeout: 1_000,
+      downloadTimeout: 5_000,
+    })
+    await worker.start(request.requestId)
+    await worker.waitForIdle()
+
+    const record = await store.getByRequestId(request.requestId)
+    assert.equal(record.status.state, 'complete')
+    assert.equal(record.progress.reservedBytes, 22, 'leading and interior empty blocks preserve exact byte boundaries')
+    assert.equal(await remote.has(1, 4), true)
+  } finally {
+    await worker?.stop().catch(() => {})
+    sourceReplication?.destroy()
+    relayReplication?.destroy()
+    await closeMetadata(relay)
+    await sourceStore.close().catch(() => {})
+    rmSync(sourceDir, { recursive: true, force: true })
+    rmSync(relayDir, { recursive: true, force: true })
+  }
+})
+
+test('sparse byte-offset search shares one deadline across every probe', async () => {
+  const worker = Object.assign(Object.create(PinWorker.prototype), {
+    rangeTimeout: 15,
+    stopping: false,
+  })
+  const job = {
+    cancelled: false,
+    stopping: false,
+    abortListeners: new Set(),
+  }
+  const boundary = 2 ** 52
+  const core = {
+    length: 2,
+    byteLength: Number.MAX_SAFE_INTEGER,
+    async seek (offset) {
+      await new Promise(resolve => setTimeout(resolve, 9))
+      return offset < boundary ? [0, offset] : [1, offset - boundary]
+    },
+  }
+  const startedAt = Date.now()
+  await assert.rejects(
+    worker._seekByteOffset(job, core, 1, startedAt + worker.rangeTimeout),
+    error => error?.reason === 'capacity',
+  )
+  assert.ok(Date.now() - startedAt < 100, 'all binary-search probes obey one total deadline')
+})
+
 test('complete pins survive Corestore reopen and resume reopens/verifies retention without redownload', async () => {
   const dir = makeTempDir('peartube-seed-pin-complete-reopen-')
   let resources = null

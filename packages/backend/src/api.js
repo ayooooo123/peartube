@@ -1,4 +1,5 @@
 import b4a from 'b4a';
+import hypercoreWants from 'hypercore/lib/wants.js';
 /**
  * Core API Module - Shared backend API methods
  *
@@ -76,6 +77,13 @@ function extractPeerKeyHex(peer) {
 
 const MAX_DURABILITY_REFS = 256
 const MAX_DURABILITY_PEERS_PER_CORE = 1024
+const MAX_DURABILITY_BITFIELD_REFRESHES = 2048
+const DEFAULT_DURABILITY_BITFIELD_REFRESH_TIMEOUT_MS = 250
+const MAX_DURABILITY_BITFIELD_REFRESH_TIMEOUT_MS = 5_000
+const MAX_DURABILITY_BITFIELD_REFRESH_DEADLINE_MS = 5_000
+const MIN_DURABILITY_WANT_PROBE = 32
+const MAX_CONCURRENT_DURABILITY_REFRESHES = 16
+const durabilityAvailabilityRefreshes = new WeakMap()
 
 function failClosedDurabilityAssessment(error = null) {
   return {
@@ -110,6 +118,282 @@ function peerBitfieldHasFullRange(peer, start, end) {
   if (typeof firstUnset !== 'function') return false
   const missing = firstUnset.call(peer.remoteBitfield, start)
   return Number.isSafeInteger(missing) && missing >= end
+}
+
+function peerBitfieldHasBatchRefs(peer, refs, batchStart, batchEnd) {
+  for (const ref of refs) {
+    const start = Math.max(ref.start, batchStart)
+    const end = Math.min(ref.end, batchEnd)
+    if (start < end && !peerBitfieldHasFullRange(peer, start, end)) return false
+  }
+  return true
+}
+
+function peerHasRefAvailability(peer, ref, refreshEvidence) {
+  if (peerBitfieldHasFullRange(peer, ref.start, ref.end)) return true
+  const batchLength = refreshEvidence?.batchLength
+  const rangeBatches = refreshEvidence?.rangeBatches?.get(peer)
+  if (!Number.isSafeInteger(batchLength) || !rangeBatches) return false
+  let batchStart = Math.floor(ref.start / batchLength) * batchLength
+  while (batchStart < ref.end) {
+    const batchEnd = batchStart + batchLength
+    const start = Math.max(ref.start, batchStart)
+    const end = Math.min(ref.end, batchEnd)
+    if (!peerBitfieldHasFullRange(peer, start, end) && !rangeBatches.has(batchStart)) return false
+    if (!Number.isSafeInteger(batchEnd) || batchEnd >= ref.end) break
+    batchStart = batchEnd
+  }
+  return true
+}
+
+function messageCoversBatchRefs(message, refs, batchStart, batchEnd) {
+  if (!message || message.drop === true ||
+      !Number.isSafeInteger(message.start) || !Number.isSafeInteger(message.length) ||
+      message.start < 0 || message.length < 0) return false
+  const messageEnd = message.start + message.length
+  if (!Number.isSafeInteger(messageEnd)) return false
+  for (const ref of refs) {
+    const start = Math.max(ref.start, batchStart)
+    const end = Math.min(ref.end, batchEnd)
+    if (start < end && (message.start > start || messageEnd < end)) return false
+  }
+  return true
+}
+
+function bitfieldMessageCoversBatchRefs(message, refs, batchStart, batchEnd) {
+  const bitfieldLength = message?.bitfield?.byteLength
+  if (!Number.isSafeInteger(bitfieldLength)) return false
+  return messageCoversBatchRefs({
+    drop: false,
+    start: message.start,
+    length: bitfieldLength * 8,
+  }, refs, batchStart, batchEnd)
+}
+
+function finishAvailabilityEntry(state, entry, evidence) {
+  if (entry.settled) return
+  entry.settled = true
+  clearTimeout(entry.timer)
+  state.inflight.delete(entry.batchStart)
+  if (entry.sent) {
+    try { state.peer.wireUnwant.send(entry.want) } catch {}
+  }
+  entry.resolve(evidence)
+  if (state.inflight.size !== 0) return
+  if (state.peer.onrange === state.wrappedOnRange) state.peer.onrange = state.originalOnRange
+  if (state.peer.onbitfield === state.wrappedOnBitfield) state.peer.onbitfield = state.originalOnBitfield
+  durabilityAvailabilityRefreshes.delete(state.peer)
+}
+
+function routeAvailabilityRange(state, message) {
+  if (!message || message.drop === true ||
+      !Number.isSafeInteger(message.start) || !Number.isSafeInteger(message.length) ||
+      message.start < 0 || message.length < 0) return
+  const end = message.start + message.length
+  if (!Number.isSafeInteger(end)) return
+  for (const entry of [...state.inflight.values()]) {
+    if (!entry.coverages.some(range => message.start < range.end && end > range.start)) continue
+    finishAvailabilityEntry(state, entry, {
+      type: 'range',
+      range: { drop: false, start: message.start, length: message.length },
+    })
+  }
+}
+
+function routeAvailabilityBitfield(state, message) {
+  const length = message?.bitfield?.byteLength
+  if (!Number.isSafeInteger(message?.start) || !Number.isSafeInteger(length)) return
+  const end = message.start + length * 8
+  if (!Number.isSafeInteger(end)) return
+  for (const entry of [...state.inflight.values()]) {
+    if (message.start > entry.batchStart || end < entry.batchEnd) continue
+    finishAvailabilityEntry(state, entry, { type: 'bitfield' })
+  }
+}
+
+function createAvailabilityState(peer) {
+  // Hypercore 11 has no public availability refresh API. Wire callbacks use
+  // c.userData dynamically, so one guarded broker observes fresh responses
+  // while preserving Hypercore's original handlers.
+  if (typeof peer?.onrange !== 'function' ||
+      typeof peer?.onbitfield !== 'function' ||
+      typeof peer?.wireWant?.send !== 'function' ||
+      typeof peer?.wireUnwant?.send !== 'function') {
+    return null
+  }
+  const state = {
+    peer,
+    inflight: new Map(),
+    originalOnRange: peer.onrange,
+    originalOnBitfield: peer.onbitfield,
+    wrappedOnRange: null,
+    wrappedOnBitfield: null,
+  }
+  state.wrappedOnRange = async function (message) {
+    const result = await state.originalOnRange.call(this, message)
+    routeAvailabilityRange(state, message)
+    return result
+  }
+  state.wrappedOnBitfield = async function (message) {
+    const result = await state.originalOnBitfield.call(this, message)
+    routeAvailabilityBitfield(state, message)
+    return result
+  }
+  peer.onrange = state.wrappedOnRange
+  peer.onbitfield = state.wrappedOnBitfield
+  durabilityAvailabilityRefreshes.set(peer, state)
+  return state
+}
+
+function requestPeerAvailability(peer, refs, batchStart, batchEnd, timeout) {
+  let state = durabilityAvailabilityRefreshes.get(peer)
+  if (!state) state = createAvailabilityState(peer)
+  if (!state) return Promise.resolve(null)
+
+  const coverages = refs.map(ref => ({
+    start: Math.max(ref.start, batchStart),
+    end: Math.min(ref.end, batchEnd),
+  })).filter(range => range.start < range.end)
+  const existing = state.inflight.get(batchStart)
+  if (existing) {
+    existing.coverages.push(...coverages)
+    return existing.promise
+  }
+
+  const want = { start: batchStart, length: batchEnd - batchStart, any: false }
+  let resolveEntry = null
+  const promise = new Promise(resolve => { resolveEntry = resolve })
+  const entry = {
+    batchStart,
+    batchEnd,
+    coverages,
+    promise,
+    resolve: resolveEntry,
+    want,
+    sent: false,
+    timer: null,
+    settled: false,
+  }
+  state.inflight.set(batchStart, entry)
+  entry.timer = setTimeout(() => finishAvailabilityEntry(state, entry, null), timeout)
+  try {
+    peer.wireWant.send(want)
+    entry.sent = true
+  } catch {
+    finishAvailabilityEntry(state, entry, null)
+  }
+  return promise
+}
+
+async function refreshPeerBitfieldBatch(peer, refs, batchStart, batchEnd, timeout) {
+  if (peerBitfieldHasBatchRefs(peer, refs, batchStart, batchEnd)) {
+    return { type: 'bitfield' }
+  }
+  return requestPeerAvailability(peer, refs, batchStart, batchEnd, timeout)
+}
+
+async function refreshPeerBitfieldRanges(peers, refs, deps, refreshBudget) {
+  const configuredTimeout = deps?.bitfieldRefreshTimeoutMs
+  const timeout = configuredTimeout === undefined
+    ? DEFAULT_DURABILITY_BITFIELD_REFRESH_TIMEOUT_MS
+    : configuredTimeout
+  if (!Number.isSafeInteger(timeout) || timeout <= 0 ||
+      timeout > MAX_DURABILITY_BITFIELD_REFRESH_TIMEOUT_MS) {
+    throw new RangeError(
+      `bitfieldRefreshTimeoutMs must be between 1 and ${MAX_DURABILITY_BITFIELD_REFRESH_TIMEOUT_MS}`
+    )
+  }
+  const configuredDeadline = deps?.bitfieldRefreshDeadlineMs
+  const deadlineMs = configuredDeadline === undefined
+    ? MAX_DURABILITY_BITFIELD_REFRESH_DEADLINE_MS
+    : configuredDeadline
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 ||
+      deadlineMs > MAX_DURABILITY_BITFIELD_REFRESH_DEADLINE_MS) {
+    throw new RangeError(
+      `bitfieldRefreshDeadlineMs must be between 1 and ${MAX_DURABILITY_BITFIELD_REFRESH_DEADLINE_MS}`
+    )
+  }
+  if (refreshBudget.deadline === null) refreshBudget.deadline = Date.now() + deadlineMs
+
+  const incompletePeers = peers.filter(peer =>
+    refs.some(ref => !peerBitfieldHasFullRange(peer, ref.start, ref.end))
+  )
+  const rangeBatches = new Map()
+  if (incompletePeers.length === 0) return { batchLength: null, rangeBatches }
+
+  const batchLength = hypercoreWants?.WANT_BATCH
+  const probeLength = batchLength / 2
+  const minRange = MIN_DURABILITY_WANT_PROBE
+  if (!Number.isSafeInteger(batchLength) ||
+      !Number.isSafeInteger(probeLength) ||
+      !Number.isSafeInteger(minRange) ||
+      probeLength < minRange ||
+      (probeLength & (probeLength - 1)) !== 0) {
+    throw new Error('unsupported Hypercore isolated WANT probe length')
+  }
+
+  const batchStarts = new Set()
+  for (const ref of refs) {
+    let batchStart = Math.floor(ref.start / probeLength) * probeLength
+    while (batchStart < ref.end) {
+      batchStarts.add(batchStart)
+      if (batchStarts.size > MAX_DURABILITY_BITFIELD_REFRESHES) {
+        throw new RangeError(`durability bitfield refreshes exceed maximum of ${MAX_DURABILITY_BITFIELD_REFRESHES}`)
+      }
+      const batchEnd = batchStart + probeLength
+      if (!Number.isSafeInteger(batchEnd) || batchEnd >= ref.end) break
+      batchStart = batchEnd
+    }
+  }
+
+  const pending = []
+  for (const peer of incompletePeers) {
+    for (const batchStart of batchStarts) {
+      const batchEnd = batchStart + probeLength
+      if (peerBitfieldHasBatchRefs(peer, refs, batchStart, batchEnd)) continue
+      if (refreshBudget.used >= MAX_DURABILITY_BITFIELD_REFRESHES) {
+        throw new RangeError(`durability bitfield refreshes exceed maximum of ${MAX_DURABILITY_BITFIELD_REFRESHES}`)
+      }
+      refreshBudget.used++
+      pending.push({ peer, batchStart, batchEnd })
+    }
+  }
+
+  let cursor = 0
+  const runNext = async () => {
+    while (cursor < pending.length) {
+      const current = pending[cursor++]
+      const remaining = refreshBudget.deadline - Date.now()
+      if (remaining <= 0) return
+      const evidence = await refreshPeerBitfieldBatch(
+        current.peer,
+        refs,
+        current.batchStart,
+        current.batchEnd,
+        Math.min(timeout, remaining),
+      )
+      if (!evidence || peerBitfieldHasBatchRefs(
+        current.peer,
+        refs,
+        current.batchStart,
+        current.batchEnd,
+      )) continue
+      if (evidence.type !== 'range' || !messageCoversBatchRefs(
+        evidence.range,
+        refs,
+        current.batchStart,
+        current.batchEnd,
+      )) continue
+      let batches = rangeBatches.get(current.peer)
+      if (!batches) rangeBatches.set(current.peer, batches = new Map())
+      batches.set(current.batchStart, evidence.range)
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(MAX_CONCURRENT_DURABILITY_REFRESHES, pending.length) },
+    runNext,
+  ))
+  return { batchLength: probeLength, rangeBatches }
 }
 
 function durabilityPeerIterable(core, getCorePeers) {
@@ -163,7 +447,7 @@ export async function assessDurableManifest(refs, trust = {}, deps = {}) {
     if (coreRefs) coreRefs.push(durabilityRef)
     else refsByCore.set(durabilityRef.coreKey, [durabilityRef])
   }
-
+  const refreshBudget = { used: 0, deadline: null }
   let holderKeys = null
   try {
     for (const [coreKey, coreRefs] of refsByCore) {
@@ -183,13 +467,23 @@ export async function assessDurableManifest(refs, trust = {}, deps = {}) {
             throw new Error(`peer count exceeds maximum of ${MAX_DURABILITY_PEERS_PER_CORE}`)
           }
         }
+        const candidatePeers = peers.filter(peer => {
+          const holderKey = authenticatedPeerKeyHex(peer)
+          return holderKey !== null && (holderKeys === null || holderKeys.has(holderKey))
+        })
+        const refreshEvidence = await refreshPeerBitfieldRanges(
+          candidatePeers,
+          coreRefs,
+          deps,
+          refreshBudget,
+        )
 
         for (const durabilityRef of coreRefs) {
           const holders = new Set()
           for (const peer of peers) {
             const holderKey = authenticatedPeerKeyHex(peer)
             if (!holderKey || (holderKeys !== null && !holderKeys.has(holderKey))) continue
-            if (peerBitfieldHasFullRange(peer, durabilityRef.start, durabilityRef.end)) {
+            if (peerHasRefAvailability(peer, durabilityRef, refreshEvidence)) {
               holders.add(holderKey)
             }
           }

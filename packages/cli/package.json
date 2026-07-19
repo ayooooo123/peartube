@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
+    "peartube": "peartube.js",
     "peartube-relay": "bin.js",
     "peartube-peer": "bin.js",
     "peartube-relay-bare": "bare-bin.js",

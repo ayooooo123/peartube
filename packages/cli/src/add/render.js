@@ -12,7 +12,8 @@ const LIST_SCREENS = {
   creatorContent: { subtitle: 'Choose content', label: 'Content', action: 'Select' },
   creatorAttachment: { subtitle: 'Attach creator source', label: 'Attachment', action: 'Select' },
   sourceSelection: { subtitle: 'Choose a source', label: 'Source', action: 'Select' },
-  bulkMapping: { subtitle: 'Verify source mapping', label: 'Mapping', action: 'Continue' }
+  bulkMapping: { subtitle: 'Verify source mapping', label: 'Mapping', action: 'Continue' },
+  review: { subtitle: 'Confirm and publish', label: 'Review', action: 'Publish' }
 }
 
 const PHASE_LABELS = {

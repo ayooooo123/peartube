@@ -4,6 +4,10 @@ import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
 import { createBackendExecutorDeps } from './backend-deps.js'
 import { readFileSync } from 'node:fs'
+import { createInteractiveDriver } from './interactive.js'
+import { createPickerState } from './picker-state.js'
+import nodePath from 'node:path'
+import { promises as nodeFsPromises } from 'node:fs'
 
 function loadConfigFile (path) {
   if (!path) return {}
@@ -133,23 +137,49 @@ async function runScripted ({ context, preferences, deps, emitProgress }) {
   }
 }
 
-async function runInteractive ({ context, preferences, deps, emitProgress }) {
-  // The interactive picker/discovery flow is driven by the terminal engine and
-  // shares the same executeSingle publication path once a selection is made.
+async function runInteractive ({ context, preferences, deps }) {
   const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger: stderrLogger(context.stderr) })
   try {
+    const tmdb = preferences.tmdbApiKey
+      ? deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
+      : null
+    const ytDlp = typeof deps.createYtDlpProvider === 'function'
+      ? deps.createYtDlpProvider({ bin: preferences.ytDlpPath || 'yt-dlp', cookiesPath: preferences.ytDlpCookiesPath || null })
+      : null
+    const driver = createInteractiveDriver({
+      tmdb,
+      ytDlp,
+      searchLimit: preferences.searchLimit,
+      cwd: context.cwd || process.cwd(),
+      fs: nodeFsPromises,
+      path: nodePath,
+      execute: (plan, onProgress) => executeSingle({
+        context,
+        runtime,
+        deps,
+        preferences,
+        channelDraft: plan.channelDraft,
+        itemDraft: plan.itemDraft,
+        fetchUrl: plan.fetchUrl,
+        emitProgress: onProgress
+      })
+    })
+    const initialState = createPickerState({ query: typeof context.query === 'string' ? context.query : '' })
     const selection = await deps.runTerminal({
       input: context.stdin,
       output: context.stderr,
       signals: context.signals || process,
-      initialState: deps.initialPickerState,
+      initialState,
+      onReady: driver.onReady,
+      onState: driver.onState,
+      onAction: driver.onAction,
       render: (state) => renderPickerLines(state, { columns: context.stderr?.columns || 80, rows: context.stderr?.rows || 24, color: !context.flags?.noColor })
     })
-    if (!selection || selection.result?.status !== 'completed') {
-      return { status: 'cancelled' }
-    }
-    const { channelDraft, itemDraft, fetchUrl } = selection.result.value
-    return await executeSingle({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress })
+    driver.cleanup()
+    if (!selection || !selection.result) return { status: 'cancelled' }
+    if (selection.result.status === 'completed') return selection.result.value
+    if (selection.result.status === 'exited') return { status: 'exited' }
+    return { status: 'cancelled' }
   } finally {
     await runtime.close?.()
   }

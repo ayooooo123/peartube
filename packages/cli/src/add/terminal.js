@@ -71,6 +71,8 @@ export function runTerminal (options = {}) {
     input.on('keypress', onKeypress)
     signals.on('SIGINT', onSigint)
 
+    if (typeof options.onReady === 'function') options.onReady(handle)
+
     if (!draw()) return
     if (state.result) finish(state)
 
@@ -85,7 +87,7 @@ export function runTerminal (options = {}) {
       }
       output.write(frameFor(lines, previousLineCount))
       previousLineCount = lines.length
-      if (typeof options.onState === 'function') options.onState(state)
+      if (typeof options.onState === 'function') options.onState(state, handle)
       return true
     }
 
@@ -93,7 +95,7 @@ export function runTerminal (options = {}) {
       if (cleaned || !rawAction) return
       const action = adaptAction(rawAction, state)
       if (!action) return
-      if (typeof options.onAction === 'function') options.onAction(action)
+      if (typeof options.onAction === 'function') options.onAction(action, handle)
       state = reducePicker(state, action)
       if (!draw()) return
       if (state.result) finish(state)

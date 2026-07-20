@@ -15,7 +15,7 @@ The command provides an in-process interactive picker with live search, `Tab` co
 
 TV and movie discovery comes from TMDB. Creator discovery and source inspection use an explicit capability matrix around the existing `yt-dlp` dependency. PearTube does not require SearXNG or a paid creator-data service. Platforms that `yt-dlp` cannot search or enumerate remain fully usable through creator URLs, content URLs, and local files.
 
-Imported content is not stored as a loose archive. Each TV show, movie, or creator becomes a rich PearTube channel. Optional channel and video schema fields preserve profile artwork, source identity, episode coordinates, publication dates, provenance, and duplicate keys. A schema-first protocol contract exposes structured channel catalogs so Expo, Electrobun, and native macOS clients can render creator, season, movie, stream, and extras views consistently.
+Imported content is not stored as a loose archive. Each TV show, movie, or creator becomes a rich PearTube channel. Optional channel and video schema fields preserve profile artwork, source identity, episode coordinates, publication dates, provenance, and duplicate keys. A schema-first protocol contract exposes structured channel catalogs so the shared Expo mobile and Electrobun desktop clients can render creator, season, movie, stream, and extras views consistently.
 
 Bulk imports are mapping-first. PearTube verifies a complete one-to-one assignment between sources and target episodes or creator items before uploading any media bytes. Ambiguous assignments require explicit user action.
 
@@ -266,7 +266,7 @@ The pre-transfer guarantee covers one importer and claims already observed in sy
 
 ## Structured Catalog Protocol
 
-Backend-facing capability starts in `packages/spec/schema.cjs`, then flows through generated JS/HRPC, `@peartube/protocol`, `@peartube/platform`, and generated Swift support.
+Backend-facing capability starts in `packages/spec/schema.cjs`, then flows through generated JS/HRPC, `@peartube/host`, and `@peartube/platform`.
 
 The catalog contract should be paginated rather than returning an unbounded channel history in one response.
 
@@ -299,7 +299,7 @@ Clients do not parse filenames or titles. All legacy or otherwise ungrouped cont
 
 Group-summary order is stable. Creator groups use `latest`, `videos`, `streams`, `extras`; TV uses numeric seasons ascending, then `extras`, then conditional `latest`; movie uses `movie`, `trailers`, `extras`, then conditional `latest`; standard channels use `latest`. Empty optional groups are omitted without changing the relative order of groups that remain.
 
-Native clients continue to validate the universal protocol version before applying returned data. Introducing the catalog contract requires the appropriate shared protocol version update and regenerated Swift outputs.
+Clients continue to validate the universal protocol version before applying returned data. Introducing the catalog contract requires the shared protocol version update and regenerated JavaScript outputs.
 
 ## Client Presentation
 
@@ -325,7 +325,7 @@ The content must appear organized after publication, not only in CLI output.
 - primary movie item
 - trailers and extras separated
 
-Expo/Electrobun and native macOS consume the same protocol shape. Platform-specific rendering may differ, but grouping semantics must not.
+Expo mobile and Electrobun desktop consume the same protocol shape. Platform-specific rendering may differ, but grouping semantics must not.
 
 ## Verified Bulk Uploads
 
@@ -615,7 +615,6 @@ Property-oriented tests should enforce one-to-one mapping invariants across gene
 - keyset pagination mutation behavior and no duplicate items across a traversal
 - protocol-version mismatch rejection
 - Expo/Electrobun creator and TV grouping smoke checks
-- native macOS creator and TV grouping smoke checks
 
 ### End-to-end smoke scenarios
 
@@ -676,8 +675,8 @@ After the first vertical deliverable, the remaining product program proceeds thr
 
 1. **Catalog protocol and clients**
    - add schema-first paginated catalog RPCs and a bounded identity-search contract if network-wide authoritative lookup is desired
-   - regenerate and atomically cut over host, protocol, platform, and Swift consumers
-   - render structured and legacy channels in Expo/Electrobun and native macOS
+   - regenerate and atomically cut over host, platform, and generated JavaScript consumers
+   - render structured and legacy channels in Expo mobile and Electrobun desktop
 2. **Bulk and creator import**
    - add creator discovery and cross-platform source attachment
    - add verified bulk mapping, extend import claims to bulk rows, and extend durable queue execution
@@ -707,7 +706,7 @@ A native creator directory is a strong long-term direction, but it cold-starts e
 
 - HyperDB evolution appends optional fields where an existing record evolves, introduces explicit `channelSources`, `channelArtwork`, and `importClaims` collections where records have independent identity, regenerates channel/public outputs together, and keeps a legacy decode fixture.
 - Channel artwork uses a dedicated collection keyed by role (`avatar`, `poster`, `banner`, `backdrop`) with MIME type, remote provenance URL, and blob coordinates. Published profile responses normalize that collection.
-- HRPC operations are `get-content-catalog` and `get-content-items`, with the pagination semantics in this specification. Their host/protocol/platform/generated-JS/generated-Swift release and shared protocol-version bump are one atomic cutover.
+- HRPC operations are `get-content-catalog` and `get-content-items`, with the pagination semantics in this specification. Their host/platform/generated-JS release and shared protocol-version bump are one atomic cutover.
 - Interactive settings use the existing `PEARTUBE_CONFIG` file under a `content` section, with `TMDB_API_KEY` as the environment override. Secret entry disables echo, logging redacts it, and a newly created secret-bearing config is mode `0600`.
 - Released import claims use a configurable retention window with a 30-day default. Compaction still requires no active job reference and either a published winner or no remaining contender.
 - The source capability matrix is an allowlist in code. V1 must support fixture-backed YouTube text search and generic direct-URL inspection; any additional search/profile/list capability is enabled only with a committed adapter fixture. Live failures still degrade at runtime.

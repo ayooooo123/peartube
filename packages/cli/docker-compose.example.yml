@@ -16,6 +16,11 @@ services:
       PEARTUBE_NETWORK_ANNOUNCE: "true"
       PEARTUBE_NETWORK_BOOTSTRAP: default
       PEARTUBE_LOG_LEVEL: info
+      # TMDB powers the Discover catalog and auto-classifies archived videos as
+      # movies/TV. Metadata only — you still archive bytes from a source URL.
+      # Create a key at https://www.themoviedb.org/settings/api
+      PEARTUBE_TMDB_API_KEY: your-tmdb-api-key-here
+      PEARTUBE_TMDB_ENABLED: "true"
       # Optional allowlist keys for private or curated public mode:
       # PEARTUBE_ADMISSION_CHANNELS: chan-key-1,chan-key-2
       # PEARTUBE_ADMISSION_OWNERS: owner-key-1

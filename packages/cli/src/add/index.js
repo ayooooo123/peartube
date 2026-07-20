@@ -117,7 +117,7 @@ async function runScripted ({ context, preferences, deps, emitProgress }) {
       const episode = episodes.find((entry) => entry.episodeNumber === Number(flags.episode))
       if (!episode) throw new AddUsageError(`Episode S${flags.season}E${flags.episode} was not found`)
       channelDraft = buildShowChannelDraft(show)
-      itemDraft = buildEpisodeItemDraft(episode, sourceFrom(fetchUrl))
+      itemDraft = buildEpisodeItemDraft(episode, sourceFrom(fetchUrl), { mediaProvider: 'tmdb', mediaId: show.mediaId })
     } else if (flags.type === 'movie') {
       const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
       const movie = await tmdb.getMovie(flags.movieId)

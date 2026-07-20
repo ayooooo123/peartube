@@ -99,5 +99,12 @@ function isDirectInvocation() {
 }
 
 if (isDirectInvocation()) {
-  process.exitCode = await runPeartube()
+  const code = await runPeartube()
+  // The result line is already written; exit promptly so late backend
+  // diagnostics (DHT/shutdown) can never leak past the --json stdout line.
+  await new Promise((resolve) => {
+    if (process.stdout.writableLength === 0) return resolve()
+    process.stdout.write('', resolve)
+  })
+  process.exit(code)
 }

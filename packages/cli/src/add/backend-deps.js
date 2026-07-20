@@ -139,7 +139,10 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
         importIdentityKey,
         importClaimantId,
         seasonNumber: Number.isInteger(item.seasonNumber) ? item.seasonNumber : undefined,
-        episodeNumber: Number.isInteger(item.episodeNumber) ? item.episodeNumber : undefined
+        episodeNumber: Number.isInteger(item.episodeNumber) ? item.episodeNumber : undefined,
+        mediaProvider: item.mediaProvider || undefined,
+        mediaId: item.mediaId || undefined,
+        thumbnailUrl: (Array.isArray(item.artwork) && item.artwork[0] && item.artwork[0].url) || undefined
       })
       const result = await uploadManager.uploadFromPath(ch, path, options, fs, (pct) => emitProgress(`Uploading ${pct}%`))
       if (!result?.success) throw new Error(result?.error || 'Upload failed')

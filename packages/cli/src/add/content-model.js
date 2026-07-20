@@ -114,7 +114,7 @@ export function buildCreatorChannelDraft (creator, channelTarget = { mode: 'new'
   })
 }
 
-export function buildEpisodeItemDraft (episode, source = {}) {
+export function buildEpisodeItemDraft (episode, source = {}, { mediaProvider = 'tmdb', mediaId = null } = {}) {
   return buildItemDraft({
     contentKind: 'episode',
     title: episode.title || null,
@@ -122,6 +122,8 @@ export function buildEpisodeItemDraft (episode, source = {}) {
     episodeNumber: episode.episodeNumber ?? null,
     sourcePublishedAt: episode.airDate || null,
     artwork: normalizeArtwork(episode.artwork),
+    mediaProvider,
+    mediaId: mediaId != null ? String(mediaId) : null,
     source
   })
 }
@@ -132,6 +134,8 @@ export function buildMovieItemDraft (movie, source = {}) {
     title: movie.title || movie.name || null,
     sourcePublishedAt: movie.releaseDate || null,
     artwork: normalizeArtwork(movie.artwork),
+    mediaProvider: movie.mediaProvider || movie.provider || 'tmdb',
+    mediaId: movie.mediaId != null ? String(movie.mediaId) : null,
     source
   })
 }
@@ -153,7 +157,7 @@ export function buildCreatorItemDraft (item, source = {}) {
   })
 }
 
-function buildItemDraft ({ contentKind, title, seasonNumber = null, episodeNumber = null, sourcePublishedAt = null, artwork = [], source = {} }) {
+function buildItemDraft ({ contentKind, title, seasonNumber = null, episodeNumber = null, sourcePublishedAt = null, artwork = [], source = {}, mediaProvider = null, mediaId = null }) {
   const identityUrl = source.identityUrl ? normalizeIdentityUrl(source.identityUrl) : null
   const draft = {
     kind: 'item',
@@ -166,6 +170,8 @@ function buildItemDraft ({ contentKind, title, seasonNumber = null, episodeNumbe
     sourcePublishedAt,
     seasonNumber,
     episodeNumber,
+    mediaProvider,
+    mediaId: mediaId != null ? String(mediaId) : null,
     artwork
   }
   return Object.freeze(draft)

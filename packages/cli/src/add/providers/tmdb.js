@@ -29,13 +29,16 @@ export function createTmdbProvider ({
     if (!apiKey) {
       throw new TmdbProviderError('TMDB API key is not configured', { code: 'ERR_TMDB_MISSING_KEY' })
     }
-    const url = buildUrl(baseUrl, path, { language, ...params })
+    // v4 read tokens are JWTs (contain dots) and use Bearer auth; v3 keys are
+    // 32-char hex and authenticate via the api_key query parameter.
+    const isV4Token = apiKey.includes('.')
+    const authParams = isV4Token ? {} : { api_key: apiKey }
+    const url = buildUrl(baseUrl, path, { language, ...authParams, ...params })
+    const headers = { Accept: 'application/json' }
+    if (isV4Token) headers.Authorization = `Bearer ${apiKey}`
     let response
     try {
-      response = await doFetch(url, {
-        signal,
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }
-      })
+      response = await doFetch(url, { signal, headers })
     } catch (cause) {
       if (cause && cause.name === 'AbortError') {
         throw new TmdbProviderError('TMDB request timed out', { code: 'ERR_TMDB_TIMEOUT' })

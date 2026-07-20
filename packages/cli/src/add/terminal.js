@@ -1,9 +1,14 @@
 import readline from 'node:readline'
+import { PassThrough } from 'node:stream'
 import { reducePicker } from './picker-state.js'
 import { renderPickerLines } from './render.js'
 
 const HIDE_CURSOR = '\u001b[?25l'
 const SHOW_CURSOR = '\u001b[?25h'
+const BRACKETED_PASTE_ON = '\u001b[?2004h'
+const BRACKETED_PASTE_OFF = '\u001b[?2004l'
+const PASTE_START = '\u001b[200~'
+const PASTE_END = '\u001b[201~'
 
 export class TerminalUsageError extends Error {
   constructor (message, { code, exitCode = 2 } = {}) {
@@ -64,11 +69,48 @@ export function runTerminal (options = {}) {
     const onKeypress = (str, key) => handle(mapKeypressToAction(str, key || {}))
     const onSigint = () => handle({ type: 'interrupt' })
 
-    const dataListenersBefore = input.listeners('data')
+    // Route input through a paste-aware filter. Terminals wrap clipboard
+    // content in bracketed-paste markers (ESC[200~ … ESC[201~); we collapse a
+    // paste to its first line so a multi-line/URL-list paste cannot fire Enter
+    // (advancing screens) or spill leftover lines into the shell on exit.
+    const keys = new PassThrough()
+    let inPaste = false
+    let pasteBuffer = ''
+
+    const commitPaste = () => {
+      inPaste = false
+      const firstLine = pasteBuffer.split(/\r?\n/)[0] || ''
+      pasteBuffer = ''
+      if (firstLine.length > 0) keys.write(firstLine)
+    }
+
+    const feedPaste = (chunk) => {
+      let s = chunk
+      while (s.length > 0) {
+        if (inPaste) {
+          const end = s.indexOf(PASTE_END)
+          if (end === -1) { pasteBuffer += s; return }
+          pasteBuffer += s.slice(0, end)
+          commitPaste()
+          s = s.slice(end + PASTE_END.length)
+        } else {
+          const start = s.indexOf(PASTE_START)
+          if (start === -1) { keys.write(s); return }
+          if (start > 0) keys.write(s.slice(0, start))
+          inPaste = true
+          s = s.slice(start + PASTE_START.length)
+        }
+      }
+    }
+
+    const onData = (chunk) => feedPaste(chunk.toString('utf8'))
+
     input.setRawMode(true)
     output.write(HIDE_CURSOR)
-    readline.emitKeypressEvents(input)
-    input.on('keypress', onKeypress)
+    output.write(BRACKETED_PASTE_ON)
+    input.on('data', onData)
+    readline.emitKeypressEvents(keys)
+    keys.on('keypress', onKeypress)
     signals.on('SIGINT', onSigint)
 
     if (typeof options.onReady === 'function') options.onReady(handle)
@@ -109,11 +151,10 @@ export function runTerminal (options = {}) {
     function cleanup () {
       if (cleaned) return
       cleaned = true
-      input.removeListener('keypress', onKeypress)
+      input.removeListener('data', onData)
+      keys.removeListener('keypress', onKeypress)
       signals.removeListener('SIGINT', onSigint)
-      for (const listener of input.listeners('data')) {
-        if (!dataListenersBefore.includes(listener)) input.removeListener('data', listener)
-      }
+      output.write(BRACKETED_PASTE_OFF)
       input.setRawMode(false)
       output.write(SHOW_CURSOR)
     }

@@ -464,3 +464,23 @@ function dirent (name, directory) {
     isDirectory: () => directory
   }
 }
+
+test('bracketed paste collapses to the first line and never fires Enter', async (t) => {
+  const harness = terminalHarness()
+  const actions = []
+  const done = runTerminal({
+    ...harness,
+    initialState: createPickerState(),
+    onAction: action => actions.push(action)
+  })
+
+  harness.input.write(Buffer.from('\u001b[200~https://a/1\nhttps://b/2\nhttps://c/3\u001b[201~'))
+  await tick()
+
+  t.absent(actions.some(action => action.type === 'step.confirm'), 'embedded newlines never confirm')
+  t.absent(actions.some(action => action.type === 'step.back'), 'paste never navigates back')
+
+  harness.signals.emit('SIGINT')
+  const state = await done
+  t.is(state.screens.search.input.value, 'https://a/1', 'only the first pasted line is inserted')
+})

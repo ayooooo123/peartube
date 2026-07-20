@@ -221,10 +221,11 @@ function buildExecutorDeps ({ runtime, deps, jobStore, preferences, fetchUrl, em
 }
 
 function finish (context, result) {
-  const { stdout, flags = {} } = context
+  const { stdout, flags = {}, mode } = context
   if (flags.json) {
     write(stdout, `${JSON.stringify(result)}\n`)
-  } else {
+  } else if (mode !== 'interactive') {
+    // Interactive mode already shows the outcome on the picker's Result screen.
     write(stdout, `${humanLine(result)}\n`)
   }
   return result.status === 'failed' ? 1 : 0

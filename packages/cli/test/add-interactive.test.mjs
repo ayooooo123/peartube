@@ -205,3 +205,28 @@ test('interactive cancel: Ctrl-C on search resolves without executing', async (t
   t.is(finalState.result.status, 'cancelled')
   t.absent(executed, 'no execution on cancel')
 })
+
+test('interactive movie: a multi-line URL paste at the source uses only the first URL', async (t) => {
+  let executed = null
+  const term = driveTerminal({
+    initialQuery: 'matrix',
+    tmdb: fakeTmdb(),
+    execute: async (plan) => {
+      executed = plan
+      return { status: 'replicationPending', videoId: 'v9', jobId: 'add_9' }
+    }
+  })
+
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // select The Matrix -> movieSource
+  await delay(40)
+  term.input.write(Buffer.from('\u001b[200~https://cdn/a.mp4\nhttps://cdn/b.mp4\nhttps://cdn/c.mp4\u001b[201~'))
+  await delay(220)
+  term.input.write(Buffer.from(KEY.enter)) // commit first URL -> review
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // publish
+
+  const finalState = await term.done
+  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(executed.fetchUrl, 'https://cdn/a.mp4', 'only the first pasted URL is used')
+})

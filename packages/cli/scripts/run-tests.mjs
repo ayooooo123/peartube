@@ -15,6 +15,7 @@
  * excluded — it needs native deps not available in the CI test env).
  */
 import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -34,11 +35,33 @@ const TEST_FILES = [
   'seed-pin-runtime.test.mjs',
   'service.test.mjs',
   'status.test.mjs',
-  'trusted-clients.test.mjs'
+  'trusted-clients.test.mjs',
+  // Interactive `peartube add` CLI suites.
+  'add-argv.test.mjs',
+  'peartube-entry.test.mjs',
+  'add-picker-state.test.mjs',
+  'add-terminal.test.mjs',
+  'add-render.test.mjs',
+  'add-preferences.test.mjs',
+  'content-config-command.test.mjs',
+  'tmdb-provider.test.mjs',
+  'add-yt-dlp-provider.test.mjs',
+  'add-discovery.test.mjs',
+  'add-bulk-matcher.test.mjs',
+  'add-bulk-property.test.mjs',
+  'add-job-store.test.mjs',
+  'add-executor.test.mjs',
+  'add-command.test.mjs',
+  'add-process-output.test.mjs'
 ]
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const brittleBin = join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'brittle.cmd' : 'brittle')
+const brittleName = process.platform === 'win32' ? 'brittle.cmd' : 'brittle'
+const brittleCandidates = [
+  join(root, 'node_modules', '.bin', brittleName),
+  join(root, '..', '..', 'node_modules', '.bin', brittleName)
+]
+const brittleBin = brittleCandidates.find((candidate) => existsSync(candidate)) || brittleCandidates[0]
 
 const files = TEST_FILES
 

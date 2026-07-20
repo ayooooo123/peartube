@@ -316,7 +316,18 @@ export function createUploadManager({ ctx }) {
           throw new Error('Channel blobs not initialized');
         }
 
-        const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
+        // Honor a caller-supplied deterministic video id so crash-safe importers
+        // can reconcile an existing private draft instead of duplicating the upload.
+        const providedVideoId = typeof options.videoId === 'string' && /^[0-9a-f]{1,64}$/i.test(options.videoId)
+          ? options.videoId
+          : null
+        if (providedVideoId && typeof channel.getVideo === 'function') {
+          const existing = await channel.getVideo(providedVideoId).catch(() => null)
+          if (existing) {
+            return { success: true, videoId: providedVideoId, metadata: existing, reused: true }
+          }
+        }
+        const videoId = providedVideoId || b4a.toString(crypto.randomBytes(16), 'hex');
         const metadata = normalizeVideoMetadata(options, videoId);
 
         // Get file size

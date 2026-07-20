@@ -1,4 +1,10 @@
-import { channelSourceIdentityKey } from '@peartube/backend/structured-content'
+import { channelSourceIdentityKey, importIdentityKey as backendImportIdentityKey } from '@peartube/backend/structured-content'
+
+// Video import claims key on the canonical `provider:contentKind:sourceVideoId`
+// identity, distinct from a channel-source (creator profile) identity key.
+export function deriveImportIdentityKey ({ contentKind = 'video', sourceProvider, sourceVideoId, mediaProvider, mediaId, seasonNumber, episodeNumber, contentFingerprint } = {}) {
+  return backendImportIdentityKey({ contentKind, sourceProvider, sourceVideoId, mediaProvider, mediaId, seasonNumber, episodeNumber, contentFingerprint })
+}
 
 // Query parameters that never contribute to a stable content identity.
 const TRACKING_PARAMS = new Set([
@@ -76,6 +82,20 @@ export function buildMovieChannelDraft (movie) {
     sources: [],
     artwork: normalizeArtwork(movie.artwork),
     channelTarget: { mode: 'new' }
+  })
+}
+
+export function buildDirectChannelDraft ({ name = 'My PearTube', description = '', channelTarget = { mode: 'new' } } = {}) {
+  return freezeChannel({
+    kind: 'channel',
+    profileKind: 'creator',
+    name,
+    description,
+    mediaProvider: null,
+    mediaId: null,
+    sources: [],
+    artwork: [],
+    channelTarget: normalizeChannelTarget(channelTarget)
   })
 }
 

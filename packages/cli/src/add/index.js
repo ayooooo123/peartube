@@ -1,7 +1,8 @@
 import { resolveAddPreferences } from './preferences.js'
-import { buildEpisodeItemDraft, buildMovieChannelDraft, buildMovieItemDraft, buildShowChannelDraft, normalizeIdentityUrl } from './content-model.js'
+import { buildCreatorItemDraft, buildDirectChannelDraft, buildEpisodeItemDraft, buildMovieChannelDraft, buildMovieItemDraft, buildShowChannelDraft, normalizeIdentityUrl } from './content-model.js'
 import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
+import { createBackendExecutorDeps } from './backend-deps.js'
 
 const PROGRESS_PHASES = {
   resolving: 'Resolving',
@@ -83,18 +84,22 @@ async function runScripted ({ context, preferences, deps, emitProgress }) {
   if (flags.provider && flags.provider !== 'tmdb') {
     throw new AddUsageError(`Provider ${flags.provider} is not available in this version`)
   }
-  if (!preferences.tmdbApiKey && flags.type) {
+  if (!preferences.tmdbApiKey && (flags.type === 'episode' || flags.type === 'movie')) {
     throw new AddUsageError('A TMDB API key is required for scripted metadata. Set TMDB_API_KEY or run peartube config.')
   }
-  const fetchUrl = context.fetchUrl
-  if (!fetchUrl) throw new AddUsageError('Scripted add requires a source URL')
+  const fetchUrl = context.fetchUrl || context.query
+  if (!fetchUrl) throw new AddUsageError('Scripted add requires a source URL or file path')
 
   const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger: stderrLogger(context.stderr) })
   try {
-    const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
     let channelDraft
     let itemDraft
-    if (flags.type === 'episode') {
+    if (flags.type === 'video') {
+      const title = flags.title || titleFromUrl(fetchUrl)
+      channelDraft = buildDirectChannelDraft({ name: flags.channelName || title })
+      itemDraft = buildCreatorItemDraft({ title, contentKind: 'video' }, sourceFrom(fetchUrl))
+    } else if (flags.type === 'episode') {
+      const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
       const show = await tmdb.getShow(flags.showId)
       const episodes = await tmdb.getSeason(flags.showId, flags.season)
       const episode = episodes.find((entry) => entry.episodeNumber === Number(flags.episode))
@@ -102,14 +107,15 @@ async function runScripted ({ context, preferences, deps, emitProgress }) {
       channelDraft = buildShowChannelDraft(show)
       itemDraft = buildEpisodeItemDraft(episode, sourceFrom(fetchUrl))
     } else if (flags.type === 'movie') {
+      const tmdb = deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
       const movie = await tmdb.getMovie(flags.movieId)
       channelDraft = buildMovieChannelDraft(movie)
       itemDraft = buildMovieItemDraft(movie, sourceFrom(fetchUrl))
     } else {
-      throw new AddUsageError('Scripted add requires --type episode or --type movie')
+      throw new AddUsageError('Scripted add requires --type video, episode, or movie')
     }
 
-    return await executeSingle({ context, runtime, deps, channelDraft, itemDraft, fetchUrl, emitProgress })
+    return await executeSingle({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress })
   } finally {
     await runtime.close?.()
   }
@@ -131,18 +137,18 @@ async function runInteractive ({ context, preferences, deps, emitProgress }) {
       return { status: 'cancelled' }
     }
     const { channelDraft, itemDraft, fetchUrl } = selection.result.value
-    return await executeSingle({ context, runtime, deps, channelDraft, itemDraft, fetchUrl, emitProgress })
+    return await executeSingle({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress })
   } finally {
     await runtime.close?.()
   }
 }
 
-async function executeSingle ({ context, runtime, deps, channelDraft, itemDraft, fetchUrl, emitProgress }) {
+async function executeSingle ({ context, runtime, deps, preferences, channelDraft, itemDraft, fetchUrl, emitProgress }) {
   const jobStore = deps.createJobStore({ bee: runtime.metadataBee })
   const jobId = deps.jobId || deriveJobId(itemDraft, fetchUrl)
   await jobStore.createJob({ jobId, rows: [{ rowId: 'r1', data: { item: itemDraft, channelDraft, channelTarget: channelDraft.channelTarget } }] })
 
-  const executor = deps.createExecutor(buildExecutorDeps({ runtime, deps, jobStore, fetchUrl, emitProgress, context }))
+  const executor = deps.createExecutor(buildExecutorDeps({ runtime, deps, jobStore, preferences, fetchUrl, emitProgress, context }))
   const job = await jobStore.getJob(jobId)
   const outcome = await executor.executeRow(job, job.rows[0], { force: Boolean(context.flags?.force) })
 
@@ -162,13 +168,13 @@ async function executeSingle ({ context, runtime, deps, channelDraft, itemDraft,
   return { status: outcome.status, jobId }
 }
 
-function buildExecutorDeps ({ runtime, deps, jobStore, fetchUrl, emitProgress, context }) {
+function buildExecutorDeps ({ runtime, deps, jobStore, preferences, fetchUrl, emitProgress, context }) {
   // Injected executor dependency wiring is supplied by the smoke/tests via
   // deps.buildExecutorDeps when driving fakes; otherwise wire the real runtime.
   if (typeof deps.buildExecutorDeps === 'function') {
     return deps.buildExecutorDeps({ runtime, jobStore, fetchUrl, emitProgress, context })
   }
-  return { jobStore, ...runtime.executorDeps }
+  return createBackendExecutorDeps({ runtime, jobStore, preferences, fetchUrl, emitProgress })
 }
 
 function finish (context, result) {
@@ -205,6 +211,17 @@ function providerFromUrl (url) {
     return host.split('.').slice(-2, -1)[0] || 'url'
   } catch {
     return 'url'
+  }
+}
+
+function titleFromUrl (url) {
+  try {
+    const parsed = new URL(url)
+    const last = parsed.pathname.split('/').filter(Boolean).pop()
+    return decodeURIComponent(last || parsed.hostname).replace(/\.[^.]+$/, '') || 'Untitled'
+  } catch {
+    const base = String(url).split('/').pop() || 'Untitled'
+    return base.replace(/\.[^.]+$/, '') || 'Untitled'
   }
 }
 

@@ -1,4 +1,4 @@
-import { deriveContentIdentityKey } from './content-model.js'
+import { deriveImportIdentityKey } from './content-model.js'
 
 const TERMINAL = new Set(['published', 'skipped'])
 
@@ -78,10 +78,12 @@ const STEPS = {
     }
 
     // Deterministic import claim; a losing claimant never downloads or uploads.
-    const importIdentityKey = deriveContentIdentityKey({
-      provider: item.sourceProvider,
-      sourceId: item.sourceVideoId,
-      identityUrl: item.identityUrl
+    // Identity binds provider:contentKind:sourceVideoId, matching the upload's
+    // stored source identity (a bare local source falls back to the video id).
+    const importIdentityKey = deriveImportIdentityKey({
+      contentKind: item.contentKind || 'video',
+      sourceProvider: item.sourceProvider || 'local',
+      sourceVideoId: item.sourceVideoId || row.intent.videoId
     })
     const claimantId = deps.deriveImportClaimantId(channel.writerKeyHex, job.jobId)
     await deps.writeClaim({ channel, identityKey: importIdentityKey, claimantId, jobId: job.jobId, writerKey: channel.writerKeyHex })
@@ -137,7 +139,8 @@ const STEPS = {
       identityUrl: item.identityUrl || null,
       importIdentityKey: row.data.importIdentityKey,
       importClaimantId: row.data.importClaimantId,
-      artworkRefs: row.data.artworkRefs || []
+      artworkRefs: row.data.artworkRefs || [],
+      item
     })
     const nextRow = await deps.jobStore.transitionRow(job.jobId, row.rowId, {
       to: 'uploaded',

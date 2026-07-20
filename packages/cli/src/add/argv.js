@@ -8,7 +8,9 @@ const VALUE_FLAGS = new Map([
   ['--show-id', 'showId'],
   ['--season', 'season'],
   ['--episode', 'episode'],
-  ['--movie-id', 'movieId']
+  ['--movie-id', 'movieId'],
+  ['--title', 'title'],
+  ['--channel-name', 'channelName']
 ])
 
 const BOOLEAN_FLAGS = new Map([
@@ -160,8 +162,22 @@ function parseAdd(flags, positionals, options) {
   validateProvider(flags)
   validateCoordinateFamily(flags)
 
-  if (flags.type && flags.type !== 'episode' && flags.type !== 'movie') {
-    throw new PeartubeUsageError(`Unsupported content type "${flags.type}"; expected "episode" or "movie"`)
+  if (flags.type && flags.type !== 'episode' && flags.type !== 'movie' && flags.type !== 'video') {
+    throw new PeartubeUsageError(`Unsupported content type "${flags.type}"; expected "episode", "movie", or "video"`)
+  }
+
+  if (flags.type === 'video') {
+    if (Object.hasOwn(flags, 'movieId') || EPISODE_COORDINATES.some(key => Object.hasOwn(flags, key))) {
+      throw new PeartubeUsageError('Direct video mode does not accept TMDB coordinates')
+    }
+    if (flags.yes) {
+      validateScriptedSource(query, positionals.length)
+      return result('add', query, fetchUrl, flags, 'scripted')
+    }
+    if (!interactive) {
+      throw new PeartubeUsageError('Direct video mode requires --yes for non-interactive add')
+    }
+    return result('add', query, fetchUrl, flags, 'interactive')
   }
 
   if (flags.type === 'episode') {

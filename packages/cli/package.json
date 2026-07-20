@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "node scripts/run-tests.mjs",
+    "add:smoke": "node ./scripts/add-smoke.mjs",
     "build:standalone": "node ./scripts/build-standalone.mjs",
     "build:standalone:linux-x64": "RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs",
     "build:standalone:linux-arm64": "RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs",
@@ -52,6 +53,7 @@
   },
   "devDependencies": {
     "bare-build": "^0.5.3",
-    "brittle": "^3.19.1"
+    "brittle": "^3.19.1",
+    "node-pty": "^1.0.0"
   }
 }

@@ -58,6 +58,7 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
     ytDlpCookiesPathSource: cookies.source,
     searchLimit: firstNumber([flags.searchLimit, content.searchLimit], ADD_PREFERENCE_DEFAULTS.searchLimit),
     claimRetentionDays: firstNumber([content.claimRetentionDays], ADD_PREFERENCE_DEFAULTS.claimRetentionDays),
+    relayUi: firstString([flags.relayUi, env.PEARTUBE_RELAY_UI, content.relayUi], '') || null,
     network: normalizeNetworkTrust({ trustedRelayKeys: relayKeys, blindPeerMirrors: mirrorKeys })
   }
 }

@@ -10,7 +10,9 @@ const VALUE_FLAGS = new Map([
   ['--episode', 'episode'],
   ['--movie-id', 'movieId'],
   ['--title', 'title'],
-  ['--channel-name', 'channelName']
+  ['--channel-name', 'channelName'],
+  ['--relay-ui', 'relayUi'],
+  ['--invidious', 'invidious']
 ])
 
 const BOOLEAN_FLAGS = new Map([
@@ -18,7 +20,10 @@ const BOOLEAN_FLAGS = new Map([
   ['--json', 'json'],
   ['--no-input', 'noInput'],
   ['--yes', 'yes'],
-  ['--force', 'force']
+  ['--force', 'force'],
+  ['--creator', 'creator'],
+  ['--no-publish', 'noPublish'],
+  ['--no-wait', 'noWait']
 ])
 
 const REPEATABLE_FLAGS = new Map([
@@ -239,6 +244,13 @@ function parseAdd(flags, positionals, options) {
       throw new PeartubeUsageError('Movie mode requires --provider tmdb and --movie-id')
     }
     return result('add', query, fetchUrl, flags, 'interactive')
+  }
+
+  // A bare source URL is a complete add on its own: the relay classifies it,
+  // and the direct path defaults it to a video. No --type/coordinates required.
+  if (fetchUrl && (flags.yes || flags.relayUi)) {
+    validateScriptedSource(query, positionals.length)
+    return result('add', query, fetchUrl, flags, 'scripted')
   }
 
   if (!interactive) {

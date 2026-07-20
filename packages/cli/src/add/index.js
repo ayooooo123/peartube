@@ -8,6 +8,7 @@ import { createInteractiveDriver } from './interactive.js'
 import { createPickerState } from './picker-state.js'
 import nodePath from 'node:path'
 import { promises as nodeFsPromises } from 'node:fs'
+import { createRelayClient } from './relay-client.js'
 
 function loadConfigFile (path) {
   if (!path) return {}
@@ -74,6 +75,13 @@ export async function runAddCommand (context = {}) {
   const scope = createDiagnosticScope({ logger })
   scope.install()
   try {
+    if (preferences.relayUi) {
+      if (mode === 'scripted') return finish(context, await runRelayScripted({ context, preferences, deps, emitProgress }))
+      if (mode === 'interactive') {
+        if (typeof deps.runTerminal !== 'function') throw new AddUsageError('Interactive mode is unavailable')
+        return finish(context, await runRelayInteractive({ context, preferences, deps }))
+      }
+    }
     if (mode === 'scripted') {
       const result = await runScripted({ context, preferences, deps, emitProgress, logger })
       return finish(context, result)
@@ -96,6 +104,87 @@ export async function runAddCommand (context = {}) {
   }
 }
 
+// Relay mode: `peartube add` is a thin client to a relay's archive console.
+// The relay downloads, seeds, and publishes; the CLI just POSTs the URL.
+async function runRelayScripted ({ context, preferences, deps, emitProgress }) {
+  const { flags } = context
+  const url = context.fetchUrl || context.query
+  if (!url) throw new AddUsageError('Relay add requires a URL: peartube add <url> --relay-ui <addr>')
+  const client = (deps.createRelayClient || createRelayClient)(preferences.relayUi)
+  const publish = !flags.noPublish
+  if (flags.creator) {
+    await client.addCreator({ url, label: flags.title || flags.channelName || '', publish })
+    return { status: 'queued', kind: 'creator', relay: client.base, url }
+  }
+  const { job, status, timedOut } = await client.archiveAndWait({
+    url,
+    channelName: flags.channelName,
+    title: flags.title,
+    invidiousInstance: flags.invidious,
+    publish
+  }, { emit: emitProgress, wait: !flags.noWait })
+  return relayResult({ job, status, timedOut, relay: client.base, url })
+}
+
+async function runRelayInteractive ({ context, preferences, deps }) {
+  const client = (deps.createRelayClient || createRelayClient)(preferences.relayUi)
+  const tmdb = preferences.tmdbApiKey
+    ? deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
+    : null
+  const driver = createInteractiveDriver({
+    tmdb,
+    ytDlp: null,
+    searchLimit: preferences.searchLimit,
+    cwd: context.cwd || process.cwd(),
+    fs: nodeFsPromises,
+    path: nodePath,
+    execute: async (plan, onProgress) => {
+      const { job, status, timedOut } = await client.archiveAndWait({
+        url: plan.fetchUrl,
+        title: plan.itemDraft?.title,
+        channelName: plan.channelDraft?.name,
+        publish: !context.flags?.noPublish
+      }, { emit: onProgress })
+      return relayResult({ job, status, timedOut, relay: client.base, url: plan.fetchUrl })
+    }
+  })
+  const initialState = createPickerState({ query: typeof context.query === 'string' ? context.query : '' })
+  const selection = await deps.runTerminal({
+    input: context.stdin,
+    output: context.stderr,
+    signals: context.signals || process,
+    initialState,
+    onReady: driver.onReady,
+    onState: driver.onState,
+    onAction: driver.onAction,
+    render: (state) => renderPickerLines(state, { columns: context.stderr?.columns || 80, rows: context.stderr?.rows || 24, color: !context.flags?.noColor })
+  })
+  driver.cleanup()
+  if (!selection || !selection.result) return { status: 'cancelled' }
+  if (selection.result.status === 'completed') return selection.result.value
+  if (selection.result.status === 'exited') return { status: 'exited' }
+  return { status: 'cancelled' }
+}
+
+function relayResult ({ job, status, timedOut, relay, url }) {
+  if (status === 'completed') {
+    const videoId = job?.videoId || null
+    const channelKey = job?.channelKey || null
+    return {
+      status: 'published',
+      relay,
+      sourceUrl: url,
+      videoId,
+      channelKey,
+      title: job?.title || null,
+      url: channelKey && videoId ? `peartube://channel/${channelKey}/video/${videoId}` : url
+    }
+  }
+  if (status === 'failed') return { status: 'failed', relay, url, error: { message: job?.error || 'relay archive failed' } }
+  if (timedOut) return { status: 'pending', relay, url, jobId: job?.id || null }
+  return { status: status || 'queued', relay, url, jobId: job?.id || null }
+}
+
 async function runScripted ({ context, preferences, deps, emitProgress, logger }) {
   const { flags } = context
   if (flags.provider && flags.provider !== 'tmdb') {
@@ -111,7 +200,7 @@ async function runScripted ({ context, preferences, deps, emitProgress, logger }
   try {
     let channelDraft
     let itemDraft
-    if (flags.type === 'video') {
+    if (flags.type === 'video' || !flags.type) {
       const title = flags.title || titleFromUrl(fetchUrl)
       channelDraft = buildDirectChannelDraft({ name: flags.channelName || title })
       itemDraft = buildCreatorItemDraft({ title, contentKind: 'video' }, sourceFrom(fetchUrl))
@@ -236,6 +325,8 @@ function humanLine (result) {
     case 'published': return `Published ${result.url}`
     case 'already-exists': return `Already added: channel ${result.channelKey} video ${result.videoId}`
     case 'replicationPending': return `Pending durability (job ${result.jobId}); retained locally.`
+    case 'queued': return `Queued on relay ${result.relay}${result.jobId ? ` (job ${result.jobId})` : ''}.`
+    case 'pending': return `Relay is still archiving (job ${result.jobId || 'unknown'}); check the relay UI at ${result.relay}.`
     case 'cancelled': return 'Cancelled.'
     case 'released': return `Skipped (another writer is importing this item).`
     case 'failed': return `Failed: ${result.error?.message || 'unknown error'}`

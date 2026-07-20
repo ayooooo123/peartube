@@ -36,6 +36,19 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
     ['config', content.ytDlpCookiesPath]
   ])
 
+  // Trusted relays drive durable publication (seed-pin). Merge --relay flags,
+  // PEARTUBE_RELAYS env, and configured keys; blind-peer mirrors stay a separate
+  // list. normalizeHexList validates/dedupes downstream.
+  const configNetwork = (config && typeof config.network === 'object' && config.network) || {}
+  const relayKeys = [
+    ...asArray(flags.relay),
+    ...splitList(env.PEARTUBE_RELAYS),
+    ...asArray(configNetwork.trustedRelayKeys)
+  ]
+  const mirrorKeys = [
+    ...asArray(flags.blindPeer),
+    ...asArray(configNetwork.blindPeerMirrors)
+  ]
   return {
     storagePath: expandHome(firstString([flags.storage, content.storagePath], ADD_PREFERENCE_DEFAULTS.storagePath)),
     tmdbApiKey: tmdb.value,
@@ -45,7 +58,7 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
     ytDlpCookiesPathSource: cookies.source,
     searchLimit: firstNumber([flags.searchLimit, content.searchLimit], ADD_PREFERENCE_DEFAULTS.searchLimit),
     claimRetentionDays: firstNumber([content.claimRetentionDays], ADD_PREFERENCE_DEFAULTS.claimRetentionDays),
-    network: normalizeNetworkTrust(config.network)
+    network: normalizeNetworkTrust({ trustedRelayKeys: relayKeys, blindPeerMirrors: mirrorKeys })
   }
 }
 
@@ -169,4 +182,15 @@ function normalizeHexList (value) {
 
 function nonEmpty (value) {
   return value !== undefined && value !== null && String(value).length > 0
+}
+
+function asArray (value) {
+  if (Array.isArray(value)) return value
+  if (value === undefined || value === null || value === '') return []
+  return [value]
+}
+
+function splitList (value) {
+  if (typeof value !== 'string') return []
+  return value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean)
 }

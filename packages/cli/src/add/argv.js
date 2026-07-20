@@ -21,6 +21,11 @@ const BOOLEAN_FLAGS = new Map([
   ['--force', 'force']
 ])
 
+const REPEATABLE_FLAGS = new Map([
+  ['--relay', 'relay'],
+  ['--blind-peer', 'blindPeer']
+])
+
 const EPISODE_COORDINATES = ['showId', 'season', 'episode']
 const ADD_ONLY_FLAGS = [
   ['type', '--type'],
@@ -101,6 +106,24 @@ function parseFlagsAndPositionals(args) {
         throw new PeartubeUsageError(`${name} does not take a value`)
       }
       setFlag(flags, name, booleanKey, true)
+      continue
+    }
+
+    const repeatableKey = REPEATABLE_FLAGS.get(name)
+    if (repeatableKey) {
+      let value = inlineValue
+      if (value === undefined) {
+        value = args[index + 1]
+        if (value === undefined || value.startsWith('-')) {
+          throw new PeartubeUsageError(`Missing value for ${name}`)
+        }
+        index += 1
+      }
+      if (value.length === 0) {
+        throw new PeartubeUsageError(`Missing value for ${name}`)
+      }
+      if (!Array.isArray(flags[repeatableKey])) flags[repeatableKey] = []
+      flags[repeatableKey].push(value)
       continue
     }
 

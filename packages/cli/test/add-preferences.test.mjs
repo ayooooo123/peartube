@@ -108,3 +108,16 @@ test('content config update preserves unrelated keys and comments and reports se
   t.ok(created.text.includes('  storagePath: /fresh'))
   t.is(created.containsSecret, false)
 })
+
+test('relay keys merge from flags, env, and config and dedupe', (t) => {
+  const k1 = 'a'.repeat(64)
+  const k2 = 'b'.repeat(64)
+  const k3 = 'c'.repeat(64)
+  const prefs = resolveAddPreferences({
+    flags: { relay: [k1] },
+    env: { PEARTUBE_RELAYS: `${k2} ${k3}` },
+    config: { network: { trustedRelayKeys: [k1] } }
+  })
+  t.alike(prefs.network.trustedRelayKeys, [k1, k2, k3], 'merged across sources and deduped')
+  t.alike(prefs.network.blindPeerMirrors, [], 'relay keys do not leak into the mirror list')
+})

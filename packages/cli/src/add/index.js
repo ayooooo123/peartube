@@ -3,6 +3,17 @@ import { buildCreatorItemDraft, buildDirectChannelDraft, buildEpisodeItemDraft, 
 import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
 import { createBackendExecutorDeps } from './backend-deps.js'
+import { readFileSync } from 'node:fs'
+
+function loadConfigFile (path) {
+  if (!path) return {}
+  try {
+    const text = readFileSync(path, 'utf8')
+    return JSON.parse(text)
+  } catch {
+    return {}
+  }
+}
 
 const PROGRESS_PHASES = {
   resolving: 'Resolving',
@@ -50,6 +61,7 @@ export async function runAddCommand (context = {}) {
 
   let config = {}
   if (typeof context.resolveConfig === 'function') config = await context.resolveConfig(context)
+  else config = loadConfigFile(flags.config || context.env?.PEARTUBE_CONFIG || null)
   const preferences = resolveAddPreferences({ flags, env: context.env || {}, config })
 
   const deps = await loadDeps(context)

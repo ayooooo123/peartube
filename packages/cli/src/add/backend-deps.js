@@ -2,9 +2,13 @@ import fs from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import b4a from 'b4a'
 import { loadChannel } from '@peartube/backend/storage'
 import { deriveImportClaimantId } from '@peartube/backend/structured-content'
 import { createContentPublication } from '@peartube/backend/content-publication'
+import { createContentReplication } from '@peartube/backend/content-replication'
+import { resolveSeedPinClientAuth } from '@peartube/backend/seed-pin'
+import { assessDurableManifest } from '@peartube/backend/api'
 import { createYtDlpDownloader } from '../archive-manager.js'
 import { fingerprintFile } from './bulk/source-scanner.js'
 import { itemIdentity } from './duplicate-check.js'
@@ -94,9 +98,9 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
 
     deriveImportClaimantId,
 
-    async writeClaim ({ channel, identityKey, claimantId, jobId }) {
+    async writeClaim ({ channel, identityKey, claimantId, jobId, videoId }) {
       const ch = channelHandle(channel)
-      await ch.putImportClaim({ identityKey, claimantId, jobId, writerKey: ch.localWriterKeyHex })
+      await ch.putImportClaim({ identityKey, claimantId, jobId, writerKey: ch.localWriterKeyHex, videoId })
     },
 
     async resolveClaimWinner ({ channel, identityKey }) {
@@ -147,15 +151,86 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
     },
 
     async awaitDurable ({ channel, videoId }) {
-      const trusted = (preferences.network?.trustedRelayKeys || [])
+      const trusted = preferences.network?.trustedRelayKeys || []
       if (trusted.length === 0) {
         emitProgress('No trusted relay configured; keeping the draft local (replicationPending).')
         return { verified: false }
       }
-      // Trusted-relay durability path is driven by content replication.
       const ch = channelHandle(channel)
-      const verified = await runReplication({ runtime, channel: ch, videoId, jobStore, preferences, emitProgress })
-      return verified
+      const video = await ch.getVideo(videoId)
+      if (!video || !video.blobId || !video.blobsCoreKey) {
+        emitProgress('Uploaded video record is missing blob refs; staying replicationPending.')
+        return { verified: false }
+      }
+      const [blockOffset, blockLength, , byteLength] = String(video.blobId).split(':').map(Number)
+      const refs = [{ coreKey: video.blobsCoreKey, start: blockOffset, end: blockOffset + blockLength, kind: 'media' }]
+      const assets = { media: [0], thumbnail: null, artwork: { avatar: null, poster: null, banner: null, backdrop: null } }
+
+      const auth = await resolveSeedPinClientAuth({ ctx, identityManager }).catch(() => null)
+      const deviceProof = auth?.deviceProof
+      const signedDescriptor = auth?.signedDescriptor
+      if (!deviceProof || !signedDescriptor) {
+        emitProgress('Active identity device proof/descriptor unavailable; staying replicationPending.')
+        return { verified: false }
+      }
+
+      const checkpointKey = `content-add/v1/replication/${ch.keyHex}/${videoId}`
+      const publicationInstance = await publicationFor(ch)
+      const replication = createContentReplication({
+        publication: publicationInstance,
+        clients: runtime.seedPinClients instanceof Map ? runtime.seedPinClients : new Map(),
+        assessDurability: assessDurableManifest,
+        assessmentDeps: { store: ctx.store },
+        getTrustedRelayKeys: () => trusted,
+        getPairedDeviceKeys: () => [],
+        async readCheckpoint () { return (await ctx.metaDb.get(checkpointKey))?.value || null },
+        async writeCheckpoint (next, { expectedRevision }) {
+          const current = (await ctx.metaDb.get(checkpointKey))?.value || null
+          if ((current?.revision ?? null) !== expectedRevision) return false
+          await ctx.metaDb.put(checkpointKey, next)
+          return next
+        },
+        ordinaryRequired: 2,
+        maxClients: 8,
+        operationTimeoutMs: 30_000
+      })
+
+      const replicationInput = {
+        channelKey: ch.keyHex,
+        rowId: videoId,
+        refs,
+        assets,
+        totalBytes: Number.isSafeInteger(video.size) ? video.size : (Number.isSafeInteger(byteLength) ? byteLength : 1),
+        expiresAt: Date.now() + 10 * 60 * 1000,
+        deviceKeyPair: ctx.swarm.keyPair,
+        deviceProof,
+        signedDescriptor,
+        stagedDescriptor: signedDescriptor,
+        idempotencyKey: `content-add/${ch.keyHex}/${videoId}`
+      }
+
+      // Seed-pin runs over ctx.swarm connections; dial the trusted relays there
+      // (blind-peering uses a separate channel) so seedPinClients populates.
+      for (const key of trusted) {
+        try { ctx.swarm.joinPeer(b4a.from(key, 'hex')) } catch {}
+      }
+      emitProgress('Requesting durable pin from trusted relay…')
+      const deadline = Date.now() + 120_000
+      let attempts = 0
+      while (Date.now() < deadline) {
+        attempts += 1
+        let result
+        try {
+          result = await replication.replicate(replicationInput)
+        } catch (error) {
+          emitProgress(`Replication attempt failed: ${error.message}`)
+          return { verified: false }
+        }
+        if (result.status === 'published') return { verified: true, published: true }
+        emitProgress(`Awaiting durability (${result.status}, attempt ${attempts})…`)
+        await delay(2000)
+      }
+      return { verified: false }
     },
 
     publication: {
@@ -173,7 +248,6 @@ function pruneUndefined (object) {
   return out
 }
 
-// Placeholder for the trusted-relay durability drive; wired in the relay step.
-async function runReplication () {
-  return { verified: false }
+function delay (ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

@@ -86,7 +86,7 @@ const STEPS = {
       sourceVideoId: item.sourceVideoId || row.intent.videoId
     })
     const claimantId = deps.deriveImportClaimantId(channel.writerKeyHex, job.jobId)
-    await deps.writeClaim({ channel, identityKey: importIdentityKey, claimantId, jobId: job.jobId, writerKey: channel.writerKeyHex })
+    await deps.writeClaim({ channel, identityKey: importIdentityKey, claimantId, jobId: job.jobId, writerKey: channel.writerKeyHex, videoId: row.intent.videoId })
     const winner = await deps.resolveClaimWinner({ channel, identityKey: importIdentityKey })
     if (winner && winner.claimantId && winner.claimantId !== claimantId) {
       const released = await deps.jobStore.transitionRow(job.jobId, row.rowId, {

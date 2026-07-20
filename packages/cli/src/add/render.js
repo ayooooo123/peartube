@@ -8,10 +8,10 @@ const LIST_SCREENS = {
   search: { subtitle: 'Find content', label: 'Search', action: 'Select' },
   tvSeason: { subtitle: 'Choose a season', label: 'Season', action: 'Select' },
   episodeSelection: { subtitle: 'Choose episodes', label: 'Episode', action: 'Continue' },
-  movieSource: { subtitle: 'Choose a source', label: 'Source', action: 'Select' },
+  movieSource: { subtitle: 'Paste a URL or type a file path', label: 'Source', action: 'Select' },
   creatorContent: { subtitle: 'Choose content', label: 'Content', action: 'Select' },
   creatorAttachment: { subtitle: 'Attach creator source', label: 'Attachment', action: 'Select' },
-  sourceSelection: { subtitle: 'Choose a source', label: 'Source', action: 'Select' },
+  sourceSelection: { subtitle: 'Paste a URL or type a file path', label: 'Source', action: 'Select' },
   bulkMapping: { subtitle: 'Verify source mapping', label: 'Mapping', action: 'Continue' },
   review: { subtitle: 'Confirm and publish', label: 'Review', action: 'Publish' }
 }

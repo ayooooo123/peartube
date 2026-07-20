@@ -148,6 +148,7 @@ export function createInteractiveDriver ({
   // candidate so Enter commits it; path entries follow for Tab autocomplete.
   async function sourceProducer (query) {
     const q = String(query || '').trim()
+    if (!q) return [] // empty input: no directory dump; render prompt guides the user
     const items = []
     if (q && isUrl(q)) {
       items.push({ label: `Use URL: ${q}`, completion: q, value: q })
@@ -396,7 +397,7 @@ export function createInteractiveDriver ({
           load(() => [])
         }
       } else if ((screen === 'movieSource' || screen === 'sourceSelection') && !state.choices.creatorContent) {
-        load(() => sourceProducer(query), { debounce: 120 })
+        load(() => sourceProducer(query))
       }
     }
   }

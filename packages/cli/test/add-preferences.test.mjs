@@ -1,6 +1,7 @@
 import test from 'brittle'
 import {
   ADD_PREFERENCE_DEFAULTS,
+  expandHome,
   describeSecret,
   normalizeNetworkTrust,
   redactPreferences,
@@ -49,7 +50,7 @@ test('env overrides config and is reported as configured without leaking value',
 
 test('absent keys fall back to defaults and keep creator/local flows available', (t) => {
   const prefs = resolveAddPreferences({ flags: {}, env: {}, config: {} })
-  t.is(prefs.storagePath, ADD_PREFERENCE_DEFAULTS.storagePath)
+  t.is(prefs.storagePath, expandHome(ADD_PREFERENCE_DEFAULTS.storagePath))
   t.is(prefs.tmdbApiKey, '')
   t.is(prefs.tmdbApiKeySource, null)
   t.is(prefs.ytDlpPath, ADD_PREFERENCE_DEFAULTS.ytDlpPath)

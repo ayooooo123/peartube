@@ -1,3 +1,5 @@
+import { homedir } from 'node:os'
+
 export const ADD_PREFERENCE_DEFAULTS = Object.freeze({
   storagePath: '~/.peartube/content',
   tmdbApiKey: '',
@@ -6,6 +8,16 @@ export const ADD_PREFERENCE_DEFAULTS = Object.freeze({
   searchLimit: 12,
   claimRetentionDays: 30
 })
+
+// Expand a leading ~ to the user's home directory. Storage/cookie paths default
+// to ~-relative values; without this they create a literal "~" folder relative
+// to the current working directory.
+export function expandHome (value) {
+  if (typeof value !== 'string' || value.length === 0) return value
+  if (value === '~') return homedir()
+  if (value.startsWith('~/') || value.startsWith('~\\')) return homedir() + value.slice(1)
+  return value
+}
 
 const HEX_64 = /^[0-9a-f]{64}$/
 
@@ -25,11 +37,11 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
   ])
 
   return {
-    storagePath: firstString([flags.storage, content.storagePath], ADD_PREFERENCE_DEFAULTS.storagePath),
+    storagePath: expandHome(firstString([flags.storage, content.storagePath], ADD_PREFERENCE_DEFAULTS.storagePath)),
     tmdbApiKey: tmdb.value,
     tmdbApiKeySource: tmdb.source,
-    ytDlpPath: firstString([flags.ytDlpPath, env.PEARTUBE_YTDLP_PATH, content.ytDlpPath], ADD_PREFERENCE_DEFAULTS.ytDlpPath),
-    ytDlpCookiesPath: cookies.value,
+    ytDlpPath: expandHome(firstString([flags.ytDlpPath, env.PEARTUBE_YTDLP_PATH, content.ytDlpPath], ADD_PREFERENCE_DEFAULTS.ytDlpPath)),
+    ytDlpCookiesPath: expandHome(cookies.value),
     ytDlpCookiesPathSource: cookies.source,
     searchLimit: firstNumber([flags.searchLimit, content.searchLimit], ADD_PREFERENCE_DEFAULTS.searchLimit),
     claimRetentionDays: firstNumber([content.claimRetentionDays], ADD_PREFERENCE_DEFAULTS.claimRetentionDays),

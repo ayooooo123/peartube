@@ -230,3 +230,30 @@ test('interactive movie: a multi-line URL paste at the source uses only the firs
   t.is(finalState.result.value.status, 'replicationPending')
   t.is(executed.fetchUrl, 'https://cdn/a.mp4', 'only the first pasted URL is used')
 })
+
+test('interactive source: empty source never advances and a URL commits promptly', async (t) => {
+  let executed = null
+  const term = driveTerminal({
+    initialQuery: 'matrix',
+    tmdb: fakeTmdb(),
+    execute: async (plan) => {
+      executed = plan
+      return { status: 'replicationPending', videoId: 'v10', jobId: 'add_10' }
+    }
+  })
+
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // select movie -> movieSource (empty list, no cwd dump)
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // Enter on empty source -> no candidate, must not advance
+  await delay(40)
+  term.input.write(Buffer.from('https://example.com/x.mp4'))
+  await delay(60) // shorter than the old 120ms debounce: proves prompt commit
+  term.input.write(Buffer.from(KEY.enter)) // commit URL -> review
+  await delay(40)
+  term.input.write(Buffer.from(KEY.enter)) // publish
+
+  const finalState = await term.done
+  t.is(finalState.result.value.status, 'replicationPending')
+  t.is(executed.fetchUrl, 'https://example.com/x.mp4', 'URL used; empty Enter was a no-op')
+})

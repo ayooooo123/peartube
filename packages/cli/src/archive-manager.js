@@ -87,6 +87,22 @@ function makeJobId(url) {
   return `arch_${digest}`
 }
 
+// Map TMDB discover coordinates onto the backend's structured-content fields.
+// Movies must NOT carry season/episode; TV needs BOTH season and episode to be
+// a valid 'episode' identity — anything partial stays a plain video so the
+// structured-content validation cannot reject the import.
+export function deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode } = {}) {
+  const id = tmdbId != null && String(tmdbId).trim() !== '' ? String(tmdbId).trim() : null
+  if (!id) return {}
+  if (tmdbType === 'tv') {
+    const seasonNumber = Number(tmdbSeason || 0) || null
+    const episodeNumber = Number(tmdbEpisode || 0) || null
+    if (!seasonNumber || !episodeNumber) return {}
+    return { contentKind: 'episode', mediaProvider: 'tmdb', mediaId: id, seasonNumber, episodeNumber }
+  }
+  return { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: id }
+}
+
 async function readValue(metaDb, key, fallback) {
   const entry = await metaDb.get(key).catch(() => null)
   return entry?.value ?? fallback
@@ -345,7 +361,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       if (sourceKey) sourceChannels.set(sourceKey, entry)
       return entry
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl }) {
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode }) {
       const result = await uploadManager.uploadFromPath(channel, filePath, {
         title,
         description,
@@ -360,7 +376,11 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         creatorSourceId,
         creatorName,
         creatorHandle,
-        thumbnailUrl
+        thumbnailUrl,
+        // TMDB coordinates make the movie/TV identity durable on the canonical
+        // video record (schema already supports these fields), not just on the
+        // relay-side job/feed previews.
+        ...deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode })
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
 
@@ -485,6 +505,9 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
           thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
           thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null,
+          // Content-type coordinates ride the feed previews so clients can
+          // group/badge movies and episodes without loading the channel.
+          ...deriveMediaCoordinates(privateInput),
           classification: privateInput.tmdbId ? {
             type: privateInput.tmdbType || 'movie',
             tmdbId: Number(privateInput.tmdbId) || privateInput.tmdbId,

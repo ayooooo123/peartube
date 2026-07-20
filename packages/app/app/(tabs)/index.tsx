@@ -146,7 +146,7 @@ function getHomePlaybackKey(video: VideoData) {
   return `${video.channelKey || video.driveKey || 'local'}:${video.id}`
 }
 
-const CATEGORIES = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+const CATEGORIES = ['All', 'Movies', 'Shows', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()

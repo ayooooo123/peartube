@@ -9,7 +9,8 @@ import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { colors } from '@/lib/colors'
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated'
 import { ThumbnailImage } from './ThumbnailImage'
-import { formatTimeAgo } from '@/lib/formatters'
+import { formatTimeAgo, formatContentBadge } from '@/lib/formatters'
+import type { ContentCoordinates } from '@/lib/formatters'
 
 export interface VideoData {
   id: string
@@ -29,6 +30,12 @@ export interface VideoData {
   category?: string
   creatorName?: string | null
   score?: number  // Search relevance score
+  contentKind?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
+  mediaProvider?: string | null
+  mediaId?: string | null
+  classification?: ContentCoordinates['classification']
   channel?: {
     name: string
     avatarUrl?: string
@@ -69,6 +76,11 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
   const timeAgo = useMemo(
     () => formatTimeAgo(video.uploadedAt || video.createdAt),
     [video.uploadedAt, video.createdAt]
+  )
+
+  const contentBadge = useMemo(
+    () => formatContentBadge(video),
+    [video.contentKind, video.seasonNumber, video.episodeNumber, video.classification]
   )
 
   // Memoize press handler to maintain referential equality
@@ -172,6 +184,12 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
                 </>
               ) : null}
               <Text style={styles.timeAgo}>{timeAgo}</Text>
+              {contentBadge ? (
+                <>
+                  <Text style={styles.dot}>·</Text>
+                  <Text style={styles.contentBadge}>{contentBadge}</Text>
+                </>
+              ) : null}
             </View>
           </View>
         </View>
@@ -205,6 +223,9 @@ function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): bo
     prev.channelKey === next.channelKey &&
     prev.driveKey === next.driveKey &&
     prev.creatorName === next.creatorName &&
+    prev.contentKind === next.contentKind &&
+    prev.seasonNumber === next.seasonNumber &&
+    prev.episodeNumber === next.episodeNumber &&
     prev.channel?.name === next.channel?.name &&
     prevProps.onPress === nextProps.onPress &&
     prevProps.showChannelInfo === nextProps.showChannelInfo &&
@@ -295,6 +316,11 @@ const styles = StyleSheet.create({
   timeAgo: {
     color: colors.textMuted,
     fontSize: 12,
+  },
+  contentBadge: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
   },
 })
 

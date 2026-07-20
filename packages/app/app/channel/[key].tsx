@@ -24,6 +24,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
+import { formatContentBadge } from '@/lib/formatters'
 import * as haptics from '@/lib/haptics'
 import { withChannelPageTimeout } from '@/lib/channel-page'
 import { createChannelCatalogState } from '@/lib/channel-catalog-state.js'
@@ -50,6 +51,9 @@ type ChannelVideo = {
   mimeType?: string | null
   publicBeeKey?: string | null
   duration?: number
+  contentKind?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
 }
 
 
@@ -61,6 +65,33 @@ type CatalogCard = {
   id: string
   item: ChannelVideo
   artworkCandidates: ArtworkCandidate[]
+  sectionLabel?: string
+}
+
+// TV channels: order episodes Season 1..N (episodes ascending inside) and stamp
+// a `sectionLabel` on each season's first card so the list renders "Season N"
+// headers. Channels without episode coordinates pass through untouched.
+export function groupCardsBySeason (cards: CatalogCard[]): CatalogCard[] {
+  const isEpisode = (card: CatalogCard) =>
+    card.item?.contentKind === 'episode' &&
+    Number(card.item?.seasonNumber) > 0 &&
+    Number(card.item?.episodeNumber) > 0
+  const episodes = cards.filter(isEpisode)
+  if (episodes.length === 0) return cards
+
+  const rest = cards.filter((card) => !isEpisode(card))
+  const sorted = [...episodes].sort((a, b) =>
+    (Number(a.item.seasonNumber) - Number(b.item.seasonNumber)) ||
+    (Number(a.item.episodeNumber) - Number(b.item.episodeNumber)))
+
+  let lastSeason: number | null = null
+  const labeled = sorted.map((card) => {
+    const season = Number(card.item.seasonNumber)
+    const isFirstOfSeason = season !== lastSeason
+    lastSeason = season
+    return isFirstOfSeason ? { ...card, sectionLabel: `Season ${season}` } : card
+  })
+  return [...labeled, ...rest]
 }
 type ArtworkResolution = {
   url: string | null
@@ -203,7 +234,10 @@ function ChannelVideoCard({
         <View className="flex-1">
           <Text className="text-label text-pear-text" numberOfLines={2}>{video.title || 'Untitled video'}</Text>
           <Text className="text-caption text-pear-text-secondary mt-1" numberOfLines={1}>
-            {channelName} · {formatVideoTime(video.sourcePublishedAt || video.originalAirDate)}
+            {(() => {
+              const badge = formatContentBadge(video)
+              return badge ? `${badge} · ` : ''
+            })()}{channelName} · {formatVideoTime(video.sourcePublishedAt || video.originalAirDate)}
           </Text>
         </View>
       </View>
@@ -271,6 +305,7 @@ export default function ChannelScreen() {
   const selectedGroupId = catalogState.selectedGroupId
   const selectedTab = catalogView?.tabs.find((tab) => tab.id === selectedGroupId) || null
   const selectedPage = catalogState.pages[selectedGroupId] || EMPTY_GROUP_PAGE
+  const groupedCards = useMemo(() => groupCardsBySeason(selectedPage.cards), [selectedPage.cards])
   const isOwner = identityDriveKey === channelKey
   const mappedAvatarUrl = profileArtworkCache.avatar?.url || ''
   const activeAvatarUrl = avatarPreviewUrl || mappedAvatarUrl
@@ -595,27 +630,32 @@ export default function ChannelScreen() {
       channelName: channelDisplayName,
     })
     return (
-      <ChannelVideoCard
-        video={{ ...channelVideo, thumbnailUrl }}
-        channelName={channelDisplayName}
-        onThumbnailError={artwork && failedThumbnailUrl ? () => {
-          void resolveCardArtwork(
-            card,
-            artwork.nextIndex,
-            artwork.provisional,
-            [...artwork.failedUrls, failedThumbnailUrl],
-          )
-        } : undefined}
-        onPress={() => router.push({
-          pathname: '/video/[id]',
-          params: {
-            id: channelVideo.id,
-            channel: channelKey,
-            publicBeeKey: playbackPayload.publicBeeKey,
-            videoData: JSON.stringify(playbackPayload),
-          },
-        })}
-      />
+      <>
+        {card.sectionLabel ? (
+          <Text style={styles.seasonHeader}>{card.sectionLabel}</Text>
+        ) : null}
+        <ChannelVideoCard
+          video={{ ...channelVideo, thumbnailUrl }}
+          channelName={channelDisplayName}
+          onThumbnailError={artwork && failedThumbnailUrl ? () => {
+            void resolveCardArtwork(
+              card,
+              artwork.nextIndex,
+              artwork.provisional,
+              [...artwork.failedUrls, failedThumbnailUrl],
+            )
+          } : undefined}
+          onPress={() => router.push({
+            pathname: '/video/[id]',
+            params: {
+              id: channelVideo.id,
+              channel: channelKey,
+              publicBeeKey: playbackPayload.publicBeeKey,
+              videoData: JSON.stringify(playbackPayload),
+            },
+          })}
+        />
+      </>
     )
   }, [channelDisplayName, channelKey, channelPublicBeeKey, resolveCardArtwork, router, thumbnailCache])
 
@@ -647,7 +687,7 @@ export default function ChannelScreen() {
         </View>
       ) : (
         <FlatList
-          data={selectedPage.cards}
+          data={groupedCards}
           keyExtractor={(card) => card.id}
           renderItem={renderCatalogCard}
           contentInsetAdjustmentBehavior="automatic"
@@ -868,6 +908,14 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     backgroundColor: colors.bg,
+  },
+  seasonHeader: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+    marginTop: 10,
+    marginBottom: 12,
   },
   topBarTitle: {
     color: colors.text,

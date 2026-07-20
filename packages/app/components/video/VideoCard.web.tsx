@@ -10,7 +10,8 @@
  */
 import React, { useState } from 'react'
 import { colors } from '@/lib/colors'
-import { formatDuration, formatViews, formatTimeAgo } from '@/lib/formatters'
+import { formatDuration, formatViews, formatTimeAgo, formatContentBadge } from '@/lib/formatters'
+import type { ContentCoordinates } from '@/lib/formatters'
 
 export interface VideoCardProps {
   id: string
@@ -21,6 +22,7 @@ export interface VideoCardProps {
   views?: number
   uploadedAt?: string
   duration?: number
+  contentBadge?: string | null
   onPress?: () => void
   onChannelPress?: () => void
 }
@@ -34,6 +36,7 @@ export function VideoCardDesktop({
   views,
   uploadedAt,
   duration,
+  contentBadge,
   onPress,
   onChannelPress,
 }: VideoCardProps) {
@@ -147,6 +150,8 @@ export function VideoCardDesktop({
             {views !== undefined && formatViews(views)}
             {views !== undefined && uploadedAt && ' • '}
             {uploadedAt && formatTimeAgo(uploadedAt)}
+            {contentBadge && (views !== undefined || uploadedAt) && ' • '}
+            {contentBadge && <span style={styles.contentBadge}>{contentBadge}</span>}
           </p>
         </div>
       </div>
@@ -173,6 +178,12 @@ export interface VideoData {
   category?: string
   creatorName?: string | null
   score?: number
+  contentKind?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
+  mediaProvider?: string | null
+  mediaId?: string | null
+  classification?: ContentCoordinates['classification']
   channel?: {
     name: string
     avatarUrl?: string
@@ -206,6 +217,7 @@ export function VideoCard({ video, onPress, showChannelInfo = true, onChannelPre
       channelAvatarUrl={video.channel?.avatarUrl}
       uploadedAt={timeAgo}
       duration={video.duration}
+      contentBadge={formatContentBadge(video)}
       onPress={onPress}
       onChannelPress={onChannelPress}
     />
@@ -305,6 +317,10 @@ const styles: Record<string, React.CSSProperties> = {
     margin: '2px 0 0',
     fontSize: 13,
     color: colors.textMuted,
+  },
+  contentBadge: {
+    color: colors.textSecondary,
+    fontWeight: 600,
   },
 }
 

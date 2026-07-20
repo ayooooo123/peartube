@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useApp, colors } from '../_layout'
-import { formatTimeAgo } from '@/lib/formatters'
+import { formatTimeAgo, formatContentBadge } from '@/lib/formatters'
 import { withChannelPageTimeout } from '@/lib/channel-page'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { createChannelCatalogState } from '@/lib/channel-catalog-state.js'
@@ -26,6 +26,9 @@ type VideoItem = {
   blobsCoreKey?: string | null
   mimeType?: string | null
   publicBeeKey?: string | null
+  contentKind?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
 }
 
 type ArtworkCandidate =
@@ -36,6 +39,32 @@ type CatalogCard = {
   id: string
   item: VideoItem
   artworkCandidates: ArtworkCandidate[]
+}
+
+// TV channels render "Season N" sections (episodes ascending); everything else
+// stays a single unlabeled grid, byte-identical to the previous layout.
+export function groupCardsIntoSections (cards: CatalogCard[]): Array<{ label: string | null; cards: CatalogCard[] }> {
+  const isEpisode = (card: CatalogCard) =>
+    card.item?.contentKind === 'episode' &&
+    Number(card.item?.seasonNumber) > 0 &&
+    Number(card.item?.episodeNumber) > 0
+  const episodes = cards.filter(isEpisode)
+  if (episodes.length === 0) return [{ label: null, cards }]
+
+  const rest = cards.filter((card) => !isEpisode(card))
+  const bySeason = new Map<number, CatalogCard[]>()
+  for (const card of episodes) {
+    const season = Number(card.item.seasonNumber)
+    const list = bySeason.get(season) || []
+    list.push(card)
+    bySeason.set(season, list)
+  }
+  const sections: Array<{ label: string | null; cards: CatalogCard[] }> = [...bySeason.keys()].sort((a, b) => a - b).map((season) => ({
+    label: `Season ${season}`,
+    cards: (bySeason.get(season) || []).sort((a, b) => Number(a.item.episodeNumber) - Number(b.item.episodeNumber))
+  }))
+  if (rest.length > 0) sections.push({ label: null, cards: rest })
+  return sections
 }
 type ArtworkResolution = {
   url: string | null
@@ -568,62 +597,70 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
               <p style={styles.stateText}>This section has no published videos.</p>
             </div>
           ) : (
-            <div style={styles.grid}>
-              {selectedPage.cards.map((card) => {
-                const video = card.item
-                const title = video.title || 'Untitled video'
-                const resolution = thumbnailCache[`${resolvedChannelKey}:${card.id}`]
-                const thumbnail = resolution?.url || ''
-                let handleThumbnailError: (() => void) | undefined
-                if (resolution?.url) {
-                  const failedUrl = resolution.url
-                  handleThumbnailError = () => {
-                    void resolveCardArtwork(
-                      card,
-                      resolution.nextIndex,
-                      resolution.provisional,
-                      [...resolution.failedUrls, failedUrl],
+            groupCardsIntoSections(selectedPage.cards).map((cardSection, cardSectionIndex) => (
+              <div key={cardSection.label || `videos-${cardSectionIndex}`}>
+                {cardSection.label ? <h3 style={styles.seasonHeader}>{cardSection.label}</h3> : null}
+                <div style={styles.grid}>
+                  {cardSection.cards.map((card) => {
+                    const video = card.item
+                    const title = video.title || 'Untitled video'
+                    const contentBadge = formatContentBadge(video)
+                    const resolution = thumbnailCache[`${resolvedChannelKey}:${card.id}`]
+                    const thumbnail = resolution?.url || ''
+                    let handleThumbnailError: (() => void) | undefined
+                    if (resolution?.url) {
+                      const failedUrl = resolution.url
+                      handleThumbnailError = () => {
+                        void resolveCardArtwork(
+                          card,
+                          resolution.nextIndex,
+                          resolution.provisional,
+                          [...resolution.failedUrls, failedUrl],
+                        )
+                      }
+                    }
+                    return (
+                      <button
+                        key={card.id}
+                        className="ptVideoCard"
+                        onClick={() => {
+                          if (typeof window === 'undefined') return
+                          const playbackPayload = createChannelPlaybackPayload({
+                            item: video,
+                            channelKey: resolvedChannelKey,
+                            publicBeeKey: resolvedPublicBeeKey,
+                            thumbnailUrl: thumbnail || null,
+                            channelName,
+                          })
+                          stageWebChannelPlayback(window, playbackPayload)
+                          window.location.hash = `/watch/${encodeURIComponent(resolvedChannelKey)}/${encodeURIComponent(card.item.id)}`
+                        }}
+                      >
+                        <div style={styles.thumbWrap}>
+                          {thumbnail ? (
+                            <img
+                              src={thumbnail}
+                              alt={title}
+                              style={styles.thumbnail}
+                              loading="lazy"
+                              onError={handleThumbnailError}
+                            />
+                          ) : (
+                            <div style={styles.thumbnailFallback}>No thumbnail</div>
+                          )}
+                        </div>
+                        <div style={styles.videoMeta}>
+                          <h3 style={styles.videoTitle}>{title}</h3>
+                          <p style={styles.videoTime}>
+                            {contentBadge ? `${contentBadge} · ` : ''}{formatTimeAgo(video.sourcePublishedAt || video.originalAirDate)}
+                          </p>
+                        </div>
+                      </button>
                     )
-                  }
-                }
-                return (
-                  <button
-                    key={card.id}
-                    className="ptVideoCard"
-                    onClick={() => {
-                      if (typeof window === 'undefined') return
-                      const playbackPayload = createChannelPlaybackPayload({
-                        item: video,
-                        channelKey: resolvedChannelKey,
-                        publicBeeKey: resolvedPublicBeeKey,
-                        thumbnailUrl: thumbnail || null,
-                        channelName,
-                      })
-                      stageWebChannelPlayback(window, playbackPayload)
-                      window.location.hash = `/watch/${encodeURIComponent(resolvedChannelKey)}/${encodeURIComponent(card.item.id)}`
-                    }}
-                  >
-                    <div style={styles.thumbWrap}>
-                      {thumbnail ? (
-                        <img
-                          src={thumbnail}
-                          alt={title}
-                          style={styles.thumbnail}
-                          loading="lazy"
-                          onError={handleThumbnailError}
-                        />
-                      ) : (
-                        <div style={styles.thumbnailFallback}>No thumbnail</div>
-                      )}
-                    </div>
-                    <div style={styles.videoMeta}>
-                      <h3 style={styles.videoTitle}>{title}</h3>
-                      <p style={styles.videoTime}>{formatTimeAgo(video.sourcePublishedAt || video.originalAirDate)}</p>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
+                  })}
+                </div>
+              </div>
+            ))
           )}
         </section>
 
@@ -751,6 +788,12 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#53535f',
     fontSize: 12,
     wordBreak: 'break-all',
+  },
+  seasonHeader: {
+    margin: '18px 0 10px',
+    fontSize: 17,
+    fontWeight: 700,
+    color: colors.text,
   },
   grid: {
     display: 'grid',

@@ -35,7 +35,8 @@ import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
-import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
+import { formatTimeAgo, formatBytes, formatDuration, formatContentBadge } from '@/lib/formatters'
+import { matchesHomeFeedCategory } from '@/lib/home-feed-virtualization'
 import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMseBackendForWatch } from '@/lib/watch-page-mse-backend-mode.mjs'
@@ -47,7 +48,7 @@ const isPear = typeof window !== 'undefined' && (
   !!(window as any).bridge
 )
 
-const CATEGORIES = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+const CATEGORIES = ['All', 'Movies', 'Shows', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
 
 // Module-level feed cache — survives component remounts on desktop navigation.
 // On mobile, Expo Router's <Tabs> keeps the component mounted so this is a no-op.
@@ -2587,7 +2588,7 @@ export default function HomeScreen() {
             ) : (
               <VideoGrid
                 videos={feedVideos
-                  .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
+                  .filter(v => matchesHomeFeedCategory(v, activeCategory))
                   .map(v => ({
                     id: v.id,
                     title: v.title || 'Untitled',
@@ -2595,6 +2596,7 @@ export default function HomeScreen() {
                     channelName: (v as any).channelName || channelMeta[v.channelKey || '']?.name || 'Unknown',
                     duration: v.duration,
                     uploadedAt: v.uploadedAt ? new Date(v.uploadedAt).toISOString() : undefined,
+                    contentBadge: formatContentBadge(v),
                   }))}
                 onVideoPress={(videoId) => {
                   const video = feedVideos.find(v => v.id === videoId)

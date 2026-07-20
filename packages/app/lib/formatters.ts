@@ -68,3 +68,42 @@ export function formatViews(views: number | null | undefined): string {
   if (views < 1_000_000) return `${(views / 1000).toFixed(1)}K views`
   return `${(views / 1_000_000).toFixed(1)}M views`
 }
+
+/**
+ * Movie/TV coordinates a video (or feed preview entry) may carry. Videos
+ * without them are plain uploads and render with no content badge.
+ */
+export interface ContentCoordinates {
+  contentKind?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
+  classification?: {
+    type?: string | null
+    year?: number | null
+    season?: number | null
+    episode?: number | null
+  } | null
+}
+
+/**
+ * Canonical content-type badge: "Movie", "Movie · 1999", or "S01E03".
+ * Accepts unknown (feed entries arrive untyped); returns null for plain videos
+ * so callers can skip rendering entirely.
+ */
+export function formatContentBadge(video: unknown): string | null {
+  if (!video || typeof video !== 'object') return null
+  // Structural read of optional fields after the object guard above.
+  const v = video as ContentCoordinates
+  const kind = v.contentKind ||
+    (v.classification?.type === 'movie' ? 'movie' : v.classification?.type === 'tv' ? 'episode' : null)
+  if (kind === 'movie') {
+    const year = v.classification?.year
+    return year ? `Movie · ${year}` : 'Movie'
+  }
+  if (kind === 'episode') {
+    const season = v.seasonNumber ?? v.classification?.season
+    const episode = v.episodeNumber ?? v.classification?.episode
+    if (season && episode) return `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
+  }
+  return null
+}

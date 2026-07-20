@@ -3,7 +3,7 @@ import { buildCreatorItemDraft, buildDirectChannelDraft, buildEpisodeItemDraft, 
 import { renderPickerLines } from './render.js'
 import { createDiagnosticScope } from './diagnostic-scope.js'
 import { createBackendExecutorDeps } from './backend-deps.js'
-import { readFileSync } from 'node:fs'
+import { readFileSync, appendFileSync } from 'node:fs'
 import { createInteractiveDriver } from './interactive.js'
 import { createPickerState } from './picker-state.js'
 import nodePath from 'node:path'
@@ -70,16 +70,17 @@ export async function runAddCommand (context = {}) {
 
   const deps = await loadDeps(context)
 
-  const scope = createDiagnosticScope({ logger: stderrLogger(stderr) })
+  const logger = mode === 'interactive' ? silentLogger(context.env || {}) : stderrLogger(stderr)
+  const scope = createDiagnosticScope({ logger })
   scope.install()
   try {
     if (mode === 'scripted') {
-      const result = await runScripted({ context, preferences, deps, emitProgress })
+      const result = await runScripted({ context, preferences, deps, emitProgress, logger })
       return finish(context, result)
     }
     if (mode === 'interactive') {
       if (typeof deps.runTerminal !== 'function') throw new AddUsageError('Interactive mode is unavailable')
-      const result = await runInteractive({ context, preferences, deps, emitProgress })
+      const result = await runInteractive({ context, preferences, deps, logger })
       return finish(context, result)
     }
     throw new AddUsageError('Unsupported add mode')
@@ -95,7 +96,7 @@ export async function runAddCommand (context = {}) {
   }
 }
 
-async function runScripted ({ context, preferences, deps, emitProgress }) {
+async function runScripted ({ context, preferences, deps, emitProgress, logger }) {
   const { flags } = context
   if (flags.provider && flags.provider !== 'tmdb') {
     throw new AddUsageError(`Provider ${flags.provider} is not available in this version`)
@@ -106,7 +107,7 @@ async function runScripted ({ context, preferences, deps, emitProgress }) {
   const fetchUrl = context.fetchUrl || context.query
   if (!fetchUrl) throw new AddUsageError('Scripted add requires a source URL or file path')
 
-  const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger: stderrLogger(context.stderr) })
+  const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger })
   try {
     let channelDraft
     let itemDraft
@@ -137,8 +138,8 @@ async function runScripted ({ context, preferences, deps, emitProgress }) {
   }
 }
 
-async function runInteractive ({ context, preferences, deps }) {
-  const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger: stderrLogger(context.stderr) })
+async function runInteractive ({ context, preferences, deps, logger }) {
+  const runtime = await deps.openAddRuntime({ storagePath: preferences.storagePath, network: preferences.network, logger })
   try {
     const tmdb = preferences.tmdbApiKey
       ? deps.createTmdbProvider({ apiKey: preferences.tmdbApiKey, searchLimit: preferences.searchLimit })
@@ -277,6 +278,20 @@ function deriveJobId (item, fetchUrl) {
 function stderrLogger (stderr) {
   const emit = (...args) => write(stderr, `${args.map(String).join(' ')}\n`)
   return { log: emit, info: emit, warn: emit, error: emit, debug: emit }
+}
+
+// Interactive mode owns stderr for the picker UI, so backend chatter must not
+// touch it. Discard by default; route to a file when PEARTUBE_LOG is set.
+function silentLogger (env = {}) {
+  const logPath = env.PEARTUBE_LOG
+  if (logPath) {
+    const emit = (...args) => {
+      try { appendFileSync(logPath, `${args.map(String).join(' ')}\n`) } catch {}
+    }
+    return { log: emit, info: emit, warn: emit, error: emit, debug: emit }
+  }
+  const noop = () => {}
+  return { log: noop, info: noop, warn: noop, error: noop, debug: noop }
 }
 
 function redact (message) {

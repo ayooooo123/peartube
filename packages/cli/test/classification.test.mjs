@@ -155,3 +155,49 @@ test('TMDB clients honor enabled=false even when an API key exists', async funct
   t.alike(await discover.search({ query: 'matrix' }), [])
   t.is(fetchCalls, 0, 'disabled clients never call TMDB')
 })
+
+test('discover.seasons shapes and sorts TMDB seasons, dropping empty ones', async function (t) {
+  const fetchFn = async () => ({
+    ok: true,
+    async json () {
+      return {
+        seasons: [
+          { season_number: 2, name: 'Season 2', episode_count: 8, air_date: '2023-01-01' },
+          { season_number: 1, name: 'Season 1', episode_count: 9, air_date: '2022-01-01' },
+          { season_number: 0, name: 'Specials', episode_count: 0 }
+        ]
+      }
+    }
+  })
+  const discover = createTmdbDiscoverClient({ apiKey: 'k', fetchFn })
+  const seasons = await discover.seasons({ tmdbId: '95396' })
+  t.is(seasons.length, 2, 'empty (0-episode) specials dropped')
+  t.is(seasons[0].season, 1, 'sorted ascending')
+  t.is(seasons[0].episodeCount, 9)
+})
+
+test('discover.episodes shapes and sorts TMDB episodes', async function (t) {
+  const fetchFn = async () => ({
+    ok: true,
+    async json () {
+      return {
+        episodes: [
+          { season_number: 1, episode_number: 2, name: 'Two', overview: 'b', air_date: '2022-01-08' },
+          { season_number: 1, episode_number: 1, name: 'One', overview: 'a', air_date: '2022-01-01' }
+        ]
+      }
+    }
+  })
+  const discover = createTmdbDiscoverClient({ apiKey: 'k', fetchFn })
+  const eps = await discover.episodes({ tmdbId: '95396', season: 1 })
+  t.is(eps.length, 2)
+  t.is(eps[0].episode, 1, 'sorted ascending')
+  t.is(eps[0].title, 'One')
+  t.is(eps[1].episode, 2)
+})
+
+test('discover season/episode fetch is disabled without a key', async function (t) {
+  const discover = createTmdbDiscoverClient({ apiKey: '' })
+  t.alike(await discover.seasons({ tmdbId: '1' }), [])
+  t.alike(await discover.episodes({ tmdbId: '1', season: 1 }), [])
+})

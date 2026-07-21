@@ -573,6 +573,14 @@ export async function createRelayService({
       if (!tmdbDiscover?.enabled) return []
       return tmdbDiscover.search({ query, type, page })
     },
+    async discoverTmdbSeasons({ tmdbId } = {}) {
+      if (!tmdbDiscover?.enabled) return []
+      return tmdbDiscover.seasons({ tmdbId })
+    },
+    async discoverTmdbEpisodes({ tmdbId, season } = {}) {
+      if (!tmdbDiscover?.enabled) return []
+      return tmdbDiscover.episodes({ tmdbId, season })
+    },
     getTrustedClients() {
       return trustedClients.list()
     },

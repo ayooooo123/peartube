@@ -426,6 +426,37 @@ export async function createArchiveConsole({
         return
       }
 
+      if (req.method === 'GET' && req.url.startsWith('/discover/seasons.json')) {
+        const parsed = new URL(req.url, 'http://relay.local')
+        const seasons = typeof service.discoverTmdbSeasons === 'function'
+          ? await service.discoverTmdbSeasons({ tmdbId: parsed.searchParams.get('tmdbId') || '' }).catch(() => [])
+          : []
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({ schema: 'peartube.relayTmdbSeasons', version: 1, seasons }, null, 2))
+        return
+      }
+
+      if (req.method === 'GET' && req.url.startsWith('/discover/episodes.json')) {
+        const parsed = new URL(req.url, 'http://relay.local')
+        const episodes = typeof service.discoverTmdbEpisodes === 'function'
+          ? await service.discoverTmdbEpisodes({
+            tmdbId: parsed.searchParams.get('tmdbId') || '',
+            season: parsed.searchParams.get('season') || ''
+          }).catch(() => [])
+          : []
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({ schema: 'peartube.relayTmdbEpisodes', version: 1, episodes }, null, 2))
+        return
+      }
+
       if (req.method === 'GET' && req.url === '/catalog.json') {
         const catalogChannels = await getCatalogChannels()
         res.writeHead(200, {

@@ -666,7 +666,7 @@ test('archive publisher opens separate relay-owned channels for source identitie
 })
 
 
-test('archive WebUI renders episode-aware TMDB source IDs for Discover archive forms', async (t) => {
+test('archive WebUI renders a season/episode picker for TV Discover cards', async (t) => {
   const html = renderArchiveWebHome({
     discover: {
       type: 'tv',
@@ -676,16 +676,19 @@ test('archive WebUI renders episode-aware TMDB source IDs for Discover archive f
         tmdbId: 95396,
         title: 'Severance',
         year: 2022,
-        season: 2,
-        episode: 4,
         posterPath: '/severance.jpg',
         networkStatus: 'missing'
       }]
     }
   })
 
-  t.ok(html.includes('name="tmdbSeason" value="2"'))
-  t.ok(html.includes('name="tmdbEpisode" value="4"'))
-  t.ok(html.includes('name="sourceVideoId" value="tmdb:tv:95396:s2:e4"'))
-  t.ok(html.includes('TV · S2 E4'))
+  // TV cards expose season/episode <select>s (populated client-side) instead of
+  // fixed hidden fields — discover results are show-level.
+  t.ok(html.includes('name="tmdbSeason" class="js-season" data-tmdbid="95396"'), 'season select bound to the show')
+  t.ok(html.includes('name="tmdbEpisode" class="js-episode"'), 'episode select present')
+  // sourceVideoId is left blank so the server rebuilds it from the chosen
+  // season/episode (see the console "builds episode-aware TMDB source ids" test).
+  t.ok(html.includes('name="sourceVideoId" value=""'), 'tv source id deferred to server')
+  t.ok(html.includes('/discover/seasons.json'), 'picker script fetches seasons')
+  t.ok(html.includes('TV'), 'card labels the TV type')
 })

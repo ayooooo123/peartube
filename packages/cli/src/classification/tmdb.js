@@ -156,6 +156,36 @@ export function createTmdbDiscoverClient({
       })
       return normalizeResults(body, mediaType)
     },
+    async seasons({ tmdbId } = {}) {
+      const id = String(tmdbId ?? '').trim()
+      if (!id) return []
+      const body = await request(`/tv/${id}`, {})
+      return (Array.isArray(body?.seasons) ? body.seasons : [])
+        .map((season) => ({
+          season: Number(season.season_number),
+          name: season.name || `Season ${season.season_number}`,
+          episodeCount: Number(season.episode_count) || 0,
+          airDate: season.air_date || null
+        }))
+        .filter((season) => Number.isFinite(season.season) && season.episodeCount > 0)
+        .sort((a, b) => a.season - b.season)
+    },
+    async episodes({ tmdbId, season } = {}) {
+      const id = String(tmdbId ?? '').trim()
+      const seasonNumber = Number(season)
+      if (!id || !Number.isFinite(seasonNumber)) return []
+      const body = await request(`/tv/${id}/season/${seasonNumber}`, {})
+      return (Array.isArray(body?.episodes) ? body.episodes : [])
+        .map((episode) => ({
+          season: Number(episode.season_number),
+          episode: Number(episode.episode_number),
+          title: episode.name || `Episode ${episode.episode_number}`,
+          overview: episode.overview || '',
+          airDate: episode.air_date || null
+        }))
+        .filter((episode) => Number.isFinite(episode.episode))
+        .sort((a, b) => a.episode - b.episode)
+    },
     posterUrl(path, size = 'w342') {
       return path ? `https://image.tmdb.org/t/p/${size}${path}` : null
     }

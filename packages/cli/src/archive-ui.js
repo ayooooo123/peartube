@@ -162,13 +162,16 @@ function discoverCard(item) {
           <input type="hidden" name="tmdbId" value="${escapeHtml(item.tmdbId)}">
           <input type="hidden" name="tmdbTitle" value="${escapeHtml(title)}">
           <input type="hidden" name="tmdbYear" value="${escapeHtml(item.year || '')}">
-          <input type="hidden" name="tmdbSeason" value="${escapeHtml(item.season || '')}">
-          <input type="hidden" name="tmdbEpisode" value="${escapeHtml(item.episode || '')}">
+          ${item.type === 'tv'
+            ? `<label class="ep-field">Season<select name="tmdbSeason" class="js-season" data-tmdbid="${escapeHtml(item.tmdbId)}"><option value="">Loading seasons…</option></select></label>
+          <label class="ep-field">Episode<select name="tmdbEpisode" class="js-episode"><option value="">Choose a season first</option></select></label>`
+            : `<input type="hidden" name="tmdbSeason" value="">
+          <input type="hidden" name="tmdbEpisode" value="">`}
           <input type="hidden" name="tmdbPosterPath" value="${escapeHtml(item.posterPath || '')}">
           <input type="hidden" name="sourceType" value="tmdb">
-          <input type="hidden" name="sourceVideoId" value="${escapeHtml(tmdbSourceVideoId(item))}">
+          <input type="hidden" name="sourceVideoId" value="${item.type === 'tv' ? '' : escapeHtml(tmdbSourceVideoId(item))}">
           <input type="hidden" name="channelName" value="${escapeHtml(title)}">
-          <input type="hidden" name="title" value="${escapeHtml(title)}">
+          <input type="hidden" name="title" value="${escapeHtml(title)}" class="js-title" data-show="${escapeHtml(title)}">
           <label>Source URL<input name="url" placeholder="Paste a YouTube/Rumble/source URL for this exact title"></label>
           <label>Or upload a video file<input type="file" name="file" accept="video/*"></label>
           <button type="submit">Archive this title</button>
@@ -455,6 +458,62 @@ export function renderArchiveWebHome(model = {}) {
       </div>
     </div>
   </main>
+  <script>
+  (function () {
+    function opt (value, label) { var o = document.createElement('option'); o.value = value; o.textContent = label; return o; }
+    function pad (n) { n = String(n); return n.length < 2 ? '0' + n : n; }
+    async function loadSeasons (sel) {
+      var tmdbId = sel.getAttribute('data-tmdbid');
+      try {
+        var res = await fetch('/discover/seasons.json?tmdbId=' + encodeURIComponent(tmdbId));
+        var data = await res.json();
+        sel.innerHTML = '';
+        sel.appendChild(opt('', 'Select season'));
+        (data.seasons || []).forEach(function (s) {
+          sel.appendChild(opt(String(s.season), (s.name || ('Season ' + s.season)) + ' (' + s.episodeCount + ' eps)'));
+        });
+      } catch (e) { sel.innerHTML = ''; sel.appendChild(opt('', 'Seasons unavailable')); }
+    }
+    async function loadEpisodes (seasonSel) {
+      var form = seasonSel.closest('form');
+      var epSel = form.querySelector('.js-episode');
+      var tmdbId = seasonSel.getAttribute('data-tmdbid');
+      var season = seasonSel.value;
+      epSel.innerHTML = ''; epSel.appendChild(opt('', 'Loading episodes'));
+      if (!season) { epSel.innerHTML = ''; epSel.appendChild(opt('', 'Choose a season first')); return; }
+      try {
+        var res = await fetch('/discover/episodes.json?tmdbId=' + encodeURIComponent(tmdbId) + '&season=' + encodeURIComponent(season));
+        var data = await res.json();
+        epSel.innerHTML = ''; epSel.appendChild(opt('', 'Select episode'));
+        (data.episodes || []).forEach(function (ep) {
+          epSel.appendChild(opt(String(ep.episode), 'E' + ep.episode + (ep.title ? ' - ' + ep.title : '')));
+        });
+        epSel._episodes = data.episodes || [];
+      } catch (e) { epSel.innerHTML = ''; epSel.appendChild(opt('', 'Episodes unavailable')); }
+    }
+    function updateTitle (form) {
+      var titleInput = form.querySelector('.js-title');
+      if (!titleInput) return;
+      var show = titleInput.getAttribute('data-show') || '';
+      var seasonSel = form.querySelector('.js-season');
+      var epSel = form.querySelector('.js-episode');
+      if (!seasonSel || !epSel || !seasonSel.value || !epSel.value) { titleInput.value = show; return; }
+      var epName = '';
+      if (epSel._episodes) {
+        var m = epSel._episodes.find(function (x) { return String(x.episode) === String(epSel.value); });
+        if (m && m.title) epName = ' ' + m.title;
+      }
+      titleInput.value = show + ' S' + pad(seasonSel.value) + 'E' + pad(epSel.value) + epName;
+    }
+    document.querySelectorAll('select.js-season').forEach(function (sel) {
+      loadSeasons(sel);
+      sel.addEventListener('change', function () { loadEpisodes(sel).then(function () { updateTitle(sel.closest('form')); }); });
+    });
+    document.addEventListener('change', function (ev) {
+      if (ev.target && ev.target.classList && ev.target.classList.contains('js-episode')) { updateTitle(ev.target.closest('form')); }
+    });
+  })();
+  </script>
 </body>
 </html>`
 }

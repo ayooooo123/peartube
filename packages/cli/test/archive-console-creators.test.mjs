@@ -62,6 +62,14 @@ function fakeService(overrides = {}) {
         { type: 'movie', tmdbId: 999, title: 'Missing Movie', year: 2024, posterPath: '/missing.jpg', overview: 'Not here yet.', popularity: 80 }
       ]
     },
+    async discoverTmdbSeasons({ tmdbId }) {
+      calls.seasons = { tmdbId }
+      return [{ season: 1, name: 'Season 1', episodeCount: 9, airDate: '2022-01-01' }]
+    },
+    async discoverTmdbEpisodes({ tmdbId, season }) {
+      calls.episodes = { tmdbId, season }
+      return [{ season: Number(season), episode: 1, title: 'Pilot', overview: '', airDate: '2022-01-01' }]
+    },
     async setTmdbSettings(form) { calls.setTmdb.push(form); tmdb.apiKey = form.apiKey; tmdb.enabled = form.enabled; return { enabled: form.enabled } },
     async addCreatorSource(form) { calls.addCreator.push(form); return { creator: {}, job: {} } },
     ...overrides
@@ -334,4 +342,30 @@ test('POST /archive accepts a multipart file upload and enqueues an upload job',
   } finally {
     rmSync(uploadDir, { recursive: true, force: true })
   }
+})
+
+test('GET /discover/seasons.json returns TMDB seasons for a show', async function (t) {
+  await withConsole(fakeService(), async (base) => {
+    const res = await fetch(`${base}/discover/seasons.json?tmdbId=95396`)
+    t.is(res.status, 200)
+    const body = await res.json()
+    t.is(body.schema, 'peartube.relayTmdbSeasons')
+    t.is(body.seasons.length, 1)
+    t.is(body.seasons[0].season, 1)
+    t.is(body.seasons[0].episodeCount, 9)
+  })
+})
+
+test('GET /discover/episodes.json returns TMDB episodes for a season', async function (t) {
+  const service = fakeService()
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/discover/episodes.json?tmdbId=95396&season=1`)
+    t.is(res.status, 200)
+    const body = await res.json()
+    t.is(body.schema, 'peartube.relayTmdbEpisodes')
+    t.is(body.episodes.length, 1)
+    t.is(body.episodes[0].episode, 1)
+    t.is(body.episodes[0].title, 'Pilot')
+  })
+  t.is(service.calls.episodes.season, '1', 'season passed through from the query string')
 })

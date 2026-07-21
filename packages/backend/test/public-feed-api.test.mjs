@@ -942,6 +942,79 @@ test('getFeedSnapshotEntries keeps manifestUpdatedAt stable for unchanged public
   }
 })
 
+test('submitToFeed forwards writable channel load options for projection repair', async (t) => {
+  const channelKey = 'ef'.repeat(32)
+  const publicBeeKey = 'ab'.repeat(32)
+  const loadOptions = {
+    preferWritable: true,
+    writerKeyName: 'peartube-archive-writer:tmdb:tv:456',
+  }
+  let loadedWith = null
+
+  const api = createApi({
+    ctx: {
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async submitChannel() {},
+    },
+    loadChannel: async (_ctx, _channelKey, options) => {
+      loadedWith = options
+      return {
+        writable: true,
+        publicBeeKey,
+        keyHex: channelKey,
+        publicBee: {
+          writable: true,
+          async getMetadata() {
+            return { commentsDbKey: channelKey }
+          },
+        },
+      }
+    },
+  })
+
+  const result = await api.submitToFeed(channelKey, loadOptions)
+
+  t.is(result.success, true)
+  t.alike(loadedWith, loadOptions)
+})
+
+test('submitToFeed fails projection repair when the channel reopens read-only', async (t) => {
+  const channelKey = 'ef'.repeat(32)
+  let submitted = false
+  const api = createApi({
+    ctx: {
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async submitChannel() {
+        submitted = true
+      },
+    },
+    loadChannel: async () => ({
+      writable: false,
+      publicBeeKey: 'ab'.repeat(32),
+      publicBee: { writable: false },
+    }),
+  })
+
+  const result = await api.submitToFeed(channelKey, {
+    preferWritable: true,
+    writerKeyName: 'peartube-archive-writer:tmdb:tv:456',
+  })
+
+  t.is(result.success, false)
+  t.ok(/writable|repair|projection/i.test(result.error || ''))
+  t.is(submitted, false)
+})
+
 test('submitToFeed fails closed when the channel cannot provide a publicBeeKey', async (t) => {
   let submitted = false
 

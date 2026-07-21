@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import { resolveRelayConfig } from '../src/config.js'
 import { createRelayService } from '../src/service.js'
+import { createArchivePublisher as createRelayArchivePublisher } from '../src/archive-manager.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -1247,4 +1248,238 @@ test('createRelayService preserves archive-job catalog source after completed ar
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('createRelayService repairs completed grouped archive projections before republishing them', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-projection-repair-')
+  const runtime = createFakeRuntime()
+  const projectionRepairs = []
+  const publishedEntries = []
+  runtime.publishRelayCatalogEntry = async (entry) => {
+    publishedEntries.push(entry)
+    return entry
+  }
+  let visibleProjectionVideos = []
+  runtime.api.submitToFeed = async (channelKey, loadOptions) => {
+    projectionRepairs.push({ channelKey, loadOptions })
+    if (
+      channelKey === 'archive-show-channel' &&
+      loadOptions?.preferWritable === true &&
+      loadOptions?.writerKeyName === 'peartube-archive-writer:tmdb:tv:456'
+    ) {
+      visibleProjectionVideos = [{ id: 'archive-show-episode' }]
+      return { success: true }
+    }
+    return { success: false, error: 'archive channel was not reopened with its writer key' }
+  }
+  const startupEvents = []
+  runtime.start = async () => { startupEvents.push('runtime:start') }
+  runtime.cacheManager = {
+    async init() { startupEvents.push('cache:init') },
+    async removeChannel(channelKey) { startupEvents.push(`cache:remove:${channelKey}`) },
+    async addChannel() {}
+  }
+  runtime.publicFeed = {
+    hideChannel(channelKey) { startupEvents.push(`feed:hide:${channelKey}`) },
+    async unpublishChannel(channelKey) { startupEvents.push(`feed:unpublish:${channelKey}`) },
+    async submitChannel() {}
+  }
+
+  await runtime.ctx.metaDb.put('relay-archive-jobs', [{
+    id: 'failed-repair-job',
+    status: 'completed',
+    publish: true,
+    channelKey: 'failed-repair-channel',
+    publicBeeKey: 'failed-repair-public-bee',
+    completedAt: 67888,
+    previewVideo: {
+      id: 'failed-repair-video',
+      title: 'Stale archive',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'cc'.repeat(32),
+      availability: 'playable'
+    }
+  }, {
+    id: 'unpublished-archive-job',
+    status: 'completed',
+    publish: false,
+    channelKey: 'blocked-show-channel',
+    publicBeeKey: 'blocked-show-public-bee',
+    completedAt: 67889,
+    previewVideo: {
+      id: 'unpublished-archive-video',
+      title: 'Private archive',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'bb'.repeat(32),
+      availability: 'playable'
+    }
+  }, {
+    id: 'blocked-show-job',
+    status: 'completed',
+    publish: true,
+    channelKey: 'blocked-show-channel',
+    publicBeeKey: 'blocked-show-public-bee',
+    completedAt: 67889,
+    previewVideo: {
+      id: 'blocked-show-episode',
+      title: 'Public sibling',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'dd'.repeat(32),
+      availability: 'playable'
+    }
+  }, {
+    id: 'archive-show-job',
+    status: 'completed',
+    publish: true,
+    channelKey: 'archive-show-channel',
+    publicBeeKey: 'archive-show-public-bee',
+    completedAt: 67890,
+    previewVideo: {
+      id: 'archive-show-episode',
+      title: 'Episode 1',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'aa'.repeat(32),
+      availability: 'playable'
+    }
+  }])
+  await runtime.ctx.metaDb.put('relay-archive-job-inputs', {
+    'failed-repair-job': {
+      anonymous: false,
+      publish: true,
+      tmdbType: 'tv',
+      tmdbId: '999',
+      tmdbTitle: 'Stale Show'
+    },
+    'blocked-show-job': {
+      anonymous: false,
+      publish: true,
+      tmdbType: 'tv',
+      tmdbId: '777',
+      tmdbTitle: 'Blocked Show'
+    },
+    'archive-show-job': {
+      anonymous: false,
+      publish: true,
+      tmdbType: 'tv',
+      tmdbId: '456',
+      tmdbTitle: 'Archived Show'
+    }
+  })
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+    await service.catalog.upsertChannel({
+      channelKey: 'blocked-show-channel',
+      publicBeeKey: 'blocked-show-public-bee',
+      source: 'archive-job',
+      retentionClass: 'private',
+      previewVideos: [{ id: 'unpublished-archive-video' }],
+      videoCount: 1
+    })
+
+    await service.start()
+    await waitFor(() =>
+      projectionRepairs.length === 2 &&
+      publishedEntries.some((entry) => entry.driveKey === 'archive-show-channel'))
+
+    t.alike(projectionRepairs, [{
+      channelKey: 'failed-repair-channel',
+      loadOptions: {
+        preferWritable: true,
+        writerKeyName: 'peartube-archive-writer:tmdb:tv:999'
+      }
+    }, {
+      channelKey: 'archive-show-channel',
+      loadOptions: {
+        preferWritable: true,
+        writerKeyName: 'peartube-archive-writer:tmdb:tv:456'
+      }
+    }])
+    t.alike(visibleProjectionVideos, [{ id: 'archive-show-episode' }])
+    t.alike(publishedEntries.map((entry) => ({
+      channelKey: entry.driveKey,
+      videoIds: entry.previewVideos.map((video) => video.id),
+    })), [{
+      channelKey: 'archive-show-channel',
+      videoIds: ['archive-show-episode'],
+    }])
+    const runtimeStartedAt = startupEvents.indexOf('runtime:start')
+    const hiddenBeforeStartAt = startupEvents.indexOf('feed:hide:blocked-show-channel')
+    const cacheRemovedBeforeStartAt = startupEvents.indexOf('cache:remove:blocked-show-channel')
+    const unpublishedAfterStartAt = startupEvents.indexOf('feed:unpublish:blocked-show-channel')
+    t.ok(
+      hiddenBeforeStartAt >= 0 && hiddenBeforeStartAt < runtimeStartedAt,
+      'mixed unpublished channels are hidden before the runtime restores feed entries'
+    )
+    t.ok(
+      cacheRemovedBeforeStartAt >= 0 && cacheRemovedBeforeStartAt < runtimeStartedAt,
+      'mixed unpublished channels are removed from the cache before startup seeding'
+    )
+    t.ok(
+      unpublishedAfterStartAt > runtimeStartedAt,
+      'persisted published-channel state is removed after feed startup'
+    )
+    t.absent(service.catalog.getChannel('blocked-show-channel'))
+    const blockedDirectPublish = await service.publishArchiveJobToFeed({
+      id: 'blocked-show-job',
+      status: 'completed',
+      publish: true,
+      channelKey: 'blocked-show-channel',
+      publicBeeKey: 'blocked-show-public-bee',
+      previewVideo: {
+        id: 'blocked-show-episode',
+        availability: 'playable'
+      }
+    })
+    t.alike(blockedDirectPublish, {
+      published: false,
+      reason: 'channel-contains-unpublished-archive'
+    })
+    t.is(publishedEntries.length, 1)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('relay archive publisher keeps unpublished imports out of public projection', async (t) => {
+  let uploadedOptions = null
+  const publisher = createRelayArchivePublisher({
+    identityManager: {},
+    uploadManager: {
+      async uploadFromPath(_channel, _filePath, options) {
+        uploadedOptions = options
+        return { success: true, videoId: 'private-archive-video' }
+      }
+    },
+    api: {},
+    runtime: {},
+    fs: {}
+  })
+
+  await publisher.importVideo({
+    channel: {},
+    filePath: '/tmp/private.mp4',
+    title: 'Private archive',
+    description: '',
+    publish: false
+  })
+
+  t.is(uploadedOptions.publicationState, 'replicationPending')
 })

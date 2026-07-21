@@ -68,15 +68,25 @@ export function createFeedApi({ ctx, publicFeed, loadChannel, isValidHypercoreHe
     /**
      * Submit channel to public feed
      * @param {string} driveKey
+     * @param {{preferWritable?: boolean, writerKeyName?: string}} [loadOptions]
      * @returns {Promise<{success: boolean}>}
      */
-    async submitToFeed(driveKey) {
+    async submitToFeed(driveKey, loadOptions) {
       console.log('[API] Submitting channel to feed:', driveKey?.slice(0, 16))
       if (publicFeed && driveKey) {
         // Get publicBeeKey from the channel for fast viewer access
         let publicBeeKey = null
         try {
-          const channel = await loadChannel(ctx, driveKey)
+          const channel = await loadChannel(ctx, driveKey, loadOptions)
+          if (
+            loadOptions?.preferWritable === true &&
+            (channel?.writable !== true || channel?.publicBee?.writable !== true)
+          ) {
+            return {
+              success: false,
+              error: 'Unable to repair public projection: channel did not reopen writable',
+            }
+          }
           if (channel?.publicProjectionActive === false) {
             return {
               success: false,

@@ -3,7 +3,7 @@ import { evaluateCandidate } from './admission.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
-import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
+import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader, createRoutingDownloader, deriveArchiveSourceIdentity } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
@@ -11,7 +11,7 @@ import { RelayClassificationStore } from './classification/store.js'
 import { createTmdbClassifier, createTmdbDiscoverClient } from './classification/tmdb.js'
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
-import { classifySourceUrl } from './archive/source-id.js'
+import { buildWriterKeyName, classifySourceUrl } from './archive/source-id.js'
 import tmdbFetch from '#fetch'
 
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
@@ -477,12 +477,75 @@ export async function createRelayService({
     return { accepted: true, retentionClass: decision.retentionClass, reason: decision.reason }
   }
 
-  async function publishArchiveJobToFeed(job) {
+  function unpublishedArchiveChannelKeys(jobs) {
+    return new Set((jobs || [])
+      .filter((job) =>
+        job?.status === 'completed' &&
+        job?.publish === false &&
+        job?.channelKey)
+      .map((job) => job.channelKey))
+  }
+
+  async function readUnpublishedArchiveChannelKeys() {
+    if (!runtime.ctx?.metaDb) return new Set()
+    const jobs = await createArchiveJobStore({ metaDb: runtime.ctx.metaDb }).listJobs()
+    return unpublishedArchiveChannelKeys(jobs)
+  }
+
+  async function scrubUnpublishedArchiveChannelsBeforeRuntimeStart() {
+    const channelKeys = await readUnpublishedArchiveChannelKeys()
+    if (channelKeys.size === 0) return channelKeys
+
+    await runtime.cacheManager?.init?.()
+    for (const channelKey of channelKeys) {
+      runtime.publicFeed?.hideChannel?.(channelKey)
+      await runtime.cacheManager?.removeChannel?.(channelKey)
+      await relayCatalog.removeChannel(channelKey)
+    }
+    return channelKeys
+  }
+
+  async function repairCompletedArchiveProjection(job, unpublishedChannelKeys = new Set()) {
+    if (job?.publish === false) return { repaired: false, reason: 'not-published' }
+    if (!job?.channelKey) return { repaired: false, reason: 'missing-channel-key' }
+    if (unpublishedChannelKeys.has(job.channelKey)) {
+      return { repaired: false, reason: 'channel-contains-unpublished-archive' }
+    }
+    if (typeof runtime.api?.submitToFeed !== 'function') {
+      throw new Error('Backend submitToFeed API is unavailable')
+    }
+
+    const privateInput = runtime.ctx?.metaDb && job?.id
+      ? await createArchiveJobStore({ metaDb: runtime.ctx.metaDb }).getPrivateInput(job.id)
+      : null
+    const sourceIdentity = deriveArchiveSourceIdentity(privateInput || {})
+    const loadOptions = sourceIdentity?.sourceId
+      ? {
+          preferWritable: true,
+          writerKeyName: buildWriterKeyName(sourceIdentity.sourceId)
+        }
+      : undefined
+    const result = await runtime.api.submitToFeed(job.channelKey, loadOptions)
+    if (!result?.success) {
+      throw new Error(result?.error || `Unable to repair public projection for ${job.channelKey}`)
+    }
+    return { repaired: true }
+  }
+
+  async function publishArchiveJobToFeed(job, { unpublishedChannelKeys = null } = {}) {
     if (closed) return { published: false, reason: 'closed' }
     if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
+    if (job?.publish === false) return { published: false, reason: 'not-published' }
     if (!job?.channelKey || !job?.publicBeeKey || !job?.previewVideo?.id) {
       return { published: false, reason: 'missing-refs' }
     }
+    if (!unpublishedChannelKeys && runtime.ctx?.metaDb) {
+      unpublishedChannelKeys = await readUnpublishedArchiveChannelKeys()
+    }
+    if (unpublishedChannelKeys?.has(job.channelKey)) {
+      return { published: false, reason: 'channel-contains-unpublished-archive' }
+    }
+
 
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
     const shapePreview = (video) => ({
@@ -749,8 +812,13 @@ export async function createRelayService({
         })
       }
 
+      const unpublishedArchiveChannels =
+        await scrubUnpublishedArchiveChannelsBeforeRuntimeStart()
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
+      for (const channelKey of unpublishedArchiveChannels) {
+        await runtime.publicFeed?.unpublishChannel?.(channelKey)
+      }
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
 
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
@@ -789,17 +857,29 @@ export async function createRelayService({
         void (async () => {
           const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
           const jobs = await store.listJobs().catch(() => [])
+          const unpublishedChannelKeys = unpublishedArchiveChannelKeys(jobs)
           for (const job of jobs) {
             if (closed) break
-            if (job?.status === 'completed') {
-              await publishArchiveJobToFeed(job).catch((err) => {
-                logger.archive.warn('Completed archive job feed publication failed', {
-                  id: job.id || null,
-                  videoId: job.videoId || null,
-                  error: err?.message || String(err)
-                })
+            if (job?.status !== 'completed') continue
+            let repair
+            try {
+              repair = await repairCompletedArchiveProjection(job, unpublishedChannelKeys)
+            } catch (err) {
+              logger.archive.warn('Completed archive job projection repair failed', {
+                id: job.id || null,
+                channelKey: job.channelKey || null,
+                error: err?.message || String(err)
               })
+              continue
             }
+            if (!repair.repaired) continue
+            await publishArchiveJobToFeed(job, { unpublishedChannelKeys }).catch((err) => {
+              logger.archive.warn('Completed archive job feed publication failed', {
+                id: job.id || null,
+                videoId: job.videoId || null,
+                error: err?.message || String(err)
+              })
+            })
           }
         })().catch(() => {})
       }

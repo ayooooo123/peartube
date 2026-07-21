@@ -190,6 +190,7 @@ export function createArchiveJobStore({ metaDb }) {
       const byChannel = new Map()
       for (const job of jobs) {
         if (job?.status !== 'completed') continue
+        if (job?.publish === false) continue
         if (!job?.channelKey || !job?.previewVideo?.id) continue
         const list = byChannel.get(job.channelKey) || []
         list.push({
@@ -449,7 +450,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
       return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode }) {
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, publish }) {
       const result = await uploadManager.uploadFromPath(channel, filePath, {
         title,
         description,
@@ -465,6 +466,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         creatorName,
         creatorHandle,
         thumbnailUrl,
+        publicationState: publish === false ? 'replicationPending' : undefined,
         // TMDB coordinates make the movie/TV identity durable on the canonical
         // video record (schema already supports these fields), not just on the
         // relay-side job/feed previews.

@@ -662,21 +662,34 @@ export async function createRelayService({
         configuredOwners: config.admission.owners?.length || 0
       })
 
+      const bootStartedAt = Date.now()
       runtime.setCandidateHandler?.((candidate) => scheduleCandidate({
         source: 'discovered',
         ...candidate
       }))
 
-      await runtime.start?.()
-
-      // Bring the archive web console up IMMEDIATELY once the runtime managers
-      // exist (identity/upload/api are created inside runtime.start), before any
-      // network-bound startup work below. The completed-job republish loop now
-      // re-classifies each preview against TMDB (real network calls), so leaving
-      // the HTTP listener behind it delayed the web UI by minutes on boot.
+      // Bring the archive web console up FIRST — before the slow, network-bound
+      // runtime bring-up (swarm join + channel seeding) — so the operator web UI
+      // is reachable within seconds instead of waiting minutes on boot. The
+      // console only needs metaDb (opened by the runtime factory, already ready)
+      // to serve browse/discover/settings/upload pages. The archive *publisher*
+      // needs managers created during runtime.start(), so it is bound lazily: an
+      // archive submitted in the brief pre-ready window returns a clear
+      // "still starting" error rather than blocking startup.
+      let archivePublisher = null
+      const requirePublisher = () => {
+        if (!archivePublisher) throw new Error('relay runtime is still starting — retry in a moment')
+        return archivePublisher
+      }
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
+        const lazyPublisher = {
+          ensureAnonymousChannel: (...args) => requirePublisher().ensureAnonymousChannel(...args),
+          importVideo: (...args) => requirePublisher().importVideo(...args),
+          publishChannel: (...args) => requirePublisher().publishChannel(...args),
+          seedChannel: (...args) => requirePublisher().seedChannel(...args)
+        }
         archiveConsole = await createArchiveConsole({
           service,
           logger,
@@ -696,15 +709,30 @@ export async function createRelayService({
             fs: runtimeFsModule,
             path: runtimePathModule
           }),
-          publisher: createArchivePublisher({
-            identityManager: runtime.identityManager,
-            uploadManager: runtime.uploadManager,
-            api: runtime.api,
-            runtime,
-            fs: runtimeFsModule
-          })
+          publisher: lazyPublisher
         })
         await archiveConsole.start()
+        logger.relay.info('Relay archive WebUI listening', {
+          host: config.archive.uiHost || '127.0.0.1',
+          port: config.archive.uiPort || 8174,
+          bootMs: Date.now() - bootStartedAt
+        })
+      }
+
+      const runtimeStartedAt = Date.now()
+      await runtime.start?.()
+      logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
+
+      // Managers exist now — bind the real archive publisher behind the lazy proxy.
+      if (config.archive?.uiEnabled) {
+        const runtimeFsModule = fsModule || await import('#fs')
+        archivePublisher = createArchivePublisher({
+          identityManager: runtime.identityManager,
+          uploadManager: runtime.uploadManager,
+          api: runtime.api,
+          runtime,
+          fs: runtimeFsModule
+        })
       }
 
       for (const channelKey of config.admission.channels || []) {

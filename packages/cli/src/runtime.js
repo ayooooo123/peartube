@@ -84,6 +84,7 @@ export async function createRelayRuntime({ config, logger, dependencies = null }
     })
   }
 
+  const storageOpenAt = Date.now()
   const ctx = await initializeStorage({
     storagePath: storageRoot,
     primaryKey,
@@ -96,6 +97,7 @@ export async function createRelayRuntime({ config, logger, dependencies = null }
     // discover peers, gossip inventory, or serve retained content to the network.
     requireNetwork: true
   })
+  logger.runtime?.info('Relay storage opened', { storageOpenMs: Date.now() - storageOpenAt })
 
   if (!primaryKey && ctx?.store?.primaryKey) {
     try {

@@ -96,14 +96,17 @@ test('direct downloader rejects a non-video response and cleans up', async funct
   }
 })
 
-test('routing downloader sends TMDB imports and direct URLs to the direct downloader', async function (t) {
-  const calls = []
-  const directDownloader = { download: async (i) => { calls.push(['direct', i.url]); return { via: 'direct' } } }
-  const ytDlpDownloader = { download: async (i) => { calls.push(['ytdlp', i.url]); return { via: 'ytdlp' } } }
+test('routing downloader uses yt-dlp only for creator imports', async function (t) {
+  const directDownloader = { download: async () => ({ via: 'direct' }) }
+  const ytDlpDownloader = { download: async () => ({ via: 'ytdlp' }) }
   const router = createRoutingDownloader({ directDownloader, ytDlpDownloader })
 
+  // Creator imports (carry a creatorSourceId) scrape a platform via yt-dlp —
+  // even a YouTube page, and even the same page without the creator marker
+  // would go direct.
+  t.is((await router.download({ url: 'https://www.youtube.com/@chan', creatorSourceId: 'youtube:channel:UC1' })).via, 'ytdlp', 'creator import -> yt-dlp')
   t.is((await router.download({ url: 'https://host/ep', tmdbType: 'tv' })).via, 'direct', 'show import -> direct')
   t.is((await router.download({ url: 'https://host/movie', tmdbType: 'movie' })).via, 'direct', 'movie import -> direct')
-  t.is((await router.download({ url: 'https://cdn/clip.mp4' })).via, 'direct', 'direct file url -> direct')
-  t.is((await router.download({ url: 'https://www.youtube.com/watch?v=x' })).via, 'ytdlp', 'platform page -> yt-dlp')
+  t.is((await router.download({ url: 'https://cdn/clip.mp4' })).via, 'direct', 'single-video direct url -> direct')
+  t.is((await router.download({ url: 'https://www.youtube.com/watch?v=x' })).via, 'direct', 'non-creator page -> direct (yt-dlp is creators-only)')
 })

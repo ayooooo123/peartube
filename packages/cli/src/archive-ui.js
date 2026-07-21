@@ -412,11 +412,10 @@ export function renderArchiveWebHome(model = {}) {
 
         <section class="card">
           <h2>Archive a single video</h2>
-          <p class="sub">Import one video into a relay-owned anonymous channel and publish availability to the network. Paste a source URL <strong>or</strong> upload a video file from this device.</p>
+          <p class="sub">Import one video into a relay-owned anonymous channel and publish availability to the network. Paste a <strong>direct link to the video file</strong> or upload one from this device. For a YouTube/Rumble creator, use <em>Contribute a creator</em> above.</p>
           <form method="post" action="/archive" enctype="multipart/form-data">
-            <label>Video or channel URL<input name="url" placeholder="https://www.youtube.com/watch?v=..."></label>
+            <label>Direct video URL<input name="url" placeholder="https://host/path/video.mp4"></label>
             <label>Or upload a video file<input type="file" name="file" accept="video/*"></label>
-            <label>Invidious fallback instance<input name="invidiousInstance" placeholder="Optional, e.g. https://inv.thepixora.com"></label>
             <label>Anonymous channel name<input name="channelName" value="Anonymous Archive"></label>
             <label>Title override<input name="title" placeholder="Optional"></label>
             <label>Description override<textarea name="description" rows="3" placeholder="Optional"></textarea></label>

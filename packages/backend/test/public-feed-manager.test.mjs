@@ -1432,6 +1432,60 @@ test('serving manifest snapshots preserve unverified playback metadata', async (
   }
 })
 
+test('feed previews carry TV/movie classification and drop unset season sentinels', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY, {
+      previewVideos: [{
+        id: 'episode-1',
+        title: 'Pilot',
+        uploadedAt: 10,
+        blobId: '0:8:0:1024',
+        blobsCoreKey: '55'.repeat(32),
+        mimeType: 'video/mp4',
+        availability: 'playable',
+        contentKind: 'episode',
+        seasonNumber: 1,
+        episodeNumber: 2,
+        mediaProvider: 'tmdb',
+        mediaId: '1399',
+        classification: { type: 'tv', year: 2011, season: 1, episode: 2, extra: 'dropme' },
+      }, {
+        id: 'plain-1',
+        title: 'Home Video',
+        uploadedAt: 5,
+        blobId: '0:8:0:2048',
+        blobsCoreKey: '66'.repeat(32),
+        mimeType: 'video/mp4',
+        availability: 'playable',
+        // Unset structured fields default to the storage sentinel.
+        contentKind: '',
+        seasonNumber: Number.MAX_SAFE_INTEGER,
+        episodeNumber: Number.MAX_SAFE_INTEGER,
+      }],
+    })
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    const [episode, plain] = feed[0].previewVideos
+
+    assert.equal(episode.contentKind, 'episode')
+    assert.equal(episode.seasonNumber, 1)
+    assert.equal(episode.episodeNumber, 2)
+    assert.equal(episode.mediaProvider, 'tmdb')
+    assert.equal(episode.mediaId, '1399')
+    assert.deepEqual(episode.classification, { type: 'tv', year: 2011, season: 1, episode: 2 })
+
+    assert.equal(plain.contentKind, null)
+    assert.equal(plain.seasonNumber, null)
+    assert.equal(plain.episodeNumber, null)
+    assert.equal(plain.classification, null)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('submitChannel stores explicit channel names before provider hydration', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())
 
@@ -1660,6 +1714,67 @@ test('feed snapshot provider propagates explicit empty previews', async () => {
     assert.deepEqual(manager.getFeed()[0].previewVideos, [])
   } finally {
     Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+test('submitChannel keeps explicit playable previews when the provider reads back empty', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  // Public bee projection lagging: the provider momentarily sees no videos.
+  manager.setFeedSnapshotProvider(async () => [{
+    driveKey: DRIVE_KEY,
+    publicBeeKey: PUBLIC_BEE_KEY,
+    previewVideos: [],
+    videoCount: 0,
+  }])
+
+  try {
+    await manager.submitChannel(DRIVE_KEY, PUBLIC_BEE_KEY, {
+      channelName: 'Grouped Show',
+      videoCount: 1,
+      manifestUpdatedAt: 200,
+      previewVideos: [{
+        id: 'episode-1',
+        title: 'Pilot',
+        uploadedAt: 200,
+        blobId: '0:8:0:1024',
+        blobsCoreKey: '77'.repeat(32),
+        mimeType: 'video/mp4',
+        availability: 'playable',
+        contentKind: 'episode',
+        seasonNumber: 1,
+        episodeNumber: 1,
+      }],
+    })
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].previewVideos.length, 1)
+    assert.equal(feed[0].previewVideos[0].id, 'episode-1')
+    assert.equal(feed[0].previewVideos[0].contentKind, 'episode')
+    assert.equal(feed[0].videoCount, 1)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('unhideChannel clears a hidden marker so the channel can be re-added', () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  try {
+    manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+    manager.hideChannel(DRIVE_KEY)
+    assert.equal(manager.getFeed().length, 0)
+    // A hidden key is silently refused by addEntry.
+    manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+    assert.equal(manager.getFeed().length, 0)
+
+    assert.equal(manager.unhideChannel(DRIVE_KEY), true)
+    assert.equal(manager.unhideChannel(DRIVE_KEY), false)
+    manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].driveKey, DRIVE_KEY)
+  } finally {
     manager.stop()
   }
 })

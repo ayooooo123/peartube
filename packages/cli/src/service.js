@@ -511,6 +511,9 @@ export async function createRelayService({
     if (unpublishedChannelKeys.has(job.channelKey)) {
       return { repaired: false, reason: 'channel-contains-unpublished-archive' }
     }
+    // The channel is fully published (passed the unpublished gate); clear any
+    // stale hidden marker from a prior session so submitToFeed can re-add it.
+    runtime.publicFeed?.unhideChannel?.(job.channelKey)
     if (typeof runtime.api?.submitToFeed !== 'function') {
       throw new Error('Backend submitToFeed API is unavailable')
     }
@@ -545,6 +548,9 @@ export async function createRelayService({
     if (unpublishedChannelKeys?.has(job.channelKey)) {
       return { published: false, reason: 'channel-contains-unpublished-archive' }
     }
+    // Fully-published channel: clear any stale hidden marker before submitting,
+    // otherwise addEntry/submitChannel silently refuse a previously-hidden key.
+    runtime.publicFeed?.unhideChannel?.(job.channelKey)
 
 
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)

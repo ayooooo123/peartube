@@ -334,11 +334,37 @@ export class PublicFeed {
           thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
           thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
           thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+          contentKind: video?.contentKind ? String(video.contentKind) : null,
+          seasonNumber: this._boundedContentInt(video?.seasonNumber),
+          episodeNumber: this._boundedContentInt(video?.episodeNumber),
+          mediaProvider: video?.mediaProvider ? String(video.mediaProvider) : null,
+          mediaId: video?.mediaId ? String(video.mediaId) : null,
+          classification: this._sanitizePreviewClassification(video?.classification),
           discoveryOnly: Boolean(video?.discoveryOnly),
           restoredFromCache: Boolean(video?.restoredFromCache),
           requiresAvailabilityProbe: Boolean(video?.requiresAvailabilityProbe),
         }
       })
+  }
+
+  // Feed previews can arrive from untrusted peers; reduce the classification to
+  // the bounded scalar shape the client badge/filter logic reads. Anything else
+  // is dropped so arbitrary nested peer objects never enter feed state.
+  _sanitizePreviewClassification(classification) {
+    if (!classification || typeof classification !== 'object') return null
+    const type = classification.type === 'movie' || classification.type === 'tv' ? classification.type : null
+    const year = Number(classification.year) > 0 ? Number(classification.year) : null
+    const season = this._boundedContentInt(classification.season)
+    const episode = this._boundedContentInt(classification.episode)
+    if (!type && !year && !season && !episode) return null
+    return { type, year, season, episode }
+  }
+
+  // Season/episode records default to Number.MAX_SAFE_INTEGER in HyperDB storage
+  // when unset, so a plain > 0 check would leak that sentinel as a real number.
+  _boundedContentInt(value) {
+    const n = Number(value)
+    return Number.isInteger(n) && n > 0 && n < Number.MAX_SAFE_INTEGER ? n : null
   }
 
   _markRestoredDiscoveryOnly(entry, restoredFrom) {
@@ -2372,6 +2398,17 @@ export class PublicFeed {
       ...(snapshot || {}),
     }
 
+    // The provider snapshot enriches, but must never erase the explicit playable
+    // previews the caller supplied: a freshly published channel whose public bee
+    // has not finished projecting reads back empty, which would otherwise ship a
+    // zero-video entry until the next relay restart re-published it.
+    if (explicitSnapshot?.previewVideos?.length && !(snapshot.previewVideos?.length)) {
+      snapshot.previewVideos = explicitSnapshot.previewVideos
+      if (!(Number(snapshot.videoCount) > 0) && Number(explicitSnapshot.videoCount) > 0) {
+        snapshot.videoCount = explicitSnapshot.videoCount
+      }
+    }
+
     // Attach the channel's signed root descriptor so strict peers accept the
     // SUBMIT_CHANNEL broadcast and subsequent HAVE_FEED announcements.
     if (!snapshot.signedDescriptor && this.signedDescriptorProvider) {
@@ -2619,6 +2656,23 @@ export class PublicFeed {
     console.log('[PublicFeed] Hidden channel:', driveKey.slice(0, 16));
     this._persistHiddenChannels().catch(() => {})
     this._schedulePersistDiscovered()
+  }
+
+  /**
+   * Clear a locally-hidden marker so a channel can be re-added/published.
+   * Explicit (re)publication must override a stale hidden marker left by a
+   * previous session — otherwise a channel hidden once (e.g. while it held an
+   * unpublished archive) stays invisible forever, even after every video in it
+   * is published.
+   * @param {string} driveKey
+   * @returns {boolean} whether a hidden marker was cleared
+   */
+  unhideChannel(driveKey) {
+    if (!this.hiddenKeys.delete(driveKey)) return false
+    console.log('[PublicFeed] Unhidden channel:', driveKey.slice(0, 16));
+    this._persistHiddenChannels().catch(() => {})
+    this._schedulePersistDiscovered()
+    return true
   }
 
   async _persistHiddenChannels() {

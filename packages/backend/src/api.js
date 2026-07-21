@@ -3106,6 +3106,13 @@ export function createApi({
         return null
       }
 
+      // Unset season/episode default to Number.MAX_SAFE_INTEGER in HyperDB
+      // storage; treat the sentinel (and any non-positive value) as absent.
+      const boundedContentInt = (value) => {
+        const n = Number(value)
+        return Number.isInteger(n) && n > 0 && n < Number.MAX_SAFE_INTEGER ? n : null
+      }
+
       const enrichMissingBlobMeta = async (videos, fetcher) => {
         const missing = (videos || []).filter(v => !v?.blobId || !v?.blobsCoreKey)
         if (missing.length === 0) return videos
@@ -3207,6 +3214,11 @@ export function createApi({
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+                contentKind: video?.contentKind ? String(video.contentKind) : null,
+                seasonNumber: boundedContentInt(video?.seasonNumber),
+                episodeNumber: boundedContentInt(video?.episodeNumber),
+                mediaProvider: video?.mediaProvider ? String(video.mediaProvider) : null,
+                mediaId: video?.mediaId ? String(video.mediaId) : null,
               }
             })
             .filter(Boolean)

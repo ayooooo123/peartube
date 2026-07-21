@@ -942,6 +942,57 @@ test('getFeedSnapshotEntries keeps manifestUpdatedAt stable for unchanged public
   }
 })
 
+test('getFeedSnapshotEntries carries TV classification fields and drops unset sentinels', async (t) => {
+  const api = createApi({
+    ctx: {
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    loadPublicBee: async () => ({
+      core: { length: 3 },
+      async getMetadata() { return { name: 'Grouped Show', updatedAt: 10 } },
+      async listVideos() {
+        return [{
+          id: 'episode-1',
+          title: 'Pilot',
+          uploadedAt: 10,
+          blobId: '0:8:0:1024',
+          blobsCoreKey: '99'.repeat(32),
+          contentKind: 'episode',
+          seasonNumber: 1,
+          episodeNumber: 2,
+          mediaProvider: 'tmdb',
+          mediaId: '1399',
+        }, {
+          id: 'plain-1',
+          title: 'Extra',
+          uploadedAt: 5,
+          blobId: '0:8:0:2048',
+          blobsCoreKey: '88'.repeat(32),
+          contentKind: '',
+          seasonNumber: Number.MAX_SAFE_INTEGER,
+          episodeNumber: Number.MAX_SAFE_INTEGER,
+        }]
+      },
+      async getVideo(id) { return { id } },
+    }),
+  })
+
+  const [entry] = await api.getFeedSnapshotEntries([{ driveKey: 'ab'.repeat(32), publicBeeKey: 'cd'.repeat(32) }])
+  const [episode, plain] = entry.previewVideos
+
+  t.is(episode.contentKind, 'episode')
+  t.is(episode.seasonNumber, 1)
+  t.is(episode.episodeNumber, 2)
+  t.is(episode.mediaProvider, 'tmdb')
+  t.is(episode.mediaId, '1399')
+  t.is(plain.contentKind, null)
+  t.is(plain.seasonNumber, null)
+  t.is(plain.episodeNumber, null)
+})
+
 test('submitToFeed forwards writable channel load options for projection repair', async (t) => {
   const channelKey = 'ef'.repeat(32)
   const publicBeeKey = 'ab'.repeat(32)

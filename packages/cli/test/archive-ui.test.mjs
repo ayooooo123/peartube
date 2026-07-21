@@ -599,36 +599,37 @@ test('yt-dlp downloader rejects bogus direct Invidious output and continues fall
 })
 
 
-test('archive publisher opens separate relay-owned channels for source identities', async (t) => {
+test('archive publisher opens separate deterministic channels per source identity', async (t) => {
   const created = []
   const uploadOptions = []
-  const channels = new Map()
-  const identityManager = {
-    getActiveIdentity() { return { publicKey: 'relay', driveKey: 'relay-drive' } },
-    async createIdentity(name) {
-      created.push({ name })
-      const driveKey = `drive-${created.length}`
-      channels.set(driveKey, { blobs: true, publicBeeKey: `bee-${created.length}` })
-      return { publicKey: `pub-${created.length}`, driveKey }
-    },
-    async getChannelForIdentity(identity) {
-      return channels.get(identity.driveKey)
-    },
-    async getActiveChannel() {
-      return { blobs: true, publicBeeKey: 'relay-bee' }
-    }
+  const stubChannel = (name) => ({
+    writable: true,
+    blobs: true,
+    _meta: {},
+    async getMetadata () { return this._meta },
+    async updateMetadata (patch) { this._meta = { ...this._meta, ...patch } },
+    async ensureLocalBlobDrive () {},
+    publicBeeKey: `bee-${name}`
+  })
+  const createChannelFn = async (_ctx, opts) => {
+    created.push(opts.writerKeyName)
+    return { channel: stubChannel(opts.writerKeyName), channelKeyHex: `ck-${created.length}` }
   }
   const publisher = createArchivePublisher({
-    identityManager,
+    identityManager: {
+      getActiveIdentity () { return { driveKey: 'relay-drive' } },
+      async getActiveChannel () { return { blobs: true, publicBeeKey: 'relay-bee' } }
+    },
     uploadManager: {
-      async uploadFromPath(_channel, _filePath, options) {
+      async uploadFromPath (_channel, _filePath, options) {
         uploadOptions.push(options)
         return { success: true, videoId: `video-${uploadOptions.length}` }
       }
     },
-    api: { async submitToFeed() {} },
-    runtime: {},
-    fs: {}
+    api: { async submitToFeed () {} },
+    runtime: { ctx: {} },
+    fs: {},
+    createChannelFn
   })
 
   const oneA = await publisher.ensureAnonymousChannel({
@@ -657,10 +658,10 @@ test('archive publisher opens separate relay-owned channels for source identitie
     creatorName: 'Creator One'
   })
 
-  t.alike(created.map((entry) => entry.name), ['Creator One', 'Creator Two'])
-  t.is(oneA.channelKey, 'drive-1')
-  t.is(two.channelKey, 'drive-2')
-  t.is(oneB.channelKey, 'drive-1')
+  t.alike(created, ['peartube-archive-writer:youtube:channel:UC1', 'peartube-archive-writer:youtube:channel:UC2'], 'one deterministic channel per source id')
+  t.is(oneA.channelKey, 'ck-1')
+  t.is(two.channelKey, 'ck-2')
+  t.is(oneB.channelKey, 'ck-1', 'the same source id reuses its channel')
   t.is(uploadOptions[0].creatorSourceId, 'youtube:channel:UC1')
   t.is(uploadOptions[0].sourceVideoId, 'one')
 })

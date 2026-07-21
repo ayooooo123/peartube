@@ -10,7 +10,41 @@ import {
   getVideoMimeType,
   buildDownloadArgs
 } from './media/yt-dlp.js'
+import { buildWriterKeyName } from './archive/source-id.js'
 
+// Derive a deterministic per-source identity for an archive job so repeated
+// imports for the same title group into ONE channel. TMDB imports key on the
+// show/movie (NOT the episode), so every episode of a show lands in the show's
+// channel. Returns null for plain single-video archives (they use the relay's
+// shared anonymous channel).
+export function deriveArchiveSourceIdentity (input = {}) {
+  const tmdbId = input.tmdbId != null && String(input.tmdbId).trim() ? String(input.tmdbId).trim() : null
+  const tmdbType = input.tmdbType === 'tv' ? 'tv' : (input.tmdbType === 'movie' ? 'movie' : null)
+  if (tmdbId && tmdbType) {
+    return {
+      platform: 'tmdb',
+      sourceId: `tmdb:${tmdbType}:${tmdbId}`,
+      creatorName: input.tmdbTitle || input.channelName || `TMDB ${tmdbType} ${tmdbId}`,
+      creatorHandle: null
+    }
+  }
+  return null
+}
+
+async function resolvePublicBeeKey (channel) {
+  let publicBeeKey = channel?.publicBeeKey
+    ? (b4a.isBuffer(channel.publicBeeKey) ? b4a.toString(channel.publicBeeKey, 'hex') : String(channel.publicBeeKey))
+    : null
+  if (!publicBeeKey && typeof channel?.getPublicBeeKey === 'function') {
+    const resolved = await channel.getPublicBeeKey().catch(() => null)
+    if (resolved) publicBeeKey = b4a.isBuffer(resolved) ? b4a.toString(resolved, 'hex') : String(resolved)
+  }
+  if (!publicBeeKey) {
+    const meta = await channel?.getMetadata?.().catch(() => null)
+    if (meta?.publicBeeKey) publicBeeKey = String(meta.publicBeeKey)
+  }
+  return typeof publicBeeKey === 'string' && publicBeeKey.length > 0 ? publicBeeKey : null
+}
 const JOBS_KEY = 'relay-archive-jobs'
 const PRIVATE_INPUTS_KEY = 'relay-archive-job-inputs'
 
@@ -347,24 +381,60 @@ export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } =
   }
 }
 
-export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs }) {
+export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, createChannelFn = null }) {
   if (!identityManager) throw new Error('identityManager is required')
   if (!uploadManager) throw new Error('uploadManager is required')
   if (!api) throw new Error('api is required')
 
   const sourceChannels = new Map()
-  const previousActiveIdentity = identityManager.getActiveIdentity?.()
+
+  // Deterministic per-source channel keyed by sourceId (writer key seed), so the
+  // same show/movie always resolves to the same channel across restarts.
+  async function ensureSourceChannel (sourceKey, name) {
+    const ctx = runtime?.ctx
+    if (!ctx) throw new Error('runtime ctx unavailable for source channel')
+    const createChannel = createChannelFn || (await import('@peartube/backend/storage')).createChannel
+    const created = await createChannel(ctx, { encrypt: false, writerKeyName: buildWriterKeyName(sourceKey) })
+    const channel = created.channel
+    const channelKey = created.channelKeyHex || created.channelKey
+    if (!channel) throw new Error('createChannel returned no channel')
+    if (channel.writable === false) throw new Error(`source channel ${sourceKey} is not writable`)
+    const meta = await channel.getMetadata?.().catch(() => null)
+    const isFresh = !meta || (typeof meta === 'object' && Object.keys(meta).length === 0)
+    if (isFresh) {
+      await channel.updateMetadata?.({ name, createdAt: Date.now(), createdBy: sourceKey }).catch(() => {})
+    }
+    await channel.ensureLocalBlobDrive?.({ deviceName: 'archive' }).catch(() => {})
+    if (!channel.blobs) throw new Error('source channel blobs not initialized')
+    const publicBeeKey = await resolvePublicBeeKey(channel)
+    // A channel without a resolvable public bee key can't be published to the
+    // feed (publishArchiveJobToFeed drops it as 'missing-refs'), which would
+    // make the archive invisible. Throw so we fall back to the shared channel
+    // that is known to publish — grouping must never cost visibility.
+    if (!channelKey || !publicBeeKey) throw new Error('source channel keys unavailable')
+    return { channel, channelKey, publicBeeKey }
+  }
 
   return {
     async ensureAnonymousChannel({ channelName, sourceIdentity = null } = {}) {
       const sourceKey = sourceIdentity?.sourceId || null
       if (sourceKey && sourceChannels.has(sourceKey)) return sourceChannels.get(sourceKey)
 
-      let identity = sourceKey ? previousActiveIdentity : identityManager.getActiveIdentity?.()
-      if (!identity?.driveKey || sourceKey) {
-        const created = sourceKey && typeof identityManager.createSourceIdentity === 'function'
-          ? await identityManager.createSourceIdentity(sourceIdentity, channelName || sourceIdentity.creatorName || 'Anonymous Archive')
-          : await identityManager.createIdentity(channelName || sourceIdentity?.creatorName || 'Anonymous Archive', true)
+      // Grouped per-source channel (show/movie). Falls back to the shared
+      // anonymous channel on any failure so archiving never hard-fails here.
+      if (sourceKey) {
+        try {
+          const entry = await ensureSourceChannel(sourceKey, channelName || sourceIdentity.creatorName || 'Archive')
+          sourceChannels.set(sourceKey, entry)
+          return entry
+        } catch (err) {
+          runtime?.logger?.archive?.warn?.('Grouped source channel failed; using shared channel', { sourceId: sourceKey, error: err?.message || String(err) })
+        }
+      }
+
+      let identity = identityManager.getActiveIdentity?.()
+      if (!identity?.driveKey) {
+        const created = await identityManager.createIdentity(channelName || sourceIdentity?.creatorName || 'Anonymous Archive', true)
         identity = {
           publicKey: created.publicKey,
           driveKey: created.driveKey,
@@ -373,15 +443,11 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         }
       }
 
-      const channel = sourceKey && typeof identityManager.getChannelForIdentity === 'function'
-        ? await identityManager.getChannelForIdentity(identity)
-        : await identityManager.getActiveChannel?.()
+      const channel = await identityManager.getActiveChannel?.()
       if (!channel?.blobs) throw new Error('Anonymous channel blobs not initialized')
       const meta = await channel.getMetadata?.().catch(() => null)
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
-      const entry = { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
-      if (sourceKey) sourceChannels.set(sourceKey, entry)
-      return entry
+      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
     },
     async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode }) {
       const result = await uploadManager.uploadFromPath(channel, filePath, {
@@ -526,7 +592,8 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         downloaded = isUpload
           ? loadUploadedFile(privateInput)
           : await downloader.download({ id, ...privateInput })
-        const channelInfo = await publisher.ensureAnonymousChannel(privateInput)
+        const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
+        const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity })
         const sourceTitle = downloaded.title || privateInput.title
         const sourceDescription = downloaded.description || privateInput.description
         const imported = await publisher.importVideo({

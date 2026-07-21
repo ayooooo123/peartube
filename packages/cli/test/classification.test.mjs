@@ -54,6 +54,43 @@ test('createTmdbClassifier picks the most popular movie/tv match', async functio
   t.is(calls.length, 2, 'queries both movie and tv endpoints')
 })
 
+test('discover search keeps TV results that lack media_type (regression: /search/tv)', async function (t) {
+  // TMDB's /search/{type} responses omit the media_type field that /trending
+  // and /multi include. A TV hit carries `name`/`first_air_date`, so the shaper
+  // must fall back to the queried type; otherwise it defaults to movie, reads
+  // the title from `title` (undefined for TV), and drops every row — making TV
+  // search silently return nothing.
+  const fetchFn = async () => ({
+    ok: true,
+    async json () {
+      return { results: [
+        { id: 95396, name: 'Severance', first_air_date: '2022-02-18', popularity: 88, poster_path: '/s.jpg' },
+        { id: 1, name: 'Other Show', first_air_date: '2019-01-01', popularity: 12 }
+      ] }
+    }
+  })
+  const discover = createTmdbDiscoverClient({ apiKey: 'key', fetchFn })
+  const items = await discover.search({ query: 'severance', type: 'tv' })
+  t.is(items.length, 2, 'TV search results are kept, not dropped')
+  t.is(items[0].type, 'tv')
+  t.is(items[0].title, 'Severance')
+  t.is(items[0].tmdbId, 95396)
+})
+
+test('discover search keeps movie results that lack media_type', async function (t) {
+  const fetchFn = async () => ({
+    ok: true,
+    async json () {
+      return { results: [{ id: 603, title: 'The Matrix', release_date: '1999-03-31', popularity: 90, poster_path: '/m.jpg' }] }
+    }
+  })
+  const discover = createTmdbDiscoverClient({ apiKey: 'key', fetchFn })
+  const items = await discover.search({ query: 'matrix', type: 'movie' })
+  t.is(items.length, 1)
+  t.is(items[0].type, 'movie')
+  t.is(items[0].title, 'The Matrix')
+})
+
 test('RelayClassificationStore caches results and avoids re-classifying', async function (t) {
   const storagePath = tmpStorage()
   t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))

@@ -81,8 +81,11 @@ function normalizeMediaType(type) {
   return type === 'tv' ? 'tv' : 'movie'
 }
 
-function shapeDiscoverItem(result = {}) {
-  const mediaType = normalizeMediaType(result.media_type || result.type)
+function shapeDiscoverItem(result = {}, fallbackType = null) {
+  // /search/{type} responses omit media_type (only /trending and /multi carry
+  // it), so fall back to the endpoint's known type — otherwise TV search rows
+  // are mistyped as movies, lose their `name`-based title, and get dropped.
+  const mediaType = normalizeMediaType(result.media_type || result.type || fallbackType)
   const title = mediaType === 'movie'
     ? (result.title || result.original_title || null)
     : (result.name || result.original_name || null)
@@ -128,9 +131,9 @@ export function createTmdbDiscoverClient({
     }
   }
 
-  function normalizeResults(body) {
+  function normalizeResults(body, fallbackType = null) {
     return (Array.isArray(body?.results) ? body.results : [])
-      .map(shapeDiscoverItem)
+      .map((result) => shapeDiscoverItem(result, fallbackType))
       .filter((item) => item.tmdbId && item.title)
       .sort((a, b) => b.popularity - a.popularity)
   }
@@ -140,7 +143,7 @@ export function createTmdbDiscoverClient({
     async trending({ type = 'movie', page = 1 } = {}) {
       const mediaType = normalizeMediaType(type)
       const body = await request(`/trending/${mediaType}/week`, { page: String(Math.max(1, Number(page) || 1)) })
-      return normalizeResults(body)
+      return normalizeResults(body, mediaType)
     },
     async search({ query, type = 'movie', page = 1 } = {}) {
       const q = String(query || '').trim()
@@ -151,7 +154,7 @@ export function createTmdbDiscoverClient({
         include_adult: 'false',
         page: String(Math.max(1, Number(page) || 1))
       })
-      return normalizeResults(body)
+      return normalizeResults(body, mediaType)
     },
     posterUrl(path, size = 'w342') {
       return path ? `https://image.tmdb.org/t/p/${size}${path}` : null

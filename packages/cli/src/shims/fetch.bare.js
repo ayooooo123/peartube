@@ -1,16 +1,35 @@
-import https from 'bare-https'
 import b4a from 'b4a'
 
 // Minimal GET-only fetch() for the Bare relay runtime, which has no global
 // fetch (so the TMDB classifier/discover client would otherwise silently
 // disable themselves and never classify anything). Returns just enough of the
-// WHATWG Response surface the callers touch — { ok, status, json(), text() } —
-// backed by bare-https (TLS with CA roots bundled in the bare-tls addon, so it
-// works even on the distroless relay image). Bare also lacks AbortController,
-// so we enforce our own request timeout rather than relying on `signal`.
+// WHATWG Response surface the callers touch — { ok, status, json(), text() }.
+//
+// bare-https (and its bare-tls addon) is loaded LAZILY on first use, inside a
+// guard, and never at module-eval time. This is deliberate: this module is in
+// the relay service's import graph, so a top-level addon import that failed to
+// load (missing prebuild, runtime lib, etc.) would crash relay startup and take
+// the whole web UI down. Lazy loading degrades a broken TLS stack to "TMDB
+// disabled" instead of a dead relay. Bare also lacks AbortController, so we
+// enforce our own request timeout rather than relying on `signal`.
 const DEFAULT_TIMEOUT_MS = 8000
 
-export default function fetch (url, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+let httpsPromise = null
+function loadHttps () {
+  if (!httpsPromise) {
+    httpsPromise = import('bare-https')
+      .then((mod) => mod?.default ?? mod)
+      .catch(() => null)
+  }
+  return httpsPromise
+}
+
+export default async function fetch (url, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const https = await loadHttps()
+  if (!https || typeof https.request !== 'function') {
+    throw new Error('bare-https is unavailable in this runtime')
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false
 

@@ -10,6 +10,7 @@ import {
   getVideoMimeType,
   buildDownloadArgs
 } from './media/yt-dlp.js'
+import { isDirectVideoUrl } from './media/direct-download.js'
 
 const JOBS_KEY = 'relay-archive-jobs'
 const PRIVATE_INPUTS_KEY = 'relay-archive-job-inputs'
@@ -326,6 +327,21 @@ export function createYtDlpDownloader({
           }
         }
       }
+    }
+  }
+}
+
+// Pick the right downloader per job: a plain link to the media file (a TMDB
+// show/movie import, or any direct video URL) is fetched straight over HTTP;
+// platform pages (YouTube/Rumble/…) go through yt-dlp. This is why an episode
+// whose source URL is a direct download no longer fails in yt-dlp.
+export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } = {}) {
+  return {
+    async download (input = {}) {
+      const preferDirect = Boolean(directDownloader) && (Boolean(input.tmdbType) || isDirectVideoUrl(input.url))
+      const downloader = preferDirect ? directDownloader : ytDlpDownloader
+      if (!downloader) throw new Error('no downloader available for this archive source')
+      return downloader.download(input)
     }
   }
 }

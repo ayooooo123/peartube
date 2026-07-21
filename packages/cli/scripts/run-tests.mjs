@@ -27,6 +27,7 @@ const TEST_FILES = [
   'archive-media-coordinates.test.mjs',
   'archive-upload.test.mjs',
   'multipart.test.mjs',
+  'direct-download.test.mjs',
   'blob-downloader.test.mjs',
   'classification.test.mjs',
   'cli.test.mjs',

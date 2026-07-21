@@ -1,1 +1,1 @@
-export { createServer } from 'node:http'
+export { createServer, request } from 'node:http'

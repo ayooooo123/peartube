@@ -3,7 +3,8 @@ import { evaluateCandidate } from './admission.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
-import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
+import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
+import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
 import { RelayClassificationStore } from './classification/store.js'
@@ -704,18 +705,25 @@ export async function createRelayService({
           host: config.archive.uiHost || '127.0.0.1',
           port: config.archive.uiPort || 8174,
           uploadDir: config.archive.tmpPath,
-          downloader: createYtDlpDownloader({
-            bin: config.archive.ytDlpPath,
-            outputDir: config.archive.tmpPath,
-            format: config.archive.format,
-            ffmpegPath: config.archive.ffmpegPath,
-            cookiesPath: config.archive.cookiesPath,
-            jsRuntime: config.archive.jsRuntime,
-            ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
-            ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
-            spawnFn: spawnFn || undefined,
-            fs: runtimeFsModule,
-            path: runtimePathModule
+          downloader: createRoutingDownloader({
+            directDownloader: createDirectDownloader({
+              outputDir: config.archive.tmpPath,
+              fs: runtimeFsModule,
+              path: runtimePathModule
+            }),
+            ytDlpDownloader: createYtDlpDownloader({
+              bin: config.archive.ytDlpPath,
+              outputDir: config.archive.tmpPath,
+              format: config.archive.format,
+              ffmpegPath: config.archive.ffmpegPath,
+              cookiesPath: config.archive.cookiesPath,
+              jsRuntime: config.archive.jsRuntime,
+              ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
+              ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
+              spawnFn: spawnFn || undefined,
+              fs: runtimeFsModule,
+              path: runtimePathModule
+            })
           }),
           publisher: lazyPublisher
         })

@@ -42,6 +42,10 @@
     "#fetch": {
       "bare": "./src/shims/fetch.bare.js",
       "default": "./src/shims/fetch.node.js"
+    },
+    "#https": {
+      "bare": "./src/shims/https.bare.js",
+      "default": "./src/shims/https.node.js"
     }
   },
   "dependencies": {

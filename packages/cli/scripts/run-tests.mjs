@@ -34,6 +34,7 @@ const TEST_FILES = [
   'seed-pin-admission.test.mjs',
   'seed-pin-runtime.test.mjs',
   'service.test.mjs',
+  'tmdb-fetch-injection.test.mjs',
   'status.test.mjs',
   'trusted-clients.test.mjs',
   // Interactive `peartube add` CLI suites.

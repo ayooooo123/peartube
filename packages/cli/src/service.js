@@ -11,6 +11,7 @@ import { createTmdbClassifier, createTmdbDiscoverClient } from './classification
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { classifySourceUrl } from './archive/source-id.js'
+import tmdbFetch from '#fetch'
 
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
 
@@ -45,8 +46,9 @@ export async function createRelayService({
     storagePath: config.storage.path,
     classificationPath: config.paths.classification
   })
-  let classifier = createTmdbClassifier(resolveTmdbOptions(config, relaySettings))
-  let tmdbDiscover = createTmdbDiscoverClient(resolveTmdbOptions(config, relaySettings))
+  const tmdbOptions = () => ({ ...resolveTmdbOptions(config, relaySettings), fetchFn: tmdbFetch })
+  let classifier = createTmdbClassifier(tmdbOptions())
+  let tmdbDiscover = createTmdbDiscoverClient(tmdbOptions())
 
   // Merge persisted trusted client device keys into the blind-peer trusted set
   // before the runtime (and its blind peer) is built, so authorized creator
@@ -173,7 +175,7 @@ export async function createRelayService({
   }
 
   function refreshClassifier() {
-    const opts = resolveTmdbOptions(config, relaySettings)
+    const opts = tmdbOptions()
     classifier = createTmdbClassifier(opts)
     tmdbDiscover = createTmdbDiscoverClient(opts)
     return classifier

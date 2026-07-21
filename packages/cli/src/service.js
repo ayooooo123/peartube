@@ -485,18 +485,32 @@ export async function createRelayService({
     }
 
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
-    const previewVideos = [{
-      ...classifiedPreview,
-      publicBeeKey: job.publicBeeKey || job.previewVideo.publicBeeKey || null,
+    const shapePreview = (video) => ({
+      ...video,
+      publicBeeKey: video.publicBeeKey || job.publicBeeKey || null,
       channelKey: job.channelKey,
       driveKey: job.channelKey,
       relayBacked: true,
-      source: job.previewVideo.source || 'relay-cache',
-      relayRole: job.previewVideo.relayRole || 'cache',
+      source: video.source || 'relay-cache',
+      relayRole: video.relayRole || 'cache',
       relayServing: true,
-      availability: job.previewVideo.availability || 'playable',
-      byteAvailability: job.previewVideo.byteAvailability || job.previewVideo.availability || 'playable'
-    }]
+      availability: video.availability || 'playable',
+      byteAvailability: video.byteAvailability || video.availability || 'playable'
+    })
+    // Publish the channel with ALL of its completed archives (union by id), not
+    // just this job's video. Otherwise archiving one episode into a channel
+    // replaces the channel's other episodes in the feed/catalog (upsert/submit
+    // overwrite previewVideos), so previously archived episodes vanish.
+    let channelCompleted = []
+    if (runtime.ctx?.metaDb) {
+      const previewStore = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+      const completedByChannel = await previewStore.getCompletedVideoPreviewsByChannel().catch(() => new Map())
+      channelCompleted = completedByChannel.get(job.channelKey) || []
+    }
+    const previewsById = new Map()
+    for (const video of channelCompleted) { if (video?.id) previewsById.set(video.id, shapePreview(video)) }
+    previewsById.set(classifiedPreview.id || job.previewVideo.id, shapePreview(classifiedPreview))
+    const previewVideos = Array.from(previewsById.values())
     const manifestUpdatedAt = Number(job.completedAt || job.updatedAt || nowFn()) || Date.now()
 
     await relayCatalog.upsertChannel({

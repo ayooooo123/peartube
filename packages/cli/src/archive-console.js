@@ -124,6 +124,17 @@ function normalizeCatalogChannel(channel, previewVideos = []) {
   }
 }
 
+// Union preview lists by video id. A channel's stored previews can be a stale
+// mirror/seed snapshot; the completed-archive previews are the live source of
+// truth. Merging (rather than preferring one) ensures a newly archived video —
+// e.g. another episode dropped into the same channel — is never shadowed.
+function mergePreviewsById(base = [], extra = []) {
+  const byId = new Map()
+  for (const video of (Array.isArray(base) ? base : [])) { if (video?.id) byId.set(video.id, video) }
+  for (const video of (Array.isArray(extra) ? extra : [])) { if (video?.id) byId.set(video.id, video) }
+  return Array.from(byId.values())
+}
+
 
 function normalizeTmdbEpisodePart(value) {
   const n = Number(value || 0)
@@ -207,9 +218,7 @@ export async function buildCatalogChannels({ channels = [], store = null, public
   for (const channel of channels || []) {
     const channelKey = channel.channelKey || channel.driveKey
     if (!channelKey) continue
-    const previewVideos = Array.isArray(channel.previewVideos) && channel.previewVideos.length > 0
-      ? channel.previewVideos
-      : (previewsByChannel?.get?.(channelKey) || [])
+    const previewVideos = mergePreviewsById(channel.previewVideos, previewsByChannel?.get?.(channelKey) || [])
     const normalized = normalizeCatalogChannel(channel, previewVideos)
     if (normalized) byKey.set(channelKey, normalized)
   }

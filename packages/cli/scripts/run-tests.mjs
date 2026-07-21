@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path'
 const TEST_FILES = [
   'admission.test.mjs',
   'archive-console-creators.test.mjs',
+  'archive-console-catalog.test.mjs',
   'archive-ui.test.mjs',
   'archive.test.mjs',
   'archive-media-coordinates.test.mjs',

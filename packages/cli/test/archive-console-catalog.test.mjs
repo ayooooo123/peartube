@@ -153,3 +153,32 @@ test('catalog projection treats local published blob refs as playable evidence',
   t.is(projected[0].previewVideos[0].availability, 'playable')
   t.is(projected[0].previewVideos[0].byteAvailability, 'playable')
 })
+
+test('catalog projection surfaces newly archived videos not yet in the stored channel snapshot', async function (t) {
+  const channelKey = 'c'.repeat(64)
+  const publicBeeKey = 'f'.repeat(64)
+  const blob = { blobId: '1:2:3:4', blobsCoreKey: 'a'.repeat(64), availability: 'playable' }
+  // The persisted channel snapshot is stale: it only knows the first episode.
+  const channels = [{
+    channelKey,
+    publicBeeKey,
+    source: 'archive-job',
+    previewVideos: [{ id: 'ep1', title: 'Show S01E01', ...blob }]
+  }]
+  // The completed-archive store has both episodes (the newer one landed after
+  // the snapshot was taken).
+  const store = {
+    async getCompletedVideoPreviewsByChannel () {
+      return new Map([[channelKey, [
+        { id: 'ep1', title: 'Show S01E01', ...blob },
+        { id: 'ep2', title: 'Show S01E02', ...blob }
+      ]]])
+    }
+  }
+
+  const projected = await buildCatalogChannels({ channels, store, publicFeed: { getFeed: () => [] } })
+  t.is(projected.length, 1)
+  const ids = projected[0].previewVideos.map((v) => v.id).sort()
+  t.alike(ids, ['ep1', 'ep2'], 'both the snapshot episode and the newly archived episode are served')
+  t.is(projected[0].videoCount, 2)
+})

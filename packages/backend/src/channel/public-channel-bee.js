@@ -1471,6 +1471,21 @@ export class PublicChannelBee extends ReadyResource {
           !logicalProfile?.canonicalRevision
         ) {
           projectionFormat = await this.setProjectionFormat('legacy')
+        } else if (
+          !logicalProfile?.canonicalRevision &&
+          !(videos || []).some((candidate) => Boolean(splitPublicVideo(candidate).details)) &&
+          reconciliationStatus.scanComplete !== false
+        ) {
+          // Non-empty pre-durability projection: public rows already exist but
+          // predate the projection-format marker and no durable root descriptor
+          // was ever written. The authoritative local source channel carries no
+          // structured (modern) projection evidence, so this is a genuine legacy
+          // channel. Establish the legacy format from local channel truth to keep
+          // its videos publicly readable instead of failing closed forever.
+          // Sparse viewer replicas never reach this path: they are non-writable
+          // and return early. A completed local scan (scanComplete) gates against
+          // treating a timed-out partial read as authoritative.
+          projectionFormat = await this.setProjectionFormat('legacy')
         } else {
           throw new Error('Public projection format evidence is unavailable')
         }

@@ -463,6 +463,48 @@ test('projection format evidence distinguishes legacy compact rows from uncertai
   })
 })
 
+test('syncFromChannel establishes legacy format for pre-durability public rows lacking a projection marker', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    // Public rows written by a pre-durability backend: videos exist but no
+    // projection-format marker and no root descriptor were ever recorded.
+    await publicBee.db.insert('@peartubePublic/videos', { id: 'legacy-1', title: 'Ep 1', uploadedAt: 1 })
+    await publicBee.db.insert('@peartubePublic/videos', { id: 'legacy-2', title: 'Ep 2', uploadedAt: 2 })
+    await publicBee.db.flush()
+
+    t.is(await publicBee.getProjectionFormat(), null, 'starts with no projection marker')
+    t.alike(
+      await publicBee.listVideosWithStatus(),
+      { status: 'uncertain', videos: [], filteredCount: 2 },
+      'unmarked rows fail closed at read time before any authoritative sync',
+    )
+
+    // Authoritative source channel exposes the same legacy videos with no
+    // structured content details, no profile canonical revision, and no root.
+    const sourceChannel = {
+      keyHex: 'aa'.repeat(32),
+      async getMetadata() { return { name: 'Legacy Show', description: '' } },
+      async listVideos() {
+        return [
+          { id: 'legacy-1', title: 'Ep 1', uploadedAt: 1 },
+          { id: 'legacy-2', title: 'Ep 2', uploadedAt: 2 },
+        ]
+      },
+      async getChannelProfile() { return null },
+      async listChannelSources() { return [] },
+      async listChannelArtwork() { return [] },
+      async listImportClaims() { return [] },
+    }
+
+    await publicBee.syncFromChannel(sourceChannel, { throwOnError: true })
+
+    t.is(await publicBee.getProjectionFormat(), 'legacy', 'authoritative legacy sync stamps the format marker')
+    const listing = await publicBee.listVideosWithStatus()
+    t.is(listing.status, 'authoritative', 'legacy videos are authoritatively readable after migration')
+    t.alike(listing.videos.map((video) => video.id).sort(), ['legacy-1', 'legacy-2'])
+    t.is(listing.filteredCount, 0)
+  })
+})
+
 
 test('public descriptor and revisioned sidecar writes cannot race backward', async (t) => {
   await withPublicBee(async (publicBee) => {

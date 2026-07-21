@@ -169,6 +169,22 @@ test('POST /settings/tmdb forwards to setTmdbSettings', async function (t) {
   t.is(service.calls.setTmdb[0].enabled, true)
 })
 
+test('POST /settings/tmdb with a blank key toggles enabled without wiping the stored key', async function (t) {
+  const service = fakeService()
+  await withConsole(service, async (base) => {
+    const res = await fetch(`${base}/settings/tmdb`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ apiKey: '   ', enabled: 'true' }).toString(),
+      redirect: 'manual'
+    })
+    t.is(res.status, 303)
+  })
+  t.is(service.calls.setTmdb.length, 1)
+  t.absent('apiKey' in service.calls.setTmdb[0], 'blank key is omitted so setTmdbSettings keeps the stored key')
+  t.is(service.calls.setTmdb[0].enabled, true)
+})
+
 test('GET / renders the creators and TMDB sections', async function (t) {
   await withConsole(fakeService(), async (base) => {
     const res = await fetch(`${base}/`)

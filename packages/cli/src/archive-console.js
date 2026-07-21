@@ -36,8 +36,12 @@ function parseCreatorForm(body) {
 
 function parseTmdbForm(body) {
   const params = new URLSearchParams(body)
+  const apiKey = (params.get('apiKey') || '').trim()
   return {
-    apiKey: params.get('apiKey') || '',
+    // A blank key field means "keep the stored key" — the form placeholder
+    // advertises exactly that ("•••••••• (set)"). Omitting the property makes
+    // setTmdbSettings skip the key write; the enable checkbox stays authoritative.
+    ...(apiKey ? { apiKey } : {}),
     enabled: params.get('enabled') === 'true' || params.get('enabled') === 'on'
   }
 }

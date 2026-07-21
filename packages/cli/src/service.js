@@ -669,44 +669,11 @@ export async function createRelayService({
 
       await runtime.start?.()
 
-      for (const channelKey of config.admission.channels || []) {
-        await scheduleCandidate({
-          channelKey,
-          source: 'config'
-        })
-      }
-
-      const status = await persistStatus()
-      logger.relay.info('Relay started', {
-        peers: status.runtime.peers,
-        connections: status.runtime.connections,
-        feedPeers: status.runtime.feedPeers,
-        feedConnections: status.runtime.feedConnections,
-        feedEntries: status.runtime.feedEntries,
-        mirroredChannels: status.summary.totalChannels
-      })
-
-      if (runtime.ctx?.metaDb) {
-        const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
-        const jobs = await store.listJobs().catch(() => [])
-        for (const job of jobs) {
-          if (job?.status === 'completed') {
-            await publishArchiveJobToFeed(job).catch((err) => {
-              logger.archive.warn('Completed archive job feed publication failed', {
-                id: job.id || null,
-                videoId: job.videoId || null,
-                error: err?.message || String(err)
-              })
-            })
-          }
-        }
-      }
-
-      // Populate the persisted creators DB from the restored catalog so the
-      // console/CLI creator views are accurate on boot (then refreshed on the
-      // heartbeat and on archive completion).
-      await syncCreators()
-
+      // Bring the archive web console up IMMEDIATELY once the runtime managers
+      // exist (identity/upload/api are created inside runtime.start), before any
+      // network-bound startup work below. The completed-job republish loop now
+      // re-classifies each preview against TMDB (real network calls), so leaving
+      // the HTTP listener behind it delayed the web UI by minutes on boot.
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
@@ -715,6 +682,7 @@ export async function createRelayService({
           logger,
           host: config.archive.uiHost || '127.0.0.1',
           port: config.archive.uiPort || 8174,
+          uploadDir: config.archive.tmpPath,
           downloader: createYtDlpDownloader({
             bin: config.archive.ytDlpPath,
             outputDir: config.archive.tmpPath,
@@ -738,6 +706,51 @@ export async function createRelayService({
         })
         await archiveConsole.start()
       }
+
+      for (const channelKey of config.admission.channels || []) {
+        await scheduleCandidate({
+          channelKey,
+          source: 'config'
+        })
+      }
+
+      const status = await persistStatus()
+      logger.relay.info('Relay started', {
+        peers: status.runtime.peers,
+        connections: status.runtime.connections,
+        feedPeers: status.runtime.feedPeers,
+        feedConnections: status.runtime.feedConnections,
+        feedEntries: status.runtime.feedEntries,
+        mirroredChannels: status.summary.totalChannels
+      })
+
+      // Republish completed archive jobs to the public feed in the BACKGROUND.
+      // Each preview is re-classified against TMDB (network), so a backlog must
+      // never block startup or the already-listening web console.
+      if (runtime.ctx?.metaDb) {
+        void (async () => {
+          const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+          const jobs = await store.listJobs().catch(() => [])
+          for (const job of jobs) {
+            if (closed) break
+            if (job?.status === 'completed') {
+              await publishArchiveJobToFeed(job).catch((err) => {
+                logger.archive.warn('Completed archive job feed publication failed', {
+                  id: job.id || null,
+                  videoId: job.videoId || null,
+                  error: err?.message || String(err)
+                })
+              })
+            }
+          }
+        })().catch(() => {})
+      }
+
+      // Populate the persisted creators DB from the restored catalog so the
+      // console/CLI creator views are accurate on boot (then refreshed on the
+      // heartbeat and on archive completion). Runs after the console is already
+      // listening, so it never delays the web UI.
+      await syncCreators()
 
       if (config.archive?.localMirror?.enabled) {
         const pollMs = Math.max(1, Number(config.archive.localMirror.poll || 30)) * 1000

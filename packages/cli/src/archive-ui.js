@@ -157,7 +157,7 @@ function discoverCard(item) {
       <div class="discover-copy">
         <div class="discover-title"><strong>${escapeHtml(title)}${escapeHtml(year)}</strong><span>${escapeHtml(typeLabel)}${escapeHtml(episodeLabel)}</span></div>
         <p>${escapeHtml(item.overview || 'No overview from TMDB.')}</p>
-        <form method="post" action="/discover/archive" class="discover-archive">
+        <form method="post" action="/discover/archive" class="discover-archive" enctype="multipart/form-data">
           <input type="hidden" name="tmdbType" value="${escapeHtml(item.type)}">
           <input type="hidden" name="tmdbId" value="${escapeHtml(item.tmdbId)}">
           <input type="hidden" name="tmdbTitle" value="${escapeHtml(title)}">
@@ -169,7 +169,8 @@ function discoverCard(item) {
           <input type="hidden" name="sourceVideoId" value="${escapeHtml(tmdbSourceVideoId(item))}">
           <input type="hidden" name="channelName" value="${escapeHtml(title)}">
           <input type="hidden" name="title" value="${escapeHtml(title)}">
-          <label>Source URL<input name="url" placeholder="Paste YouTube/Rumble/source URL for this exact title" required></label>
+          <label>Source URL<input name="url" placeholder="Paste a YouTube/Rumble/source URL for this exact title"></label>
+          <label>Or upload a video file<input type="file" name="file" accept="video/*"></label>
           <button type="submit">Archive this title</button>
         </form>
       </div>
@@ -408,9 +409,10 @@ export function renderArchiveWebHome(model = {}) {
 
         <section class="card">
           <h2>Archive a single video</h2>
-          <p class="sub">Import one video or channel URL into a relay-owned anonymous channel and publish availability to the network.</p>
-          <form method="post" action="/archive">
-            <label>Video or channel URL<input name="url" required placeholder="https://www.youtube.com/watch?v=..."></label>
+          <p class="sub">Import one video into a relay-owned anonymous channel and publish availability to the network. Paste a source URL <strong>or</strong> upload a video file from this device.</p>
+          <form method="post" action="/archive" enctype="multipart/form-data">
+            <label>Video or channel URL<input name="url" placeholder="https://www.youtube.com/watch?v=..."></label>
+            <label>Or upload a video file<input type="file" name="file" accept="video/*"></label>
             <label>Invidious fallback instance<input name="invidiousInstance" placeholder="Optional, e.g. https://inv.thepixora.com"></label>
             <label>Anonymous channel name<input name="channelName" value="Anonymous Archive"></label>
             <label>Title override<input name="title" placeholder="Optional"></label>

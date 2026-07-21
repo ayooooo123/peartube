@@ -2,26 +2,43 @@ import { createServer } from '#http'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
+import { parseBoundary, receiveMultipartUpload } from './multipart.js'
+
+const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024 // 5 GB
+
+function buildArchiveForm(get) {
+  return {
+    url: get('url') || '',
+    invidiousInstance: get('invidiousInstance') || '',
+    channelName: get('channelName') || 'Anonymous Archive',
+    title: get('title') || '',
+    description: get('description') || '',
+    publish: get('publish') !== 'false',
+    sourceType: get('sourceType') || '',
+    sourceUrl: get('sourceUrl') || '',
+    sourceVideoId: get('sourceVideoId') || '',
+    tmdbType: get('tmdbType') || '',
+    tmdbId: get('tmdbId') || '',
+    tmdbSeason: get('tmdbSeason') || '',
+    tmdbEpisode: get('tmdbEpisode') || '',
+    tmdbPosterPath: get('tmdbPosterPath') || '',
+    tmdbTitle: get('tmdbTitle') || '',
+    tmdbYear: get('tmdbYear') || ''
+  }
+}
 
 function parseForm(body) {
   const params = new URLSearchParams(body)
+  return buildArchiveForm((key) => params.get(key) || '')
+}
+
+function uploadFields(file) {
+  if (!file) return {}
   return {
-    url: params.get('url') || '',
-    invidiousInstance: params.get('invidiousInstance') || '',
-    channelName: params.get('channelName') || 'Anonymous Archive',
-    title: params.get('title') || '',
-    description: params.get('description') || '',
-    publish: params.get('publish') !== 'false',
-    sourceType: params.get('sourceType') || '',
-    sourceUrl: params.get('sourceUrl') || '',
-    sourceVideoId: params.get('sourceVideoId') || '',
-    tmdbType: params.get('tmdbType') || '',
-    tmdbId: params.get('tmdbId') || '',
-    tmdbSeason: params.get('tmdbSeason') || '',
-    tmdbEpisode: params.get('tmdbEpisode') || '',
-    tmdbPosterPath: params.get('tmdbPosterPath') || '',
-    tmdbTitle: params.get('tmdbTitle') || '',
-    tmdbYear: params.get('tmdbYear') || ''
+    uploadPath: file.path,
+    uploadFilename: file.filename,
+    uploadMimeType: file.mimeType,
+    uploadSize: file.size
   }
 }
 
@@ -229,11 +246,28 @@ export async function createArchiveConsole({
   host = '127.0.0.1',
   port = 8174,
   logger = null,
+  uploadDir = null,
+  maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
   serverFactory = createDefaultServer
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
   const manager = createArchiveManager({ store, downloader, publisher, logger, onCompleted: (job) => service.publishArchiveJobToFeed?.(job) })
+
+  // Read an archive submission as either a browser file upload
+  // (multipart/form-data, streamed to disk) or a URL-encoded form. Returns the
+  // normalized archive form plus an optional uploaded file descriptor.
+  async function readArchiveSubmission(req) {
+    const contentType = req.headers?.['content-type'] || req.headers?.['Content-Type'] || ''
+    if (/multipart\/form-data/i.test(contentType)) {
+      const boundary = parseBoundary(contentType)
+      if (!boundary) throw new Error('multipart upload is missing its boundary')
+      if (!uploadDir) throw new Error('relay archive upload directory is not configured')
+      const { fields, file } = await receiveMultipartUpload(req, { boundary, uploadDir, maxBytes: maxUploadBytes })
+      return { form: buildArchiveForm((key) => fields[key] ?? ''), file }
+    }
+    return { form: parseForm(await collectBody(req)), file: null }
+  }
 
   function creatorsView() {
     const creators = service.creators?.getCreators?.() || []
@@ -409,9 +443,15 @@ export async function createArchiveConsole({
       }
 
       if (req.method === 'POST' && req.url === '/discover/archive') {
-        const form = parseForm(await collectBody(req))
+        const { form, file } = await readArchiveSubmission(req)
+        if (!file && !form.url) {
+          res.writeHead(303, { location: '/#discover' })
+          res.end()
+          return
+        }
         await manager.enqueue({
           ...form,
+          ...uploadFields(file),
           sourceType: form.sourceType || 'tmdb',
           sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
         })
@@ -422,8 +462,13 @@ export async function createArchiveConsole({
       }
 
       if (req.method === 'POST' && req.url === '/archive') {
-        const form = parseForm(await collectBody(req))
-        await manager.enqueue(form)
+        const { form, file } = await readArchiveSubmission(req)
+        if (!file && !form.url) {
+          res.writeHead(303, { location: '/' })
+          res.end()
+          return
+        }
+        await manager.enqueue({ ...form, ...uploadFields(file) })
         manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
         res.writeHead(303, { location: '/' })
         res.end()

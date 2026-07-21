@@ -1,5 +1,8 @@
 import test from 'brittle'
 import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole } from '../src/archive-console.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 function fakeMetaDb() {
   const map = new Map()
@@ -308,4 +311,27 @@ test('POST /discover/archive builds episode-aware TMDB source ids when no hidden
   })
 
   t.is(downloads[0].sourceVideoId, 'tmdb:tv:95396:s2:e4')
+})
+
+test('POST /archive accepts a multipart file upload and enqueues an upload job', async function (t) {
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-upload-'))
+  try {
+    await withConsole(fakeService(), async (base) => {
+      const fd = new FormData()
+      fd.set('channelName', 'Severance')
+      fd.set('title', 'Severance S01E02')
+      fd.set('tmdbType', 'tv')
+      fd.set('tmdbId', '95396')
+      fd.set('publish', 'false')
+      fd.set('file', new Blob([Buffer.from('FAKE-MP4-BYTES')], { type: 'video/mp4' }), 'clip.mp4')
+      const res = await fetch(`${base}/archive`, { method: 'POST', body: fd, redirect: 'manual' })
+      t.is(res.status, 303, 'multipart upload is accepted')
+
+      const jobs = await (await fetch(`${base}/jobs`)).json()
+      t.ok(jobs.jobs.length >= 1, 'an archive job was enqueued from the upload')
+      t.ok(jobs.jobs.some((job) => job.title === 'Severance S01E02'), 'job carries the submitted title')
+    }, { uploadDir })
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
 })

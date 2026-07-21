@@ -172,10 +172,11 @@ export function createArchiveJobStore({ metaDb }) {
 }
 
 export async function enqueueArchiveJob(store, input = {}) {
-  const url = sanitizeUrl(input.url)
+  const uploadPath = input.uploadPath ? String(input.uploadPath) : null
+  const url = uploadPath ? null : sanitizeUrl(input.url)
   const createdAt = now()
   const job = {
-    id: makeJobId(url),
+    id: makeJobId(url || uploadPath),
     status: 'queued',
     channelName: sanitizeName(input.channelName),
     title: input.title ? String(input.title) : null,
@@ -189,6 +190,10 @@ export async function enqueueArchiveJob(store, input = {}) {
 
   return store.addJob(job, {
     url,
+    uploadPath,
+    uploadFilename: input.uploadFilename ? String(input.uploadFilename) : null,
+    uploadMimeType: input.uploadMimeType ? String(input.uploadMimeType) : null,
+    uploadSize: Number(input.uploadSize) || null,
     invidiousInstance: input.invidiousInstance ? String(input.invidiousInstance).trim() : '',
     title: job.title,
     description: job.description,
@@ -199,7 +204,7 @@ export async function enqueueArchiveJob(store, input = {}) {
     creatorName: input.creatorName ? String(input.creatorName) : null,
     creatorHandle: input.creatorHandle ? String(input.creatorHandle) : null,
     sourceType: input.sourceType ? String(input.sourceType) : null,
-    sourceUrl: input.sourceUrl ? String(input.sourceUrl) : url,
+    sourceUrl: input.sourceUrl ? String(input.sourceUrl) : (url || null),
     sourceVideoId: input.sourceVideoId ? String(input.sourceVideoId) : null,
     tmdbType: input.tmdbType ? String(input.tmdbType) : null,
     tmdbId: input.tmdbId ? String(input.tmdbId) : null,
@@ -450,6 +455,34 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
   }
 }
 
+// Adapt a browser-uploaded file into the same shape `downloader.download`
+// returns, so an upload job flows through the identical import/publish/seed
+// path as a URL archive — no yt-dlp involved. TMDB coordinates and the title
+// ride in from the private input just like the URL case.
+function loadUploadedFile (privateInput) {
+  const filePath = String(privateInput.uploadPath || '')
+  if (!filePath || !existsSync(filePath)) {
+    throw new Error(`Uploaded file is missing: ${filePath || '(none)'}`)
+  }
+  const separator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  const dir = separator > 0 ? filePath.slice(0, separator) : null
+  const baseName = (privateInput.uploadFilename || filePath.slice(separator + 1) || 'Uploaded video')
+  const stem = baseName.replace(/\.[^.]+$/, '') || 'Uploaded video'
+  return {
+    filePath,
+    title: privateInput.title || stem,
+    description: privateInput.description || '',
+    duration: undefined,
+    thumbnailUrl: null,
+    thumbnailFile: null,
+    creatorName: privateInput.creatorName || null,
+    mimeType: privateInput.uploadMimeType || getVideoMimeType(filePath),
+    cleanup () {
+      try { if (dir) rmSync(dir, { recursive: true, force: true }) } catch { /* best effort */ }
+    }
+  }
+}
+
 export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null }) {
   if (!store) throw new Error('store is required')
   if (!downloader) throw new Error('downloader is required')
@@ -467,12 +500,15 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
     },
     async runJob(id) {
       const privateInput = await store.getPrivateInput(id)
-      if (!privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
+      const isUpload = Boolean(privateInput?.uploadPath)
+      if (!isUpload && !privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
       await store.updateJob(id, { status: 'running', error: null })
       let downloaded = null
 
       try {
-        downloaded = await downloader.download({ id, ...privateInput })
+        downloaded = isUpload
+          ? loadUploadedFile(privateInput)
+          : await downloader.download({ id, ...privateInput })
         const channelInfo = await publisher.ensureAnonymousChannel(privateInput)
         const sourceTitle = downloaded.title || privateInput.title
         const sourceDescription = downloaded.description || privateInput.description

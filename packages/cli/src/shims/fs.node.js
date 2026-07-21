@@ -1,11 +1,14 @@
 export {
+  closeSync,
   createReadStream,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync
+  writeFileSync,
+  writeSync
 } from 'node:fs'

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.37 - Wednesday, July 22, 2026
+
+- Stop a single unhandled promise rejection (or thrown error) in the Electrobun desktop backend worker from aborting the whole worker: on the Bare runtime the default handler calls `abort()` (SIGABRT), taking the app's backend down. The desktop worker now installs `Bare.on('unhandledRejection'|'uncaughtException')` guards that log the reason and suppress the fatal default — parity with the mobile backend, which already did this. Expected P2P blob-range cancellations stay silently consumed.
+- Fix desktop playback of MKV and other containers the webview's native `<video>` can't demux: `PearInlineVideoView` now forwards the nested `MediaError` code (`error.error.code`, where browsers put `MEDIA_ERR_SRC_NOT_SUPPORTED`/code 4) rather than only the (usually empty) top-level code, so the desktop watch page reliably switches from the native element to the MSE backend that remuxes into fMP4 on demand via mediabunny (with a bare-ffmpeg audio-transcode fallback). The fallback previously never triggered, so these sources failed to a black frame; note that video codecs the webview itself cannot decode (e.g. HEVC) can still fail since the compat path only stream-copies video.
+
 ## v0.2.36 - Wednesday, July 22, 2026
 
 - Sign the `channel/root` descriptor for relay grouped per-title archive channels (TMDB shows/movies), vouched by the relay identity's device attestation. These channels are created directly (not through identity creation) and previously had no signed descriptor, so remote strict feed peers rejected them with `missing-signed-descriptor` — TMDB-catalog uploads appeared only in the relay's own local feed, never on the public feed for app peers, while plain uploads (shared identity channel) worked. Descriptors are also (idempotently) ensured on the startup archive republish path so previously uploaded shows/movies become visible.

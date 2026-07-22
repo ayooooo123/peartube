@@ -713,9 +713,26 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (status === 'error') {
       console.error('[PearInlineVideoView] error:', error)
       if (!isUnrecoverableSourceError(error) && tryRecoverFromPlaybackError()) return
+      // Browsers surface the fatal MediaError at error.error.code (e.g. code 4,
+      // MEDIA_ERR_SRC_NOT_SUPPORTED, for a container/codec the webview can't
+      // demux — MKV, HEVC, etc.). Forward the nested code/message, not just the
+      // top-level ones, so the desktop watch page (index.web.tsx) sees code 4
+      // and flips to the MSE backend that remuxes MKV→fMP4 via mediabunny.
+      const raw: unknown = error
+      let code: number | undefined
+      let message: string | undefined
+      if (raw && typeof raw === 'object') {
+        if ('code' in raw && typeof raw.code === 'number') code = raw.code
+        if ('message' in raw && typeof raw.message === 'string') message = raw.message
+        if ('error' in raw && raw.error && typeof raw.error === 'object') {
+          const nested = raw.error
+          if (code === undefined && 'code' in nested && typeof nested.code === 'number') code = nested.code
+          if (message === undefined && 'message' in nested && typeof nested.message === 'string') message = nested.message
+        }
+      }
       onError?.({
-        message: error?.message || 'Unknown error',
-        code: (error as any)?.code,
+        message: message || 'Unknown error',
+        code,
         engine: 'expo-video',
       })
     }

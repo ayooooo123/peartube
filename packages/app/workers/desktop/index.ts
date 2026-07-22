@@ -25,8 +25,39 @@ import { createBackend } from '@peartube/backend/src/backend-entry.js'
 import { createBackendContext } from '@peartube/backend/orchestrator'
 // @ts-ignore
 import { PROTOCOL_VERSION } from '@peartube/host'
+// @ts-ignore
+import { isExpectedBlobRequestCancellation } from '@peartube/backend/blob-request-cancellation'
 // Bare runtime globals (available when spawned via pear.run())
 declare const Bare: { argv: string[]; IPC: any } | undefined
+
+// Prevent a stray promise rejection or thrown error from aborting the entire
+// desktop backend worker. On the Bare runtime the default
+// unhandledRejection/uncaughtException handler calls abort() (SIGABRT), which
+// tears down the app's whole backend — observed as recurring `bare` crashes.
+// The mobile backend (packages/app/backend/index.mjs) already installs this
+// parity; the desktop worker was missing it. Log the reason and return true to
+// suppress the fatal default; expected P2P blob-range cancellations are consumed
+// silently. Covers post-import runtime rejections (static imports run first).
+if (typeof Bare !== 'undefined' && Bare !== null && 'on' in Bare) {
+  const on = Bare.on
+  if (typeof on === 'function') {
+    on.call(Bare, 'unhandledRejection', (reason: unknown) => {
+      let expected = false
+      try { expected = isExpectedBlobRequestCancellation(reason) } catch { expected = false }
+      if (expected) return true
+      try {
+        console.error('[DesktopWorker] Unhandled rejection:', reason instanceof Error ? (reason.stack ?? reason.message) : String(reason))
+      } catch {}
+      return true
+    })
+    on.call(Bare, 'uncaughtException', (error: unknown) => {
+      try {
+        console.error('[DesktopWorker] Uncaught exception:', error instanceof Error ? (error.stack ?? error.message) : String(error))
+      } catch {}
+      return true
+    })
+  }
+}
 // Cast proxy infrastructure
 let castProxyServer: any = null
 let castProxyPort = 0

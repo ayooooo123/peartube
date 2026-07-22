@@ -3,7 +3,7 @@ import { evaluateCandidate } from './admission.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
-import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader, createRoutingDownloader, deriveArchiveSourceIdentity } from './archive-manager.js'
+import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader, deriveArchiveSourceIdentity } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
@@ -766,22 +766,12 @@ export async function createRelayService({
       // console only needs metaDb (opened by the runtime factory, already ready)
       // to serve browse/discover/settings/upload pages. The archive *publisher*
       // needs managers created during runtime.start(), so it is bound lazily: an
-      // archive submitted in the brief pre-ready window returns a clear
-      // "still starting" error rather than blocking startup.
-      let archivePublisher = null
-      const requirePublisher = () => {
-        if (!archivePublisher) throw new Error('relay runtime is still starting — retry in a moment')
-        return archivePublisher
-      }
+      // archive submitted in the brief pre-ready window waits for the publisher
+      // (see below) rather than failing and discarding the upload.
+      const deferredPublisher = createDeferredPublisher()
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
-        const lazyPublisher = {
-          ensureAnonymousChannel: (...args) => requirePublisher().ensureAnonymousChannel(...args),
-          importVideo: (...args) => requirePublisher().importVideo(...args),
-          publishChannel: (...args) => requirePublisher().publishChannel(...args),
-          seedChannel: (...args) => requirePublisher().seedChannel(...args)
-        }
         archiveConsole = await createArchiveConsole({
           service,
           logger,
@@ -808,7 +798,7 @@ export async function createRelayService({
               path: runtimePathModule
             })
           }),
-          publisher: lazyPublisher
+          publisher: deferredPublisher.publisher
         })
         await archiveConsole.start()
         logger.relay.info('Relay archive WebUI listening', {
@@ -830,13 +820,13 @@ export async function createRelayService({
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
-        archivePublisher = createArchivePublisher({
+        deferredPublisher.bind(createArchivePublisher({
           identityManager: runtime.identityManager,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
           fs: runtimeFsModule
-        })
+        }))
       }
 
       for (const channelKey of config.admission.channels || []) {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.34 - Tuesday, July 21, 2026
+
+- Wait for the relay runtime to finish starting before running an archive upload submitted through the web console, instead of failing it with "relay runtime is still starting" and deleting the uploaded file — early TMDB-catalog uploads now import and publish once the runtime is ready.
+
 ## v0.2.33 - Tuesday, July 21, 2026
 
 - Repair completed relay archive projections on startup so previously uploaded shows and movies reappear in public channel catalogs.

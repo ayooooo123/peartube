@@ -12,6 +12,37 @@ import {
 } from './media/yt-dlp.js'
 import { buildWriterKeyName } from './archive/source-id.js'
 
+// A publisher proxy that WAITS for the real publisher to be bound instead of
+// failing when called early. The relay web console starts before the
+// network-bound runtime, so an upload can arrive before the publisher exists;
+// throwing there marks the job failed and runJob's finally-cleanup deletes the
+// uploaded temp file, permanently losing the upload. Deferring the calls lets
+// the background job proceed to import/publish once the runtime is ready.
+export function createDeferredPublisher() {
+  let target = null
+  let markReady = null
+  const ready = new Promise((resolve) => { markReady = resolve })
+  const resolveTarget = async () => {
+    if (!target) await ready
+    return target
+  }
+  const forward = (name) => async (...args) => (await resolveTarget())[name](...args)
+  return {
+    publisher: {
+      ensureAnonymousChannel: forward('ensureAnonymousChannel'),
+      importVideo: forward('importVideo'),
+      publishChannel: forward('publishChannel'),
+      seedChannel: forward('seedChannel')
+    },
+    bind(realPublisher) {
+      if (!realPublisher) throw new Error('bind requires a publisher')
+      if (target) throw new Error('publisher already bound')
+      target = realPublisher
+      markReady()
+    }
+  }
+}
+
 // Derive a deterministic per-source identity for an archive job so repeated
 // imports for the same title group into ONE channel. TMDB imports key on the
 // show/movie (NOT the episode), so every episode of a show lands in the show's

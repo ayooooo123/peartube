@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.36 - Wednesday, July 22, 2026
+
+- Sign the `channel/root` descriptor for relay grouped per-title archive channels (TMDB shows/movies), vouched by the relay identity's device attestation. These channels are created directly (not through identity creation) and previously had no signed descriptor, so remote strict feed peers rejected them with `missing-signed-descriptor` — TMDB-catalog uploads appeared only in the relay's own local feed, never on the public feed for app peers, while plain uploads (shared identity channel) worked. Descriptors are also (idempotently) ensured on the startup archive republish path so previously uploaded shows/movies become visible.
+- Cap the relay's autonomous blind-peer mirror storage (enable the blind-peer GC with a `maxBytes` bound, default = `storage.maxBytes`, override via `network.blindPeerMaxBytes` / `PEARTUBE_RELAY_BLIND_PEER_MAX_BYTES`). Relay-owned/seeded content is announced and exempt from GC, so only untrusted peer-protocol mirror bytes are reclaimed. Blind-peer stats now report `maxBytes`/`gcEnabled`/`bytesAllocated`.
+- Add a storage-threshold ingestion guard so the relay stops growing instead of crashing with ENOSPC. Discovery-cache mirroring is refused once actual storage-dir usage (measured by block allocation) reaches `storage.maxBytes` or free disk drops below `storage.minFreeBytes` (new; default 2 GiB, override via `--min-free-bytes` / `PEARTUBE_STORAGE_MIN_FREE_BYTES`). Deliberate archive uploads/imports (incl. web-console uploads) are only refused on the hard free-disk floor, never merely because the evictable discovery cache filled the logical budget — so cache growth can't starve the relay's actual purpose.
+
 ## v0.2.35 - Tuesday, July 21, 2026
 
 - Return relay startup promptly by seeding the cached/discovered channel backlog in the background instead of awaiting it, so the archive publisher binds within seconds and web-console uploads no longer hang in "running" while a large cache re-seeds on boot.

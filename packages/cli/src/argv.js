@@ -106,6 +106,11 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--min-free-bytes') {
+      flags.minFreeBytes = consumeValue()
+      continue
+    }
+
     if (arg === '--key') {
       flags.key = consumeValue()
       continue

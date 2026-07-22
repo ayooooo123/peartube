@@ -247,10 +247,11 @@ function configFromEnv(env = {}) {
 
   if (env.PEARTUBE_MODE) config.mode = env.PEARTUBE_MODE
   if (env.PEARTUBE_POLICY) config.policy = env.PEARTUBE_POLICY
-  if (env.PEARTUBE_STORAGE_PATH || env.PEARTUBE_STORAGE_MAX_BYTES) {
+  if (env.PEARTUBE_STORAGE_PATH || env.PEARTUBE_STORAGE_MAX_BYTES || env.PEARTUBE_STORAGE_MIN_FREE_BYTES) {
     config.storage = {}
     if (env.PEARTUBE_STORAGE_PATH) config.storage.path = env.PEARTUBE_STORAGE_PATH
     if (env.PEARTUBE_STORAGE_MAX_BYTES) config.storage.maxBytes = Number(env.PEARTUBE_STORAGE_MAX_BYTES)
+    if (env.PEARTUBE_STORAGE_MIN_FREE_BYTES) config.storage.minFreeBytes = Number(env.PEARTUBE_STORAGE_MIN_FREE_BYTES)
   }
   if (env.PEARTUBE_ADMISSION_CHANNELS || env.PEARTUBE_ADMISSION_OWNERS) {
     config.admission = {}
@@ -266,11 +267,12 @@ function configFromEnv(env = {}) {
       config.discovery.maxChannelsPerOwner = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER)
     }
   }
-  if (env.PEARTUBE_NETWORK_ANNOUNCE || env.PEARTUBE_NETWORK_BOOTSTRAP || env.PEARTUBE_RELAY_BLIND_PEER_ENABLED || env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS) {
+  if (env.PEARTUBE_NETWORK_ANNOUNCE || env.PEARTUBE_NETWORK_BOOTSTRAP || env.PEARTUBE_RELAY_BLIND_PEER_ENABLED || env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS || env.PEARTUBE_RELAY_BLIND_PEER_MAX_BYTES) {
     config.network = {}
     if (env.PEARTUBE_NETWORK_ANNOUNCE) config.network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
     if (env.PEARTUBE_NETWORK_BOOTSTRAP) config.network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
     if (env.PEARTUBE_RELAY_BLIND_PEER_ENABLED) config.network.blindPeer = parseBoolean(env.PEARTUBE_RELAY_BLIND_PEER_ENABLED)
+    if (env.PEARTUBE_RELAY_BLIND_PEER_MAX_BYTES) config.network.blindPeerMaxBytes = Number(env.PEARTUBE_RELAY_BLIND_PEER_MAX_BYTES)
     if (env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS) config.network.trustedBlindPeerClients = splitCommaList(env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS)
   }
   if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE || env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
@@ -377,12 +379,12 @@ function configFromCli(cli = {}) {
   if (cli.archive) config.archive = { ...cli.archive }
   if (cli.mode) config.mode = cli.mode
   if (cli.policy) config.policy = cli.policy
-
-  if (cli.storage || cli.maxBytes !== undefined || cli.maxStorage !== undefined) {
+  if (cli.storage || cli.maxBytes !== undefined || cli.maxStorage !== undefined || cli.minFreeBytes !== undefined) {
     config.storage = {}
     if (cli.storage) config.storage.path = cli.storage
     if (cli.maxBytes !== undefined) config.storage.maxBytes = Number(cli.maxBytes)
     if (cli.maxStorage !== undefined) config.storage.maxBytes = Number(cli.maxStorage) * 1024 * 1024
+    if (cli.minFreeBytes !== undefined) config.storage.minFreeBytes = Number(cli.minFreeBytes)
   }
 
   if (cli.channel || cli.owner) {
@@ -662,9 +664,12 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.storage = deepMerge(DEFAULT_RELAY_CONFIG.storage, config.storage || {})
   config.storage.maxBytes = Number(config.storage.maxBytes)
-
   if (!Number.isFinite(config.storage.maxBytes) || config.storage.maxBytes <= 0) {
     throw new Error('storage.maxBytes must be a positive number')
+  }
+  config.storage.minFreeBytes = Number(config.storage.minFreeBytes)
+  if (!Number.isFinite(config.storage.minFreeBytes) || config.storage.minFreeBytes < 0) {
+    config.storage.minFreeBytes = 0
   }
 
   config.admission = deepMerge(DEFAULT_RELAY_CONFIG.admission, config.admission || {})
@@ -689,8 +694,11 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.seedPin = resolveSeedPinConfig(config.seedPin)
 
-  config.retention = deepMerge(DEFAULT_RELAY_CONFIG.retention, config.retention || {})
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
+  config.network.blindPeerMaxBytes = Number(config.network.blindPeerMaxBytes)
+  if (!Number.isFinite(config.network.blindPeerMaxBytes) || config.network.blindPeerMaxBytes < 0) {
+    config.network.blindPeerMaxBytes = 0
+  }
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
 
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })

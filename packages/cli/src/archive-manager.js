@@ -444,7 +444,28 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     // make the archive invisible. Throw so we fall back to the shared channel
     // that is known to publish — grouping must never cost visibility.
     if (!channelKey || !publicBeeKey) throw new Error('source channel keys unavailable')
+
+    // Strict feed peers reject unsigned gossip entries. The shared anonymous
+    // channel is signed at identity creation, but a grouped per-title channel
+    // is created directly (createChannel) with no channel/root descriptor, so
+    // remote peers drop it (missing-signed-descriptor) even though it appears
+    // in the relay's own local feed. Vouch for it with the relay identity's
+    // device attestation; throw on failure so we fall back to the shared
+    // channel that is known to publish — grouping must never cost visibility.
+    await ensureRelayIdentity(name)
+    const signed = await identityManager.signChannelRootDescriptorForOwnedChannel?.(channel, { profile: { name } })
+    if (!signed?.ok) throw new Error(`source channel descriptor signing failed: ${signed?.reason || 'unavailable'}`)
     return { channel, channelKey, publicBeeKey }
+  }
+
+  // A grouped channel needs an active identity to vouch for its signed root
+  // descriptor. Create the relay's default identity if none exists yet (the
+  // shared-channel fallback does the same lazily).
+  async function ensureRelayIdentity (fallbackName) {
+    const active = identityManager.getActiveIdentity?.()
+    if (active?.publicKey) return active
+    await identityManager.createIdentity(fallbackName || 'Relay Archive', true)
+    return identityManager.getActiveIdentity?.()
   }
 
   return {
@@ -599,7 +620,7 @@ function loadUploadedFile (privateInput) {
   }
 }
 
-export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null }) {
+export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, canIngest = null }) {
   if (!store) throw new Error('store is required')
   if (!downloader) throw new Error('downloader is required')
   if (!publisher) throw new Error('publisher is required')
@@ -618,6 +639,15 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
       const privateInput = await store.getPrivateInput(id)
       const isUpload = Boolean(privateInput?.uploadPath)
       if (!isUpload && !privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
+      // Refuse to download/import when the relay is over its storage threshold
+      // or low on free disk, so archive imports (incl. web-console uploads) can't
+      // fill the disk and crash the relay. Mark failed WITHOUT touching the
+      // staged upload temp so runNext() retries cleanly once space is reclaimed
+      // (a URL job re-downloads; an upload re-reads its still-present temp).
+      if (typeof canIngest === 'function' && !canIngest()) {
+        logger?.archive?.warn?.('[archive-stage] refused: storage threshold reached', { id })
+        return store.updateJob(id, { status: 'failed', error: 'relay storage threshold reached; free space or raise storage.maxBytes' })
+      }
       await store.updateJob(id, { status: 'running', error: null })
       logger?.archive?.info?.('[archive-stage] running', { id, isUpload })
       let downloaded = null

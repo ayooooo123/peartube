@@ -24,7 +24,7 @@ function createNoopRelayBlindPeer({ key, error = null } = {}) {
     addCore() { return false },
     addAutobase() { return false },
     getStats() {
-      return { enabled: false, publicKey: key || null, mirroredCores: 0, mirroredAutobases: 0, error }
+      return { enabled: false, publicKey: key || null, mirroredCores: 0, mirroredAutobases: 0, maxBytes: 0, gcEnabled: false, bytesAllocated: 0, error }
     },
     async close() {}
   }
@@ -41,6 +41,13 @@ export async function createRelayBlindPeer({
   storagePath,
   enabled = true,
   trustedPeerKeys = [],
+  // Cap the autonomous (peer-requested) mirror storage. 0 leaves it unbounded.
+  // Relay-owned/seeded content is added via addCore() below, which only
+  // announces + downloads (no blind-peer DB record), so it is never counted in
+  // the GC digest nor eligible for GC — the cap bounds untrusted mirror bytes
+  // only. GC also skips announced/trusted records.
+  maxBytes = 0,
+  enableGc = null,
   logger = {},
   BlindPeerCtor = null,
 } = {}) {
@@ -60,15 +67,19 @@ export async function createRelayBlindPeer({
   }
 
   try {
+    const cap = Number.isFinite(maxBytes) && maxBytes > 0 ? Math.floor(maxBytes) : 0
+    // GC only reclaims untrusted/unannounced peer-mirror records; relay-owned
+    // and trusted content stay protected. Enable it whenever a cap is set (or
+    // explicitly forced) so "fancy blind peer" mirror storage stays bounded.
+    const gcEnabled = enableGc === null ? cap > 0 : Boolean(enableGc)
     const blindPeerPath = `${storagePath}/corestore/blind-peer`
     const blindPeer = new BlindPeer(blindPeerPath, {
       store: ctx.store,
       swarm: ctx.swarm,
       wakeup: ctx.wakeup || undefined,
       trustedPubKeys: normalizeBlindPeerKeys(trustedPeerKeys),
-      // PearTube already has explicit retention/cache policy. Do not let the
-      // generic blind-peer GC clear mirrored video cores underneath the relay.
-      enableGc: false,
+      enableGc: gcEnabled,
+      ...(cap > 0 ? { maxBytes: cap } : {}),
     })
     await blindPeer.ready?.()
     await blindPeer.listen?.()
@@ -106,11 +117,16 @@ export async function createRelayBlindPeer({
         return true
       },
       getStats() {
+        let bytesAllocated = 0
+        try { bytesAllocated = Number(blindPeer.digest?.bytesAllocated) || 0 } catch { /* digest may be unavailable pre-ready */ }
         return {
           enabled: true,
           publicKey,
           mirroredCores: trackedCores.size,
           mirroredAutobases: trackedAutobases.size,
+          maxBytes: cap,
+          gcEnabled,
+          bytesAllocated,
           error: null
         }
       },

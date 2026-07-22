@@ -12,6 +12,7 @@ import { createTmdbClassifier, createTmdbDiscoverClient } from './classification
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
 import { buildWriterKeyName, classifySourceUrl } from './archive/source-id.js'
+import { createStorageGuard } from './storage-guard.js'
 import tmdbFetch from '#fetch'
 
 const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
@@ -43,6 +44,23 @@ export async function createRelayService({
     creatorsPath: config.paths.creators
   })
   const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
+
+  // Storage threshold gate: refuse new ingestion (discovery mirroring, archive
+  // imports) once actual storage-dir usage reaches storage.maxBytes, or free
+  // disk drops below storage.minFreeBytes, so the relay stops growing instead
+  // of crashing the whole process with ENOSPC. Degrades gracefully when the
+  // injected fs module lacks statfs/stat primitives (e.g. Bare builds).
+  const guardFsModule = fsModule || await import('#fs')
+  const storageGuard = createStorageGuard({
+    storagePath: config.storage.path,
+    maxBytes: config.storage.maxBytes || 0,
+    minFreeBytes: config.storage.minFreeBytes || 0,
+    statfsSync: guardFsModule?.statfsSync || null,
+    statSync: guardFsModule?.statSync || null,
+    readdirSync: guardFsModule?.readdirSync || null,
+    log: (...args) => logger.status?.debug?.(args.map(String).join(' ')),
+    now: nowFn
+  })
   const classificationStore = await RelayClassificationStore.open({
     storagePath: config.storage.path,
     classificationPath: config.paths.classification
@@ -320,6 +338,20 @@ export async function createRelayService({
     if (closed) {
       return { accepted: false, reason: 'closed' }
     }
+    // Stop mirroring new content when storage-dir usage reaches the budget or
+    // the volume is low on free disk, so full-core seeding downloads can't fill
+    // the disk and crash the relay.
+    if (!storageGuard.canIngest()) {
+      const snap = storageGuard.snapshot()
+      logger.status?.warn?.('Storage threshold reached; refusing new mirror', {
+        reason: snap.overBudget ? 'over-budget' : 'low-disk',
+        usedBytes: snap.usedBytes,
+        maxBytes: snap.maxBytes,
+        freeBytes: snap.freeBytes,
+        minFreeBytes: snap.minFreeBytes
+      })
+      return { accepted: false, reason: snap.overBudget ? 'storage-over-budget' : 'storage-low' }
+    }
 
     const now = Number(nowFn()) || Date.now()
     const resolved = runtime.resolveCandidate
@@ -569,6 +601,23 @@ export async function createRelayService({
           writerKeyName: buildWriterKeyName(sourceIdentity.sourceId)
         }
       : undefined
+    // Grouped per-title archive channels are created without a channel/root
+    // descriptor, so remote strict feed peers drop them (missing-signed-descriptor)
+    // even though they appear in the relay's own local feed. Sign the descriptor
+    // (idempotent) with the relay identity's device attestation before
+    // (re)publishing so submitToFeed can attach it and peers accept the entry.
+    if (loadOptions?.writerKeyName && typeof runtime.identityManager?.signChannelRootDescriptorForOwnedChannel === 'function') {
+      const signResult = await runtime.identityManager.signChannelRootDescriptorForOwnedChannel(job.channelKey, {
+        profile: { name: job.channelName || sourceIdentity?.creatorName || 'Archive' },
+        loadOptions
+      }).catch((err) => ({ ok: false, reason: err?.message || String(err) }))
+      if (!signResult?.ok) {
+        logger.archive?.warn?.('Archive channel descriptor signing skipped', {
+          channelKey: job.channelKey,
+          reason: signResult?.reason || 'unavailable'
+        })
+      }
+    }
     const result = await runtime.api.submitToFeed(job.channelKey, loadOptions)
     if (!result?.success) {
       throw new Error(result?.error || `Unable to repair public projection for ${job.channelKey}`)
@@ -691,6 +740,9 @@ export async function createRelayService({
     classificationStore,
     settings: relaySettings,
     trustedClients,
+    storageGuard,
+    canIngest: () => storageGuard.canIngest(),
+    canArchive: () => storageGuard.hasMinFreeDisk(),
     getClassifier() {
       return classifier
     },
@@ -1029,12 +1081,24 @@ export async function createRelayService({
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
+      // Deliberate uploads are the relay's purpose; they are only refused when
+      // the disk is genuinely low (ENOSPC risk), NOT when the evictable
+      // discovery cache merely filled the logical storage.maxBytes budget.
+      if (!storageGuard.hasMinFreeDisk()) {
+        const snap = storageGuard.snapshot()
+        logger.status?.warn?.('Storage floor reached; refusing archive ingestion', {
+          freeBytes: snap.freeBytes,
+          minFreeBytes: snap.minFreeBytes
+        })
+        throw new Error(`relay storage low on disk (free ${snap.freeBytes ?? 'unknown'} < floor ${snap.minFreeBytes}); free space before archiving`)
+      }
       const runtimeFsModule = fsModule || await import('#fs')
       const runtimePathModule = pathModule || await import('#path')
       const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
       const manager = createArchiveManager({
         store,
         logger,
+        canIngest: () => storageGuard.hasMinFreeDisk(),
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',

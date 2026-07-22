@@ -26,11 +26,16 @@ function stubChannel (name) {
   }
 }
 
-function publisherWith (createChannelFn) {
+function publisherWith (createChannelFn, { signCalls = null } = {}) {
   return createArchivePublisher({
     identityManager: {
-      getActiveIdentity: () => ({ driveKey: 'active-channel' }),
-      getActiveChannel: async () => stubChannel('active')
+      getActiveIdentity: () => ({ driveKey: 'active-channel', publicKey: 'ident-pub' }),
+      getActiveChannel: async () => stubChannel('active'),
+      createIdentity: async () => ({ success: true, publicKey: 'ident-pub' }),
+      async signChannelRootDescriptorForOwnedChannel (channel, opts) {
+        signCalls?.push({ channelKey: channel?.keyHex ?? null, opts })
+        return { ok: true, changed: true }
+      }
     },
     uploadManager: {},
     api: {},
@@ -68,4 +73,37 @@ test('ensureAnonymousChannel uses the shared channel for plain archives', async 
   const publisher = publisherWith(async () => { throw new Error('must not be called') })
   const info = await publisher.ensureAnonymousChannel({ channelName: 'Anonymous Archive', sourceIdentity: null })
   t.is(info.channelKey, 'active-channel')
+})
+
+test('ensureAnonymousChannel signs the grouped channel root descriptor', async function (t) {
+  const signCalls = []
+  const publisher = publisherWith(async (ctx, opts) => {
+    return { channel: { ...stubChannel(opts.writerKeyName), keyHex: `ck-${opts.writerKeyName}` }, channelKeyHex: `ck-${opts.writerKeyName}` }
+  }, { signCalls })
+  const identity = deriveArchiveSourceIdentity({ tmdbType: 'tv', tmdbId: '95396', tmdbTitle: 'Severance' })
+
+  await publisher.ensureAnonymousChannel({ channelName: 'Severance', sourceIdentity: identity })
+
+  t.is(signCalls.length, 1, 'the grouped channel is signed so strict feed peers accept it')
+  t.is(signCalls[0].channelKey, 'ck-peartube-archive-writer:tmdb:tv:95396')
+  t.alike(signCalls[0].opts, { profile: { name: 'Severance' } })
+})
+
+test('ensureAnonymousChannel falls back to the shared channel when signing fails', async function (t) {
+  const publisher = createArchivePublisher({
+    identityManager: {
+      getActiveIdentity: () => ({ driveKey: 'active-channel', publicKey: 'ident-pub' }),
+      getActiveChannel: async () => stubChannel('active'),
+      createIdentity: async () => ({ success: true, publicKey: 'ident-pub' }),
+      signChannelRootDescriptorForOwnedChannel: async () => ({ ok: false, reason: 'active-identity-proof-unavailable' })
+    },
+    uploadManager: {},
+    api: {},
+    runtime: { ctx: {} },
+    fs: {},
+    createChannelFn: async (ctx, opts) => ({ channel: { ...stubChannel(opts.writerKeyName), keyHex: `ck-${opts.writerKeyName}` }, channelKeyHex: `ck-${opts.writerKeyName}` })
+  })
+  const identity = deriveArchiveSourceIdentity({ tmdbType: 'movie', tmdbId: '603', tmdbTitle: 'The Matrix' })
+  const info = await publisher.ensureAnonymousChannel({ channelName: 'The Matrix', sourceIdentity: identity })
+  t.is(info.channelKey, 'active-channel', 'an unsignable grouped channel falls back to the signed shared channel')
 })

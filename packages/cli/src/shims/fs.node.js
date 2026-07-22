@@ -7,6 +7,7 @@ export {
   readdirSync,
   readFileSync,
   rmSync,
+  statfsSync,
   statSync,
   unlinkSync,
   writeFileSync,

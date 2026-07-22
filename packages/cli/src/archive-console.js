@@ -261,7 +261,7 @@ export async function createArchiveConsole({
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
-  const manager = createArchiveManager({ store, downloader, publisher, logger, onCompleted: (job) => service.publishArchiveJobToFeed?.(job) })
+  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJobToFeed?.(job) })
 
   // Read an archive submission as either a browser file upload
   // (multipart/form-data, streamed to disk) or a URL-encoded form. Returns the

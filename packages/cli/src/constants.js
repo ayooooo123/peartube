@@ -12,6 +12,10 @@ export const VALID_POLICIES = [RELAY_POLICY_ALLOWLIST, RELAY_POLICY_DISCOVERY]
 
 export const DEFAULT_STORAGE_PATH = './peartube-relay'
 export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
+// Refuse new ingestion (discovery mirroring, archive imports) once free disk on
+// the storage volume drops below this floor, so the relay stops growing before
+// it crashes the process with ENOSPC. 0 disables the floor.
+export const DEFAULT_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
 export const DEFAULT_DISCOVERY_MAX_CHANNELS = 0
 export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 0
@@ -101,7 +105,8 @@ export const DEFAULT_RELAY_CONFIG = {
   policy: RELAY_POLICY_DISCOVERY,
   storage: {
     path: DEFAULT_STORAGE_PATH,
-    maxBytes: DEFAULT_MAX_BYTES
+    maxBytes: DEFAULT_MAX_BYTES,
+    minFreeBytes: DEFAULT_MIN_FREE_BYTES
   },
   admission: {
     channels: [],
@@ -122,6 +127,8 @@ export const DEFAULT_RELAY_CONFIG = {
     announce: true,
     bootstrap: 'default',
     blindPeer: true,
+    // 0 = derive from storage.maxBytes at runtime. Caps autonomous mirror bytes.
+    blindPeerMaxBytes: 0,
     trustedBlindPeerClients: []
   },
   archive: DEFAULT_ARCHIVE_CONFIG,

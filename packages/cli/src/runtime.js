@@ -113,11 +113,20 @@ export async function createRelayRuntime({ config, logger, dependencies = null }
 
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
   const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)
+  // Cap the relay's autonomous blind-peer mirror storage at the configured
+  // blind-peer budget, defaulting to the overall storage threshold. Relays are
+  // effectively fancy blind peers, so this is what keeps untrusted mirror bytes
+  // from filling the disk; relay-owned/seeded content is announced and exempt.
+  const configuredBlindPeerMax = Number(config?.network?.blindPeerMaxBytes)
+  const blindPeerMaxBytes = Number.isFinite(configuredBlindPeerMax) && configuredBlindPeerMax > 0
+    ? configuredBlindPeerMax
+    : (Number(config?.storage?.maxBytes) || 0)
   const blindPeer = await createRelayBlindPeer({
     ctx,
     storagePath: storageRoot,
     enabled: config?.network?.blindPeer !== false,
     trustedPeerKeys: config?.network?.trustedBlindPeerClients || [],
+    maxBytes: blindPeerMaxBytes,
     logger: logger.runtime || logger.relay || logger
   })
   const seeder = createRelaySeeder({

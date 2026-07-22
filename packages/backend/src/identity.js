@@ -793,6 +793,80 @@ export function createIdentityManager({ ctx }) {
         }
       }
       return summary
+    },
+
+    /**
+     * Sign and write a `channel/root` descriptor for a locally-owned writable
+     * channel that is NOT itself a registered identity (e.g. the relay's
+     * grouped per-title archive channels). Strict feed peers reject unsigned
+     * gossip entries, so without a descriptor a grouped channel is invisible to
+     * remote peers even though it shows in the relay's own local feed.
+     *
+     * The descriptor binds the channel key + public bee + blobs drive, vouched
+     * for by the active identity's device attestation (the same persisted proof
+     * the backfill reuses; never needs the identity secret key). Idempotent: a
+     * valid descriptor already bound to this channel/publicBee is left as-is.
+     *
+     * @param {import('./channel/multi-writer-channel.js').MultiWriterChannel|string} channelOrKey
+     * @param {{ profile?: object|null, loadOptions?: object|null }} [options]
+     * @returns {Promise<{ ok: boolean, changed?: boolean, reason?: string, signed?: object|null }>}
+     */
+    async signChannelRootDescriptorForOwnedChannel(channelOrKey, { profile = null, loadOptions = null } = {}) {
+      if (!ctx?.swarm?.keyPair?.publicKey || !ctx?.swarm?.keyPair?.secretKey) {
+        return { ok: false, reason: 'device-keypair-unavailable' }
+      }
+
+      const active = identities.find(i => i.publicKey === activeIdentity) || null
+      const proofHex = active?.attestationProof || active?.signedDescriptor?.proof || null
+      if (!active?.publicKey || !proofHex) return { ok: false, reason: 'active-identity-proof-unavailable' }
+
+      let channel = channelOrKey
+      if (typeof channelOrKey === 'string') {
+        channel = await loadChannel(ctx, channelOrKey, { preferWritable: true, ...(loadOptions || {}) }).catch(() => null)
+      }
+      if (!channel?.publicBee?.writable) return { ok: false, reason: 'channel-not-writable' }
+
+      const channelKey = channel.keyHex
+      const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey?.()
+      const mediaKey = channel.blobsKeyHex
+      if (!channelKey || !metadataKey || !mediaKey) return { ok: false, reason: 'channel-keys-unavailable' }
+
+      const existing = await channel.publicBee.getRootDescriptor().catch(() => null)
+      if (existing) {
+        const verified = await verifySignedChannelRootDescriptor(existing)
+        if (
+          verified?.valid &&
+          verified.descriptor?.channelId === channelKey.toLowerCase() &&
+          verified.descriptor?.metadataKey === metadataKey.toLowerCase()
+        ) {
+          return { ok: true, changed: false, signed: existing }
+        }
+      }
+
+      const previousSeq = Number(existing?.descriptor?.seq ?? 0) || 0
+      const descriptor = createChannelRootDescriptor({
+        identityPublicKey: active.publicKey,
+        channelId: channelKey,
+        metadataKey,
+        mediaKey,
+        seq: previousSeq + 1,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        profile: profile && typeof profile === 'object' ? profile : { name: channel.name || 'Archive' }
+      })
+      const signed = await signChannelRootDescriptor({
+        descriptor,
+        deviceKeyPair: ctx.swarm.keyPair,
+        deviceProof: proofHex
+      })
+
+      // Never write a descriptor peers would reject.
+      const check = await verifySignedChannelRootDescriptor(signed)
+      if (!check?.valid) return { ok: false, reason: check?.error || 'self-verification-failed' }
+
+      await channel.publicBee.setRootDescriptor(signed)
+      await channel.publicBee.setMetadata({ name: descriptor.profile?.name })
+      return { ok: true, changed: true, signed }
     }
   };
 }

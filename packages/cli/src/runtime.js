@@ -333,12 +333,27 @@ export async function createRelayRuntime({ config, logger, dependencies = null }
         await publicFeed.start()
 
         logger.runtime?.info('Relay runtime started', this.getNetworkStats())
-        await seeder.seedCachedChannels(cacheManager).catch((err) => {
-          logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
-        })
-        await seedFeedEntries('startup')
-        emitFeedEntries()
         started = true
+        // Seed the cached/discovered channel backlog in the BACKGROUND. Awaiting
+        // it blocks start() for minutes once many channels are cached, which
+        // stalls every consumer that waits on start() — notably the relay's
+        // archive publisher bind, leaving web uploads stuck in "running". The
+        // network, feed protocol, and API providers are already up by here;
+        // seeding only refreshes what we advertise, so it is safe to defer.
+        void (async () => {
+          try {
+            await seeder.seedCachedChannels(cacheManager)
+          } catch (err) {
+            logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
+          }
+          if (closed) return
+          try {
+            await seedFeedEntries('startup')
+            emitFeedEntries()
+          } catch (err) {
+            logger.runtime?.warn('Relay feed-entry startup seeding failed', { error: err?.message || String(err) })
+          }
+        })()
       } catch (error) {
         await this.close()
         throw error

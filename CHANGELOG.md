@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.2.35 - Tuesday, July 21, 2026
+
+- Return relay startup promptly by seeding the cached/discovered channel backlog in the background instead of awaiting it, so the archive publisher binds within seconds and web-console uploads no longer hang in "running" while a large cache re-seeds on boot.
+- Add a periodic relay storage-eviction loop: when the tracked discovery cache exceeds the storage budget, clear the lowest-retention discovery blob ranges first (real Hypercore clear + corestore compaction), protecting pinned channels and private/allowlist (deliberate uploads); evicted channels stop being advertised. Byte accounting only counts a channel freed after every clearable range is actually cleared.
+- Log per-stage archive job progress (running/ensuring-channel/channel-ready/imported/publishing/published) so a stalled upload identifies the exact stage.
+
 ## v0.2.34 - Tuesday, July 21, 2026
 
 - Wait for the relay runtime to finish starting before running an archive upload submitted through the web console, instead of failing it with "relay runtime is still starting" and deleting the uploaded file — early TMDB-catalog uploads now import and publish once the runtime is ready.

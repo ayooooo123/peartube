@@ -382,19 +382,13 @@ test('createRelayService installs and clears a heartbeat interval', async (t) =>
   const logger = createFakeLogger()
   let scheduled = null
   const cleared = []
-  let unrefCalled = false
 
+  // The service installs more than one interval (heartbeat + quota sweep);
+  // capture the heartbeat by its 30s period and track unref per timer.
   function setIntervalFn(fn, ms) {
-    scheduled = {
-      fn,
-      ms,
-      timer: {
-        unref() {
-          unrefCalled = true
-        }
-      }
-    }
-    return scheduled.timer
+    const timer = { ms, unrefCalled: false, unref() { this.unrefCalled = true } }
+    if (ms === 30000) scheduled = { fn, ms, timer }
+    return timer
   }
 
   function clearIntervalFn(timer) {
@@ -434,13 +428,13 @@ test('createRelayService installs and clears a heartbeat interval', async (t) =>
     t.ok(scheduled)
     t.is(typeof scheduled.fn, 'function')
     t.is(scheduled.ms, 30000)
-    t.is(unrefCalled, false)
+    t.is(scheduled.timer.unrefCalled, false)
 
     await scheduled.fn()
     t.ok(logger.entries.some((entry) => entry.component === 'status' && entry.level === 'info' && entry.msg === 'Relay heartbeat'))
 
     await service.close()
-    t.alike(cleared, [scheduled.timer])
+    t.ok(cleared.includes(scheduled.timer), 'the heartbeat interval is cleared on close')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -473,8 +467,9 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
   let scheduled = null
 
   function setIntervalFn(fn, ms) {
-    scheduled = { fn, ms, timer: {} }
-    return scheduled.timer
+    const timer = {}
+    if (ms === 30000) scheduled = { fn, ms, timer }
+    return timer
   }
 
   try {
@@ -563,8 +558,9 @@ test('relay heartbeat logs DHT bootstrap diagnostics when no peers are discovere
   let scheduled = null
 
   function setIntervalFn(fn, ms) {
-    scheduled = { fn, ms, timer: {} }
-    return scheduled.timer
+    const timer = {}
+    if (ms === 30000) scheduled = { fn, ms, timer }
+    return timer
   }
 
   try {

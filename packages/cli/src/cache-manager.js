@@ -1,3 +1,6 @@
+import b4a from 'b4a'
+import { RETENTION_PRIORITY } from './constants.js'
+
 /**
  * @typedef {Object} CacheChannelRecord
  * @property {string} driveKey - Hex-encoded drive key
@@ -165,24 +168,127 @@ export class CacheManager {
     return true;
   }
 
-  async enforceQuota() {
-    let total = this.getTotalBytes();
-    if (total <= this.maxBytes) return;
+  /**
+   * Reclaim disk by clearing cached discovery blob ranges when tracked usage
+   * exceeds maxBytes. Deliberately-retained content (pinned, or catalog
+   * retentionClass private/allowlist) is never evicted; only network-discovered
+   * cache is. Lowest retention priority is evicted first, oldest within a class.
+   *
+   * @param {{
+   *   retentionClassOf?: (driveKey: string) => string,
+   *   protectedCoreKeys?: Set<string> | string[],
+   *   resolveChannelBlobRefs?: (channel: CacheChannelRecord) => Promise<Array<{blobsCoreKey: string, blobId: string}>> | Array<{blobsCoreKey: string, blobId: string}>,
+   *   onEvicted?: (driveKey: string) => any,
+   *   collectGarbage?: () => any,
+   *   log?: (...args: any[]) => void,
+   * }} [options]
+   * @returns {Promise<{evicted: string[], freedBytes: number, clearedRanges: number}>}
+   */
+  async enforceQuota(options = {}) {
+    const retentionClassOf = typeof options.retentionClassOf === 'function' ? options.retentionClassOf : () => 'discovery'
+    const resolveChannelBlobRefs = typeof options.resolveChannelBlobRefs === 'function' ? options.resolveChannelBlobRefs : null
+    const onEvicted = typeof options.onEvicted === 'function' ? options.onEvicted : null
+    const collectGarbage = typeof options.collectGarbage === 'function' ? options.collectGarbage : null
+    const log = typeof options.log === 'function' ? options.log : null
+    const protectedCoreKeys = options.protectedCoreKeys instanceof Set
+      ? options.protectedCoreKeys
+      : new Set(Array.isArray(options.protectedCoreKeys) ? options.protectedCoreKeys : [])
+    const discoveryPriority = RETENTION_PRIORITY.discovery || 1
 
+    let total = this.getTotalBytes()
+    const result = { evicted: [], freedBytes: 0, clearedRanges: 0 }
+    if (!Number.isFinite(this.maxBytes) || this.maxBytes <= 0 || total <= this.maxBytes) return result
+
+    // Only network-discovered cache is evictable: pinned channels and anything
+    // the catalog marks private/allowlist (deliberate uploads, allowlisted
+    // seeds) are protected. Evict lowest priority first, oldest within a class.
     const evictable = Array.from(this.channels.values())
       .filter((channel) => !channel.pinned)
-      .sort((a, b) => a.addedAt - b.addedAt);
+      .filter((channel) => (RETENTION_PRIORITY[retentionClassOf(channel.driveKey)] || 0) <= discoveryPriority)
+      .sort((a, b) => {
+        const pa = RETENTION_PRIORITY[retentionClassOf(a.driveKey)] || 0
+        const pb = RETENTION_PRIORITY[retentionClassOf(b.driveKey)] || 0
+        return pa - pb || a.addedAt - b.addedAt
+      })
 
-    let changed = false;
     for (const channel of evictable) {
-      if (total <= this.maxBytes) break;
-      if (!this.channels.delete(channel.driveKey)) continue;
-      total -= channel.bytes;
-      changed = true;
+      if (total <= this.maxBytes) break
+      let refs = this._channelBlobRefs(channel)
+      if (resolveChannelBlobRefs) {
+        try {
+          const resolved = await resolveChannelBlobRefs(channel)
+          if (Array.isArray(resolved) && resolved.length > 0) refs = resolved
+        } catch { /* fall back to cached preview refs */ }
+      }
+      // A channel with ANY protected (active/in-use) blob core is left intact:
+      // we won't clear a protected range, so we could never fully reclaim the
+      // channel, and subtracting its bytes would overstate freed disk.
+      if (refs.length === 0 || refs.some((ref) => protectedCoreKeys.has(ref.blobsCoreKey))) {
+        log?.('[CacheManager] Skipped eviction; channel has no clearable refs or an active core', channel.driveKey.slice(0, 16))
+        continue
+      }
+      let clearedForChannel = 0
+      for (const ref of refs) {
+        if (await this._clearBlobRange(ref.blobsCoreKey, ref.blobId, log)) clearedForChannel += 1
+      }
+      // Only drop the record and claim the channel's bytes once EVERY range is
+      // actually gone; a partial clear leaves the channel tracked so the quota
+      // never overstates freed disk and a later sweep retries (re-clearing an
+      // already-cleared range is a no-op).
+      if (clearedForChannel !== refs.length) {
+        log?.('[CacheManager] Skipped eviction; channel not fully reclaimed', channel.driveKey.slice(0, 16), `${clearedForChannel}/${refs.length}`)
+        continue
+      }
+      result.clearedRanges += clearedForChannel
+      this.channels.delete(channel.driveKey)
+      const bytes = Math.max(0, Number(channel.bytes) || 0)
+      total -= bytes
+      result.freedBytes += bytes
+      result.evicted.push(channel.driveKey)
+      if (onEvicted) { try { await onEvicted(channel.driveKey) } catch { /* best effort */ } }
+      log?.('[CacheManager] Evicted discovery channel', channel.driveKey.slice(0, 16), 'freed~', bytes, 'ranges', clearedForChannel)
     }
 
-    if (changed) {
-      await this._persist();
+    if (result.evicted.length > 0) {
+      await this._persist()
+      if (collectGarbage) { try { await collectGarbage() } catch { /* best effort */ } }
+    }
+    return result
+  }
+
+  _channelBlobRefs(channel) {
+    const refs = []
+    for (const video of (channel?.previewVideos || [])) {
+      if (video?.blobId && video?.blobsCoreKey) {
+        refs.push({ blobsCoreKey: String(video.blobsCoreKey), blobId: String(video.blobId) })
+      }
+      if (video?.thumbnailBlobId && video?.thumbnailBlobsCoreKey) {
+        refs.push({ blobsCoreKey: String(video.thumbnailBlobsCoreKey), blobId: String(video.thumbnailBlobId) })
+      }
+    }
+    return refs
+  }
+
+  // Clear a single blob's Hypercore block range. blobId is
+  // "blockOffset:blockLength:byteOffset:byteLength" (matches the seeder).
+  async _clearBlobRange(blobsCoreKey, blobId, log = null) {
+    if (!/^[0-9a-f]{64}$/i.test(blobsCoreKey || '')) return false
+    const parts = String(blobId || '').split(':')
+    const blockOffset = Number(parts[0])
+    const blockLength = Number(parts[1])
+    if (!Number.isInteger(blockOffset) || blockOffset < 0 || !Number.isInteger(blockLength) || blockLength <= 0) return false
+    let core = null
+    try {
+      core = this.store.get(b4a.from(blobsCoreKey, 'hex'))
+      await core.ready?.()
+      if (typeof core.clear !== 'function') return false
+      await core.clear(blockOffset, blockOffset + blockLength)
+      return true
+    } catch (err) {
+      log?.('[CacheManager] Failed to clear blob range', String(blobsCoreKey).slice(0, 16), err?.message || String(err))
+      return false
+    } finally {
+      try { await core?.close?.() } catch { /* best effort */ }
     }
   }
 

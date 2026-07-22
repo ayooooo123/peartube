@@ -71,6 +71,7 @@ export async function createRelayService({
   let queue = Promise.resolve()
   let heartbeatTimer = null
   let localMirrorTimer = null
+  let quotaSweepTimer = null
   let localMirrorRunning = false
   let archiveConsole = null
   const localMirrorState = createLocalDriveMirrorState()
@@ -223,6 +224,46 @@ export async function createRelayService({
 
     await Promise.resolve(writeStatusFile(config.paths.status, currentStatus))
     return currentStatus
+  }
+
+  // Reclaim disk when the discovery cache exceeds the storage budget. Deliberate
+  // uploads / allowlisted seeds (retentionClass private/allowlist) are protected;
+  // only network-discovered cache blob ranges are cleared, lowest priority first.
+  async function enforceStorageQuota() {
+    if (typeof runtime.cacheManager?.enforceQuota !== 'function') return null
+    const store = runtime.ctx?.store
+    try {
+      const result = await runtime.cacheManager.enforceQuota({
+        retentionClassOf: (driveKey) => relayCatalog.getChannel?.(driveKey)?.retentionClass || 'discovery',
+        collectGarbage: async () => {
+          const storage = store?.storage
+          if (!storage) return
+          try { await storage.flush?.() } catch { /* best effort */ }
+          try { await storage.compact?.() } catch { /* best effort */ }
+        },
+        onEvicted: async (driveKey) => {
+          // Stop advertising the evicted channel: drop it from the CLI catalog
+          // and the public feed so peers no longer see this relay as serving it.
+          await Promise.resolve(relayCatalog.removeChannel(driveKey)).catch(() => {})
+          await Promise.resolve(runtime.publicFeed?.unpublishChannel?.(driveKey)).catch(() => {})
+        },
+        log: (...args) => logger.status?.debug?.(args.map(String).join(' ')),
+      })
+      if (result && result.evicted.length > 0) {
+        logger.relay.info('Relay storage quota enforced', {
+          evicted: result.evicted.length,
+          freedBytes: result.freedBytes,
+          clearedRanges: result.clearedRanges,
+          usedBytes: runtime.cacheManager.getTotalBytes?.() || 0,
+          maxBytes: config.storage?.maxBytes || 0,
+        })
+        await persistStatus()
+      }
+      return result
+    } catch (err) {
+      logger.relay?.warn?.('Relay storage quota enforcement failed', { error: err?.message || String(err) })
+      return null
+    }
   }
 
   const basePublishRelayCatalogEntry = typeof runtime.publishRelayCatalogEntry === 'function'
@@ -971,6 +1012,13 @@ export async function createRelayService({
         }
       }, 30_000)
 
+      // Periodically reclaim disk if the discovery cache exceeds the budget.
+      const quotaSweepMs = Math.max(30_000, Number(config.storage?.quotaSweepMs) || 60_000)
+      const runQuotaSweep = () => enforceStorageQuota().catch(() => {})
+      quotaSweepTimer = setIntervalFn(runQuotaSweep, quotaSweepMs)
+      quotaSweepTimer?.unref?.()
+      runQuotaSweep()
+
       return service
     },
     async processCandidate(candidate) {
@@ -1039,6 +1087,10 @@ export async function createRelayService({
       if (localMirrorTimer) {
         clearIntervalFn(localMirrorTimer)
         localMirrorTimer = null
+      }
+      if (quotaSweepTimer) {
+        clearIntervalFn(quotaSweepTimer)
+        quotaSweepTimer = null
       }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})

@@ -619,6 +619,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
       const isUpload = Boolean(privateInput?.uploadPath)
       if (!isUpload && !privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
       await store.updateJob(id, { status: 'running', error: null })
+      logger?.archive?.info?.('[archive-stage] running', { id, isUpload })
       let downloaded = null
 
       try {
@@ -626,7 +627,9 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           ? loadUploadedFile(privateInput)
           : await downloader.download({ id, ...privateInput })
         const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
+        logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null })
         const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity })
+        logger?.archive?.info?.('[archive-stage] channel-ready', { id, channelKey: channelInfo?.channelKey || null, publicBeeKey: channelInfo?.publicBeeKey || null })
         const sourceTitle = downloaded.title || privateInput.title
         const sourceDescription = downloaded.description || privateInput.description
         const imported = await publisher.importVideo({
@@ -636,6 +639,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           title: sourceTitle,
           description: sourceDescription
         })
+        logger?.archive?.info?.('[archive-stage] imported', { id, videoId: imported?.videoId || null })
         const importedMetadata = imported?.metadata || imported
 
         const previewVideo = imported?.videoId ? {
@@ -672,10 +676,12 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
             classifiedAt: now()
           } : undefined
         } : null
+        logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
         if (privateInput.publish !== false) {
           await publisher.publishChannel(channelInfo)
           await publisher.seedChannel({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
         }
+        logger?.archive?.info?.('[archive-stage] published', { id })
 
         const completed = await store.updateJob(id, {
           status: 'completed',

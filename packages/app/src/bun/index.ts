@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
 import { existsSync } from 'fs'
 import { execSync } from 'child_process'
+import { createBunPublisherKeyVault } from './publisher-key-vault'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_NAME = 'PearTube'
@@ -55,6 +56,8 @@ function getStoragePath(): string {
 // and copy entries at Resources/app/ — go up one dir from import.meta.url
 const appCodeDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const storagePath = getStoragePath()
+const publisherKeyVault = createBunPublisherKeyVault()
+;(globalThis as any).__peartubePublisherKeyVault = publisherKeyVault
 
 function getWorker(specifier: string) {
   if (workers.has(specifier)) return workers.get(specifier)

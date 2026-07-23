@@ -10,6 +10,11 @@
 
 ---
 
+## Active Autoresearch Iteration — 2026-07-23
+
+The active task handoff has been iterated with the absorbed `autoresearch` workflow after Task 1 review failures. Use `docs/superpowers/plans/2026-07-23-peartube-media-cockpit-slice-1-autoresearch-iteration.md` for remaining execution. The original task bodies below are retained as baseline/reference material and should not be dispatched directly.
+
+
 ## File Structure
 
 - Create: `packages/app/lib/media-hub.js`

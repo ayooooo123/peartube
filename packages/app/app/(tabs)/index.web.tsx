@@ -41,6 +41,7 @@ import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo 
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMseBackendForWatch } from '@/lib/watch-page-mse-backend-mode.mjs'
 import { consumeStagedWebChannelPlayback } from '@/lib/channel-playback-handoff.js'
+import { buildMediaHubSections } from '@/lib/media-hub'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -134,6 +135,156 @@ function safeDecodeURIComponent(value: string): string {
   } catch {
     return value
   }
+}
+
+
+function getMediaHubSource(item: any): any {
+  return item?.item && typeof item.item === 'object' ? item.item : item
+}
+
+function getMediaHubArtwork(item: any): string | null {
+  const source = getMediaHubSource(item)
+  return item?.thumbnailUrl || item?.thumbnail || source?.thumbnailUrl || source?.thumbnail || null
+}
+
+function getMediaHubTitle(item: any): string {
+  const source = getMediaHubSource(item)
+  return item?.title || source?.title || 'Untitled'
+}
+
+function getMediaHubSubtitle(item: any): string {
+  const source = getMediaHubSource(item)
+  return item?.subtitle || item?.channelName || source?.channelName || source?.channel?.name || 'PearTube network media'
+}
+
+function getMediaHubTimestamp(item: any): number | string | null {
+  const source = getMediaHubSource(item)
+  return item?.createdAt || source?.uploadedAt || source?.createdAt || source?.updatedAt || null
+}
+
+function getMediaHubDuration(item: any): number | null {
+  const source = getMediaHubSource(item)
+  const duration = item?.duration || item?.durationSec || source?.duration || source?.durationSec
+  return typeof duration === 'number' && Number.isFinite(duration) && duration > 0 ? duration : null
+}
+
+function getMediaHubMeta(item: any): string {
+  const parts = []
+  const badge = formatContentBadge(getMediaHubSource(item))
+  const duration = getMediaHubDuration(item)
+  const timestamp = getMediaHubTimestamp(item)
+  if (badge) parts.push(badge)
+  if (duration) parts.push(formatDuration(duration))
+  if (timestamp) parts.push(formatTimeAgo(timestamp))
+  return parts.join(' • ')
+}
+
+interface DesktopMediaHeroProps {
+  item: any
+  peerCount: number
+  isRefreshing: boolean
+  onItemPress: (item: any) => void
+  onChannelPress: (item: any) => void
+  onRefresh: () => void
+}
+
+function DesktopMediaHero({ item, peerCount, isRefreshing, onItemPress, onChannelPress, onRefresh }: DesktopMediaHeroProps) {
+  const artwork = getMediaHubArtwork(item)
+  const hasItem = !!item
+
+  return (
+    <section style={styles.mediaHero}>
+      <div style={styles.mediaHeroCopy}>
+        <div style={styles.mediaKicker}>PEARTUBE MEDIA COCKPIT</div>
+        <h1 style={styles.mediaHeroTitle}>{hasItem ? getMediaHubTitle(item) : 'Your network media library'}</h1>
+        <p style={styles.mediaHeroSubtitle}>
+          {hasItem
+            ? getMediaHubSubtitle(item)
+            : 'Movies, shows, music, channels, and seeded media from the swarm in one desktop-native home.'}
+        </p>
+        <div style={styles.mediaHeroMetaRow}>
+          <span style={styles.mediaHeroPill}>Generic media CDN</span>
+          <span style={styles.mediaHeroPill}>{peerCount > 0 ? `${peerCount} peers nearby` : 'P2P swarm ready'}</span>
+          {hasItem && getMediaHubMeta(item) ? <span style={styles.mediaHeroPill}>{getMediaHubMeta(item)}</span> : null}
+        </div>
+        <div style={styles.mediaHeroActions}>
+          <button
+            type="button"
+            onClick={() => (hasItem ? onItemPress(item) : onRefresh())}
+            style={styles.mediaPrimaryButton}
+            disabled={!hasItem && isRefreshing}
+          >
+            {hasItem ? 'Play featured' : isRefreshing ? 'Refreshing…' : 'Refresh swarm'}
+          </button>
+          {hasItem ? (
+            <button type="button" onClick={() => onChannelPress(item)} style={styles.mediaSecondaryButton}>
+              Open channel
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div style={styles.mediaHeroArtwork}>
+        {artwork ? (
+          <img src={artwork} alt="" style={styles.mediaHeroImage} />
+        ) : (
+          <div style={styles.mediaHeroImagePlaceholder}>PT</div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+interface DesktopMediaRailProps {
+  rail: any
+  variant?: 'poster' | 'episode'
+  onItemPress: (item: any) => void
+  onChannelPress: (item: any) => void
+}
+
+function DesktopMediaRail({ rail, variant = 'poster', onItemPress, onChannelPress }: DesktopMediaRailProps) {
+  const items = Array.isArray(rail?.items) ? rail.items : []
+  if (items.length === 0) return null
+
+  return (
+    <section style={styles.mediaRailSection}>
+      <div style={styles.mediaRailHeader}>
+        <div>
+          <h2 style={styles.mediaRailTitle}>{rail.title}</h2>
+          {rail.subtitle ? <p style={styles.mediaRailSubtitle}>{rail.subtitle}</p> : null}
+        </div>
+        <span style={styles.mediaRailCount}>{items.length} items</span>
+      </div>
+      <div style={styles.mediaRailScroller}>
+        {items.slice(0, rail.limit || 14).map((item: any, index: number) => {
+          const artwork = getMediaHubArtwork(item)
+          const progress = typeof item?.progress === 'number' ? Math.max(0, Math.min(1, item.progress)) : 0
+          const cardStyle = variant === 'episode' ? styles.mediaEpisodeCard : styles.mediaPosterCard
+          return (
+            <article key={item.playbackKey || item.id || index} style={cardStyle}>
+              <button type="button" onClick={() => onItemPress(item)} style={styles.mediaCardButton}>
+                <div style={styles.mediaCardArtwork}>
+                  {artwork ? <img src={artwork} alt="" style={styles.mediaCardImage} /> : <div style={styles.mediaCardPlaceholder}>PT</div>}
+                  {progress > 0 ? (
+                    <div style={styles.mediaProgressTrack}>
+                      <div style={{ ...styles.mediaProgressFill, width: `${Math.round(progress * 100)}%` }} />
+                    </div>
+                  ) : null}
+                </div>
+                <div style={styles.mediaCardBody}>
+                  <div style={styles.mediaCardTitle}>{getMediaHubTitle(item)}</div>
+                  <div style={styles.mediaCardSubtitle}>{getMediaHubSubtitle(item)}</div>
+                  {getMediaHubMeta(item) ? <div style={styles.mediaCardMeta}>{getMediaHubMeta(item)}</div> : null}
+                </div>
+              </button>
+              <button type="button" onClick={() => onChannelPress(item)} style={styles.mediaChannelButton}>
+                Channel
+              </button>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
 }
 
 // WatchPageView - YouTube-style video playback page
@@ -2074,6 +2225,24 @@ export default function HomeScreen() {
     uploadedAt: v.uploadedAt ? new Date(v.uploadedAt).toISOString() : undefined,
   })), [myVideosWithMeta])
 
+
+  const mediaHubSections = useMemo(() => buildMediaHubSections({
+    feedVideos,
+    myVideos: myVideosWithMeta,
+    continueWatching: [],
+    recommendedVideos: [],
+  }), [feedVideos, myVideosWithMeta])
+
+  const desktopMediaRails = useMemo(() => [
+    mediaHubSections.continueWatching,
+    mediaHubSections.movies,
+    mediaHubSections.shows,
+    mediaHubSections.newEpisodes,
+    mediaHubSections.musicAndCreators,
+    mediaHubSections.recentlySeeded,
+    mediaHubSections.yourLibrary,
+  ].filter((rail: any) => Array.isArray(rail?.items) && rail.items.length > 0), [mediaHubSections])
+
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
     if (!rpc) return
@@ -2406,6 +2575,38 @@ export default function HomeScreen() {
     window.location.href = target
   }, [identity?.driveKey])
 
+
+  const getMediaHubSourceItem = useCallback((item: any): VideoData => {
+    const source = getMediaHubSource(item) || {}
+    const id = source?.id || source?.videoId || item?.id || item?.videoId
+    const channelKey = source?.channelKey || item?.channelKey || source?.driveKey || item?.driveKey || identity?.driveKey || ''
+    const publicBeeKey = source?.publicBeeKey || item?.publicBeeKey || null
+    return {
+      ...source,
+      id,
+      channelKey,
+      publicBeeKey,
+      title: source?.title || item?.title || 'Untitled',
+      thumbnailUrl: source?.thumbnailUrl || item?.thumbnailUrl || source?.thumbnail || item?.thumbnail || null,
+      thumbnail: source?.thumbnail || item?.thumbnail || source?.thumbnailUrl || item?.thumbnailUrl || null,
+    }
+  }, [identity?.driveKey])
+
+  const playMediaHubItem = useCallback((item: any) => {
+    playVideo(getMediaHubSourceItem(item))
+  }, [getMediaHubSourceItem, playVideo])
+
+  const openMediaHubChannel = useCallback((item: any) => {
+    const source = getMediaHubSourceItem(item) as any
+    const channelKey = source.channelKey || source.driveKey
+    if (!channelKey) return
+    const feedEntry = feedEntries.find((entry: any) => (entry.channelKey || entry.driveKey) === channelKey)
+    const publicBeeKey = source.publicBeeKey || (feedEntry as any)?.publicBeeKey
+    window.location.hash = publicBeeKey
+      ? `#/channel/${encodeURIComponent(channelKey)}?publicBeeKey=${encodeURIComponent(publicBeeKey)}`
+      : '#/channel/' + encodeURIComponent(channelKey)
+  }, [feedEntries, getMediaHubSourceItem])
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
     // Keep refresh focused on Discover/public feed.
@@ -2534,12 +2735,33 @@ export default function HomeScreen() {
       {/* Main Feed */}
       {!viewingChannel && (
         <div style={styles.mainContent}>
+          {/* Desktop Media Cockpit */}
+          <div style={styles.mediaCockpitShell}>
+            <DesktopMediaHero
+              item={mediaHubSections.featured.item}
+              peerCount={peerCount}
+              isRefreshing={feedLoading}
+              onItemPress={playMediaHubItem}
+              onChannelPress={openMediaHubChannel}
+              onRefresh={refreshFeed}
+            />
+            {desktopMediaRails.map((rail: any) => (
+              <DesktopMediaRail
+                key={rail.id}
+                rail={rail}
+                variant={rail.id === 'new-episodes' || rail.id === 'continue-watching' ? 'episode' : 'poster'}
+                onItemPress={playMediaHubItem}
+                onChannelPress={openMediaHubChannel}
+              />
+            ))}
+          </div>
+
           {/* Discover Section */}
           <div style={styles.discoverSection}>
             <div style={styles.sectionHeader}>
               <div style={styles.sectionTitleGroup}>
                 <GlobeIcon color={colors.primary} size={20} />
-                <h2 style={styles.sectionTitle}>Discover</h2>
+                <h2 style={styles.sectionTitle}>Recently from the swarm</h2>
                 {peerCount > 0 && (
                   <span style={styles.peerBadge}>
                     <UsersIcon color={colors.textMuted} size={14} />
@@ -2647,6 +2869,255 @@ export default function HomeScreen() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  mediaCockpitShell: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 28,
+    marginBottom: 36,
+  },
+  mediaHero: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1.35fr) minmax(280px, 0.65fr)',
+    gap: 28,
+    minHeight: 360,
+    borderRadius: 28,
+    padding: 32,
+    border: `1px solid ${colors.border}`,
+    background: 'radial-gradient(circle at 10% 10%, rgba(163,230,53,0.28), transparent 32%), linear-gradient(135deg, rgba(20,24,20,0.98), rgba(6,8,7,0.98))',
+    boxShadow: '0 28px 80px rgba(0,0,0,0.36)',
+    overflow: 'hidden',
+  },
+  mediaHeroCopy: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  mediaKicker: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    marginBottom: 14,
+  },
+  mediaHeroTitle: {
+    color: colors.text,
+    fontSize: 54,
+    lineHeight: 1.02,
+    letterSpacing: -1.8,
+    margin: '0 0 16px 0',
+    maxWidth: 760,
+  },
+  mediaHeroSubtitle: {
+    color: colors.textMuted,
+    fontSize: 18,
+    lineHeight: '28px',
+    margin: 0,
+    maxWidth: 720,
+  },
+  mediaHeroMetaRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 22,
+  },
+  mediaHeroPill: {
+    borderRadius: 999,
+    border: `1px solid ${colors.border}`,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: 700,
+    padding: '8px 12px',
+  },
+  mediaHeroActions: {
+    display: 'flex',
+    gap: 12,
+    marginTop: 28,
+  },
+  mediaPrimaryButton: {
+    border: 'none',
+    borderRadius: 999,
+    backgroundColor: colors.primary,
+    color: '#081008',
+    cursor: 'pointer',
+    fontSize: 15,
+    fontWeight: 800,
+    padding: '13px 20px',
+  },
+  mediaSecondaryButton: {
+    borderRadius: 999,
+    border: `1px solid ${colors.border}`,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    color: colors.text,
+    cursor: 'pointer',
+    fontSize: 15,
+    fontWeight: 700,
+    padding: '12px 18px',
+  },
+  mediaHeroArtwork: {
+    position: 'relative',
+    minHeight: 280,
+    borderRadius: 24,
+    overflow: 'hidden',
+    border: `1px solid ${colors.border}`,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  mediaHeroImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  mediaHeroImagePlaceholder: {
+    height: '100%',
+    minHeight: 280,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: colors.primary,
+    fontSize: 64,
+    fontWeight: 900,
+    letterSpacing: -4,
+    background: 'linear-gradient(135deg, rgba(163,230,53,0.22), rgba(255,255,255,0.04))',
+  },
+  mediaRailSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+  },
+  mediaRailHeader: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  mediaRailTitle: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: 800,
+    letterSpacing: -0.4,
+    margin: 0,
+  },
+  mediaRailSubtitle: {
+    color: colors.textMuted,
+    fontSize: 13,
+    margin: '5px 0 0 0',
+  },
+  mediaRailCount: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: 700,
+    padding: '6px 10px',
+    borderRadius: 999,
+    border: `1px solid ${colors.border}`,
+  },
+  mediaRailScroller: {
+    display: 'flex',
+    gap: 16,
+    overflowX: 'auto',
+    padding: '2px 0 12px 0',
+  },
+  mediaPosterCard: {
+    width: 214,
+    minWidth: 214,
+    borderRadius: 18,
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    overflow: 'hidden',
+  },
+  mediaEpisodeCard: {
+    width: 300,
+    minWidth: 300,
+    borderRadius: 18,
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    overflow: 'hidden',
+  },
+  mediaCardButton: {
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    padding: 0,
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+  mediaCardArtwork: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: '16 / 10',
+    backgroundColor: colors.bg,
+    overflow: 'hidden',
+  },
+  mediaCardImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+  },
+  mediaCardPlaceholder: {
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: colors.primary,
+    fontSize: 28,
+    fontWeight: 900,
+    background: 'linear-gradient(135deg, rgba(163,230,53,0.18), rgba(255,255,255,0.04))',
+  },
+  mediaCardBody: {
+    padding: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 5,
+  },
+  mediaCardTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: 800,
+    lineHeight: '18px',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
+  mediaCardSubtitle: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: '16px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  mediaCardMeta: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: 700,
+  },
+  mediaProgressTrack: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  mediaProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  mediaChannelButton: {
+    margin: '0 12px 12px 12px',
+    border: `1px solid ${colors.border}`,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    color: colors.textMuted,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 700,
+    padding: '7px 10px',
+  },
   container: {
     flex: 1,
     backgroundColor: colors.bg,

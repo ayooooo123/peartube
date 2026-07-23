@@ -262,6 +262,60 @@ let globalPlaybackActiveUpdatedAt = 0;
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
 let watchdogTimer = null
+
+export function installBackendCleanupStack(ctx, options = {}) {
+  if (!ctx || typeof ctx !== 'object') return ctx
+  if (ctx._cleanupStack && typeof ctx.registerCleanup === 'function') return ctx
+
+  const stack = []
+  let cleanupPromise = null
+  const defaultTimeoutMs = Math.max(1, Number(options.defaultTimeoutMs || 5000) || 5000)
+
+  ctx._cleanupStack = stack
+  ctx._cleanupStackConsumed = false
+  ctx.isShuttingDown = Boolean(ctx.isShuttingDown)
+
+  ctx.registerCleanup = function registerCleanup(label, cleanup, entryOptions = {}) {
+    if (typeof cleanup !== 'function') return { cancel() {} }
+    const entry = {
+      label: String(label || `cleanup:${stack.length + 1}`),
+      cleanup,
+      timeoutMs: Math.max(1, Number(entryOptions.timeoutMs || defaultTimeoutMs) || defaultTimeoutMs),
+      cancelled: false,
+      ran: false,
+    }
+    stack.push(entry)
+    return {
+      cancel() {
+        entry.cancelled = true
+      }
+    }
+  }
+
+  ctx.registerCleanupTimer = function registerCleanupTimer(label, timer, clearFn = clearTimeout) {
+    return ctx.registerCleanup(label, () => {
+      if (timer) clearFn(timer)
+    }, { timeoutMs: 100 })
+  }
+
+  ctx._runCleanupStack = async function runCleanupStack(runShutdownStep) {
+    if (cleanupPromise) return cleanupPromise
+    ctx.isShuttingDown = true
+    cleanupPromise = (async () => {
+      for (let index = stack.length - 1; index >= 0; index--) {
+        const entry = stack[index]
+        if (!entry || entry.cancelled || entry.ran) continue
+        entry.ran = true
+        await runShutdownStep(entry.label, entry.cleanup, entry.timeoutMs)
+      }
+      ctx._cleanupStackConsumed = true
+    })()
+    return cleanupPromise
+  }
+
+  return ctx
+}
+
 const PLAYBACK_ACTIVITY_TTL_MS = 60 * 60 * 1000
 
 /**
@@ -1832,9 +1886,11 @@ export async function initializeStorage(config) {
     }
   }
 
-  // Check DHT state after a delay
-  setTimeout(logDhtState, 2000)
-  setTimeout(logDhtState, 5000)
+  // Check DHT state after a delay; the owning context clears these on shutdown.
+  const dhtStateTimers = [
+    setTimeout(logDhtState, 2000),
+    setTimeout(logDhtState, 5000),
+  ]
 
 
   // Set global reference for suspend/resume lifecycle management
@@ -1862,8 +1918,56 @@ export async function initializeStorage(config) {
     blobSessionToken, // Session token for URL authentication
     channels,
     wakeup,
-    peerPoolDiscovery: globalPeerPoolDiscovery
+    knownPeerCache,
+    peerPoolDiscovery: globalPeerPoolDiscovery,
+    platform
   };
+
+  installBackendCleanupStack(storageContext)
+  storageContext.registerCleanup('store close', async () => {
+    const storeDb = store?.storage?.db
+    if (storeDb && typeof storeDb.flush === 'function') {
+      try { await storeDb.flush() } catch (err) { console.log('[Backend] Shutdown: store db flush failed (non-fatal):', err?.message) }
+    }
+    await store?.close?.()
+  }, { timeoutMs: 5000 })
+  storageContext.registerCleanup('metaCore close', async () => metaCore?.close?.(), { timeoutMs: 2000 })
+  storageContext.registerCleanup('metaDb close', async () => metaDb?.close?.(), { timeoutMs: 2000 })
+  storageContext.registerCleanup('known peer cache flush', async () => knownPeerCache?.flush?.(), { timeoutMs: 1000 })
+  storageContext.registerCleanup('swarm destroy', async () => {
+    try { await persistDhtRoutingTable(swarm, metaDb, { reason: 'shutdown' }) } catch (err) { console.log('[Backend] Shutdown: DHT routing table persist failed (non-fatal):', err?.message) }
+    try { swarm?._peartubePeerPoolWarmup?.cancel?.() } catch { /* best effort */ }
+    await swarm?.destroy?.()
+  }, { timeoutMs: 2000 })
+  storageContext.registerCleanup('peer pool discovery destroy', async () => {
+    try { globalPeerPoolDiscovery?.destroy?.() } catch { /* best effort */ }
+  }, { timeoutMs: 1000 })
+  storageContext.registerCleanup('blobServer close', async () => {
+    try { releaseAllPrioritizedBlobRanges() } catch { /* best effort */ }
+    await blobServer?.close?.()
+  }, { timeoutMs: 2000 })
+  storageContext.registerCleanup('public bee cache close', async () => {
+    const publicBeeCache = storageContext._publicBeeCache
+    if (!publicBeeCache) return
+    await Promise.allSettled([...publicBeeCache.values()].map(async (bee) => bee?.close?.()))
+    publicBeeCache.clear()
+  }, { timeoutMs: 2000 })
+  storageContext.registerCleanup('channels close', async () => {
+    await Promise.allSettled([...channels.values()].map(async (channel) => channel?.close?.()))
+    channels.clear()
+  }, { timeoutMs: 2000 })
+  storageContext.registerCleanup('retained swarm discoveries destroy', async () => {
+    const handles = storageContext._swarmDiscoveryHandles
+    if (!handles) return
+    for (const handle of handles.values()) {
+      try { handle?.destroy?.() } catch { /* best effort */ }
+    }
+    handles.clear()
+  }, { timeoutMs: 1000 })
+  for (const [index, timer] of dhtStateTimers.entries()) {
+    storageContext.registerCleanupTimer(`dht state timer ${index + 1}`, timer)
+  }
+
   return storageContext
 }
 
@@ -2498,6 +2602,7 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
 
 export async function shutdownBackend(ctx) {
   if (!ctx) return
+  if (ctx._shutdownPromise) return ctx._shutdownPromise
   if (ctx._isShutdown) return
 
   ctx._isShutdown = true
@@ -2534,6 +2639,27 @@ export async function shutdownBackend(ctx) {
     if (timedOut) {
       console.log(`[Backend] Shutdown: ${label} timed out after ${timeoutMs}ms (continuing)`)
     }
+  }
+
+  function cleanupGlobalReferences() {
+    if (globalSwarm === ctx.swarm) globalSwarm = null
+    if (globalBlobServer === ctx.blobServer) globalBlobServer = null
+    if (globalChannels === ctx.channels) globalChannels = null
+    if (globalPeerPoolDiscovery === ctx.peerPoolDiscovery) globalPeerPoolDiscovery = null
+    if (globalMetaDb === ctx.metaDb) globalMetaDb = null
+    if (globalKnownPeerCache === ctx.knownPeerCache) globalKnownPeerCache = null
+    globalSwarmDiagnostics = null
+    globalNetworkStartupTiming = null
+    networkStats = null
+  }
+
+  if (typeof ctx._runCleanupStack === 'function') {
+    ctx._shutdownPromise = (async () => {
+      await ctx._runCleanupStack(runShutdownStep)
+      cleanupGlobalReferences()
+      console.log('[Backend] Shutdown complete')
+    })()
+    return ctx._shutdownPromise
   }
 
   const shutdownBody = async () => {
@@ -2680,8 +2806,12 @@ export async function shutdownBackend(ctx) {
     }
   }
 
-  await shutdownBody()
-  console.log('[Backend] Shutdown complete')
+  ctx._shutdownPromise = (async () => {
+    await shutdownBody()
+    cleanupGlobalReferences()
+    console.log('[Backend] Shutdown complete')
+  })()
+  return ctx._shutdownPromise
 }
 
 // =============================================================================

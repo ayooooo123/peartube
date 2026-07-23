@@ -4,6 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveHyperswarmOptions } from '../src/storage.js'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const storageSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'storage.js'), 'utf8')
@@ -137,6 +139,34 @@ test('storage uses bounded warm reconnect and desktop discovery refreshes', () =
   assert.match(storageSource, /swarm\._peartubeSwarmOptions = summarizeSwarmOptions\(hyperswarmOptions\)/)
   assert.match(storageSource, /options: summarizeSwarmOptions\(swarm\?\._peartubeSwarmOptions\)/)
   assert.match(storageSource, /swarmOptions: globalSwarm\._peartubeSwarmOptions \|\| null/)
+})
+
+test('storage applies platform-specific swarm defaults without blocking explicit overrides', () => {
+  const keyPair = {
+    publicKey: Buffer.alloc(32, 1),
+    secretKey: Buffer.alloc(64, 2),
+  }
+
+  const desktopOptions = resolveHyperswarmOptions({ keyPair, platform: 'desktop' })
+  assert.equal(desktopOptions.maxParallel, 12)
+  assert.equal(desktopOptions.maxPeers, 96)
+
+  const mobileOptions = resolveHyperswarmOptions({ keyPair, platform: 'mobile' })
+  assert.equal(mobileOptions.maxParallel, undefined)
+  assert.equal(mobileOptions.maxPeers, undefined)
+
+  const explicitOptions = resolveHyperswarmOptions({
+    keyPair,
+    platform: 'mobile',
+    network: { bootstrap: ['relay-a'], port: 0 },
+    swarmOptions: { maxParallel: 3, maxPeers: 8, keyPair: { publicKey: Buffer.alloc(32, 9) } },
+  })
+
+  assert.deepEqual(explicitOptions.bootstrap, ['relay-a'])
+  assert.equal(explicitOptions.port, 0)
+  assert.equal(explicitOptions.maxParallel, 3)
+  assert.equal(explicitOptions.maxPeers, 8)
+  assert.equal(explicitOptions.keyPair, keyPair)
 })
 
 test('storage creates an offline swarm fallback when Hyperswarm is unavailable', () => {

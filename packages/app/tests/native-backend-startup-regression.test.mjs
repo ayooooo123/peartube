@@ -145,6 +145,11 @@ test('mobile backend consumes launch options before downloader worker args', () 
   )
   assert.match(
     source,
+    /platform:\s*'mobile'/,
+    'createBackendContext should receive mobile platform policy',
+  )
+  assert.match(
+    source,
     /swarmOptions: launchOptions\?\.swarmOptions/,
     'createBackendContext should receive launchOptions.swarmOptions',
   )
@@ -187,6 +192,20 @@ test('mobile backend parses launch options after entrypoint and preserves downlo
   assert.deepEqual(parsed.launchOptions.network, launchOptions.network)
   assert.deepEqual(parsed.launchOptions.swarmOptions, launchOptions.swarmOptions)
   assert.deepEqual(parsed.workerArgs, ['/tmp/downloader.bundle'])
+})
+
+test('mobile backend registers host-owned timers and locks on the backend cleanup stack', () => {
+  const source = readAppFile('backend/index.mjs')
+
+  assert.match(source, /ctx\.registerCleanup\?\.\('mobile feed refresh interval'/)
+  assert.match(source, /ctx\.registerCleanup\?\.\('mobile backend owner lock'/)
+})
+
+test('desktop worker registers cast proxy and transcode cleanup on the backend cleanup stack', () => {
+  const source = readAppFile('workers/desktop/index.ts')
+
+  assert.match(source, /ctx\.registerCleanup\?\.\('desktop cast proxy'/)
+  assert.match(source, /ctx\.registerCleanup\?\.\('desktop transcode sessions'/)
 })
 
 test('native root layout clears startup timeout and releases loading on explicit startup errors', () => {

@@ -127,6 +127,8 @@ test('createBackend exposes universal core as the entry runtime composition root
   const stream = {}
   let readyPayload = null
   const lifecycle = []
+  let backendDestroyCount = 0
+  let contextPlatform = null
   const metaDb = {
     async get() { return null },
     async put() {}
@@ -138,12 +140,16 @@ test('createBackend exposes universal core as the entry runtime composition root
     platform: 'desktop',
     protocolVersion: 42,
     onReady(payload) { readyPayload = payload },
-    createBackendContext: async () => ({
-      ctx: { metaDb },
-      api: {},
-      identityManager: { getIdentities: () => [] },
-      uploadManager: {},
-    }),
+    createBackendContext: async (contextOptions) => {
+      contextPlatform = contextOptions.platform
+      return {
+        ctx: { metaDb },
+        api: {},
+        identityManager: { getIdentities: () => [] },
+        uploadManager: {},
+        async destroy() { backendDestroyCount++ },
+      }
+    },
     createGossipService: () => ({}),
     createMirrorSeedWorker: () => ({}),
     createStorageService: () => ({}),
@@ -172,9 +178,12 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(session.core.state, 'started')
   t.is(readyPayload.protocolVersion, 42)
   t.is(session.rpc.ready.protocolVersion, 42)
+  t.is(contextPlatform, 'desktop')
   t.ok(lifecycle.includes('hc:init'))
   t.ok(lifecycle.includes('hc:start'))
 
   await session.destroy()
+  await session.destroy()
+  t.is(backendDestroyCount, 1)
   t.is(session.core.state, 'shutdown')
 })

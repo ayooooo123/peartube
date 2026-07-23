@@ -123,6 +123,10 @@ export function setIsShuttingDown(value) {
   isShuttingDown = value;
 }
 
+function isContextShuttingDown(ctx) {
+  return Boolean(ctx?.isShuttingDown || ctx?._isShutdown)
+}
+
 /**
  * @typedef {Object} BackendConfig
  * @property {string} storagePath - Path to storage directory
@@ -428,6 +432,7 @@ export async function createBackendContext(config) {
     onStatsUpdate,
     corestoreWaitForLock = false,
     disableStandalonePrimaryKeyFile = false,
+    platform = 'desktop',
     network = {},
     swarmOptions = {},
     peerScorer = null,
@@ -528,6 +533,7 @@ export async function createBackendContext(config) {
       blobServerBindHost,
       primaryKey,
       corestoreWaitForLock,
+      platform,
       network,
       swarmOptions
     });
@@ -555,6 +561,7 @@ export async function createBackendContext(config) {
       blobServerBindHost,
       primaryKey: null,
       corestoreWaitForLock,
+      platform,
       network,
       swarmOptions
     })
@@ -862,7 +869,7 @@ export async function createBackendContext(config) {
   // Drive warming and feed discovery can happen after UI is ready
   defer(async () => {
     // Early return if shutdown was initiated during deferred init setup
-    if (isShuttingDown) {
+    if (isContextShuttingDown(ctx)) {
       console.log('[Orchestrator] Deferred init aborted: shutdown in progress')
       return
     }

@@ -78,3 +78,4 @@ export { createUniversalCore } from './universal-core.js';
 export * as universalCore from './universal-core.js';
 export * as peerScorer from './peer-scorer.js';
 export * as budgetManager from './budget-manager.js';
+export * as records from './records/index.js';

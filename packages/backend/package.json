@@ -44,6 +44,7 @@
     "./universal-core": "./src/universal-core.js",
     "./peer-scorer": "./src/peer-scorer.js",
     "./budget-manager": "./src/budget-manager.js",
+    "./records": "./src/records/index.js",
     "./hash-utils": "./src/hash-utils.js",
     "./blob-ref": "./src/blob-ref.js",
     "./archive-schema": "./lib/archive-schema.js",

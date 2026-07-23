@@ -12,6 +12,49 @@ function readAppFile(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getMeasuredTabBarPaddingVariables(source) {
+  const measuredVariables = new Set()
+
+  for (const match of source.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*Math\.max\(([^)]*tabBarMetrics\.height[^)]*)\)/g)) {
+    measuredVariables.add(match[1])
+  }
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const match of source.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*([^\n]+)/g)) {
+      const [, variableName, initializer] = match
+      if (measuredVariables.has(variableName)) continue
+      for (const measuredVariable of measuredVariables) {
+        if (new RegExp(`\\b${escapeRegExp(measuredVariable)}\\b`).test(initializer)) {
+          measuredVariables.add(variableName)
+          changed = true
+          break
+        }
+      }
+    }
+  }
+
+  return measuredVariables
+}
+
+function hasMeasuredScrollPadding(source, measuredVariables) {
+  const variableAlternation = [...measuredVariables].map(escapeRegExp).join('|')
+  if (!variableAlternation) return false
+
+  return new RegExp(
+    [
+      `contentContainerStyle\\s*=\\s*\\{[\\s\\S]{0,800}?paddingBottom\\s*:\\s*(?:${variableAlternation})\\b`,
+      `contentInset\\s*=\\s*\\{[\\s\\S]{0,400}?bottom\\s*:\\s*(?:${variableAlternation})\\b`,
+      `scrollIndicatorInsets\\s*=\\s*\\{[\\s\\S]{0,400}?bottom\\s*:\\s*(?:${variableAlternation})\\b`,
+    ].join('|'),
+  ).test(source)
+}
+
 test('native tabs expose a vertical discovery doomscroll surface', () => {
   const tabsLayout = readAppFile('app/(tabs)/_layout.tsx')
   const tabBar = readAppFile('components/PillTabBar.tsx')
@@ -344,12 +387,15 @@ test('native inline player exposes explicit PiP exit and tears down its surface 
   assert.match(source, /destroy: async \(\) => \{[\s\S]*player\.pause\(\)[\s\S]*player\.showNowPlayingNotification = false[\s\S]*player\.staysActiveInBackground = false[\s\S]*player\.currentTime = 0[\s\S]*replaceAsync\(null\)[\s\S]*player\.replace\(null\)/, 'destroy should disable notification/background state and detach the Expo Video source so Android media sessions are released')
 })
 
-test('bottom tab screens pad scrollable content by the measured pill tab bar height', () => {
+test('bottom tab screens redirect or pad scrollable content by the measured pill tab bar height', () => {
+  const redirectPattern = /<Redirect\b[^>]*\bhref\s*=\s*(['"])[^'"]+\1\s*\/?>/
   const indexSource = readAppFile('app/(tabs)/index.tsx')
   const subscriptionsSource = readAppFile('app/(tabs)/subscriptions.tsx')
   const studioSource = readAppFile('app/(tabs)/studio.tsx')
   const downloadsSource = readAppFile('app/(tabs)/downloads.tsx')
   const settingsSource = readAppFile('app/(tabs)/settings.tsx')
+
+  assert.match(subscriptionsSource, /<Redirect\b[^>]*\bhref\s*=\s*(['"])\/library\?tab=channels\1\s*\/?>/, 'subscriptions tab should redirect to the Library channels surface')
 
   for (const [label, source] of [
     ['home', indexSource],
@@ -358,8 +404,16 @@ test('bottom tab screens pad scrollable content by the measured pill tab bar hei
     ['downloads', downloadsSource],
     ['settings', settingsSource],
   ]) {
+    if (redirectPattern.test(source)) {
+      assert.doesNotMatch(source, /FlatList|ScrollView/, `${label} redirect-only screen should not own scrollable content padding`)
+      continue
+    }
+
     assert.match(source, /useTabBarMetrics\(/, `${label} should read measured tab bar metrics`)
-    assert.match(source, /const bottomPadding = Math\.max\(tabBarMetrics\.height \+ 16, insets\.bottom \+ 16\)/, `${label} should reserve enough space for the floating pill nav`)
     assert.doesNotMatch(source, /paddingBottom:\s*insets\.bottom \+ (16|20|100)/, `${label} should not use hard-coded safe-area-only bottom padding`)
+
+    const measuredVariables = getMeasuredTabBarPaddingVariables(source)
+    assert.ok(measuredVariables.size > 0, `${label} should derive bottom padding from measured tab bar metrics`)
+    assert.ok(hasMeasuredScrollPadding(source, measuredVariables), `${label} should apply measured tab bar padding to scrollable content`)
   }
 })

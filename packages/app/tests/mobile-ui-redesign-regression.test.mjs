@@ -102,3 +102,45 @@ test('media cockpit components stay presentational', () => {
     'media cockpit cards should reuse the existing thumbnail renderer',
   )
 })
+
+test('mobile home media cockpit preserves playback, channel, and refresh paths', () => {
+  const source = readApp('app/(tabs)/index.tsx')
+
+  for (const required of [
+    'buildMediaHubSections',
+    'HeroFeatureCard',
+    'MediaRail',
+    'MediaPosterCard',
+    'EpisodeCard',
+    'getMediaHubSourceItem',
+    'playMediaHubItem',
+    'rpc.preparePlayback(playbackRequest)',
+    'loadAndPlayVideo(video, result.url)',
+    'onPress={refreshFeed}',
+    'Recently from the swarm',
+  ]) {
+    assert.ok(source.includes(required), `Home should contain ${required}`)
+  }
+  assert.doesNotMatch(source, /getContentCatalog\(/, 'Home should not add catalog fetches for Slice 1 media cockpit rails')
+  assert.doesNotMatch(source, /getRecommendations/, 'Home should not add recommendation RPC fetches for Slice 1 media cockpit rails')
+})
+
+test('mobile home media cockpit playback helper preserves videoId playback identity', () => {
+  const source = readApp('app/(tabs)/index.tsx')
+
+  assert.match(
+    source,
+    /const id = source\?\.id \|\| source\?\.videoId \|\| item\?\.id \|\| item\?\.videoId/,
+    'media hub playback helper should map normalized or watch-history videoId to playVideo id',
+  )
+  assert.match(
+    source,
+    /return \{ \.\.\.source, id, channelKey, publicBeeKey \}/,
+    'media hub playback helper should return a playback-safe source copy without mutating raw records',
+  )
+  assert.match(
+    source,
+    /playVideo\(getMediaHubSourceItem\(item\)\)/,
+    'media cockpit playback should go through the source normalizer before playVideo',
+  )
+})

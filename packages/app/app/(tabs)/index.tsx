@@ -8,11 +8,11 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { VideoCard } from '../../components/video'
-import { RailCard, RAIL_CARD_WIDTH } from '../../components/video/RailCard'
+import { EpisodeCard, EPISODE_CARD_WIDTH, HeroFeatureCard, MediaPosterCard, MEDIA_POSTER_CARD_WIDTH, MediaRail } from '@/components/media'
 import type { VideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
-import { SwarmIndicator, Chip, Rail } from '@/components/primitives'
+import { SwarmIndicator, Chip } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as watchHistoryStore from '@/lib/watch-history'
 import { resumeWatchEntry } from '@/lib/playback-resume'
@@ -22,6 +22,7 @@ import { formatTimeAgo } from '@/lib/formatters'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-virtualization'
+import { buildMediaHubSections, getMediaHubPlaybackKey } from '@/lib/media-hub'
 import {
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
@@ -93,8 +94,12 @@ interface ChannelMeta {
 }
 
 type HomeFeedListItem =
+  | { type: 'hero' }
   | { type: 'continue-watching' }
-  | { type: 'recommended' }
+  | { type: 'movies' }
+  | { type: 'shows' }
+  | { type: 'new-episodes' }
+  | { type: 'music-creators' }
   | { type: 'discover-header' }
   | { type: 'discover-loading' }
   | { type: 'discover-empty' }
@@ -183,9 +188,9 @@ export default function HomeScreen() {
   channelMetaRef.current = channelMeta
   const inflightChannelMetaLoads = useRef<Set<string>>(new Set())
 
-  // Personal rails: local continue-watching + backend recommendations
+  // Personal rails: local continue-watching. Recommendations stay client-side for this slice.
   const [continueWatching, setContinueWatching] = useState<watchHistoryStore.WatchHistoryEntry[]>([])
-  const [recommendedVideos, setRecommendedVideos] = useState<VideoData[]>([])
+  const recommendedVideos = useMemo<VideoData[]>(() => [], [])
   const [swarmDetailOpen, setSwarmDetailOpen] = useState(false)
 
   useFocusEffect(
@@ -198,36 +203,6 @@ export default function HomeScreen() {
     }, [])
   )
 
-  useEffect(() => {
-    if (!ready || !rpc || !identity?.driveKey) return
-    if (typeof (rpc as any).getRecommendations !== 'function') return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const res = await (rpc as any).getRecommendations({ channelKey: identity.driveKey, limit: 10 })
-        if (cancelled) return
-        const results: any[] = Array.isArray(res?.results) ? res.results : []
-        const mapped: VideoData[] = results
-          .map((r) => {
-            const meta = r?.metadata || {}
-            const channelKey = meta.channelKey || meta.driveKey
-            const id = meta.id || meta.videoId || r?.id
-            if (!channelKey || !id || !meta.title) return null
-            return {
-              ...meta,
-              id,
-              channelKey,
-              title: meta.title,
-            } as VideoData
-          })
-          .filter(Boolean) as VideoData[]
-        setRecommendedVideos(mapped)
-      } catch {
-        // Recommendations are best-effort; the rail simply stays hidden.
-      }
-    })()
-    return () => { cancelled = true }
-  }, [ready, rpc, identity?.driveKey])
 
   const resumeEntry = useCallback((entry: watchHistoryStore.WatchHistoryEntry) => {
     void resumeWatchEntry(entry, { rpc, loadAndPlayVideo, seekTo })
@@ -443,11 +418,6 @@ export default function HomeScreen() {
     }
   }, [ready, continueWatching, fetchThumbnail])
 
-  // Same for the "For you" recommendations rail.
-  useEffect(() => {
-    if (!ready || isPear || recommendedVideos.length === 0) return
-    fetchThumbnailsForVideos(recommendedVideos)
-  }, [ready, recommendedVideos, fetchThumbnailsForVideos])
 
   // Re-sweep feed cards still missing a thumbnail. The initial fetches run
   // while the backend is busiest (P2P bootstrap, feed hydration), so they can
@@ -941,6 +911,27 @@ export default function HomeScreen() {
     }
   }, [rpc, loadAndPlayVideo])
 
+  const getMediaHubSourceItem = useCallback((item: any) => {
+    const source = item?.item && typeof item.item === 'object' && !Array.isArray(item.item) ? item.item : item
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return source
+    const id = source?.id || source?.videoId || item?.id || item?.videoId
+    const channelKey = source?.channelKey || source?.driveKey || item?.channelKey || item?.driveKey
+    const publicBeeKey = source?.publicBeeKey || item?.publicBeeKey || undefined
+    if (source.id === id && source.channelKey === channelKey && source.publicBeeKey === publicBeeKey) return source
+    return { ...source, id, channelKey, publicBeeKey }
+  }, [])
+
+  const playMediaHubItem = useCallback((item: any) => {
+    playVideo(getMediaHubSourceItem(item))
+  }, [getMediaHubSourceItem, playVideo])
+
+  const openMediaHubChannel = useCallback((item: any) => {
+    const source = getMediaHubSourceItem(item)
+    const channelKey = source?.channelKey || source?.driveKey || item?.channelKey || item?.driveKey
+    if (!channelKey) return
+    router.push({ pathname: '/channel/[key]', params: { key: channelKey, publicBeeKey: source?.publicBeeKey || item?.publicBeeKey || undefined } })
+  }, [getMediaHubSourceItem, router])
+
   // Legacy: Play video in overlay only (used by mini player expansion)
   const playVideoInOverlay = useCallback(async (video: VideoData) => {
     if (!rpc) return
@@ -1102,6 +1093,13 @@ export default function HomeScreen() {
     [myVideosWithMeta, gridColumns]
   )
 
+  const mediaHub = useMemo(() => buildMediaHubSections({
+    feedVideos: feedVideosWithThumbs,
+    myVideos: myVideosWithMeta,
+    continueWatching,
+    recommendedVideos,
+  }), [feedVideosWithThumbs, myVideosWithMeta, continueWatching, recommendedVideos])
+
   const channelRows = useMemo(
     () => chunkHomeFeedRows(channelVideosWithThumbs, gridColumns) as VideoData[][],
     [channelVideosWithThumbs, gridColumns]
@@ -1109,8 +1107,12 @@ export default function HomeScreen() {
 
   const homeFeedItems = useMemo<HomeFeedListItem[]>(() => {
     const items: HomeFeedListItem[] = []
-    if (continueWatching.length > 0) items.push({ type: 'continue-watching' })
-    if (recommendedVideos.length > 0) items.push({ type: 'recommended' })
+    if (mediaHub.featured.item) items.push({ type: 'hero' })
+    if (mediaHub.continueWatching.items.length > 0) items.push({ type: 'continue-watching' })
+    if (mediaHub.movies.items.length > 0) items.push({ type: 'movies' })
+    if (mediaHub.shows.items.length > 0) items.push({ type: 'shows' })
+    if (mediaHub.newEpisodes.items.length > 0) items.push({ type: 'new-episodes' })
+    if (mediaHub.musicAndCreators.items.length > 0) items.push({ type: 'music-creators' })
     items.push({ type: 'discover-header' })
     if ((feedLoading || loadingFeedVideos) && feedVideos.length === 0) {
       items.push({ type: 'discover-loading' })
@@ -1127,7 +1129,7 @@ export default function HomeScreen() {
       myVideoRows.forEach((row, rowIndex) => items.push({ type: 'my-videos-row', videos: row, rowIndex }))
     }
     return items
-  }, [continueWatching.length, recommendedVideos.length, discoverRows, feedLoading, loadingFeedVideos, feedVideos.length, myVideoRows])
+  }, [mediaHub, discoverRows, feedLoading, loadingFeedVideos, feedVideos.length, myVideoRows])
 
   const channelItems = useMemo<ChannelListItem[]>(() => {
     if (loadingChannel) return [{ type: 'loading' }]
@@ -1196,52 +1198,100 @@ export default function HomeScreen() {
   }, [isDesktop, renderVideoRow])
 
   const renderHomeFeedItem = useCallback(({ item }: ListRenderItemInfo<HomeFeedListItem>) => {
-    if (item.type === 'continue-watching') {
+    if (item.type === 'hero') {
+      const hero = mediaHub.featured.item
+      if (!hero) return null
       return (
-        <View style={{ paddingTop: isDesktop ? 24 : 16 }}>
-          <View style={{ paddingHorizontal: isDesktop ? 24 : 20, marginBottom: 10 }}>
-            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Continue watching</Text>
-          </View>
-          <Rail
-            data={continueWatching}
-            keyExtractor={(entry) => `${entry.channelKey}:${entry.videoId}`}
-            itemWidth={RAIL_CARD_WIDTH}
-            renderItem={({ item: entry }) => (
-              <RailCard
-                title={entry.title}
-                subtitle={entry.channelName}
-                thumbnailUrl={getRenderableThumbnailUrl(entry, thumbnailCache[`${entry.channelKey}:${entry.videoId}`])}
-                duration={entry.durationSec}
-                progress={entry.durationSec > 0 ? entry.positionSec / entry.durationSec : 0}
-                onPress={() => resumeEntry(entry)}
-              />
-            )}
+        <View style={{ paddingHorizontal: isDesktop ? 24 : 20, paddingTop: isDesktop ? 24 : 16 }}>
+          <HeroFeatureCard
+            item={hero}
+            peers={displayPeers}
+            onPress={() => playMediaHubItem(hero)}
+            onChannelPress={() => openMediaHubChannel(hero)}
           />
         </View>
       )
     }
 
-    if (item.type === 'recommended') {
+    if (item.type === 'continue-watching') {
       return (
-        <View style={{ paddingTop: 16 }}>
-          <View style={{ paddingHorizontal: isDesktop ? 24 : 20, marginBottom: 10 }}>
-            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>For you</Text>
-          </View>
-          <Rail
-            data={recommendedVideos}
-            keyExtractor={(video) => `${video.channelKey}:${video.id}`}
-            itemWidth={RAIL_CARD_WIDTH}
-            renderItem={({ item: video }) => (
-              <RailCard
-                title={video.title}
-                subtitle={video.channel?.name}
-                thumbnailUrl={getRenderableThumbnailUrl(video, thumbnailCache[`${video.channelKey}:${video.id}`])}
-                duration={video.duration}
-                onPress={() => playVideo(video)}
+        <MediaRail
+          title={mediaHub.continueWatching.title}
+          data={mediaHub.continueWatching.items}
+          keyExtractor={(entry: any) => getMediaHubPlaybackKey(entry)}
+          itemWidth={EPISODE_CARD_WIDTH}
+          renderItem={({ item: entry }: ListRenderItemInfo<any>) => {
+            const source = getMediaHubSourceItem(entry) as watchHistoryStore.WatchHistoryEntry
+            const thumbnailUrl = getRenderableThumbnailUrl(source as any, thumbnailCache[`${entry.channelKey}:${entry.videoId}`])
+            const progress = entry.durationSec > 0 && entry.positionSec > 0 ? entry.positionSec / entry.durationSec : entry.progress
+            return (
+              <EpisodeCard
+                item={thumbnailUrl ? { ...entry, thumbnailUrl } : entry}
+                progress={progress}
+                onPress={() => resumeEntry(source)}
               />
-            )}
-          />
-        </View>
+            )
+          }}
+          topSpacing={isDesktop ? 24 : 16}
+        />
+      )
+    }
+
+    if (item.type === 'movies') {
+      return (
+        <MediaRail
+          title={mediaHub.movies.title}
+          subtitle={mediaHub.movies.subtitle}
+          data={mediaHub.movies.items}
+          keyExtractor={(mediaItem: any) => getMediaHubPlaybackKey(mediaItem)}
+          itemWidth={MEDIA_POSTER_CARD_WIDTH}
+          renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
+            <MediaPosterCard item={mediaItem} onPress={() => playMediaHubItem(mediaItem)} />
+          )}
+        />
+      )
+    }
+
+    if (item.type === 'shows') {
+      return (
+        <MediaRail
+          title={mediaHub.shows.title}
+          subtitle={mediaHub.shows.subtitle}
+          data={mediaHub.shows.items}
+          keyExtractor={(mediaItem: any) => getMediaHubPlaybackKey(mediaItem)}
+          itemWidth={MEDIA_POSTER_CARD_WIDTH}
+          renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
+            <MediaPosterCard item={mediaItem} onPress={() => playMediaHubItem(mediaItem)} />
+          )}
+        />
+      )
+    }
+
+    if (item.type === 'new-episodes') {
+      return (
+        <MediaRail
+          title={mediaHub.newEpisodes.title}
+          data={mediaHub.newEpisodes.items}
+          keyExtractor={(mediaItem: any) => getMediaHubPlaybackKey(mediaItem)}
+          itemWidth={EPISODE_CARD_WIDTH}
+          renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
+            <EpisodeCard item={mediaItem} onPress={() => playMediaHubItem(mediaItem)} />
+          )}
+        />
+      )
+    }
+
+    if (item.type === 'music-creators') {
+      return (
+        <MediaRail
+          title={mediaHub.musicAndCreators.title}
+          data={mediaHub.musicAndCreators.items}
+          keyExtractor={(mediaItem: any) => getMediaHubPlaybackKey(mediaItem)}
+          itemWidth={EPISODE_CARD_WIDTH}
+          renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
+            <EpisodeCard item={mediaItem} onPress={() => playMediaHubItem(mediaItem)} />
+          )}
+        />
       )
     }
 
@@ -1249,7 +1299,7 @@ export default function HomeScreen() {
       return (
         <View style={{ paddingHorizontal: isDesktop ? 24 : 20, paddingTop: isDesktop ? 24 : 16 }}>
           <View className="flex-row items-center justify-between mb-3">
-            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Discover</Text>
+            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Recently from the swarm</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
               <Pressable
                 onPress={() => setSwarmDetailOpen((v) => !v)}
@@ -1480,18 +1530,19 @@ export default function HomeScreen() {
     backendError,
     backendLoading,
     categories,
-    continueWatching,
     displayChannels,
     displayFeedEntries,
     displayPeers,
     feedDiscoveryState,
     feedLoading,
+    getMediaHubSourceItem,
     identity?.driveKey,
     isDesktop,
     lastFeedRefresh,
     loadingFeedVideos,
-    playVideo,
-    recommendedVideos,
+    mediaHub,
+    openMediaHubChannel,
+    playMediaHubItem,
     refreshFeed,
     refreshMyVideos,
     refreshingMyVideos,

@@ -124,7 +124,7 @@ export function setIsShuttingDown(value) {
 }
 
 function isContextShuttingDown(ctx) {
-  return Boolean(ctx?.isShuttingDown || ctx?._isShutdown)
+  return Boolean(ctx && (ctx.isShuttingDown || ctx._isShutdown))
 }
 
 /**
@@ -614,6 +614,14 @@ export async function createBackendContext(config) {
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb, { peerScorer });
   ctx.publicFeed = publicFeed
+  ctx.registerCleanup?.('publicFeed stop', async () => {
+    try {
+      if (typeof publicFeed._persistDiscoveredNow === 'function') await publicFeed._persistDiscoveredNow()
+    } catch (err) {
+      console.log('[Backend] Shutdown: public feed cache persist failed (non-fatal):', err?.message)
+    }
+    await publicFeed.stop?.()
+  }, { timeoutMs: 2000 })
 
   // Blind-peering client: delegates retained content to always-on blind peers so
   // the user's own uploads stay available while this device is offline. Mirror
@@ -639,6 +647,9 @@ export async function createBackendContext(config) {
     enabled: network.blindPeering !== false,
     logger: { info: (...a) => console.log(...a), warn: (...a) => console.warn(...a) },
   })
+  ctx.registerCleanup?.('blind-peering close', async () => {
+    await ctx.blindPeering?.close?.()
+  }, { timeoutMs: 2000 })
   // Dialing/delegation can also use feed-discovered mirrors, but only the live
   // canonical ctx.trustedRelayKeys union is durability authorization.
 
@@ -697,6 +708,7 @@ export async function createBackendContext(config) {
   const playbackWindowCache = createPlaybackWindowCache({ store: ctx.store });
   playbackWindowCache.start();
   ctx.playbackWindowCache = playbackWindowCache;
+  ctx.registerCleanup?.('playback window cache stop', () => playbackWindowCache.stop?.(), { timeoutMs: 1000 })
 
   // Symmetric counterpart to the window cache: keep a deep read-ahead window
   // downloading *ahead* of the playhead so a fast peer builds a real buffer
@@ -705,6 +717,7 @@ export async function createBackendContext(config) {
   const playbackForwardFill = createPlaybackForwardFill({ store: ctx.store });
   playbackForwardFill.start();
   ctx.playbackForwardFill = playbackForwardFill;
+  ctx.registerCleanup?.('playback forward fill stop', () => playbackForwardFill.stop?.(), { timeoutMs: 1000 })
 
   const uploadManager = createUploadManager({ ctx });
 
@@ -827,6 +840,11 @@ export async function createBackendContext(config) {
     throw error
   }
   const seedPinRegistration = seedPinStartup.registration
+  ctx.registerCleanup?.('seed-pin unregister', async () => {
+    const registration = ctx.seedPinRegistration
+    await registration?.unregister?.()
+    if (ctx.seedPinRegistration === registration) ctx.seedPinRegistration = null
+  }, { timeoutMs: 2000 })
   const publicFeedStartPromise = seedPinStartup.discovery
 
 
@@ -853,6 +871,9 @@ export async function createBackendContext(config) {
     uploadManager,
     seedPin: seedPinRegistration,
     seedPinClients: seedPinRegistration?.clients || null,
+    async destroy() {
+      return shutdownBackend(ctx)
+    },
     async initializeIdentityFromMnemonic(mnemonic) {
       const pk = await derivePrimaryKey(mnemonic);
       const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic);
@@ -893,7 +914,7 @@ export async function createBackendContext(config) {
     try {
       // Load channels in the background.
       // This can be slow (sync + metadata replay) and should NOT block worker init.
-      if (isShuttingDown) return
+      if (isContextShuttingDown(ctx)) return
       try {
         await identityManager.loadChannelDrives()
       } catch (e) {
@@ -914,7 +935,7 @@ export async function createBackendContext(config) {
 
       // Start public feed discovery
       // Warm subscribed / pinned / seeding channels (can be slow)
-      if (isShuttingDown) return
+      if (isContextShuttingDown(ctx)) return
       try {
         const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
         const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean)
@@ -946,7 +967,7 @@ export async function createBackendContext(config) {
         console.log('[Orchestrator] Warm-up skipped:', e?.message)
       }
 
-      if (isShuttingDown) return
+      if (isContextShuttingDown(ctx)) return
       console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====')
       console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0)
       console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size)

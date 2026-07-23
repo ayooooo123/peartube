@@ -679,6 +679,7 @@ export function createUniversalCore(options = {}) {
   let backend = null
   let services = null
   let nativeHandles = {}
+  let backendShutdownPromise = null
   let eventSeq = 0
   const appendSubscribers = new Set()
   let lifecycleTail = Promise.resolve()
@@ -850,9 +851,23 @@ export function createUniversalCore(options = {}) {
     })
   }
 
+  async function shutdownBackendOnce() {
+    if (!backend || typeof backend.destroy !== 'function') return null
+    if (!backendShutdownPromise) {
+      backendShutdownPromise = Promise.resolve()
+        .then(() => backend.destroy())
+        .catch((error) => {
+          backendShutdownPromise = null
+          throw error
+        })
+    }
+    return await backendShutdownPromise
+  }
+
   async function shutdown() {
     return await runLifecycle(async () => {
       lifecycleState = 'shutting_down'
+      await shutdownBackendOnce()
       await transitionNative('shutdown', ['libudx', 'libkv', 'libhc'], ['shutdown', 'close', 'stop', 'destroy'], { platform: options.platform })
       playerCore.close()
       lifecycleState = 'shutdown'

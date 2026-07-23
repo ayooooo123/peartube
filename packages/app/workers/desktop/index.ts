@@ -493,6 +493,16 @@ if (missingDesktopServices.length > 0) {
   )
 }
 const getBlobPort = () => (ctx.blobServer as any)?.port || ctx.blobServerPort || 0
+ctx.registerCleanup?.('desktop cast proxy', () => {
+  if (castProxyServer) {
+    try { castProxyServer.close() } catch {}
+    castProxyServer = null
+    castProxyPort = 0
+    castProxyReady = null
+    castProxySessions.clear()
+  }
+}, { timeoutMs: 1000 })
+ctx.registerCleanup?.('desktop transcode sessions', () => cleanupTranscodeSessions(), { timeoutMs: 1000 })
 
 console.log('[Worker] Backend initialized, attaching desktop handler methods...')
 // registerSharedHandlers (called inside createBackend) registered lazy closures
@@ -932,8 +942,6 @@ const shutdown = async (reason: string) => {
 
   const cleanup = (async () => {
     await new Promise(resolve => setTimeout(resolve, 100))
-    if (castProxyServer) { try { castProxyServer.close() } catch {}; castProxyServer = null; castProxyPort = 0; castProxyReady = null; castProxySessions.clear() }
-    cleanupTranscodeSessions()
     try { await destroy() } catch (err) { console.error('[Worker] destroy() failed:', err) }
   })()
 

@@ -7,7 +7,7 @@
  * mobile runtime under the default `createMobileRuntimeBackend()` path.
  */
 
-import { parseMobileLaunchArgsForTest, startMobileBackend as startMobileBackendContract } from './mobile-start.mjs'
+import { startMobileBackend as startMobileBackendContract } from './mobile-start.mjs'
 import { PROTOCOL_VERSION } from '@peartube/host'
 import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
 import * as specModule from '@peartube/spec'
@@ -326,6 +326,23 @@ function attachMobileOnlyRpcHandlers(rpc, api) {
   }
 }
 
+export function parseMobileLaunchArgsForTest(args = []) {
+  const candidates = [0, 1]
+  for (const index of candidates) {
+    const arg = args[index]
+    if (typeof arg !== 'string' || !arg.trim().startsWith('{')) continue
+    try {
+      const parsed = JSON.parse(arg)
+      if (parsed?.__peartubeLaunchOptions === true) {
+        return { launchOptions: parsed, workerArgs: [...args.slice(0, index), ...args.slice(index + 1)].filter((value) => value !== 'mobile-entry') }
+      }
+    } catch {}
+  }
+
+  const workerArgs = args[0] === 'mobile-entry' ? args.slice(1) : args
+  return { launchOptions: null, workerArgs }
+}
+
 function parseMobileLaunchArgs(args = []) {
   return parseMobileLaunchArgsForTest(args)
 }
@@ -534,6 +551,7 @@ function removeStaleLocks(storageDir) {
     backend = await createBackendContext({
       storagePath: storageDir,
       corestoreWaitForLock: false,
+      platform: 'mobile',
       network: launchOptions?.network,
       swarmOptions: launchOptions?.swarmOptions,
       ipcLog,
@@ -566,6 +584,8 @@ function removeStaleLocks(storageDir) {
   } = backend
 
   backendCtx = ctx
+  ctx.registerCleanup?.('mobile backend owner lock', () => closeOwnerLock(), { timeoutMs: 1000 })
+  ctx.registerCleanup?.('mobile cast proxy close', () => closeCastProxyServer('host-terminate'), { timeoutMs: 1000 })
 
   ensureRpc()
   if (!rpc) {
@@ -665,10 +685,7 @@ function removeStaleLocks(storageDir) {
 
     shutdownInFlight = (async () => {
       setIsShuttingDown(true)
-      if (feedRefreshInterval) clearInterval(feedRefreshInterval)
       await shutdownBackend(ctx)
-      closeCastProxyServer('host-terminate')
-      closeOwnerLock()
     })().finally(() => {
       shutdownInFlight = null
     })
@@ -744,6 +761,11 @@ function removeStaleLocks(storageDir) {
       persistFeedCache()
     } catch {}
   }, 30000)
+  ctx.registerCleanup?.('mobile feed refresh interval', () => {
+    if (!feedRefreshInterval) return
+    clearInterval(feedRefreshInterval)
+    feedRefreshInterval = null
+  }, { timeoutMs: 100 })
 
   publicFeed.setOnFeedUpdate(() => {
     persistFeedCache()

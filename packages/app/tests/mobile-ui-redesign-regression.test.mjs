@@ -74,3 +74,31 @@ test('channel page presents a polished mobile-native hero and named catalog sect
   assert.match(source, /styles\.sectionHeading/, 'channel content should have a named section heading')
   assert.match(source, /style=\{styles\.sectionTitle\}>\{selectedTab\?\.sectionLabel \|\| 'Latest'\}/, 'selected catalog tab should label the active content section')
 })
+
+test('media cockpit components stay presentational', () => {
+  const componentPaths = [
+    'components/media/NetworkStatusPill.tsx',
+    'components/media/HeroFeatureCard.tsx',
+    'components/media/MediaRail.tsx',
+    'components/media/MediaPosterCard.tsx',
+    'components/media/EpisodeCard.tsx',
+    'components/media/index.ts',
+  ]
+  const sources = componentPaths.map((componentPath) => readApp(componentPath)).join('\n')
+
+  assert.doesNotMatch(
+    sources,
+    /preparePlayback|getContentCatalog|rpc\./,
+    'media cockpit components should not call playback preparation, catalog RPC, or raw rpc clients',
+  )
+  assert.doesNotMatch(
+    sources,
+    /router\.push|useRouter/,
+    'media cockpit components should receive parent callbacks instead of routing directly',
+  )
+  assert.match(
+    sources,
+    /ThumbnailImage/,
+    'media cockpit cards should reuse the existing thumbnail renderer',
+  )
+})

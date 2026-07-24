@@ -4,7 +4,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 const repoRoot = path.resolve(import.meta.dirname, '../../..')
-const apiSource = fs.readFileSync(path.join(repoRoot, 'packages/backend/src/api.js'), 'utf8')
+const apiSource = fs.readFileSync(path.join(repoRoot, 'packages/backend/src/api/search.js'), 'utf8')
 const semanticFinderSource = fs.readFileSync(path.join(repoRoot, 'packages/backend/src/search/semantic-finder.js'), 'utf8')
 
 test('global search keeps preview/direct-ref results without blocking on hydration', () => {

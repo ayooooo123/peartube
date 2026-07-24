@@ -8,10 +8,10 @@
  */
 
 import * as castModule from '@peartube/backend/cast'
-import * as dgramModule from 'bare-dgram'
-import * as udxModule from 'udx-native'
+import os from 'bare-os'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import { selectLocalIPv4ForTarget } from '@peartube/backend/cast/network-address'
 
 let CastContext = null
 let castLoadError = null
@@ -145,64 +145,13 @@ function extractCastPrefetchTarget(rawUrl) {
   }
 }
 
-function isUsableIPv4(address, family) {
-  if (!address) return false
-  if (address.includes(':')) return false
-  if (CAST_LOCALHOSTS.has(address)) return false
-  if (address.startsWith('127.')) return false
-  if (family && family !== 4 && family !== 'IPv4') return false
-  return true
-}
-
 async function getLocalIPv4ForTarget(targetHost) {
   if (!targetHost) return null
 
   try {
-    const dgram = dgramModule?.default || dgramModule
-    const socket = (() => {
-      try {
-        return dgram.createSocket('udp4')
-      } catch {}
-      try {
-        return dgram.createSocket({ type: 'udp4' })
-      } catch {}
-      return dgram.createSocket()
-    })()
-    await new Promise((resolve) => socket.bind(0, resolve))
-    socket.connect(1, targetHost)
-    const addr = socket.address?.()
-    const local = addr?.address || null
-    await socket.close?.()
-    if (isUsableIPv4(local, addr?.family)) {
-      return local
-    }
+    return selectLocalIPv4ForTarget(targetHost, os.networkInterfaces())
   } catch (err) {
-    console.warn('[Backend] bare-dgram local IP detection failed:', err?.message || err)
-  }
-
-  let targetPrefix = null
-  const parts = targetHost.split('.')
-  if (parts.length === 4) {
-    targetPrefix = parts.slice(0, 3).join('.')
-  }
-
-  try {
-    const UDX = udxModule?.default || udxModule
-    const udx = new UDX()
-    let fallback = null
-
-    for (const iface of udx.networkInterfaces()) {
-      if (iface.family !== 4 || iface.internal) continue
-      if (!isUsableIPv4(iface.host, iface.family)) continue
-      if (targetPrefix && iface.host.startsWith(`${targetPrefix}.`)) {
-        return iface.host
-      }
-      if (!fallback) fallback = iface.host
-    }
-
-    return fallback
-  } catch (err) {
-    console.warn('[Backend] udx-native not available for IP detection:', err?.message || err)
+    console.warn('[Backend] bare-os local IP detection failed:', err?.message || err)
     return null
   }
 }

@@ -56,6 +56,7 @@ function logWatchEventSafe(video: VideoData | null, durationSec: number, complet
 
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
 let NEXT_VIDEO_PLAYER_CONTROLLER_ID = 1
+const STARTUP_AUTOPLAY_GUARD_MS = 3000
 
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
@@ -293,6 +294,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const lastPlaybackStartAtRef = useRef(0)
   const queuedPlaybackStartRef = useRef<{ video: VideoData; url: string; source: string } | null>(null)
   const playbackStartDrainTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const startupAutoplayGuardRef = useRef<{ key: string; until: number } | null>(null)
+  const startupAutoplayReassertTimersRef = useRef<NodeJS.Timeout[]>([])
   const playbackStartInFlightRef = useRef(false)
   const playbackStartCooldownUntilRef = useRef(0)
   const seekConfirmRef = useRef<{ targetSeconds: number; startedAt: number } | null>(null)
@@ -408,6 +411,39 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     isPlayingRef.current = nextIsPlaying
     setIsPlaying(nextIsPlaying)
   }, [])
+  const clearStartupAutoplayGuard = useCallback(() => {
+    startupAutoplayGuardRef.current = null
+    for (const timer of startupAutoplayReassertTimersRef.current) {
+      clearTimeout(timer)
+    }
+    startupAutoplayReassertTimersRef.current = []
+  }, [])
+
+  const scheduleStartupAutoplayReassertions = useCallback((playbackKey: string) => {
+    for (const timer of startupAutoplayReassertTimersRef.current) {
+      clearTimeout(timer)
+    }
+    startupAutoplayReassertTimersRef.current = []
+
+    for (const delayMs of [50, 150, 350, 750]) {
+      const timer = setTimeout(() => {
+        const startupGuard = startupAutoplayGuardRef.current
+        if (
+          !startupGuard ||
+          startupGuard.key !== playbackKey ||
+          Date.now() > startupGuard.until ||
+          lastPlaybackStartKeyRef.current !== playbackKey
+        ) {
+          return
+        }
+        setDesiredPlaying(true)
+        try {
+          getPlayerPort()?.play?.()
+        } catch {}
+      }, delayMs)
+      startupAutoplayReassertTimersRef.current.push(timer)
+    }
+  }, [getPlayerPort, setDesiredPlaying])
 
   const restoreLastClosedVideo = useCallback((reason: string) => {
     if (!lastClosedVideoRef.current || !lastClosedUrlRef.current) return false
@@ -468,6 +504,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (__DEV__) console.log('[VideoPlayerContext] Closing session:', reason)
 
     closingVideoRef.current = true
+    clearStartupAutoplayGuard()
 
     queuedPlaybackStartRef.current = null
     playbackStartInFlightRef.current = false
@@ -540,7 +577,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // a transient APP_FOREGROUND (fired during the same close) from
     // incorrectly restoring before the close is committed.
     closingVideoRef.current = false
-  }, [dispatch, setDesiredPlaying])
+  }, [clearStartupAutoplayGuard, dispatch, setDesiredPlaying])
 
   const closeVideo = useCallback(() => {
     closeSession('user')
@@ -841,6 +878,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
     lastPlaybackStartKeyRef.current = playbackKey
     lastPlaybackStartAtRef.current = now
+    currentVideoRef.current = video
+    videoUrlRef.current = url
+    startupAutoplayGuardRef.current = {
+      key: playbackKey,
+      until: now + STARTUP_AUTOPLAY_GUARD_MS,
+    }
+    scheduleStartupAutoplayReassertions(playbackKey)
 
     try {
       getPlayerPort()?.stop?.()
@@ -855,8 +899,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     pipTransitionInFlightRef.current = false
     isInPipModeRef.current = false
     setPlaybackSession((prev) => prev + 1)
-    currentVideoRef.current = video
-    videoUrlRef.current = url
     dispatch({ type: 'LOAD_VIDEO', source: 'loadAndPlayVideo', video, url })
     setDesiredPlaying(true)
     setVideoStats(null)
@@ -872,7 +914,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       iosIgnorePausedUntilRef.current = Date.now() + 1500
     }
     _videoLoadEventEmitter.emit(video)
-  }, [dispatch, setDesiredPlaying])
+  }, [dispatch, scheduleStartupAutoplayReassertions, setDesiredPlaying])
 
   const drainQueuedPlaybackStart = useCallback(() => {
     if (playbackStartInFlightRef.current) return
@@ -926,8 +968,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         clearTimeout(playbackStartDrainTimerRef.current)
         playbackStartDrainTimerRef.current = null
       }
+      clearStartupAutoplayGuard()
     }
-  }, [])
+  }, [clearStartupAutoplayGuard])
 
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
@@ -964,13 +1007,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Pause video
   const pauseVideo = useCallback(() => {
     if (__DEV__) console.log('[VideoPlayerContext] Pausing video')
+    clearStartupAutoplayGuard()
     if (Platform.OS === 'web') {
       try {
         getPlayerPort()?.pause?.()
       } catch {}
     }
     setDesiredPlaying(false)
-  }, [setDesiredPlaying])
+  }, [clearStartupAutoplayGuard, setDesiredPlaying])
 
   const resumeVideo = useCallback(() => {
     if (__DEV__) console.log('[VideoPlayerContext] Resuming video')
@@ -1223,6 +1267,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const onPlaying = useCallback(() => {
     if (__DEV__) console.log('[VideoPlayerContext] Player playing')
+    clearStartupAutoplayGuard()
     if (Platform.OS === 'ios') {
       iosIgnorePausedUntilRef.current = 0
     }
@@ -1233,12 +1278,28 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // (PiP play button, notification controls, headset button)
     setIsPlaying(true)
     tryApplyPendingSeek()
-  }, [tryApplyPendingSeek])
+  }, [clearStartupAutoplayGuard, tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
     if (Platform.OS === 'ios' && Date.now() < iosIgnorePausedUntilRef.current) {
       if (__DEV__) console.log('[VideoPlayerContext] Ignoring transient iOS paused event during source swap')
       return
+    }
+    const startupGuard = startupAutoplayGuardRef.current
+    if (
+      Platform.OS === 'android' &&
+      startupGuard &&
+      Date.now() <= startupGuard.until &&
+      lastPlaybackStartKeyRef.current === startupGuard.key
+    ) {
+      setDesiredPlaying(true)
+      try {
+        getPlayerPort()?.play?.()
+      } catch {}
+      return
+    }
+    if (startupGuard && Date.now() > startupGuard.until) {
+      clearStartupAutoplayGuard()
     }
     if (pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
       reassertNativePlayAfterPipExit('player-paused-during-pip-exit')
@@ -1269,7 +1330,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       // A deliberate pause is a good resume point — persist it immediately.
       recordWatchProgressSafe(currentVideoRef.current, currentTimeRef.current, durationRef.current)
     }
-  }, [getPlayerPort, reassertNativePlayAfterPipExit])
+  }, [clearStartupAutoplayGuard, getPlayerPort, reassertNativePlayAfterPipExit, setDesiredPlaying])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     if (__DEV__) console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)

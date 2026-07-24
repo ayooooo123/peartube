@@ -18,6 +18,7 @@
 import { EventEmitter } from 'bare-events'
 import tls from 'bare-tls'
 import Buffer from 'bare-buffer'
+import os from 'bare-os'
 
 // Default Chromecast port
 export const CHROMECAST_PORT = 8009
@@ -158,7 +159,7 @@ function mapPlayerState(state, idleReason) {
   }
 }
 
-async function getLocalIPv4(targetHost) {
+function getLocalIPv4(targetHost) {
   let targetPrefix = null
   if (typeof targetHost === 'string') {
     const parts = targetHost.split('.')
@@ -168,18 +169,23 @@ async function getLocalIPv4(targetHost) {
   }
 
   try {
-    const mod = await import('udx-native')
-    const UDX = (mod && mod.default) ? mod.default : mod
-    const udx = new UDX()
+    const interfaces = os.networkInterfaces()
     let fallback = null
 
-    for (const iface of udx.networkInterfaces()) {
-      if (iface.family !== 4 || iface.internal) continue
-      if (targetPrefix && iface.host.startsWith(`${targetPrefix}.`)) {
-        return iface.host
+    for (const name in interfaces) {
+      const addresses = interfaces[name]
+      if (!Array.isArray(addresses)) continue
+
+      for (const iface of addresses) {
+        const address = iface?.address
+        if (!address || iface.internal) continue
+        if (iface.family !== 4 && iface.family !== 'IPv4') continue
+        if (targetPrefix && address.startsWith(`${targetPrefix}.`)) {
+          return address
+        }
+        if (name === 'en0') return address
+        if (!fallback) fallback = address
       }
-      if (iface.name === 'en0') return iface.host
-      if (!fallback) fallback = iface.host
     }
 
     return fallback

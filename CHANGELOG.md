@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Remove ad-hoc `udx-native` construction from mobile, desktop, Chromecast, and mDNS Cast address discovery. Targeted Cast routes now select the receiver's matching subnet from Holepunch `bare-os` interface data, while mDNS and Chromecast bind from the same runtime interface source; this avoids creating unrelated UDX transports or unreliable connected-UDP probes solely to choose a LAN address.
+- Preserve Android autoplay across the transient native pause emitted while replacing a video source. The player now guards the bounded startup handoff, reasserts native play until a real playing event arrives, and cancels retries on explicit pause, close, or successful playback.
+
 ## v0.2.37 - Wednesday, July 22, 2026
 
 - Stop a single unhandled promise rejection (or thrown error) in the Electrobun desktop backend worker from aborting the whole worker: on the Bare runtime the default handler calls `abort()` (SIGABRT), taking the app's backend down. The desktop worker now installs `Bare.on('unhandledRejection'|'uncaughtException')` guards that log the reason and suppress the fatal default — parity with the mobile backend, which already did this. Expected P2P blob-range cancellations stay silently consumed.

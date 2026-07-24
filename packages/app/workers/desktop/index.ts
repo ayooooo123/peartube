@@ -14,6 +14,8 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 import http1 from 'bare-http1'
 // @ts-ignore
+import { selectLocalIPv4ForTarget } from '@peartube/backend/cast/network-address'
+// @ts-ignore
 import * as transcoder from '@peartube/backend/transcode/transcoder'
 // @ts-ignore
 import * as castTranscoder from '@peartube/backend/transcode/cast-transcoder'
@@ -347,22 +349,13 @@ async function loadCastContext(): Promise<void> {
   return castLoadPromise
 }
 function normalizeCastVolume(v: any): number { const n = typeof v === 'number' && Number.isFinite(v) ? v : 1; return n > 1 ? Math.max(0, Math.min(100, n)) / 100 : Math.max(0, Math.min(1, n)) }
-function isUsableIPv4(addr: string | null | undefined, family?: any): boolean { if (!addr || addr.includes(':') || CAST_LOCALHOSTS.has(addr) || addr.startsWith('127.')) return false; if (family && family !== 4 && family !== 'IPv4') return false; return true }
 async function getLocalIPv4ForTarget(targetHost?: string): Promise<string | null> {
   if (!targetHost) return null
   try {
-    const mod = await import('bare-dgram'); const dgram = (mod as any)?.default || mod
-    const socket = (() => { try { return dgram.createSocket('udp4') } catch {} try { return dgram.createSocket({ type: 'udp4' }) } catch {} return dgram.createSocket() })()
-    await new Promise(resolve => socket.bind(0, resolve)); socket.connect(1, targetHost)
-    const addr = socket.address?.(); const local = addr?.address || null; await socket.close?.()
-    if (isUsableIPv4(local, addr?.family)) return local
-  } catch {}
-  const targetPrefix = targetHost.split('.').length === 4 ? targetHost.split('.').slice(0, 3).join('.') : null
-  try {
-    const mod = await import('udx-native'); const UDX = (mod as any)?.default || mod; const udx = new UDX(); let fallback: string | null = null
-    for (const iface of udx.networkInterfaces()) { if (iface.family !== 4 || iface.internal || !isUsableIPv4(iface.host, iface.family)) continue; if (targetPrefix && iface.host.startsWith(`${targetPrefix}.`)) return iface.host; if (!fallback) fallback = iface.host }
-    return fallback
-  } catch { return null }
+    return selectLocalIPv4ForTarget(targetHost, os.networkInterfaces())
+  } catch {
+    return null
+  }
 }
 function rewriteUrlHost(url: string, host: string): string { try { const p = new URL(url); p.hostname = host; return p.toString() } catch { return url } }
 function normalizeLocalUrlForWorker(url: string): string { try { const p = new URL(url); if (CAST_LOCALHOSTS.has(p.hostname)) { p.hostname = '127.0.0.1'; return p.toString() } } catch {} return url }

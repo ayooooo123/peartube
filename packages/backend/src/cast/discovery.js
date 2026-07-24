@@ -8,6 +8,7 @@
  */
 
 import { EventEmitter } from 'bare-events'
+import os from 'bare-os'
 
 // mDNS multicast address and port
 export const MDNS_ADDRESS = '224.0.0.251'
@@ -237,19 +238,26 @@ export class DeviceDiscoverer extends EventEmitter {
     if (this._localIp !== undefined) return this._localIp
     this._localIp = null
     try {
-      const mod = await import('udx-native')
-      const UDX = (mod && mod.default) ? mod.default : mod
-      const udx = new UDX()
+      const interfaces = os.networkInterfaces()
       let fallback = null
-      for (const iface of udx.networkInterfaces()) {
-        if (iface.family !== 4 || iface.internal) continue
-        // Prefer the well-known Wi-Fi interface names where we can tell.
-        if (iface.name === 'wlan0' || iface.name === 'en0') {
-          this._localIp = iface.host
-          return this._localIp
+
+      for (const name in interfaces) {
+        const addresses = interfaces[name]
+        if (!Array.isArray(addresses)) continue
+
+        for (const iface of addresses) {
+          const address = iface?.address
+          if (!address || iface.internal) continue
+          if (iface.family !== 4 && iface.family !== 'IPv4') continue
+          // Prefer the well-known Wi-Fi interface names where we can tell.
+          if (name === 'wlan0' || name === 'en0') {
+            this._localIp = address
+            return this._localIp
+          }
+          if (!fallback) fallback = address
         }
-        if (!fallback) fallback = iface.host
       }
+
       this._localIp = fallback
     } catch {
       this._localIp = null
@@ -413,7 +421,7 @@ export class DeviceDiscoverer extends EventEmitter {
   /**
    * Join the mDNS multicast group on the given interface.
    *
-   * udx-native's underlying socket exposes addMembership(address[, iface]).
+   * The datagram implementation's underlying socket exposes addMembership(address[, iface]).
    * Passing the interface address makes the kernel deliver multicast
    * responses arriving on that NIC — without it, a multi-homed device can
    * join on the wrong interface and never see Chromecast announcements.
@@ -532,7 +540,7 @@ export class DeviceDiscoverer extends EventEmitter {
     }
 
     if (this._socket) {
-      // Try to leave multicast group using inner udx-native socket
+      // Try to leave the multicast group through the underlying UDP socket.
       try {
         const innerSocket = this._socket._socket
         if (innerSocket && typeof innerSocket.dropMembership === 'function') {

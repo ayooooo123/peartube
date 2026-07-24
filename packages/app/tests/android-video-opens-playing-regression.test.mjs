@@ -25,10 +25,10 @@ test('native inline player verifies each play request against native state until
 
   const verifyStart = src.indexOf('const scheduleAutoplayVerify')
   assert.notEqual(verifyStart, -1, 'expected a scheduleAutoplayVerify helper — event-driven guards alone miss dropped play() calls that leave ExoPlayer paused without emitting further events')
-  const verify = src.slice(verifyStart, src.indexOf('}, [clearAutoplayVerify])', verifyStart))
+  const verify = src.slice(verifyStart, src.indexOf('\n\n  useEffect(() => {', verifyStart))
 
   assert.doesNotMatch(verify, /Platform\.OS === 'web'\) return/, 'desktop web playback must also retry a dropped initial play() call')
-  assert.match(verify, /attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS\) return/, 'verification must be bounded — no standing interval, just a capped retry chain')
+  assert.match(verify, /attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS/, 'verification must be bounded — no standing interval, just a capped retry chain')
   assert.match(verify, /scheduleAutoplayVerify\(attempt \+ 1\)/, 'a failed verification must re-arm itself, since the dropped-play state emits no event to react to')
   assert.match(verify, /hasReceivedPlayEventRef\.current \|\| !isPlayingRef\.current\) return/, 'verification stops once a real play event arrived or playback is no longer desired')
   assert.match(verify, /\.playing\)[\s\S]*\.play\(\)/, 'verification reasserts play() based on the actual native playing state, not JS-side bookkeeping')
@@ -62,6 +62,56 @@ test('desktop web autoplay verification uses the real HTML video element state',
   assert.match(src, /ref=\{nativeVideoViewRef\}/, 'VideoView should receive the ref used for real web video state')
 })
 
+test('desktop web waits for the HTML playing event before confirming playback', async () => {
+  const src = await source(inlineViewPath)
+  const handlerStart = src.indexOf("useEventListener(player, 'playingChange'")
+  assert.notEqual(handlerStart, -1, 'expected expo-video playingChange handler')
+  const handler = src.slice(handlerStart, src.indexOf("useEventListener(player, 'statusChange'", handlerStart))
+  const webGuard = handler.indexOf("Platform.OS === 'web'")
+  const confirmation = handler.indexOf('hasReceivedPlayEventRef.current = true')
+
+  assert.notEqual(webGuard, -1, 'expo-video web onplay is optimistic and must have a dedicated guard')
+  assert.ok(webGuard < confirmation, 'the web guard must run before playback is marked as confirmed')
+  assert.match(
+    handler.slice(webGuard, confirmation),
+    /scheduleAutoplayVerify\(\)[\s\S]*return/,
+    'optimistic web onplay must keep verification armed until HTMLMediaElement emits playing',
+  )
+})
+
+test('desktop progress confirmation clears transient playback recovery state', async () => {
+  const src = await source(inlineViewPath)
+  const timeUpdateStart = src.indexOf("useEventListener(player, 'timeUpdate'")
+  const timeUpdate = src.slice(timeUpdateStart, src.indexOf("useEventListener(player, 'playingChange'", timeUpdateStart))
+
+  assert.match(timeUpdate, /pipExitPlayingRef\.current = false/, 'confirmed progress should clear stale PiP-exit recovery')
+  assert.match(timeUpdate, /seekPlaybackRecoveryUntilRef\.current = 0/, 'confirmed progress should clear stale seek recovery')
+  assert.match(timeUpdate, /playbackStartedAtRef\.current = Date\.now\(\)/, 'confirmed progress should record actual startup time')
+  assert.match(timeUpdate, /onPlaying\?\.\(\)/, 'progress confirmation should notify the parent even if the DOM playing event was missed')
+})
+
+test('desktop web confirms startup only after media time advances', async () => {
+  const src = await source(inlineViewPath)
+  const listenerStart = src.indexOf('function attachWebVideoStartListeners()')
+  const listenerBlock = src.slice(listenerStart, src.indexOf('const requestNativePlayback', listenerStart))
+  const playingStart = listenerBlock.indexOf('const handlePlaying = () => {')
+  const playingEnd = listenerBlock.indexOf('const handlePause = () => {', playingStart)
+  const playingHandler = listenerBlock.slice(playingStart, playingEnd)
+  const timeUpdateStart = src.indexOf("useEventListener(player, 'timeUpdate'")
+  const timeUpdate = src.slice(timeUpdateStart, src.indexOf("useEventListener(player, 'playingChange'", timeUpdateStart))
+
+  assert.doesNotMatch(
+    playingHandler,
+    /hasReceivedPlayEventRef\.current = true/,
+    'a DOM playing event at time zero can still be followed by a source-replacement pause',
+  )
+  assert.match(
+    timeUpdate,
+    /currentTime > 0\.1[\s\S]*Platform\.OS === 'web'[\s\S]*hasReceivedPlayEventRef\.current = true[\s\S]*clearAutoplayVerify\(\)/,
+    'desktop startup is confirmed only once playback has measurably advanced',
+  )
+})
+
 test('desktop web reasserts playback from real media readiness events', async () => {
   const src = await source(inlineViewPath)
 
@@ -80,6 +130,51 @@ test('desktop web autoplay verifier starts with a short retry delay', async () =
 
   assert.match(src, /const AUTOPLAY_VERIFY_BASE_DELAY_MS = 100/, 'desktop startup should not wait 400ms before the first fallback retry')
   assert.match(src, /AUTOPLAY_VERIFY_BASE_DELAY_MS \* 2 \*\* attempt/, 'retry delay should remain bounded exponential backoff')
+})
+
+test('desktop web autoplay verification spans slow P2P startup', async () => {
+  const src = await source(inlineViewPath)
+
+  assert.match(
+    src,
+    /const AUTOPLAY_VERIFY_MAX_ATTEMPTS = 7/,
+    'bounded retries should reach 12.7 seconds so a video that becomes ready after the initial 1.5-second window still starts',
+  )
+})
+
+test('desktop web readiness events cannot restart the active retry budget', async () => {
+  const src = await source(inlineViewPath)
+  const verifyStart = src.indexOf('const scheduleAutoplayVerify')
+  const verify = src.slice(verifyStart, src.indexOf('\n\n  useEffect(() => {', verifyStart))
+  const activeTimerGuard = verify.indexOf('attempt === 0 && autoplayVerifyTimerRef.current')
+  const clearTimer = verify.indexOf('clearAutoplayVerify()')
+
+  assert.notEqual(activeTimerGuard, -1, 'an already-running retry chain should ignore duplicate event-driven scheduling')
+  assert.ok(activeTimerGuard < clearTimer, 'the active timer guard must run before clearing the current retry')
+})
+
+test('desktop autoplay callback changes do not reload the active media source', async () => {
+  const src = await source(inlineViewPath)
+  const verifyStart = src.indexOf('const scheduleAutoplayVerify')
+  const verifyEnd = src.indexOf('\n\n  useEffect(() => {', verifyStart)
+  const verify = src.slice(verifyStart, verifyEnd)
+
+  assert.match(src, /const onPausedRef = useRef\(onPaused\)/, 'the latest parent callback should be stored without changing verifier identity')
+  assert.match(src, /onPausedRef\.current = onPaused/, 'the callback ref must follow the latest parent render')
+  assert.match(verify, /onPausedRef\.current\?\.\(\)/, 'retry exhaustion should invoke the current parent callback')
+  assert.doesNotMatch(verify, /\[clearAutoplayVerify, onPaused\]/, 'an inline parent callback must not recreate the verifier and reload the source')
+})
+
+test('desktop web exposes manual play when bounded startup retries are exhausted', async () => {
+  const src = await source(inlineViewPath)
+  const verifyStart = src.indexOf('const scheduleAutoplayVerify')
+  const verify = src.slice(verifyStart, src.indexOf('\n\n  useEffect(() => {', verifyStart))
+
+  assert.match(
+    verify,
+    /attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS[\s\S]*Platform\.OS === 'web'[\s\S]*webVideo\?\.paused[\s\S]*isPlayingRef\.current = false[\s\S]*onPausedRef\.current\?\.\(\)/,
+    'a permanently paused web element must return the UI to a clickable Play state instead of remaining stuck on Pause',
+  )
 })
 
 test('Android reasserts desired play when source first becomes ready before native playing event', async () => {

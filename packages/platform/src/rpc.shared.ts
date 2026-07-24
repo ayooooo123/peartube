@@ -141,7 +141,6 @@ export type NetworkStatusData = {
   swarmListenResolved?: boolean
   peerPoolJoined?: boolean
   publicFeedDiscoveryJoined?: boolean
-  feedTopicHex?: string | null
   recommendedBoundary?: string | null
   network?: any
   startupTiming?: any

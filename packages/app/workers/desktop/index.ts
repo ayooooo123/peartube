@@ -630,100 +630,6 @@ B.subscribeChannel = async (r: any) => { await api.subscribeChannel(r.channelKey
 B.unsubscribeChannel = async (r: any) => { await api.unsubscribeChannel(r.channelKey); return { success: true } }
 B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map((i: any) => ({ channelKey: i.driveKey, channelName: i.name })) } }
 B.joinChannel = async (r: any) => { await api.subscribeChannel(r.channelKey); return { success: true } }
-B.getPublicFeed = async () => {
-  try {
-    const r = api.getPublicFeed()
-    return {
-      success: true,
-      entries: (r.entries || [])
-      .map((e: any) => ({
-        channelKey: e.channelKey || e.driveKey || '',
-        driveKey: e.driveKey || e.channelKey || '',
-        source: e.source || 'peer',
-        publicBeeKey: e.publicBeeKey || null,
-        channelName: e.channelName || e.name || null,
-        videoCount: e.videoCount || 0,
-        peerCount: e.peerCount || 0,
-        lastSeen: e.lastSeen || 0,
-        manifestUpdatedAt: e.manifestUpdatedAt || 0,
-        previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos : [],
-      }))
-      .filter((e: any) => typeof e.channelKey === 'string' && e.channelKey.length > 0),
-      stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
-    }
-  } catch (err: any) {
-    return { success: false, error: err?.message || String(err), stale: true, retryable: true, entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } }
-  }
-}
-B.getCanonicalFeed = B.getPublicFeed
-B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }
-B.submitToFeed = async () => {
-  const a = identityManager.getActiveIdentity();
-  if (!a?.driveKey) return { success: false, error: 'No active channel to publish' }
-  return api.submitToFeed(a.driveKey)
-}
-B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }
-B.isChannelPublished = async () => { const a = identityManager.getActiveIdentity(); return a?.driveKey ? api.isChannelPublished(a.driveKey) : { published: false } }
-B.hideChannel = async (r: any) => { api.hideChannel(r.channelKey); return { success: true } }
-B.addComment = async (r: any) => { if (!r.channelKey || !r.videoId || !r.text) return { success: false, error: 'Missing required fields' }; try { const res = await api.addComment(r.channelKey, r.videoId, r.text, r.parentId, r.publicBeeKey); return { success: res.success, commentId: res.commentId || null, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
-B.listComments = async (r: any) => { try { const res = await api.listComments(r.channelKey, r.videoId, { page: r.page || 0, limit: r.limit || 50, publicBeeKey: r.publicBeeKey }); const comments = (res.comments || []).map((c: any) => ({ videoId: r.videoId, commentId: c.commentId || c.id || '', text: c.text || '', authorKeyHex: c.authorKeyHex || c.author || '', timestamp: c.timestamp || 0, parentId: c.parentId || null, isAdmin: Boolean(c.isAdmin) })); return { success: Boolean(res?.success), comments, error: res?.error || null } } catch (e: any) { return { success: false, comments: [], error: e?.message } } }
-B.hideComment = async (r: any) => { try { const res = await api.hideComment(r.channelKey, r.videoId, r.commentId, r.publicBeeKey); return { success: res.success, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
-B.removeComment = async (r: any) => { try { const res = await api.removeComment(r.channelKey, r.videoId, r.commentId, r.publicBeeKey); return { success: res.success, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
-B.addReaction = async (r: any) => { try { const res = await api.addReaction(r.channelKey, r.videoId, r.reactionType, r.publicBeeKey); return { success: res.success, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
-B.removeReaction = async (r: any) => { try { const res = await api.removeReaction(r.channelKey, r.videoId, r.publicBeeKey); return { success: res.success, error: res.error } } catch (e: any) { return { success: false, error: e?.message } } }
-B.getReactions = async (r: any) => { try { const res = await api.getReactions(r.channelKey, r.videoId, r.publicBeeKey); const counts = Object.entries(res?.counts && typeof res.counts === 'object' ? res.counts : {}).map(([t, c]) => ({ reactionType: t, count: typeof c === 'number' ? c : 0 })); return { success: Boolean(res?.success), counts, userReaction: res?.userReaction || null, error: res?.error || null } } catch (e: any) { return { success: false, counts: [], userReaction: null, error: e?.message } } }
-
-function normalizeSeedingStatus(s: any) {
-  const maxStorageGB = Number.isFinite(Number(s?.maxStorageGB))
-    ? Number(s.maxStorageGB)
-    : Number.isFinite(Number(s?.config?.maxStorageGB))
-      ? Number(s.config.maxStorageGB)
-      : 10
-  const activeSeeds = Number.isFinite(Number(s?.activeSeeds))
-    ? Number(s.activeSeeds)
-    : Array.isArray(s?.seeds)
-      ? s.seeds.length
-      : 0
-  return {
-    status: {
-      enabled: Boolean(s?.config?.autoSeedWatched),
-      usedStorage: Math.max(0, Number(s?.storageUsedBytes || 0) || 0),
-      maxStorage: Math.max(0, maxStorageGB * 1024 * 1024 * 1024),
-      seedingCount: Math.max(0, activeSeeds)
-    }
-  }
-}
-
-B.getSeedingStatus = async () => normalizeSeedingStatus(await api.getSeedingStatus())
-B.setSeedingConfig = async (r: any) => { await api.setSeedingConfig(r.config); return { success: true } }
-B.getTranscodeSettings = async () => api.getTranscodeSettings()
-B.setTranscodeSettings = async (r: any) => api.setTranscodeSettings(r)
-B.pinChannel = async (r: any) => { await api.pinChannel(r.channelKey); return { success: true } }
-B.unpinChannel = async (r: any) => { await api.unpinChannel(r.channelKey); return { success: true } }
-B.getPinnedChannels = async () => { const r = api.getPinnedChannels(); return { channels: r.channels || [] } }
-B.getStorageStats = async () => api.getStorageStats()
-B.setStorageLimit = async (r: any) => api.setStorageLimit(r.maxGB)
-B.clearCache = async () => api.clearCache()
-B.assessUploadOffload = async (r: any) => api.assessUploadOffload(r.channelKey, r.videoId)
-B.offloadUpload = async (r: any) => api.offloadUpload(r.channelKey, r.videoId)
-B.getVideoThumbnail = async (r: any) => {
-  if (isShuttingDown) return { url: null, exists: false }
-  try {
-    // Use the shared api.getVideoThumbnail loader — the same path mobile uses
-    // (see mobile-handlers.js) — so desktop and mobile resolve thumbnails
-    // identically, including the blob-server Content-Type. Feed-preview blob
-    // refs are forwarded for gossip-discovered channels that have no locally
-    // resolvable video record.
-    const res = await api.getVideoThumbnail(r.channelKey, r.videoId, {
-      thumbnailBlobId: r.thumbnailBlobId || null,
-      thumbnailBlobsCoreKey: r.thumbnailBlobsCoreKey || null,
-      thumbnailMimeType: r.thumbnailMimeType || null,
-    })
-    return { url: res.url || null, exists: res.exists || false, dataUrl: null }
-  } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, retryable: true, url: null, exists: false } }
-}
-B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(Buffer.from(r.imageData, 'base64')); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
-B.setVideoThumbnailFromFile = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(fs.readFileSync(r.filePath)); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
 B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getIdentities().length > 0, blobServerPort: getBlobPort() } })
 B.getSwarmStatus = async () => {
   const s = api.getSwarmStatus()
@@ -745,7 +651,6 @@ B.getSwarmStatus = async () => {
     swarmListenResolved: Boolean(s.swarmListenResolved),
     peerPoolJoined: Boolean(s.peerPoolJoined),
     publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
-    feedTopicHex: s.feedTopicHex || null,
     recommendedBoundary: s.recommendedBoundary || s.doctor?.recommendedBoundary || null,
   }
 }

@@ -8,7 +8,9 @@ const APP_RPC_NAMESPACES = Object.freeze({
   system: [
     'get-status',
     'get-swarm-status',
-    'get-blob-server-port'
+    'get-blob-server-port',
+    'get-network-policy',
+    'set-network-policy'
   ],
   identity: [
     'create-identity',
@@ -26,8 +28,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'submit-publisher-root-operation'
   ],
   feed: [
-    'get-canonical-feed',
-    'get-public-feed',
     'refresh-feed',
     'submit-to-feed',
     'unpublish-from-feed',
@@ -118,9 +118,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'clear-cache',
     'assess-upload-offload',
     'offload-upload',
-    'add-relay-link',
-    'remove-relay-link',
-    'get-relay-links'
   ],
   search: [
     'search-videos',

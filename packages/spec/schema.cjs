@@ -1361,38 +1361,6 @@ ns.register({
 })
 
 ns.register({
-  name: 'get-public-feed-request',
-  fields: [
-    { name: 'limit', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-public-feed-response',
-  fields: [
-    { name: 'entries', type: '@peartube/feed-entry', array: true }
-  ]
-})
-
-ns.register({
-  name: 'get-canonical-feed-request',
-  fields: [
-    { name: 'limit', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-canonical-feed-response',
-  fields: [
-    { name: 'version', type: 'uint', required: false },
-    { name: 'savedAt', type: 'uint', required: false },
-    { name: 'identityDriveKey', type: 'string', required: false },
-    { name: 'entries', type: '@peartube/feed-entry', array: true },
-    { name: 'videos', type: '@peartube/feed-entry-preview-video', array: true }
-  ]
-})
-
-ns.register({
   name: 'refresh-feed-request',
   fields: []
 })
@@ -1491,7 +1459,6 @@ ns.register({
     { name: 'swarmListenResolved', type: 'bool', required: false },
     { name: 'peerPoolJoined', type: 'bool', required: false },
     { name: 'publicFeedDiscoveryJoined', type: 'bool', required: false },
-    { name: 'feedTopicHex', type: 'string', required: false },
     { name: 'networkJson', type: 'string', required: false },
     { name: 'startupTimingJson', type: 'string', required: false },
     { name: 'doctorJson', type: 'string', required: false },
@@ -1728,54 +1695,48 @@ ns.register({
 })
 
 ns.register({
-  name: 'relay-link',
-  fields: [
-    { name: 'mirrorKey', type: 'string', required: true },
-    { name: 'label', type: 'string', required: false },
-    { name: 'addedAt', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'add-relay-link-request',
-  fields: [
-    { name: 'mirrorKey', type: 'string', required: true },
-    { name: 'label', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'add-relay-link-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true },
-    { name: 'mirrorKey', type: 'string', required: false },
-    { name: 'label', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'remove-relay-link-request',
-  fields: [
-    { name: 'mirrorKey', type: 'string', required: true }
-  ]
-})
-
-ns.register({
-  name: 'remove-relay-link-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true }
-  ]
-})
-
-ns.register({
-  name: 'get-relay-links-request',
+  name: 'get-network-policy-request',
   fields: []
 })
 
 ns.register({
-  name: 'get-relay-links-response',
+  name: 'get-network-policy-response',
   fields: [
-    { name: 'links', type: '@peartube/relay-link', array: true }
+    { name: 'uploadPermission', type: 'string', required: false },
+    { name: 'meteredNetwork', type: 'string', required: false },
+    { name: 'backgroundMode', type: 'string', required: false },
+    { name: 'diskCeilingBytes', type: 'uint', required: false },
+    { name: 'uploadCeilingBytes', type: 'uint', required: false },
+    { name: 'retentionMode', type: 'string', required: false },
+    { name: 'followedPublishersJson', type: 'string', required: false },
+    { name: 'followedIndexesJson', type: 'string', required: false },
+    { name: 'trustedModerationFeedsJson', type: 'string', required: false },
+    { name: 'aiAnalysis', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-network-policy-request',
+  fields: [
+    { name: 'uploadPermission', type: 'string', required: false },
+    { name: 'meteredNetwork', type: 'string', required: false },
+    { name: 'backgroundMode', type: 'string', required: false },
+    { name: 'diskCeilingBytes', type: 'uint', required: false },
+    { name: 'uploadCeilingBytes', type: 'uint', required: false },
+    { name: 'retentionMode', type: 'string', required: false },
+    { name: 'followedPublishersJson', type: 'string', required: false },
+    { name: 'followedIndexesJson', type: 'string', required: false },
+    { name: 'trustedModerationFeedsJson', type: 'string', required: false },
+    { name: 'aiAnalysis', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-network-policy-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
   ]
 })
 
@@ -3388,18 +3349,6 @@ rpcNs.register({
 
 // Public Feed commands
 rpcNs.register({
-  name: 'get-public-feed',
-  request: { name: '@peartube/get-public-feed-request', stream: false },
-  response: { name: '@peartube/get-public-feed-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-canonical-feed',
-  request: { name: '@peartube/get-canonical-feed-request', stream: false },
-  response: { name: '@peartube/get-canonical-feed-response', stream: false }
-})
-
-rpcNs.register({
   name: 'refresh-feed',
   request: { name: '@peartube/refresh-feed-request', stream: false },
   response: { name: '@peartube/refresh-feed-response', stream: false }
@@ -3537,27 +3486,21 @@ rpcNs.register({
 })
 
 rpcNs.register({
+  name: 'get-network-policy',
+  request: { name: '@peartube/get-network-policy-request', stream: false },
+  response: { name: '@peartube/get-network-policy-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-network-policy',
+  request: { name: '@peartube/set-network-policy-request', stream: false },
+  response: { name: '@peartube/set-network-policy-response', stream: false }
+})
+
+rpcNs.register({
   name: 'clear-cache',
   request: { name: '@peartube/clear-cache-request', stream: false },
   response: { name: '@peartube/clear-cache-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'add-relay-link',
-  request: { name: '@peartube/add-relay-link-request', stream: false },
-  response: { name: '@peartube/add-relay-link-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'remove-relay-link',
-  request: { name: '@peartube/remove-relay-link-request', stream: false },
-  response: { name: '@peartube/remove-relay-link-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-relay-links',
-  request: { name: '@peartube/get-relay-links-request', stream: false },
-  response: { name: '@peartube/get-relay-links-response', stream: false }
 })
 
 rpcNs.register({

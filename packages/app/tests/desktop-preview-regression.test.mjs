@@ -11,7 +11,7 @@ test('desktop Home merges preview cards instead of replacing them during hydrati
   assert.match(desktopHomeSource, /mergePreviewFeedVideos\(\{\s*previousVideos:\s*prev,\s*previewVideos:\s*playablePreviews,/s)
   assert.match(desktopHomeSource, /mergeHydratedFeedVideos\(\{\s*previousVideos:\s*mergePreviewFeedVideos/s)
   assert.match(desktopHomeSource, /feedEntries,\s*identityDriveKey:/s)
-  assert.match(desktopHomeSource, /__peartubePendingWatchVideo/)
+  assert.match(desktopHomeSource, /consumeStagedWebChannelPlayback/)
   assert.doesNotMatch(desktopHomeSource, /setFeedVideos\(playablePreviews\)/)
   assert.doesNotMatch(desktopHomeSource, /const merged = backfilledVideos\.length > 0[\s\S]*: previewVideos/)
 })

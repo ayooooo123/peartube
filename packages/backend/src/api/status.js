@@ -2,7 +2,7 @@
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 import { getNetworkStats } from '../storage.js'
-import { NETWORK_TOPIC_STRING } from '../types.js'
+import { PROTOCOL_NAME } from '../types.js'
 import { describeScopedTopic } from '../network/topics.js'
 
 export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
@@ -26,7 +26,7 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
      * @returns {Object}
      */
     getSwarmStatus() {
-      const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
+      const topicHex = b4a.toString(crypto.data(b4a.from(PROTOCOL_NAME, 'utf-8')), 'hex')
       const scopedTopics = [
         describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: 1 }),
       ]
@@ -52,8 +52,7 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
         },
         discovery: {
           peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-          publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
-          discoveredPeers: feedStats.directPeerDial?.discoveredPeers || 0,
+            discoveredPeers: feedStats.directPeerDial?.discoveredPeers || 0,
           recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
         },
         socket: {
@@ -77,15 +76,12 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
       }
       if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
       else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
-      else if (doctor.socket.swarmConnections > 0 && doctor.feed.feedConnections === 0) doctor.recommendedBoundary = 'protomux-feed-open'
-      else if (doctor.feed.feedConnections > 0 && doctor.feed.feedEntries === 0) doctor.recommendedBoundary = 'feed-gossip'
       else doctor.recommendedBoundary = 'content-playback-or-ui'
       return {
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
         feedConnections: publicFeed?.feedConnections?.size || 0,
         feedEntries: visibleFeedEntries,
-        feedTopicHex: topicHex,
         scopedTopics,
         network: networkDebug,
         startupTiming,
@@ -94,7 +90,6 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
         peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-        publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',

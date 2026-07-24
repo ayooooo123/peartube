@@ -51,7 +51,6 @@ export type ProtocolNetworkStatus = {
   swarmListenResolved: boolean
   peerPoolJoined: boolean
   publicFeedDiscoveryJoined: boolean
-  feedTopicHex: string | null
   recommendedBoundary: string | null
 }
 

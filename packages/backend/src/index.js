@@ -12,8 +12,6 @@ export {
   pairDevice
 } from './storage.js';
 
-// Public Feed - P2P channel discovery
-export { PublicFeed, PublicFeed as PublicFeedManager } from './public-feed.js';
 export { createContentPublication, createImmutableContentPublication } from './content-publication.js';
 export {
   CONTENT_REPLICATION_CHECKPOINT_VERSION,
@@ -21,7 +19,6 @@ export {
 } from './content-replication.js';
 
 // Modular facades for smaller backend surfaces
-export * as feed from './feed.js';
 // Bare-only media, transcode, and cast surfaces stay available through package
 // subpath exports. Do not re-export them from the package root: root import must
 // remain safe under Node test runners that do not define Bare.
@@ -65,7 +62,7 @@ export { createUploadManager } from './upload.js';
 export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
 
 // Types and constants
-export { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+export { PROTOCOL_NAME } from './types.js';
 
 // Logger - structured logging with automatic secret redaction
 export { logger, setLogLevel, LogLevel } from './logger.js';

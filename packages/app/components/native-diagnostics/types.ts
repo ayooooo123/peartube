@@ -91,7 +91,6 @@ export interface SwarmStatus {
   swarmListenResolved?: boolean
   peerPoolJoined?: boolean
   publicFeedDiscoveryJoined?: boolean
-  feedTopicHex?: string | null
   /** JSON-encoded fallbacks — the HRPC wire schema carries these as strings. */
   networkJson?: string | null
   doctorJson?: string | null

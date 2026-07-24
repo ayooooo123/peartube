@@ -128,5 +128,4 @@
  * @property {number} [height] - Video height in pixels
  */
 
-export const NETWORK_TOPIC_STRING = 'peartube-network';
-export const PROTOCOL_NAME = 'peartube-feed';
+export const PROTOCOL_NAME = 'peartube';

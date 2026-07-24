@@ -159,7 +159,7 @@ export function getFeedVideoHydrationMode({ feedEntries, swarmStatus }) {
   if (!Array.isArray(feedEntries) || feedEntries.length === 0) return 'off'
 
   // Use backend-provided per-entry peerCount as a network readiness signal too.
-  // On mobile, getSwarmStatus can lag or time out while getPublicFeed already knows
+  // On mobile, getSwarmStatus can lag or time out while catalog discovery already knows
   // that peer-discovered channels have reachable peers. If we ignore entry peerCount,
   // hydration stays stuck in local-only mode and never joins/fetches remote videos.
   const entryPeerSignal = feedEntries.some((entry) => (entry?.peerCount ?? 0) > 0)

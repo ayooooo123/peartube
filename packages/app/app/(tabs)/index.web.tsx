@@ -2249,7 +2249,7 @@ export default function HomeScreen() {
     try {
       setFeedLoading(true)
       // Add timeout to prevent infinite spinner if RPC hangs
-      const feedPromise = rpc.getPublicFeed({})
+      const feedPromise = typeof rpc.getContentCatalog === 'function' ? rpc.getContentCatalog({}) : Promise.resolve({ entries: [] })
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
       const result = await Promise.race([feedPromise, timeoutPromise])
 

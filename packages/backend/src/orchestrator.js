@@ -17,12 +17,9 @@ import {
   retainSwarmDiscovery,
   shutdownBackend,
 } from './storage.js';
-import { PublicFeedManager } from './public-feed.js';
 import { createContentPublication } from './content-publication.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
-import { createBlindPeeringClient } from './blind-peering-client.js';
-import { loadRelayLinks, mergeTrustedRelayKeys } from './relay-links.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
@@ -34,7 +31,28 @@ import {
   registerSeedPinProtocol,
   installSeedPinIdentityMutationHooks,
   resolveSeedPinClientAuth,
-} from './seed-pin/index.js'
+} from './seed-pin/index.js';
+
+function createNoopFeed() {
+  return {
+    feedConnections: new Set(),
+    feedDiscovery: null,
+    getFeed: () => [],
+    start: async () => {},
+    stop: async () => {},
+    addStopHook: () => null,
+    setOnRelayMirrorKey: () => {},
+    setOnFeedUpdate: () => {},
+    setOnFeedConnectionOpen: () => {},
+    setOnFeedSync: () => {},
+    handleDiscoveredPeer: () => false,
+    handleConnection: () => {},
+    setAvailabilityHintProvider: () => {},
+    setFeedSnapshotProvider: () => {},
+    setSignedDescriptorProvider: () => {},
+  }
+}
+
 import {
   readIdentityKeyFile,
   readPrimaryKeyFile,
@@ -140,7 +158,7 @@ function isContextShuttingDown(ctx) {
  * @typedef {Object} BackendContext
  * @property {import('./types.js').StorageContext} ctx - Storage context
  * @property {ReturnType<typeof createApi>} api - API methods
- * @property {PublicFeedManager} publicFeed - Public feed manager
+ * @property {object} publicFeed - scoped discovery facade
  * @property {SeedingManager} seedingManager - Seeding manager
  * @property {VideoStatsTracker} videoStats - Video stats tracker
  * @property {ReturnType<typeof createIdentityManager>} identityManager - Identity manager
@@ -612,46 +630,11 @@ export async function createBackendContext(config) {
   await appendDebugLine('[orchestrator] managers creating')
 
   // Phase 2: Create managers (synchronous, fast)
-  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb, { peerScorer });
+  const publicFeed = createNoopFeed()
   ctx.publicFeed = publicFeed
-  ctx.registerCleanup?.('publicFeed stop', async () => {
-    try {
-      if (typeof publicFeed._persistDiscoveredNow === 'function') await publicFeed._persistDiscoveredNow()
-    } catch (err) {
-      console.log('[Backend] Shutdown: public feed cache persist failed (non-fatal):', err?.message)
-    }
-    await publicFeed.stop?.()
-  }, { timeoutMs: 2000 })
-
-  // Blind-peering client: delegates retained content to always-on blind peers so
-  // the user's own uploads stay available while this device is offline. Mirror
-  // keys are seeded from config and grown via feed discovery (below). Best-effort
-  // — a noop client is returned if the module/DHT is unavailable.
-  // User-linked relays (added in-app by pasting/scanning a relay's mirror key)
-  // are persisted and re-applied on boot: delegate uploads to them and treat
-  // them as durable offload anchors (ctx.trustedRelayKeys, read by api.js
-  // getKnownDurableRelayKeys).
-  ctx.refreshTrustedRelayKeys = async () => {
-    const persistedLinks = await loadRelayLinks(ctx.metaDb)
-    ctx.trustedRelayKeys = mergeTrustedRelayKeys(network.trustedRelayKeys, persistedLinks)
-    return ctx.trustedRelayKeys
-  }
-  await ctx.refreshTrustedRelayKeys()
-  const configuredMirrorKeys = [
-    ...(Array.isArray(network.blindPeerMirrors) ? network.blindPeerMirrors : []),
-    ...ctx.trustedRelayKeys,
-  ]
-  ctx.blindPeering = await createBlindPeeringClient({
-    ctx,
-    mirrorKeys: configuredMirrorKeys,
-    enabled: network.blindPeering !== false,
-    logger: { info: (...a) => console.log(...a), warn: (...a) => console.warn(...a) },
-  })
-  ctx.registerCleanup?.('blind-peering close', async () => {
-    await ctx.blindPeering?.close?.()
-  }, { timeoutMs: 2000 })
-  // Dialing/delegation can also use feed-discovered mirrors, but only the live
-  // canonical ctx.trustedRelayKeys union is durability authorization.
+  ctx.trustedRelayKeys = Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys.slice() : []
+  ctx.refreshTrustedRelayKeys = async () => ctx.trustedRelayKeys
+  ctx.blindPeering = { enabled: false, addMirrorKeys: () => 0, close: async () => {} }
 
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();

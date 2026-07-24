@@ -260,8 +260,6 @@ test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
     'swarmOfflineReason',
     'swarmListenResolved',
     'peerPoolJoined',
-    'publicFeedDiscoveryJoined',
-    'feedTopicHex',
   ]) {
     assert.match(handlerBlock, new RegExp(field), `getSwarmStatus should expose ${field}`)
   }
@@ -271,7 +269,7 @@ test('desktop worker forwards feed update events and full swarm diagnostics', ()
   const source = readAppFile('workers/desktop/index.ts')
 
   assert.match(source, /onFeedUpdate:\s*\(\) => \{[\s\S]*?eventFeedUpdate\?\.\(\{ channelKey: 'feed', action: 'update' \}\)/)
-  assert.match(source, /B\.getCanonicalFeed = B\.getPublicFeed/)
+  assert.doesNotMatch(source, /B\.getCanonicalFeed = B\.getPublicFeed/)
 
   const swarmStatusBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\}/)?.[1] ?? ''
   assert.ok(swarmStatusBlock, 'desktop getSwarmStatus handler should exist')
@@ -285,8 +283,6 @@ test('desktop worker forwards feed update events and full swarm diagnostics', ()
     'swarmOfflineReason',
     'swarmListenResolved',
     'peerPoolJoined',
-    'publicFeedDiscoveryJoined',
-    'feedTopicHex',
     'feedConnections',
     'feedEntries',
   ]) {

@@ -324,7 +324,7 @@ export default function VerticalDiscoveryScreen() {
     setFeedLoading(true)
     try {
       const timeoutToken = Symbol('vertical-feed-timeout')
-      const result = await withFeedTimeout(rpc.getCanonicalFeed({}), 4000, timeoutToken as any)
+      const result = await withFeedTimeout(typeof rpc.getContentCatalog === 'function' ? rpc.getContentCatalog({}) : Promise.resolve({ entries: [] }), 4000, timeoutToken as any)
       if (result === timeoutToken) {
         setFeedTimedOut(true)
         setFeedError('Feed refresh timed out; showing cached snapshot.')

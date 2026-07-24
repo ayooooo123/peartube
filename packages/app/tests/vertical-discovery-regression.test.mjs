@@ -179,7 +179,7 @@ test('Home Discover does not show a peer-fetching badge from feed metadata alone
 test('Home Discover falls back to public feed RPC and labels feed entries separately from live peers', () => {
   const source = readAppFile('app/(tabs)/index.tsx')
 
-  assert.match(source, /typeof rpc\.getCanonicalFeed === 'function'[\s\S]*rpc\.getPublicFeed\(\{\}\)/, 'Home should fall back when mobile backend only exposes getPublicFeed')
+  assert.doesNotMatch(source, /getPublicFeed\(\{\}\)|getCanonicalFeed\(\{\}\)/, 'Home should not use legacy global feed RPCs')
   assert.match(source, /const displayFeedEntries = Math\.max\([\s\S]*swarmStatus\?\.feedEntries \?\? 0,[\s\S]*feedEntries\.length/, 'Home should display backend feed-entry count separately')
   assert.match(source, />Feed: \{displayFeedEntries\}</, 'Home should label feed entries as Feed, not Peers')
   assert.match(source, />Peers: \{displayPeers\}</, 'Home should keep live peer/connection count under Peers')

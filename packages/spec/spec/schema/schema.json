@@ -4418,86 +4418,6 @@
       ]
     },
     {
-      "name": "get-public-feed-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "limit",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "get-public-feed-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "entries",
-          "array": true,
-          "type": "@peartube/feed-entry",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "get-canonical-feed-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "limit",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "get-canonical-feed-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "version",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "savedAt",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "identityDriveKey",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "entries",
-          "array": true,
-          "type": "@peartube/feed-entry",
-          "version": 1
-        },
-        {
-          "name": "videos",
-          "array": true,
-          "type": "@peartube/feed-entry-preview-video",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "refresh-feed-request",
       "namespace": "peartube",
       "compact": false,
@@ -4738,12 +4658,6 @@
           "name": "publicFeedDiscoveryJoined",
           "required": false,
           "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "feedTopicHex",
-          "required": false,
-          "type": "string",
           "version": 1
         },
         {
@@ -5337,122 +5251,170 @@
       ]
     },
     {
-      "name": "relay-link",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "mirrorKey",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "label",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "addedAt",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "add-relay-link-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "mirrorKey",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "label",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "add-relay-link-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "mirrorKey",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "label",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "remove-relay-link-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "mirrorKey",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "remove-relay-link-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "get-relay-links-request",
+      "name": "get-network-policy-request",
       "namespace": "peartube",
       "compact": false,
       "flagsPosition": -1,
       "fields": []
     },
     {
-      "name": "get-relay-links-response",
+      "name": "get-network-policy-response",
       "namespace": "peartube",
       "compact": false,
       "flagsPosition": 0,
       "fields": [
         {
-          "name": "links",
-          "array": true,
-          "type": "@peartube/relay-link",
+          "name": "uploadPermission",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "meteredNetwork",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "backgroundMode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "diskCeilingBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "uploadCeilingBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "retentionMode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "followedPublishersJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "followedIndexesJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "trustedModerationFeedsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "aiAnalysis",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-network-policy-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "uploadPermission",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "meteredNetwork",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "backgroundMode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "diskCeilingBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "uploadCeilingBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "retentionMode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "followedPublishersJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "followedIndexesJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "trustedModerationFeedsJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "aiAnalysis",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-network-policy-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]

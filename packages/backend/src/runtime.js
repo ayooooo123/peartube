@@ -100,8 +100,6 @@ export function buildSharedSystemHandlers(backend, options = {}) {
         swarmOfflineReason: swarmStatus.swarmOfflineReason ?? null,
         swarmListenResolved: Boolean(swarmStatus.swarmListenResolved),
         peerPoolJoined: Boolean(swarmStatus.peerPoolJoined),
-        publicFeedDiscoveryJoined: Boolean(swarmStatus.publicFeedDiscoveryJoined),
-        feedTopicHex: swarmStatus.feedTopicHex ?? null,
         networkJson: safeJson(swarmStatus.network),
         startupTimingJson: safeJson(swarmStatus.startupTiming),
         doctorJson: safeJson(swarmStatus.doctor),

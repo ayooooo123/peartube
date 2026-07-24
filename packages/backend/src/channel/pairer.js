@@ -70,7 +70,8 @@ export class ChannelPairer extends ReadyResource {
           return
         }
         this._replicatedConns.add(conn)
-        this.store.replicate(conn)
+        const pairingReplicationStream = conn
+        this.store.replicate(pairingReplicationStream)
       })
     }
 

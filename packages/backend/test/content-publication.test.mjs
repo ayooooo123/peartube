@@ -12,7 +12,6 @@ import { createContentPublication, createImmutableContentPublication } from '../
 import { createContentPublication as createContentPublicationFromRoot, createImmutableContentPublication as createImmutableContentPublicationFromRoot } from '../src/index.js'
 import { createContentPublication as createContentPublicationFromSubpath } from '@peartube/backend/content-publication'
 import { createIdentityManager } from '../src/identity.js'
-import { PublicFeed } from '../src/public-feed.js'
 import {
   installOwnedContentPublicationIdentityHooks,
   reconcileOwnedContentPublications,
@@ -624,83 +623,6 @@ test('a crash after PublicBee revision commit repairs feed state on a fresh publ
   await restarted.reconcileCanonicalClaims({ channelKey: CHANNEL_KEY, publicBeeKey: PUBLIC_BEE_KEY })
   t.is(harness.feedRows.size, 1)
   t.is(harness.feedRows.values().next().value.revision, committedRevision)
-})
-
-test('PublicFeed stable channel snapshot upsert uses channel/publicBee identity without duplicate rows', async (t) => {
-  const metaDb = createMemoryDb()
-  const { swarm } = createTestSwarm()
-  const feed = new PublicFeed(swarm, metaDb)
-  const base = {
-    channelKey: CHANNEL_KEY,
-    publicBeeKey: PUBLIC_BEE_KEY,
-    revision: `sha256:${'f'.repeat(64)}`,
-    channelName: 'Stable Channel',
-    manifestUpdatedAt: 999,
-    videoIds: ['one'],
-    previewVideos: [{ id: 'one', title: 'One', uploadedAt: 1 }],
-  }
-
-  t.is((await feed.upsertChannelSnapshot(base)).changed, true)
-  t.is((await feed.upsertChannelSnapshot(base)).changed, false)
-  t.is(await feed.getChannelSnapshotRevision(CHANNEL_KEY, PUBLIC_BEE_KEY), base.revision)
-  t.is(feed.getFeed().length, 1)
-
-  const next = {
-    ...base,
-    revision: `sha256:${'a'.repeat(64)}`,
-    manifestUpdatedAt: 1,
-    videoIds: ['two'],
-    previewVideos: [{ id: 'two', title: 'Two', uploadedAt: 2 }],
-  }
-  t.is((await feed.upsertChannelSnapshot(next)).changed, true)
-  t.is(feed.getFeed().length, 1, 'video ID is snapshot content, not feed row identity')
-  t.alike(feed.getFeed()[0].previewVideos.map((video) => video.id), ['two'])
-  t.is(feed.getFeed()[0].manifestUpdatedAt, 1, 'canonical revision replaces a lower manifest timestamp')
-  feed.addEntry(CHANNEL_KEY, 'local', PUBLIC_BEE_KEY, {
-    manifestUpdatedAt: 5000,
-    videoCount: 1,
-    previewVideos: [{ id: 'legacy-stale', title: 'Legacy stale', uploadedAt: 3 }],
-  })
-  t.alike(
-    feed.getFeed()[0].previewVideos.map((video) => video.id),
-    ['two'],
-    'unrevisioned enrichment cannot overwrite a canonical winner snapshot',
-  )
-  const cleared = {
-    ...next,
-    revision: `sha256:${'b'.repeat(64)}`,
-    manifestUpdatedAt: 0,
-    videoIds: [],
-    videoCount: 0,
-    previewVideos: [],
-  }
-  t.is((await feed.upsertChannelSnapshot(cleared)).changed, true)
-  const serialized = feed._serializeEntry(feed.getFeed()[0])
-  t.ok(Object.hasOwn(serialized, 'previewVideos'))
-  t.alike(serialized.previewVideos, [], 'revision-bound HAVE_FEED snapshots clear stale previews')
-  t.is(serialized.videoCount, 0, 'revision-bound HAVE_FEED snapshots clear stale counts')
-  feed.stop()
-  const restarted = new PublicFeed(createTestSwarm().swarm, metaDb)
-  await restarted.start()
-  t.is(restarted.getFeed().length, 1)
-  t.alike(restarted.getFeed()[0].previewVideos, [])
-  t.is(await restarted.getChannelSnapshotRevision(CHANNEL_KEY, PUBLIC_BEE_KEY), cleared.revision)
-  restarted.stop()
-  const legacyFeed = new PublicFeed(createTestSwarm().swarm, createMemoryDb())
-  legacyFeed.addEntry('33'.repeat(32), 'local', '44'.repeat(32), {
-    manifestUpdatedAt: 1,
-    previewVideos: [{ id: 'legacy-old', title: 'Old', uploadedAt: 1 }],
-  })
-  legacyFeed.addEntry('33'.repeat(32), 'local', '44'.repeat(32), {
-    manifestUpdatedAt: 2,
-    previewVideos: [{ id: 'legacy-new', title: 'New', uploadedAt: 2 }],
-  })
-  t.alike(
-    legacyFeed.getFeed()[0].previewVideos.map((video) => video.id),
-    ['legacy-new'],
-    'legacy feed entries keep timestamp-based enrichment compatibility',
-  )
-  legacyFeed.stop()
 })
 
 test('real deferred MultiWriterChannel/PublicBee stays empty until staged durable projection activates', async (t) => {

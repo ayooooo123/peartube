@@ -155,7 +155,6 @@ export default function DiagnosticsPanel({
           <Metric label="Bootstrapped" value={boolLabel(dht?.bootstrapped)} />
           <Metric label="Firewalled" value={boolLabel(dht?.firewalled)} />
         </View>
-        <Text style={styles.detailText}>Feed topic {swarmStatus?.feedTopicHex || 'unavailable'}</Text>
         <Text style={styles.detailText}>
           Feed entries: {swarmStatus?.feedEntries ?? 0} • Channels loaded: {swarmStatus?.channelsLoaded ?? 0}
         </Text>

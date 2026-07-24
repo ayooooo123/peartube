@@ -711,37 +711,6 @@ function removeStaleLocks(storageDir) {
     IPC.on('end', () => castCleanup.enterHeadlessMode?.('ipc-end'))
   }
 
-  async function restoreFeedCache() {
-    try {
-      const cache = await ctx.metaDb.get('public-feed-cache').catch(() => null)
-      const entries = cache?.value || []
-      if (!Array.isArray(entries) || entries.length === 0) return
-      for (const entry of entries) {
-        try {
-          if (typeof entry === 'object' && entry.driveKey) {
-            publicFeed.addEntry(entry.driveKey, 'peer', entry.publicBeeKey || null)
-          } else if (typeof entry === 'string') {
-            publicFeed.addEntry(entry, 'peer')
-          }
-        } catch {}
-      }
-    } catch {}
-  }
-
-  async function persistFeedCache() {
-    try {
-      await ctx.metaDb.put(
-        'public-feed-cache',
-        publicFeed.getFeed().map((entry) => ({
-          driveKey: entry.driveKey,
-          publicBeeKey: entry.publicBeeKey || null
-        }))
-      )
-    } catch {}
-  }
-
-  await restoreFeedCache()
-
   const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
   onReady({ blobServerPort: blobPort, protocolVersion: PROTOCOL_VERSION })
 

@@ -145,12 +145,12 @@ export function createImmutableContentPublication(input = {}) {
 
 /**
  * Compose the durable private channel, canonical PublicBee projection, and
- * stable public-feed snapshot into one replay-safe publication boundary.
+ * stable publication snapshot into one replay-safe publication boundary.
  */
 export function createContentPublication({ channel, publicFeed } = {}) {
   if (!channel || typeof channel.getVideo !== 'function') throw new Error('A private channel is required')
   if (!publicFeed || typeof publicFeed.upsertChannelSnapshot !== 'function') {
-    throw new Error('A stable PublicFeed snapshot writer is required')
+    throw new Error('A stable publication snapshot writer is required')
   }
 
   let operationTail = Promise.resolve()

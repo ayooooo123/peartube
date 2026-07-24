@@ -219,7 +219,7 @@ export interface ChannelMetadata {
 }
 
 /**
- * Result from getPublicFeed RPC call
+ * Result from media graph discovery calls
  */
 export interface PublicFeedResult {
   entries: PublicFeedEntry[];

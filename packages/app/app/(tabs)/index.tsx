@@ -318,10 +318,11 @@ export default function HomeScreen() {
     const startedAt = nowMs()
     try {
       setFeedLoading(true)
-      // Add timeout to prevent infinite spinner if RPC hangs
-      const feedPromise = (typeof rpc.getCanonicalFeed === 'function'
-        ? rpc.getCanonicalFeed({})
-        : rpc.getPublicFeed({}))
+      // Add timeout to prevent infinite spinner if RPC hangs. Discovery now uses
+      // bounded catalog/media graph surfaces instead of the legacy global feed RPC.
+      const feedPromise = (typeof rpc.getContentCatalog === 'function'
+        ? rpc.getContentCatalog({})
+        : Promise.resolve({ entries: [] }))
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
       const result = await Promise.race([feedPromise, timeoutPromise])
 
@@ -330,7 +331,7 @@ export default function HomeScreen() {
           const key = entry?.channelKey || entry?.driveKey
           return key && all.findIndex((candidate) => (candidate?.channelKey || candidate?.driveKey) === key) === index
         }) as FeedEntry[]
-        console.log('[Home] getCanonicalFeed entries:', mergedEntries.map((e: any) => ({
+        console.log('[Home] catalog entries:', mergedEntries.map((e: any) => ({
           channelKey: e.channelKey || e.driveKey,
           source: e.source,
           peerCount: e.peerCount,
@@ -867,7 +868,7 @@ export default function HomeScreen() {
 
       // Prefer stable identifier for RPC calls:
       // - Legacy channels expect a path
-      // - Multi-writer/public-feed channels can resolve from id as well
+      // - Multi-writer catalog channels can resolve from id as well
       const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
         ? video.path
         : video.id
@@ -942,7 +943,7 @@ export default function HomeScreen() {
 
       // Prefer stable identifier for RPC calls:
       // - Legacy channels expect a path
-      // - Multi-writer/public-feed channels can resolve from id as well
+      // - Multi-writer catalog channels can resolve from id as well
       const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
         ? video.path
         : video.id

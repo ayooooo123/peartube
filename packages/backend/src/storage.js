@@ -23,7 +23,7 @@ import {
   resolveBareOrNodeFsModuleSync,
   resolveBareOrNodePathModuleSync,
 } from './runtime-modules.js'
-import { NETWORK_TOPIC_STRING } from './types.js'
+import { PROTOCOL_NAME } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
@@ -1749,14 +1749,14 @@ export async function initializeStorage(config) {
         }
       }
 
-      // Replicate all Hypercore data in the Corestore:
-      // - HyperDB channel cores (metadata, videos, comments, reactions)
-      // - Hyperblobs cores (video bytes, thumbnails)
+      // Legacy shared-swarm replication fallback. New permissionless paths use
+      // purpose-bound sessions and scoped topics before requesting data.
       try {
         if (conn.destroyed) return
-        store.replicate(conn);
+        const scopedReplicationStream = conn
+        store.replicate(scopedReplicationStream);
       } catch (err) {
-        console.log('[Storage] store.replicate failed (non-fatal):', err?.message);
+        console.log('[Storage] scoped replication fallback failed (non-fatal):', err?.message);
       }
 
     } catch (err) {
@@ -1775,7 +1775,7 @@ export async function initializeStorage(config) {
   // Join the PearTube network topic immediately. Do not wait for DHT bootstrap
   // or listen() resolution; HyperDHT/Hyperswarm can use the announcement to wake
   // routing state while startup continues.
-  const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
+  const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(PROTOCOL_NAME, 'utf-8'));
   globalPeerPoolTopicHex = b4a.toString(PEARTUBE_NETWORK_TOPIC, 'hex')
   let peerPoolDiscoveryStarted = false
 
@@ -1788,7 +1788,7 @@ export async function initializeStorage(config) {
       globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex, reason })
       globalPeerPoolDiscovery = poolDiscovery;
       swarm.peerPoolDiscovery = poolDiscovery
-      console.log('[Storage] Joined peartube-network topic for peer pool building immediately:', reason)
+      console.log('[Storage] Joined scoped peer pool topic immediately:', reason)
       swarm._peartubePeerPoolWarmup = schedulePeerPoolWarmupRefreshes({
         platform,
         swarm,

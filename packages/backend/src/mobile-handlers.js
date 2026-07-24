@@ -228,59 +228,6 @@ export function attachMobileHandlers(B, deps) {
   B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map(i => ({ channelKey: i.driveKey, channelName: i.name })) } }
   B.joinChannel = async (r) => { await api.subscribeChannel(r.channelKey); return { success: true } }
 
-  B.getPublicFeed = async () => {
-    const r = await api.getPublicFeed()
-    const entries = Array.isArray(r?.entries) ? r.entries : []
-    const stats = r?.stats && typeof r.stats === 'object' ? r.stats : {}
-    const visibleEntries = entries.length
-    const feedConnections = Number(stats.feedConnections ?? stats.peerCount ?? 0) || 0
-    return {
-      entries: entries.map(e => ({
-        channelKey: e.driveKey || e.channelKey,
-        driveKey: e.driveKey || e.channelKey,
-        source: e.source || 'peer',
-        publicBeeKey: e.publicBeeKey || null,
-        channelName: e.channelName || e.name || null,
-        videoCount: e.videoCount || 0,
-        peerCount: e.peerCount || 0,
-        lastSeen: e.lastSeen || 0,
-        manifestUpdatedAt: e.manifestUpdatedAt || 0,
-        isLive: Array.isArray(e.liveStreams) && e.liveStreams.length > 0,
-        liveStreams: Array.isArray(e.liveStreams) ? e.liveStreams.map((s) => ({
-          videoId: s.videoId,
-          liveCoreKey: s.liveCoreKey,
-          title: s.title || null,
-          startedAt: Number(s.startedAt || 0) || 0,
-        })) : [],
-        previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos.map((v) => ({
-          ...v,
-          byteAvailability: v?.byteAvailability ?? null,
-          hasHeadBlock: Boolean(v?.hasHeadBlock),
-          contiguousBlocks: Number(v?.contiguousBlocks || 0) || 0,
-          readyForPlayback: Boolean(v?.readyForPlayback),
-        })) : [],
-      })),
-      stats: {
-        ...stats,
-        peerCount: feedConnections,
-        feedConnections,
-        feedEntries: Number(stats.feedEntries ?? stats.totalEntries ?? visibleEntries) || visibleEntries,
-        totalEntries: Number(stats.totalEntries ?? visibleEntries) || visibleEntries,
-        channelsLoaded: Number(stats.channelsLoaded ?? visibleEntries) || visibleEntries,
-      },
-    }
-  }
-  B.getCanonicalFeed = B.getPublicFeed
-  B.refreshFeed = async () => { await api.refreshFeed(); return { success: true } }
-  B.submitToFeed = async () => {
-    const a = identityManager.getActiveIdentity();
-    if (!a?.driveKey) return { success: false, error: 'No active channel to publish' }
-    return api.submitToFeed(a.driveKey)
-  }
-  B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }
-  B.isChannelPublished = async () => { const a = identityManager.getActiveIdentity(); return a?.driveKey ? api.isChannelPublished(a.driveKey) : { published: false } }
-  B.hideChannel = async (r) => { await api.hideChannel(r.channelKey); return { success: true } }
-
   B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getActiveIdentity() !== null, blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0 } })
   B.getBlobServerPort = async () => ({ port: ctx.blobServer?.port || ctx.blobServerPort || 0 })
   B.getSwarmStatus = async () => {
@@ -297,8 +244,6 @@ export function attachMobileHandlers(B, deps) {
       swarmOfflineReason: s.swarmOfflineReason ?? null,
       swarmListenResolved: Boolean(s.swarmListenResolved),
       peerPoolJoined: Boolean(s.peerPoolJoined),
-      publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
-      feedTopicHex: s.feedTopicHex ?? null,
       networkJson: safeJson(s.network),
       startupTimingJson: safeJson(s.startupTiming),
       doctorJson: safeJson(s.doctor),

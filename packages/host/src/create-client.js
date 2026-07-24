@@ -103,7 +103,6 @@ function normalizeNetworkStatusPayload(payload = {}) {
     swarmListenResolved: Boolean(payload?.swarmListenResolved),
     peerPoolJoined: Boolean(payload?.peerPoolJoined),
     publicFeedDiscoveryJoined: Boolean(payload?.publicFeedDiscoveryJoined),
-    feedTopicHex: payload?.feedTopicHex ?? null,
     recommendedBoundary: payload?.recommendedBoundary ?? doctor?.recommendedBoundary ?? null,
     network,
     startupTiming,

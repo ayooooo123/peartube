@@ -1,2 +1,5 @@
 export * from './entity-ref.js'
 export * from './claims.js'
+export * from './store.js'
+export * from './resolver.js'
+export * from './source-selector.js'

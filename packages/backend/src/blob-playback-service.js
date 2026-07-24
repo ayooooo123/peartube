@@ -32,8 +32,9 @@ function getPeerKey(peer) {
 }
 
 export class BlobPlaybackService {
-  constructor({ ctx }) {
+  constructor({ ctx, findingPeerLeaseMs = 250 } = {}) {
     this.ctx = ctx
+    this.findingPeerLeaseMs = findingPeerLeaseMs
   }
 
   resolveDirectBlobUrl({ blobsCoreKey, blobId, mimeType = 'video/mp4' }) {
@@ -81,7 +82,7 @@ export class BlobPlaybackService {
     const ctx = this.ctx
     if (!ctx.store) return null
     try {
-      return ctx.store.get(keyBuffer)
+      return ctx.store.get({ key: keyBuffer })
     } catch {
       return null
     }
@@ -98,6 +99,15 @@ export class BlobPlaybackService {
 
     try {
       await blobsCore.ready()
+      let releaseFindingPeers = null
+      try {
+        releaseFindingPeers = typeof blobsCore.findingPeers === 'function' ? blobsCore.findingPeers() : null
+        if (releaseFindingPeers && this.findingPeerLeaseMs >= 0) {
+          setTimeout(() => {
+            try { releaseFindingPeers?.() } catch {}
+          }, this.findingPeerLeaseMs).unref?.()
+        }
+      } catch { /* best effort */ }
       const label = `blobs:${String(blobsCoreKey).slice(0, 16)}`
       let retained = false
       if (ctx.swarm && blobsCore.discoveryKey) {

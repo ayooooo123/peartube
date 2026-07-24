@@ -42,6 +42,7 @@ import { createSubscriptionsApi } from './api/subscriptions.js'
 import { createLiveApi } from './api/live.js'
 import { createStatusApi } from './api/status.js'
 import { createNetworkLifecycleApi } from './api/network-lifecycle.js'
+import { createPublisherApi } from './api/publisher.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
 
 const CATALOG_PROFILE_FIELDS = Object.freeze([
@@ -721,6 +722,7 @@ export function createApi({
   loadPublicBee = storageLoadPublicBee,
 }) {
   const blobPlayback = createBlobPlaybackService(ctx)
+  const publisherApi = createPublisherApi({ now: () => Date.now() })
 
   async function isMultiWriterChannelKey(channelKey) {
     try {
@@ -1889,6 +1891,7 @@ export function createApi({
 
   return {
     invalidateChannelCaches,
+    ...publisherApi,
     async getAvailabilityHints(requests = []) {
       const hints = []
       for (const req of requests) {

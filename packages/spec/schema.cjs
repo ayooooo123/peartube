@@ -214,6 +214,67 @@ ns.register({
 })
 
 // ============================================
+// Publisher Root Operation Types
+// ============================================
+
+ns.register({
+  name: 'prepare-publisher-root-operation-request',
+  fields: [
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'recordType', type: 'string', required: true },
+    { name: 'body', type: 'buffer', required: true },
+    { name: 'displaySummaryJson', type: 'string', required: false },
+    { name: 'issuedAt', type: 'uint', required: false },
+    { name: 'expiresAt', type: 'uint', required: false },
+    { name: 'expiresInMs', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-publisher-root-operation-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'publisherId', type: 'string', required: false },
+    { name: 'recordType', type: 'string', required: false },
+    { name: 'unsignedBytes', type: 'buffer', required: true },
+    { name: 'candidateRecordId', type: 'buffer', required: true },
+    { name: 'bodyLength', type: 'uint', required: true },
+    { name: 'issuedAt', type: 'uint', required: true },
+    { name: 'expiresAt', type: 'uint', required: true },
+    { name: 'displaySummaryJson', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'submit-publisher-root-operation-request',
+  fields: [
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'recordType', type: 'string', required: true },
+    { name: 'unsignedBytes', type: 'buffer', required: true },
+    { name: 'candidateRecordId', type: 'buffer', required: true },
+    { name: 'displaySummaryJson', type: 'string', required: false },
+    { name: 'signer', type: 'buffer', required: true },
+    { name: 'signature', type: 'buffer', required: true },
+    { name: 'allowedSigners', type: 'buffer', array: true, required: false }
+  ]
+})
+
+ns.register({
+  name: 'submit-publisher-root-operation-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'valid', type: 'bool', required: true },
+    { name: 'reason', type: 'string', required: false },
+    { name: 'publisherId', type: 'string', required: false },
+    { name: 'recordType', type: 'string', required: false },
+    { name: 'recordId', type: 'buffer', required: true },
+    { name: 'signer', type: 'buffer', required: true },
+    { name: 'signature', type: 'buffer', required: true }
+  ]
+})
+
+// ============================================
 // Channel Types
 // ============================================
 
@@ -2911,6 +2972,19 @@ rpcNs.register({
   name: 'verify-attestation',
   request: { name: '@peartube/verify-attestation-request', stream: false },
   response: { name: '@peartube/verify-attestation-response', stream: false }
+})
+
+// Publisher root operation commands
+rpcNs.register({
+  name: 'prepare-publisher-root-operation',
+  request: { name: '@peartube/prepare-publisher-root-operation-request', stream: false },
+  response: { name: '@peartube/prepare-publisher-root-operation-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'submit-publisher-root-operation',
+  request: { name: '@peartube/submit-publisher-root-operation-request', stream: false },
+  response: { name: '@peartube/submit-publisher-root-operation-response', stream: false }
 })
 
 // Channel commands

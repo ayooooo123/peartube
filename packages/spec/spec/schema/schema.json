@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "schema": [
     {
       "name": "empty",
@@ -506,6 +506,237 @@
           "name": "devicePublicKey",
           "required": true,
           "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "prepare-publisher-root-operation-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recordType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "body",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "displaySummaryJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "issuedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresInMs",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "prepare-publisher-root-operation-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "publisherId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recordType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "unsignedBytes",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "candidateRecordId",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "bodyLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "issuedAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "displaySummaryJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "submit-publisher-root-operation-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recordType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "unsignedBytes",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "candidateRecordId",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "displaySummaryJson",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "signer",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "allowedSigners",
+          "required": false,
+          "array": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "submit-publisher-root-operation-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "valid",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recordType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "recordId",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "signer",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "buffer",
           "version": 1
         }
       ]
@@ -1102,7 +1333,7 @@
           "name": "limitProvided",
           "required": false,
           "type": "bool",
-          "version": 2
+          "version": 1
         }
       ]
     },

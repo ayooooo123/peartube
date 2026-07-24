@@ -675,11 +675,12 @@ export async function initPlatformRPC(config: {
         else if (os === 'android') derivedPlayer = 'exoplayer';
       } catch { /* Platform unavailable — leave player unset */ }
     }
-    const launchOptionsArg = (config.launchOptions || derivedPlayer)
+    if (derivedPlayer && !config.launchOptions) config.launchOptions = {};
+    const launchOptionsArg = config.launchOptions
       ? JSON.stringify({
         __peartubeLaunchOptions: true,
-        network: config.launchOptions?.network,
-        swarmOptions: config.launchOptions?.swarmOptions,
+        network: config.launchOptions.network,
+        swarmOptions: config.launchOptions.swarmOptions,
         player: derivedPlayer ?? undefined,
       })
       : null;

@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'brittle'
 
+import { createPublisherApi } from '../src/api/publisher.js'
 import {
   deriveRecordId,
   deriveSigningDigest,
@@ -99,4 +100,38 @@ test('publisher key provider rejects oversized prepared bodies before allocating
     body: b4a.alloc(MAX_PREPARED_ROOT_OPERATION_BYTES + 1),
   }), /body length exceeds/i)
   t.pass('prepared body bound enforced')
+})
+
+test('publisher API prepares and submits shell-signed root operation payloads', async (t) => {
+  const root = keyPair(9)
+  const api = createPublisherApi({ now: () => 1000 })
+  const prepared = await api.preparePublisherRootOperation({
+    publisherId: 'ptpub:test',
+    recordType: 'publisher.root.operation.v1',
+    body: b4a.from('api-operation'),
+    displaySummaryJson: JSON.stringify({ action: 'api operation' }),
+    expiresInMs: 60_000,
+  })
+
+  assert.equal(prepared.success, true)
+  assert.equal(prepared.recordType, 'publisher.root.operation.v1')
+  assert.equal(prepared.bodyLength, 'api-operation'.length)
+
+  const signature = crypto.sign(deriveSigningDigest(prepared.candidateRecordId), root.secretKey)
+  const submitted = await api.submitPublisherRootOperation({
+    publisherId: prepared.publisherId,
+    recordType: prepared.recordType,
+    unsignedBytes: prepared.unsignedBytes,
+    candidateRecordId: prepared.candidateRecordId,
+    displaySummaryJson: prepared.displaySummaryJson,
+    signer: root.publicKey,
+    signature,
+    allowedSigners: [root.publicKey],
+  })
+
+  assert.equal(submitted.success, true)
+  assert.equal(submitted.valid, true)
+  assert.deepEqual(submitted.signer, root.publicKey)
+  assert.deepEqual(submitted.signature, signature)
+  t.pass('publisher API bridges canonical prepared bytes and shell signature')
 })

@@ -21,7 +21,9 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'list-devices',
     'bootstrap-device',
     'attest-device',
-    'verify-attestation'
+    'verify-attestation',
+    'prepare-publisher-root-operation',
+    'submit-publisher-root-operation'
   ],
   feed: [
     'get-canonical-feed',

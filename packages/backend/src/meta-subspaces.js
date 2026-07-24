@@ -34,6 +34,8 @@ export const META_SUBSPACE_COLLECTIONS = [
   { name: 'playbackProfiles', namespace: 'playback-profile', legacyPrefix: 'playback-profile!' },
   // Durable deferred-publication activation marker keyed by canonical channel key.
   { name: 'publicProjectionStates', namespace: 'public-projection-state', legacyPrefix: 'public-projection-state:' },
+  // Local media graph claim/projection records keyed by deterministic graph keys.
+  { name: 'mediaGraphClaims', namespace: 'media-graph-claim', legacyPrefix: 'media-graph-claim:' },
 ]
 
 // Smallest string strictly greater than every key starting with `prefix`:

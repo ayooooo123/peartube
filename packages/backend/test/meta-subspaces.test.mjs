@@ -32,9 +32,11 @@ test('sub accessors round-trip and are isolated from the base keyspace', async (
     await bee.put('subscriptions', { unrelated: true }) // base-level key
     await subs.downloadIntents.put('driveA:vidA', { intent: 'a' })
     await subs.channelKinds.put('cc'.repeat(32), { kind: 'autobase' })
+    await subs.mediaGraphClaims.put('claim-1', { accepted: true })
 
     assert.deepEqual((await subs.downloadIntents.get('driveA:vidA'))?.value, { intent: 'a' })
     assert.deepEqual((await subs.channelKinds.get('cc'.repeat(32)))?.value, { kind: 'autobase' })
+    assert.deepEqual((await subs.mediaGraphClaims.get('claim-1'))?.value, { accepted: true })
 
     // A full-sub scan returns only that sub's keys (decoded), not base keys.
     const diKeys = []

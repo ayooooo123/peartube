@@ -16,12 +16,38 @@ function signerHex(envelope) {
   return envelope?.signer ? hex(envelope.signer) : null
 }
 
+function externalRefKey(ref = {}) {
+  if (!ref?.namespace || !ref?.identifier) return null
+  return `${String(ref.namespace).toLowerCase()}:${String(ref.identifier).trim()}`
+}
+
+function indexPayload(row, indexes) {
+  const { byExternalRef, byPublication, byCollection } = indexes
+  const payload = row.body.payload || {}
+  const externalKey = externalRefKey(payload.externalRef)
+  if (externalKey) appendIndex(byExternalRef, externalKey, row.claimId)
+  if (typeof payload.publicationId === 'string' && payload.publicationId.length) {
+    appendIndex(byPublication, payload.publicationId, row.claimId)
+  }
+  if (payload.collectionRef?.entityId) appendIndex(byCollection, payload.collectionRef.entityId, row.claimId)
+}
+
+function normalizeScanLimit(limit = 100) {
+  const next = Number(limit)
+  if (!Number.isSafeInteger(next) || next < 1 || next > 1000) throw new Error('limit must be between 1 and 1000')
+  return next
+}
+
 export function createMediaGraphStore(options = {}) {
   const trustedSigners = new Set((options.trustedSigners || []).map(hex))
   const claims = new Map()
   const quarantined = []
   const bySubject = new Map()
   const byIssuer = new Map()
+  const byPredicate = new Map()
+  const byExternalRef = new Map()
+  const byPublication = new Map()
+  const byCollection = new Map()
 
   function materialize(claimId) {
     return claims.get(claimId) || null
@@ -65,7 +91,9 @@ export function createMediaGraphStore(options = {}) {
       }
       claims.set(claimId, row)
       appendIndex(byIssuer, issuer, claimId)
+      appendIndex(byPredicate, body.claimType, claimId)
       for (const subject of row.subjects) appendIndex(bySubject, subject, claimId)
+      indexPayload(row, { byExternalRef, byPublication, byCollection })
 
       if (body.claimType === 'RetractionClaim') {
         for (const targetClaimId of body.payload.targetClaimIds || []) {
@@ -91,6 +119,32 @@ export function createMediaGraphStore(options = {}) {
 
     getClaimsByIssuer(issuer) {
       return rowsFor(byIssuer.get(issuer) || [])
+    },
+
+    getClaimsByPredicate(predicate) {
+      return rowsFor(byPredicate.get(predicate) || [])
+    },
+
+    getClaimsByExternalRef(refKey) {
+      return rowsFor(byExternalRef.get(refKey) || [])
+    },
+
+    getClaimsByPublication(publicationId) {
+      return rowsFor(byPublication.get(publicationId) || [])
+    },
+
+    getClaimsByCollection(collectionId) {
+      return rowsFor(byCollection.get(collectionId) || [])
+    },
+
+    scanClaims({ limit = 100, cursor = null } = {}) {
+      const boundedLimit = normalizeScanLimit(limit)
+      const rows = this.getClaims()
+      const start = cursor ? rows.findIndex(row => row.claimId === cursor) + 1 : 0
+      const offset = Math.max(0, start)
+      const page = rows.slice(offset, offset + boundedLimit)
+      const next = offset + boundedLimit < rows.length ? page.at(-1)?.claimId || null : null
+      return { rows: page, cursor: next }
     },
 
     getQuarantinedClaims() {

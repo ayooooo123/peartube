@@ -76,3 +76,55 @@ test('media graph store keeps untrusted equivalence inspectable but inactive', a
   t.alike(await store.ingestClaim(untrustedClaim.envelope), { status: 'quarantined' })
   t.alike(store.getQuarantinedClaims()[0].body.payload.title, 'Fake Pilot')
 })
+
+test('media graph store indexes by predicate, external ref, publication, and collection', async (t) => {
+  const store = createMediaGraphStore({ trustedSigners: [issuer.publicKey] })
+  const collection = createEntityReference({ entityKind: 'collection', namespace: 'issuer-native', issuerRootKey: issuer.publicKey, issuerLocalId: 'season-1' })
+  const member = workRef('episode-2')
+  const external = createMediaClaim({
+    claimType: 'ExternalReferenceClaim',
+    subjectRefs: [member],
+    payload: { externalRef: { namespace: 'imdb-title', identifier: 'tt0903747' }, publicationId: 'pub-episode-2' },
+    keyPair: issuer,
+  })
+  const membership = createMediaClaim({
+    claimType: 'CollectionMembershipClaim',
+    subjectRefs: [collection],
+    payload: { collectionRef: collection, memberRef: member, memberRole: 'episode', position: { season: 1, episode: 2 }, insertionId: 's1e2' },
+    keyPair: issuer,
+  })
+
+  await store.ingestClaim(external.envelope)
+  await store.ingestClaim(membership.envelope)
+
+  t.alike(store.getClaimsByPredicate('ExternalReferenceClaim').map(row => row.claimId), [external.claimId])
+  t.alike(store.getClaimsByExternalRef('imdb-title:tt0903747').map(row => row.claimId), [external.claimId])
+  t.alike(store.getClaimsByPublication('pub-episode-2').map(row => row.claimId), [external.claimId])
+  t.alike(store.getClaimsByCollection(collection.entityId).map(row => row.claimId), [membership.claimId])
+})
+
+test('media graph store bounded scans return stable pages and cursors', async (t) => {
+  const store = createMediaGraphStore({ trustedSigners: [issuer.publicKey] })
+  const claims = []
+  for (let i = 0; i < 5; i++) {
+    const claim = createMediaClaim({
+      claimType: 'EntityMetadataClaim',
+      subjectRefs: [workRef(`episode-${i}`)],
+      payload: { title: `Episode ${i}` },
+      keyPair: issuer,
+      issuerSequence: i + 1,
+    })
+    claims.push(claim)
+    await store.ingestClaim(claim.envelope)
+  }
+
+  const first = store.scanClaims({ limit: 2 })
+  const second = store.scanClaims({ limit: 2, cursor: first.cursor })
+  const third = store.scanClaims({ limit: 10, cursor: second.cursor })
+
+  t.alike(first.rows.length, 2)
+  t.alike(second.rows.length, 2)
+  t.alike(third.rows.length, 1)
+  t.alike(new Set([...first.rows, ...second.rows, ...third.rows].map(row => row.claimId)).size, 5)
+  t.exception(() => store.scanClaims({ limit: 1001 }), /limit/)
+})

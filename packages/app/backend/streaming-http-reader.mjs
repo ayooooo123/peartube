@@ -12,6 +12,7 @@
  */
 
 import http from 'bare-http1'
+import { redactCapabilityUrl } from '@peartube/backend/capability-url'
 
 // Priority levels for fetch queue
 const PRIORITY_HIGH = 0   // MKK Cues, critical seeks
@@ -141,7 +142,7 @@ export class StreamingHttpReader {
     // Background prefetch tracking
     this.backgroundPrefetches = new Set()
 
-    console.log('[StreamingHttpReader] Created for', url.substring(0, 60), 'size:', Math.round(fileSize / 1024 / 1024) + 'MB')
+    console.log('[StreamingHttpReader] Created for', redactCapabilityUrl(url), 'size:', Math.round(fileSize / 1024 / 1024) + 'MB')
   }
 
   /**

@@ -14,6 +14,7 @@
 import Worker from 'bare-worker'
 import Channel from 'bare-channel'
 import http from 'bare-http1'
+import { redactCapabilityUrl } from '@peartube/backend/capability-url'
 
 // Priority levels
 const PRIORITY_HIGH = 0   // Seeks, Cues
@@ -125,7 +126,7 @@ class Downloader {
     this.running = true
     this.initializing = true
 
-    console.log('[Downloader] Created for', url.substring(0, 60), 'size:', Math.round(fileSize / 1024 / 1024) + 'MB')
+    console.log('[Downloader] Created for', redactCapabilityUrl(url), 'size:', Math.round(fileSize / 1024 / 1024) + 'MB')
   }
 
   /**

@@ -55,8 +55,6 @@ export function VideoCardDesktop({
       }
     : null
 
-  console.log('[VideoCard.web] Rendering:', id, 'thumbnailUrl:', thumbnailUrl?.slice(0, 50))
-
   return (
     <article
       style={{

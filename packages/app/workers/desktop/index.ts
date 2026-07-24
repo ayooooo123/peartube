@@ -16,6 +16,8 @@ import http1 from 'bare-http1'
 // @ts-ignore
 import { selectLocalIPv4ForTarget } from '@peartube/backend/cast/network-address'
 // @ts-ignore
+import { redactCapabilityUrl } from '@peartube/backend/capability-url'
+// @ts-ignore
 import * as transcoder from '@peartube/backend/transcode/transcoder'
 // @ts-ignore
 import * as castTranscoder from '@peartube/backend/transcode/cast-transcoder'
@@ -66,7 +68,6 @@ let castProxyPort = 0
 let castProxyReady: Promise<number> | null = null
 const castProxySessions = new Map<string, { url: string; createdAt: number; lastAccessAt?: number; transcodeSessionId?: string; isHls?: boolean }>()
 const CAST_PROXY_TTL_MS = 8 * 60 * 60 * 1000
-const castProxyPlaylistLogged = new Set<string>()
 interface TranscodeSession {
   id: string; inputUrl: string; cacheKey: string
   status: 'pending' | 'transcoding' | 'complete' | 'error'; progress: number
@@ -119,7 +120,7 @@ async function ensureCastProxyServer(): Promise<number> {
     };
     castProxyServer = http1.createServer((req: any, res: any) => {
       try {
-        console.log('[CastProxy] incoming', req.method || 'GET', req.url || '/');
+        console.log('[CastProxy] incoming', req.method || 'GET', redactCapabilityUrl(req.url || '/'));
       } catch {}
       setCorsHeaders(res);
       if ((req.method || '').toUpperCase() === 'OPTIONS') {
@@ -238,11 +239,6 @@ async function ensureCastProxyServer(): Promise<number> {
             const rewritten = rewriteHlsPlaylist(body, isTranscodeComplete);
             const segments = rewritten.split(/\r?\n/).filter((l: string) => l.endsWith('.ts'));
             console.log(`[CastProxy] playlist has ${segments.length} segments`);
-            const logKey = `${token}:${isStreamRequest ? 'stream' : 'index'}`;
-            if (!castProxyPlaylistLogged.has(logKey)) {
-              castProxyPlaylistLogged.add(logKey);
-              console.log('[CastProxy] playlist sample:\n' + rewritten.split(/\r?\n/).slice(0, 8).join('\n'));
-            }
             const out = Buffer.from(rewritten, 'utf8');
             res.statusCode = proxyRes.statusCode || 200;
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');

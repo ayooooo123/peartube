@@ -548,7 +548,7 @@ export const WebMseVideoBackend = memo(function WebMseVideoBackend({
           let compat: CompatPlaybackResult = null
           try { compat = await requestCompatPlayback() } catch {}
           if (compat?.transcoded && compat.url) {
-            console.log('[WebMseBackend] Using compat fragment source:', compat.url)
+            console.log('[WebMseBackend] Using compat fragment source')
             try { (input as any).dispose?.() } catch {}
             const compatDisposeRef: { current: (() => void) | null } = { current: null }
             disposeRef.current = () => {

@@ -974,7 +974,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
-    if (__DEV__) console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
+    if (__DEV__) console.log('[VideoPlayerContext] Loading video:', video.title)
 
     startInActivityPlayback(video, url, 'direct-load')
   }, [startInActivityPlayback])
@@ -1385,8 +1385,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const onError = useCallback((error: any) => {
     if (__DEV__) {
-      const currentUrl = videoUrlRef.current
-      console.error('[VideoPlayerContext] Player error:', error, 'URL:', currentUrl)
+      console.error('[VideoPlayerContext] Player error:', error)
     }
     setIsLoading(false)
   }, [])

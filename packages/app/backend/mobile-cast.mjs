@@ -12,6 +12,7 @@ import os from 'bare-os'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import { selectLocalIPv4ForTarget } from '@peartube/backend/cast/network-address'
+import { redactCapabilityUrl } from '@peartube/backend/capability-url'
 
 let CastContext = null
 let castLoadError = null
@@ -25,7 +26,6 @@ let castProxyServer = null
 let castProxyPort = 0
 let castProxyReady = null
 const castProxySessions = new Map()
-const castProxyPlaylistLogged = new Set()
 const CAST_PROXY_TTL_MS = 8 * 60 * 60 * 1000
 
 const CAST_LOCALHOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1'])
@@ -423,7 +423,7 @@ async function loadCastContext() {
 
       castProxyServer = http1.createServer((req, res) => {
         try {
-          console.log('[CastProxy] incoming', req.method || 'GET', req.url?.substring(0, 80))
+          console.log('[CastProxy] incoming', req.method || 'GET', redactCapabilityUrl(req.url || '/'))
         } catch {}
         setCorsHeaders(res)
         if ((req.method || '').toUpperCase() === 'OPTIONS') {
@@ -533,12 +533,6 @@ async function loadCastContext() {
             proxyRes.on('data', (chunk) => { body += chunk })
             proxyRes.on('end', () => {
               const rewritten = rewriteHlsPlaylist(body)
-              const logKey = `${token}:${isStreamRequest ? 'stream' : 'index'}`
-              if (!castProxyPlaylistLogged.has(logKey)) {
-                castProxyPlaylistLogged.add(logKey)
-                const preview = rewritten.split(/\r?\n/).slice(0, 8).join('\n')
-                console.log('[CastProxy] playlist sample:\n' + preview)
-              }
               const out = Buffer.from(rewritten, 'utf8')
               res.statusCode = proxyRes.statusCode || 200
               res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
@@ -646,7 +640,7 @@ async function loadCastContext() {
     castProxySessions.set(token, { url: sourceUrl, isHls, createdAt: now, lastAccessAt: now })
     const suffix = isHls ? '/index.m3u8' : ''
     const proxyUrl = `http://${localIp}:${castProxyPort}/cast/${token}${suffix}`
-    console.log('[Backend] Cast proxy created:', proxyUrl)
+    console.log('[Backend] Cast proxy created:', redactCapabilityUrl(proxyUrl))
     return proxyUrl
   }
 
@@ -928,8 +922,7 @@ async function loadCastContext() {
 
         const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp)
         if (!hlsUrl) throw new Error('Could not get cast HLS URL')
-        console.log('[CastDiag] Chromecast HLS URL:', hlsUrl)
-        console.log('[CastDiag] Chromecast HLS probe:', `curl -sv "${hlsUrl}"`)
+        console.log('[CastDiag] Chromecast HLS URL:', redactCapabilityUrl(hlsUrl))
         url = hlsUrl
         contentType = 'application/vnd.apple.mpegurl'
       } else {

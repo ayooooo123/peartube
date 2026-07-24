@@ -14,6 +14,7 @@
 import Worker from 'bare-worker'
 import Channel from 'bare-channel'
 import http from 'bare-http1'
+import { redactCapabilityUrl } from '@peartube/backend/capability-url'
 import {
   createReaderAbortError,
   createReaderTimeoutError,
@@ -111,7 +112,7 @@ export class ChannelStreamReader {
     this.bytesRead = 0
     this.readCalls = 0
 
-    console.log('[ChannelStreamReader] Created for', url.substring(0, 60), 'size:', Math.round(fileSize / 1024 / 1024) + 'MB')
+    console.log('[ChannelStreamReader] Created for', redactCapabilityUrl(url), 'size:', Math.round(fileSize / 1024 / 1024) + 'MB')
   }
 
   /**

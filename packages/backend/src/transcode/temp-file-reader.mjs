@@ -24,6 +24,7 @@ import fs from 'bare-fs'
 import path from 'bare-path'
 import os from 'bare-os'
 import http from 'bare-http1'
+import { redactCapabilityUrl } from '../capability-url.js'
 
 /* eslint-disable no-empty */
 
@@ -135,7 +136,7 @@ export class TempFileReader {
     this._bufferWaitReject = null
     this._bufferWaitTimer = null
 
-    console.log('[TempFileReader] Created for', url.substring(0, 60))
+    console.log('[TempFileReader] Created for', redactCapabilityUrl(url))
     console.log('[TempFileReader] File size:', Math.round(fileSize / 1024 / 1024) + 'MB')
     console.log('[TempFileReader] Initial buffer:', Math.round(this.initialBufferSize / 1024 / 1024) + 'MB',
       '(min=' + Math.round(MIN_INITIAL_BUFFER / 1024 / 1024) + 'MB,',

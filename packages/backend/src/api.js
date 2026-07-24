@@ -18,6 +18,7 @@ import { beginPlaybackTiming, markPlaybackTiming } from './playback-timing.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
+import { redactCapabilityUrl } from './capability-url.js'
 import { encodeIndexKey } from './index-encoder.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
@@ -4139,7 +4140,7 @@ export function createApi({
      * @returns {Promise<{isComplete: boolean, progress: number, availableBlocks: number, totalBlocks: number, byteLength: number}>}
      */
     async checkVideoSync(blobUrl) {
-      console.log('[API] CHECK_VIDEO_SYNC:', blobUrl?.slice(0, 180));
+      console.log('[API] CHECK_VIDEO_SYNC:', redactCapabilityUrl(blobUrl));
       try {
         const parsed = new URL(blobUrl);
         const keyParam = parsed.searchParams.get('key');

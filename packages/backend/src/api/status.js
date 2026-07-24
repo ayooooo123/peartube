@@ -3,6 +3,7 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 import { getNetworkStats } from '../storage.js'
 import { NETWORK_TOPIC_STRING } from '../types.js'
+import { describeScopedTopic } from '../network/topics.js'
 
 export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
   return {
@@ -26,6 +27,9 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
      */
     getSwarmStatus() {
       const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
+      const scopedTopics = [
+        describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: 1 }),
+      ]
       const networkDebug = getNetworkStats()
       const feedStats = publicFeed?.getStats?.() || {}
       // Report what the user can actually SEE. The raw entries map includes
@@ -82,6 +86,7 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
         feedConnections: publicFeed?.feedConnections?.size || 0,
         feedEntries: visibleFeedEntries,
         feedTopicHex: topicHex,
+        scopedTopics,
         network: networkDebug,
         startupTiming,
         doctor,

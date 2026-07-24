@@ -105,4 +105,7 @@ test('backend swarm status reports visible feed entries and channels, not only o
   assert.equal(status.feedEntries, 2)
   assert.equal(status.channelsLoaded, 2)
   assert.equal(status.doctor.recommendedBoundary, 'content-playback-or-ui')
+  assert.deepEqual(status.scopedTopics.map(topic => topic.role), ['bootstrap'])
+  assert.equal(typeof status.scopedTopics[0].topicHex, 'string')
+  assert.equal(status.scopedTopics[0].descriptorDigest, undefined)
 })

@@ -251,24 +251,40 @@ const methods = new Map([
   [120, '@peartube/get-video-recommendations'],
   ['@peartube/update-video-metadata', 121],
   [121, '@peartube/update-video-metadata'],
-  ['@peartube/desktop-bootstrap', 122],
-  [122, '@peartube/desktop-bootstrap'],
-  ['@peartube/desktop-shutdown', 123],
-  [123, '@peartube/desktop-shutdown'],
-  ['@peartube/desktop-refresh-browse', 124],
-  [124, '@peartube/desktop-refresh-browse'],
-  ['@peartube/ffmpeg-decode-available', 125],
-  [125, '@peartube/ffmpeg-decode-available'],
-  ['@peartube/update-channel-avatar', 126],
-  [126, '@peartube/update-channel-avatar'],
-  ['@peartube/transcode-start', 127],
-  [127, '@peartube/transcode-start'],
-  ['@peartube/transcode-stop', 128],
-  [128, '@peartube/transcode-stop'],
-  ['@peartube/transcode-status', 129],
-  [129, '@peartube/transcode-status'],
-  ['@peartube/event-transcode-progress', 130],
-  [130, '@peartube/event-transcode-progress']
+  ['@peartube/get-media-entity', 122],
+  [122, '@peartube/get-media-entity'],
+  ['@peartube/get-media-collection', 123],
+  [123, '@peartube/get-media-collection'],
+  ['@peartube/get-media-collection-items', 124],
+  [124, '@peartube/get-media-collection-items'],
+  ['@peartube/get-media-agent', 125],
+  [125, '@peartube/get-media-agent'],
+  ['@peartube/get-agent-contributions', 126],
+  [126, '@peartube/get-agent-contributions'],
+  ['@peartube/get-publication-sources', 127],
+  [127, '@peartube/get-publication-sources'],
+  ['@peartube/get-claim-provenance', 128],
+  [128, '@peartube/get-claim-provenance'],
+  ['@peartube/set-source-preference', 129],
+  [129, '@peartube/set-source-preference'],
+  ['@peartube/desktop-bootstrap', 130],
+  [130, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 131],
+  [131, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 132],
+  [132, '@peartube/desktop-refresh-browse'],
+  ['@peartube/ffmpeg-decode-available', 133],
+  [133, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 134],
+  [134, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 135],
+  [135, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 136],
+  [136, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 137],
+  [137, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 138],
+  [138, '@peartube/event-transcode-progress']
 ])
 
 class HRPC {
@@ -398,6 +414,14 @@ class HRPC {
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-request')],
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')],
       ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-request')],
+      ['@peartube/get-media-entity', getEncoding('@peartube/get-media-entity-request')],
+      ['@peartube/get-media-collection', getEncoding('@peartube/get-media-collection-request')],
+      ['@peartube/get-media-collection-items', getEncoding('@peartube/get-media-collection-items-request')],
+      ['@peartube/get-media-agent', getEncoding('@peartube/get-media-agent-request')],
+      ['@peartube/get-agent-contributions', getEncoding('@peartube/get-agent-contributions-request')],
+      ['@peartube/get-publication-sources', getEncoding('@peartube/get-publication-sources-request')],
+      ['@peartube/get-claim-provenance', getEncoding('@peartube/get-claim-provenance-request')],
+      ['@peartube/set-source-preference', getEncoding('@peartube/set-source-preference-request')],
       ['@peartube/desktop-bootstrap', getEncoding('@peartube/desktop-bootstrap-request')],
       ['@peartube/desktop-shutdown', getEncoding('@peartube/desktop-shutdown-request')],
       ['@peartube/desktop-refresh-browse', getEncoding('@peartube/desktop-refresh-browse-request')],
@@ -520,6 +544,14 @@ class HRPC {
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-response')],
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')],
       ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-response')],
+      ['@peartube/get-media-entity', getEncoding('@peartube/get-media-entity-response')],
+      ['@peartube/get-media-collection', getEncoding('@peartube/get-media-collection-response')],
+      ['@peartube/get-media-collection-items', getEncoding('@peartube/get-media-collection-items-response')],
+      ['@peartube/get-media-agent', getEncoding('@peartube/get-media-agent-response')],
+      ['@peartube/get-agent-contributions', getEncoding('@peartube/get-agent-contributions-response')],
+      ['@peartube/get-publication-sources', getEncoding('@peartube/get-publication-sources-response')],
+      ['@peartube/get-claim-provenance', getEncoding('@peartube/get-claim-provenance-response')],
+      ['@peartube/set-source-preference', getEncoding('@peartube/set-source-preference-response')],
       ['@peartube/desktop-bootstrap', getEncoding('@peartube/desktop-bootstrap-response')],
       ['@peartube/desktop-shutdown', getEncoding('@peartube/desktop-shutdown-response')],
       ['@peartube/desktop-refresh-browse', getEncoding('@peartube/desktop-refresh-browse-response')],
@@ -1114,6 +1146,38 @@ class HRPC {
     return this._call('@peartube/update-video-metadata', args)
   }
 
+  async getMediaEntity(args) {
+    return this._call('@peartube/get-media-entity', args)
+  }
+
+  async getMediaCollection(args) {
+    return this._call('@peartube/get-media-collection', args)
+  }
+
+  async getMediaCollectionItems(args) {
+    return this._call('@peartube/get-media-collection-items', args)
+  }
+
+  async getMediaAgent(args) {
+    return this._call('@peartube/get-media-agent', args)
+  }
+
+  async getAgentContributions(args) {
+    return this._call('@peartube/get-agent-contributions', args)
+  }
+
+  async getPublicationSources(args) {
+    return this._call('@peartube/get-publication-sources', args)
+  }
+
+  async getClaimProvenance(args) {
+    return this._call('@peartube/get-claim-provenance', args)
+  }
+
+  async setSourcePreference(args) {
+    return this._call('@peartube/set-source-preference', args)
+  }
+
   async desktopBootstrap(args) {
     return this._call('@peartube/desktop-bootstrap', args)
   }
@@ -1636,6 +1700,38 @@ class HRPC {
 
   onUpdateVideoMetadata(responseFn) {
     this._handlers['@peartube/update-video-metadata'] = responseFn
+  }
+
+  onGetMediaEntity(responseFn) {
+    this._handlers['@peartube/get-media-entity'] = responseFn
+  }
+
+  onGetMediaCollection(responseFn) {
+    this._handlers['@peartube/get-media-collection'] = responseFn
+  }
+
+  onGetMediaCollectionItems(responseFn) {
+    this._handlers['@peartube/get-media-collection-items'] = responseFn
+  }
+
+  onGetMediaAgent(responseFn) {
+    this._handlers['@peartube/get-media-agent'] = responseFn
+  }
+
+  onGetAgentContributions(responseFn) {
+    this._handlers['@peartube/get-agent-contributions'] = responseFn
+  }
+
+  onGetPublicationSources(responseFn) {
+    this._handlers['@peartube/get-publication-sources'] = responseFn
+  }
+
+  onGetClaimProvenance(responseFn) {
+    this._handlers['@peartube/get-claim-provenance'] = responseFn
+  }
+
+  onSetSourcePreference(responseFn) {
+    this._handlers['@peartube/set-source-preference'] = responseFn
   }
 
   onDesktopBootstrap(responseFn) {

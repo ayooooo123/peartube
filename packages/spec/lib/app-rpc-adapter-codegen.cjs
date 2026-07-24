@@ -49,6 +49,16 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'update-channel',
     'update-channel-avatar'
   ],
+  mediaGraph: [
+    'get-media-entity',
+    'get-media-collection',
+    'get-media-collection-items',
+    'get-media-agent',
+    'get-agent-contributions',
+    'get-publication-sources',
+    'get-claim-provenance',
+    'set-source-preference'
+  ],
   video: [
     'list-videos',
     'get-video-url',

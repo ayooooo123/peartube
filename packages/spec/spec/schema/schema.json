@@ -1382,6 +1382,894 @@
       ]
     },
     {
+      "name": "media-page-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "limitProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-rendition-descriptor",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 7,
+      "fields": [
+        {
+          "name": "renditionId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "purpose",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "format",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "coreKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "coreLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "treeHash",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "byteLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "segmentIndexId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-publication-source",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publisherId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "manifestId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "score",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "availabilityScore",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "formatSupport",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "moderationPenalty",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "preferred",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-claim-provenance",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "claimId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claimType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "issuerId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "subjectEntityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "confidence",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sourceRank",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "revoked",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "issuedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-conflict-summary",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "conflictId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claimType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "subjectEntityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claimIds",
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "preferredClaimId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-agent-summary",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "localClusterId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "displayName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claimCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-contribution-summary",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "agentEntityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "role",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "workEntityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claimId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "media-entity-summary",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entityKind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "localClusterId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "subtitle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claimCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "conflictCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sources",
+          "array": true,
+          "type": "@peartube/media-publication-source",
+          "version": 1
+        },
+        {
+          "name": "renditions",
+          "array": true,
+          "type": "@peartube/media-rendition-descriptor",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-entity-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "includeClaims",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "includeConflicts",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-entity-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entity",
+          "required": false,
+          "type": "@peartube/media-entity-summary",
+          "version": 1
+        },
+        {
+          "name": "claims",
+          "array": true,
+          "type": "@peartube/media-claim-provenance",
+          "version": 1
+        },
+        {
+          "name": "conflicts",
+          "array": true,
+          "type": "@peartube/media-conflict-summary",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-collection-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "includeClaims",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "includeConflicts",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-collection-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entity",
+          "required": false,
+          "type": "@peartube/media-entity-summary",
+          "version": 1
+        },
+        {
+          "name": "claims",
+          "array": true,
+          "type": "@peartube/media-claim-provenance",
+          "version": 1
+        },
+        {
+          "name": "conflicts",
+          "array": true,
+          "type": "@peartube/media-conflict-summary",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-agent-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "includeClaims",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "includeConflicts",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-agent-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entity",
+          "required": false,
+          "type": "@peartube/media-agent-summary",
+          "version": 1
+        },
+        {
+          "name": "claims",
+          "array": true,
+          "type": "@peartube/media-claim-provenance",
+          "version": 1
+        },
+        {
+          "name": "conflicts",
+          "array": true,
+          "type": "@peartube/media-conflict-summary",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-collection-items-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "collectionEntityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "limitProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-media-collection-items-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "items",
+          "array": true,
+          "type": "@peartube/media-entity-summary",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-agent-contributions-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "agentEntityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "limitProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-agent-contributions-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "items",
+          "array": true,
+          "type": "@peartube/media-contribution-summary",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-publication-sources-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "limitProvided",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-publication-sources-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "items",
+          "array": true,
+          "type": "@peartube/media-publication-source",
+          "version": 1
+        },
+        {
+          "name": "nextCursor",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-claim-provenance-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "claimId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-claim-provenance-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "claim",
+          "required": false,
+          "type": "@peartube/media-claim-provenance",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-source-preference-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "preferred",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-source-preference-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "video",
       "namespace": "peartube",
       "compact": false,

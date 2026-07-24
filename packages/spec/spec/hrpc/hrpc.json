@@ -1556,6 +1556,110 @@
     },
     {
       "id": 122,
+      "name": "@peartube/get-media-entity",
+      "request": {
+        "name": "@peartube/get-media-entity-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-media-entity-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 123,
+      "name": "@peartube/get-media-collection",
+      "request": {
+        "name": "@peartube/get-media-collection-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-media-collection-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 124,
+      "name": "@peartube/get-media-collection-items",
+      "request": {
+        "name": "@peartube/get-media-collection-items-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-media-collection-items-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 125,
+      "name": "@peartube/get-media-agent",
+      "request": {
+        "name": "@peartube/get-media-agent-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-media-agent-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 126,
+      "name": "@peartube/get-agent-contributions",
+      "request": {
+        "name": "@peartube/get-agent-contributions-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-agent-contributions-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 127,
+      "name": "@peartube/get-publication-sources",
+      "request": {
+        "name": "@peartube/get-publication-sources-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-publication-sources-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 128,
+      "name": "@peartube/get-claim-provenance",
+      "request": {
+        "name": "@peartube/get-claim-provenance-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-claim-provenance-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 129,
+      "name": "@peartube/set-source-preference",
+      "request": {
+        "name": "@peartube/set-source-preference-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-source-preference-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 130,
       "name": "@peartube/desktop-bootstrap",
       "request": {
         "name": "@peartube/desktop-bootstrap-request",
@@ -1568,7 +1672,7 @@
       "version": 1
     },
     {
-      "id": 123,
+      "id": 131,
       "name": "@peartube/desktop-shutdown",
       "request": {
         "name": "@peartube/desktop-shutdown-request",
@@ -1581,7 +1685,7 @@
       "version": 1
     },
     {
-      "id": 124,
+      "id": 132,
       "name": "@peartube/desktop-refresh-browse",
       "request": {
         "name": "@peartube/desktop-refresh-browse-request",
@@ -1594,7 +1698,7 @@
       "version": 1
     },
     {
-      "id": 125,
+      "id": 133,
       "name": "@peartube/ffmpeg-decode-available",
       "request": {
         "name": "@peartube/ffmpeg-decode-available-request",
@@ -1607,7 +1711,7 @@
       "version": 1
     },
     {
-      "id": 126,
+      "id": 134,
       "name": "@peartube/update-channel-avatar",
       "request": {
         "name": "@peartube/update-channel-avatar-request",
@@ -1620,7 +1724,7 @@
       "version": 1
     },
     {
-      "id": 127,
+      "id": 135,
       "name": "@peartube/transcode-start",
       "request": {
         "name": "@peartube/transcode-start-request",
@@ -1633,7 +1737,7 @@
       "version": 1
     },
     {
-      "id": 128,
+      "id": 136,
       "name": "@peartube/transcode-stop",
       "request": {
         "name": "@peartube/transcode-stop-request",
@@ -1646,7 +1750,7 @@
       "version": 1
     },
     {
-      "id": 129,
+      "id": 137,
       "name": "@peartube/transcode-status",
       "request": {
         "name": "@peartube/transcode-status-request",
@@ -1659,7 +1763,7 @@
       "version": 1
     },
     {
-      "id": 130,
+      "id": 138,
       "name": "@peartube/event-transcode-progress",
       "request": {
         "name": "@peartube/event-transcode-progress",

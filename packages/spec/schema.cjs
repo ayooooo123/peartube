@@ -451,6 +451,196 @@ ns.register({
 })
 
 // ============================================
+// Media Graph Types
+// ============================================
+
+ns.register({
+  name: 'media-page-request',
+  fields: [
+    { name: 'cursor', type: 'string', required: false },
+    { name: 'limit', type: 'uint', required: false },
+    { name: 'limitProvided', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'media-rendition-descriptor',
+  fields: [
+    { name: 'renditionId', type: 'string', required: true },
+    { name: 'purpose', type: 'string', required: true },
+    { name: 'format', type: 'string', required: true },
+    { name: 'coreKey', type: 'string', required: true },
+    { name: 'coreLength', type: 'uint', required: true },
+    { name: 'treeHash', type: 'string', required: true },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'segmentIndexId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'media-publication-source',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'manifestId', type: 'string', required: true },
+    { name: 'renditionId', type: 'string', required: false },
+    { name: 'score', type: 'uint', required: false },
+    { name: 'availabilityScore', type: 'uint', required: false },
+    { name: 'formatSupport', type: 'uint', required: false },
+    { name: 'moderationPenalty', type: 'uint', required: false },
+    { name: 'preferred', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'media-claim-provenance',
+  fields: [
+    { name: 'claimId', type: 'string', required: true },
+    { name: 'claimType', type: 'string', required: true },
+    { name: 'issuerId', type: 'string', required: true },
+    { name: 'subjectEntityId', type: 'string', required: false },
+    { name: 'confidence', type: 'uint', required: false },
+    { name: 'sourceRank', type: 'uint', required: false },
+    { name: 'revoked', type: 'bool', required: false },
+    { name: 'issuedAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'media-conflict-summary',
+  fields: [
+    { name: 'conflictId', type: 'string', required: true },
+    { name: 'claimType', type: 'string', required: true },
+    { name: 'subjectEntityId', type: 'string', required: true },
+    { name: 'claimIds', type: 'string', array: true },
+    { name: 'preferredClaimId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'media-agent-summary',
+  fields: [
+    { name: 'entityId', type: 'string', required: true },
+    { name: 'localClusterId', type: 'string', required: false },
+    { name: 'displayName', type: 'string', required: false },
+    { name: 'claimCount', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'media-contribution-summary',
+  fields: [
+    { name: 'agentEntityId', type: 'string', required: true },
+    { name: 'role', type: 'string', required: true },
+    { name: 'workEntityId', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'claimId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'media-entity-summary',
+  fields: [
+    { name: 'entityId', type: 'string', required: true },
+    { name: 'entityKind', type: 'string', required: true },
+    { name: 'localClusterId', type: 'string', required: false },
+    { name: 'title', type: 'string', required: false },
+    { name: 'subtitle', type: 'string', required: false },
+    { name: 'claimCount', type: 'uint', required: false },
+    { name: 'conflictCount', type: 'uint', required: false },
+    { name: 'sources', type: '@peartube/media-publication-source', array: true },
+    { name: 'renditions', type: '@peartube/media-rendition-descriptor', array: true }
+  ]
+})
+
+for (const name of [
+  'get-media-entity',
+  'get-media-collection',
+  'get-media-agent'
+]) {
+  ns.register({
+    name: `${name}-request`,
+    fields: [
+      { name: 'entityId', type: 'string', required: true },
+      { name: 'includeClaims', type: 'bool', required: false },
+      { name: 'includeConflicts', type: 'bool', required: false }
+    ]
+  })
+  ns.register({
+    name: `${name}-response`,
+    fields: [
+      { name: 'success', type: 'bool', required: true },
+      { name: 'errorCode', type: 'string', required: false },
+      { name: 'error', type: 'string', required: false },
+      { name: 'entity', type: name === 'get-media-agent' ? '@peartube/media-agent-summary' : '@peartube/media-entity-summary', required: false },
+      { name: 'claims', type: '@peartube/media-claim-provenance', array: true },
+      { name: 'conflicts', type: '@peartube/media-conflict-summary', array: true }
+    ]
+  })
+}
+
+for (const name of [
+  'get-media-collection-items',
+  'get-agent-contributions',
+  'get-publication-sources'
+]) {
+  ns.register({
+    name: `${name}-request`,
+    fields: [
+      { name: name === 'get-agent-contributions' ? 'agentEntityId' : name === 'get-publication-sources' ? 'entityId' : 'collectionEntityId', type: 'string', required: true },
+      { name: 'cursor', type: 'string', required: false },
+      { name: 'limit', type: 'uint', required: false },
+      { name: 'limitProvided', type: 'bool', required: false }
+    ]
+  })
+  ns.register({
+    name: `${name}-response`,
+    fields: [
+      { name: 'success', type: 'bool', required: true },
+      { name: 'errorCode', type: 'string', required: false },
+      { name: 'error', type: 'string', required: false },
+      { name: 'items', type: name === 'get-agent-contributions' ? '@peartube/media-contribution-summary' : name === 'get-publication-sources' ? '@peartube/media-publication-source' : '@peartube/media-entity-summary', array: true },
+      { name: 'nextCursor', type: 'string', required: false }
+    ]
+  })
+}
+
+ns.register({
+  name: 'get-claim-provenance-request',
+  fields: [
+    { name: 'claimId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-claim-provenance-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'claim', type: '@peartube/media-claim-provenance', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-source-preference-request',
+  fields: [
+    { name: 'entityId', type: 'string', required: true },
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'preferred', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-source-preference-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// ============================================
 // Video Types
 // ============================================
 
@@ -3667,6 +3857,24 @@ rpcNs.register({
   request: { name: '@peartube/update-video-metadata-request', stream: false },
   response: { name: '@peartube/update-video-metadata-response', stream: false }
 })
+
+// Media graph app-facing commands
+for (const name of [
+  'get-media-entity',
+  'get-media-collection',
+  'get-media-collection-items',
+  'get-media-agent',
+  'get-agent-contributions',
+  'get-publication-sources',
+  'get-claim-provenance',
+  'set-source-preference'
+]) {
+  rpcNs.register({
+    name,
+    request: { name: `@peartube/${name}-request`, stream: false },
+    response: { name: `@peartube/${name}-response`, stream: false }
+  })
+}
 
 // Desktop lifecycle commands
 rpcNs.register({

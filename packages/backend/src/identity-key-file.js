@@ -69,6 +69,11 @@ function getPrimaryKeyFilePath(storagePath) {
   return path.join(storagePath, PRIMARY_KEY_FILENAME);
 }
 
+function getMigrationAckFilePath(storagePath) {
+  if (!path || !storagePath) return null;
+  return path.join(storagePath, '.identity-key-migration-ack');
+}
+
 function hasCanonicalCorestore(storagePath) {
   if (!fs || !path || !storagePath) return false;
 
@@ -166,6 +171,79 @@ export async function readPrimaryKeyFile(storagePath) {
 
   debugIdentityKeyFile('readPrimaryKeyFile miss')
   return null;
+}
+
+function readLegacyIdentityKeyRecord(storagePath) {
+  const legacyPath = getLegacyIdentityKeyFilePath(storagePath);
+  if (!legacyPath || !fs?.existsSync(legacyPath)) return null;
+
+  const raw = fs.readFileSync(legacyPath, 'utf-8');
+  const parsed = JSON.parse(raw);
+  if (parsed?.version !== IDENTITY_KEY_FILE_VERSION) return null;
+
+  const primaryKey = parseHexKey(parsed.primaryKey);
+  const identityPublicKey = parseHexKey(parsed.identityPublicKey);
+  if (!primaryKey || !identityPublicKey) return null;
+
+  return { legacyPath, primaryKey, identityPublicKey };
+}
+
+function sameBytes(a, b) {
+  if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b)) return false;
+  if (a.length !== b.length) return false;
+  return Buffer.compare(a, b) === 0;
+}
+
+export async function migrateLegacyIdentityKeyFile(storagePath, options = {}) {
+  await initModules();
+  if (!fs || !path) return { status: 'unavailable' };
+  if (typeof options.importLegacyRoot !== 'function') throw new Error('importLegacyRoot is required');
+
+  const ackPath = getMigrationAckFilePath(storagePath);
+  const legacyPath = getLegacyIdentityKeyFilePath(storagePath);
+  if (!ackPath || !legacyPath) return { status: 'invalid-storage-path' };
+
+  if (fs.existsSync(ackPath)) {
+    try {
+      if (fs.existsSync(legacyPath)) fs.unlinkSync(legacyPath);
+      return { status: 'deleted-after-ack' };
+    } catch (error) {
+      return { status: 'delete-failed', error: error?.message || String(error) };
+    }
+  }
+
+  const record = readLegacyIdentityKeyRecord(storagePath);
+  if (!record) return { status: 'not-found' };
+
+  const imported = await options.importLegacyRoot({
+    primaryKey: Buffer.from(record.primaryKey),
+    identityPublicKey: Buffer.from(record.identityPublicKey),
+    source: 'legacy-db-identity-key',
+  });
+
+  const importedPublicKey = Buffer.isBuffer(imported?.identityPublicKey)
+    ? imported.identityPublicKey
+    : parseHexKey(imported?.identityPublicKey);
+  if (!sameBytes(importedPublicKey, record.identityPublicKey)) {
+    return { status: 'continuity-mismatch' };
+  }
+
+  if (!imported?.acknowledged) return { status: 'pending-ack' };
+
+  const ackTmpPath = `${ackPath}.tmp`;
+  const ackPayload = {
+    version: 1,
+    source: 'legacy-db-identity-key',
+    identityPublicKey: record.identityPublicKey.toString('hex'),
+    ackId: typeof imported.ackId === 'string' ? imported.ackId : null,
+    acknowledgedAt: Date.now(),
+  };
+
+  fs.mkdirSync(path.dirname(ackPath), { recursive: true });
+  fs.writeFileSync(ackTmpPath, JSON.stringify(ackPayload));
+  fs.renameSync(ackTmpPath, ackPath);
+  fs.unlinkSync(record.legacyPath);
+  return { status: 'migrated' };
 }
 
 export async function writeIdentityKeyFile(storagePath, { primaryKey, identityPublicKey }) {

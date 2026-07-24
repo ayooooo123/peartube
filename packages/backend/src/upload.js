@@ -16,6 +16,7 @@ import b4a from 'b4a';
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
 import { normalizeContentDetails } from './channel/structured-content.js';
+import { createPublicationManifest, createRenditionDescriptor } from './assets/index.js';
 
 /**
  * Detect MIME type from file magic bytes
@@ -206,6 +207,55 @@ function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
     availability: playbackSupport.availability,
     playbackSupport: playbackSupport.playbackSupport
   });
+  return metadata;
+}
+
+function hashUploadFallback(metadata, blobResult, channel, fileSize) {
+  return b4a.toString(crypto.hash(b4a.from(JSON.stringify({
+    blobsCoreKey: channel.blobsKeyHex,
+    blobId: blobResult.id,
+    fileSize,
+    fingerprint: metadata.contentFingerprint || null
+  }))), 'hex');
+}
+
+function uploadTreeHash(metadata, blobResult, channel, fileSize) {
+  const fingerprint = typeof metadata.contentFingerprint === 'string' ? metadata.contentFingerprint : '';
+  if (/^sha256:[0-9a-f]{64}$/i.test(fingerprint)) return fingerprint.slice(7).toLowerCase();
+  return hashUploadFallback(metadata, blobResult, channel, fileSize);
+}
+
+function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, options = {}) {
+  const keyPair = options.immutablePublisherKeyPair || null;
+  if (!keyPair?.publicKey || !keyPair?.secretKey) return metadata;
+  const sequence = options.immutablePublicationSequence ?? metadata.uploadedAt ?? Date.now();
+  const rendition = createRenditionDescriptor({
+    purpose: 'original',
+    format: String(mimeType || metadata.mimeType || 'video/mp4'),
+    core: {
+      key: channel.blobsKeyHex,
+      length: Number(blobResult.blockLength || 1),
+      treeHash: uploadTreeHash(metadata, blobResult, channel, fileSize),
+      byteLength: fileSize
+    }
+  });
+  const manifest = createPublicationManifest({
+    publisherId: keyPair.publicKey,
+    sequence,
+    title: metadata.title || metadata.id,
+    description: metadata.description || null,
+    renditions: [rendition],
+    provenance: [{ type: 'upload', videoId: metadata.id, blobId: blobResult.id, blobsCoreKey: channel.blobsKeyHex }],
+    keyPair
+  });
+  metadata.immutablePublication = {
+    publicationId: manifest.publicationId,
+    manifestId: manifest.body.manifestId,
+    renditionId: rendition.renditionId,
+    publisherId: manifest.body.publisherId,
+    sequence,
+    manifest
+  };
   return metadata;
 }
 
@@ -419,6 +469,7 @@ export function createUploadManager({ ctx }) {
           fileSize,
           mimeType
         );
+        maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, options);
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {
@@ -485,6 +536,7 @@ export function createUploadManager({ ctx }) {
           fileSize,
           mimeType
         );
+        maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, options);
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {

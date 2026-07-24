@@ -14,7 +14,7 @@ export {
 
 // Public Feed - P2P channel discovery
 export { PublicFeed, PublicFeed as PublicFeedManager } from './public-feed.js';
-export { createContentPublication } from './content-publication.js';
+export { createContentPublication, createImmutableContentPublication } from './content-publication.js';
 export {
   CONTENT_REPLICATION_CHECKPOINT_VERSION,
   createContentReplication
@@ -81,3 +81,4 @@ export * as budgetManager from './budget-manager.js';
 export * as records from './records/index.js';
 export * as publisher from './publisher/index.js';
 export * as mediaGraph from './media-graph/index.js';
+export * as assets from './assets/index.js';

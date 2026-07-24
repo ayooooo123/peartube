@@ -8,8 +8,8 @@ import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 import sodium from 'sodium-universal'
 
-import { createContentPublication } from '../src/content-publication.js'
-import { createContentPublication as createContentPublicationFromRoot } from '../src/index.js'
+import { createContentPublication, createImmutableContentPublication } from '../src/content-publication.js'
+import { createContentPublication as createContentPublicationFromRoot, createImmutableContentPublication as createImmutableContentPublicationFromRoot } from '../src/index.js'
 import { createContentPublication as createContentPublicationFromSubpath } from '@peartube/backend/content-publication'
 import { createIdentityManager } from '../src/identity.js'
 import { PublicFeed } from '../src/public-feed.js'
@@ -192,6 +192,21 @@ function createFakeHarness({ videos = [], claims = [], active = true } = {}) {
 function claim({ identityKey = 'youtube:video:42', claimantId, videoId, state = 'published' }) {
   return { identityKey, claimantId, videoId, state }
 }
+
+test('immutable content publication helper creates signed content-addressed manifests from content-publication surfaces', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 21))
+  const rendition = {
+    purpose: 'original',
+    format: 'video/mp4',
+    core: { key: '11'.repeat(32), length: 1, treeHash: '22'.repeat(32), byteLength: 256 },
+  }
+
+  const direct = createImmutableContentPublication({ publisherId: publisher.publicKey, sequence: 1, title: 'Pilot', renditions: [rendition], keyPair: publisher })
+  const fromRoot = createImmutableContentPublicationFromRoot({ publisherId: publisher.publicKey, sequence: 1, title: 'Pilot', renditions: [rendition], keyPair: publisher })
+
+  t.alike(direct.publicationId, fromRoot.publicationId)
+  t.ok(direct.body.manifestId)
+})
 
 function createMemoryDb() {
   const values = new Map()

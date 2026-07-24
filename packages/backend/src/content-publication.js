@@ -1,6 +1,8 @@
 import b4a from 'b4a'
 import sodium from 'sodium-universal'
 
+import { createPublicationManifest } from './assets/manifest.js'
+
 const KEY_PATTERN = /^[0-9a-f]{64}$/
 const REVISION_PATTERN = /^sha256:[0-9a-f]{64}$/
 const PROJECTABLE_STATES = new Set(['durabilityVerified', 'published'])
@@ -135,6 +137,10 @@ function snapshotVideos(videos) {
     .sort((left, right) =>
       Number(right.uploadedAt || 0) - Number(left.uploadedAt || 0) ||
       String(left.id).localeCompare(String(right.id)))
+}
+
+export function createImmutableContentPublication(input = {}) {
+  return createPublicationManifest(input)
 }
 
 /**

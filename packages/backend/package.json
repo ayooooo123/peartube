@@ -47,6 +47,7 @@
     "./records": "./src/records/index.js",
     "./publisher": "./src/publisher/index.js",
     "./media-graph": "./src/media-graph/index.js",
+    "./assets": "./src/assets/index.js",
     "./hash-utils": "./src/hash-utils.js",
     "./blob-ref": "./src/blob-ref.js",
     "./archive-schema": "./lib/archive-schema.js",

@@ -97,6 +97,35 @@ test('direct blob warmup keeps findingPeers active briefly for first range reque
   t.ok(calls.some((call) => call[0] === 'findingPeers.done'), 'peer finding lease is released after its bounded window')
 })
 
+test('repeated direct blob warmup refreshes the active findingPeers lease', async (t) => {
+  const { ctx, calls } = createCtx()
+  const service = new BlobPlaybackService({ ctx, findingPeerLeaseMs: 200 })
+
+  service.resolveDirectBlobUrl({
+    blobsCoreKey: VALID_KEY,
+    blobId: VALID_BLOB,
+    mimeType: 'video/mp4',
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  service.resolveDirectBlobUrl({
+    blobsCoreKey: VALID_KEY,
+    blobId: VALID_BLOB,
+    mimeType: 'video/mp4',
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  await new Promise((resolve) => setTimeout(resolve, 170))
+  t.absent(calls.some((call) => call[0] === 'findingPeers.done'), 'the original deadline must not end a refreshed lease')
+
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  t.is(calls.filter((call) => call[0] === 'findingPeers').length, 1, 'refresh reuses the existing findingPeers handle')
+  t.is(calls.filter((call) => call[0] === 'findingPeers.done').length, 1, 'refreshed lease releases exactly once')
+})
+
 test('metadata fallback resolves direct refs when metadata includes blobsCoreKey', async (t) => {
   const { ctx, calls } = createCtx()
   const service = new BlobPlaybackService({ ctx })

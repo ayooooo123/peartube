@@ -5,6 +5,7 @@
 - Remove ad-hoc `udx-native` construction from mobile, desktop, Chromecast, and mDNS Cast address discovery. Targeted Cast routes now select the receiver's matching subnet from Holepunch `bare-os` interface data, while mDNS and Chromecast bind from the same runtime interface source; this avoids creating unrelated UDX transports or unreliable connected-UDP probes solely to choose a LAN address.
 - Preserve Android autoplay across the transient native pause emitted while replacing a video source. The player now guards the bounded startup handoff, reasserts native play until a real playing event arrives, and cancels retries on explicit pause, close, or successful playback.
 - Redact bearer capabilities from backend, Cast, transcode, playback, download, and search diagnostics. Cast proxy path tokens and blob-server query tokens now pass through one tested sanitizer, credential-bearing playlist/curl dumps are removed, raw search result objects and user queries are not logged, and the unused pseudo-auth blob token was deleted.
+- Restore direct P2P playback discovery guarantees: remote blob cores are opened with Corestore key options, and each first-range warmup keeps Hypercore peer discovery alive for a bounded lease so on-demand blob-server reads can establish peers without turning playback into a full-file prefetch.
 
 ## v0.2.37 - Wednesday, July 22, 2026
 

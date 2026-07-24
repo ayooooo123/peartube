@@ -59,7 +59,8 @@
     "test": "brittle test/*.test.mjs",
     "test:watch": "brittle --watch test/*.test.mjs",
     "test:multiwriter": "node test/multiwriter-channel-harness.mjs",
-    "test:personal": "node test/personal-store-harness.mjs"
+    "test:personal": "node test/personal-store-harness.mjs",
+    "test:adversarial": "brittle test/adversarial-network.test.mjs test/entity-graph-integration.test.mjs test/archive-integration.test.mjs test/protocol-version-skew.test.mjs"
   },
   "dependencies": {
     "@peartube/spec": "file:../spec",

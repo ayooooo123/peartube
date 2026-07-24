@@ -44,6 +44,7 @@ import { createStatusApi } from './api/status.js'
 import { createNetworkLifecycleApi } from './api/network-lifecycle.js'
 import { createPublisherApi } from './api/publisher.js'
 import { createMediaGraphApi } from './api/media-graph.js'
+import { createPolicyApi } from './api/policy.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
 
 const CATALOG_PROFILE_FIELDS = Object.freeze([
@@ -4651,6 +4652,8 @@ export function createApi({
     ...createNetworkLifecycleApi({
       onPlaybackActive: cancelScheduledQuotaSweep,
       onPlaybackInactive: scheduleQuotaSweepAfterPlayback,
-    })
+    }),
+    // Local policy controls
+    ...createPolicyApi({ store: ctx.networkPolicyStore || ctx.metaDb?.sub?.('network-policy') || new Map(), onPolicyChange: ctx.onNetworkPolicyChange }),
   };
 }

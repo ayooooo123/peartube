@@ -83,6 +83,7 @@ export * as discovery from './discovery/index.js';
 export * as playback from './playback/index.js';
 export * as archive from './archive/index.js';
 export * as indexing from './indexing/index.js';
+export * as moderation from './moderation/index.js';
 export * as records from './records/index.js';
 export * as publisher from './publisher/index.js';
 export * as mediaGraph from './media-graph/index.js';

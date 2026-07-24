@@ -342,6 +342,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     identity: appRpc.identity,
     feed: appRpc.feed,
     channel: appRpc.channel,
+    mediaGraph: appRpc.mediaGraph,
     video: appRpc.video,
     watch: appRpc.watch,
     transfer: appRpc.transfer,

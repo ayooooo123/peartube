@@ -75,6 +75,10 @@ class FakeHRPC {
   transcodeStart() {
     return Promise.resolve({ success: true, sessionId: 'tx', transcodeUrl: 'http://video.local/tx.m3u8' })
   }
+
+  getMediaEntity(request) {
+    return Promise.resolve({ success: true, entity: { entityId: request.entityId, entityKind: 'work' }, claims: [], conflicts: [] })
+  }
 }
 
 test('createProtocolClient remaps feed update events', async (t) => {
@@ -192,6 +196,12 @@ test('createProtocolClient exposes generated app RPC namespace methods', async (
     success: true,
     sessionId: 'tx',
     transcodeUrl: 'http://video.local/tx.m3u8'
+  })
+  t.alike(await client.mediaGraph.getMediaEntity({ entityId: 'work-1' }), {
+    success: true,
+    entity: { entityId: 'work-1', entityKind: 'work' },
+    claims: [],
+    conflicts: []
   })
 })
 

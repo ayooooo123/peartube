@@ -1,36 +1,295 @@
-function notImplemented() {
-  return { success: false, errorCode: 'MEDIA_GRAPH_NOT_READY', error: 'Media graph API is registered but projection storage is not wired yet' }
+import { resolveMediaEntity } from '../media-graph/resolver.js'
+import { selectPublicationSources } from '../media-graph/source-selector.js'
+
+const DEFAULT_PAGE_LIMIT = 50
+const MAX_PAGE_LIMIT = 100
+
+function okPage(items, nextCursor = null) {
+  return { success: true, items, nextCursor }
 }
 
-function emptyPage() {
-  return { success: true, items: [], nextCursor: null }
+function error(code, message, extra = {}) {
+  return { success: false, errorCode: code, error: message, ...extra }
 }
 
-export function createMediaGraphApi() {
+function entityKindFromRow(row) {
+  return row?.body?.subjectRefs?.[0]?.entityKind || 'unknown'
+}
+
+function entityKindFromId(entityId = '') {
+  const match = /^peartube:media-entity:v1:([^:]+):/.exec(String(entityId))
+  return match?.[1] || 'unknown'
+}
+
+function normalizeLimit(request = {}) {
+  if (!request.limitProvided && request.limit === undefined) return DEFAULT_PAGE_LIMIT
+  const limit = Number(request.limit)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) {
+    throw new Error('limit must be between 1 and 100')
+  }
+  return limit
+}
+
+function pageRows(rows, request = {}, keyOf = row => row.claimId) {
+  const limit = normalizeLimit(request)
+  let offset = 0
+  if (request.cursor) {
+    const index = rows.findIndex(row => keyOf(row) === request.cursor)
+    if (index < 0) return { error: error('INVALID_CURSOR', 'Invalid media graph cursor', { items: [], nextCursor: null }) }
+    offset = index + 1
+  }
+  const page = rows.slice(offset, offset + limit)
+  const nextCursor = offset + limit < rows.length ? keyOf(page.at(-1)) : null
+  return { page, nextCursor }
+}
+
+function claimSummary(row) {
+  if (!row) return null
   return {
-    async getMediaEntity() {
-      return notImplemented()
+    claimId: row.claimId,
+    claimType: row.body.claimType,
+    issuerId: row.issuer,
+    subjectEntityId: row.subjects?.[0] || null,
+    confidence: row.body.confidence,
+    sourceRank: row.body.payload?.sourceRank,
+    revoked: row.revoked === true,
+    issuedAt: row.envelope?.issuedAt || null,
+  }
+}
+
+function conflictSummary(row) {
+  return {
+    conflictId: row.claimId,
+    claimId: row.claimId,
+    claimType: row.body.claimType,
+    subjectEntityId: row.subjects?.[0] || null,
+    claimIds: [row.claimId],
+    preferredClaimId: null,
+  }
+}
+
+function contributionSummary(row) {
+  const payload = row.body.payload || {}
+  return {
+    agentEntityId: payload.agentRef?.entityId || null,
+    role: payload.role || 'unknown',
+    workEntityId: payload.subjectRef?.entityId || row.subjects?.[0] || null,
+    publicationId: payload.publicationId || null,
+    claimId: row.claimId,
+  }
+}
+
+function sourcePreferenceKey(entityId, publicationId) {
+  return `${entityId}\n${publicationId}`
+}
+
+function createMemoryPreferenceStore() {
+  const values = new Map()
+  return {
+    async get(key) {
+      if (!values.has(key)) return null
+      return { value: values.get(key) }
     },
-    async getMediaCollection() {
-      return notImplemented()
+    async put(key, value) {
+      values.set(key, value)
     },
-    async getMediaCollectionItems() {
-      return emptyPage()
+    async del(key) {
+      values.delete(key)
     },
-    async getMediaAgent() {
-      return notImplemented()
+  }
+}
+
+function normalizePreferenceStore(store) {
+  if (!store) return createMemoryPreferenceStore()
+  if (store instanceof Map) {
+    return {
+      async get(key) {
+        if (!store.has(key)) return null
+        return { value: store.get(key) }
+      },
+      async put(key, value) {
+        store.set(key, value)
+      },
+      async del(key) {
+        store.delete(key)
+      },
+    }
+  }
+  return store
+}
+
+function manifestSource(manifest, row, preferred, trust = {}) {
+  const rendition = manifest?.body?.renditions?.[0] || null
+  const publisherId = manifest?.body?.publisherId || row.issuer
+  return {
+    publicationId: manifest?.publicationId || row.body.payload?.publicationId,
+    publisherId,
+    manifestId: manifest?.body?.manifestId || null,
+    renditionId: rendition?.renditionId || null,
+    metadataConfidence: row.body.confidence || 0,
+    publisherTrust: trust[publisherId] || 0,
+    availabilityScore: row.body.payload?.availabilityStatus === 'available' ? 100 : 0,
+    formatSupport: 100,
+    moderationPenalty: row.body.payload?.moderationPenalty || 0,
+    preferred,
+  }
+}
+
+function sourceResponse(source) {
+  return {
+    publicationId: source.publicationId,
+    publisherId: source.publisherId,
+    manifestId: source.manifestId,
+    renditionId: source.renditionId,
+    score: Math.max(0, Math.round(source.score || 0)),
+    availabilityScore: source.availabilityScore,
+    formatSupport: source.formatSupport,
+    moderationPenalty: source.moderationPenalty,
+    preferred: source.preferred === true,
+  }
+}
+
+export function createMediaGraphApi(options = {}) {
+  const mediaGraphStore = options.mediaGraphStore || options.ctx?.mediaGraphStore || null
+  const assetManifestStore = options.assetManifestStore || options.ctx?.assetManifestStore || null
+  const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences)
+  const trust = options.trust || options.ctx?.mediaGraphTrust || {}
+
+  function requireGraphStore() {
+    if (!mediaGraphStore) return error('MEDIA_GRAPH_NOT_READY', 'Media graph projection storage is not wired yet')
+    return null
+  }
+
+  async function isPreferred(entityId, publicationId) {
+    const row = await sourcePreferenceStore.get(sourcePreferenceKey(entityId, publicationId))
+    return row?.value?.preferred === true || row?.preferred === true
+  }
+
+  async function buildSources(entityId) {
+    const rows = mediaGraphStore.getClaimsBySubject(entityId)
+      .filter(row => !row.revoked && row.body.claimType === 'AvailabilityObservation' && row.body.payload?.publicationId)
+    const sources = []
+    for (const row of rows) {
+      const publicationId = row.body.payload.publicationId
+      const manifest = assetManifestStore?.getManifest?.(publicationId) || null
+      sources.push(manifestSource(manifest, row, await isPreferred(entityId, publicationId), trust))
+    }
+    return selectPublicationSources(sources).sort((a, b) => {
+      if (a.preferred !== b.preferred) return a.preferred ? -1 : 1
+      if (b.score !== a.score) return b.score - a.score
+      return String(a.publicationId).localeCompare(String(b.publicationId))
+    })
+  }
+
+  function resolveOrMissing(entityId) {
+    const claims = mediaGraphStore.getClaimsBySubject(entityId)
+    if (claims.length === 0) return null
+    return resolveMediaEntity(mediaGraphStore, entityId, { trust })
+  }
+
+  async function entityResult(entityId, request = {}, agent = false) {
+    const missingStore = requireGraphStore()
+    if (missingStore) return missingStore
+    const resolved = resolveOrMissing(entityId)
+    if (!resolved) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
+    const sources = await buildSources(entityId)
+    const entity = {
+      entityId,
+      entityKind: agent ? 'agent' : entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
+      localClusterId: resolved.localClusterId,
+      title: resolved.metadata.title || resolved.metadata.displayName || null,
+      subtitle: resolved.metadata.subtitle || null,
+      displayName: resolved.metadata.displayName || resolved.metadata.title || null,
+      claimCount: resolved.claims.length,
+      conflictCount: resolved.conflicts.length,
+      sources: sources.map(sourceResponse),
+      renditions: [],
+    }
+    return {
+      success: true,
+      entity,
+      claims: request.includeClaims ? resolved.claims.map(claimSummary) : [],
+      conflicts: request.includeConflicts ? resolved.conflicts.map(conflictSummary) : [],
+    }
+  }
+
+  return {
+    async getMediaEntity(request = {}) {
+      return entityResult(request.entityId, request)
     },
-    async getAgentContributions() {
-      return emptyPage()
+
+    async getMediaCollection(request = {}) {
+      return entityResult(request.entityId, request)
     },
-    async getPublicationSources() {
-      return emptyPage()
+
+    async getMediaCollectionItems(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
+      const rows = mediaGraphStore.getClaimsByCollection(request.collectionEntityId)
+        .filter(row => !row.revoked && row.body.claimType === 'CollectionMembershipClaim')
+        .sort((a, b) => {
+          const ap = a.body.payload?.position?.episode || a.body.payload?.position?.index || 0
+          const bp = b.body.payload?.position?.episode || b.body.payload?.position?.index || 0
+          if (ap !== bp) return ap - bp
+          return a.claimId.localeCompare(b.claimId)
+        })
+      const result = pageRows(rows, request)
+      if (result.error) return result.error
+      return okPage(result.page.map(row => ({
+        entityId: row.body.payload?.memberRef?.entityId,
+        entityKind: row.body.payload?.memberRef?.entityKind || entityKindFromId(row.body.payload?.memberRef?.entityId),
+        claimCount: 1,
+        conflictCount: 0,
+        sources: [],
+        renditions: [],
+      })), result.nextCursor)
     },
-    async getClaimProvenance() {
-      return notImplemented()
+
+    async getMediaAgent(request = {}) {
+      return entityResult(request.entityId, request, true)
     },
-    async setSourcePreference() {
-      return notImplemented()
+
+    async getAgentContributions(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
+      const rows = mediaGraphStore.getClaims()
+        .filter(row => !row.revoked && row.body.claimType === 'ContributionClaim' && row.body.payload?.agentRef?.entityId === request.agentEntityId)
+        .sort((a, b) => a.claimId.localeCompare(b.claimId))
+      const result = pageRows(rows, request)
+      if (result.error) return result.error
+      return okPage(result.page.map(contributionSummary), result.nextCursor)
+    },
+
+    async getPublicationSources(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
+      const sources = await buildSources(request.entityId)
+      const result = pageRows(sources, request, source => source.publicationId)
+      if (result.error) return result.error
+      return okPage(result.page.map(sourceResponse), result.nextCursor)
+    },
+
+    async getClaimProvenance(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return missingStore
+      const claim = mediaGraphStore.getClaim(request.claimId)
+      if (!claim) return error('MEDIA_CLAIM_NOT_FOUND', 'Media claim not found')
+      return { success: true, claim: claimSummary(claim) }
+    },
+
+    async setSourcePreference(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return missingStore
+      if (!request.entityId || !request.publicationId) return error('INVALID_SOURCE_PREFERENCE', 'entityId and publicationId are required')
+      const key = sourcePreferenceKey(request.entityId, request.publicationId)
+      if (request.preferred) {
+        await sourcePreferenceStore.put(key, { entityId: request.entityId, publicationId: request.publicationId, preferred: true })
+      } else if (typeof sourcePreferenceStore.del === 'function') {
+        await sourcePreferenceStore.del(key)
+      } else {
+        await sourcePreferenceStore.put(key, { entityId: request.entityId, publicationId: request.publicationId, preferred: false })
+      }
+      return { success: true }
     },
   }
 }

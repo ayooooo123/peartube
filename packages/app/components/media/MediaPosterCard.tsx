@@ -13,38 +13,63 @@ export interface MediaPosterCardProps {
   onPress: () => void
 }
 
+function pickString(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return null
+}
+
+function getBadge(item: MediaCockpitItem): string | null {
+  const formatted = formatContentBadge(item)
+  const kind = pickString(item.contentKind, item.classification?.type)
+  if (kind === 'movie') return 'Movie'
+  if (kind === 'episode' || kind === 'tv') return 'Episode'
+  if (kind === 'season' || kind === 'album' || kind === 'collection') return 'Collection'
+  if (kind === 'song' || kind === 'music') return 'Music'
+  return formatted || (item.localEntityId ? 'Work' : null)
+}
+
+function getArtwork(item: MediaCockpitItem): string | null {
+  return pickString(item.posterUrl, item.thumbnailUrl, item.thumbnail, item.stillUrl, item.backdropUrl)
+}
+
+function getSubtitle(item: MediaCockpitItem): string | null {
+  return pickString(item.subtitle, item.creatorName, item.sourceProviderName, item.publisherName, item.channelName, item.channel?.name)
+}
+
+function getSignal(item: MediaCockpitItem): string | null {
+  if (typeof item.sourceCount === 'number' && item.sourceCount > 1) return `${item.sourceCount} sources`
+  const archiveStatus = pickString(item.archiveStatus, item.availabilityStatus)
+  if (archiveStatus === 'local' || archiveStatus === 'complete-local') return 'local copy'
+  if (archiveStatus === 'cached' || archiveStatus === 'retained') return 'retained'
+  if (item.publicationId || item.localEntityId) return 'provenance'
+  return pickString(item.sourceProviderName, item.publisherName)
+}
+
 function MediaPosterCardComponent({ item, onPress }: MediaPosterCardProps) {
-  const title = typeof item.title === 'string' && item.title.trim().length > 0 ? item.title : 'Untitled media'
-  const subtitle = typeof item.subtitle === 'string' && item.subtitle.trim().length > 0
-    ? item.subtitle
-    : typeof item.channelName === 'string' && item.channelName.trim().length > 0
-      ? item.channelName
-      : typeof item.channel?.name === 'string' && item.channel.name.trim().length > 0
-        ? item.channel.name
-        : typeof item.creatorName === 'string' && item.creatorName.trim().length > 0
-          ? item.creatorName
-          : null
-  const thumbnailUrl = typeof item.thumbnailUrl === 'string' && item.thumbnailUrl.trim().length > 0
-    ? item.thumbnailUrl
-    : typeof item.thumbnail === 'string' && item.thumbnail.trim().length > 0
-      ? item.thumbnail
-      : null
+  const title = pickString(item.title) || 'Untitled media'
+  const subtitle = getSubtitle(item)
+  const thumbnailUrl = getArtwork(item)
   const duration = typeof item.duration === 'number' && item.duration > 0
     ? item.duration
     : typeof item.durationSec === 'number' && item.durationSec > 0
       ? item.durationSec
       : undefined
-  const badge = formatContentBadge(item)
+  const badge = getBadge(item)
+  const signal = getSignal(item)
+  const conflictCount = Array.isArray(item.conflicts) ? item.conflicts.length : 0
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`Play ${title}`}
+      accessibilityLabel={`Open ${title}`}
       style={styles.card}
     >
       <View style={styles.posterFrame}>
         <ThumbnailImage thumbnailUrl={thumbnailUrl} duration={duration} channelInitial={title.charAt(0).toUpperCase()} style={styles.thumbnail} />
+        <View pointerEvents="none" style={styles.posterScrim} />
         {badge ? (
           <View style={styles.badgeWrap} pointerEvents="none">
             <Text style={styles.badge} numberOfLines={1}>{badge}</Text>
@@ -54,6 +79,10 @@ function MediaPosterCardComponent({ item, onPress }: MediaPosterCardProps) {
       <View style={styles.copy}>
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {subtitle ? <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text> : null}
+        <View style={styles.signalRow}>
+          {signal ? <Text style={styles.signal} numberOfLines={1}>{signal}</Text> : null}
+          {conflictCount > 0 ? <Text style={styles.signalWarn} numberOfLines={1}>conflict</Text> : null}
+        </View>
       </View>
     </Pressable>
   )
@@ -79,6 +108,14 @@ const styles = StyleSheet.create({
     height: '100%',
     aspectRatio: undefined,
     borderRadius: 0,
+  },
+  posterScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 74,
+    backgroundColor: 'rgba(0,0,0,0.34)',
   },
   badgeWrap: {
     position: 'absolute',
@@ -111,5 +148,39 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     marginTop: 4,
+  },
+  signalRow: {
+    minHeight: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 7,
+  },
+  signal: {
+    color: colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(163,230,53,0.26)',
+    backgroundColor: 'rgba(163,230,53,0.08)',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  signalWarn: {
+    color: '#fde68a',
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.28)',
+    backgroundColor: 'rgba(251,191,36,0.10)',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
 })

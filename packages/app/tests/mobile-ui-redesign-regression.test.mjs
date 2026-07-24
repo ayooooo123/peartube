@@ -103,6 +103,33 @@ test('media cockpit components stay presentational', () => {
   )
 })
 
+
+test('media cockpit cards surface permissionless media graph signals', () => {
+  const sources = [
+    'components/media/HeroFeatureCard.tsx',
+    'components/media/MediaPosterCard.tsx',
+    'components/media/EpisodeCard.tsx',
+  ].map((componentPath) => readApp(componentPath)).join('\n')
+
+  for (const required of [
+    'posterUrl',
+    'backdropUrl',
+    'stillUrl',
+    'sourceCount',
+    'sourceProviderName',
+    'archiveStatus',
+    'availabilityStatus',
+    'conflicts',
+    'provenance',
+    'localEntityId',
+    'publicationId',
+    'Permissionless media CDN',
+    'Play selected source',
+  ]) {
+    assert.ok(sources.includes(required), `media cockpit cards should surface ${required}`)
+  }
+})
+
 test('mobile home media cockpit preserves playback, channel, and refresh paths', () => {
   const source = readApp('app/(tabs)/index.tsx')
 
@@ -112,6 +139,10 @@ test('mobile home media cockpit preserves playback, channel, and refresh paths',
     'MediaRail',
     'MediaPosterCard',
     'EpisodeCard',
+    "{ type: 'collections' }",
+    "{ type: 'creators' }",
+    'mediaHub.collections.items',
+    'mediaHub.creators.items',
     'getMediaHubSourceItem',
     'playMediaHubItem',
     'rpc.preparePlayback(playbackRequest)',
@@ -127,20 +158,69 @@ test('mobile home media cockpit preserves playback, channel, and refresh paths',
 
 test('mobile home media cockpit playback helper preserves videoId playback identity', () => {
   const source = readApp('app/(tabs)/index.tsx')
+  const mapper = readApp('lib/media-hub.js')
 
+  assert.ok(source.includes('getMediaHubPlayableSourceItem'), 'mobile Home should import the shared playable-source adapter')
   assert.match(
     source,
-    /const id = source\?\.id \|\| source\?\.videoId \|\| item\?\.id \|\| item\?\.videoId/,
-    'media hub playback helper should map normalized or watch-history videoId to playVideo id',
-  )
-  assert.match(
-    source,
-    /return \{ \.\.\.source, id, channelKey, publicBeeKey \}/,
-    'media hub playback helper should return a playback-safe source copy without mutating raw records',
+    /return getMediaHubPlayableSourceItem\(item\)/,
+    'media hub playback helper should delegate normalized source unwrapping to the shared adapter',
   )
   assert.match(
     source,
     /playVideo\(getMediaHubSourceItem\(item\)\)/,
     'media cockpit playback should go through the source normalizer before playVideo',
   )
+  assert.match(
+    mapper,
+    /source\.videoId,[\s\S]*source\.path,[\s\S]*source\.id,[\s\S]*selectedSource \? null : item\?\.videoId/,
+    'shared adapter should prefer selected source video/path/id before legacy item id fallbacks',
+  )
+})
+
+test('Task 18 media entity routes expose inspectable source and provenance panels', () => {
+  const home = readApp('app/(tabs)/index.tsx')
+  const mediaRoute = readApp('app/media/[id].tsx')
+  const collectionRoute = readApp('app/collection/[id].tsx')
+  const creatorRoute = readApp('app/creator/[id].tsx')
+  const detail = readApp('components/media/MediaEntityDetailScreen.tsx')
+  const sourceSelector = readApp('components/media/SourceSelector.tsx')
+  const provenancePanel = readApp('components/media/ProvenancePanel.tsx')
+  const conflictNotice = readApp('components/media/ConflictNotice.tsx')
+  const archiveStatus = readApp('components/media/ArchiveStatus.tsx')
+
+  for (const required of [
+    "openMediaEntityPage(hero, 'media')",
+    "openMediaEntityPage(mediaItem, 'collection')",
+    "openMediaEntityPage(mediaItem, 'creator')",
+    'encodeMediaEntityRouteParam',
+    'getMediaEntityRouteId',
+    "onDetailsPress={() => openMediaEntityPage(hero, 'media')}",
+    'onChannelPress={() => openMediaHubChannel(hero)}',
+  ]) {
+    assert.ok(home.includes(required), `mobile Home should wire entity navigation through ${required}`)
+  }
+  assert.ok(mediaRoute.includes('type="media"'), 'media route should render media entity detail screen')
+  assert.ok(collectionRoute.includes('type="collection"'), 'collection route should render collection entity detail screen')
+  assert.ok(creatorRoute.includes('type="creator"'), 'creator route should render creator entity detail screen')
+  for (const required of [
+    'SourceSelector',
+    'ProvenancePanel',
+    'ConflictNotice',
+    'ArchiveStatus',
+    'useLocalSearchParams',
+    'fallbackItemForRoute',
+    'onSelectSource={(source) => setSelectedSourceKey(sourceIdentityKey(source))}',
+    'candidateSourcesForItem',
+    'fallbackItemForRoute',
+    'CollectionStructurePanel',
+    'CreatorContributionsPanel',
+  ]) {
+    assert.ok(detail.includes(required), `entity detail route should include ${required}`)
+  }
+  assert.ok(sourceSelector.includes('Playable publications and renditions'), 'SourceSelector should expose playable publications')
+  assert.ok(sourceSelector.includes('onPress={() => onSelectSource?.(source)}'), 'SourceSelector should wire source presses to the selected-source callback')
+  assert.ok(provenancePanel.includes('Publisher claims'), 'ProvenancePanel should expose publisher claims')
+  assert.ok(conflictNotice.includes('Conflict notice'), 'ConflictNotice should expose metadata conflicts')
+  assert.ok(archiveStatus.includes('Archive status'), 'ArchiveStatus should expose archive evidence')
 })

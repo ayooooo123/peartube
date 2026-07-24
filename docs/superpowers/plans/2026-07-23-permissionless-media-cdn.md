@@ -1463,6 +1463,108 @@ git commit -m "refactor(network): delete the global feed data plane"
 
 ---
 
+## Additional Operability, Recovery, and Abuse-Resistance Work
+
+These items were identified after Tasks 19–22 exposed the core protocol shape. They are required before the design should be treated as product-complete, even if the cryptographic/protocol foundations are already implemented.
+
+### Migration observability
+
+Migration must expose user- and operator-visible state, not only deterministic tests:
+
+- [ ] Show migration states: pending, running, complete, failed, and retrying.
+- [ ] Report imported records, skipped records, quarantined records, and unsupported legacy shapes.
+- [ ] Preserve machine-readable failure reasons so support/debug tooling can tell “still migrating” from “quarantined” from “gone.”
+- [ ] Provide a safe retry path and an exportable migration report without exposing secrets.
+
+### Trust/debug explanation UI
+
+Users need to understand why a media entity/source appears or disappears:
+
+- [ ] Explain which publisher, index feed, moderation feed, and local policy decision introduced each visible source.
+- [ ] Show why the selected source won over alternatives and why another source was blocked, stale, incomplete, or deprioritized.
+- [ ] Surface claim conflicts, provenance, archive state, local-cache state, and peer/unavailability state in plain language.
+- [ ] Keep the explanation local; do not require a global authority to answer “why am I seeing this?”
+
+### Discovery/index spam resistance
+
+Moderation is necessary but not sufficient. Discovery and index ingestion must resist pressure from spam and malformed-but-valid records:
+
+- [ ] Enforce per-index, per-publisher, per-agent, and per-collection ingest/projection budgets.
+- [ ] Bound duplicate storms, fork storms, huge collection poisoning, malicious metadata/title/artwork spam, and repeated retractions/renames.
+- [ ] Keep reputation or quality signals local heuristics, never global truth.
+- [ ] Add adversarial tests for spammy signed-but-unwanted feeds and indexes.
+
+### Key loss, recovery, and revoked-device UX
+
+The publisher root operation model must be understandable and recoverable:
+
+- [ ] Define UX and protocol behavior for lost device, revoked device, rotated root, stale device publishing, and failed halfway legacy import.
+- [ ] Show when a device is authorized, stale, revoked, or unable to publish.
+- [ ] Define what the user can still do when media exists locally but publisher authority is lost.
+- [ ] Test that stale/revoked devices cannot publish after root transition acceptance.
+
+### Backup and export story
+
+A user should be able to rebuild their local view and evidence without trusting an old relay:
+
+- [ ] Export publisher root public history and recovery metadata without private root secrets.
+- [ ] Export local graph/index preferences, followed publisher/index feeds, moderation subscriptions, archive/offload evidence, and policy state.
+- [ ] Restore those exports on a new device and verify all signatures/checkpoints before use.
+- [ ] Document which data is portable, which data is device-local, and which secrets are never exported by default.
+
+### Storage pressure UX
+
+Local-first caching, pinning, archiving, and seeding need understandable disk controls:
+
+- [ ] Show what disk is used by owned originals, immutable publications, pinned/archive commitments, local cache, thumbnails, indexes, and temporary transfer state.
+- [ ] Explain what can be evicted safely and what will stop being seeded or become unavailable.
+- [ ] Preview the consequence of reducing disk/upload/background limits before applying policy changes.
+- [ ] Ensure pledged/archive data is never silently evicted as ordinary cache.
+
+### Versioned protocol deprecation policy
+
+Protocol-major tests exist, but operators and users need a written compatibility story:
+
+- [ ] Define how long old peers/backends are tolerated and what error newer clients show.
+- [ ] Make publisher catalogs and index feeds advertise required protocol versions/capabilities.
+- [ ] Define mobile bundle behavior when stored backend state was created by an older protocol.
+- [ ] Add compatibility/deprecation tests around deleted legacy surfaces so fallback pressure does not reintroduce them.
+
+### Privacy model
+
+The plan must explicitly state what is private, what leaks, and what is not solved yet:
+
+- [ ] Document leakage from followed publishers/indexes, requested assets, catalog fetches, archive challenges, moderation subscriptions, peer IP correlation, and local discovery.
+- [ ] Avoid product copy that implies anonymity or privacy the protocol does not provide.
+- [ ] Add settings/copy that distinguish local moderation privacy from network-visible fetch/seeding behavior.
+
+### Relay/operator model
+
+The design should not assume infinite free archivists or neutral always-on relays:
+
+- [ ] Declare whether the intended model is altruistic pinning, friend/family relays, paid archival operators, community indexes, or local-first only.
+- [ ] Ensure the protocol does not require any default trusted relay, default paid operator, or central upload endpoint.
+- [ ] Add operator-facing diagnostics for archive pledge health, possession challenge failures, capacity exhaustion, and rejected offload attempts.
+
+### Disaster and chaos tests
+
+Add product-level chaos tests in addition to unit/protocol tests:
+
+- [ ] Kill the app mid-upload, mid-migration, mid-offload confirmation, and mid-live sealing.
+- [ ] Delete half the blobs, restart, and verify structured unavailability without corrupting graph state.
+- [ ] Serve stale catalogs, equivocated indexes, and changed moderation feeds during active download.
+- [ ] Rotate publisher roots while peers hold old catalogs.
+- [ ] Jump clocks forward/backward around live epochs, archive pledges, moderation expiry, and offload confirmation tokens.
+- [ ] Let the mobile OS kill the backend during migration/offload/live paths and verify recovery.
+
+### Anti-centralization regression guards
+
+Source-absence tests should cover the design goal, not only old symbol names:
+
+- [ ] Reject hardcoded relay keys, default trusted indexes, default moderation authorities, default upload endpoints, and remote bootstrap services capable of serving media bytes.
+- [ ] Reject env-var-only production trust roots and hidden central service dependencies.
+- [ ] Verify bootstrap/discovery can introduce candidates but cannot become a media origin or trust authority.
+
 ## Completion Criteria
 
 The program is complete only when all of the following are observed:

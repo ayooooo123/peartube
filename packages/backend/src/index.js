@@ -80,3 +80,4 @@ export * as peerScorer from './peer-scorer.js';
 export * as budgetManager from './budget-manager.js';
 export * as records from './records/index.js';
 export * as publisher from './publisher/index.js';
+export * as mediaGraph from './media-graph/index.js';

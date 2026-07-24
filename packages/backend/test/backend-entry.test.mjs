@@ -127,8 +127,11 @@ test('createBackend exposes universal core as the entry runtime composition root
   const stream = {}
   let readyPayload = null
   const lifecycle = []
-  let backendDestroyCount = 0
   let contextPlatform = null
+  let releaseBackendDestroy = null
+  const backendDestroyGate = new Promise((resolve) => {
+    releaseBackendDestroy = resolve
+  })
   const metaDb = {
     async get() { return null },
     async put() {}
@@ -147,7 +150,10 @@ test('createBackend exposes universal core as the entry runtime composition root
         api: {},
         identityManager: { getIdentities: () => [] },
         uploadManager: {},
-        async destroy() { backendDestroyCount++ },
+        async destroy() {
+          lifecycle.push('backend:destroy')
+          await backendDestroyGate
+        },
       }
     },
     createGossipService: () => ({}),
@@ -180,10 +186,18 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(session.rpc.ready.protocolVersion, 42)
   t.is(contextPlatform, 'desktop')
   t.ok(lifecycle.includes('hc:init'))
+  t.is(contextPlatform, 'desktop')
   t.ok(lifecycle.includes('hc:start'))
 
-  await session.destroy()
-  await session.destroy()
-  t.is(backendDestroyCount, 1)
+  const firstDestroy = session.destroy()
+  let secondDestroySettled = false
+  const secondDestroy = session.destroy().finally(() => {
+    secondDestroySettled = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  t.is(secondDestroySettled, false, 'concurrent destroy waits for the in-flight shutdown')
+  releaseBackendDestroy()
+  await Promise.all([firstDestroy, secondDestroy])
   t.is(session.core.state, 'shutdown')
+  t.is(lifecycle.filter((entry) => entry === 'backend:destroy').length, 1)
 })

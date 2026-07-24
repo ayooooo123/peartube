@@ -26,6 +26,9 @@ export class FederatedSearch {
     this.finder = finder
     this.ensureIndexed = typeof opts.ensureIndexed === 'function' ? opts.ensureIndexed : null
     this.searchTopic = null
+    this.discovery = null
+    this.closed = false
+    this._closePromise = null
     /** @type {Map<string, {resultSets: Array<Array>, timeoutId: any, resolve: Function}>} */
     this.pendingQueries = new Map() // queryId -> aggregation state
 
@@ -43,6 +46,7 @@ export class FederatedSearch {
    * @param {Buffer} channelKey - Channel key for topic derivation
    */
   setupTopic(channelKey) {
+    if (this.closed) throw new Error('Federated search is closed')
     // Derive search topic from channel key
     const topic = crypto.data(b4a.concat([b4a.from('peartube-search', 'utf-8'), channelKey]))
     this.searchTopic = topic
@@ -51,7 +55,7 @@ export class FederatedSearch {
 
     // Join discovery for federated search
     try {
-      this.swarm.join(this.searchTopic, { server: true, client: true })
+      this.discovery = this.swarm.join(this.searchTopic, { server: true, client: true })
     } catch {}
 
     // Wire protocol on current + future connections
@@ -69,6 +73,7 @@ export class FederatedSearch {
   }
 
   _handleConnection(conn, info) {
+    if (this.closed) return
     if (!conn || this.peerChannels.has(conn)) return
 
     let mux
@@ -132,6 +137,7 @@ export class FederatedSearch {
   }
 
   async _handleMessage(msg, conn) {
+    if (this.closed) return
     if (!msg || typeof msg !== 'object') return
 
     if (msg.type === 'SEARCH_QUERY' && msg.queryId && typeof msg.query === 'string') {
@@ -179,6 +185,7 @@ export class FederatedSearch {
    * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
    */
   async search(query, options = {}) {
+    if (this.closed) return []
     const {
       topK = 10,
       federated = true,
@@ -214,6 +221,7 @@ export class FederatedSearch {
    * @returns {Promise<Array<Array>>}
    */
   async _broadcastSearch(query, topK, timeout, channelKey) {
+    if (this.closed) return []
     const queryId = b4a.toString(crypto.randomBytes(16), 'hex')
 
     // Snapshot of current peers with protocol channels open
@@ -280,6 +288,40 @@ export class FederatedSearch {
     // Sort by score and return top K
     const sorted = Array.from(merged.values()).sort((a, b) => b.score - a.score)
     return sorted.slice(0, topK)
+  }
+
+  close() {
+    if (this._closePromise) return this._closePromise
+    this.closed = true
+    this._closePromise = (async () => {
+      for (const pending of this.pendingQueries.values()) {
+        clearTimeout(pending.timeoutId)
+        try { pending.resolve(pending.resultSets) } catch {}
+      }
+      this.pendingQueries.clear()
+
+      for (const channel of this.peerChannels.values()) {
+        try { await channel?.close?.() } catch {}
+      }
+      this.peerChannels.clear()
+
+      if (this._connectionHandler && this.swarm) {
+        try {
+          if (typeof this.swarm.off === 'function') this.swarm.off('connection', this._connectionHandler)
+          else this.swarm.removeListener?.('connection', this._connectionHandler)
+        } catch {}
+      }
+      this._connectionHandler = null
+
+      const discovery = this.discovery
+      this.discovery = null
+      try {
+        if (typeof discovery?.destroy === 'function') await discovery.destroy()
+        else await discovery?.close?.()
+      } catch {}
+      this.searchTopic = null
+    })()
+    return this._closePromise
   }
 
   // Incoming peer queries are handled by the protomux channel `onmessage` handler.

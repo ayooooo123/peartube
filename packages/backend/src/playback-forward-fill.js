@@ -96,21 +96,29 @@ export class PlaybackForwardFill {
     /** @type {Map<string, { core: any, range: any, anchorBlock: number, lastFillAt: number, opening: boolean }>} */
     this.coreState = new Map()
     this.unsubscribe = null
+    this.stopped = false
+    this.generation = 0
   }
 
   start() {
     if (this.unsubscribe) return
+    this.stopped = false
+    this.generation += 1
     this.unsubscribe = subscribeBlobPlayhead((event) => this.onPlayhead(event))
   }
 
-  stop() {
+  async stop() {
+    this.stopped = true
+    this.generation += 1
     try { this.unsubscribe?.() } catch { /* best effort */ }
     this.unsubscribe = null
-    for (const state of this.coreState.values()) this._releaseState(state)
+    const closing = Array.from(this.coreState.values(), (state) => this._releaseState(state))
     this.coreState.clear()
+    await Promise.all(closing)
   }
 
   onPlayhead(event) {
+    if (this.stopped) return
     if (!this.store || !event?.coreKeyHex) return
     const state = this.coreState.get(event.coreKeyHex) || null
 
@@ -127,20 +135,36 @@ export class PlaybackForwardFill {
   }
 
   async anchorFill(coreKeyHex, start, end) {
+    if (this.stopped) return
+    const generation = this.generation
     let state = this.coreState.get(coreKeyHex)
     if (!state) {
-      state = { core: null, range: null, anchorBlock: -1, lastFillAt: 0, opening: true }
+      state = { core: null, range: null, anchorBlock: -1, lastFillAt: 0, opening: true, released: false }
       this.coreState.set(coreKeyHex, state)
     } else {
       state.opening = true
+      state.released = false
     }
     state.lastFillAt = Date.now()
 
     try {
       if (!state.core || state.core.closed === true) {
         const core = this.store.get(Buffer.from(coreKeyHex, 'hex'))
-        await core.ready?.()
         state.core = core
+        await core.ready?.()
+        if (
+          this.stopped ||
+          generation !== this.generation ||
+          state.released ||
+          this.coreState.get(coreKeyHex) !== state ||
+          state.core !== core
+        ) {
+          if (state.core === core) {
+            state.core = null
+            try { await core.close?.() } catch { /* best effort */ }
+          }
+          return
+        }
       }
       if (typeof state.core.download !== 'function') return
 
@@ -173,22 +197,24 @@ export class PlaybackForwardFill {
       if (oldestKey === keepKey || oldestKey == null) break
       const oldest = this.coreState.get(oldestKey)
       this.coreState.delete(oldestKey)
-      this._releaseState(oldest)
+      void this._releaseState(oldest)
     }
   }
 
   _releaseState(state) {
-    if (!state) return
+    if (!state) return Promise.resolve()
+    state.released = true
     if (state.range) {
       try { state.range.destroy?.() } catch { /* best effort */ }
       state.range = null
     }
-    if (state.core) {
-      try {
-        const closing = state.core.close?.()
-        if (closing && typeof closing.catch === 'function') closing.catch(() => {})
-      } catch { /* best effort */ }
-      state.core = null
+    const core = state.core
+    state.core = null
+    if (!core) return Promise.resolve()
+    try {
+      return Promise.resolve(core.close?.()).catch(() => {})
+    } catch {
+      return Promise.resolve()
     }
   }
 }

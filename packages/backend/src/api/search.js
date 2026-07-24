@@ -3,6 +3,9 @@
 // serve other indexing paths in api.js.
 import b4a from 'b4a'
 import { FederatedSearch } from '../search/federated-search.js'
+function assertContextRunning(ctx) {
+  if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
+}
 
 export function createSearchApi({
   ctx,
@@ -27,19 +30,32 @@ export function createSearchApi({
 
       // Ensure semantic finder is initialized with persistence
       await ensureSemanticFinder(ctx)
+      assertContextRunning(ctx)
 
       // Initialize federated search if not already done
       if (!ctx.federatedSearch && ctx.swarm) {
-        ctx.federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder)
-        const channelKeyBuf = b4a.from(channelKey, 'hex')
-        ctx.federatedSearch.setupTopic(channelKeyBuf)
+        const federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder)
+        const ownership = ctx?.ownResource?.('federated search', federatedSearch, 'close', 5000)
+          || ctx?.lifecycle?.ownResource?.('federated search', federatedSearch, 'close', 5000)
+          || null
+        ctx.federatedSearch = federatedSearch
+        try {
+          const channelKeyBuf = b4a.from(channelKey, 'hex')
+          federatedSearch.setupTopic(channelKeyBuf)
+          assertContextRunning(ctx)
+        } catch (error) {
+          if (ctx.federatedSearch === federatedSearch) ctx.federatedSearch = null
+          await ownership?.cleanup?.()
+          throw error
+        }
       }
 
       // Use federated search if available, otherwise local only
-      if (ctx.federatedSearch && federated) {
-        return await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000 })
-      }
-      return await ctx.semanticFinder.search(query, topK)
+      const results = ctx.federatedSearch && federated
+        ? await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000 })
+        : await ctx.semanticFinder.search(query, topK)
+      assertContextRunning(ctx)
+      return results
     },
 
     /**

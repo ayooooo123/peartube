@@ -27,11 +27,18 @@ function toKeyHex(publicKey) {
   return null
 }
 
-export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
+export function createKnownPeerCache(metaDb, {
+  selfKeyHex = null,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
   const peers = new Map()
   let dirty = false
   let flushTimer = null
-
+  let closing = false
+  let closed = false
+  let closePromise = null
+  let flushPromise = null
   function evictOldest() {
     if (peers.size <= MAX_KNOWN_PEERS) return
     const sorted = [...peers.entries()].sort((a, b) => a[1] - b[1])
@@ -42,26 +49,38 @@ export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
   }
 
   function scheduleFlush() {
+    if (closing || closed) return
     if (flushTimer) return
-    flushTimer = setTimeout(() => {
+    flushTimer = setTimer(() => {
       flushTimer = null
+      if (closing || closed) return
       void flush()
     }, FLUSH_DEBOUNCE_MS)
   }
 
-  async function flush() {
-    if (!dirty || !metaDb) return
-    dirty = false
-    const list = [...peers.entries()].map(([key, lastSeen]) => ({ key, lastSeen }))
-    try {
-      await metaDb.put(KNOWN_PEERS_KEY, list)
-    } catch (err) {
-      console.log('[KnownPeers] flush failed:', err?.message)
-      dirty = true
-    }
+  function flush() {
+    if (flushPromise) return flushPromise
+    if (closed || !dirty || !metaDb) return Promise.resolve()
+    flushPromise = (async () => {
+      while (!closed && dirty) {
+        dirty = false
+        const list = [...peers.entries()].map(([key, lastSeen]) => ({ key, lastSeen }))
+        try {
+          await metaDb.put(KNOWN_PEERS_KEY, list)
+        } catch (err) {
+          console.log('[KnownPeers] flush failed:', err?.message)
+          dirty = true
+          break
+        }
+      }
+    })().finally(() => {
+      flushPromise = null
+    })
+    return flushPromise
   }
 
   function record(publicKey) {
+    if (closing || closed) return
     if (!metaDb) return
     const keyHex = toKeyHex(publicKey)
     if (!keyHex || keyHex === selfKeyHex) return
@@ -71,7 +90,25 @@ export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
     scheduleFlush()
   }
 
-  return { record, flush }
+  function close({ flush: flushPending = true } = {}) {
+    if (closePromise) return closePromise
+    closePromise = (async () => {
+      closing = true
+      clearTimer(flushTimer)
+      flushTimer = null
+      if (flushPromise) await flushPromise
+      if (flushPending) await flush()
+      closed = true
+      closing = false
+    })()
+    return closePromise
+  }
+
+  function stop() {
+    return close({ flush: false })
+  }
+
+  return { record, flush, close, stop }
 }
 
 export async function loadKnownPeers(metaDb) {

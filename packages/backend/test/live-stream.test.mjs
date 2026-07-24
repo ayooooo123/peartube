@@ -18,6 +18,8 @@ import {
 } from '../src/live/live-core-format.js'
 import { LiveBroadcastService } from '../src/live/live-broadcast-service.js'
 import { LivePlaybackService } from '../src/live/live-playback-service.js'
+import { createLiveApi } from '../src/api/live.js'
+import { createBackendLifecycle } from '../src/storage.js'
 import { buildTestFmp4Init, buildTestFmp4Fragment } from './helpers/build-test-mp4.mjs'
 
 function makeStore(t) {
@@ -253,4 +255,117 @@ test('playback service slides the live window and ignores unknown routes', async
   t.is((await httpGet(`http://127.0.0.1:${playback.port}/other/path`)).status, 404)
 
   await session.stop()
+})
+
+test('lazy live services are owned immediately and broadcast resources close on shutdown', async (t) => {
+  const lifecycle = createBackendLifecycle()
+  const ownedLabels = []
+  let coreCloseCalls = 0
+  let discoveryDestroyCalls = 0
+  const core = {
+    key: Buffer.alloc(32, 7),
+    discoveryKey: Buffer.alloc(32, 8),
+    length: 0,
+    peers: [],
+    async ready() {},
+    async append() {
+      this.length += 1
+    },
+    async close() {
+      coreCloseCalls += 1
+    },
+  }
+  const ctx = {
+    lifecycle,
+    store: { get: () => core },
+    swarm: {
+      join() {
+        return {
+          async destroy() {
+            discoveryDestroyCalls += 1
+          },
+        }
+      },
+    },
+    ownResource(label, resource, methods, timeoutMs) {
+      ownedLabels.push(label)
+      return lifecycle.ownResource(label, resource, methods, timeoutMs)
+    },
+  }
+  const api = createLiveApi({ ctx, publicFeed: null })
+  const started = await api.startLivestream()
+  t.is(started.success, true)
+  await api.prepareLivePlayback('invalid')
+
+  t.ok(ownedLabels.includes('live broadcast service'))
+  t.ok(ownedLabels.includes('live playback service'))
+  await lifecycle.shutdown()
+  t.is(coreCloseCalls, 1)
+  t.is(discoveryDestroyCalls, 1)
+})
+
+test('broadcast core closes when shutdown interrupts readiness', async (t) => {
+  const lifecycle = createBackendLifecycle()
+  let releaseReady = null
+  const readyGate = new Promise((resolve) => {
+    releaseReady = resolve
+  })
+  let closeCalls = 0
+  const core = {
+    key: Buffer.alloc(32, 9),
+    discoveryKey: Buffer.alloc(32, 10),
+    length: 0,
+    ready: () => readyGate,
+    async append() {},
+    async close() {
+      closeCalls += 1
+    },
+  }
+  const ctx = {
+    lifecycle,
+    store: { get: () => core },
+    swarm: null,
+    ownResource(label, resource, methods, timeoutMs) {
+      return lifecycle.ownResource(label, resource, methods, timeoutMs)
+    },
+  }
+  const api = createLiveApi({ ctx, publicFeed: null })
+  const started = api.startLivestream()
+  await new Promise((resolve) => setImmediate(resolve))
+  await lifecycle.shutdown()
+  t.is(closeCalls, 1)
+  releaseReady()
+  t.is((await started).success, false)
+})
+
+test('playback core closes when shutdown interrupts readiness', async (t) => {
+  const lifecycle = createBackendLifecycle()
+  let releaseReady = null
+  const readyGate = new Promise((resolve) => {
+    releaseReady = resolve
+  })
+  let closeCalls = 0
+  const core = {
+    discoveryKey: Buffer.alloc(32, 11),
+    ready: () => readyGate,
+    async close() {
+      closeCalls += 1
+    },
+  }
+  const ctx = {
+    lifecycle,
+    store: { get: () => core },
+    swarm: null,
+    ownResource(label, resource, methods, timeoutMs) {
+      return lifecycle.ownResource(label, resource, methods, timeoutMs)
+    },
+  }
+  const playback = new LivePlaybackService({ ctx })
+  const opening = playback._getSession('12'.repeat(32))
+  await new Promise((resolve) => setImmediate(resolve))
+  await lifecycle.shutdown()
+  t.is(closeCalls, 1)
+  releaseReady()
+  await t.exception(opening, /shutting down/)
+  t.is(playback._sessions.size, 0)
 })

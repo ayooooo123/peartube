@@ -60,6 +60,7 @@ export async function startMobileBackend(options = {}) {
     createBackendImpl: async (hostOptions) => {
       const backendSession = await createBackendImpl({
         ...hostOptions,
+        platform: 'mobile',
         storagePath: hostOptions.storagePath || storagePath,
         stream: hostOptions.stream || stream,
         args: hostOptions.args ?? args

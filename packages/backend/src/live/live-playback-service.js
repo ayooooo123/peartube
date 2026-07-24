@@ -36,6 +36,26 @@ const DEFAULT_LIVE_WINDOW_SEGMENTS = 120
 const SEGMENT_FETCH_TIMEOUT_MS = 10000
 const CONTROL_FETCH_TIMEOUT_MS = 3000
 const ROUTE_PATTERN = /^\/live\/([0-9a-f]{64})\/(playlist\.m3u8|init\.mp4|seg-(\d+)\.m4s)$/
+function assertContextRunning(ctx) {
+  if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
+}
+
+function ownCoreUntilSession(ctx, label, core) {
+  if (typeof ctx?.ownResource === 'function') {
+    return ctx.ownResource(label, core, 'close', 5000)
+  }
+  let active = true
+  return {
+    release() {
+      active = false
+    },
+    async cleanup() {
+      if (!active) return
+      active = false
+      await core?.close?.()
+    },
+  }
+}
 
 export class LivePlaybackService {
   constructor({ ctx, liveWindowSegments = DEFAULT_LIVE_WINDOW_SEGMENTS } = {}) {
@@ -45,14 +65,17 @@ export class LivePlaybackService {
     this.port = 0
     this._serverReady = null
     this._sessions = new Map() // coreKeyHex → session
+    this._closePromise = null
   }
 
   async ensureServer() {
+    assertContextRunning(this.ctx)
     if (this._serverReady) return this._serverReady
     this._serverReady = (async () => {
       const http = await loadBareOrNodeHttpModule()
+      assertContextRunning(this.ctx)
       await new Promise((resolve, reject) => {
-        this.server = http.createServer((req, res) => {
+        const server = http.createServer((req, res) => {
           this._handleRequest(req, res).catch((err) => {
             try {
               if (!res.headersSent) {
@@ -63,19 +86,22 @@ export class LivePlaybackService {
             } catch { /* connection gone */ }
           })
         })
-        this.server.on('error', reject)
-        this.server.listen(0, '127.0.0.1', () => {
-          const addr = this.server.address?.() || null
+        this.server = server
+        server.on('error', reject)
+        server.listen(0, '127.0.0.1', () => {
+          const addr = server.address?.() || null
           this.port = addr?.port || 0
           resolve()
         })
       })
+      assertContextRunning(this.ctx)
       return this.port
     })()
     return this._serverReady
   }
 
   async getPlaybackUrl(liveCoreKeyHex) {
+    assertContextRunning(this.ctx)
     const keyHex = String(liveCoreKeyHex || '').toLowerCase()
     if (!/^[0-9a-f]{64}$/.test(keyHex)) throw new Error('Invalid live core key')
     await this.ensureServer()
@@ -84,22 +110,24 @@ export class LivePlaybackService {
     return `http://127.0.0.1:${this.port}/live/${keyHex}/playlist.m3u8`
   }
 
-  async close() {
-    for (const session of this._sessions.values()) {
-      try {
-        const closing = session.core?.close?.()
-        if (closing?.catch) closing.catch(() => {})
-      } catch { /* best effort */ }
-    }
-    this._sessions.clear()
-    if (this.server) {
-      await new Promise((resolve) => {
-        try { this.server.close(() => resolve()) } catch { resolve() }
-      })
-      this.server = null
-      this._serverReady = null
-      this.port = 0
-    }
+  close() {
+    if (this._closePromise) return this._closePromise
+    this._closePromise = (async () => {
+      for (const session of this._sessions.values()) {
+        try { await session.core?.close?.() } catch { /* best effort */ }
+      }
+      this._sessions.clear()
+      if (this.server) {
+        const server = this.server
+        await new Promise((resolve) => {
+          try { server.close(() => resolve()) } catch { resolve() }
+        })
+        if (this.server === server) this.server = null
+        this._serverReady = null
+        this.port = 0
+      }
+    })()
+    return this._closePromise
   }
 
   // ─── Session state ──────────────────────────────────────────────────────────
@@ -107,23 +135,32 @@ export class LivePlaybackService {
   async _getSession(keyHex) {
     let session = this._sessions.get(keyHex)
     if (session) return session
+    assertContextRunning(this.ctx)
 
     const core = this.ctx.store.get(b4a.from(keyHex, 'hex'))
-    await core.ready()
-    if (this.ctx.swarm && core.discoveryKey) {
-      try { retainSwarmDiscovery(this.ctx, core.discoveryKey, { label: `live:${keyHex.slice(0, 16)}` }) } catch { /* best effort */ }
-    }
-    try { core.update({ wait: true }).catch(() => {}) } catch { /* best effort */ }
+    const coreOwnership = ownCoreUntilSession(this.ctx, `live playback core ${keyHex.slice(0, 16)}`, core)
+    try {
+      await core.ready()
+      assertContextRunning(this.ctx)
+      if (this.ctx.swarm && core.discoveryKey) {
+        try { retainSwarmDiscovery(this.ctx, core.discoveryKey, { label: `live:${keyHex.slice(0, 16)}` }) } catch { /* best effort */ }
+      }
+      try { core.update({ wait: true }).catch(() => {}) } catch { /* best effort */ }
 
-    session = {
-      core,
-      descriptor: null,
-      timescale: null,
-      eosBlock: null,
-      decodeTimes: new Map(), // block index → tfdt decode time (media timescale units)
+      session = {
+        core,
+        descriptor: null,
+        timescale: null,
+        eosBlock: null,
+        decodeTimes: new Map(), // block index → tfdt decode time (media timescale units)
+      }
+      this._sessions.set(keyHex, session)
+      coreOwnership.release()
+      return session
+    } catch (error) {
+      await coreOwnership.cleanup()
+      throw error
     }
-    this._sessions.set(keyHex, session)
-    return session
   }
 
   async _getDescriptor(session) {

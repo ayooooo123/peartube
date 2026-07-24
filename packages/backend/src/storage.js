@@ -33,6 +33,147 @@ import { serveVideoRangeHttpRequest } from './video-range-http.js'
 import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
 import { appendDebugLine } from './debug-log.js'
 
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000
+
+export function createBackendLifecycle({
+  scheduleDeferred = typeof setImmediate === 'function' ? setImmediate : (fn) => setTimeout(fn, 0),
+  cancelDeferred = typeof clearImmediate === 'function' ? clearImmediate : clearTimeout,
+  shutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
+} = {}) {
+  const controller = new AbortController()
+  const ownership = new Set()
+  let shutdownPromise = null
+
+  const runBounded = async (entry) => {
+    let timeoutId = null
+    let timedOut = false
+    try {
+      await Promise.race([
+        Promise.resolve().then(entry.cleanup),
+        new Promise((resolve) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true
+            resolve()
+          }, entry.timeoutMs)
+        }),
+      ])
+    } catch (error) {
+      console.warn(`[BackendLifecycle] ${entry.label} cleanup failed:`, error?.message || error)
+    } finally {
+      clearTimeout(timeoutId)
+    }
+    if (timedOut) {
+      console.warn(`[BackendLifecycle] ${entry.label} cleanup timed out after ${entry.timeoutMs}ms`)
+    }
+  }
+
+  const consume = (entry) => {
+    if (entry.cleanupPromise) return entry.cleanupPromise
+    if (!entry.active) return Promise.resolve()
+    entry.active = false
+    entry.cleanupPromise = runBounded(entry).finally(() => {
+      ownership.delete(entry)
+    })
+    return entry.cleanupPromise
+  }
+
+  const own = (label, cleanup, timeoutMs = shutdownTimeoutMs) => {
+    if (typeof cleanup !== 'function') throw new TypeError(`Cleanup for ${label} must be a function`)
+    const entry = {
+      label,
+      cleanup,
+      timeoutMs: Math.max(1, Number(timeoutMs) || shutdownTimeoutMs),
+      active: true,
+      cleanupPromise: null,
+    }
+    ownership.add(entry)
+
+    const registration = {
+      release() {
+        if (!entry.active) return
+        entry.active = false
+        ownership.delete(entry)
+      },
+      cleanup() {
+        return consume(entry)
+      },
+    }
+
+    if (controller.signal.aborted) void registration.cleanup()
+    return registration
+  }
+
+  const ownResource = (label, resource, methods = ['close', 'destroy', 'stop'], timeoutMs) => {
+    const candidates = Array.isArray(methods) ? methods : [methods]
+    return own(label, async () => {
+      if (resource?.closed === true) return
+      for (const method of candidates) {
+        if (typeof resource?.[method] === 'function') {
+          await resource[method]()
+          return
+        }
+      }
+    }, timeoutMs)
+  }
+
+  const ownTimer = (label, handle, cancel = clearTimeout) =>
+    own(label, () => cancel(handle), shutdownTimeoutMs)
+
+  const defer = (label, work) => {
+    if (controller.signal.aborted) return null
+    let handle = null
+    let task = null
+    const registration = own(label, async () => {
+      if (handle !== null) {
+        cancelDeferred(handle)
+        handle = null
+      }
+      if (task) await task
+    })
+    try {
+      handle = scheduleDeferred(() => {
+        handle = null
+        task = Promise.resolve()
+          .then(() => work(controller.signal))
+          .catch((error) => {
+            if (!controller.signal.aborted) {
+              console.warn(`[BackendLifecycle] ${label} failed:`, error?.message || error)
+            }
+          })
+          .finally(() => registration.release())
+      })
+    } catch (error) {
+      registration.release()
+      throw error
+    }
+    return registration
+  }
+
+  const shutdown = () => {
+    if (shutdownPromise) return shutdownPromise
+    controller.abort()
+    shutdownPromise = (async () => {
+      const entries = Array.from(ownership)
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        await consume(entries[index])
+      }
+    })()
+    return shutdownPromise
+  }
+
+  return {
+    signal: controller.signal,
+    own,
+    ownResource,
+    ownTimer,
+    defer,
+    shutdown,
+    get ownedCount() {
+      return ownership.size
+    },
+  }
+}
+
 function isEmbeddedBareKitStoragePath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
 }
@@ -1061,6 +1202,40 @@ function wrapStoreForBlobServerStreaming(store) {
   return blobStore
 }
 
+function getContextResourceOwnership(ctx) {
+  if (!ctx?._resourceOwnership) ctx._resourceOwnership = new WeakMap()
+  return ctx._resourceOwnership
+}
+
+function ownContextResource(ctx, label, resource, methods = ['close', 'destroy', 'stop'], timeoutMs = 2000) {
+  if (!resource || !ctx?.lifecycle) return null
+  const ownership = getContextResourceOwnership(ctx)
+  const existing = ownership.get(resource)
+  if (existing) return existing
+  const registration = ctx.lifecycle.ownResource(label, resource, methods, timeoutMs)
+  ownership.set(resource, registration)
+  return registration
+}
+
+async function cleanupContextResource(ctx, resource, methods = ['close', 'destroy', 'stop']) {
+  const registration = ctx?._resourceOwnership?.get?.(resource)
+  if (registration) {
+    await registration.cleanup()
+    return
+  }
+  const candidates = Array.isArray(methods) ? methods : [methods]
+  for (const method of candidates) {
+    if (typeof resource?.[method] === 'function') {
+      await resource[method]()
+      return
+    }
+  }
+}
+
+function assertContextRunning(ctx) {
+  if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
+}
+
 function getSwarmDiscoveryHandles(ctx) {
   if (!ctx?._swarmDiscoveryHandles) ctx._swarmDiscoveryHandles = new Map()
   return ctx._swarmDiscoveryHandles
@@ -1074,14 +1249,18 @@ function createDeferredDiscoveryHandle() {
     resolveFlushed = resolve
   })
 
+  const closeHandle = (handle) => {
+    if (typeof handle?.destroy === 'function') handle.destroy()
+    else handle?.close?.()
+  }
+
   return {
     _peartubeDeferred: true,
     _peartubeDestroyed: false,
     _peartubeStarted: false,
     _setRealHandle(handle) {
       if (destroyed) {
-        try { handle?.destroy?.() } catch { /* best effort */ }
-        try { handle?.close?.() } catch { /* best effort */ }
+        try { closeHandle(handle) } catch { /* best effort */ }
         resolveFlushed?.(null)
         return
       }
@@ -1095,8 +1274,7 @@ function createDeferredDiscoveryHandle() {
     destroy() {
       destroyed = true
       this._peartubeDestroyed = true
-      try { realHandle?.destroy?.() } catch { /* best effort */ }
-      try { realHandle?.close?.() } catch { /* best effort */ }
+      try { closeHandle(realHandle) } catch { /* best effort */ }
       resolveFlushed?.(null)
     },
     close() {
@@ -1142,10 +1320,13 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   if (existing) return existing
 
   const handle = createDeferredDiscoveryHandle()
+  if (ctx.lifecycle?.signal?.aborted) return null
+  ownContextResource(ctx, `swarm discovery ${options?.label || discoveryKeyHex.slice(0, 16)}`, handle, ['destroy', 'close'])
   handles.set(discoveryKeyHex, handle)
   scheduleDeferredDiscoveryJoin(ctx, discoveryKey, handle, options)
   return handle
 }
+
 
 
 function isValidCoreKeyHex(value) {
@@ -1174,6 +1355,11 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
     errors: 0,
     lastError: null,
   }
+  const signal = ctx?.lifecycle?.signal
+  const loadPublicBeeImpl = typeof options.loadPublicBee === 'function'
+    ? options.loadPublicBee
+    : loadPublicBee
+  if (signal?.aborted) return stats
 
   if (!isValidCoreKeyHex(publicBeeKeyHex)) {
     stats.errors += 1
@@ -1183,7 +1369,8 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
 
   let publicBee = null
   try {
-    publicBee = await loadPublicBee(ctx, publicBeeKeyHex)
+    publicBee = await loadPublicBeeImpl(ctx, publicBeeKeyHex)
+    if (signal?.aborted) return stats
   } catch (err) {
     stats.errors += 1
     stats.lastError = err?.message || String(err)
@@ -1193,6 +1380,7 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
   let videos = []
   try {
     videos = await publicBee?.listVideos?.().catch(() => [])
+    if (signal?.aborted) return stats
   } catch (err) {
     stats.errors += 1
     stats.lastError = err?.message || String(err)
@@ -1210,9 +1398,18 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
   }
 
   for (const [coreKeyHex, kind] of coreKeys) {
+    if (signal?.aborted) return stats
     try {
       const core = ctx.store?.get?.(b4a.from(coreKeyHex, 'hex'))
+      if (core) {
+        if (typeof ctx.ownResource === 'function') {
+          ctx.ownResource(`retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
+        } else {
+          ownContextResource(ctx, `retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
+        }
+      }
       await core?.ready?.()
+      if (signal?.aborted) return stats
       if (core?.discoveryKey && retainSwarmDiscovery(ctx, core.discoveryKey, {
         label: `${options.label || 'publicBee'}:${kind}:${coreKeyHex.slice(0, 16)}`
       })) {
@@ -1243,6 +1440,7 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
+  const lifecycle = config.lifecycle || createBackendLifecycle()
   globalNetworkStartupTiming = createNetworkStartupTiming()
   await appendDebugLine('[storage] initializeStorage entry')
   warmOptionalStorageDeps()
@@ -1323,6 +1521,7 @@ export async function initializeStorage(config) {
     network,
     swarmOptions
   })
+  let swarmOwnership = null
   let swarm
   if (typeof LoadedHyperswarm !== 'function') {
     console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
@@ -1337,6 +1536,7 @@ export async function initializeStorage(config) {
       swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
     }
   }
+  swarmOwnership = lifecycle.ownResource('Hyperswarm', swarm, 'destroy', 2000)
   swarm._peartubeSwarmOptions = summarizeSwarmOptions(hyperswarmOptions)
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
   globalNetworkStartupTiming?.record('swarm-created', {
@@ -1377,7 +1577,7 @@ export async function initializeStorage(config) {
     try {
       if (globalSwarm === swarm) globalSwarm = null
       globalSwarmDiagnostics = null
-      await swarm?.destroy?.()
+      await swarmOwnership?.cleanup()
       await appendDebugLine(`[storage] swarm destroyed after init failure ${label}`)
     } catch (error) {
       await appendDebugLine(`[storage] swarm destroy after init failure failed ${label} ${describeDebugError(error)}`)
@@ -1433,8 +1633,10 @@ export async function initializeStorage(config) {
     ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
     : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
   let store
+  let storeOwnership = null
   try {
     store = await createCorestoreInstance(storagePath, corestoreOptions)
+    storeOwnership = lifecycle.ownResource('Corestore', store, 'close', 5000)
   } catch (error) {
     await appendDebugLine(`[storage] corestore create failed ${describeDebugError(error)}`)
     await destroySwarmAfterInitFailure('corestore create')
@@ -1451,6 +1653,7 @@ export async function initializeStorage(config) {
       appendDebugLine,
       describeError: describeDebugError
     })
+    storeOwnership?.release()
     await destroySwarmAfterInitFailure('corestore ready')
     throw error
   }
@@ -1482,44 +1685,21 @@ export async function initializeStorage(config) {
 
   let metaCore = null
   let metaDb = null
+  let metaCoreOwnership = null
+  let metaDbOwnership = null
+  let blobServerOwnership = null
 
   async function cleanupFailedMetadataStartup(label, originalError) {
     await appendDebugLine(`[storage] metadata init cleanup start ${label}`)
 
-    try {
-      await metaDb?.close?.()
-      await appendDebugLine(`[storage] metadata init cleanup metaDb ok ${label}`)
-    } catch (error) {
-      await appendDebugLine(
-        `[storage] metadata init cleanup metaDb failed ${label} ${describeDebugError(error)}`
-      )
-    }
+    await blobServerOwnership?.cleanup()
+    if (globalBlobServer === blobServer) globalBlobServer = null
 
-    try {
-      await metaCore?.close?.()
-      await appendDebugLine(`[storage] metadata init cleanup metaCore ok ${label}`)
-    } catch (error) {
-      await appendDebugLine(
-        `[storage] metadata init cleanup metaCore failed ${label} ${describeDebugError(error)}`
-      )
-    }
+    await metaDbOwnership?.cleanup()
+    if (globalMetaDb === metaDb) globalMetaDb = null
 
-    try {
-      await blobServer?.close?.()
-      if (globalBlobServer === blobServer) globalBlobServer = null
-      if (globalMetaDb === metaDb) globalMetaDb = null
-      await appendDebugLine(`[storage] metadata init cleanup blobServer ok ${label}`)
-    } catch (error) {
-      await appendDebugLine(
-        `[storage] metadata init cleanup blobServer failed ${label} ${describeDebugError(error)}`
-      )
-    }
-
-    await cleanupFailedCorestoreOpen(store, `metadata init cleanup ${label}`, {
-      appendDebugLine,
-      describeError: describeDebugError
-    })
-
+    await metaCoreOwnership?.cleanup()
+    await storeOwnership?.cleanup()
     await destroySwarmAfterInitFailure(label)
 
     throw originalError
@@ -1530,6 +1710,7 @@ export async function initializeStorage(config) {
   console.log('[Storage] metaCore get start')
   try {
     metaCore = await openDeterministicNamedCore(store, 'peartube-meta');
+    metaCoreOwnership = lifecycle.ownResource('metadata core', metaCore, 'close', 2000)
   } catch (error) {
     await appendDebugLine(`[storage] metaCore get failed ${describeDebugError(error)}`)
     console.error('[Storage] metaCore get failed:', describeDebugError(error))
@@ -1555,6 +1736,7 @@ export async function initializeStorage(config) {
     keyEncoding: 'utf-8',
     valueEncoding: 'json'
   });
+  metaDbOwnership = lifecycle.ownResource('metadata database', metaDb, 'close', 2000)
   await appendDebugLine('[storage] metaDb construct ok')
   console.log('[Storage] metaDb construct ok')
   try {
@@ -1592,7 +1774,11 @@ export async function initializeStorage(config) {
       port: desiredPort || 0,
       host: blobServerBindHost
     });
-
+    blobServerOwnership = lifecycle.own('blob server', async () => {
+      releaseAllPrioritizedBlobRanges()
+      await blobServer?.close?.()
+    }, 2000)
+    blobServer._peartubeLifecycle = lifecycle
     // Patch _onrequest to add CORS headers for mediabunny's UrlSource (fetch)
     const origOnRequest = blobServer._onrequest.bind(blobServer)
     blobServer._onrequest = async function (req, res) {
@@ -1698,6 +1884,7 @@ export async function initializeStorage(config) {
   if (HyperswarmStats) {
     try {
       networkStats = new HyperswarmStats(swarm);
+      lifecycle.ownResource('network statistics', networkStats, ['destroy', 'close', 'stop'], 2000)
       console.log('[Storage] Network stats initialized');
     } catch (e) {
       console.log('[Storage] Network stats init failed:', e?.message);
@@ -1711,6 +1898,7 @@ export async function initializeStorage(config) {
   if (Wakeup) {
     try {
       wakeup = new Wakeup();
+      lifecycle.ownResource('wakeup protocol', wakeup, ['destroy', 'close', 'stop'], 2000)
       console.log('[Storage] Wakeup protocol initialized');
     } catch (err) {
       console.log('[Storage] Wakeup init failed (non-fatal):', err?.message);
@@ -1720,6 +1908,7 @@ export async function initializeStorage(config) {
   // Known-peer cache records remote pubkeys for diagnostics and future peer tracking.
   const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
   const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
+  lifecycle.ownResource('known-peer cache', knownPeerCache, 'close', 2000)
   globalKnownPeerCache = knownPeerCache
 
   // Register handlers BEFORE swarm.join so any incoming connection is replicated
@@ -1785,16 +1974,19 @@ export async function initializeStorage(config) {
     peerPoolDiscoveryStarted = true
     try {
       const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
+      lifecycle.ownResource('peer pool discovery', poolDiscovery, ['destroy', 'close'], 2000)
       globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex, reason })
       globalPeerPoolDiscovery = poolDiscovery;
       swarm.peerPoolDiscovery = poolDiscovery
       console.log('[Storage] Joined scoped peer pool topic immediately:', reason)
-      swarm._peartubePeerPoolWarmup = schedulePeerPoolWarmupRefreshes({
+      const peerPoolWarmup = schedulePeerPoolWarmupRefreshes({
         platform,
         swarm,
         discovery: poolDiscovery,
         startupTiming: globalNetworkStartupTiming
       })
+      swarm._peartubePeerPoolWarmup = peerPoolWarmup
+      lifecycle.own('peer pool warmup timers', () => peerPoolWarmup.cancel(), 2000)
       // Do not await flushed(); mobile DHT bootstrapping can lag behind the join.
       poolDiscovery.flushed().then(() => {
         console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
@@ -1828,11 +2020,12 @@ export async function initializeStorage(config) {
   // Bounded and best-effort; joinPeer is idempotent so this never duplicates an
   // existing connection.
   if (!swarm._peartubeOffline && typeof swarm.joinPeer === 'function') {
-    void (async () => {
+    lifecycle.defer('known peer warm reconnect', async (signal) => {
       try {
         const known = await loadKnownPeers(metaDb)
         let dialed = 0
         for (const { key } of known.slice(0, KNOWN_PEER_REDIAL_LIMIT)) {
+          if (signal.aborted) return
           try { swarm.joinPeer(b4a.from(key, 'hex')); dialed++ } catch { /* best effort */ }
         }
         if (dialed > 0) {
@@ -1840,9 +2033,9 @@ export async function initializeStorage(config) {
           void appendDebugLine(`[storage] warm reconnect re-dialing ${dialed} known peers`)
         }
       } catch (err) {
-        console.log('[Storage] Warm reconnect skipped:', err?.message || err)
+        if (!signal.aborted) console.log('[Storage] Warm reconnect skipped:', err?.message || err)
       }
-    })()
+    })
   }
 
   // Start listening - DON'T block on it since it may hang on mobile
@@ -1886,15 +2079,24 @@ export async function initializeStorage(config) {
     }
   }
 
-  // Check DHT state after a delay; the owning context clears these on shutdown.
-  const dhtStateTimers = [
-    setTimeout(logDhtState, 2000),
-    setTimeout(logDhtState, 5000),
-  ]
-
+  // Check DHT state after a delay; lifecycle shutdown clears both timers.
+  lifecycle.ownTimer('DHT state log timer (2s)', setTimeout(logDhtState, 2000))
+  lifecycle.ownTimer('DHT state log timer (5s)', setTimeout(logDhtState, 5000))
 
   // Set global reference for suspend/resume lifecycle management
   globalChannels = channels;
+  lifecycle.own('storage shutdown preparation', async () => {
+    await persistDhtRoutingTable(swarm, metaDb, { reason: 'shutdown' })
+    if (globalSwarm === swarm) globalSwarm = null
+    if (globalBlobServer === blobServer) globalBlobServer = null
+    if (globalChannels === channels) globalChannels = null
+    if (globalPeerPoolDiscovery === swarm.peerPoolDiscovery) globalPeerPoolDiscovery = null
+    if (globalMetaDb === metaDb) globalMetaDb = null
+    if (globalKnownPeerCache === knownPeerCache) globalKnownPeerCache = null
+    globalSwarmDiagnostics = null
+    globalNetworkStartupTiming = null
+    networkStats = null
+  }, 2000)
 
   // Generate session token for blob URL authentication
   // This token is included in video URLs to prevent unauthorized access
@@ -1920,53 +2122,21 @@ export async function initializeStorage(config) {
     wakeup,
     knownPeerCache,
     peerPoolDiscovery: globalPeerPoolDiscovery,
-    platform
+    platform,
+    lifecycle,
+    ownResource(label, resource, methods, timeoutMs) {
+      return ownContextResource(storageContext, label, resource, methods, timeoutMs)
+    },
+    registerCleanup(label, cleanup, options = {}) {
+      const registration = lifecycle.own(label, cleanup, options.timeoutMs)
+      return { cancel: () => registration.release() }
+    },
+    registerCleanupTimer(label, timer, clear = clearTimeout) {
+      const registration = lifecycle.ownTimer(label, timer, clear)
+      return { cancel: () => registration.release() }
+    },
   };
 
-  installBackendCleanupStack(storageContext)
-  storageContext.registerCleanup('store close', async () => {
-    const storeDb = store?.storage?.db
-    if (storeDb && typeof storeDb.flush === 'function') {
-      try { await storeDb.flush() } catch (err) { console.log('[Backend] Shutdown: store db flush failed (non-fatal):', err?.message) }
-    }
-    await store?.close?.()
-  }, { timeoutMs: 5000 })
-  storageContext.registerCleanup('metaCore close', async () => metaCore?.close?.(), { timeoutMs: 2000 })
-  storageContext.registerCleanup('metaDb close', async () => metaDb?.close?.(), { timeoutMs: 2000 })
-  storageContext.registerCleanup('known peer cache flush', async () => knownPeerCache?.flush?.(), { timeoutMs: 1000 })
-  storageContext.registerCleanup('swarm destroy', async () => {
-    try { await persistDhtRoutingTable(swarm, metaDb, { reason: 'shutdown' }) } catch (err) { console.log('[Backend] Shutdown: DHT routing table persist failed (non-fatal):', err?.message) }
-    try { swarm?._peartubePeerPoolWarmup?.cancel?.() } catch { /* best effort */ }
-    await swarm?.destroy?.()
-  }, { timeoutMs: 2000 })
-  storageContext.registerCleanup('peer pool discovery destroy', async () => {
-    try { globalPeerPoolDiscovery?.destroy?.() } catch { /* best effort */ }
-  }, { timeoutMs: 1000 })
-  storageContext.registerCleanup('blobServer close', async () => {
-    try { releaseAllPrioritizedBlobRanges() } catch { /* best effort */ }
-    await blobServer?.close?.()
-  }, { timeoutMs: 2000 })
-  storageContext.registerCleanup('public bee cache close', async () => {
-    const publicBeeCache = storageContext._publicBeeCache
-    if (!publicBeeCache) return
-    await Promise.allSettled([...publicBeeCache.values()].map(async (bee) => bee?.close?.()))
-    publicBeeCache.clear()
-  }, { timeoutMs: 2000 })
-  storageContext.registerCleanup('channels close', async () => {
-    await Promise.allSettled([...channels.values()].map(async (channel) => channel?.close?.()))
-    channels.clear()
-  }, { timeoutMs: 2000 })
-  storageContext.registerCleanup('retained swarm discoveries destroy', async () => {
-    const handles = storageContext._swarmDiscoveryHandles
-    if (!handles) return
-    for (const handle of handles.values()) {
-      try { handle?.destroy?.() } catch { /* best effort */ }
-    }
-    handles.clear()
-  }, { timeoutMs: 1000 })
-  for (const [index, timer] of dhtStateTimers.entries()) {
-    storageContext.registerCleanupTimer(`dht state timer ${index + 1}`, timer)
-  }
 
   return storageContext
 }
@@ -2042,15 +2212,17 @@ async function resolveChannelLoadOptions(ctx, channelKeyHex, options) {
 }
 
 export async function loadChannel(ctx, channelKeyHex, options = {}) {
+  assertContextRunning(ctx)
   channelKeyHex = channelKeyHex.toLowerCase()
   options = await resolveChannelLoadOptions(ctx, channelKeyHex, options)
+  assertContextRunning(ctx)
   if (!ctx.channels) ctx.channels = new Map()
   if (ctx.channels.has(channelKeyHex)) {
     const cached = ctx.channels.get(channelKeyHex)
     if (!isChannelUsable(cached)) {
       console.log('[Storage] loadChannel: evicting stale cached channel:', channelKeyHex.slice(0, 16))
       ctx.channels.delete(channelKeyHex)
-      try { await cached?.close?.() } catch { /* best effort */ }
+      try { await cleanupContextResource(ctx, cached) } catch { /* best effort */ }
     }
 
     if (ctx.channels.has(channelKeyHex)) {
@@ -2060,7 +2232,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
           console.log('[Storage] loadChannel: cached channel read-only, reloading for writable access:', channelKeyHex.slice(0, 16))
           try {
             await Promise.race([
-              current.close(),
+              cleanupContextResource(ctx, current),
               new Promise((resolve) => setTimeout(resolve, 2000))
             ])
           } catch { /* best effort */ }
@@ -2114,6 +2286,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
           ? await ctx.store.createKeyPair(writerKeyName)
           : null
 
+      assertContextRunning(ctx)
       console.log('[Storage] Loading channel:', channelKeyHex.slice(0, 16));
       const ch = new MultiWriterChannel(ctx.store, {
         key: b4a.from(channelKeyHex, 'hex'),
@@ -2124,6 +2297,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
         publicProjectionState: options.publicProjectionState,
         setPublicProjectionState: options.setPublicProjectionState,
       })
+      ownContextResource(ctx, `channel ${channelKeyHex.slice(0, 16)}`, ch)
 
       const readyTimeoutMs = options.preferWritable ? 25000 : 10000
       const readyStart = Date.now()
@@ -2135,8 +2309,9 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
             readyTimer = setTimeout(() => reject(new Error('Channel ready timeout')), readyTimeoutMs)
           })
         ])
+        assertContextRunning(ctx)
       } catch (err) {
-        try { await ch.close() } catch { /* best effort */ }
+        try { await cleanupContextResource(ctx, ch) } catch { /* best effort */ }
         throw err
       } finally {
         clearTimeout(readyTimer)
@@ -2245,6 +2420,7 @@ function getPublicBeeInflight(ctx) {
  * @returns {Promise<PublicChannelBee>}
  */
 export async function loadPublicBee(ctx, publicBeeKeyHex) {
+  assertContextRunning(ctx)
   if (ctx.store.closed) {
     throw new Error('Corestore is closed')
   }
@@ -2266,23 +2442,26 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
       return false
     },
     closeStale: async (bee) => {
-      try { await bee?.close?.() } catch { /* best effort */ }
+      try { await cleanupContextResource(ctx, bee) } catch { /* best effort */ }
     },
     loadFresh: async () => {
+      assertContextRunning(ctx)
       console.log('[Storage] loadPublicBee: loading:', publicBeeKeyHex.slice(0, 16))
 
       const bee = new PublicChannelBee(ctx.store, {
         key: publicBeeKeyHex
       })
+      ownContextResource(ctx, `public bee ${publicBeeKeyHex.slice(0, 16)}`, bee)
 
       try {
         await Promise.race([
           bee.ready(),
           new Promise((_, reject) => setTimeout(() => reject(new Error('PublicBee ready timeout')), 10000))
         ])
+        assertContextRunning(ctx)
       } catch (err) {
         console.error('[Storage] loadPublicBee failed:', err.message)
-        try { await bee.close() } catch { /* best effort */ }
+        try { await cleanupContextResource(ctx, bee) } catch { /* best effort */ }
         throw err
       }
 
@@ -2307,6 +2486,7 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
  * @returns {Promise<{channel: import('./channel/multi-writer-channel.js').MultiWriterChannel, channelKeyHex: string, encryptionKeyHex: string|null}>}
  */
 export async function createChannel(ctx, options = {}) {
+  assertContextRunning(ctx)
   if (!ctx.channels) ctx.channels = new Map()
 
   const suffix = b4a.toString(crypto.randomBytes(16), 'hex')
@@ -2329,6 +2509,7 @@ export async function createChannel(ctx, options = {}) {
     ? await ctx.store.createKeyPair(writerKeyName)
     : null
 
+  assertContextRunning(ctx)
   const ch = new MultiWriterChannel(ctx.store, {
     key: derivedChannelKeyHex ? b4a.from(derivedChannelKeyHex, 'hex') : null,
     encryptionKey: derivedEncryptionKeyHex ? b4a.from(derivedEncryptionKeyHex, 'hex') : null,
@@ -2341,11 +2522,16 @@ export async function createChannel(ctx, options = {}) {
       ? createPublicProjectionStateWriter(ctx, derivedChannelKeyHex)
       : null,
   })
-  await ch.ready()
-
-  if (!ch.writable) {
-    // This should never happen for a brand-new channel; fail loudly so callers don't hang.
-    throw new Error('Channel not writable after creation')
+  ownContextResource(ctx, `channel ${derivedChannelKeyHex?.slice(0, 16) || 'new'}`, ch)
+  try {
+    await ch.ready()
+    assertContextRunning(ctx)
+    if (!ch.writable) {
+      throw new Error('Channel not writable after creation')
+    }
+  } catch (error) {
+    await cleanupContextResource(ctx, ch)
+    throw error
   }
 
   const channelKeyHex = ch.keyHex
@@ -2413,12 +2599,39 @@ export async function deriveDeterministicChannelSeed(store, { writerKeyName, enc
  * @returns {Promise<{channel: import('./channel/multi-writer-channel.js').MultiWriterChannel, channelKeyHex: string}>}
  */
 export async function pairDevice(ctx, inviteCode, options = {}) {
+  assertContextRunning(ctx)
+  const channelOwnerships = new Map()
   const pairer = new ChannelPairer(ctx.store, inviteCode, {
     swarm: ctx.swarm,
-    deviceName: options.deviceName || ''
+    deviceName: options.deviceName || '',
+    onChannel: (channel) => {
+      if (!channelOwnerships.has(channel)) {
+        channelOwnerships.set(
+          channel,
+          ownContextResource(ctx, `paired channel ${channel.keyHex?.slice(0, 16) || 'unknown'}`, channel, 'close', 2000)
+        )
+      }
+    },
   })
-  await pairer.ready()
-  const channel = await pairer.finished()
+  const pairerOwnership = ownContextResource(ctx, 'channel pairer', pairer, 'close', 2000)
+  let channel = null
+  try {
+    await pairer.ready()
+    assertContextRunning(ctx)
+    channel = await pairer.finished()
+  } catch (error) {
+    await Promise.all([...channelOwnerships.values()].map((ownership) => ownership.cleanup()))
+    await pairerOwnership?.cleanup()
+    throw error
+  }
+  const channelOwnership = channelOwnerships.get(channel)
+  await pairerOwnership?.cleanup()
+  try {
+    assertContextRunning(ctx)
+  } catch (error) {
+    await channelOwnership?.cleanup()
+    throw error
+  }
   const channelKeyHex = channel.keyHex
   if (!ctx.channels) ctx.channels = new Map()
   ctx.channels.set(channelKeyHex, channel)
@@ -2427,16 +2640,25 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
   try {
     await ctx.metaSubspaces.channelKinds.put(channelKeyHex, { kind: 'hyperdb', createdAt: Date.now() })
   } catch { /* best effort */ }
+  if (ctx.lifecycle?.signal?.aborted) {
+    ctx.channels.delete(channelKeyHex)
+    await channelOwnership?.cleanup()
+    throw new Error('Backend is shutting down')
+  }
 
   // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
   if (ctx.swarm) {
     try {
-      if (channel.discoveryKey) retainSwarmDiscovery(ctx, channel.discoveryKey, { label: `paired:${channelKeyHex.slice(0, 16)}` })
       // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
       await channel.setupPairing(ctx.swarm)
     } catch (err) {
       console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
     }
+  }
+  if (ctx.lifecycle?.signal?.aborted) {
+    ctx.channels.delete(channelKeyHex)
+    await channelOwnership?.cleanup()
+    throw new Error('Backend is shutting down')
   }
 
   // Create wakeup session for paired channel
@@ -2454,6 +2676,7 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
  * @returns {{url: string}} - Returns synchronously!
  */
 export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
+  assertContextRunning(ctx)
   console.log('[Storage] GET_VIDEO_URL_INSTANT:', blobsCoreKeyHex?.slice(0, 16));
 
   if (!blobsCoreKeyHex || blobsCoreKeyHex.length !== 64) {
@@ -2483,7 +2706,9 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
 
   // Kick off background sync (don't await)
   const blobsCore = ctx.store.get(keyBuffer)
+  ownContextResource(ctx, `instant blob core ${blobsCoreKeyHex.slice(0, 16)}`, blobsCore, 'close')
   blobsCore.ready().then(() => {
+    if (ctx.lifecycle?.signal?.aborted) return
     if (ctx.swarm && blobsCore.discoveryKey) {
       try {
         retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
@@ -2514,6 +2739,7 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   if (options.instant) {
     return getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options)
   }
+  assertContextRunning(ctx)
 
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB:', blobsCoreKeyHex?.slice(0, 16), 'blobId:', JSON.stringify(blobId), 'keyLength:', blobsCoreKeyHex?.length);
 
@@ -2533,9 +2759,11 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
 
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: calling store.get...');
   const blobsCore = ctx.store.get(keyBuffer)
+  ownContextResource(ctx, `blob core ${blobsCoreKeyHex.slice(0, 16)}`, blobsCore, 'close')
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: store.get returned, calling ready...');
 
   await blobsCore.ready()
+  assertContextRunning(ctx)
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ready() complete');
 
   if (!blobsCore.key) {
@@ -2608,209 +2836,41 @@ export async function shutdownBackend(ctx) {
   ctx._isShutdown = true
   ctx.isShuttingDown = true
 
-  // The cast watchdog probes the blob server on an interval and force-resumes
-  // it; left running past shutdown it targets a closed server forever.
   if (watchdogTimer) {
     clearInterval(watchdogTimer)
     watchdogTimer = null
   }
 
-  async function runShutdownStep(label, fn, timeoutMs = 5000) {
-    let timeoutId = null
+  const runShutdownStep = async (label, cleanup, timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS) => {
+    let timeout = null
     let timedOut = false
-
     try {
       await Promise.race([
-        Promise.resolve().then(fn),
+        Promise.resolve().then(cleanup),
         new Promise((resolve) => {
-          timeoutId = setTimeout(() => {
+          timeout = setTimeout(() => {
             timedOut = true
             resolve()
           }, timeoutMs)
-        })
+        }),
       ])
-    } catch (err) {
-      console.log(`[Backend] Shutdown: ${label} failed (non-fatal):`, err?.message)
-      return
+    } catch (error) {
+      console.warn(`[Backend] Shutdown: ${label} failed (non-fatal):`, error?.message || error)
     } finally {
-      if (timeoutId) clearTimeout(timeoutId)
+      clearTimeout(timeout)
     }
-
-    if (timedOut) {
-      console.log(`[Backend] Shutdown: ${label} timed out after ${timeoutMs}ms (continuing)`)
-    }
-  }
-
-  function cleanupGlobalReferences() {
-    if (globalSwarm === ctx.swarm) globalSwarm = null
-    if (globalBlobServer === ctx.blobServer) globalBlobServer = null
-    if (globalChannels === ctx.channels) globalChannels = null
-    if (globalPeerPoolDiscovery === ctx.peerPoolDiscovery) globalPeerPoolDiscovery = null
-    if (globalMetaDb === ctx.metaDb) globalMetaDb = null
-    if (globalKnownPeerCache === ctx.knownPeerCache) globalKnownPeerCache = null
-    globalSwarmDiagnostics = null
-    globalNetworkStartupTiming = null
-    networkStats = null
-  }
-
-  if (typeof ctx._runCleanupStack === 'function') {
-    ctx._shutdownPromise = (async () => {
-      await ctx._runCleanupStack(runShutdownStep)
-      cleanupGlobalReferences()
-      console.log('[Backend] Shutdown complete')
-    })()
-    return ctx._shutdownPromise
-  }
-
-  const shutdownBody = async () => {
-    if (ctx.seedPinRegistration) {
-      const registration = ctx.seedPinRegistration
-      console.log('[Backend] Shutdown: unregistering seed-pin protocol...')
-      await runShutdownStep('seed-pin unregister', async () => {
-        await registration.unregister?.()
-      }, 2000)
-      if (ctx.seedPinRegistration === registration) ctx.seedPinRegistration = null
-    }
-
-    if (ctx.publicFeed) {
-      console.log('[Backend] Shutdown: persisting public feed cache...')
-      try {
-        if (typeof ctx.publicFeed._persistDiscoveredNow === 'function') {
-          await ctx.publicFeed._persistDiscoveredNow()
-        }
-      } catch (err) {
-        console.log('[Backend] Shutdown: public feed cache persist failed (non-fatal):', err?.message)
-      }
-    }
-
-    if (ctx.channels) {
-      const channelCount = ctx.channels.size
-      console.log(`[Backend] Shutdown: closing ${channelCount} channels...`)
-      try {
-        await Promise.allSettled([...ctx.channels.values()].map(async (ch) => {
-          try {
-            if (ch && typeof ch.close === 'function') {
-              await ch.close()
-            }
-          } catch { /* best effort */ }
-        }))
-      } catch (err) {
-        console.log('[Backend] Shutdown: channel close batch failed (non-fatal):', err?.message)
-      }
-    }
-
-    if (ctx._publicBeeCache) {
-      const publicBeeCount = ctx._publicBeeCache.size
-      console.log(`[Backend] Shutdown: closing ${publicBeeCount} publicBeeCache entries...`)
-      try {
-        await Promise.allSettled([...ctx._publicBeeCache.values()].map(async (bee) => {
-          try {
-            if (bee && typeof bee.close === 'function') {
-              await bee.close()
-            }
-          } catch { /* best effort */ }
-        }))
-      } catch (err) {
-        console.log('[Backend] Shutdown: publicBeeCache close batch failed (non-fatal):', err?.message)
-      }
-    }
-
-    if (ctx.publicFeed) {
-      console.log('[Backend] Shutdown: stopping publicFeed...')
-      await runShutdownStep('publicFeed stop', async () => {
-        await ctx.publicFeed.stop()
-      }, 2000)
-    }
-
-    if (ctx._swarmDiscoveryHandles) {
-      const discoveryCount = ctx._swarmDiscoveryHandles.size
-      console.log(`[Backend] Shutdown: destroying ${discoveryCount} retained swarm discoveries...`)
-      for (const handle of ctx._swarmDiscoveryHandles.values()) {
-        try {
-          handle?.destroy?.()
-        } catch { /* best effort */ }
-      }
-      ctx._swarmDiscoveryHandles.clear()
-    }
-
-    if (ctx.playbackWindowCache) {
-      try { ctx.playbackWindowCache.stop() } catch { /* best effort */ }
-    }
-
-    if (ctx.playbackForwardFill) {
-      try { ctx.playbackForwardFill.stop() } catch { /* best effort */ }
-    }
-
-    if (ctx.blobServer) {
-      console.log('[Backend] Shutdown: closing blobServer...')
-      try {
-        releaseAllPrioritizedBlobRanges()
-      } catch { /* best effort */ }
-      await runShutdownStep('blobServer close', async () => {
-        await ctx.blobServer.close()
-      }, 2000)
-    }
-
-    if (ctx.blindPeering) {
-      console.log('[Backend] Shutdown: closing blind-peering client...')
-      await runShutdownStep('blind-peering close', async () => {
-        await ctx.blindPeering.close()
-      }, 2000)
-    }
-
-    if (ctx.swarm) {
-      console.log('[Backend] Shutdown: persisting DHT routing table before destroy...')
-      try {
-        await persistDhtRoutingTable(ctx.swarm, ctx.metaDb, { reason: 'shutdown' })
-      } catch (err) {
-        console.log('[Backend] Shutdown: DHT routing table persist failed (non-fatal):', err?.message)
-      }
-      try {
-        ctx.swarm._peartubePeerPoolWarmup?.cancel?.()
-      } catch { /* best effort */ }
-      console.log('[Backend] Shutdown: destroying swarm...')
-      await runShutdownStep('swarm destroy', async () => {
-        await ctx.swarm.destroy()
-      }, 2000)
-    }
-
-    if (ctx.metaDb) {
-      console.log('[Backend] Shutdown: closing metaDb...')
-      await runShutdownStep('metaDb close', async () => {
-        await ctx.metaDb.close()
-      }, 2000)
-    }
-
-    if (ctx.metaCore) {
-      console.log('[Backend] Shutdown: closing metaCore...')
-      await runShutdownStep('metaCore close', async () => {
-        await ctx.metaCore.close()
-      }, 2000)
-    }
-
-    if (ctx.store) {
-      const storeDb = ctx.store?.storage?.db
-      if (storeDb && typeof storeDb.flush === 'function') {
-        console.log('[Backend] Shutdown: flushing store db...')
-        try {
-          await storeDb.flush()
-        } catch (err) {
-          console.log('[Backend] Shutdown: store db flush failed (non-fatal):', err?.message)
-        }
-      }
-
-      console.log('[Backend] Shutdown: closing store...')
-      await runShutdownStep('store close', async () => {
-        await ctx.store.close()
-      }, 5000)
-    }
+    if (timedOut) console.warn(`[Backend] Shutdown: ${label} timed out after ${timeoutMs}ms`)
   }
 
   ctx._shutdownPromise = (async () => {
-    await shutdownBody()
-    cleanupGlobalReferences()
+    if (typeof ctx.lifecycle?.shutdown === 'function') {
+      await ctx.lifecycle.shutdown()
+    } else if (typeof ctx._runCleanupStack === 'function') {
+      await ctx._runCleanupStack(runShutdownStep)
+    }
     console.log('[Backend] Shutdown complete')
   })()
+
   return ctx._shutdownPromise
 }
 
@@ -2979,6 +3039,7 @@ export function startBlobServerWatchdog() {
 
     req.end()
   }, 30000)
+  globalBlobServer?._peartubeLifecycle?.ownTimer('blob server watchdog', watchdogTimer, clearInterval)
 }
 
 export async function prefetchVideoForCast(drive, filePath, signal) {

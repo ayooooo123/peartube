@@ -62,12 +62,13 @@ export async function createBackend(opts = {}) {
   let core = null
   let backend = null
   let rpc = null
-  let destroyed = false
+  let destroyPromise = null
 
-  async function destroy() {
-    if (destroyed) return
-    destroyed = true
-    await core?.shutdown?.()
+  function destroy() {
+    if (!destroyPromise) {
+      destroyPromise = Promise.resolve().then(() => core?.shutdown?.())
+    }
+    return destroyPromise
   }
 
   try {

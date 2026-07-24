@@ -4,11 +4,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { resolveHyperswarmOptions } from '../src/storage.js'
+import {
+  createBackendLifecycle,
+  getVideoUrlFromBlob,
+  getVideoUrlInstant,
+  resolveHyperswarmOptions,
+} from '../src/storage.js'
+import { createKnownPeerCache } from '../src/known-peers.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const storageSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'storage.js'), 'utf8')
+const pairerSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'channel', 'pairer.js'), 'utf8')
 
 test('storage startup does not eagerly load HTTP before backend ready', () => {
   const initStorageModulesBody =
@@ -117,12 +124,177 @@ test('storage tears down the early swarm on every storage init failure path', ()
   assert.match(storageSource, /destroySwarmAfterInitFailure\('corestore ready'\)/)
   assert.match(storageSource, /destroySwarmAfterInitFailure\(label\)/)
 })
+test('storage registers long-lived resources with the instance lifecycle as they are created', () => {
+  assert.match(storageSource, /swarm = new LoadedHyperswarm\(hyperswarmOptions\);[\s\S]{0,500}lifecycle\.ownResource\('Hyperswarm', swarm/)
+  assert.match(storageSource, /store = await createCorestoreInstance\(storagePath, corestoreOptions\)[\s\S]{0,160}lifecycle\.ownResource\('Corestore', store/)
+  assert.match(storageSource, /metaCore = await openDeterministicNamedCore\(store, 'peartube-meta'\);[\s\S]{0,160}lifecycle\.ownResource\('metadata core', metaCore/)
+  assert.match(storageSource, /metaDb = new Hyperbee\(metaCore,[\s\S]{0,180}lifecycle\.ownResource\('metadata database', metaDb/)
+  assert.match(storageSource, /blobServer = new BlobServer\(blobStore,[\s\S]{0,240}lifecycle\.own\('blob server'/)
+  assert.match(storageSource, /const pairer = new ChannelPairer\([\s\S]{0,800}ownContextResource\(ctx, 'channel pairer', pairer/)
+  assert.match(storageSource, /onChannel: \(channel\) => \{[\s\S]{0,400}ownContextResource\(ctx, `paired channel[\s\S]{0,800}channel = await pairer\.finished\(\)/)
+  const pairDeviceBody = storageSource.match(/export async function pairDevice\(ctx, inviteCode, options = \{\}\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.ok(pairDeviceBody.indexOf('ownContextResource(ctx, `paired channel') < pairDeviceBody.indexOf('ctx.channels.set(channelKeyHex, channel)'))
+})
+test('pairer exposes a newly created channel to lifecycle ownership before readiness', () => {
+  assert.match(pairerSource, /this\.channel = new MultiWriterChannel\([\s\S]{0,240}this\.opts\.onChannel\?\.\(this\.channel\)[\s\S]{0,80}await this\.channel\.ready\(\)/)
+  assert.match(storageSource, /new ChannelPairer\(ctx\.store, inviteCode,[\s\S]{0,300}onChannel: \(channel\) => \{[\s\S]{0,240}ownContextResource\(ctx, `paired channel/)
+})
+test('pairer retains transient discovery without duplicating the channel-owned join', () => {
+  assert.match(pairerSource, /this\.discovery = this\.swarm\.join\(this\.channel\.discoveryKey\)[\s\S]{0,120}await this\.discovery\.flushed\(\)/)
+  const pairDeviceBody = storageSource.match(/export async function pairDevice\(ctx, inviteCode, options = \{\}\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.doesNotMatch(pairDeviceBody, /retainSwarmDiscovery\(ctx, channel\.discoveryKey/)
+  assert.match(pairDeviceBody, /await channel\.setupPairing\(ctx\.swarm\)/)
+})
+
+
+test('known-peer cache cancels its debounce before metadata shutdown', async () => {
+  let scheduled = null
+  let cleared = null
+  let puts = 0
+  const metaDb = {
+    closed: false,
+    async put() {
+      assert.equal(this.closed, false, 'known-peer flush must not target a closed metadata database')
+      puts += 1
+    },
+  }
+  const cache = createKnownPeerCache(metaDb, {
+    setTimer(fn) {
+      scheduled = fn
+      return 42
+    },
+    clearTimer(id) {
+      cleared = id
+    },
+  })
+
+  cache.record(Buffer.alloc(32, 9))
+  await cache.close({ flush: false })
+  metaDb.closed = true
+  scheduled?.()
+  await Promise.resolve()
+
+  assert.equal(cleared, 42)
+  assert.equal(puts, 0)
+})
+test('known-peer cache close waits for an in-flight metadata write', async () => {
+  let releasePut = null
+  const putGate = new Promise((resolve) => {
+    releasePut = resolve
+  })
+  const metaDb = {
+    closed: false,
+    async put() {
+      assert.equal(this.closed, false)
+      await putGate
+      assert.equal(this.closed, false)
+    },
+  }
+  const cache = createKnownPeerCache(metaDb, {
+    setTimer() {
+      return 42
+    },
+    clearTimer() {},
+  })
+  cache.record(Buffer.alloc(32, 10))
+  const flush = cache.flush()
+  let closeSettled = false
+  const close = cache.close({ flush: false }).finally(() => {
+    closeSettled = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(closeSettled, false)
+  releasePut()
+  await Promise.all([flush, close])
+  metaDb.closed = true
+})
+
+
+
 
 test('storage persists and restores DHT routing table state around lifecycle events', () => {
   assert.match(storageSource, /DHT_ROUTING_TABLE_KEY/)
   assert.match(storageSource, /restorePersistedDhtRoutingTable\([\s\S]*?reason: 'startup'/)
   assert.match(storageSource, /persistDhtRoutingTable\(globalSwarm, globalMetaDb, \{ reason: 'suspend' \}\)/)
 })
+test('instant blob core background work closes on shutdown and does not update after abort', async () => {
+  const lifecycle = createBackendLifecycle()
+  let releaseReady = null
+  const readyGate = new Promise((resolve) => {
+    releaseReady = resolve
+  })
+  let closeCalls = 0
+  let updateCalls = 0
+  const core = {
+    discoveryKey: Buffer.alloc(32, 1),
+    ready() {
+      return readyGate
+    },
+    async update() {
+      updateCalls += 1
+    },
+    async close() {
+      closeCalls += 1
+    },
+  }
+  const ctx = {
+    lifecycle,
+    store: { get: () => core },
+    blobServer: {
+      port: 1234,
+      getLink: () => 'http://127.0.0.1:1234/blob',
+    },
+    swarm: {},
+  }
+  getVideoUrlInstant(ctx, '11'.repeat(32), {
+    blockOffset: 0,
+    blockLength: 1,
+    byteOffset: 0,
+    byteLength: 1,
+  })
+  await lifecycle.shutdown()
+  assert.equal(closeCalls, 1)
+  releaseReady()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(updateCalls, 0)
+})
+
+test('awaited blob core closes when shutdown interrupts readiness', async () => {
+  const lifecycle = createBackendLifecycle()
+  let releaseReady = null
+  const readyGate = new Promise((resolve) => {
+    releaseReady = resolve
+  })
+  let closeCalls = 0
+  const core = {
+    key: Buffer.alloc(32, 2),
+    ready() {
+      return readyGate
+    },
+    async close() {
+      closeCalls += 1
+    },
+  }
+  const ctx = {
+    lifecycle,
+    store: { get: () => core },
+    blobServer: {
+      port: 1234,
+      getLink: () => 'http://127.0.0.1:1234/blob',
+    },
+  }
+  const request = getVideoUrlFromBlob(ctx, '22'.repeat(32), {
+    blockOffset: 0,
+    blockLength: 1,
+    byteOffset: 0,
+    byteLength: 1,
+  })
+  await lifecycle.shutdown()
+  assert.equal(closeCalls, 1)
+  releaseReady()
+  await assert.rejects(request, /shutting down/)
+})
+
 
 
 
@@ -169,6 +341,23 @@ test('storage applies platform-specific swarm defaults without blocking explicit
   assert.equal(explicitOptions.keyPair, keyPair)
 })
 
+test('explicit network and swarm options override platform defaults', () => {
+  const keyPair = { publicKey: Buffer.alloc(32, 1), secretKey: Buffer.alloc(64, 2) }
+  const bootstrap = ['bootstrap.example:49737']
+  const options = resolveHyperswarmOptions({
+    keyPair,
+    platform: 'desktop',
+    network: { bootstrap, port: 12345 },
+    swarmOptions: { maxPeers: 17, maxParallel: 3, port: 23456 },
+  })
+
+  assert.equal(options.maxPeers, 17)
+  assert.equal(options.maxParallel, 3)
+  assert.equal(options.port, 23456)
+  assert.equal(options.bootstrap, bootstrap)
+  assert.equal(options.keyPair, keyPair)
+})
+
 test('storage creates an offline swarm fallback when Hyperswarm is unavailable', () => {
   assert.match(
     storageSource,
@@ -210,7 +399,7 @@ test('offline swarm fallback skips peer pool discovery instead of joining noop t
 
 test('storage exposes public bee content discovery retention for cached serving cores', () => {
   assert.match(storageSource, /export async function retainPublicBeeContentDiscovery\(ctx, publicBeeKeyHex/)
-  assert.match(storageSource, /await loadPublicBee\(ctx, publicBeeKeyHex\)/)
+  assert.match(storageSource, /await loadPublicBeeImpl\(ctx, publicBeeKeyHex\)/)
   assert.match(storageSource, /video\?\.blobsCoreKey/)
   assert.match(storageSource, /video\?\.thumbnailBlobsCoreKey/)
   assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)

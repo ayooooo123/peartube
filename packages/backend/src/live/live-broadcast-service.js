@@ -21,6 +21,28 @@ import b4a from 'b4a'
 import { FMP4Segmenter } from '../transcode/fmp4-segmenter.mjs'
 import { LiveCoreWriter } from './live-core-writer.js'
 import { DEFAULT_TARGET_FRAGMENT_DURATION_S, FIRST_MEDIA_BLOCK } from './live-core-format.js'
+import { retainSwarmDiscovery } from '../storage.js'
+
+function assertContextRunning(ctx) {
+  if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
+}
+
+function ownCoreUntilSession(ctx, label, core) {
+  if (typeof ctx?.ownResource === 'function') {
+    return ctx.ownResource(label, core, 'close', 5000)
+  }
+  let active = true
+  return {
+    release() {
+      active = false
+    },
+    async cleanup() {
+      if (!active) return
+      active = false
+      await core?.close?.()
+    },
+  }
+}
 
 export class LiveBroadcastSession {
   constructor({ core, writer, segmenter, videoId, liveCoreKey, announced }) {
@@ -103,42 +125,54 @@ export class LiveBroadcastService {
     height = 0,
   } = {}) {
     if (!this.ctx?.store) throw new Error('Storage not initialized')
+    assertContextRunning(this.ctx)
 
     const videoId = b4a.toString(crypto.randomBytes(16), 'hex')
     const core = this.ctx.store.get({ name: `peartube-live-${videoId}` })
-    await core.ready()
+    const coreOwnership = ownCoreUntilSession(this.ctx, `live broadcast core ${videoId}`, core)
 
-    const writer = new LiveCoreWriter(core, {
-      videoId,
-      channelKey,
-      title,
-      targetFragmentDuration,
-      codecs,
-      width,
-      height,
-    })
-    await writer.open()
+    try {
+      await core.ready()
+      assertContextRunning(this.ctx)
 
-    const segmenter = new FMP4Segmenter(writer, { targetDuration: targetFragmentDuration })
+      const writer = new LiveCoreWriter(core, {
+        videoId,
+        channelKey,
+        title,
+        targetFragmentDuration,
+        codecs,
+        width,
+        height,
+      })
+      await writer.open()
+      assertContextRunning(this.ctx)
 
-    let announced = false
-    if (this.ctx.swarm && core.discoveryKey) {
-      try {
-        this.ctx.swarm.join(core.discoveryKey, { server: true, client: true })
-        announced = true
-      } catch { /* announce is best-effort; local playback still works */ }
+      const segmenter = new FMP4Segmenter(writer, { targetDuration: targetFragmentDuration })
+
+      let announced = false
+      if (this.ctx.swarm && core.discoveryKey) {
+        try {
+          announced = Boolean(retainSwarmDiscovery(this.ctx, core.discoveryKey, {
+            label: `live-broadcast:${videoId}`,
+          }))
+        } catch { /* announce is best-effort; local playback still works */ }
+      }
+
+      const session = new LiveBroadcastSession({
+        core,
+        writer,
+        segmenter,
+        videoId,
+        liveCoreKey: b4a.toString(core.key, 'hex'),
+        announced,
+      })
+      this.sessions.set(videoId, session)
+      coreOwnership.release()
+      return session
+    } catch (error) {
+      await coreOwnership.cleanup()
+      throw error
     }
-
-    const session = new LiveBroadcastSession({
-      core,
-      writer,
-      segmenter,
-      videoId,
-      liveCoreKey: b4a.toString(core.key, 'hex'),
-      announced,
-    })
-    this.sessions.set(videoId, session)
-    return session
   }
 
   getSession(videoId) {
@@ -155,6 +189,7 @@ export class LiveBroadcastService {
   async closeAll() {
     for (const session of this.sessions.values()) {
       try { await session.stop() } catch { /* best effort */ }
+      try { await session.core?.close?.() } catch { /* best effort */ }
     }
     this.sessions.clear()
   }

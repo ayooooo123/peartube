@@ -866,6 +866,7 @@ export function createUniversalCore(options = {}) {
 
   async function shutdown() {
     return await runLifecycle(async () => {
+      if (lifecycleState === 'shutdown') return backend
       lifecycleState = 'shutting_down'
       await shutdownBackendOnce()
       await transitionNative('shutdown', ['libudx', 'libkv', 'libhc'], ['shutdown', 'close', 'stop', 'destroy'], { platform: options.platform })

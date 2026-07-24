@@ -157,6 +157,36 @@ test('PlaybackForwardFill.start subscribes to the blob playhead', (t) => {
   t.absent(fill.unsubscribe, 'cleared on stop')
 })
 
+test('PlaybackForwardFill closes a core that becomes ready after stop without opening a range', async (t) => {
+  let releaseReady = null
+  let downloadCalls = 0
+  let closeCalls = 0
+  const readyGate = new Promise((resolve) => { releaseReady = resolve })
+  const core = {
+    async ready() { await readyGate },
+    download() {
+      downloadCalls += 1
+      return { destroy() {} }
+    },
+    async close() { closeCalls += 1 },
+  }
+  const fill = new PlaybackForwardFill({
+    store: { get() { return core } },
+    config: cfg,
+    log: () => {},
+  })
+
+  fill.onPlayhead(eventAtBlock(BLOCK_OFFSET))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  fill.stop()
+  releaseReady()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  t.is(closeCalls, 1, 'the pending core is closed exactly once')
+  t.is(downloadCalls, 0, 'shutdown prevents a delayed range from opening')
+  t.is(fill.coreState.size, 0, 'shutdown does not restore cleared state')
+})
+
 test('default look-ahead is deep but bounded', (t) => {
   const c = DEFAULT_FORWARD_FILL_CONFIG
   t.ok(c.lookAheadBytes >= 64 * MB, 'deep enough to outpace playback bitrate')

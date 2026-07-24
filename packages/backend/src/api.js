@@ -45,6 +45,33 @@ import { createMediaGraphApi } from './api/media-graph.js'
 import { createPolicyApi } from './api/policy.js'
 import { buildCatalogGroupPage, buildChannelCatalog } from './catalog/channel-catalog.js'
 
+function assertApiContextRunning(ctx) {
+  if (ctx?.lifecycle?.signal?.aborted) throw new Error('Backend is shutting down')
+}
+
+function ownApiResource(ctx, label, resource, methods, timeoutMs) {
+  const ownership = typeof ctx?.ownResource === 'function'
+    ? ctx.ownResource(label, resource, methods, timeoutMs)
+    : ctx?.lifecycle?.ownResource?.(label, resource, methods, timeoutMs)
+  if (ownership) return ownership
+  const candidates = Array.isArray(methods) ? methods : [methods]
+  let cleanupPromise = null
+  return {
+    release() {},
+    cleanup() {
+      if (cleanupPromise) return cleanupPromise
+      cleanupPromise = (async () => {
+        for (const method of candidates) {
+          if (typeof resource?.[method] !== 'function') continue
+          await resource[method]()
+          return
+        }
+      })()
+      return cleanupPromise
+    },
+  }
+}
+
 const CATALOG_PROFILE_FIELDS = Object.freeze([
   'name',
   'description',
@@ -1142,14 +1169,124 @@ export function createApi({
   const VIDEO_AVAILABILITY_NEGATIVE_CACHE_TTL_MS = 1_500
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
-  const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
-  const activeOnDemandPlaybackStats = new Map() // key: normalized stats key -> { core, cleanup }
+  const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: tracked ranges, listeners, and timers
+  const activeOnDemandPlaybackStats = new Map() // key: normalized stats key -> owned core and monitor cleanup
+  const activePrefetchCores = new Map() // key: prefetch key -> API-manager-owned core session
+  const apiTimers = new Set()
+  const managedApiResources = new Set()
+  let apiClosed = false
+  let apiClosePromise = null
 
-  function cleanupOnDemandPlaybackStats(statsKey) {
+  const pendingPlaybackReadyResolvers = new Set()
+  function scheduleApiTimeout(callback, delayMs) {
+    if (apiClosed || ctx?.lifecycle?.signal?.aborted) return null
+    const timer = setTimeout(() => {
+      apiTimers.delete(timer)
+      if (!apiClosed && !ctx?.lifecycle?.signal?.aborted) callback()
+    }, delayMs)
+    timer.unref?.()
+    apiTimers.add(timer)
+    return timer
+  }
+
+  function clearApiTimeout(timer) {
+    if (timer == null) return
+    clearTimeout(timer)
+    apiTimers.delete(timer)
+  }
+
+  function ownManagedApiResource(resource, methods = 'close') {
+    const candidates = Array.isArray(methods) ? methods : [methods]
+    let cleanupPromise = null
+    const record = {
+      cleanup() {
+        if (cleanupPromise) return cleanupPromise
+        managedApiResources.delete(record)
+        cleanupPromise = (async () => {
+          for (const method of candidates) {
+            if (typeof resource?.[method] !== 'function') continue
+            await resource[method]()
+            return
+          }
+        })().catch(() => {})
+        return cleanupPromise
+      },
+    }
+    managedApiResources.add(record)
+    return record
+  }
+
+  function ownPrefetchCore(prefetchKey, core) {
+    const ownership = ownManagedApiResource(core, 'close')
+    let cleanupPromise = null
+    const record = {
+      core,
+      cleanup() {
+        if (cleanupPromise) return cleanupPromise
+        if (activePrefetchCores.get(prefetchKey) === record) {
+          activePrefetchCores.delete(prefetchKey)
+        }
+        cleanupPromise = (async () => {
+          await ownership.cleanup()
+        })()
+        return cleanupPromise
+      },
+    }
+    const previous = activePrefetchCores.get(prefetchKey)
+    activePrefetchCores.set(prefetchKey, record)
+    if (previous && previous !== record) void previous.cleanup()
+    return record
+  }
+
+  async function cleanupPrefetchCore(prefetchKey) {
+    await activePrefetchCores.get(prefetchKey)?.cleanup?.()
+  }
+
+  async function cleanupRangeRequest(prefetchKey, { cleanupMonitor = true } = {}) {
+    const request = activeRangeRequests.get(prefetchKey)
+    if (request) {
+      activeRangeRequests.delete(prefetchKey)
+      try { request.cancel?.() } catch { /* best effort */ }
+      for (const timer of request.timers || []) clearApiTimeout(timer)
+      request.timers?.clear?.()
+      request.ranges?.forEach(range => { try { range?.destroy?.() } catch { /* best effort */ } })
+      if (request.core) {
+        try { request.core.off('download', request.onDownload) } catch { /* best effort */ }
+        try { request.core.off('upload', request.onUpload) } catch { /* best effort */ }
+      }
+      try { request.resolvePlaybackReady?.() } catch { /* best effort */ }
+      if (cleanupMonitor) {
+        try { videoStats?.cleanupMonitor?.(request.driveKey, request.videoPath) } catch { /* best effort */ }
+      }
+    }
+    await cleanupPrefetchCore(prefetchKey)
+  }
+
+  async function cleanupOnDemandPlaybackStats(statsKey) {
     const active = activeOnDemandPlaybackStats.get(statsKey)
     if (!active) return
-    try { active.cleanup?.() } catch { /* best effort */ }
     activeOnDemandPlaybackStats.delete(statsKey)
+    try { active.cleanupMonitor?.() } catch { /* best effort */ }
+    try { await active.ownership?.cleanup?.() } catch { /* best effort */ }
+  }
+
+  async function closeApiResources() {
+    if (apiClosePromise) return apiClosePromise
+    apiClosed = true
+    apiClosePromise = (async () => {
+      cancelScheduledQuotaSweep()
+      for (const resolve of Array.from(pendingPlaybackReadyResolvers)) {
+        try { resolve() } catch { /* best effort */ }
+      }
+      pendingPlaybackReadyResolvers.clear()
+      for (const timer of Array.from(apiTimers)) clearApiTimeout(timer)
+      await Promise.all(Array.from(activeRangeRequests.keys(), (key) => cleanupRangeRequest(key)))
+      await Promise.all(Array.from(activeOnDemandPlaybackStats.keys(), (key) => cleanupOnDemandPlaybackStats(key)))
+      await Promise.all(Array.from(activePrefetchCores.values(), (record) => record.cleanup()))
+      await Promise.all(Array.from(managedApiResources, (record) => record.cleanup()))
+      prefetchInFlight.clear()
+    })()
+    return apiClosePromise
   }
 
   async function countInitialBlobBlocks(core, startBlock, endBlock, totalBlocks) {
@@ -1182,6 +1319,7 @@ export function createApi({
 
   async function startOnDemandPlaybackStats(driveKey, videoPath, playbackBlobRef) {
     if (!videoStats || !ctx?.store || !playbackBlobRef?.blobsCoreKey || !playbackBlobRef?.blobId) return null
+    let coreOwnership = null
 
     const blobsCoreKey = normalizeBlobsCoreKey(playbackBlobRef.blobsCoreKey)
     const blob = normalizeBlobRefInput(playbackBlobRef.blobId) || parseBlobRef(playbackBlobRef)?.blob
@@ -1193,12 +1331,15 @@ export function createApi({
     }
 
     try {
-      cleanupOnDemandPlaybackStats(statsKey)
+      await cleanupOnDemandPlaybackStats(statsKey)
       try { videoStats.cleanupMonitor(driveKey, videoPath) } catch { /* best effort */ }
 
+      assertApiContextRunning(ctx)
       const keyBuf = b4a.from(blobsCoreKey, 'hex')
       const core = ctx.store.get({ key: keyBuf })
+      coreOwnership = ownManagedApiResource(core, 'close')
       await core.ready()
+      assertApiContextRunning(ctx)
 
       const startBlock = blob.blockOffset
       const totalBlocks = blob.blockLength
@@ -1292,21 +1433,26 @@ export function createApi({
       }
       core.on('download', onDownload)
       core.on('upload', onUpload)
+      const cleanupMonitor = () => videoStats.cleanupMonitor(driveKey, videoPath)
+      activeOnDemandPlaybackStats.set(statsKey, {
+        core,
+        ownership: coreOwnership,
+        cleanupMonitor,
+      })
       videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
         try { core.off('download', onDownload) } catch { /* best effort */ }
         try { core.off('upload', onUpload) } catch { /* best effort */ }
-        activeOnDemandPlaybackStats.delete(statsKey)
-      })
-      activeOnDemandPlaybackStats.set(statsKey, {
-        core,
-        cleanup: () => videoStats.cleanupMonitor(driveKey, videoPath),
+        const active = activeOnDemandPlaybackStats.get(statsKey)
+        if (active?.core === core) activeOnDemandPlaybackStats.delete(statsKey)
+        void coreOwnership?.cleanup?.()
       })
       videoStats.emitStats(driveKey, videoPath, true)
 
       return videoStats.getStats(driveKey, videoPath)
     } catch (err) {
       console.log('[API] on-demand playback stats unavailable:', err?.message || err)
-      cleanupOnDemandPlaybackStats(statsKey)
+      await cleanupOnDemandPlaybackStats(statsKey)
+      try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
       return null
     }
   }
@@ -1336,11 +1482,12 @@ export function createApi({
 
   function cancelScheduledQuotaSweep() {
     if (!quotaSweepTimer) return
-    clearTimeout(quotaSweepTimer)
+    clearApiTimeout(quotaSweepTimer)
     quotaSweepTimer = null
   }
 
   function runQuotaSweep() {
+    if (apiClosed || ctx?.lifecycle?.signal?.aborted) return
     quotaSweepTimer = null
     if (!seedingManager?.enforceQuota) return
     // A new playback may have started during the debounce window — never evict
@@ -1356,7 +1503,7 @@ export function createApi({
   function scheduleQuotaSweepAfterPlayback() {
     if (!seedingManager?.enforceQuota) return
     cancelScheduledQuotaSweep()
-    quotaSweepTimer = setTimeout(runQuotaSweep, QUOTA_SWEEP_AFTER_PLAYBACK_MS)
+    quotaSweepTimer = scheduleApiTimeout(runQuotaSweep, QUOTA_SWEEP_AFTER_PLAYBACK_MS)
   }
 
   /** @type {Map<string, { ts: number, value: any[] }>} */
@@ -1889,8 +2036,8 @@ export function createApi({
     }
     return intents
   }
-
-  return {
+  ownApiResource(ctx, 'api resource manager', { close: closeApiResources }, 'close', 5000)
+  const api = {
     invalidateChannelCaches,
     ...publisherApi,
     ...mediaGraphApi,
@@ -1900,6 +2047,7 @@ export function createApi({
         const id = req?.id
         if (!id) continue
         const local = await (async () => {
+          let coreOwnership = null
           try {
             const video = {
               id,
@@ -1925,8 +2073,11 @@ export function createApi({
             const keyBuf = normalizeBlobsCoreKey(video?.blobsCoreKey) ? b4a.from(normalizeBlobsCoreKey(video.blobsCoreKey), 'hex') : null
             const blobId = normalizeBlobRefInput(video?.blobId) || parseBlobRef(video)?.blob
             if (!keyBuf || !blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+            assertApiContextRunning(ctx)
             const core = ctx.store.get({ key: keyBuf })
+            coreOwnership = ownApiResource(ctx, 'availability probe core', core, 'close', 2000)
             await core.ready()
+            assertApiContextRunning(ctx)
             const startBlock = blobId?.blockOffset
             const totalBlocks = blobId?.blockLength
             const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks) ? startBlock + totalBlocks : null
@@ -1939,6 +2090,8 @@ export function createApi({
             return { availability: initialAvailable ? 'playable' : 'unknown', contiguousBlocks: initialAvailable ? Math.max(1, headEnd - startBlock) : 0, hasHeadBlock: initialAvailable }
           } catch {
             return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+          } finally {
+            try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
           }
         })()
         const localPeerId = localSwarmPeerId()
@@ -2291,10 +2444,14 @@ export function createApi({
           let availability = 'unknown'
           let contiguousBlocks = 0
           let hasHeadBlock = false
+          let coreOwnership = null
           try {
+            assertApiContextRunning(ctx)
             const keyBuf = b4a.from(normalizeBlobsCoreKey(blobsCoreKey) || blobsCoreKey, 'hex')
             const core = ctx.store.get({ key: keyBuf })
+            coreOwnership = ownApiResource(ctx, 'feed availability core', core, 'close', 2000)
             await core.ready()
+            assertApiContextRunning(ctx)
 
             const blobId = normalizeBlobRefInput(blobIdRaw) || parseBlobRef({ blobsCoreKey, blobId: blobIdRaw })?.blob
             if (!blobId) {
@@ -2327,6 +2484,8 @@ export function createApi({
             }
           } catch (err) {
             availability = 'unknown'
+          } finally {
+            try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
           }
 
           videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
@@ -2665,6 +2824,7 @@ export function createApi({
      */
     async downloadVideo(channelKey, videoId, destPath, fsModule, onProgress) {
       console.log('[API] downloadVideo:', channelKey?.slice(0, 16), videoId, 'to:', destPath);
+      let coreOwnership = null
       try {
         const meta = await this.getVideoData(channelKey, videoId);
         if (!meta) {
@@ -2692,8 +2852,11 @@ export function createApi({
         }
 
         // Load the blobs Hypercore
+        assertApiContextRunning(ctx)
         const blobsCore = ctx.store.get(blobEntry.blobsKey);
+        coreOwnership = ownApiResource(ctx, 'video download core', blobsCore, 'close', 2000)
         await blobsCore.ready();
+        assertApiContextRunning(ctx)
 
         // Create Hyperblobs reader
         const Hyperblobs = (await import('hyperblobs')).default;
@@ -2727,6 +2890,8 @@ export function createApi({
       } catch (err) {
         console.error('[API] downloadVideo failed:', err?.message);
         return { success: false, error: err?.message || 'Download failed' };
+      } finally {
+        try { await coreOwnership?.cleanup?.() } catch { /* best effort */ }
       }
     },
 
@@ -2847,6 +3012,7 @@ export function createApi({
      */
     async getVideoThumbnail(driveKey, videoId, refs = {}, opts = {}) {
       try {
+        assertApiContextRunning(ctx)
         const normalizeVideoId = (value) => {
           if (!value || typeof value !== 'string') return value
           if (value.startsWith('/videos/')) {
@@ -2936,17 +3102,32 @@ export function createApi({
           const keyBuffer = b4a.from(meta.thumbnailBlobsCoreKey, 'hex');
           
           let blobsCore;
+          let blobsCoreOwnership = null;
           try {
+            assertApiContextRunning(ctx)
             blobsCore = ctx.store.get(keyBuffer);
+            blobsCoreOwnership = ownApiResource(
+              ctx,
+              `thumbnail blob core ${meta.thumbnailBlobsCoreKey.slice(0, 16)}`,
+              blobsCore,
+              'close',
+              2000
+            );
             await blobsCore.ready();
+            assertApiContextRunning(ctx)
           } catch (storeErr) {
+            await blobsCoreOwnership?.cleanup?.();
             console.error('[API] GET_VIDEO_THUMBNAIL: store.get/ready failed:', storeErr.message);
             throw storeErr;
           }
 
           // Join swarm for thumbnail core
           if (ctx.swarm && blobsCore.discoveryKey) {
-            try { ctx.swarm.join(blobsCore.discoveryKey) } catch { /* best effort */ }
+            try {
+              retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
+                label: `thumbnail:${meta.thumbnailBlobsCoreKey.slice(0, 16)}`
+              })
+            } catch { /* best effort */ }
           }
 
           const blob = normalizeBlobRefInput(meta.thumbnailBlobId) || parseBlobRef({
@@ -2972,11 +3153,9 @@ export function createApi({
           }
 
           let thumbnailLocal = await hasThumbnailBlocks()
+          assertApiContextRunning(ctx)
           if (!thumbnailLocal) {
             if (opts?.ensureLocal) {
-              if (ctx.swarm && blobsCore.discoveryKey) {
-                try { ctx.swarm.join(blobsCore.discoveryKey) } catch { /* best effort */ }
-              }
               let range = null
               try {
                 range = blobsCore.download({ start: blobStart, end: blobEnd, linear: true })
@@ -2987,6 +3166,7 @@ export function createApi({
               } catch { /* best effort */ } finally {
                 try { range?.destroy?.() } catch { /* best effort */ }
               }
+              assertApiContextRunning(ctx)
               thumbnailLocal = await hasThumbnailBlocks()
               // Only hand back a URL once the bytes are local: the blob server's
               // buffered thumbnail response reads them on the next request, so this
@@ -2999,6 +3179,7 @@ export function createApi({
                   new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
                 ]);
               } catch { /* best effort */ }
+              assertApiContextRunning(ctx)
             }
           }
 
@@ -3245,6 +3426,7 @@ export function createApi({
     },
 
     // ============================================
+
     // Recommendations Operations
     ...createRecommendationsApi({
       ctx,

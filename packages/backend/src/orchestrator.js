@@ -11,6 +11,7 @@
 
 import {
   initializeStorage,
+  createBackendLifecycle,
   isPlaybackActive,
   loadChannel,
   retainPublicBeeContentDiscovery,
@@ -79,6 +80,22 @@ import { appendDebugLine } from './debug-log.js'
 
 const STARTUP_GATE_WARMUP_WAIT_MS = 2000
 
+export { createBackendLifecycle }
+
+export function buildStorageConfig(config, primaryKey) {
+  return {
+    storagePath: config.storagePath,
+    blobServerHost: config.blobServerHost,
+    blobServerBindHost: config.blobServerBindHost,
+    primaryKey,
+    corestoreWaitForLock: config.corestoreWaitForLock ?? false,
+    platform: config.platform ?? 'desktop',
+    network: config.network ?? {},
+    swarmOptions: config.swarmOptions ?? {},
+    lifecycle: config.lifecycle,
+  }
+}
+
 // Resolve an async stat/readdir for whichever fs flavour the runtime provides.
 // bare-fs on mobile does not reliably expose `fs.promises`, so the original
 // `fs.promises?.stat` path returned undefined and the whole measurer bailed to
@@ -130,16 +147,6 @@ function createStorageUsageMeasurer(storagePath) {
   }
 }
 
-// Shutdown flag to prevent deferred init from running during cleanup
-let isShuttingDown = false;
-
-/**
- * Set the shutdown flag to prevent deferred background init from running
- * @param {boolean} value - Whether the backend is shutting down
- */
-export function setIsShuttingDown(value) {
-  isShuttingDown = value;
-}
 
 function isContextShuttingDown(ctx) {
   return Boolean(ctx && (ctx.isShuttingDown || ctx._isShutdown))
@@ -170,6 +177,7 @@ async function warmChannels(ctx, channelKeys, label) {
   if (!unique.length) return;
   console.log(`[Orchestrator] Warming ${label}:`, unique.length);
   for (const key of unique) {
+    if (ctx?.lifecycle?.signal?.aborted) return
     try {
       await loadChannel(ctx, key);
     } catch (e) {
@@ -189,6 +197,7 @@ function createOwnedPublicationReconciler({
 }) {
   const entries = new Map()
   const timers = new Map()
+  const timerOwnership = new Map()
   const attempts = new Map()
   const state = {
     stopped: false,
@@ -201,6 +210,8 @@ function createOwnedPublicationReconciler({
       const pending = timers.get(entry.channelKey)
       if (pending) {
         clearTimeout(pending)
+        timerOwnership.get(entry.channelKey)?.release()
+        timerOwnership.delete(entry.channelKey)
         timers.delete(entry.channelKey)
       }
       try {
@@ -225,6 +236,8 @@ function createOwnedPublicationReconciler({
       )
       const timer = setTimeout(async () => {
         timers.delete(entry.channelKey)
+        timerOwnership.get(entry.channelKey)?.release()
+        timerOwnership.delete(entry.channelKey)
         if (state.stopped) return
         try {
           await state.execute(entry)
@@ -237,12 +250,16 @@ function createOwnedPublicationReconciler({
         }
       }, delay)
       timer.unref?.()
+      const ownership = ctx?.lifecycle?.ownTimer(`publication retry ${entry.channelKey.slice(0, 16)}`, timer)
+      if (ownership) timerOwnership.set(entry.channelKey, ownership)
       timers.set(entry.channelKey, timer)
     },
     stop() {
       if (state.stopped) return
       state.stopped = true
       for (const timer of timers.values()) clearTimeout(timer)
+      for (const ownership of timerOwnership.values()) ownership.release()
+      timerOwnership.clear()
       timers.clear()
       attempts.clear()
       for (const entry of entries.values()) {
@@ -281,6 +298,7 @@ export async function reconcileOwnedContentPublications({
       retryMaxMs: Math.max(1, Number(retryMaxMs) || 30000),
     })
     ctx[OWNED_PUBLICATION_RECONCILER] = coordinator
+    ctx?.lifecycle?.ownResource('publication reconciler', coordinator, 'stop', 2000)
   } else {
     coordinator.log = log
     coordinator.retryBaseMs = Math.max(1, Number(retryBaseMs) || coordinator.retryBaseMs)
@@ -401,6 +419,7 @@ export async function startBackendSeedPinBeforeDiscovery({
   }
   const enabled = seedPin?.enabled !== false
   let registration = null
+  let registrationOwnership = null
   if (enabled) {
     const clientAuthResolver = () => resolveClientAuth({ ctx, identityManager })
     const admission = typeof seedPin?.admission === 'function'
@@ -413,6 +432,10 @@ export async function startBackendSeedPinBeforeDiscovery({
       admission,
       resolveClientAuth: clientAuthResolver,
     })
+    registrationOwnership = ctx?.lifecycle?.own('seed-pin registration', async () => {
+      await registration?.unregister?.()
+      if (ctx?.seedPinRegistration === registration) ctx.seedPinRegistration = null
+    }, 2000)
     ctx.seedPinRegistration = registration
     await registration?.ready
     await registration?.refreshClientAuth?.()
@@ -421,8 +444,8 @@ export async function startBackendSeedPinBeforeDiscovery({
   const discovery = Promise.resolve()
     .then(() => publicFeed.start())
     .catch(async error => {
-      await registration?.unregister?.()
-      if (ctx?.seedPinRegistration === registration) ctx.seedPinRegistration = null
+      if (registrationOwnership) await registrationOwnership.cleanup()
+      else await registration?.unregister?.()
       throw error
     })
   return { registration, discovery }
@@ -444,13 +467,13 @@ export async function startBackendSeedPinBeforeDiscovery({
 export async function createBackendContext(config) {
   const {
     storagePath,
+    platform = 'desktop',
     blobServerHost,
     blobServerBindHost,
     onFeedUpdate,
     onStatsUpdate,
     corestoreWaitForLock = false,
     disableStandalonePrimaryKeyFile = false,
-    platform = 'desktop',
     network = {},
     swarmOptions = {},
     peerScorer = null,
@@ -459,11 +482,9 @@ export async function createBackendContext(config) {
   } = config;
 
   const ipcLog = typeof _ipcLog === 'function' ? _ipcLog : () => {}
+  const lifecycle = config.lifecycle || createBackendLifecycle()
+  const storageConfig = { ...config, platform, lifecycle }
 
-  const defer =
-    typeof setImmediate === 'function'
-      ? setImmediate
-      : (fn) => setTimeout(fn, 0)
 
   console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
   console.log('[Orchestrator] Storage path:', storagePath);
@@ -545,44 +566,24 @@ export async function createBackendContext(config) {
   ipcLog('[orchestrator] initializeStorage starting')
   await appendDebugLine('[orchestrator] initializeStorage starting')
   try {
-    ctx = await initializeStorageWithRetry({
-      storagePath,
-      blobServerHost,
-      blobServerBindHost,
-      primaryKey,
-      corestoreWaitForLock,
-      platform,
-      network,
-      swarmOptions
-    });
+    ctx = await initializeStorageWithRetry(buildStorageConfig(storageConfig, primaryKey));
     await appendDebugLine('[orchestrator] initializeStorage done')
   } catch (err) {
     await appendDebugLine(`[orchestrator] initializeStorage error ${err?.message || String(err)}`)
     if (!primaryKey || !shouldRetryCorestoreSeedFallback(err, { hasIdentityKeyFile: Boolean(identityKeyData) })) {
+      await lifecycle.shutdown()
       throw err
     }
 
     console.warn('[Orchestrator] Identity key file primaryKey mismatches existing Corestore seed. Falling back to stored Corestore seed.')
     
-    // Close the first store before retrying to avoid self-deadlock
     try {
-      if (ctx?.store) {
-        await ctx.store.close()
-      }
-    } catch (closeErr) {
-      console.warn('[Orchestrator] Error closing store before seed mismatch retry:', closeErr?.message)
+      ctx = await initializeStorageWithRetry(buildStorageConfig(storageConfig, null))
+    } catch (retryError) {
+      await lifecycle.shutdown()
+      throw retryError
     }
-    
-    ctx = await initializeStorageWithRetry({
-      storagePath,
-      blobServerHost,
-      blobServerBindHost,
-      primaryKey: null,
-      corestoreWaitForLock,
-      platform,
-      network,
-      swarmOptions
-    })
+
 
     try {
       const identityPublicKey = identityKeyData?.identityPublicKey
@@ -629,6 +630,7 @@ export async function createBackendContext(config) {
   ipcLog('[orchestrator] managers creating')
   await appendDebugLine('[orchestrator] managers creating')
 
+  try {
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = createNoopFeed()
   ctx.publicFeed = publicFeed
@@ -638,8 +640,11 @@ export async function createBackendContext(config) {
 
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
+  lifecycle.ownResource('video statistics', videoStats)
   const identityManager = createIdentityManager({ ctx });
+  lifecycle.ownResource('identity manager', identityManager)
   const personalManager = createPersonalManager({ ctx, identityManager });
+  lifecycle.ownResource('personal manager', personalManager, 'close', 2000)
   ctx.personalManager = personalManager;
 
   // Keep the active personal store in sync with the active identity across all
@@ -669,6 +674,11 @@ export async function createBackendContext(config) {
     blindPeering: ctx.blindPeering,
     metaSubspaces: ctx.metaSubspaces
   });
+  lifecycle.own('seeding manager', async () => {
+    seedingManager.clearTimer?.(seedingManager._storageMaintenanceTimer)
+    seedingManager._storageMaintenanceTimer = null
+    await seedingManager.flushSeedPersist?.()
+  }, 2000)
 
   // Feed discovery: when a relay-serving feed entry advertises its blind-peer
   // mirror key, adopt it as a mirror and re-mirror retained content to it.
@@ -689,6 +699,7 @@ export async function createBackendContext(config) {
   // blocks behind a bounded seek-back window while it streams. Unlike the
   // seed-quota sweep this is playhead-aware, so it runs *during* playback.
   const playbackWindowCache = createPlaybackWindowCache({ store: ctx.store });
+  lifecycle.ownResource('playback window cache', playbackWindowCache, 'stop', 2000)
   playbackWindowCache.start();
   ctx.playbackWindowCache = playbackWindowCache;
   ctx.registerCleanup?.('playback window cache stop', () => playbackWindowCache.stop?.(), { timeoutMs: 1000 })
@@ -698,11 +709,13 @@ export async function createBackendContext(config) {
   // instead of the on-demand stream settling at playback bitrate. The window
   // cache trims behind, so the two together bound the on-disk footprint.
   const playbackForwardFill = createPlaybackForwardFill({ store: ctx.store });
+  lifecycle.ownResource('playback forward fill', playbackForwardFill, 'stop', 2000)
   playbackForwardFill.start();
   ctx.playbackForwardFill = playbackForwardFill;
   ctx.registerCleanup?.('playback forward fill stop', () => playbackForwardFill.stop?.(), { timeoutMs: 1000 })
 
   const uploadManager = createUploadManager({ ctx });
+  lifecycle.ownResource('upload manager', uploadManager)
 
   // Phase 3: Wire up callbacks
   if (onFeedUpdate) {
@@ -855,7 +868,7 @@ export async function createBackendContext(config) {
     seedPin: seedPinRegistration,
     seedPinClients: seedPinRegistration?.clients || null,
     async destroy() {
-      return shutdownBackend(ctx)
+      await shutdownBackend(ctx)
     },
     async initializeIdentityFromMnemonic(mnemonic) {
       const pk = await derivePrimaryKey(mnemonic);
@@ -871,9 +884,9 @@ export async function createBackendContext(config) {
 
   // Phase 8: Heavy initialization in background (non-blocking)
   // Drive warming and feed discovery can happen after UI is ready
-  defer(async () => {
+  lifecycle.defer('backend warm-up', async (signal) => {
     // Early return if shutdown was initiated during deferred init setup
-    if (isContextShuttingDown(ctx)) {
+    if (signal.aborted || isContextShuttingDown(ctx)) {
       console.log('[Orchestrator] Deferred init aborted: shutdown in progress')
       return
     }
@@ -893,16 +906,18 @@ export async function createBackendContext(config) {
       console.log('[Orchestrator] Startup gate wait failed:', e?.message)
       return
     }
+    if (signal.aborted) return
     
     try {
       // Load channels in the background.
       // This can be slow (sync + metadata replay) and should NOT block worker init.
-      if (isContextShuttingDown(ctx)) return
+      if (signal.aborted || isContextShuttingDown(ctx)) return
       try {
         await identityManager.loadChannelDrives()
       } catch (e) {
         console.error('[Orchestrator] Identity background init error:', e?.message)
       }
+      if (signal.aborted) return
       const publicationReconciliation = await reconcileOwnedContentPublications({
         ctx,
         identityManager,
@@ -918,9 +933,10 @@ export async function createBackendContext(config) {
 
       // Start public feed discovery
       // Warm subscribed / pinned / seeding channels (can be slow)
-      if (isContextShuttingDown(ctx)) return
+      if (signal.aborted || isContextShuttingDown(ctx)) return
       try {
         const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
+        if (signal.aborted) return
         const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean)
         const pinnedKeys = seedingManager.getPinnedChannels?.() || []
         const seeds = seedingManager.getActiveSeeds?.() || []
@@ -930,17 +946,23 @@ export async function createBackendContext(config) {
         // watched/seeded entries retain their blob-core discovery immediately,
         // without waiting for full channel hydration.
         for (const seed of seeds) {
+          if (signal.aborted) return
           if (seed?.blobsCoreKey && ctx.store) {
             try {
               const core = ctx.store.get(Buffer.from(seed.blobsCoreKey, 'hex'))
+              ctx.ownResource?.(`seed blob core ${seed.blobsCoreKey.slice(0, 16)}`, core, 'close')
               await core?.ready?.()
+              if (signal.aborted) return
               if (core?.discoveryKey) retainSwarmDiscovery(ctx, core.discoveryKey, { label: `seed:${seed.blobsCoreKey.slice(0, 16)}` })
             } catch {
               // Discovery retention is best-effort during startup warmup.
             }
           }
           if (seed?.publicBeeKey) {
-            retainPublicBeeContentDiscovery(ctx, seed.publicBeeKey, { label: `seed:${seed.driveKey?.slice?.(0, 16) || 'channel'}` }).catch(() => {})
+            await retainPublicBeeContentDiscovery(ctx, seed.publicBeeKey, {
+              label: `seed:${seed.driveKey?.slice?.(0, 16) || 'channel'}`
+            })
+            if (signal.aborted) return
           }
         }
 
@@ -950,7 +972,7 @@ export async function createBackendContext(config) {
         console.log('[Orchestrator] Warm-up skipped:', e?.message)
       }
 
-      if (isContextShuttingDown(ctx)) return
+      if (signal.aborted || isContextShuttingDown(ctx)) return
       console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====')
       console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0)
       console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size)
@@ -960,4 +982,8 @@ export async function createBackendContext(config) {
   })
 
   return result;
+  } catch (error) {
+    await lifecycle.shutdown()
+    throw error
+  }
 }

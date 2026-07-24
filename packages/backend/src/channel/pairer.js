@@ -20,6 +20,7 @@ export class ChannelPairer extends ReadyResource {
    * @param {Object} [opts]
    * @param {import('hyperswarm')} [opts.swarm]
    * @param {string} [opts.deviceName]
+   * @param {(channel: MultiWriterChannel) => void} [opts.onChannel]
    */
   constructor(store, inviteCode, opts = {}) {
     super()
@@ -31,6 +32,7 @@ export class ChannelPairer extends ReadyResource {
     this.pairing = null
     this.candidate = null
     this.channel = null
+    this.discovery = null
     // Track replicated connections for the pairing swarm we manage if we create one.
     this._replicatedConns = new WeakSet()
 
@@ -118,6 +120,7 @@ export class ChannelPairer extends ReadyResource {
             keyPair: localKeyPair,
             swarm: this.swarm
           })
+          this.opts.onChannel?.(this.channel)
           await this.channel.ready()
           console.log('[ChannelPairer] Channel ready')
 
@@ -138,8 +141,8 @@ export class ChannelPairer extends ReadyResource {
           if (this.swarm && this.channel.discoveryKey) {
             console.log('[ChannelPairer] Joining swarm for channel discovery...')
             this.channel.swarm = this.swarm
-            const discovery = this.swarm.join(this.channel.discoveryKey)
-            await discovery.flushed().catch(() => {})
+            this.discovery = this.swarm.join(this.channel.discoveryKey)
+            await this.discovery.flushed().catch(() => {})
             console.log('[ChannelPairer] Swarm join flushed')
 
           }
@@ -159,6 +162,14 @@ export class ChannelPairer extends ReadyResource {
   }
 
   async _close() {
+    const discovery = this.discovery
+    this.discovery = null
+    try {
+      if (typeof discovery?.destroy === 'function') await discovery.destroy()
+      else await discovery?.close?.()
+    } catch {
+      // best effort
+    }
     try {
       if (this.candidate) await this.candidate.close()
     } catch {

@@ -18,14 +18,54 @@ function readWorkspaceFile(relativePath) {
 }
 
 function loadParseMobileLaunchArgsForTest() {
-  const source = readAppFile('backend/index.mjs')
+  const source = readAppFile('backend/mobile-start.mjs')
   const pattern = new RegExp('export function parseMobileLaunchArgsForTest\\(args = \\[\\]\\) \\{([\\s\\S]*?)\\n\\}')
   const match = source.match(pattern)
   assert.ok(match, 'parseMobileLaunchArgsForTest should exist')
   return Function(`return function parseMobileLaunchArgsForTest(args = []) {${match[1]}
 }`)()
 }
+function loadBuildMobileBackendContextOptions() {
+  const source = readAppFile('backend/index.mjs')
+  const match = source.match(/export function buildMobileBackendContextOptions\(options = \{\}\) \{([\s\S]*?)\n\}/)
+  assert.ok(match, 'buildMobileBackendContextOptions should exist in the bundled mobile runtime')
+  return Function(`return function buildMobileBackendContextOptions(options = {}) {${match[1]}
+}`)()
+}
 
+
+
+test('native hosts explicitly select their backend platform policy', () => {
+  const mobileSource = readAppFile('backend/mobile-start.mjs')
+  const desktopSource = readAppFile('workers/desktop/index.ts')
+  const mobileRuntimeSource = readAppFile('backend/index.mjs')
+
+  assert.match(
+    mobileSource,
+    /createBackendImpl\(\{[\s\S]*?platform: 'mobile'/,
+    'mobile host must pass mobile into createBackend',
+  )
+  assert.match(
+    desktopSource,
+    /createBackend\(\{[\s\S]*?platform: 'desktop'/,
+    'desktop worker must pass desktop into createBackend',
+  )
+  assert.doesNotMatch(
+    mobileRuntimeSource,
+    /setIsShuttingDown/,
+    'mobile runtime must use its backend context lifecycle instead of module-global shutdown state',
+  )
+  const buildMobileBackendContextOptions = loadBuildMobileBackendContextOptions()
+  const network = { bootstrap: ['mobile-bootstrap'] }
+  const contextOptions = buildMobileBackendContextOptions({ platform: 'mobile', network })
+  assert.equal(contextOptions.platform, 'mobile')
+  assert.equal(contextOptions.network, network)
+  assert.match(
+    mobileRuntimeSource,
+    /createBackendContext\(buildMobileBackendContextOptions\(\{/,
+    'bundled mobile runtime must apply its platform policy to createBackendContext',
+  )
+})
 
 test('native root layout passes versioned bundle loaders into initPlatformRPC instead of eagerly reading source at the call site', () => {
   const source = readAppFile('app/_layout.tsx')

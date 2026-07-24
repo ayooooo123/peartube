@@ -1286,11 +1286,8 @@ export class MultiWriterChannel extends ReadyResource {
     if (!id) return null
     let blobsKey = this._blobsCore?.key
     if (video.blobsCoreKey && video.blobsCoreKey !== this.blobsKeyHex) {
-      try {
-        const remoteBlobsCore = this.store.get(b4a.from(video.blobsCoreKey, 'hex'))
-        await remoteBlobsCore.ready()
-        blobsKey = remoteBlobsCore.key
-      } catch { return null }
+      if (typeof video.blobsCoreKey !== 'string' || !/^[0-9a-f]{64}$/i.test(video.blobsCoreKey)) return null
+      blobsKey = b4a.from(video.blobsCoreKey, 'hex')
     }
     if (!blobsKey) return null
     return { blobId: id, blobsKey, byteLength: id.byteLength }
@@ -1366,9 +1363,10 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.swarm) return false
     if (this.discoveryKey) {
       try {
-        const discovery = this.swarm.join(this.discoveryKey)
-        this._channelDiscovery = discovery
-        await discovery.flushed()
+        if (!this._channelDiscovery) {
+          this._channelDiscovery = this.swarm.join(this.discoveryKey)
+        }
+        await this._channelDiscovery?.flushed?.()
       } catch {
         // best effort
       }

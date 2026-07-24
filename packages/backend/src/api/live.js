@@ -6,11 +6,19 @@ export function createLiveApi({ ctx, publicFeed }) {
   let liveBroadcast = null
   let livePlayback = null
   function getLiveBroadcast() {
-    if (!liveBroadcast) liveBroadcast = createLiveBroadcastService(ctx)
+    if (!liveBroadcast) {
+      const service = createLiveBroadcastService(ctx)
+      ctx?.ownResource?.('live broadcast service', service, 'closeAll', 5000)
+      liveBroadcast = service
+    }
     return liveBroadcast
   }
   function getLivePlayback() {
-    if (!livePlayback) livePlayback = createLivePlaybackService(ctx)
+    if (!livePlayback) {
+      const service = createLivePlaybackService(ctx)
+      ctx?.ownResource?.('live playback service', service, 'close', 5000)
+      livePlayback = service
+    }
     return livePlayback
   }
 

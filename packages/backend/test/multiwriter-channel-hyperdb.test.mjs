@@ -326,3 +326,74 @@ test('MultiWriterChannel preserves legacy public sync defaults and honors explic
     assert.equal(publicSyncs, 4, 'explicit true forces sync')
   })
 })
+
+test('MultiWriterChannel reuses pairing discovery while waiting for a peer', async () => {
+  let joinCalls = 0
+  let destroyCalls = 0
+  const discovery = {
+    async flushed() {},
+    async destroy() {
+      destroyCalls += 1
+    },
+    async close() {},
+  }
+  const swarm = {
+    connections: new Set([{}]),
+    join() {
+      joinCalls += 1
+      return discovery
+    },
+  }
+  const channel = Object.create(MultiWriterChannel.prototype)
+  Object.assign(channel, {
+    _pairingSetupDone: false,
+    _channelDiscovery: null,
+    _publicDiscovery: null,
+    _publicActivation: null,
+    swarm: null,
+    core: { discoveryKey: Buffer.alloc(32, 1), writable: false },
+    db: null,
+    wakeupSession: null,
+    publicBee: null,
+    pairingMember: null,
+    pairing: null,
+    blobs: null,
+    _blobsCore: null,
+  })
+
+  await channel.setupPairing(swarm)
+  assert.equal(await channel.waitForPeerConnection(), true)
+  await channel._close()
+  assert.equal(joinCalls, 1)
+  assert.equal(destroyCalls, 1)
+})
+
+test('MultiWriterChannel decodes a referenced blobs key without opening a redundant core', async () => {
+  const localKey = Buffer.alloc(32, 1)
+  const remoteKeyHex = 'ab'.repeat(32)
+  let storeGets = 0
+  const channel = Object.create(MultiWriterChannel.prototype)
+  Object.assign(channel, {
+    _blobsCore: { key: localKey },
+    store: {
+      get() {
+        storeGets += 1
+        throw new Error('must not open a core to decode an existing key')
+      },
+    },
+  })
+
+  const entry = await channel.getBlobEntry({
+    blobId: '4:2:0:128',
+    blobsCoreKey: remoteKeyHex,
+  })
+
+  assert.equal(storeGets, 0)
+  assert.equal(entry.blobsKey.toString('hex'), remoteKeyHex)
+  assert.deepEqual(entry.blobId, {
+    blockOffset: 4,
+    blockLength: 2,
+    byteOffset: 0,
+    byteLength: 128,
+  })
+})

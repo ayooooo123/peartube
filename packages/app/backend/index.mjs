@@ -29,7 +29,6 @@ import HyperswarmModule from 'hyperswarm'
 
 let HRPC = null
 let createBackendContext = null
-let setIsShuttingDown = null
 let shutdownBackend = null
 let setCastActive = null
 let isCastActive = null
@@ -57,7 +56,6 @@ async function loadBackendModules() {
   setHyperswarmModuleForRuntime(HyperswarmModule)
   HRPC = specModule?.default ?? specModule
   createBackendContext = orchestratorModule?.createBackendContext
-  setIsShuttingDown = orchestratorModule?.setIsShuttingDown
   shutdownBackend = storageModule?.shutdownBackend
   setCastActive = storageModule?.setCastActive
   isCastActive = storageModule?.isCastActive
@@ -72,7 +70,6 @@ async function loadBackendModules() {
   const checks = {
     HRPC,
     createBackendContext,
-    setIsShuttingDown,
     shutdownBackend,
     setCastActive,
     isCastActive,
@@ -347,6 +344,10 @@ function parseMobileLaunchArgs(args = []) {
   return parseMobileLaunchArgsForTest(args)
 }
 
+export function buildMobileBackendContextOptions(options = {}) {
+  return { ...options, platform: 'mobile' }
+}
+
 export async function startMobileBackend(options = {}) {
   return startMobileBackendContract({
     createBackendImpl: createMobileRuntimeBackend,
@@ -357,6 +358,7 @@ export async function startMobileBackend(options = {}) {
 export async function createMobileRuntimeBackend(options = {}) {
   const {
     storagePath,
+    platform = 'mobile',
     stream,
     args = [],
     onReady = () => {},
@@ -365,6 +367,7 @@ export async function createMobileRuntimeBackend(options = {}) {
 
   if (!stream) throw new Error('createMobileRuntimeBackend requires a stream transport')
   if (!storagePath) throw new Error('createMobileRuntimeBackend requires a storagePath')
+  if (platform !== 'mobile') throw new Error('createMobileRuntimeBackend requires the mobile platform')
 
   const IPC = stream
   const { launchOptions, workerArgs } = parseMobileLaunchArgs(args)
@@ -548,7 +551,7 @@ function removeStaleLocks(storageDir) {
   let backend = null
   try {
     ipcLog('[init] createBackendContext starting')
-    backend = await createBackendContext({
+    backend = await createBackendContext(buildMobileBackendContextOptions({
       storagePath: storageDir,
       corestoreWaitForLock: false,
       platform: 'mobile',
@@ -567,7 +570,7 @@ function removeStaleLocks(storageDir) {
           })
         } catch {}
       }
-    })
+    }))
   } catch (error) {
     reportBackendError('Backend init failed', error)
     closeOwnerLock()

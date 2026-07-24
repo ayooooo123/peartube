@@ -1,8 +1,11 @@
+import { projectMediaEntityGraph } from './media-entity-graph.js'
+
 const MOVIE_CLASSIFICATION = 'movie'
 const SHOW_CLASSIFICATION = 'tv'
 const EPISODE_KIND = 'episode'
 const MUSIC_CREATOR_KINDS = new Set(['music', 'creator'])
 const MUSIC_CREATOR_TYPES = new Set(['music', 'creator'])
+const COLLECTION_KINDS = new Set(['collection', 'season', 'series', 'album', 'playlist'])
 const MUSIC_CREATOR_CATEGORIES = new Set(['Music', 'music'])
 const CREATOR_PROFILE_KINDS = new Set(['creator'])
 const TIMESTAMP_FIELDS = ['uploadedAt', 'createdAt', 'updatedAt', 'indexedAt', 'addedAt', 'publishedAt']
@@ -126,6 +129,17 @@ function normalizeProgress(item, duration) {
 }
 
 function stableItemKey(item) {
+  const selectedSource = nonArrayObject(item?.selectedSource) ? item.selectedSource : nonArrayObject(item?.item?.selectedSource) ? item.item.selectedSource : null
+  if (selectedSource) {
+    return firstNonEmptyString([
+      selectedSource.videoId,
+      selectedSource.path,
+      selectedSource.publicationId,
+      item?.videoId,
+      item?.path,
+      item?.id,
+    ], null)
+  }
   return firstNonEmptyString([item?.id, item?.videoId, item?.path], null)
 }
 
@@ -160,14 +174,42 @@ function normalizeVideoItem(item, source) {
     channelName: nonEmptyString(item?.channelName) ? item.channelName : null,
     channel: nonArrayObject(item?.channel) ? item.channel : null,
     creatorName: nonEmptyString(item?.creatorName) ? item.creatorName : null,
-    thumbnailUrl: firstNonEmptyString([item?.thumbnailUrl, item?.thumbnail], null),
+    thumbnailUrl: firstNonEmptyString([item?.thumbnailUrl, item?.thumbnail, item?.stillUrl, item?.posterUrl, item?.backdropUrl], null),
     thumbnail: nonEmptyString(item?.thumbnail) ? item.thumbnail : null,
-    contentKind: hasUsefulValue(item?.contentKind) ? item.contentKind : null,
+    posterUrl: firstNonEmptyString([item?.posterUrl, item?.thumbnailUrl, item?.thumbnail], null),
+    backdropUrl: firstNonEmptyString([item?.backdropUrl, item?.stillUrl, item?.posterUrl, item?.thumbnailUrl, item?.thumbnail], null),
+    stillUrl: firstNonEmptyString([item?.stillUrl, item?.thumbnailUrl, item?.thumbnail, item?.posterUrl], null),
+    artwork: Array.isArray(item?.artwork) ? item.artwork.slice() : [],
+    contentKind: hasUsefulValue(item?.contentKind) ? item.contentKind : hasUsefulValue(item?.mediaKind) ? item.mediaKind : null,
+    mediaKind: hasUsefulValue(item?.mediaKind) ? item.mediaKind : hasUsefulValue(item?.contentKind) ? item.contentKind : null,
+    entityKind: hasUsefulValue(item?.entityKind) ? item.entityKind : null,
+    localEntityId: nonEmptyString(item?.localEntityId) ? item.localEntityId : null,
     classification: hasUsefulValue(item?.classification) ? item.classification : null,
     category: hasUsefulValue(item?.category) ? item.category : null,
     profileKind: hasUsefulValue(item?.profileKind) ? item.profileKind : null,
     duration,
     durationSec: positiveDuration(item?.durationSec) ?? null,
+    seasonNumber: Number.isSafeInteger(item?.seasonNumber) ? item.seasonNumber : null,
+    episodeNumber: Number.isSafeInteger(item?.episodeNumber) ? item.episodeNumber : null,
+    trackNumber: Number.isSafeInteger(item?.trackNumber) ? item.trackNumber : null,
+    sourceCount: Number.isSafeInteger(item?.sourceCount) ? item.sourceCount : 0,
+    selectedSource: nonArrayObject(item?.selectedSource) ? item.selectedSource : null,
+    alternateSources: Array.isArray(item?.alternateSources) ? item.alternateSources.slice() : [],
+    sources: Array.isArray(item?.sources) ? item.sources.slice() : [],
+    provenance: Array.isArray(item?.provenance) ? item.provenance.slice() : [],
+    conflicts: Array.isArray(item?.conflicts) ? item.conflicts.slice() : [],
+    archiveStatus: hasUsefulValue(item?.archiveStatus) ? item.archiveStatus : null,
+    availabilityStatus: hasUsefulValue(item?.availabilityStatus) ? item.availabilityStatus : null,
+    publisherName: firstNonEmptyString([item?.publisherName, item?.sourceProviderName], null),
+    sourceProviderName: firstNonEmptyString([item?.sourceProviderName, item?.publisherName], null),
+    publicationId: nonEmptyString(item?.publicationId) ? item.publicationId : null,
+    renditionId: nonEmptyString(item?.renditionId) ? item.renditionId : null,
+    creatorRoles: Array.isArray(item?.creatorRoles) ? item.creatorRoles.slice() : [],
+    items: Array.isArray(item?.items) ? item.items.slice() : [],
+    missingMembers: Array.isArray(item?.missingMembers) ? item.missingMembers.slice() : [],
+    completeness: nonArrayObject(item?.completeness) ? { ...item.completeness } : null,
+    contributions: Array.isArray(item?.contributions) ? item.contributions.slice() : [],
+    sourcePublisherCount: Number.isSafeInteger(item?.sourcePublisherCount) ? item.sourcePublisherCount : null,
     progress: normalizeProgress(item, duration),
     createdAt: firstNonEmptyString([item?.createdAt, item?.publishedAt, item?.updatedAt, item?.indexedAt, item?.addedAt], null),
     item: { ...item },
@@ -242,7 +284,13 @@ function mergeMissingTimestampFields(existing, item) {
 function mergeMissingMediaFields(existing, item) {
   mergeMissingField(existing, item, 'thumbnailUrl')
   mergeMissingField(existing, item, 'thumbnail')
+  mergeMissingField(existing, item, 'posterUrl')
+  mergeMissingField(existing, item, 'backdropUrl')
+  mergeMissingField(existing, item, 'stillUrl')
   mergeMissingField(existing, item, 'contentKind')
+  mergeMissingField(existing, item, 'mediaKind')
+  mergeMissingField(existing, item, 'entityKind')
+  mergeMissingField(existing, item, 'localEntityId')
   mergeMissingClassification(existing, item)
   mergeMissingField(existing, item, 'category')
   mergeMissingField(existing, item, 'profileKind')
@@ -252,6 +300,15 @@ function mergeMissingMediaFields(existing, item) {
   mergeMissingField(existing, item, 'channelName')
   mergeMissingField(existing, item, 'channel')
   mergeMissingField(existing, item, 'creatorName')
+  mergeMissingField(existing, item, 'publisherName')
+  mergeMissingField(existing, item, 'sourceProviderName')
+  mergeMissingField(existing, item, 'publicationId')
+  mergeMissingField(existing, item, 'renditionId')
+  mergeMissingField(existing, item, 'archiveStatus')
+  mergeMissingField(existing, item, 'availabilityStatus')
+  mergeMissingField(existing, item, 'seasonNumber')
+  mergeMissingField(existing, item, 'episodeNumber')
+  mergeMissingField(existing, item, 'trackNumber')
   mergeMissingField(existing, item, 'channelKey')
   mergeMissingField(existing, item, 'driveKey')
   mergeMissingField(existing, item, 'videoId')
@@ -262,6 +319,11 @@ function mergeMissingMediaFields(existing, item) {
   mergeMissingSourceField(existing, item, 'videoId')
   mergeMissingSourceField(existing, item, 'path')
   mergeMissingSourceField(existing, item, 'publicBeeKey')
+  if (Array.isArray(existing.artwork) && existing.artwork.length === 0 && Array.isArray(item.artwork) && item.artwork.length > 0) existing.artwork = item.artwork.slice()
+  if (Array.isArray(existing.provenance) && existing.provenance.length === 0 && Array.isArray(item.provenance) && item.provenance.length > 0) existing.provenance = item.provenance.slice()
+  if (Array.isArray(existing.conflicts) && existing.conflicts.length === 0 && Array.isArray(item.conflicts) && item.conflicts.length > 0) existing.conflicts = item.conflicts.slice()
+  if (Array.isArray(existing.alternateSources) && existing.alternateSources.length === 0 && Array.isArray(item.alternateSources) && item.alternateSources.length > 0) existing.alternateSources = item.alternateSources.slice()
+  if (Array.isArray(existing.creatorRoles) && existing.creatorRoles.length === 0 && Array.isArray(item.creatorRoles) && item.creatorRoles.length > 0) existing.creatorRoles = item.creatorRoles.slice()
   mergeMissingTimestampFields(existing, item)
 }
 
@@ -306,8 +368,14 @@ function isMusicOrCreatorItem(item) {
 function hasFeaturedThumbnail(item) {
   return nonEmptyString(item?.thumbnailUrl)
     || nonEmptyString(item?.thumbnail)
+    || nonEmptyString(item?.posterUrl)
+    || nonEmptyString(item?.backdropUrl)
+    || nonEmptyString(item?.stillUrl)
     || nonEmptyString(item?.item?.thumbnailUrl)
     || nonEmptyString(item?.item?.thumbnail)
+    || nonEmptyString(item?.item?.posterUrl)
+    || nonEmptyString(item?.item?.backdropUrl)
+    || nonEmptyString(item?.item?.stillUrl)
 }
 
 function isBetterFeaturedItem(candidate, selected) {
@@ -342,9 +410,9 @@ function rail(id, title, items, options = {}) {
   const result = {
     id,
     title,
+    subtitle: nonEmptyString(options.subtitle) ? options.subtitle : '',
     items,
   }
-  if (nonEmptyString(options.subtitle)) result.subtitle = options.subtitle
   if (Number.isSafeInteger(options.limit) && options.limit > 0) result.limit = options.limit
   return result
 }
@@ -371,12 +439,68 @@ export function getMediaHubPlaybackKey(item) {
   return `${channelKey}:${itemKey}`
 }
 
+function selectedSourceForPlayback(item) {
+  if (nonArrayObject(item?.selectedSource)) return item.selectedSource
+  if (nonArrayObject(item?.item?.selectedSource)) return item.item.selectedSource
+  return null
+}
+
+export function getMediaHubPlayableSourceItem(item, options = {}) {
+  const selectedSource = selectedSourceForPlayback(item)
+  const rawSelected = nonArrayObject(selectedSource?.raw) ? selectedSource.raw : null
+  const legacySource = !selectedSource && nonArrayObject(item?.item) ? item.item : item
+  const source = selectedSource ? { ...rawSelected, ...selectedSource } : legacySource
+  if (!nonArrayObject(source)) return source
+
+  const id = firstNonEmptyString([
+    source.videoId,
+    source.path,
+    source.id,
+    selectedSource ? null : item?.videoId,
+    selectedSource ? null : item?.id,
+    selectedSource ? null : item?.path,
+  ], null)
+  const channelKey = firstNonEmptyString([
+    source.channelKey,
+    source.driveKey,
+    source.channel?.key,
+    selectedSource ? null : item?.channelKey,
+    selectedSource ? null : item?.driveKey,
+    options.fallbackChannelKey,
+  ], '')
+  const publicBeeKey = firstNonEmptyString([
+    source.publicBeeKey,
+    selectedSource ? null : item?.publicBeeKey,
+    options.publicBeeKey,
+  ], null)
+
+  return {
+    ...source,
+    id,
+    videoId: firstNonEmptyString([source.videoId, id], id),
+    channelKey,
+    driveKey: firstNonEmptyString([source.driveKey, channelKey], channelKey),
+    publicBeeKey,
+    title: firstNonEmptyString([source.title, item?.title], 'Untitled'),
+    thumbnailUrl: firstNonEmptyString([source.thumbnailUrl, item?.thumbnailUrl, source.thumbnail, item?.thumbnail], null),
+    thumbnail: firstNonEmptyString([source.thumbnail, item?.thumbnail, source.thumbnailUrl, item?.thumbnailUrl], null),
+  }
+}
+
 export function isMovieItem(item) {
-  return item?.contentKind === MOVIE_CLASSIFICATION || item?.classification?.type === MOVIE_CLASSIFICATION
+  return item?.contentKind === MOVIE_CLASSIFICATION || item?.mediaKind === MOVIE_CLASSIFICATION || item?.classification?.type === MOVIE_CLASSIFICATION
 }
 
 export function isShowItem(item) {
-  return item?.contentKind === EPISODE_KIND || item?.classification?.type === SHOW_CLASSIFICATION
+  return item?.contentKind === EPISODE_KIND || item?.mediaKind === EPISODE_KIND || item?.contentKind === SHOW_CLASSIFICATION || item?.mediaKind === SHOW_CLASSIFICATION || item?.classification?.type === SHOW_CLASSIFICATION
+}
+
+export function isCollectionItem(item) {
+  return COLLECTION_KINDS.has(item?.entityKind) || COLLECTION_KINDS.has(item?.contentKind) || COLLECTION_KINDS.has(item?.mediaKind)
+}
+
+export function isCreatorItem(item) {
+  return item?.entityKind === 'agent' || item?.contentKind === 'creator' || item?.mediaKind === 'creator' || item?.profileKind === 'creator'
 }
 
 export function buildMediaHubSections(input = {}) {
@@ -385,7 +509,18 @@ export function buildMediaHubSections(input = {}) {
     myVideos = [],
     continueWatching = [],
     recommendedVideos = [],
+    mediaGraph = null,
+    mediaEntities = [],
+    resolvedEntities = [],
+    works = [],
+    collections: graphCollections = [],
+    agents = [],
+    creators: graphCreators = [],
   } = input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {}
+  const graphProjection = projectMediaEntityGraph({ mediaGraph, mediaEntities, resolvedEntities, works, collections: graphCollections, agents, creators: graphCreators }, { includeLegacy: false })
+  const graphItems = mapVideos(graphProjection.mediaItems, 'media-graph')
+  const graphCollectionItems = mapVideos(graphProjection.collections, 'media-graph')
+  const graphAgentItems = mapVideos(graphProjection.agents, 'media-graph')
   const recommendedItems = mapVideos(recommendedVideos, 'recommended')
   const feedItems = mapVideos(feedVideos, 'feed')
   const libraryItems = mapVideos(myVideos, 'library')
@@ -393,12 +528,16 @@ export function buildMediaHubSections(input = {}) {
 
   const feedRailItems = dedupeByPlaybackKey([feedItems])
   const libraryRailItems = dedupeByPlaybackKey([libraryItems])
-  const mediaItems = dedupeByPlaybackKey([recommendedItems, feedItems, libraryItems])
+  const mediaItems = dedupeByPlaybackKey([graphItems, recommendedItems, feedItems, libraryItems])
+  const collectionItems = sortNewest(dedupeByPlaybackKey([graphCollectionItems]))
+  const creatorItems = sortNewest(dedupeByPlaybackKey([graphAgentItems, mediaItems.filter(isCreatorItem)]))
   const allItems = sortNewest(mediaItems)
   const movies = sortNewest(allItems.filter(isMovieItem))
   const shows = sortNewest(allItems.filter(isShowItem))
   const newEpisodes = sortNewest(shows)
-  const musicAndCreators = sortNewest(allItems.filter(isMusicOrCreatorItem))
+  const collections = limitItems(collectionItems, 12)
+  const creators = limitItems(creatorItems, 12)
+  const musicAndCreators = sortNewest(dedupeByPlaybackKey([allItems.filter(isMusicOrCreatorItem), creators]))
   const recentlySeeded = limitItems(sortNewest(feedRailItems), 18)
   const yourLibrary = limitItems(sortNewest(libraryRailItems), 12)
   const featured = selectFeatured(dedupeByPlaybackKey([mediaItems, continueItems]))
@@ -413,6 +552,8 @@ export function buildMediaHubSections(input = {}) {
     movies: rail('movies', 'Movies', movies, { subtitle: 'Feature-length media on your network' }),
     shows: rail('shows', 'Shows', shows, { subtitle: 'Episodes and series from peers' }),
     newEpisodes: rail('new-episodes', 'New episodes', newEpisodes),
+    collections: rail('collections', 'Collections', collections, { subtitle: 'Seasons, albums, playlists, and curated sets from the graph', limit: 12 }),
+    creators: rail('creators', 'Creators', creators, { subtitle: 'Agents and contributors resolved across publishers', limit: 12 }),
     musicAndCreators: rail('music-creators', 'Music & creators', musicAndCreators),
     recentlySeeded: rail('recently-seeded', 'Recently from the swarm', recentlySeeded, { limit: 18 }),
     yourLibrary: rail('your-library', 'Your library', yourLibrary, { limit: 12 }),

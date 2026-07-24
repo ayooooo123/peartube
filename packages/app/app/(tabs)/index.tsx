@@ -9,6 +9,7 @@ import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { VideoCard } from '../../components/video'
 import { EpisodeCard, EPISODE_CARD_WIDTH, HeroFeatureCard, MediaPosterCard, MEDIA_POSTER_CARD_WIDTH, MediaRail } from '@/components/media'
+import { encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components/media/MediaEntityDetailScreen'
 import type { VideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
@@ -22,7 +23,7 @@ import { formatTimeAgo } from '@/lib/formatters'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-virtualization'
-import { buildMediaHubSections, getMediaHubPlaybackKey } from '@/lib/media-hub'
+import { buildMediaHubSections, getMediaHubPlayableSourceItem, getMediaHubPlaybackKey } from '@/lib/media-hub'
 import {
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
@@ -99,6 +100,8 @@ type HomeFeedListItem =
   | { type: 'movies' }
   | { type: 'shows' }
   | { type: 'new-episodes' }
+  | { type: 'collections' }
+  | { type: 'creators' }
   | { type: 'music-creators' }
   | { type: 'discover-header' }
   | { type: 'discover-loading' }
@@ -912,13 +915,7 @@ export default function HomeScreen() {
   }, [rpc, loadAndPlayVideo])
 
   const getMediaHubSourceItem = useCallback((item: any) => {
-    const source = item?.item && typeof item.item === 'object' && !Array.isArray(item.item) ? item.item : item
-    if (!source || typeof source !== 'object' || Array.isArray(source)) return source
-    const id = source?.id || source?.videoId || item?.id || item?.videoId
-    const channelKey = source?.channelKey || source?.driveKey || item?.channelKey || item?.driveKey
-    const publicBeeKey = source?.publicBeeKey || item?.publicBeeKey || undefined
-    if (source.id === id && source.channelKey === channelKey && source.publicBeeKey === publicBeeKey) return source
-    return { ...source, id, channelKey, publicBeeKey }
+    return getMediaHubPlayableSourceItem(item)
   }, [])
 
   const playMediaHubItem = useCallback((item: any) => {
@@ -931,6 +928,18 @@ export default function HomeScreen() {
     if (!channelKey) return
     router.push({ pathname: '/channel/[key]', params: { key: channelKey, publicBeeKey: source?.publicBeeKey || item?.publicBeeKey || undefined } })
   }, [getMediaHubSourceItem, router])
+
+  const openMediaEntityPage = useCallback((item: any, entityType: 'media' | 'collection' | 'creator' = 'media') => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return
+    const pathname = entityType === 'collection' ? '/collection/[id]' : entityType === 'creator' ? '/creator/[id]' : '/media/[id]'
+    router.push({
+      pathname: pathname as any,
+      params: {
+        id: encodeURIComponent(getMediaEntityRouteId(item)),
+        item: encodeMediaEntityRouteParam(item),
+      },
+    })
+  }, [router])
 
   // Legacy: Play video in overlay only (used by mini player expansion)
   const playVideoInOverlay = useCallback(async (video: VideoData) => {
@@ -1112,6 +1121,8 @@ export default function HomeScreen() {
     if (mediaHub.movies.items.length > 0) items.push({ type: 'movies' })
     if (mediaHub.shows.items.length > 0) items.push({ type: 'shows' })
     if (mediaHub.newEpisodes.items.length > 0) items.push({ type: 'new-episodes' })
+    if (mediaHub.collections.items.length > 0) items.push({ type: 'collections' })
+    if (mediaHub.creators.items.length > 0) items.push({ type: 'creators' })
     if (mediaHub.musicAndCreators.items.length > 0) items.push({ type: 'music-creators' })
     items.push({ type: 'discover-header' })
     if ((feedLoading || loadingFeedVideos) && feedVideos.length === 0) {
@@ -1208,6 +1219,7 @@ export default function HomeScreen() {
             peers={displayPeers}
             onPress={() => playMediaHubItem(hero)}
             onChannelPress={() => openMediaHubChannel(hero)}
+            onDetailsPress={() => openMediaEntityPage(hero, 'media')}
           />
         </View>
       )
@@ -1276,6 +1288,36 @@ export default function HomeScreen() {
           itemWidth={EPISODE_CARD_WIDTH}
           renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
             <EpisodeCard item={mediaItem} onPress={() => playMediaHubItem(mediaItem)} />
+          )}
+        />
+      )
+    }
+
+    if (item.type === 'collections') {
+      return (
+        <MediaRail
+          title={mediaHub.collections.title}
+          subtitle={mediaHub.collections.subtitle}
+          data={mediaHub.collections.items}
+          keyExtractor={(mediaItem: any) => getMediaHubPlaybackKey(mediaItem)}
+          itemWidth={MEDIA_POSTER_CARD_WIDTH}
+          renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
+            <MediaPosterCard item={mediaItem} onPress={() => openMediaEntityPage(mediaItem, 'collection')} />
+          )}
+        />
+      )
+    }
+
+    if (item.type === 'creators') {
+      return (
+        <MediaRail
+          title={mediaHub.creators.title}
+          subtitle={mediaHub.creators.subtitle}
+          data={mediaHub.creators.items}
+          keyExtractor={(mediaItem: any) => getMediaHubPlaybackKey(mediaItem)}
+          itemWidth={MEDIA_POSTER_CARD_WIDTH}
+          renderItem={({ item: mediaItem }: ListRenderItemInfo<any>) => (
+            <MediaPosterCard item={mediaItem} onPress={() => openMediaEntityPage(mediaItem, 'creator')} />
           )}
         />
       )
@@ -1542,6 +1584,7 @@ export default function HomeScreen() {
     loadingFeedVideos,
     mediaHub,
     openMediaHubChannel,
+    openMediaEntityPage,
     playMediaHubItem,
     refreshFeed,
     refreshMyVideos,

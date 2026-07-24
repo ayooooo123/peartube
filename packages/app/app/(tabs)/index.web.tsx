@@ -41,7 +41,8 @@ import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo 
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMseBackendForWatch } from '@/lib/watch-page-mse-backend-mode.mjs'
 import { consumeStagedWebChannelPlayback } from '@/lib/channel-playback-handoff.js'
-import { buildMediaHubSections } from '@/lib/media-hub'
+import { getMediaHubPlayableSourceItem, buildMediaHubSections } from '@/lib/media-hub'
+import { MediaEntityDetailScreen, encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components/media/MediaEntityDetailScreen'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -108,7 +109,13 @@ interface HomeRoute {
   type: 'home'
 }
 
-type Route = WatchRoute | ChannelRoute | HomeRoute
+interface EntityRoute {
+  type: 'media' | 'collection' | 'creator'
+  entityId: string
+  item?: string
+}
+
+type Route = WatchRoute | ChannelRoute | EntityRoute | HomeRoute
 
 function parseHash(hash: string): Route {
   const normalized = hash.replace(/^#\/?/, '') || ''
@@ -126,6 +133,13 @@ function parseHash(hash: string): Route {
       publicBeeKey: safeDecodeURIComponent(params.get('publicBeeKey') || ''),
     }
   }
+  if ((parts[0] === 'media' || parts[0] === 'collection' || parts[0] === 'creator') && parts[1]) {
+    return {
+      type: parts[0],
+      entityId: safeDecodeURIComponent(parts[1]),
+      item: params.get('item') || undefined,
+    }
+  }
   return { type: 'home' }
 }
 
@@ -139,44 +153,150 @@ function safeDecodeURIComponent(value: string): string {
 
 
 function getMediaHubSource(item: any): any {
-  return item?.item && typeof item.item === 'object' ? item.item : item
+  if (item?.selectedSource && typeof item.selectedSource === 'object' && !Array.isArray(item.selectedSource)) return item.selectedSource
+  if (item?.item?.selectedSource && typeof item.item.selectedSource === 'object' && !Array.isArray(item.item.selectedSource)) return item.item.selectedSource
+  return item?.item && typeof item.item === 'object' && !Array.isArray(item.item) ? item.item : item
 }
 
-function getMediaHubArtwork(item: any): string | null {
+function mediaHubString(...values: any[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+  return null
+}
+
+function mediaHubNumber(...values: any[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  }
+  return null
+}
+
+function getMediaHubArtwork(item: any, intent: 'hero' | 'poster' | 'episode' | 'card' = 'card'): string | null {
   const source = getMediaHubSource(item)
-  return item?.thumbnailUrl || item?.thumbnail || source?.thumbnailUrl || source?.thumbnail || null
+  const choices = intent === 'hero'
+    ? [item?.backdropUrl, source?.backdropUrl, item?.posterUrl, source?.posterUrl, item?.stillUrl, source?.stillUrl, item?.thumbnailUrl, item?.thumbnail, source?.thumbnailUrl, source?.thumbnail]
+    : intent === 'poster'
+      ? [item?.posterUrl, source?.posterUrl, item?.thumbnailUrl, item?.thumbnail, source?.thumbnailUrl, source?.thumbnail, item?.stillUrl, source?.stillUrl, item?.backdropUrl, source?.backdropUrl]
+      : [item?.stillUrl, source?.stillUrl, item?.thumbnailUrl, item?.thumbnail, source?.thumbnailUrl, source?.thumbnail, item?.backdropUrl, source?.backdropUrl, item?.posterUrl, source?.posterUrl]
+  return mediaHubString(...choices)
 }
 
 function getMediaHubTitle(item: any): string {
   const source = getMediaHubSource(item)
-  return item?.title || source?.title || 'Untitled'
+  return mediaHubString(item?.title, source?.title, source?.preferredMetadata?.title, source?.name) || 'Untitled media'
 }
 
 function getMediaHubSubtitle(item: any): string {
   const source = getMediaHubSource(item)
-  return item?.subtitle || item?.channelName || source?.channelName || source?.channel?.name || 'PearTube network media'
+  return mediaHubString(item?.subtitle, item?.creatorName, item?.sourceProviderName, item?.publisherName, item?.channelName, source?.subtitle, source?.creatorName, source?.sourceProviderName, source?.publisherName, source?.channelName, source?.channel?.name) || 'Resolved from your PearTube media graph'
 }
 
 function getMediaHubTimestamp(item: any): number | string | null {
   const source = getMediaHubSource(item)
-  return item?.createdAt || source?.uploadedAt || source?.createdAt || source?.updatedAt || null
+  return item?.createdAt || item?.publishedAt || source?.uploadedAt || source?.createdAt || source?.updatedAt || null
 }
 
 function getMediaHubDuration(item: any): number | null {
   const source = getMediaHubSource(item)
-  const duration = item?.duration || item?.durationSec || source?.duration || source?.durationSec
-  return typeof duration === 'number' && Number.isFinite(duration) && duration > 0 ? duration : null
+  return mediaHubNumber(item?.duration, item?.durationSec, source?.duration, source?.durationSec)
+}
+
+function getMediaHubEpisodeLabel(item: any): string | null {
+  const source = getMediaHubSource(item)
+  const season = item?.seasonNumber ?? source?.seasonNumber ?? item?.classification?.season ?? source?.classification?.season
+  const episode = item?.episodeNumber ?? source?.episodeNumber ?? item?.classification?.episode ?? source?.classification?.episode
+  if (Number.isSafeInteger(season) && Number.isSafeInteger(episode)) return `S${String(season).padStart(2, '0')} E${String(episode).padStart(2, '0')}`
+  return mediaHubString(item?.episodeLabel, source?.episodeLabel)
+}
+
+function getMediaHubBadge(item: any): string {
+  const source = getMediaHubSource(item)
+  const formatted = formatContentBadge(source) || formatContentBadge(item)
+  const kind = mediaHubString(item?.contentKind, item?.mediaKind, source?.contentKind, source?.mediaKind, item?.classification?.type, source?.classification?.type)
+  const entityKind = mediaHubString(item?.entityKind, source?.entityKind)
+  if (kind === 'movie') return 'Movie'
+  if (kind === 'episode' || kind === 'tv') return getMediaHubEpisodeLabel(item) || 'TV Episode'
+  if (kind === 'song' || kind === 'music') return 'Music'
+  if (kind === 'season' || kind === 'album' || kind === 'playlist' || kind === 'collection' || entityKind === 'collection') return 'Collection'
+  if (kind === 'creator' || entityKind === 'agent') return 'Creator'
+  if (formatted) return formatted
+  return 'Work'
+}
+
+function getMediaHubSourceSummary(item: any): string {
+  const sourceCount = Number.isSafeInteger(item?.sourceCount) ? item.sourceCount : Array.isArray(item?.sources) ? item.sources.length : 0
+  if (sourceCount > 1) return `${sourceCount} sources`
+  return mediaHubString(item?.sourceProviderName, item?.publisherName, item?.channelName, getMediaHubSource(item)?.publisherName, getMediaHubSource(item)?.channelName) || '1 source'
+}
+
+function getMediaHubArchiveSummary(item: any): string | null {
+  const status = mediaHubString(item?.archiveStatus, item?.availabilityStatus, getMediaHubSource(item)?.archiveStatus, getMediaHubSource(item)?.availabilityStatus)
+  if (!status) return null
+  if (status === 'local' || status === 'complete-local') return 'Local copy'
+  if (status === 'cached' || status === 'retained') return 'Retained nearby'
+  if (status === 'pledged' || status === 'archived') return 'Archive evidence'
+  if (status === 'unavailable' || status === 'missing') return 'Missing source'
+  return status
 }
 
 function getMediaHubMeta(item: any): string {
   const parts = []
-  const badge = formatContentBadge(getMediaHubSource(item))
+  const badge = getMediaHubBadge(item)
   const duration = getMediaHubDuration(item)
   const timestamp = getMediaHubTimestamp(item)
+  const sourceSummary = getMediaHubSourceSummary(item)
   if (badge) parts.push(badge)
   if (duration) parts.push(formatDuration(duration))
+  if (sourceSummary) parts.push(sourceSummary)
   if (timestamp) parts.push(formatTimeAgo(timestamp))
   return parts.join(' • ')
+}
+
+function hashMediaHubTitle(title: string): number {
+  let hash = 0
+  for (let i = 0; i < title.length; i += 1) hash = ((hash << 5) - hash + title.charCodeAt(i)) | 0
+  return Math.abs(hash)
+}
+
+function getMediaHubFallbackGradient(item: any): string {
+  const title = getMediaHubTitle(item)
+  const gradients = [
+    'linear-gradient(135deg, #18230f 0%, #0b0f0d 46%, #5d2f12 100%)',
+    'linear-gradient(135deg, #071a2f 0%, #111118 48%, #4c1d95 100%)',
+    'linear-gradient(135deg, #2f1111 0%, #100f0d 48%, #8a5a10 100%)',
+    'linear-gradient(135deg, #09251f 0%, #0b0d12 45%, #14532d 100%)',
+    'linear-gradient(135deg, #241432 0%, #08090d 52%, #365314 100%)',
+  ]
+  return gradients[hashMediaHubTitle(title) % gradients.length]
+}
+
+function getMediaHubInitials(item: any): string {
+  return getMediaHubTitle(item)
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'PT'
+}
+
+function hasMediaGraphEvidence(item: any): boolean {
+  return Boolean(item?.localEntityId || item?.publicationId || item?.renditionId || item?.provenance?.length || item?.conflicts?.length || item?.sourceCount > 1)
+}
+
+function MediaFallbackArtwork({ item, variant = 'card' }: { item: any, variant?: 'hero' | 'poster' | 'card' }) {
+  const style = variant === 'hero'
+    ? styles.mediaHeroImagePlaceholder
+    : variant === 'poster'
+      ? styles.mediaPosterPlaceholder
+      : styles.mediaCardPlaceholder
+  return (
+    <div style={{ ...style, background: getMediaHubFallbackGradient(item) }}>
+      <span style={styles.mediaFallbackInitials}>{getMediaHubInitials(item)}</span>
+      <span style={styles.mediaFallbackBadge}>{getMediaHubBadge(item)}</span>
+    </div>
+  )
 }
 
 interface DesktopMediaHeroProps {
@@ -189,23 +309,29 @@ interface DesktopMediaHeroProps {
 }
 
 function DesktopMediaHero({ item, peerCount, isRefreshing, onItemPress, onChannelPress, onRefresh }: DesktopMediaHeroProps) {
-  const artwork = getMediaHubArtwork(item)
+  const heroArtwork = getMediaHubArtwork(item, 'hero')
+  const posterArtwork = getMediaHubArtwork(item, 'poster')
   const hasItem = !!item
+  const archiveSummary = hasItem ? getMediaHubArchiveSummary(item) : null
 
   return (
     <section style={styles.mediaHero}>
+      {heroArtwork ? <img src={heroArtwork} alt="" style={styles.mediaHeroBackdropImage} /> : null}
+      <div style={styles.mediaHeroBackdropWash} />
       <div style={styles.mediaHeroCopy}>
-        <div style={styles.mediaKicker}>PEARTUBE MEDIA COCKPIT</div>
-        <h1 style={styles.mediaHeroTitle}>{hasItem ? getMediaHubTitle(item) : 'Your network media library'}</h1>
+        <div style={styles.mediaKicker}>PERMISSIONLESS MEDIA CDN</div>
+        <h1 style={styles.mediaHeroTitle}>{hasItem ? getMediaHubTitle(item) : 'A media graph, not a feed'}</h1>
         <p style={styles.mediaHeroSubtitle}>
           {hasItem
             ? getMediaHubSubtitle(item)
-            : 'Movies, shows, music, channels, and seeded media from the swarm in one desktop-native home.'}
+            : 'Works, episodes, albums, creators, publications, and archive evidence resolved into one local streaming library without a central catalog owner.'}
         </p>
         <div style={styles.mediaHeroMetaRow}>
-          <span style={styles.mediaHeroPill}>Generic media CDN</span>
-          <span style={styles.mediaHeroPill}>{peerCount > 0 ? `${peerCount} peers nearby` : 'P2P swarm ready'}</span>
-          {hasItem && getMediaHubMeta(item) ? <span style={styles.mediaHeroPill}>{getMediaHubMeta(item)}</span> : null}
+          <span style={styles.mediaHeroPillStrong}>{hasItem ? getMediaHubBadge(item) : 'Entity graph'}</span>
+          <span style={styles.mediaHeroPill}>{peerCount > 0 ? `${peerCount} peers connected` : 'Scoped swarms ready'}</span>
+          <span style={styles.mediaHeroPill}>{hasItem ? getMediaHubSourceSummary(item) : 'Publisher + asset topics'}</span>
+          {archiveSummary ? <span style={styles.mediaHeroPill}>{archiveSummary}</span> : null}
+          {hasItem && Array.isArray(item?.conflicts) && item.conflicts.length > 0 ? <span style={styles.mediaHeroPillWarn}>{item.conflicts.length} conflict{item.conflicts.length === 1 ? '' : 's'}</span> : null}
         </div>
         <div style={styles.mediaHeroActions}>
           <button
@@ -214,21 +340,124 @@ function DesktopMediaHero({ item, peerCount, isRefreshing, onItemPress, onChanne
             style={styles.mediaPrimaryButton}
             disabled={!hasItem && isRefreshing}
           >
-            {hasItem ? 'Play featured' : isRefreshing ? 'Refreshing…' : 'Refresh swarm'}
+            {hasItem ? '▶ Play selected source' : isRefreshing ? 'Refreshing…' : 'Refresh network'}
           </button>
           {hasItem ? (
             <button type="button" onClick={() => onChannelPress(item)} style={styles.mediaSecondaryButton}>
-              Open channel
+              Open source channel
             </button>
           ) : null}
         </div>
       </div>
       <div style={styles.mediaHeroArtwork}>
-        {artwork ? (
-          <img src={artwork} alt="" style={styles.mediaHeroImage} />
+        {posterArtwork ? (
+          <img src={posterArtwork} alt="" style={styles.mediaHeroPosterImage} />
         ) : (
-          <div style={styles.mediaHeroImagePlaceholder}>PT</div>
+          <MediaFallbackArtwork item={item} variant="hero" />
         )}
+      </div>
+    </section>
+  )
+}
+
+interface DesktopMediaStatsProps {
+  sections: any
+  peerCount: number
+}
+
+function DesktopMediaStats({ sections, peerCount }: DesktopMediaStatsProps) {
+  const stats = [
+    { label: 'Works', value: sections?.allItems?.length || 0, detail: 'resolved playable items' },
+    { label: 'Collections', value: sections?.collections?.items?.length || 0, detail: 'seasons, albums, sets' },
+    { label: 'Creators', value: sections?.creators?.items?.length || 0, detail: 'agents + roles' },
+    { label: 'Sources', value: (sections?.allItems || []).reduce((total: number, item: any) => total + (Number.isSafeInteger(item.sourceCount) ? item.sourceCount : 1), 0), detail: 'publications/renditions' },
+    { label: 'Swarm', value: peerCount, detail: peerCount === 1 ? 'peer nearby' : 'peers nearby' },
+  ]
+  return (
+    <section style={styles.mediaStatsGrid} aria-label="PearTube permissionless media CDN overview">
+      {stats.map((stat) => (
+        <div key={stat.label} style={styles.mediaStatCard}>
+          <span style={styles.mediaStatValue}>{stat.value}</span>
+          <span style={styles.mediaStatLabel}>{stat.label}</span>
+          <span style={styles.mediaStatDetail}>{stat.detail}</span>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function getDesktopEvidenceSources(item: any): any[] {
+  if (!item) return []
+  if (Array.isArray(item.sources) && item.sources.length > 0) return item.sources
+  const selected = getMediaHubSource(item)
+  const alternates = Array.isArray(item.alternateSources) ? item.alternateSources : []
+  return [selected, ...alternates].filter((source) => source && typeof source === 'object')
+}
+
+function desktopEvidenceLabel(source: any, index: number): string {
+  return mediaHubString(source?.publisherName, source?.sourceProviderName, source?.channelName, source?.publisherId, source?.channelKey, `Source ${index + 1}`) || `Source ${index + 1}`
+}
+
+function desktopEvidenceId(source: any): string {
+  return mediaHubString(source?.publicationId, source?.renditionId, source?.videoId, source?.id, source?.path) || 'publication claim'
+}
+
+function desktopEvidenceStatus(source: any): string {
+  const status = mediaHubString(source?.archiveStatus, source?.availabilityStatus, source?.retentionStatus)
+  if (source?.localComplete || status === 'local' || status === 'complete-local') return 'local'
+  if (source?.cached || status === 'cached' || status === 'retained') return 'cached'
+  if (source?.available || status === 'available' || status === 'online') return 'available'
+  return status || 'claim'
+}
+
+function DesktopMediaEvidencePanel({ item }: { item: any }) {
+  if (!item) return null
+  const sources = getDesktopEvidenceSources(item)
+  const provenance = Array.isArray(item.provenance) ? item.provenance : []
+  const conflicts = Array.isArray(item.conflicts) ? item.conflicts : []
+  const archive = getMediaHubArchiveSummary(item) || 'No archive evidence yet'
+
+  return (
+    <section style={styles.mediaEvidenceGrid} aria-label="Media graph evidence">
+      <div style={styles.mediaEvidenceCard}>
+        <div style={styles.mediaEvidenceKicker}>SourceSelector</div>
+        <h3 style={styles.mediaEvidenceTitle}>Playable publications</h3>
+        <div style={styles.mediaEvidenceList}>
+          {sources.length === 0 ? <p style={styles.mediaEvidenceEmpty}>No alternate sources attached yet.</p> : sources.slice(0, 4).map((source, index) => (
+            <div key={desktopEvidenceId(source) + index} style={styles.mediaEvidenceRow}>
+              <div style={styles.mediaEvidenceRowMain}>
+                <span style={styles.mediaEvidenceRowTitle}>{desktopEvidenceLabel(source, index)}</span>
+                <span style={styles.mediaEvidenceRowMeta}>{desktopEvidenceId(source)}</span>
+              </div>
+              <span style={styles.mediaEvidenceStatus}>{desktopEvidenceStatus(source)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={styles.mediaEvidenceCard}>
+        <div style={styles.mediaEvidenceKicker}>ProvenancePanel</div>
+        <h3 style={styles.mediaEvidenceTitle}>Publisher claims</h3>
+        <div style={styles.mediaEvidenceList}>
+          {provenance.length === 0 ? <p style={styles.mediaEvidenceEmpty}>{item.localEntityId || 'Legacy source metadata only'}</p> : provenance.slice(0, 4).map((entry: any, index: number) => (
+            <div key={(entry.publicationId || entry.renditionId || entry.role || 'claim') + index} style={styles.mediaEvidenceRow}>
+              <div style={styles.mediaEvidenceRowMain}>
+                <span style={styles.mediaEvidenceRowTitle}>{entry.role || 'claim'}</span>
+                <span style={styles.mediaEvidenceRowMeta}>{mediaHubString(entry.publisherName, entry.publisherId, entry.publicationId, entry.renditionId) || 'unsigned claim'}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={styles.mediaEvidenceCard}>
+        <div style={styles.mediaEvidenceKicker}>ArchiveStatus</div>
+        <h3 style={styles.mediaEvidenceTitle}>{archive}</h3>
+        <p style={styles.mediaEvidenceEmpty}>{sources.length > 0 ? `${sources.length} source${sources.length === 1 ? '' : 's'} can satisfy this entity.` : 'No source claims attached yet.'}</p>
+        {conflicts.length > 0 ? (
+          <div style={styles.mediaConflictInline}>
+            <div style={styles.mediaEvidenceKicker}>ConflictNotice</div>
+            <p style={styles.mediaEvidenceEmpty}>{conflicts.length} unresolved metadata conflict{conflicts.length === 1 ? '' : 's'}</p>
+          </div>
+        ) : null}
       </div>
     </section>
   )
@@ -244,6 +473,7 @@ interface DesktopMediaRailProps {
 function DesktopMediaRail({ rail, variant = 'poster', onItemPress, onChannelPress }: DesktopMediaRailProps) {
   const items = Array.isArray(rail?.items) ? rail.items : []
   if (items.length === 0) return null
+  const limit = rail.limit || (variant === 'poster' ? 12 : 14)
 
   return (
     <section style={styles.mediaRailSection}>
@@ -252,18 +482,23 @@ function DesktopMediaRail({ rail, variant = 'poster', onItemPress, onChannelPres
           <h2 style={styles.mediaRailTitle}>{rail.title}</h2>
           {rail.subtitle ? <p style={styles.mediaRailSubtitle}>{rail.subtitle}</p> : null}
         </div>
-        <span style={styles.mediaRailCount}>{items.length} items</span>
+        <span style={styles.mediaRailCount}>{items.length} in graph</span>
       </div>
       <div style={styles.mediaRailScroller}>
-        {items.slice(0, rail.limit || 14).map((item: any, index: number) => {
-          const artwork = getMediaHubArtwork(item)
+        {items.slice(0, limit).map((item: any, index: number) => {
+          const artwork = getMediaHubArtwork(item, variant === 'poster' ? 'poster' : 'episode')
           const progress = typeof item?.progress === 'number' ? Math.max(0, Math.min(1, item.progress)) : 0
           const cardStyle = variant === 'episode' ? styles.mediaEpisodeCard : styles.mediaPosterCard
+          const artworkStyle = variant === 'episode' ? styles.mediaEpisodeArtwork : styles.mediaPosterArtwork
+          const archiveSummary = getMediaHubArchiveSummary(item)
+          const graphEvidence = hasMediaGraphEvidence(item)
           return (
-            <article key={item.playbackKey || item.id || index} style={cardStyle}>
+            <article key={item.playbackKey || item.localEntityId || item.id || index} style={cardStyle}>
               <button type="button" onClick={() => onItemPress(item)} style={styles.mediaCardButton}>
-                <div style={styles.mediaCardArtwork}>
-                  {artwork ? <img src={artwork} alt="" style={styles.mediaCardImage} /> : <div style={styles.mediaCardPlaceholder}>PT</div>}
+                <div style={artworkStyle}>
+                  {artwork ? <img src={artwork} alt="" style={styles.mediaCardImage} /> : <MediaFallbackArtwork item={item} variant={variant === 'poster' ? 'poster' : 'card'} />}
+                  <span style={styles.mediaCardBadge}>{getMediaHubBadge(item)}</span>
+                  <div style={styles.mediaCardScrim} />
                   {progress > 0 ? (
                     <div style={styles.mediaProgressTrack}>
                       <div style={{ ...styles.mediaProgressFill, width: `${Math.round(progress * 100)}%` }} />
@@ -273,11 +508,16 @@ function DesktopMediaRail({ rail, variant = 'poster', onItemPress, onChannelPres
                 <div style={styles.mediaCardBody}>
                   <div style={styles.mediaCardTitle}>{getMediaHubTitle(item)}</div>
                   <div style={styles.mediaCardSubtitle}>{getMediaHubSubtitle(item)}</div>
-                  {getMediaHubMeta(item) ? <div style={styles.mediaCardMeta}>{getMediaHubMeta(item)}</div> : null}
+                  <div style={styles.mediaCardMeta}>{getMediaHubMeta(item)}</div>
+                  <div style={styles.mediaCardSignalRow}>
+                    <span style={graphEvidence ? styles.mediaSignalPillActive : styles.mediaSignalPill}>provenance</span>
+                    {archiveSummary ? <span style={styles.mediaSignalPill}>{archiveSummary}</span> : null}
+                    {Array.isArray(item?.conflicts) && item.conflicts.length > 0 ? <span style={styles.mediaSignalPillWarn}>conflict</span> : null}
+                  </div>
                 </div>
               </button>
               <button type="button" onClick={() => onChannelPress(item)} style={styles.mediaChannelButton}>
-                Channel
+                Source channel
               </button>
             </article>
           )
@@ -2238,6 +2478,8 @@ export default function HomeScreen() {
     mediaHubSections.movies,
     mediaHubSections.shows,
     mediaHubSections.newEpisodes,
+    mediaHubSections.collections,
+    mediaHubSections.creators,
     mediaHubSections.musicAndCreators,
     mediaHubSections.recentlySeeded,
     mediaHubSections.yourLibrary,
@@ -2577,19 +2819,7 @@ export default function HomeScreen() {
 
 
   const getMediaHubSourceItem = useCallback((item: any): VideoData => {
-    const source = getMediaHubSource(item) || {}
-    const id = source?.id || source?.videoId || item?.id || item?.videoId
-    const channelKey = source?.channelKey || item?.channelKey || source?.driveKey || item?.driveKey || identity?.driveKey || ''
-    const publicBeeKey = source?.publicBeeKey || item?.publicBeeKey || null
-    return {
-      ...source,
-      id,
-      channelKey,
-      publicBeeKey,
-      title: source?.title || item?.title || 'Untitled',
-      thumbnailUrl: source?.thumbnailUrl || item?.thumbnailUrl || source?.thumbnail || item?.thumbnail || null,
-      thumbnail: source?.thumbnail || item?.thumbnail || source?.thumbnailUrl || item?.thumbnailUrl || null,
-    }
+    return getMediaHubPlayableSourceItem(item, { fallbackChannelKey: identity?.driveKey || '' }) as VideoData
   }, [identity?.driveKey])
 
   const playMediaHubItem = useCallback((item: any) => {
@@ -2606,6 +2836,13 @@ export default function HomeScreen() {
       ? `#/channel/${encodeURIComponent(channelKey)}?publicBeeKey=${encodeURIComponent(publicBeeKey)}`
       : '#/channel/' + encodeURIComponent(channelKey)
   }, [feedEntries, getMediaHubSourceItem])
+
+  const openMediaEntityPage = useCallback((item: any, entityType: 'media' | 'collection' | 'creator' = 'media') => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return
+    const id = getMediaEntityRouteId(item)
+    const encodedItem = encodeMediaEntityRouteParam(item)
+    window.location.hash = `#/${entityType}/${encodeURIComponent(id)}?item=${encodedItem}`
+  }, [])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -2639,6 +2876,22 @@ export default function HomeScreen() {
         <p style={styles.loadingText}>
           {!ready ? 'Starting P2P network...' : 'Loading...'}
         </p>
+      </div>
+    )
+  }
+
+  // On Pear desktop with media entity route, render the inspectable entity detail surface
+  if (isPear && (currentRoute.type === 'media' || currentRoute.type === 'collection' || currentRoute.type === 'creator')) {
+    return (
+      <div style={styles.container}>
+        <MediaEntityDetailScreen
+          type={currentRoute.type}
+          routeId={currentRoute.entityId}
+          itemParam={currentRoute.item}
+          onBack={() => {
+            window.location.hash = ''
+          }}
+        />
       </div>
     )
   }
@@ -2745,12 +2998,18 @@ export default function HomeScreen() {
               onChannelPress={openMediaHubChannel}
               onRefresh={refreshFeed}
             />
+            <DesktopMediaStats sections={mediaHubSections} peerCount={peerCount} />
+            <DesktopMediaEvidencePanel item={mediaHubSections.featured.item} />
             {desktopMediaRails.map((rail: any) => (
               <DesktopMediaRail
                 key={rail.id}
                 rail={rail}
                 variant={rail.id === 'new-episodes' || rail.id === 'continue-watching' ? 'episode' : 'poster'}
-                onItemPress={playMediaHubItem}
+                onItemPress={(item: any) => {
+                  if (rail.id === 'collections') openMediaEntityPage(item, 'collection')
+                  else if (rail.id === 'creators') openMediaEntityPage(item, 'creator')
+                  else playMediaHubItem(item)
+                }}
                 onChannelPress={openMediaHubChannel}
               />
             ))}
@@ -2870,24 +3129,46 @@ export default function HomeScreen() {
 
 const styles: Record<string, React.CSSProperties> = {
   mediaCockpitShell: {
+    position: 'relative',
     display: 'flex',
     flexDirection: 'column',
-    gap: 28,
-    marginBottom: 36,
+    gap: 30,
+    marginBottom: 42,
+    padding: '4px 0 0 0',
   },
   mediaHero: {
+    position: 'relative',
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1.35fr) minmax(280px, 0.65fr)',
-    gap: 28,
-    minHeight: 360,
-    borderRadius: 28,
-    padding: 32,
-    border: `1px solid ${colors.border}`,
-    background: 'radial-gradient(circle at 10% 10%, rgba(163,230,53,0.28), transparent 32%), linear-gradient(135deg, rgba(20,24,20,0.98), rgba(6,8,7,0.98))',
-    boxShadow: '0 28px 80px rgba(0,0,0,0.36)',
+    gridTemplateColumns: 'minmax(0, 1.45fr) minmax(230px, 0.55fr)',
+    gap: 30,
+    minHeight: 430,
+    borderRadius: 34,
+    padding: 36,
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'linear-gradient(135deg, #060807 0%, #0b0f0d 48%, #11170f 100%)',
+    boxShadow: '0 32px 120px rgba(0,0,0,0.52)',
     overflow: 'hidden',
+    isolation: 'isolate',
+  },
+  mediaHeroBackdropImage: {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    opacity: 0.42,
+    filter: 'saturate(1.15) contrast(1.08)',
+    zIndex: 0,
+  },
+  mediaHeroBackdropWash: {
+    position: 'absolute',
+    inset: 0,
+    background: 'radial-gradient(circle at 76% 18%, rgba(163,230,53,0.20), transparent 34%), linear-gradient(90deg, rgba(4,6,5,0.98) 0%, rgba(5,7,6,0.86) 42%, rgba(5,7,6,0.40) 100%), linear-gradient(0deg, rgba(5,7,6,0.88), rgba(5,7,6,0.18))',
+    zIndex: 1,
   },
   mediaHeroCopy: {
+    position: 'relative',
+    zIndex: 2,
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
@@ -2895,76 +3176,106 @@ const styles: Record<string, React.CSSProperties> = {
   },
   mediaKicker: {
     color: colors.primary,
-    fontSize: 12,
-    fontWeight: 800,
-    letterSpacing: 2,
+    fontSize: 11,
+    fontWeight: 900,
+    letterSpacing: 3,
     textTransform: 'uppercase',
-    marginBottom: 14,
+    marginBottom: 16,
   },
   mediaHeroTitle: {
     color: colors.text,
-    fontSize: 54,
-    lineHeight: 1.02,
-    letterSpacing: -1.8,
-    margin: '0 0 16px 0',
-    maxWidth: 760,
+    fontSize: 64,
+    lineHeight: 0.96,
+    letterSpacing: -2.6,
+    margin: '0 0 18px 0',
+    maxWidth: 860,
+    textShadow: '0 18px 60px rgba(0,0,0,0.45)',
   },
   mediaHeroSubtitle: {
-    color: colors.textMuted,
+    color: 'rgba(245,245,239,0.78)',
     fontSize: 18,
-    lineHeight: '28px',
+    lineHeight: '29px',
     margin: 0,
-    maxWidth: 720,
+    maxWidth: 780,
   },
   mediaHeroMetaRow: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: 10,
-    marginTop: 22,
+    marginTop: 24,
   },
   mediaHeroPill: {
     borderRadius: 999,
-    border: `1px solid ${colors.border}`,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    color: colors.text,
+    border: '1px solid rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.075)',
+    color: 'rgba(245,245,239,0.88)',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 800,
+    padding: '8px 12px',
+    backdropFilter: 'blur(14px)',
+  },
+  mediaHeroPillStrong: {
+    borderRadius: 999,
+    border: '1px solid rgba(163,230,53,0.45)',
+    backgroundColor: 'rgba(163,230,53,0.16)',
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: 900,
+    padding: '8px 12px',
+    backdropFilter: 'blur(14px)',
+  },
+  mediaHeroPillWarn: {
+    borderRadius: 999,
+    border: '1px solid rgba(251,191,36,0.45)',
+    backgroundColor: 'rgba(251,191,36,0.14)',
+    color: '#fde68a',
+    fontSize: 12,
+    fontWeight: 900,
     padding: '8px 12px',
   },
   mediaHeroActions: {
     display: 'flex',
     gap: 12,
-    marginTop: 28,
+    marginTop: 30,
   },
   mediaPrimaryButton: {
     border: 'none',
     borderRadius: 999,
-    backgroundColor: colors.primary,
+    background: `linear-gradient(135deg, ${colors.primary}, #d9f99d)`,
     color: '#081008',
+    cursor: 'pointer',
+    fontSize: 15,
+    fontWeight: 900,
+    letterSpacing: -0.1,
+    padding: '14px 24px',
+    boxShadow: '0 18px 42px rgba(163,230,53,0.24)',
+  },
+  mediaSecondaryButton: {
+    borderRadius: 999,
+    border: '1px solid rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.09)',
+    color: colors.text,
     cursor: 'pointer',
     fontSize: 15,
     fontWeight: 800,
     padding: '13px 20px',
-  },
-  mediaSecondaryButton: {
-    borderRadius: 999,
-    border: `1px solid ${colors.border}`,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    color: colors.text,
-    cursor: 'pointer',
-    fontSize: 15,
-    fontWeight: 700,
-    padding: '12px 18px',
+    backdropFilter: 'blur(16px)',
   },
   mediaHeroArtwork: {
     position: 'relative',
-    minHeight: 280,
+    zIndex: 2,
+    alignSelf: 'center',
+    justifySelf: 'center',
+    width: 'min(100%, 290px)',
+    aspectRatio: '2 / 3',
     borderRadius: 24,
     overflow: 'hidden',
-    border: `1px solid ${colors.border}`,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    boxShadow: '0 30px 80px rgba(0,0,0,0.52)',
+    transform: 'rotate(1.3deg)',
   },
-  mediaHeroImage: {
+  mediaHeroPosterImage: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
@@ -2972,68 +3283,197 @@ const styles: Record<string, React.CSSProperties> = {
   },
   mediaHeroImagePlaceholder: {
     height: '100%',
-    minHeight: 280,
+    minHeight: 320,
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 14,
     color: colors.primary,
-    fontSize: 64,
+    padding: 18,
+  },
+  mediaStatsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+    gap: 12,
+  },
+  mediaStatCard: {
+    minHeight: 98,
+    borderRadius: 22,
+    padding: 18,
+    border: '1px solid rgba(255,255,255,0.10)',
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.032))',
+    boxShadow: '0 18px 48px rgba(0,0,0,0.20)',
+  },
+  mediaStatValue: {
+    display: 'block',
+    color: colors.text,
+    fontSize: 30,
+    lineHeight: '32px',
     fontWeight: 900,
-    letterSpacing: -4,
-    background: 'linear-gradient(135deg, rgba(163,230,53,0.22), rgba(255,255,255,0.04))',
+    letterSpacing: -1,
+  },
+  mediaStatLabel: {
+    display: 'block',
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: 850,
+    marginTop: 9,
+  },
+  mediaStatDetail: {
+    display: 'block',
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  mediaEvidenceGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 14,
+  },
+  mediaEvidenceCard: {
+    minHeight: 170,
+    borderRadius: 24,
+    padding: 18,
+    border: '1px solid rgba(255,255,255,0.10)',
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.070), rgba(255,255,255,0.030))',
+    boxShadow: '0 18px 54px rgba(0,0,0,0.18)',
+  },
+  mediaEvidenceKicker: {
+    color: colors.primary,
+    fontSize: 10,
+    fontWeight: 900,
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  mediaEvidenceTitle: {
+    color: colors.text,
+    fontSize: 18,
+    lineHeight: '22px',
+    fontWeight: 900,
+    letterSpacing: -0.3,
+    margin: '6px 0 0 0',
+  },
+  mediaEvidenceList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 9,
+    marginTop: 14,
+  },
+  mediaEvidenceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderRadius: 14,
+    border: '1px solid rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.045)',
+    padding: '10px 11px',
+  },
+  mediaEvidenceRowMain: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  mediaEvidenceRowTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: 850,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  mediaEvidenceRowMeta: {
+    color: colors.textMuted,
+    fontSize: 11,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  mediaEvidenceStatus: {
+    flexShrink: 0,
+    color: colors.primary,
+    borderRadius: 999,
+    border: '1px solid rgba(163,230,53,0.26)',
+    backgroundColor: 'rgba(163,230,53,0.08)',
+    padding: '5px 8px',
+    fontSize: 10,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+  },
+  mediaEvidenceEmpty: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: '18px',
+    margin: '12px 0 0 0',
+  },
+  mediaConflictInline: {
+    marginTop: 16,
+    borderRadius: 16,
+    border: '1px solid rgba(251,191,36,0.26)',
+    backgroundColor: 'rgba(251,191,36,0.08)',
+    padding: 12,
   },
   mediaRailSection: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 14,
+    gap: 15,
   },
   mediaRailHeader: {
     display: 'flex',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     gap: 16,
+    paddingRight: 4,
   },
   mediaRailTitle: {
     color: colors.text,
-    fontSize: 24,
-    fontWeight: 800,
-    letterSpacing: -0.4,
+    fontSize: 26,
+    fontWeight: 900,
+    letterSpacing: -0.8,
     margin: 0,
   },
   mediaRailSubtitle: {
-    color: colors.textMuted,
+    color: 'rgba(245,245,239,0.55)',
     fontSize: 13,
-    margin: '5px 0 0 0',
+    margin: '6px 0 0 0',
   },
   mediaRailCount: {
     color: colors.textMuted,
     fontSize: 12,
-    fontWeight: 700,
-    padding: '6px 10px',
+    fontWeight: 800,
+    padding: '7px 11px',
     borderRadius: 999,
-    border: `1px solid ${colors.border}`,
+    border: '1px solid rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.045)',
   },
   mediaRailScroller: {
     display: 'flex',
-    gap: 16,
+    gap: 18,
     overflowX: 'auto',
-    padding: '2px 0 12px 0',
+    padding: '4px 0 16px 0',
+    scrollSnapType: 'x proximity',
   },
   mediaPosterCard: {
-    width: 214,
-    minWidth: 214,
-    borderRadius: 18,
-    backgroundColor: colors.bgSecondary,
-    border: `1px solid ${colors.border}`,
+    width: 190,
+    minWidth: 190,
+    borderRadius: 20,
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.072), rgba(255,255,255,0.028))',
+    border: '1px solid rgba(255,255,255,0.10)',
     overflow: 'hidden',
+    boxShadow: '0 20px 46px rgba(0,0,0,0.25)',
+    scrollSnapAlign: 'start',
   },
   mediaEpisodeCard: {
-    width: 300,
-    minWidth: 300,
-    borderRadius: 18,
-    backgroundColor: colors.bgSecondary,
-    border: `1px solid ${colors.border}`,
+    width: 344,
+    minWidth: 344,
+    borderRadius: 20,
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.072), rgba(255,255,255,0.028))',
+    border: '1px solid rgba(255,255,255,0.10)',
     overflow: 'hidden',
+    boxShadow: '0 20px 46px rgba(0,0,0,0.25)',
+    scrollSnapAlign: 'start',
   },
   mediaCardButton: {
     width: '100%',
@@ -3043,11 +3483,25 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     textAlign: 'left',
   },
+  mediaPosterArtwork: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: '2 / 3',
+    backgroundColor: '#050706',
+    overflow: 'hidden',
+  },
+  mediaEpisodeArtwork: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: '16 / 9',
+    backgroundColor: '#050706',
+    overflow: 'hidden',
+  },
   mediaCardArtwork: {
     position: 'relative',
     width: '100%',
-    aspectRatio: '16 / 10',
-    backgroundColor: colors.bg,
+    aspectRatio: '16 / 9',
+    backgroundColor: '#050706',
     overflow: 'hidden',
   },
   mediaCardImage: {
@@ -3055,27 +3509,74 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100%',
     objectFit: 'cover',
     display: 'block',
+    transform: 'scale(1.01)',
+  },
+  mediaCardScrim: {
+    position: 'absolute',
+    inset: 0,
+    background: 'linear-gradient(180deg, rgba(0,0,0,0.02) 40%, rgba(0,0,0,0.46) 100%)',
+    pointerEvents: 'none',
   },
   mediaCardPlaceholder: {
     height: '100%',
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
     color: colors.primary,
-    fontSize: 28,
-    fontWeight: 900,
-    background: 'linear-gradient(135deg, rgba(163,230,53,0.18), rgba(255,255,255,0.04))',
+    padding: 16,
   },
-  mediaCardBody: {
-    padding: 12,
+  mediaPosterPlaceholder: {
+    height: '100%',
     display: 'flex',
     flexDirection: 'column',
-    gap: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    color: colors.primary,
+    padding: 16,
+  },
+  mediaFallbackInitials: {
+    fontSize: 42,
+    fontWeight: 950,
+    letterSpacing: -2,
+    color: 'rgba(245,245,239,0.95)',
+    textShadow: '0 14px 40px rgba(0,0,0,0.55)',
+  },
+  mediaFallbackBadge: {
+    borderRadius: 999,
+    border: '1px solid rgba(255,255,255,0.18)',
+    color: 'rgba(245,245,239,0.78)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    fontSize: 11,
+    fontWeight: 850,
+    padding: '6px 9px',
+  },
+  mediaCardBadge: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    zIndex: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    border: '1px solid rgba(255,255,255,0.18)',
+    color: 'rgba(245,245,239,0.92)',
+    fontSize: 11,
+    fontWeight: 850,
+    padding: '5px 8px',
+    backdropFilter: 'blur(12px)',
+  },
+  mediaCardBody: {
+    padding: 13,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
   },
   mediaCardTitle: {
     color: colors.text,
     fontSize: 14,
-    fontWeight: 800,
+    fontWeight: 850,
     lineHeight: '18px',
     display: '-webkit-box',
     WebkitLineClamp: 2,
@@ -3083,7 +3584,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
   mediaCardSubtitle: {
-    color: colors.textMuted,
+    color: 'rgba(245,245,239,0.58)',
     fontSize: 12,
     lineHeight: '16px',
     whiteSpace: 'nowrap',
@@ -3091,9 +3592,42 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: 'ellipsis',
   },
   mediaCardMeta: {
-    color: colors.textMuted,
+    color: 'rgba(245,245,239,0.46)',
     fontSize: 11,
-    fontWeight: 700,
+    fontWeight: 800,
+  },
+  mediaCardSignalRow: {
+    display: 'flex',
+    gap: 6,
+    flexWrap: 'wrap',
+    marginTop: 3,
+  },
+  mediaSignalPill: {
+    borderRadius: 999,
+    border: '1px solid rgba(255,255,255,0.10)',
+    color: 'rgba(245,245,239,0.52)',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    fontSize: 10,
+    fontWeight: 850,
+    padding: '4px 7px',
+  },
+  mediaSignalPillActive: {
+    borderRadius: 999,
+    border: '1px solid rgba(163,230,53,0.32)',
+    color: colors.primary,
+    backgroundColor: 'rgba(163,230,53,0.10)',
+    fontSize: 10,
+    fontWeight: 850,
+    padding: '4px 7px',
+  },
+  mediaSignalPillWarn: {
+    borderRadius: 999,
+    border: '1px solid rgba(251,191,36,0.32)',
+    color: '#fde68a',
+    backgroundColor: 'rgba(251,191,36,0.10)',
+    fontSize: 10,
+    fontWeight: 850,
+    padding: '4px 7px',
   },
   mediaProgressTrack: {
     position: 'absolute',
@@ -3102,20 +3636,22 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: 0,
     height: 4,
     backgroundColor: 'rgba(255,255,255,0.18)',
+    zIndex: 3,
   },
   mediaProgressFill: {
     height: '100%',
     backgroundColor: colors.primary,
+    boxShadow: '0 0 18px rgba(163,230,53,0.65)',
   },
   mediaChannelButton: {
-    margin: '0 12px 12px 12px',
-    border: `1px solid ${colors.border}`,
+    margin: '0 13px 13px 13px',
+    border: '1px solid rgba(255,255,255,0.10)',
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(255,255,255,0.045)',
     color: colors.textMuted,
     cursor: 'pointer',
     fontSize: 12,
-    fontWeight: 700,
+    fontWeight: 800,
     padding: '7px 10px',
   },
   container: {

@@ -1971,6 +1971,8 @@ ns.register({
     { name: 'backgroundMode', type: 'string', required: false },
     { name: 'diskCeilingBytes', type: 'uint', required: false },
     { name: 'uploadCeilingBytes', type: 'uint', required: false },
+    { name: 'diskCeilingBytesPresent', type: 'bool', required: false },
+    { name: 'uploadCeilingBytesPresent', type: 'bool', required: false },
     { name: 'retentionMode', type: 'string', required: false },
     { name: 'followedPublishersJson', type: 'string', required: false },
     { name: 'followedIndexesJson', type: 'string', required: false },

@@ -1,24 +1,59 @@
-import React from 'react'
-import { ModerationFeedEditor } from '../components/library/ModerationFeedEditor'
+import { useRouter } from 'expo-router'
+import { useApp } from '@/lib/AppContext'
+import { ModerationFeedEditor } from '@/components/library/ModerationFeedEditor'
+import { PolicyCard, PolicyHeading, PolicyScreenFrame } from '@/components/library/PolicyControls'
+import { useNetworkPolicy } from '@/hooks/useNetworkPolicy'
+import type { NetworkPolicy, NetworkPolicyRpc } from '@/lib/network-policy'
 
 type Props = {
-  rpc?: { getNetworkPolicy?: () => unknown, setNetworkPolicy?: (patch: Record<string, unknown>) => unknown }
-  policy?: Record<string, unknown>
+  rpc?: NetworkPolicyRpc | null
+  policy?: Partial<NetworkPolicy> | null
 }
 
-export default function ModerationScreen({ rpc, policy = {} }: Props) {
-  // getNetworkPolicy / setNetworkPolicy manage trustedModerationFeeds and aiAnalysis.
-  void rpc?.getNetworkPolicy
-  void rpc?.setNetworkPolicy
+export default function ModerationScreen({ rpc, policy }: Props) {
+  if (rpc) return <ModerationContent rpc={rpc} initialPolicy={policy} />
+  return <ConnectedModeration initialPolicy={policy} />
+}
+
+function ConnectedModeration({ initialPolicy }: { initialPolicy?: Partial<NetworkPolicy> | null }) {
+  const { rpc } = useApp()
+  return <ModerationContent rpc={rpc} initialPolicy={initialPolicy} />
+}
+
+function ModerationContent({
+  rpc,
+  initialPolicy,
+}: {
+  rpc: NetworkPolicyRpc | null
+  initialPolicy?: Partial<NetworkPolicy> | null
+}) {
+  const router = useRouter()
+  const state = useNetworkPolicy(rpc, initialPolicy)
   return (
-    <main>
-      <h1>Moderation and AI analysis</h1>
-      <p>Trusted moderation feeds are local policy for your device. Optional AI analysis stores derived annotations, not canonical media edits.</p>
-      <ModerationFeedEditor policy={policy} onChange={(patch) => rpc?.setNetworkPolicy?.(patch)} />
-      <dl>
-        <dt>trustedModerationFeeds</dt><dd>{JSON.stringify(policy.trustedModerationFeeds || [])}</dd>
-        <dt>aiAnalysis</dt><dd>{String(policy.aiAnalysis || 'disabled')}</dd>
-      </dl>
-    </main>
+    <PolicyScreenFrame
+      title="Moderation"
+      subtitle="Local trust inputs and optional derived analysis for this device."
+      loading={state.loading}
+      saving={state.saving}
+      error={state.error}
+      onBack={() => router.back()}
+      onRetry={() => { void state.reload() }}
+    >
+      {state.policy ? (
+        <>
+          <PolicyCard tone="privacy">
+            <PolicyHeading
+              title="Local decisions, inspectable evidence"
+              description="Moderation feeds influence download, display, and seeding only on this device. Publisher-authored records remain immutable and inspectable."
+            />
+          </PolicyCard>
+          <ModerationFeedEditor
+            policy={state.policy}
+            disabled={state.saving}
+            onChange={(patch) => { void state.update(patch) }}
+          />
+        </>
+      ) : null}
+    </PolicyScreenFrame>
   )
 }

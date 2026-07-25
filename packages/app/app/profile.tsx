@@ -948,6 +948,34 @@ export default function ProfileScreen() {
         <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
         {renderStorageCard()}
 
+        {/* Local trust and transfer policy */}
+        <SectionHeader title="Local policy" subtitle="Control what this device discovers, transfers, and trusts" />
+        <GlassCard padded={false} style={styles.sectionCard}>
+          <Pressable onPress={() => router.push('/network-policy')} style={styles.advancedToggle} accessibilityRole="button">
+            <Feather name="sliders" size={15} color={colors.textMuted} />
+            <Text style={styles.advancedLabel}>Network, storage & retention</Text>
+            <Feather name="chevron-right" size={17} color={colors.textMuted} />
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/subscriptions')}
+            style={[styles.advancedToggle, { borderTopWidth: 1, borderTopColor: colors.glassBorder }]}
+            accessibilityRole="button"
+          >
+            <Feather name="rss" size={15} color={colors.textMuted} />
+            <Text style={styles.advancedLabel}>Subscriptions & feed trust</Text>
+            <Feather name="chevron-right" size={17} color={colors.textMuted} />
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/moderation')}
+            style={[styles.advancedToggle, { borderTopWidth: 1, borderTopColor: colors.glassBorder }]}
+            accessibilityRole="button"
+          >
+            <Feather name="shield" size={15} color={colors.textMuted} />
+            <Text style={styles.advancedLabel}>Moderation & analysis</Text>
+            <Feather name="chevron-right" size={17} color={colors.textMuted} />
+          </Pressable>
+        </GlassCard>
+
         {/* Advanced */}
         <SectionHeader title="Advanced" />
         <GlassCard padded={false} style={styles.sectionCard}>

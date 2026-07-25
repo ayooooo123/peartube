@@ -618,3 +618,25 @@ test('native facade accepts injected shell signer while web facade hard-rejects 
   assert.match(webRunnerSource, /const \{ publisherSigner, \.\.\.transportOptions \} = options/)
   assert.match(webRunnerSource, /publisherSigner: publisherSigner \?\? undefined/)
 })
+
+test('operability facade exposes complete local network policy RPC', async () => {
+  const { createOperabilityRpc } = await loadCatalogModules()
+  const calls = []
+  const policy = createOperabilityRpc(() => ({
+    async getNetworkPolicy(request) {
+      calls.push(['get', request])
+      return { uploadPermission: 'manual' }
+    },
+    async setNetworkPolicy(request) {
+      calls.push(['set', request])
+      return { success: true, ...request }
+    },
+  }))
+
+  assert.equal((await policy.getNetworkPolicy()).uploadPermission, 'manual')
+  assert.equal((await policy.setNetworkPolicy({ backgroundMode: 'local-only' })).success, true)
+  assert.deepEqual(calls, [
+    ['get', {}],
+    ['set', { backgroundMode: 'local-only' }],
+  ])
+})

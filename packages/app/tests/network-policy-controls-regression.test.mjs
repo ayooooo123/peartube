@@ -12,13 +12,16 @@ test('network policy controls expose bandwidth, disk, retention, trust, moderati
   const network = read('app/network-policy.tsx')
   const subscriptions = read('app/subscriptions.tsx')
   const moderation = read('app/moderation.tsx')
+  const model = read('lib/network-policy.ts')
   for (const token of ['getNetworkPolicy', 'setNetworkPolicy', 'uploadPermission', 'meteredNetwork', 'backgroundMode', 'diskCeilingBytes', 'uploadCeilingBytes', 'retentionMode', 'public IP', 'cannot retract']) {
-    assert.ok(network.includes(token), `network policy missing ${token}`)
+    assert.ok(`${network}\n${model}`.includes(token), `network policy missing ${token}`)
   }
-  assert.match(subscriptions, /followedPublishers/)
-  assert.match(subscriptions, /followedIndexes/)
-  assert.match(moderation, /trustedModerationFeeds/)
-  assert.match(moderation, /aiAnalysis/)
+  const subscriptionControls = `${subscriptions}\n${read('components/library/FeedTrustEditor.tsx')}\n${model}`
+  const moderationControls = `${moderation}\n${read('components/library/ModerationFeedEditor.tsx')}\n${model}`
+  assert.match(subscriptionControls, /followedPublishers/)
+  assert.match(subscriptionControls, /followedIndexes/)
+  assert.match(moderationControls, /trustedModerationFeeds/)
+  assert.match(moderationControls, /aiAnalysis/)
 })
 
 test('policy editor components do not imply global moderation or guaranteed retention', () => {

@@ -12,6 +12,7 @@
 - Redact bearer capabilities from backend, Cast, transcode, playback, download, and search diagnostics. Cast proxy path tokens and blob-server query tokens now pass through one tested sanitizer, credential-bearing playlist/curl dumps are removed, raw search result objects and user queries are not logged, and the unused pseudo-auth blob token was deleted.
 - Restore direct P2P playback discovery guarantees: remote blob cores are opened with Corestore key options, and each first-range warmup keeps Hypercore peer discovery alive for a bounded lease so on-demand blob-server reads can establish peers without turning playback into a full-file prefetch.
 - Connect native and web media, collection, and creator routes to bounded media-graph RPC loaders. Detail views now render alternate publication/rendition sources, claim provenance and conflicts, archive uncertainty, explicit missing collection members, and uploader/performer/director attribution without inventing global ownership.
+- Make local network, retention, subscription, moderation, and AI-analysis policy operational in the app: native-safe screens load and persist through the initialized universal RPC facade, explicit zero-byte ceilings survive optional HRPC fields, profile navigation exposes all three policy areas, startup waits for the platform client instead of reporting a false missing-method error, and privacy copy distinguishes on-device decisions from publisher/index follows, catalog requests, archive records, seeding, mDNS, and IP-address leakage.
 
 ## v0.2.37 - Wednesday, July 22, 2026
 

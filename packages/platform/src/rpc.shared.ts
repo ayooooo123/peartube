@@ -980,6 +980,16 @@ export function createOperabilityRpc(ensureRPC: () => any) {
       return ensureRPC().confirmSourceOffload(request)
     },
 
+    async getNetworkPolicy(): Promise<Record<string, unknown>> {
+      return ensureRPC().getNetworkPolicy({})
+    },
+
+    async setNetworkPolicy(
+      request: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      return ensureRPC().setNetworkPolicy(request)
+    },
+
     async previewStorageLimit(
       request: { maxBytes: number },
     ): Promise<PreviewStorageLimitResponse> {

@@ -1,13 +1,12 @@
 import React from 'react'
-import { SourceSelector, isPublicationSourceSelectable, type PublicationSource } from '../media/SourceSelector'
-import { ProvenancePanel } from '../media/ProvenancePanel'
-import { ConflictNotice } from '../media/ConflictNotice'
-import { ArchiveStatus } from '../media/ArchiveStatus'
-import { ContributionList } from '../media/ContributionList'
-import {
-  PublisherDeviceStatus,
-  type PublisherCapabilityAction,
-  type PublisherDeviceStatusInput,
+import { useLocalSearchParams } from 'expo-router'
+import { isPublicationSourceSelectable, type PublicationSource } from '../media/SourceSelector'
+import { MediaEntityDetailScreen, encodeMediaEntityRouteParam } from '../media/MediaEntityDetailScreen'
+import { loadMediaEntity } from './media-entity-loaders.js'
+import { firstRouteParam, useRouteEntityLoader } from './useRouteEntityLoader'
+import type {
+  PublisherCapabilityAction,
+  PublisherDeviceStatusInput,
 } from '../publisher/PublisherDeviceStatus'
 
 type MediaEntityInput = {
@@ -20,6 +19,7 @@ type MediaEntityInput = {
   archiveStatus?: { pledgeCount?: number | null } | null
   contributions?: Array<{ role?: string }> | null
   publisherDeviceStatus?: PublisherDeviceStatusInput | null
+  [key: string]: unknown
 }
 
 export type MediaEntityView = {
@@ -74,9 +74,9 @@ export function normalizeMediaEntityView(entity: MediaEntityInput | null | undef
 type Props = {
   id?: string
   mediaGraph?: {
-    getMediaEntity?: unknown
-    getPublicationSources?: unknown
-  }
+    getMediaEntity?: (request: Record<string, unknown>) => Promise<any>
+    getPublicationSources?: (request: Record<string, unknown>) => Promise<any>
+  } | null
   entity?: MediaEntityInput | null
   publisherDeviceStatus?: PublisherDeviceStatusInput | null
   publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
@@ -91,28 +91,49 @@ export default function MediaEntityPage({
   publisherActionHandlers,
   onSelectSource,
 }: Props) {
-  const resolved = normalizeMediaEntityView(entity, id)
-  // mediaGraph.getMediaEntity and mediaGraph.getPublicationSources are injected by the runtime loader.
-  void mediaGraph?.getMediaEntity
-  void mediaGraph?.getPublicationSources
+  const params = useLocalSearchParams<{ id?: string | string[] }>()
+  const entityId = id || firstRouteParam(params.id)
+  const loaded = useRouteEntityLoader({
+    entityId,
+    explicitItem: entity,
+    rpc: mediaGraph,
+    loader: loadMediaEntity,
+  })
+  const sourceEntity = loaded.item || (loaded.error
+    ? {
+        entityId,
+        title: entityId ? `Media ${entityId}` : 'Media details',
+        subtitle: `Media graph request failed: ${loaded.error}`,
+        loadError: loaded.error,
+        sources: [],
+      }
+    : null)
+  const resolved = normalizeMediaEntityView(sourceEntity, entityId)
   const securityStatus = publisherDeviceStatus || resolved.publisherDeviceStatus
+  const itemParam = sourceEntity
+    ? encodeMediaEntityRouteParam({
+        ...sourceEntity,
+        id: resolved.entityId,
+        entityId: resolved.entityId,
+        localEntityId: resolved.entityId,
+        entityKind: 'work',
+        title: resolved.title,
+        sources: resolved.sources,
+        provenance: resolved.provenance,
+        conflicts: resolved.conflicts,
+        archiveStatus: resolved.archiveStatus,
+        contributions: resolved.contributions,
+        publisherDeviceStatus: securityStatus,
+      } as any)
+    : undefined
   return (
-    <main>
-      <h1>{resolved.title}</h1>
-      <SourceSelector
-        entityId={resolved.entityId}
-        sources={resolved.sources}
-        selectedPublicationId={resolved.selectedPublicationId}
-        onSelectSource={onSelectSource}
-      />
-      <ProvenancePanel provenance={resolved.provenance} />
-      <ConflictNotice conflicts={resolved.conflicts} />
-      <ArchiveStatus status={resolved.archiveStatus} />
-      <ContributionList contributions={resolved.contributions} />
-      {securityStatus
-        ? <PublisherDeviceStatus status={securityStatus} actionHandlers={publisherActionHandlers} />
-        : null}
-      <p>Publisher channels remain provenance destinations, not creator owners.</p>
-    </main>
+    <MediaEntityDetailScreen
+      type="media"
+      routeId={entityId}
+      itemParam={itemParam}
+      publisherDeviceStatus={securityStatus}
+      publisherActionHandlers={publisherActionHandlers}
+      onSelectSource={onSelectSource}
+    />
   )
 }

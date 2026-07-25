@@ -1,4 +1,6 @@
 import test from 'brittle'
+import c from 'compact-encoding'
+import * as schema from '../../spec/spec/schema/index.js'
 
 import { createApi } from '../src/api.js'
 
@@ -91,6 +93,10 @@ test('backend source offload rejects unknown publication and anonymous viewer co
   const missing = await harness.api.assessSourceOffload({ publicationId: 'e'.repeat(64) })
   t.is(missing.success, false)
   t.is(missing.reason, 'evidence-unavailable')
+  t.execution(() => c.encode(
+    schema.getEncoding('@peartube/assess-source-offload-response'),
+    missing,
+  ), 'expected assessment rejection crosses HRPC')
   const assessment = await harness.api.assessSourceOffload({ publicationId })
   t.is(assessment.eligible, false)
   t.is((await harness.api.confirmSourceOffload(confirmation(assessment))).reason, 'not-eligible')

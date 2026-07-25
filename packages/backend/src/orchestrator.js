@@ -406,6 +406,18 @@ export async function createBackendContext(config) {
   })
   lifecycle.ownResource('publisher catalog registry', catalogRegistry, 'close', 5000)
   let scopedNetwork = null
+  const protectedArchiveCores = new Map()
+  const retainArchiveCore = ({ coreKey }) => {
+    protectedArchiveCores.set(coreKey, (protectedArchiveCores.get(coreKey) || 0) + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (protectedArchiveCores.get(coreKey) || 0) - 1
+      if (remaining > 0) protectedArchiveCores.set(coreKey, remaining)
+      else protectedArchiveCores.delete(coreKey)
+    }
+  }
   const mediaCatalogProjection = createPublisherCatalogProjection({
     catalogRegistry,
     now: () => Date.now(),
@@ -434,6 +446,7 @@ export async function createBackendContext(config) {
         await scopedNetwork?.revalidateRetainedRenditions?.()
       }
     },
+    retainArchiveCore,
   })
   ctx.scopedNetwork = scopedNetwork
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
@@ -451,6 +464,7 @@ export async function createBackendContext(config) {
     now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
   })
   const archiveReservationStateKey = 'archive:retention-reservations:v1'
+  const archiveParticipationStateKey = 'archive:participation-policy:v1'
   const archivePolicy = createArchivePolicy({
     capacityBytes: archive.capacityBytes,
     diagnostics: archiveDiagnostics,
@@ -472,7 +486,15 @@ export async function createBackendContext(config) {
         scopedNetwork,
         archiveStore,
         archivePolicy,
-        enabled: archive.enabled === true,
+        participationRepository: {
+          async load() {
+            return (await ctx.metaDb.get(archiveParticipationStateKey))?.value || null
+          },
+          async save(state) {
+            await ctx.metaDb.put(archiveParticipationStateKey, state)
+          },
+        },
+        enabled: archive.enabled,
         capacityBytes: archive.capacityBytes,
         maxRequestBytes: archive.maxRequestBytes,
         diagnostics: archiveDiagnostics,
@@ -530,7 +552,8 @@ export async function createBackendContext(config) {
     identityManager,
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath),
     isCacheClearBlocked: isPlaybackActive,
-    metaSubspaces: ctx.metaSubspaces
+    metaSubspaces: ctx.metaSubspaces,
+    protectedArchiveCores,
   });
   lifecycle.own('seeding manager', async () => {
     seedingManager.clearTimer?.(seedingManager._storageMaintenanceTimer)

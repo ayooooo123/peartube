@@ -11,15 +11,49 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
 
+const appUiStubPlugin = {
+  name: 'app-ui-stubs',
+  setup(context) {
+    context.onResolve({ filter: /^@expo\/vector-icons$/ }, () => ({
+      path: 'vector-icons',
+      namespace: 'test-stub',
+    }))
+    context.onResolve({ filter: /^expo-router$/ }, () => ({
+      path: 'expo-router',
+      namespace: 'test-stub',
+    }))
+    context.onResolve({ filter: /^@\/lib\/AppContext$/ }, () => ({
+      path: 'app-context',
+      namespace: 'test-stub',
+    }))
+    context.onLoad({ filter: /^vector-icons$/, namespace: 'test-stub' }, () => ({
+      contents: "import React from 'react'; export const Ionicons = (props) => React.createElement('span', props);",
+      loader: 'js',
+    }))
+    context.onLoad({ filter: /^expo-router$/, namespace: 'test-stub' }, () => ({
+      contents: 'export const useLocalSearchParams = () => ({}); export const useRouter = () => ({ back() {} });',
+      loader: 'js',
+    }))
+    context.onLoad({ filter: /^app-context$/, namespace: 'test-stub' }, () => ({
+      contents: 'export const useApp = () => ({ rpc: {} });',
+      loader: 'js',
+    }))
+  },
+}
+
 async function loadModule(entry) {
   const result = await build({
     entryPoints: [path.join(appRoot, entry)],
     bundle: true,
     format: 'esm',
     platform: 'node',
+    alias: { 'react-native': 'react-native-web' },
+    external: ['react', 'react-dom', 'react-native-web'],
+    plugins: [appUiStubPlugin],
+    tsconfigRaw: { compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } } },
     write: false,
   })
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-operability-ui-'))
+  const directory = fs.mkdtempSync(path.join(appRoot, '.tmp-operability-ui-'))
   const output = path.join(directory, 'module.mjs')
   fs.writeFileSync(output, result.outputFiles[0].text)
   try {
@@ -326,11 +360,11 @@ test('publisher capability controls deny publish and root transition while retai
     'delete-local'() {},
   }
   const html = renderToStaticMarkup(React.createElement(PublisherDeviceStatus, { status, actionHandlers }))
-  assert.match(html, /data-action="publish"[^>]*disabled=""/)
-  assert.match(html, /data-action="root-transition"[^>]*disabled=""/)
-  assert.doesNotMatch(html, /data-action="play-local"[^>]*disabled/)
-  assert.doesNotMatch(html, /data-action="export-local"[^>]*disabled/)
-  assert.doesNotMatch(html, /data-action="delete-local"[^>]*disabled/)
+  assert.match(html, /<[^>]*(?=[^>]*data-testid="publisher-action-publish")(?=[^>]*aria-disabled="true")[^>]*>/)
+  assert.match(html, /<[^>]*(?=[^>]*data-testid="publisher-action-root-transition")(?=[^>]*aria-disabled="true")[^>]*>/)
+  assert.doesNotMatch(html, /<[^>]*(?=[^>]*data-testid="publisher-action-play-local")(?=[^>]*aria-disabled="true")[^>]*>/)
+  assert.doesNotMatch(html, /<[^>]*(?=[^>]*data-testid="publisher-action-export-local")(?=[^>]*aria-disabled="true")[^>]*>/)
+  assert.doesNotMatch(html, /<[^>]*(?=[^>]*data-testid="publisher-action-delete-local")(?=[^>]*aria-disabled="true")[^>]*>/)
 })
 
 test('non-authorized and unknown device states fail closed for privileged actions', async () => {

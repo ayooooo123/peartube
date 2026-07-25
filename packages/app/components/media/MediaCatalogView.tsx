@@ -21,7 +21,7 @@ interface Props {
   diagnostic: MediaCatalogDiagnostic | null
   onRefresh(): void
   onLoadNext(): void
-  onEntityPress(entityId: string): void
+  onEntityPress(entityId: string, item: MediaEntitySummary): void
   contentBottomInset?: number
 }
 
@@ -86,7 +86,7 @@ export function MediaCatalogView({
   contentBottomInset = 24,
 }: Props) {
   const renderItem = useCallback(({ item }: ListRenderItemInfo<MediaEntitySummary>) => (
-    <MemoizedEntityCard item={item} onPress={() => onEntityPress(item.entityId)} />
+    <MemoizedEntityCard item={item} onPress={() => onEntityPress(item.entityId, item)} />
   ), [onEntityPress])
 
   const header = (

@@ -19,6 +19,30 @@ const PURPOSE_CODES = new Map([
   ['archive-discovery', 6],
 ])
 const PURPOSE_NAMES = new Map(Array.from(PURPOSE_CODES, ([name, code]) => [code, name]))
+
+export function peerFrameTypeCode(type = '') {
+  const text = String(type)
+  let code = 0
+  for (let i = 0; i < text.length; i++) code = ((code * 33) ^ text.charCodeAt(i)) >>> 0
+  return code || 1
+}
+
+export const PEER_FRAME_TYPE_NAMES = Object.freeze(Object.fromEntries([
+  'locator',
+  'probe',
+  'asset-block-request',
+  'asset-block-proof',
+  'asset-block-chunk',
+  'asset-block-unavailable',
+  'archive-request',
+  'archive-pledge',
+  'archive-challenge',
+  'archive-challenge-proof',
+  'archive-block-request',
+  'archive-block-proof',
+  'archive-block-chunk',
+  'archive-block-unavailable',
+].map(type => [peerFrameTypeCode(type), type])))
 const TYPE_NAMES = new Map()
 
 function assertBuffer(value, name) {
@@ -29,9 +53,7 @@ function assertBuffer(value, name) {
 
 function typeToCode(type = '') {
   const text = String(type)
-  let code = 0
-  for (let i = 0; i < text.length; i++) code = ((code * 33) ^ text.charCodeAt(i)) >>> 0
-  code = code || 1
+  const code = peerFrameTypeCode(text)
   TYPE_NAMES.set(code, text)
   return code
 }

@@ -32,9 +32,10 @@ function getPeerKey(peer) {
 }
 
 export class BlobPlaybackService {
-  constructor({ ctx, findingPeerLeaseMs = 250 } = {}) {
+  constructor({ ctx, findingPeerLeaseMs = 10_000 }) {
     this.ctx = ctx
-    this.findingPeerLeaseMs = findingPeerLeaseMs
+    this.findingPeerLeaseMs = Math.max(0, Number(findingPeerLeaseMs) || 0)
+    this.findingPeerLeases = new WeakMap()
   }
 
   resolveDirectBlobUrl({ blobsCoreKey, blobId, mimeType = 'video/mp4' }) {
@@ -78,6 +79,40 @@ export class BlobPlaybackService {
     return { url }
   }
 
+  scheduleFindingPeerRelease(core, lease) {
+    clearTimeout(lease.timer)
+    lease.timer = setTimeout(() => {
+      if (this.findingPeerLeases.get(core) !== lease) return
+      this.findingPeerLeases.delete(core)
+      try {
+        lease.done()
+      } catch {}
+    }, this.findingPeerLeaseMs)
+    lease.timer.unref?.()
+  }
+
+  retainFindingPeers(core) {
+    if (!core || typeof core.findingPeers !== 'function') return
+
+    const activeLease = this.findingPeerLeases.get(core)
+    if (activeLease) {
+      this.scheduleFindingPeerRelease(core, activeLease)
+      return
+    }
+
+    let done
+    try {
+      done = core.findingPeers()
+    } catch {
+      return
+    }
+    if (typeof done !== 'function') return
+
+    const lease = { done, timer: null }
+    this.findingPeerLeases.set(core, lease)
+    this.scheduleFindingPeerRelease(core, lease)
+  }
+
   getBlobCore(blobsCoreKey, keyBuffer = b4a.from(blobsCoreKey, 'hex')) {
     const ctx = this.ctx
     if (!ctx.store) return null
@@ -99,15 +134,7 @@ export class BlobPlaybackService {
 
     try {
       await blobsCore.ready()
-      let releaseFindingPeers = null
-      try {
-        releaseFindingPeers = typeof blobsCore.findingPeers === 'function' ? blobsCore.findingPeers() : null
-        if (releaseFindingPeers && this.findingPeerLeaseMs >= 0) {
-          setTimeout(() => {
-            try { releaseFindingPeers?.() } catch {}
-          }, this.findingPeerLeaseMs).unref?.()
-        }
-      } catch { /* best effort */ }
+      this.retainFindingPeers(blobsCore)
       const label = `blobs:${String(blobsCoreKey).slice(0, 16)}`
       let retained = false
       if (ctx.swarm && blobsCore.discoveryKey) {

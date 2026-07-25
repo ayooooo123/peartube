@@ -19,6 +19,18 @@ export interface MediaCockpitItem {
   } | null
   thumbnailUrl?: string | null
   thumbnail?: string | null
+  posterUrl?: string | null
+  backdropUrl?: string | null
+  stillUrl?: string | null
+  sourceCount?: number | null
+  sourceProviderName?: string | null
+  publisherName?: string | null
+  archiveStatus?: string | null
+  availabilityStatus?: string | null
+  conflicts?: Array<unknown> | null
+  provenance?: Array<unknown> | null
+  localEntityId?: string | null
+  publicationId?: string | null
   duration?: number | null
   durationSec?: number | null
   contentKind?: string | null
@@ -36,34 +48,69 @@ export interface HeroFeatureCardProps {
   peers?: number | null
   onPress: () => void
   onChannelPress?: () => void
+  onDetailsPress?: () => void
 }
 
 
-function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress }: HeroFeatureCardProps) {
+function pickString(...values: Array<unknown>): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return null
+}
+
+function getEntityBadge(item: MediaCockpitItem): string | null {
+  const formatted = formatContentBadge(item)
+  const kind = pickString(item.contentKind, item.classification?.type)
+  if (kind === 'movie') return 'Movie'
+  if (kind === 'episode' || kind === 'tv') return 'Episode'
+  if (kind === 'season' || kind === 'album' || kind === 'collection') return 'Collection'
+  if (kind === 'song' || kind === 'music') return 'Music'
+  return formatted || (item.localEntityId ? 'Work' : null)
+}
+
+function getArtwork(item: MediaCockpitItem): string | null {
+  return pickString(item.backdropUrl, item.posterUrl, item.stillUrl, item.thumbnailUrl, item.thumbnail)
+}
+
+function getSourceSummary(item: MediaCockpitItem): string {
+  if (typeof item.sourceCount === 'number' && item.sourceCount > 1) return `${item.sourceCount} sources`
+  return pickString(item.sourceProviderName, item.publisherName, item.channelName, item.channel?.name) || '1 source'
+}
+
+function getArchiveSummary(item: MediaCockpitItem): string | null {
+  const status = pickString(item.archiveStatus, item.availabilityStatus)
+  if (!status) return null
+  if (status === 'local' || status === 'complete-local') return 'Local copy'
+  if (status === 'cached' || status === 'retained') return 'Retained nearby'
+  if (status === 'pledged' || status === 'archived') return 'Archive evidence'
+  if (status === 'unavailable' || status === 'missing') return 'Missing source'
+  return status
+}
+
+function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress, onDetailsPress }: HeroFeatureCardProps) {
   if (!item) return null
 
-  const title = typeof item.title === 'string' && item.title.trim().length > 0 ? item.title : 'Featured media'
-  const subtitle = typeof item.subtitle === 'string' && item.subtitle.trim().length > 0
-    ? item.subtitle
-    : typeof item.channelName === 'string' && item.channelName.trim().length > 0
-      ? item.channelName
-      : typeof item.channel?.name === 'string' && item.channel.name.trim().length > 0
-        ? item.channel.name
-        : typeof item.creatorName === 'string' && item.creatorName.trim().length > 0
-          ? item.creatorName
-          : null
-  const badge = formatContentBadge(item)
-  const thumbnailUrl = typeof item.thumbnailUrl === 'string' && item.thumbnailUrl.trim().length > 0
-    ? item.thumbnailUrl
-    : typeof item.thumbnail === 'string' && item.thumbnail.trim().length > 0
-      ? item.thumbnail
-      : null
+  const title = pickString(item.title) || 'Featured media'
+  const subtitle = pickString(
+    item.subtitle,
+    item.creatorName,
+    item.sourceProviderName,
+    item.publisherName,
+    item.channelName,
+    item.channel?.name,
+  )
+  const badge = getEntityBadge(item)
+  const thumbnailUrl = getArtwork(item)
   const duration = typeof item.duration === 'number' && item.duration > 0
     ? item.duration
     : typeof item.durationSec === 'number' && item.durationSec > 0
       ? item.durationSec
       : undefined
   const channelInitial = title.charAt(0).toUpperCase()
+  const archiveSummary = getArchiveSummary(item)
+  const conflictCount = Array.isArray(item.conflicts) ? item.conflicts.length : 0
+  const hasProvenance = Boolean(item.localEntityId || item.publicationId || (Array.isArray(item.provenance) && item.provenance.length > 0))
 
   return (
     <Pressable
@@ -77,7 +124,7 @@ function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress }: Hero
         <View pointerEvents="none" style={styles.scrimTop} />
         <View pointerEvents="none" style={styles.scrimBottom} />
         <View style={styles.mediaTopRow}>
-          <Text style={styles.kicker} numberOfLines={1}>Featured from the swarm</Text>
+          <Text style={styles.kicker} numberOfLines={1}>Permissionless media CDN</Text>
           <NetworkStatusPill peers={peers} tone={peers && peers > 0 ? 'live' : 'ready'} />
         </View>
       </View>
@@ -85,21 +132,32 @@ function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress }: Hero
       <View style={styles.body}>
         <View style={styles.metaRow}>
           {badge ? <Text style={styles.badge} numberOfLines={1}>{badge}</Text> : null}
-          {item.category ? <Text style={styles.meta} numberOfLines={1}>{item.category}</Text> : null}
+          <Text style={styles.meta} numberOfLines={1}>{getSourceSummary(item)}</Text>
+          {archiveSummary ? <Text style={styles.meta} numberOfLines={1}>{archiveSummary}</Text> : null}
         </View>
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {subtitle ? (
           onChannelPress ? (
-            <Pressable onPress={onChannelPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Open ${subtitle}`}>
+            <Pressable onPress={onChannelPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Open publisher for ${title}`}>
               <Text style={[styles.subtitle, styles.subtitleAction]} numberOfLines={1}>{subtitle}</Text>
             </Pressable>
           ) : (
             <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
           )
         ) : null}
+        <View style={styles.signalRow}>
+          {onDetailsPress ? (
+            <Pressable onPress={onDetailsPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={`Open media evidence for ${title}`}>
+              <Text style={hasProvenance ? styles.signalActive : styles.signal} numberOfLines={1}>provenance</Text>
+            </Pressable>
+          ) : (
+            <Text style={hasProvenance ? styles.signalActive : styles.signal} numberOfLines={1}>provenance</Text>
+          )}
+          {conflictCount > 0 ? <Text style={styles.signalWarn} numberOfLines={1}>{conflictCount} conflict{conflictCount === 1 ? '' : 's'}</Text> : null}
+        </View>
         <View style={styles.playButton}>
           <Ionicons name="play" size={16} color={colors.onPrimary} />
-          <Text style={styles.playText}>Play</Text>
+          <Text style={styles.playText}>Play selected source</Text>
         </View>
       </View>
     </Pressable>
@@ -210,6 +268,54 @@ const styles = StyleSheet.create({
   },
   subtitleAction: {
     color: colors.swarm,
+  },
+  signalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  signal: {
+    color: colors.textMuted,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  signalActive: {
+    color: colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(163,230,53,0.35)',
+    backgroundColor: 'rgba(163,230,53,0.10)',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  signalWarn: {
+    color: '#fde68a',
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.32)',
+    backgroundColor: 'rgba(251,191,36,0.10)',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   playButton: {
     alignSelf: 'flex-start',

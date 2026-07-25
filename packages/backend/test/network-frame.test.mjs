@@ -1,5 +1,6 @@
 import test from 'brittle'
 import b4a from 'b4a'
+import { execFileSync } from 'node:child_process'
 
 import {
   FRAME_FLAG_OPTIONAL_TAG,
@@ -44,4 +45,29 @@ test('peer frame codec skips optional length-delimited minor extensions and pres
   t.is(decoded.requestId, 7)
   t.alike(decoded.payload, b4a.from('payload'))
   t.alike(decoded.optionalTags[0].code, 5000)
+})
+
+test('archive challenge frame types decode in an isolated receiving process', (t) => {
+  const frameUrl = new URL('../src/network/frame.js', import.meta.url).href
+  for (const type of ['archive-challenge', 'archive-challenge-proof']) {
+    const encoded = execFileSync(process.execPath, ['--input-type=module', '--eval', `
+      import b4a from 'b4a'
+      import { encodePeerFrame } from ${JSON.stringify(frameUrl)}
+      process.stdout.write(b4a.toString(encodePeerFrame({
+        purpose: 'archive-discovery',
+        type: ${JSON.stringify(type)},
+        requestId: 1,
+        payload: b4a.from('payload'),
+      }), 'hex'))
+    `], { encoding: 'utf8' })
+    const decodedType = execFileSync(process.execPath, ['--input-type=module', '--eval', `
+      import b4a from 'b4a'
+      import { decodePeerFrame, PEER_FRAME_TYPE_NAMES } from ${JSON.stringify(frameUrl)}
+      process.stdout.write(decodePeerFrame(
+        b4a.from(${JSON.stringify(encoded)}, 'hex'),
+        { typeCodes: PEER_FRAME_TYPE_NAMES },
+      ).type)
+    `], { encoding: 'utf8' })
+    t.is(decodedType, type)
+  }
 })

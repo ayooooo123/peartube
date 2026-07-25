@@ -10,6 +10,36 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
+
+const appUiStubPlugin = {
+  name: 'app-ui-stubs',
+  setup(context) {
+    context.onResolve({ filter: /^@expo\/vector-icons$/ }, () => ({
+      path: 'vector-icons',
+      namespace: 'test-stub',
+    }))
+    context.onResolve({ filter: /^expo-router$/ }, () => ({
+      path: 'expo-router',
+      namespace: 'test-stub',
+    }))
+    context.onResolve({ filter: /^@\/lib\/AppContext$/ }, () => ({
+      path: 'app-context',
+      namespace: 'test-stub',
+    }))
+    context.onLoad({ filter: /^vector-icons$/, namespace: 'test-stub' }, () => ({
+      contents: "import React from 'react'; export const Ionicons = (props) => React.createElement('span', props);",
+      loader: 'js',
+    }))
+    context.onLoad({ filter: /^expo-router$/, namespace: 'test-stub' }, () => ({
+      contents: 'export const useLocalSearchParams = () => ({}); export const useRouter = () => ({ back() {} });',
+      loader: 'js',
+    }))
+    context.onLoad({ filter: /^app-context$/, namespace: 'test-stub' }, () => ({
+      contents: 'export const useApp = () => ({ rpc: {} });',
+      loader: 'js',
+    }))
+  },
+}
 const routeNames = ['collection', 'creator', 'media']
 const platforms = [
   {
@@ -30,6 +60,8 @@ const routeProps = {
     collection: {
       title: 'Collection One',
       items: [{ entityId: 'media-one', title: 'Media One', available: true }],
+      missingMembers: [{ entityId: 'media-missing', title: 'Missing Episode' }],
+      completeness: { known: 1, missing: 1, hasTrustedStructure: true },
     },
   },
   creator: {
@@ -42,7 +74,18 @@ const routeProps = {
     entity: {
       entityId: 'media-one',
       title: 'Media One',
-      sources: [],
+      sources: [{
+        publicationId: 'publication-one',
+        renditionId: 'rendition-one',
+        publisherId: 'publisher-one',
+        available: true,
+        selected: true,
+      }],
+      selectedPublicationId: 'publication-one',
+      provenance: [{ claimId: 'claim-one', publisherId: 'publisher-one' }],
+      conflicts: [{ field: 'title' }],
+      archiveStatus: { pledgeCount: 2 },
+      contributions: [{ role: 'uploader' }, { role: 'performer' }, { role: 'director' }],
       publisherDeviceStatus: {
         success: true,
         status: 'authorized',
@@ -63,12 +106,15 @@ async function loadRouteModule(entry, resolveExtensions) {
     format: 'esm',
     platform: 'node',
     resolveExtensions,
+    alias: { 'react-native': 'react-native-web' },
+    external: ['react', 'react-dom', 'react-native-web'],
+    plugins: [appUiStubPlugin],
     tsconfigRaw: {
-      compilerOptions: { jsx: 'react' },
+      compilerOptions: { jsx: 'react-jsx', baseUrl: appRoot, paths: { '@/*': ['./*'] } },
     },
     write: false,
   })
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-entity-route-'))
+  const directory = fs.mkdtempSync(path.join(appRoot, '.tmp-entity-route-'))
   const output = path.join(directory, 'route.mjs')
   fs.writeFileSync(output, result.outputFiles[0].text)
   try {
@@ -89,11 +135,11 @@ test('entity route entries target shared components and never import their own b
       const entry = `app/${routeName}/[id]${suffix}`
       const source = fs.readFileSync(path.join(appRoot, entry), 'utf8')
       const specifiers = [...source.matchAll(/\bfrom\s+['\"]([^'\"]+)['\"]/g)].map(match => match[1])
-      assert.ok(specifiers.length > 0, `${entry} must reexport a shared component`)
-      assert.ok(specifiers.every(specifier => specifier === components[routeName]), `${entry} must only target its shared component`)
+      assert.ok(specifiers.includes(components[routeName]), `${entry} must import its shared route component`)
+      assert.ok(specifiers.includes('@/lib/AppContext'), `${entry} must inject the initialized app RPC facade`)
       assert.ok(specifiers.every(specifier => path.basename(specifier) !== '[id]'), `${entry} must not resolve back to itself`)
       if (routeName === 'media') {
-        assert.match(source, /export \{ default, normalizeMediaEntityView \}/)
+        assert.match(source, /export \{ normalizeMediaEntityView \}/)
         assert.match(source, /export type \{ MediaEntityView \}/)
       }
     }
@@ -109,9 +155,22 @@ test('native and web entity route entries resolve and server-render', async t =>
         assert.equal(typeof route.default, 'function', `${entry} must resolve a default route component`)
         const html = renderToStaticMarkup(React.createElement(route.default, routeProps[routeName]))
         assert.match(html, new RegExp(`${routeName} one`, 'i'))
+        if (routeName === 'collection') {
+          assert.match(html, /1 missing/i)
+          assert.match(html, /Missing Episode/i)
+          assert.match(html, /trusted structure/i)
+        }
+        if (routeName === 'creator') {
+          assert.match(html, /Role attribution and publisher claims/i)
+          assert.match(html, /director/i)
+        }
         if (routeName === 'media') {
           assert.equal(typeof route.normalizeMediaEntityView, 'function', `${entry} must preserve normalizeMediaEntityView`)
           assert.match(html, /authorized to publish/i)
+          assert.match(html, /Playable publications and renditions/i)
+          assert.match(html, /provenance/i)
+          assert.match(html, /conflict/i)
+          assert.match(html, /director/i)
         }
       })
     }

@@ -1,9 +1,12 @@
 import React from 'react'
-import { CollectionCompleteness } from '../media/CollectionCompleteness'
+import { useLocalSearchParams } from 'expo-router'
+import { MediaEntityDetailScreen, encodeMediaEntityRouteParam } from '../media/MediaEntityDetailScreen'
+import { loadCollectionEntity } from './media-entity-loaders.js'
+import { firstRouteParam, useRouteEntityLoader } from './useRouteEntityLoader'
 
 type CollectionMediaGraph = {
-  getMediaCollection?: unknown
-  getMediaCollectionItems?: unknown
+  getMediaCollection?: (request: Record<string, unknown>) => Promise<any>
+  getMediaCollectionItems?: (request: Record<string, unknown>) => Promise<any>
 }
 
 type CollectionItem = {
@@ -13,27 +16,47 @@ type CollectionItem = {
 }
 
 type MediaCollection = {
+  entityId?: string
   title?: string
   items?: CollectionItem[]
+  [key: string]: unknown
 }
 
-type CollectionPageProps = {
+export type CollectionPageProps = {
   id?: string
-  mediaGraph?: CollectionMediaGraph
+  mediaGraph?: CollectionMediaGraph | null
   collection?: MediaCollection | null
 }
 
 export default function CollectionPage({ id, mediaGraph, collection = null }: CollectionPageProps) {
-  // mediaGraph.getMediaCollection and mediaGraph.getMediaCollectionItems fetch paginated collection data.
-  void mediaGraph?.getMediaCollection
-  void mediaGraph?.getMediaCollectionItems
-  const items = collection?.items || []
-  const missingCount = items.filter(item => item.available === false).length
-  return (
-    <main>
-      <h1>{collection?.title || id}</h1>
-      <CollectionCompleteness completeness={missingCount > 0 ? 'partial' : 'complete'} missingCount={missingCount} />
-      {items.map(item => <div key={item.entityId}>{item.available === false ? 'missing placeholder' : item.title}</div>)}
-    </main>
-  )
+  const params = useLocalSearchParams<{ id?: string | string[] }>()
+  const entityId = id || firstRouteParam(params.id)
+  const loaded = useRouteEntityLoader({
+    entityId,
+    explicitItem: collection,
+    rpc: mediaGraph,
+    loader: loadCollectionEntity,
+  })
+  const resolved = loaded.item || (loaded.error
+    ? {
+        entityId,
+        title: entityId ? `Collection ${entityId}` : 'Collection',
+        subtitle: `Collection graph request failed: ${loaded.error}`,
+        loadError: loaded.error,
+        items: [],
+        sources: [],
+      }
+    : null)
+  const itemParam = resolved
+    ? encodeMediaEntityRouteParam({
+        ...resolved,
+        id: entityId,
+        entityId,
+        localEntityId: entityId,
+        entityKind: 'collection',
+        contentKind: 'collection',
+        sources: Array.isArray(resolved.sources) ? resolved.sources : [],
+      } as any)
+    : undefined
+  return <MediaEntityDetailScreen type="collection" routeId={entityId} itemParam={itemParam} />
 }

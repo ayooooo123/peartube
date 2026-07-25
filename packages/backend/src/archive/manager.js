@@ -101,6 +101,19 @@ export function createArchiveManager(options = {}) {
     }
   }
 
+  function assessmentRejection(reason, context = {}) {
+    return {
+      ...rejection(reason, context),
+      eligible: false,
+      evidenceDigest: '',
+      confirmationNonce: '',
+      expiresAt: 0,
+      policyVersion,
+      byteLength: 0,
+      limitations: [],
+    }
+  }
+
   async function recordAudit(input) {
     const audit = {
       ...input,
@@ -129,7 +142,7 @@ export function createArchiveManager(options = {}) {
     createOffloadAssessment(input = {}) {
       return serialize(async () => {
         let publicationId
-        try { publicationId = hex32(input.publicationId, 'publicationId') } catch { return rejection('publication-invalid') }
+        try { publicationId = hex32(input.publicationId, 'publicationId') } catch { return assessmentRejection('publication-invalid') }
         const issuedAt = now()
         pruneAssessments(issuedAt)
         let evidence
@@ -140,7 +153,7 @@ export function createArchiveManager(options = {}) {
             policyVersion,
           })
         } catch {
-          return rejection('evidence-unavailable', { publicationId })
+          return assessmentRejection('evidence-unavailable', { publicationId })
         }
         const confidence = assessArchiveConfidence(evidence)
         const evidenceDigest = digestEvidence(confidence.evidence)

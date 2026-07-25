@@ -360,3 +360,25 @@ test('ordinary seed eviction clears its thumbnail range', async (t) => {
   t.alike(store.cores.get(coreB).clearCalls, [{ start: 7, end: 9 }])
   t.is(result.clearedBytes, 46)
 })
+
+test('archive-retained cores cannot be evicted through an ordinary watched seed', async (t) => {
+  const protectedArchiveCores = new Map([[coreA, 1]])
+  const store = createStore()
+  const manager = new seeding.SeedingManager(store, createMetaDb(), { protectedArchiveCores })
+  manager.config.maxStorageGB = 0
+  manager.activeSeeds.set('drive-watch:videos/watch.mp4', {
+    key: 'drive-watch:videos/watch.mp4',
+    driveKey: 'drive-watch',
+    videoPath: 'videos/watch.mp4',
+    reason: 'watched',
+    bytes: 40,
+    blobId: '0:1:0:40',
+    blobsCoreKey: coreA,
+  })
+
+  await manager.enforceQuota()
+
+  t.is(manager.getActiveSeeds().length, 1)
+  t.is(manager.protectedBlobCores.size, 0, 'archive custody is not reported as active playback')
+  t.absent(store.cores.get(coreA)?.clearCalls?.length)
+})

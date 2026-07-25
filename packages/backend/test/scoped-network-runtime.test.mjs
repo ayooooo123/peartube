@@ -462,7 +462,9 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
     keyPair: archivist,
   })
   let replicated = 0
+  let downloads = 0
   let closed = 0
+  let protectedRanges = 0
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({
     swarm,
@@ -473,15 +475,21 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
           key,
           async ready () {},
           replicate () { replicated++ },
-          download () { return { destroy () {} } },
+          download () { downloads++; return { destroy () {} } },
           async close () { closed++ },
         }
       },
     },
+    retainArchiveCore () {
+      protectedRanges++
+      return () => { protectedRanges-- }
+    },
   })
   await runtime.start()
   const first = await runtime.retainAuthorizedArchive({ pledge, coreKey, start: 0, end: 2 })
-  const second = await runtime.retainAuthorizedArchive({ pledge, coreKey, start: 4, end: 7 })
+  const second = await runtime.retainAuthorizedArchive({ pledge, coreKey, start: 4, end: 7, download: false })
+  t.is(protectedRanges, 2)
+  t.is(downloads, 1, 'verification-only requester scopes do not start a full-range download')
   t.is(first.archiveId, second.archiveId)
   t.is(runtime.getDiagnostics().topics.filter(topic => topic.purpose === 'archive').length, 1)
   const archiveTopic = deriveArchiveTopic({ archiveId: first.archiveId })
@@ -490,6 +498,7 @@ test('archive pledges retain multiple exact ranges without exposing a Hypercore 
   const released = await runtime.releaseAuthorizedArchive({ archiveId: first.archiveId })
   t.is(released.released, true)
   t.is(closed, 2)
+  t.is(protectedRanges, 0)
   await runtime.close()
 })
 

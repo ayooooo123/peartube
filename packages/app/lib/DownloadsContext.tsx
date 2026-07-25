@@ -283,7 +283,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
          const ext = getExtension((video as any).mimeType)
          const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
 
-        console.log('[Downloads] Got blob URL:', blobUrl)
+        console.log('[Downloads] Blob URL ready')
         setDownloads(prev => prev.map(d => d.id === id ? { ...d, totalBytes } : d))
 
         await downloadForWeb(id, blobUrl, filename, abortController.signal)

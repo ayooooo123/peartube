@@ -1,4 +1,5 @@
 import React from 'react'
+import { Pressable, StyleSheet, Text, View } from 'react-native'
 
 export type PublisherDeviceState =
   | 'authorized'
@@ -121,35 +122,108 @@ export type PublisherDeviceStatusProps = {
 export function PublisherDeviceStatus({ status, actionHandlers = {} }: PublisherDeviceStatusProps) {
   const model = normalizePublisherDeviceStatus(status)
   return (
-    <section aria-labelledby="publisher-device-status-heading" aria-live="polite">
-      <h2 id="publisher-device-status-heading">Publisher device security</h2>
-      <h3>{model.label}</h3>
-      <p>{model.explanation}</p>
-      {model.detail ? <p>{model.detail}</p> : null}
-      <p>Publishing restrictions do not remove local media that this device is still allowed to use.</p>
-      <div aria-label="Publisher and local-media capabilities">
+    <View
+      accessibilityLabel="Publisher device security"
+      accessibilityLiveRegion="polite"
+      style={styles.panel}
+    >
+      <Text style={styles.kicker}>Publisher device security</Text>
+      <Text style={styles.title}>{model.label}</Text>
+      <Text style={styles.explanation}>{model.explanation}</Text>
+      {model.detail ? <Text style={styles.detail}>{model.detail}</Text> : null}
+      <Text style={styles.detail}>Publishing restrictions do not remove local media that this device is still allowed to use.</Text>
+      <View accessibilityLabel="Publisher and local-media capabilities" style={styles.actions}>
         {model.actions.map((action) => {
           const handler = actionHandlers[action.id]
           if (!handler) {
             return (
-              <span key={action.id} data-action={action.id} aria-disabled={!action.allowed}>
-                {action.label}: {action.allowed ? 'Allowed' : 'Not allowed'}
-              </span>
+              <View
+                key={action.id}
+                accessibilityState={{ disabled: !action.allowed }}
+                testID={`publisher-action-${action.id}`}
+                style={[styles.action, !action.allowed && styles.actionDenied]}
+              >
+                <Text style={styles.actionText}>{action.label}: {action.allowed ? 'Allowed' : 'Not allowed'}</Text>
+              </View>
             )
           }
           return (
-            <button
+            <Pressable
               key={action.id}
-              type="button"
-              data-action={action.id}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !action.allowed }}
               disabled={!action.allowed}
-              onClick={action.allowed ? handler : undefined}
+              testID={`publisher-action-${action.id}`}
+              onPress={action.allowed ? handler : undefined}
+              style={({ pressed }) => [
+                styles.action,
+                !action.allowed && styles.actionDenied,
+                pressed && action.allowed && styles.actionPressed,
+              ]}
             >
-              {action.label}: {action.allowed ? 'Allowed' : 'Not allowed'}
-            </button>
+              <Text style={styles.actionText}>{action.label}: {action.allowed ? 'Allowed' : 'Not allowed'}</Text>
+            </Pressable>
           )
         })}
-      </div>
-    </section>
+      </View>
+    </View>
   )
 }
+
+const styles = StyleSheet.create({
+  panel: {
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.22)',
+    borderRadius: 18,
+    backgroundColor: 'rgba(15,23,42,0.76)',
+    padding: 16,
+    gap: 8,
+  },
+  kicker: {
+    color: '#a3e635',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  title: {
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  explanation: {
+    color: '#e2e8f0',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  detail: {
+    color: '#94a3b8',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  actions: {
+    gap: 8,
+    marginTop: 4,
+  },
+  action: {
+    borderWidth: 1,
+    borderColor: 'rgba(163,230,53,0.30)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(163,230,53,0.08)',
+  },
+  actionDenied: {
+    borderColor: 'rgba(148,163,184,0.20)',
+    backgroundColor: 'rgba(148,163,184,0.06)',
+    opacity: 0.72,
+  },
+  actionPressed: {
+    opacity: 0.74,
+  },
+  actionText: {
+    color: '#e2e8f0',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+})

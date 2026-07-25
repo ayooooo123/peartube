@@ -103,7 +103,7 @@ test('media cockpit components stay presentational', () => {
   )
 })
 
-test('mobile home renders the shared resolved-entity catalog and navigates by entity id', () => {
+test('mobile home preserves resolved entity type and payload in detail navigation', () => {
   const source = readApp('app/(tabs)/index.tsx')
 
   for (const required of [
@@ -111,10 +111,39 @@ test('mobile home renders the shared resolved-entity catalog and navigates by en
     'MediaCatalogView',
     'onRefresh={() => { void catalog.refresh() }}',
     'onLoadNext={() => { void catalog.loadNext() }}',
-    "pathname: '/media/[id]'",
-    'params: { id: entityId }',
+    "item.entityKind === 'collection'",
+    "item.entityKind === 'agent'",
+    "'/collection/[id]'",
+    "'/creator/[id]'",
+    "'/media/[id]'",
+    'encodeMediaEntityRouteParam(item',
+    'getMediaEntityRouteId(item',
   ]) {
     assert.ok(source.includes(required), `Home should contain ${required}`)
   }
   assert.doesNotMatch(source, /getContentCatalog|preparePlayback|setInterval|setTimeout/)
+})
+
+test('permissionless media cards retain resolved graph signals', () => {
+  const sources = [
+    'components/media/HeroFeatureCard.tsx',
+    'components/media/MediaPosterCard.tsx',
+    'components/media/EpisodeCard.tsx',
+  ].map((componentPath) => readApp(componentPath)).join('\n')
+
+  for (const required of [
+    'posterUrl',
+    'backdropUrl',
+    'stillUrl',
+    'sourceCount',
+    'sourceProviderName',
+    'archiveStatus',
+    'availabilityStatus',
+    'conflicts',
+    'provenance',
+    'localEntityId',
+    'publicationId',
+  ]) {
+    assert.ok(sources.includes(required), `media cards should surface ${required}`)
+  }
 })

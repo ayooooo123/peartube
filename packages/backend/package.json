@@ -34,6 +34,8 @@
     "./transcode/cast-transcoder": "./src/transcode/cast-transcoder.mjs",
     "./transcode/videotoolbox-settings": "./src/transcode/videotoolbox-settings.mjs",
     "./cast": "./src/cast/index.js",
+    "./cast/network-address": "./src/cast/network-address.js",
+    "./capability-url": "./src/capability-url.js",
     "./logger": "./src/logger.js",
     "./thumbnail": "./src/thumbnail.js",
     "./runtime": "./src/runtime.js",

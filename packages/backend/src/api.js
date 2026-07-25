@@ -17,6 +17,7 @@ import { beginPlaybackTiming, markPlaybackTiming } from './playback-timing.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
+import { redactCapabilityUrl } from './capability-url.js'
 import { encodeIndexKey } from './index-encoder.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
@@ -2054,7 +2055,7 @@ export function createApi({
     }
     const archivistChallenges = typeof sourceOffload.getArchivistChallenges === 'function'
       ? await sourceOffload.getArchivistChallenges({ publicationId, manifest, locators })
-      : await permissionlessArchiveNetwork?.getOffloadEvidence?.(publicationId) || []
+      : await permissionlessArchiveNetwork?.getOffloadEvidence?.(publicationId, locators) || []
     return {
       publicationId,
       byteLength: locators.reduce((total, locator) => total + locator.byteLength, 0),
@@ -3732,6 +3733,7 @@ export function createApi({
     },
 
     // ============================================
+
 
     // Recommendations Operations
     ...createRecommendationsApi({

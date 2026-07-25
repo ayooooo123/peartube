@@ -3,7 +3,10 @@ import { View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
+
 import { MediaCatalogView } from '@/components/media/MediaCatalogView'
+import { encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components/media/MediaEntityDetailScreen'
+import type { MediaEntitySummary } from '@peartube/core'
 import { useMediaCatalog } from '@/hooks/useMediaCatalog'
 import { colors } from '@/lib/colors'
 import { useApp } from '../_layout'
@@ -18,8 +21,19 @@ export default function WebHomeScreen() {
     events: platformEvents,
     diagnostics: { backendError, startupStatus },
   })
-  const openEntity = useCallback((entityId: string) => {
-    router.push({ pathname: '/media/[id]', params: { id: entityId } })
+  const openEntity = useCallback((_entityId: string, item: MediaEntitySummary) => {
+    const pathname = item.entityKind === 'collection'
+      ? '/collection/[id]'
+      : item.entityKind === 'agent'
+        ? '/creator/[id]'
+        : '/media/[id]'
+    router.push({
+      pathname,
+      params: {
+        id: encodeURIComponent(getMediaEntityRouteId(item as any)),
+        item: encodeMediaEntityRouteParam(item as any),
+      },
+    })
   }, [router])
 
   return (
@@ -37,3 +51,4 @@ export default function WebHomeScreen() {
     </View>
   )
 }
+

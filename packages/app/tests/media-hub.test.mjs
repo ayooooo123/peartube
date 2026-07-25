@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   buildMediaHubSections,
+  getMediaHubPlayableSourceItem,
   getMediaHubPlaybackKey,
   isMovieItem,
   isShowItem,
@@ -639,3 +640,166 @@ test('deduped playback field backfill survives source item unwrap', () => {
   assert.equal(item.thumbnailUrl, 'https://img.example/backfilled-playback.jpg')
 })
 
+test('playable source helper unwraps selected graph source without using entity id for playback', () => {
+  const item = {
+    id: 'work:movie:network-film',
+    localEntityId: 'work:movie:network-film',
+    title: 'Network Film',
+    channelKey: 'entity-channel-should-not-win',
+    selectedSource: {
+      id: 'publication-id-should-not-win',
+      publicationId: 'publication-id-should-not-win',
+      videoId: 'playable-video-id',
+      channelKey: 'publisher-channel',
+      publicBeeKey: 'public-bee-key',
+      raw: {
+        id: 'raw-upload-id',
+        videoId: 'playable-video-id',
+        channelKey: 'publisher-channel',
+        blobId: 'blob-1',
+        blobsCoreKey: 'blobs-core-1',
+      },
+    },
+  }
+
+  const playable = getMediaHubPlayableSourceItem(item)
+  assert.equal(playable.id, 'playable-video-id')
+  assert.equal(playable.videoId, 'playable-video-id')
+  assert.equal(playable.channelKey, 'publisher-channel')
+  assert.equal(playable.publicBeeKey, 'public-bee-key')
+  assert.equal(playable.blobId, 'blob-1')
+  assert.notEqual(playable.id, item.localEntityId)
+})
+
+test('playable source helper preserves legacy normalized video wrappers', () => {
+  const playable = getMediaHubPlayableSourceItem({
+    id: 'legacy:channel-a:video-a',
+    title: 'Legacy wrapped upload',
+    item: {
+      videoId: 'video-a',
+      channelKey: 'channel-a',
+      publicBeeKey: 'bee-a',
+      thumbnailUrl: 'https://example.test/thumb.jpg',
+    },
+  })
+
+  assert.equal(playable.id, 'video-a')
+  assert.equal(playable.videoId, 'video-a')
+  assert.equal(playable.channelKey, 'channel-a')
+  assert.equal(playable.publicBeeKey, 'bee-a')
+  assert.equal(playable.thumbnailUrl, 'https://example.test/thumb.jpg')
+})
+
+test('media hub renders resolved graph works as unified source-aware media', () => {
+  const sections = buildMediaHubSections({
+    resolvedEntities: [
+      {
+        localEntityId: 'work:movie:network-film',
+        entityKind: 'work',
+        contentKind: 'movie',
+        preferredMetadata: { title: 'Network Film' },
+        artwork: [{ role: 'poster', remoteUrl: 'https://example.test/poster.jpg' }],
+        conflicts: [{ claimId: 'conflict-title' }],
+        publications: [
+          { publicationId: 'pub-a', renditionId: 'rend-a', publisherId: 'publisher-a', publisherName: 'Publisher A', availabilityStatus: 'available' },
+          { publicationId: 'pub-b', renditionId: 'rend-b', publisherId: 'publisher-b', publisherName: 'Publisher B', availabilityStatus: 'cached', cached: true },
+        ],
+      },
+    ],
+  })
+
+  assert.equal(sections.movies.items.length, 1)
+  assert.equal(sections.movies.items[0].title, 'Network Film')
+  assert.equal(sections.movies.items[0].localEntityId, 'work:movie:network-film')
+  assert.equal(sections.movies.items[0].sourceCount, 2)
+  assert.equal(sections.movies.items[0].publicationId, 'pub-b')
+  assert.equal(sections.movies.items[0].posterUrl, 'https://example.test/poster.jpg')
+  assert.equal(sections.movies.items[0].conflicts.length, 1)
+})
+
+test('media hub exposes collection and creator rails from the resolved graph', () => {
+  const sections = buildMediaHubSections({
+    collections: [
+      {
+        localEntityId: 'collection:season:show-x:s1',
+        entityKind: 'collection',
+        contentKind: 'season',
+        preferredMetadata: { title: 'Show X Season 1' },
+        items: [{ localEntityId: 'work:e1' }],
+      },
+    ],
+    agents: [
+      {
+        localEntityId: 'agent:creator:one',
+        entityKind: 'agent',
+        preferredMetadata: { title: 'Creator One' },
+        contributions: [{ publisherId: 'publisher-a', role: 'director' }],
+      },
+    ],
+  })
+
+  assert.equal(sections.collections.title, 'Collections')
+  assert.equal(sections.collections.items[0].title, 'Show X Season 1')
+  assert.equal(sections.creators.title, 'Creators')
+  assert.equal(sections.creators.items[0].title, 'Creator One')
+})
+
+
+
+test('promotes collection and creator graph detail fields into serialized hub cards', () => {
+  const sections = buildMediaHubSections({
+    mediaGraph: {
+      collections: [
+        {
+          localEntityId: 'collection:season:1',
+          entityKind: 'collection',
+          contentKind: 'season',
+          preferredMetadata: { title: 'Season One' },
+          items: [{ localEntityId: 'work:e1', title: 'Episode 1' }],
+          missingMembers: [{ position: { season: 1, episode: 2 }, reason: 'peer claim' }],
+          completeness: { known: 1, missing: 1, hasTrustedStructure: false },
+        },
+      ],
+      creators: [
+        {
+          localEntityId: 'creator:director:1',
+          entityKind: 'agent',
+          contentKind: 'creator',
+          preferredMetadata: { title: 'Director One' },
+          contributions: [{ role: 'director', agentName: 'Director One', publisherId: 'publisher-a' }],
+        },
+      ],
+    },
+  })
+
+  const collection = sections.collections.items[0]
+  assert.equal(collection.items.length, 1)
+  assert.equal(collection.missingMembers.length, 1)
+  assert.equal(collection.completeness.hasTrustedStructure, false)
+
+  const creator = sections.creators.items[0]
+  assert.equal(creator.contributions.length, 1)
+  assert.equal(creator.contributions[0].role, 'director')
+  assert.equal(creator.sourcePublisherCount, 1)
+})
+
+test('dedupes graph media items against legacy playable feed entries by selected source identity', () => {
+  const sections = buildMediaHubSections({
+    mediaGraph: {
+      works: [
+        {
+          localEntityId: 'work:movie:archive-1',
+          entityKind: 'work',
+          contentKind: 'movie',
+          preferredMetadata: { title: 'Archive Movie' },
+          publications: [{ publicationId: 'video-1', renditionId: 'rend-1', channelKey: 'channel-a', videoId: 'video-1', publisherName: 'Publisher', availabilityStatus: 'available' }],
+        },
+      ],
+    },
+    feedVideos: [video({ id: 'video-1', videoId: 'video-1', channelKey: 'channel-a', title: 'Archive Movie duplicate' })],
+  })
+
+  assert.equal(sections.allItems.length, 1)
+  assert.equal(sections.allItems[0].localEntityId, 'work:movie:archive-1')
+  assert.equal(sections.allItems[0].id, 'video-1')
+})

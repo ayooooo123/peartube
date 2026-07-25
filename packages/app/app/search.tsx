@@ -142,29 +142,24 @@ export default function SearchScreen() {
       setSearched(true)
 
       try {
-        console.log('[Search] Searching for:', query)
         console.log('[Search] rpc.globalSearchVideos:', typeof rpc.globalSearchVideos)
         if (typeof rpc.globalSearchVideos !== 'function') {
           throw new Error('globalSearchVideos method not available on rpc')
         }
         console.log('[Search] Calling globalSearchVideos...')
         const res = await rpc.globalSearchVideos({ query, topK: 50 })
-        console.log('[Search] Got response:', res)
         console.log('[Search] Results:', res?.results?.length || 0)
 
         // Convert search results to VideoData format
         // Note: metadata can be JSON string from RPC or already parsed object
-        console.log('[Search] Raw results:', res.results)
         const videos: VideoData[] = (res.results || []).map((r: any, idx: number) => {
-          console.log('[Search] Processing result', idx, ':', r)
-          console.log('[Search] r.metadata type:', typeof r.metadata, 'value:', r.metadata)
+          console.log('[Search] Processing result', idx)
           console.log('[Search] r.channelKey:', r.channelKey)
           try {
             // Handle metadata as either string (RPC serialized) or object
             const metadata = typeof r.metadata === 'string'
               ? JSON.parse(r.metadata)
               : (r.metadata || {})
-            console.log('[Search] Parsed metadata:', metadata)
 
             const score = typeof r.score === 'string' ? parseFloat(r.score) : (r.score || undefined)
 
@@ -199,7 +194,7 @@ export default function SearchScreen() {
             console.log('[Search] Parsed video:', video.title, 'channelKey:', video.channelKey)
             return video
           } catch (parseErr) {
-            console.error('[Search] Failed to parse result:', parseErr, r)
+            console.error('[Search] Failed to parse result:', parseErr)
             return null
           }
         }).filter(Boolean) as VideoData[]
@@ -211,7 +206,7 @@ export default function SearchScreen() {
           return (b.score ?? 0) - (a.score ?? 0)
         })
 
-        console.log('[Search] Final videos array:', videos.length, videos)
+        console.log('[Search] Final video count:', videos.length)
         setResults(videos)
 
         // Fetch thumbnails for search results
@@ -257,12 +252,12 @@ export default function SearchScreen() {
 
   // Handle video click - match the homepage behavior per platform.
   const handleVideoPress = useCallback(async (video: VideoData) => {
-    console.log('[Search] handleVideoPress called with:', video)
+    console.log('[Search] Opening video:', video.id)
     // Ensure channelKey is set (search results may have it in driveKey)
     const channelKey = video.channelKey || video.driveKey
     console.log('[Search] Using channelKey:', channelKey)
     if (!channelKey) {
-      console.error('[Search] Cannot play video - missing channelKey:', video)
+      console.error('[Search] Cannot play video - missing channelKey for:', video.id)
       return
     }
 
@@ -332,10 +327,8 @@ export default function SearchScreen() {
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: video.mimeType || undefined,
       })
-      console.log('[Search] getVideoUrl result:', result)
 
       if (result?.url) {
-        console.log('[Search] Playing video with url:', result.url)
         const coreVideo: CoreVideoData = {
           id: video.id,
           title: video.title,
@@ -358,7 +351,7 @@ export default function SearchScreen() {
         }
         loadAndPlayVideo(coreVideo, result.url)
       } else {
-        console.error('[Search] No url in result:', result)
+        console.error('[Search] Playback preparation returned no URL')
       }
     } catch (err) {
       console.error('[Search] Failed to play video:', err)

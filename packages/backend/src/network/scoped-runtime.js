@@ -7,6 +7,7 @@ import {
   decodePeerFrame,
   encodePeerFrame,
   MAX_PEER_FRAME_BYTES,
+  PEER_FRAME_TYPE_NAMES,
   PROTOCOL_MAJOR,
 } from './frame.js'
 import {
@@ -33,6 +34,8 @@ import {
 } from '../publisher/namespace.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
 
+
+const FRAME_TYPES = PEER_FRAME_TYPE_NAMES
 export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v1'
 export const ARCHIVE_RANGE_CAPABILITY = 'archive-range:v1'
 export const ARCHIVE_DISCOVERY_CAPABILITY = 'archive-discovery:v1'
@@ -167,26 +170,6 @@ export function decodeScopedHello (input) {
   return { protocolMajor, purpose, topic, maxFrameBytes, capabilities: normalizeCapabilities(capabilities) }
 }
 
-function typeCode (type) {
-  let code = 0
-  for (let index = 0; index < type.length; index++) code = ((code * 33) ^ type.charCodeAt(index)) >>> 0
-  return code || 1
-}
-
-const FRAME_TYPES = Object.freeze({
-  [typeCode('locator')]: 'locator',
-  [typeCode('probe')]: 'probe',
-  [typeCode('asset-block-request')]: 'asset-block-request',
-  [typeCode('asset-block-proof')]: 'asset-block-proof',
-  [typeCode('asset-block-chunk')]: 'asset-block-chunk',
-  [typeCode('asset-block-unavailable')]: 'asset-block-unavailable',
-  [typeCode('archive-request')]: 'archive-request',
-  [typeCode('archive-pledge')]: 'archive-pledge',
-  [typeCode('archive-block-request')]: 'archive-block-request',
-  [typeCode('archive-block-proof')]: 'archive-block-proof',
-  [typeCode('archive-block-chunk')]: 'archive-block-chunk',
-  [typeCode('archive-block-unavailable')]: 'archive-block-unavailable',
-})
 
 export function createScopedProtocolSession (options = {}) {
   const purpose = String(options.purpose || '')
@@ -984,6 +967,10 @@ export function createScopedNetworkRuntime (options = {}) {
     for (const transfer of scope.archiveChallengeProofTransfers?.values() || []) clearTimeout(transfer.timer)
     scope.archiveChallengeProofTransfers?.clear()
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
+    for (const resource of scope.archiveResources?.values() || []) {
+      try { resource.releaseArchiveProtection?.() } catch {}
+      resource.releaseArchiveProtection = null
+    }
     const resources = scope.archiveResources
       ? [...scope.archiveResources.values()].flatMap(resource => [
           [resource.download, ['destroy', 'close']],
@@ -1513,7 +1500,7 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'published', delivered }
   }
 
-  async function retainAuthorizedArchive ({ pledge, coreKey: requestedCoreKey, start, end } = {}) {
+  async function retainAuthorizedArchive ({ pledge, coreKey: requestedCoreKey, start, end, download: shouldDownload = true } = {}) {
     if (status !== 'active') fail('runtime is not active')
     const envelope = pledge?.envelope || pledge
     const verified = await verifyArchivePledge(envelope, { now: options.now?.() })
@@ -1529,9 +1516,16 @@ export function createScopedNetworkRuntime (options = {}) {
     if (existing) return { ...existing.result, status: 'already-retained' }
     if (!store?.get) fail('corestore is unavailable')
     const core = store.get({ key: b4a.from(coreKey, 'hex') })
+    let releaseArchiveProtection = null
     try {
+      if (typeof options.retainArchiveCore === 'function') {
+        const release = options.retainArchiveCore({ archiveId, coreKey, start: range.start, end: range.end })
+        if (typeof release === 'function') releaseArchiveProtection = release
+      }
       await core.ready?.()
-      const download = core.download?.({ start: range.start, end: range.end }) || null
+      const download = shouldDownload === false
+        ? null
+        : core.download?.({ start: range.start, end: range.end }) || null
       const topic = deriveArchiveTopic({ protocolMajor, archiveId })
       const mode = `range:${coreKey}:${range.start}:${range.end}`
       const { scope } = joinScope({
@@ -1547,13 +1541,24 @@ export function createScopedNetworkRuntime (options = {}) {
         archiveUploadCeilingBytes: verified.body.uploadCeilingBytes,
       })
       if (!scope.archiveResources) scope.archiveResources = new Map()
-      const resource = { resourceId, archiveId, coreKey, core, download, range, mode, nextIndex: range.start }
+      const resource = {
+        resourceId,
+        archiveId,
+        coreKey,
+        core,
+        download,
+        range,
+        mode,
+        nextIndex: shouldDownload === false ? range.end : range.start,
+        releaseArchiveProtection,
+      }
       scope.archiveResources.set(resourceId, resource)
       void pumpArchiveSessions(scope)
       const result = { status: 'retained', archiveId, coreKey, range: { ...range }, topic: stableScopeDiagnostic(scope) }
       archives.set(resourceId, { scope, resource, result })
       return result
     } catch (error) {
+      try { releaseArchiveProtection?.() } catch {}
       try { await core.close?.() } catch {}
       throw error
     }
@@ -1609,6 +1614,8 @@ export function createScopedNetworkRuntime (options = {}) {
     for (const [resourceId, value] of retained) {
       archives.delete(resourceId)
       value.scope.archiveResources?.delete(resourceId)
+      try { value.resource.releaseArchiveProtection?.() } catch {}
+      value.resource.releaseArchiveProtection = null
       await Promise.allSettled([
         cleanupResource(value.resource.download, ['destroy', 'close']),
         cleanupResource(value.resource.core, ['close']),

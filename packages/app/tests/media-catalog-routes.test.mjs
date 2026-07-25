@@ -13,8 +13,9 @@ test('native and web catalog routes share the paged media catalog view and navig
     const source = read(route)
     assert.match(source, /useMediaCatalog/)
     assert.match(source, /MediaCatalogView/)
-    assert.match(source, /pathname:\s*['"]\/media\/\[id\]['"]/)
-    assert.match(source, /params:\s*\{\s*id:\s*entityId\s*\}/)
+    assert.match(source, /['"]\/collection\/\[id\]['"][\s\S]*['"]\/creator\/\[id\]['"][\s\S]*['"]\/media\/\[id\]['"]/)
+    assert.match(source, /getMediaEntityRouteId\(item as any\)/)
+    assert.match(source, /item:\s*encodeMediaEntityRouteParam\(item as any\)/)
     assert.doesNotMatch(source, forbidden)
     assert.doesNotMatch(source, /setInterval|setTimeout/)
   }

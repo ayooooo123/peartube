@@ -24,6 +24,7 @@ import {
   resolveBareOrNodePathModuleSync,
 } from './runtime-modules.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
+import { redactCapabilityUrl } from './capability-url.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
@@ -500,16 +501,6 @@ export function installBackendCleanupStack(ctx, options = {}) {
 }
 
 const PLAYBACK_ACTIVITY_TTL_MS = 60 * 60 * 1000
-
-/**
- * Generate a random session token for blob server URL auth.
- * This token is included in blob URLs and verified by the server.
- * @returns {string} 32-char hex token
- */
-function generateSessionToken() {
-  const tokenBytes = crypto.randomBytes(16)
-  return b4a.toString(tokenBytes, 'hex')
-}
 
 function peerKeyHex(value) {
   if (!value) return null
@@ -2005,13 +1996,6 @@ export async function initializeStorage(config) {
     networkStats = null
   }, 2000)
 
-  // Generate session token for blob URL authentication
-  // This token is included in video URLs to prevent unauthorized access
-  // NOTE: Full token validation requires extending hypercore-blob-server or using a proxy
-  // For now, the token is generated and stored for future middleware implementation
-  const blobSessionToken = generateSessionToken()
-  console.log('[Storage] Generated blob session token:', blobSessionToken.slice(0, 8) + '...')
-
   storageContext = {
     store,
     metaCore,
@@ -2024,7 +2008,6 @@ export async function initializeStorage(config) {
     blobServerError,
     blobServerHost,
     blobServerBindHost,
-    blobSessionToken, // Session token for URL authentication
     channels,
     wakeup,
     knownPeerCache,
@@ -2621,7 +2604,7 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
     blobsCore.update().catch(() => {})
   }).catch(() => {})
 
-  console.log('[Storage] Instant URL generated:', url.replace(/token=[^&]+/, 'token=***'));
+  console.log('[Storage] Instant URL generated:', redactCapabilityUrl(url));
   return { url };
 }
 
@@ -2721,7 +2704,7 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
       port: ctx.blobServer?.port || ctx.blobServerPort
     });
 
-    console.log('[Storage] Direct blob URL (hyperblobs):', url.replace(/token=[^&]+/, 'token=***'));
+    console.log('[Storage] Direct blob URL (hyperblobs):', redactCapabilityUrl(url));
     return { url };
   } catch (err) {
     console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack);

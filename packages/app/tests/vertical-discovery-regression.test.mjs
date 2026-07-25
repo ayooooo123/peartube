@@ -15,11 +15,16 @@ test('Discover uses the shared paged media catalog without route-local caches', 
   assert.doesNotMatch(source, /cache|setInterval|setTimeout|getContentCatalog/)
 })
 
-test('Discover navigates resolved entities through the media route', () => {
+test('Discover preserves entity type and payload when opening shared detail routes', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
-  assert.match(source, /const openEntity = useCallback\(\(entityId: string\)/)
-  assert.match(source, /pathname: '\/media\/\[id\]'/)
-  assert.match(source, /params: \{ id: entityId \}/)
+  assert.match(source, /item: MediaEntitySummary/)
+  assert.match(source, /item\.entityKind === 'collection'/)
+  assert.match(source, /item\.entityKind === 'agent'/)
+  assert.match(source, /'\/collection\/\[id\]'/)
+  assert.match(source, /'\/creator\/\[id\]'/)
+  assert.match(source, /'\/media\/\[id\]'/)
+  assert.match(source, /encodeMediaEntityRouteParam\(item/)
+  assert.match(source, /getMediaEntityRouteId\(item/)
   assert.match(source, /onEntityPress=\{openEntity\}/)
 })
 

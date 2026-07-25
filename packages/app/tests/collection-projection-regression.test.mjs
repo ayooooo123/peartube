@@ -1,26 +1,65 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const appRoot = path.resolve(__dirname, '..')
-const read = rel => fs.readFileSync(path.join(appRoot, rel), 'utf8')
+import {
+  loadCollectionEntity,
+  loadCreatorEntity,
+} from '../components/routes/media-entity-loaders.js'
 
-test('collection page renders completeness and missing member placeholders from graph RPC', () => {
-  const route = read('components/routes/CollectionPage.tsx')
-  assert.match(route, /mediaGraph.getMediaCollection/)
-  assert.match(route, /mediaGraph.getMediaCollectionItems/)
-  assert.match(route, /CollectionCompleteness/)
-  assert.match(route, /missing|placeholder/i)
+test('collection loader fetches every bounded page and preserves explicit missing members', async () => {
+  const cursors = []
+  const rpc = {
+    async getMediaCollection(request) {
+      assert.deepEqual(request, { entityId: 'collection-one', includeClaims: true, includeConflicts: true })
+      return {
+        success: true,
+        entity: {
+          entityId: 'collection-one',
+          title: 'Collection One',
+          missingMembers: [{ entityId: 'missing-episode', title: 'Missing Episode' }],
+          completeness: { known: 2, missing: 1, hasTrustedStructure: true },
+        },
+        claims: [{ claimId: 'collection-claim' }],
+        conflicts: [],
+      }
+    },
+    async getMediaCollectionItems(request) {
+      cursors.push(request.cursor)
+      return request.cursor
+        ? { success: true, items: [{ entityId: 'episode-two', title: 'Episode Two' }], nextCursor: null }
+        : { success: true, items: [{ entityId: 'episode-one', title: 'Episode One' }], nextCursor: 'page-two' }
+    },
+  }
+
+  const result = await loadCollectionEntity({ rpc, entityId: 'collection-one' })
+
+  assert.deepEqual(cursors, [undefined, 'page-two'])
+  assert.deepEqual(result.items.map(item => item.entityId), ['episode-one', 'episode-two'])
+  assert.equal(result.missingMembers[0].title, 'Missing Episode')
+  assert.equal(result.completeness.hasTrustedStructure, true)
+  assert.deepEqual(result.provenance, [{ claimId: 'collection-claim' }])
 })
 
-test('creator page assembles roles across publisher claims without making publisher the global owner', () => {
-  const route = read('components/routes/CreatorPage.tsx')
-  assert.match(route, /mediaGraph.getMediaAgent/)
-  assert.match(route, /mediaGraph.getAgentContributions/)
-  assert.match(route, /publisher/i)
-  assert.match(route, /performer|director|uploader/i)
-  assert.doesNotMatch(route, /globalOwner/)
+test('creator loader assembles contribution roles across publisher claims', async () => {
+  const rpc = {
+    async getMediaAgent() {
+      return { success: true, entity: { entityId: 'creator-one', title: 'Creator One' }, claims: [], conflicts: [] }
+    },
+    async getAgentContributions() {
+      return {
+        success: true,
+        items: [
+          { agentId: 'creator-one', role: 'performer', publisherId: 'publisher-one' },
+          { agentId: 'creator-one', role: 'director', publisherId: 'publisher-two' },
+        ],
+        nextCursor: null,
+      }
+    },
+  }
+
+  const result = await loadCreatorEntity({ rpc, entityId: 'creator-one' })
+
+  assert.deepEqual(result.contributions.map(item => item.role), ['performer', 'director'])
+  assert.deepEqual(result.contributions.map(item => item.publisherId), ['publisher-one', 'publisher-two'])
+  assert.equal('globalOwner' in result, false)
 })

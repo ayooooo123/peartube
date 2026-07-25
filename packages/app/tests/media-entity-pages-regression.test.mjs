@@ -4,17 +4,39 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { loadMediaEntity } from '../components/routes/media-entity-loaders.js'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(__dirname, '..')
 const read = rel => fs.readFileSync(path.join(appRoot, rel), 'utf8')
 
-test('media entity page exposes sources, provenance, conflicts, archive state, and contribution roles', () => {
-  const route = read('components/routes/MediaEntityPage.tsx')
-  for (const token of ['SourceSelector', 'ProvenancePanel', 'ConflictNotice', 'ArchiveStatus', 'ContributionList', 'mediaGraph.getMediaEntity', 'mediaGraph.getPublicationSources']) {
-    assert.ok(route.includes(token), `missing ${token}`)
+test('media entity loader exposes sources, provenance, conflicts, and archive evidence', async () => {
+  const rpc = {
+    async getMediaEntity(request) {
+      assert.deepEqual(request, { entityId: 'work-one', includeClaims: true, includeConflicts: true })
+      return {
+        success: true,
+        entity: { entityId: 'work-one', title: 'Work One', archiveStatus: { pledgeCount: 2 } },
+        claims: [{ claimId: 'claim-one', publisherId: 'publisher-one' }],
+        conflicts: [{ field: 'title' }],
+      }
+    },
+    async getPublicationSources(request) {
+      assert.deepEqual(request, { entityId: 'work-one', limit: 64 })
+      return {
+        success: true,
+        items: [{ publicationId: 'publication-one', renditionId: 'rendition-one', publisherId: 'publisher-one' }],
+        nextCursor: null,
+      }
+    },
   }
-  assert.match(route, /publisher/i)
-  assert.match(route, /uploader|performer|director/i)
+
+  const result = await loadMediaEntity({ rpc, entityId: 'work-one' })
+
+  assert.equal(result.sources[0].publicationId, 'publication-one')
+  assert.equal(result.provenance[0].claimId, 'claim-one')
+  assert.equal(result.conflicts[0].field, 'title')
+  assert.equal(result.archiveStatus.pledgeCount, 2)
 })
 
 test('source selector preserves playback source identity while route identity remains entity id', () => {

@@ -4,6 +4,9 @@ import crypto from 'hypercore-crypto'
 
 import {
   createArchiveRequest,
+  createArchiveChallenge,
+  createArchiveChallengeEnvelope,
+  createArchivePledge,
   createPermissionlessArchiveNetwork,
   createArchivePolicy,
   authorizeArchiveRequestFromManifestStore,
@@ -132,6 +135,7 @@ test('opted-in strangers randomly accept verified requests without API keys or t
   t.is(volunteerScoped.retained.length, 1, 'the volunteer starts filling the pledged range')
   t.is(standbyScoped.retained.length, 0)
   t.is(requesterScoped.retained.length, 1, 'the requester joins the pledge scope to serve and verify transfers')
+  t.is(requesterScoped.retained[0].download, false, 'requesters do not refill an offloaded source range')
   t.is(volunteerNetwork.getStatus().reservedBytes, 4096)
   t.is(volunteerNetwork.getStatus().acceptedRequests, 1)
   t.is(standbyNetwork.getStatus().randomRejections, 1)
@@ -163,9 +167,9 @@ test('participation defaults off, enforces local capacity, and releases custody 
   })
 
   t.is((await network.ingestRequest(request.envelope)).reason, 'participation-disabled')
-  network.setParticipation({ enabled: true, capacityBytes: 256 })
+  await network.setParticipation({ enabled: true, capacityBytes: 256 })
   t.is((await network.ingestRequest(request.envelope)).reason, 'capacity-exceeded')
-  network.setParticipation({ enabled: true, capacityBytes: 1024 })
+  await network.setParticipation({ enabled: true, capacityBytes: 1024 })
   const accepted = await network.ingestRequest(request.envelope)
   t.is(accepted.status, 'accepted')
   t.is(network.getStatus().reservedBytes, 512)
@@ -331,6 +335,10 @@ test('random possession challenges bind transport identity, score proofs, and ex
   t.ok(observations.some(observation => observation.status === 'challenge-issued'))
   t.ok(observations.some(observation => observation.status === 'challenge-passed'))
   t.alike(rewards.map(reward => [reward.kind, reward.context.peerId]), [['proof-accepted', volunteerPeerId]])
+  t.is(requesterNetwork.getOffloadEvidence(publicationId, ranges).length, 1)
+  t.is(requesterNetwork.getOffloadEvidence(publicationId, [
+    { coreKey: 'd'.repeat(64), start: 0, end: 4 },
+  ]).length, 0, 'proof for another core cannot authorize source deletion')
 
   respondToChallenge = false
   currentTime = 2_000
@@ -375,6 +383,7 @@ test('permissionless acceptance reserves before retain and releases reservation 
     },
     clearTimeout() {},
   })
+  await network.ready
   const makeRequest = nonce => createArchiveRequest({
     requesterId: requester.publicKey,
     publicationId,
@@ -468,4 +477,159 @@ test('archive participation restores retained pledges and expiry timers after re
   t.is(restarted.getStatus().acceptedRequests, 0)
   t.is(restarted.getStatus().reservedBytes, 0)
   t.is(restartedScoped.released.length, 1)
+})
+
+test('archive participation policy persists across backend restarts', async (t) => {
+  let state = null
+  const participationRepository = {
+    async load () { return state == null ? null : structuredClone(state) },
+    async save (next) { state = structuredClone(next) },
+  }
+  const first = createPermissionlessArchiveNetwork({
+    keyPair: volunteer,
+    scopedNetwork: scopedRecorder(),
+    participationRepository,
+  })
+  await first.ready
+  await first.setParticipation({
+    enabled: true,
+    capacityBytes: 8192,
+    maxRequestBytes: 2048,
+    acceptanceProbability: 0.75,
+  })
+  await first.close()
+
+  const restarted = createPermissionlessArchiveNetwork({
+    keyPair: volunteer,
+    scopedNetwork: scopedRecorder(),
+    participationRepository,
+  })
+  await restarted.ready
+  t.alike(restarted.getStatus(), {
+    enabled: true,
+    capacityBytes: 8192,
+    maxRequestBytes: 2048,
+    acceptanceProbability: 0.75,
+    reservedBytes: 0,
+    availableBytes: 8192,
+    acceptedRequests: 0,
+    knownRequests: 0,
+    receivedPledges: 0,
+    randomRejections: 0,
+    capacityRejections: 0,
+    authorizationRejections: 0,
+  })
+  await restarted.close()
+})
+
+test('requester releases received pledge scopes when retention expires', async (t) => {
+  let currentTime = 1_000
+  const timers = []
+  const scoped = scopedRecorder()
+  const network = createPermissionlessArchiveNetwork({
+    keyPair: requester,
+    now: () => currentTime,
+    scopedNetwork: scoped,
+    publishRequest: async () => ({ status: 'published' }),
+    setTimeout (fn, delay) {
+      const timer = { fn, delay, unref () {} }
+      timers.push(timer)
+      return timer
+    },
+    clearTimeout () {},
+  })
+  const requested = await network.requestArchive({
+    publicationId,
+    renditionId,
+    ranges,
+    requestedBytes: 4096,
+    expiresAt: 1_500,
+    retentionUntil: 2_000,
+  })
+  const pledge = createArchivePledge({
+    archivistId: volunteer.publicKey,
+    publicationId,
+    renditionId,
+    ranges,
+    retentionUntil: 2_000,
+    uploadCeilingBytes: 4096,
+    issuedAt: 1_000,
+    nonce: requested.requestId,
+    keyPair: volunteer,
+  })
+  t.is((await network.ingestPledge(pledge.envelope)).status, 'accepted')
+  t.is(network.getStatus().receivedPledges, 1)
+  currentTime = 2_000
+  await timers.find(timer => timer.delay === 1_000).fn()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is(network.getStatus().receivedPledges, 0)
+  t.ok(scoped.released.some(entry => entry.archiveId === pledge.pledgeId))
+  await network.close()
+})
+
+test('one transport peer cannot run unbounded possession proofs concurrently', async (t) => {
+  let releaseProof
+  const proofGate = new Promise(resolve => { releaseProof = resolve })
+  let proofCalls = 0
+  const scoped = {
+    ...scopedRecorder(),
+    getLocalTransportPeerId: () => b4a.toString(volunteer.publicKey, 'hex'),
+    async createAuthorizedArchiveChallengeProof () {
+      proofCalls++
+      await proofGate
+      return b4a.from('bounded-proof')
+    },
+  }
+  const network = createPermissionlessArchiveNetwork({
+    keyPair: volunteer,
+    now: () => 1_000,
+    random: () => 0,
+    enabled: true,
+    capacityBytes: 8192,
+    acceptanceProbability: 1,
+    maxActiveChallengesPerPeer: 1,
+    authorizeRequest: authorized,
+    scopedNetwork: scoped,
+    publishChallengeProof: async () => ({ status: 'published' }),
+  })
+  const pledges = []
+  for (const nonce of ['concurrent-a', 'concurrent-b']) {
+    const request = createArchiveRequest({
+      requesterId: requester.publicKey,
+      publicationId,
+      renditionId,
+      ranges,
+      requestedBytes: 512,
+      retentionUntil: 20_000,
+      expiresAt: 2_000,
+      issuedAt: 1_000,
+      nonce,
+      keyPair: requester,
+    })
+    pledges.push((await network.ingestRequest(request.envelope)).pledge)
+  }
+  const peerId = b4a.toString(requester.publicKey, 'hex')
+  const signedChallenges = pledges.map((pledge, index) => {
+    const challenge = createArchiveChallenge({
+      pledgeEnvelope: pledge.envelope,
+      auditorEntropy: b4a.alloc(32, index + 1),
+      auditorPublicKey: requester.publicKey,
+      coreKey,
+      range: { start: index, end: index + 1 },
+      deadline: 1_500,
+    })
+    return createArchiveChallengeEnvelope({
+      challenge,
+      keyPair: requester,
+      issuedAt: 1_000,
+    }).envelope
+  })
+
+  const first = network.ingestChallenge(signedChallenges[0], { peerId })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  t.is((await network.ingestChallenge(signedChallenges[1], { peerId })).reason, 'challenge-peer-busy')
+  t.is(proofCalls, 1)
+  releaseProof()
+  t.is((await first).status, 'published')
+  await network.close()
 })

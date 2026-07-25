@@ -169,6 +169,8 @@ export class SeedingManager {
     this.activeSeeds = new Map();
     /** @type {Map<string, number>} blobsCoreKey -> active playback/prefetch retain count */
     this.protectedBlobCores = new Map();
+    /** @type {Map<string, number>} blobsCoreKey -> active archive custody retain count */
+    this.protectedArchiveCores = options.protectedArchiveCores instanceof Map ? options.protectedArchiveCores : new Map();
     /** @type {Set<string>} driveKeys that are pinned (always seed) */
     this.pinnedChannels = new Set();
     /** @type {ReturnType<typeof setTimeout> | null} pending throttled seed persist */
@@ -226,7 +228,10 @@ export class SeedingManager {
 
   isSeedBlobProtected(seed) {
     const ref = normalizeSeedBlobRef(seed)
-    return Boolean(ref && this.protectedBlobCores.has(ref.blobsCoreKey))
+    return Boolean(ref && (
+      this.protectedBlobCores.has(ref.blobsCoreKey) ||
+      this.protectedArchiveCores.has(ref.blobsCoreKey)
+    ))
   }
 
   isCacheClearBlockedNow() {

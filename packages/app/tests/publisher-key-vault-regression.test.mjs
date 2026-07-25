@@ -371,3 +371,44 @@ test('mobile and Bun migration imports zero mutable secret and challenge copies 
     )
   }
 })
+
+test('Bun vault reuses one active publisher root across fresh startup and legacy upgrade', async () => {
+  const bunModule = await loadVault('src/bun/publisher-key-vault.ts')
+  const values = new Map()
+  class AsyncEntry {
+    constructor(service, name) { this.key = `${service}:${name}` }
+    async getPassword() { return values.get(this.key) ?? null }
+    async setPassword(value) { values.set(this.key, value) }
+    async deletePassword() { values.delete(this.key) }
+  }
+  const options = {
+    keyringLoader: async () => ({ AsyncEntry }),
+    cryptoLoader: async () => crypto,
+    b4aLoader: async () => b4a,
+  }
+  const freshVault = bunModule.createBunPublisherKeyVault(options)
+  const first = await freshVault.getOrCreateRoot()
+  const again = await freshVault.getOrCreateRoot()
+  assert.deepEqual(again, first)
+  assert.equal(values.size, 1, 'fresh startup persists exactly one active root')
+
+  values.clear()
+  const pair = crypto.keyPair(b4a.alloc(32, 123))
+  const nonce = b4a.alloc(32, 124)
+  const challenge = b4a.concat([
+    b4a.from('peartube:legacy-publisher-root-migration:v1\0'),
+    pair.publicKey,
+    nonce,
+  ])
+  const upgradeVault = bunModule.createBunPublisherKeyVault(options)
+  await upgradeVault.importLegacyRootMigration({
+    version: 1,
+    identityPublicKey: pair.publicKey,
+    secretKey: pair.secretKey,
+    challenge,
+  })
+  const upgraded = await upgradeVault.getOrCreateRoot()
+  assert.equal(upgraded.publisherId, b4a.toString(derivePublisherId(pair.publicKey), 'hex'))
+  assert.equal(upgraded.publicKey, b4a.toString(pair.publicKey, 'hex'))
+  assert.equal(values.size, 1, 'upgrade imports and reuses exactly one active root')
+})

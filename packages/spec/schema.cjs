@@ -245,7 +245,12 @@ ns.register({
     { name: 'publisherId', type: 'string', required: true },
     { name: 'catalogBootstrapKey', type: 'buffer', required: true },
     { name: 'errorCode', type: 'string', required: false },
-    { name: 'error', type: 'string', required: false }
+    { name: 'error', type: 'string', required: false },
+    { name: 'localWriterKey', type: 'buffer', required: true },
+    { name: 'localSignerKey', type: 'buffer', required: true },
+    { name: 'writable', type: 'bool', required: true },
+    { name: 'namespaceInitialized', type: 'bool', required: true },
+    { name: 'admitted', type: 'bool', required: true }
   ]
 })
 

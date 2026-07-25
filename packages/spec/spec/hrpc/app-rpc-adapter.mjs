@@ -844,7 +844,17 @@ export const APP_RPC_METADATA = Object.freeze({
       "response": "@peartube/set-network-policy-response",
       "send": false,
       "requestStream": false,
-      "responseStream": false
+      "responseStream": false,
+      "presenceFields": [
+        {
+          "field": "diskCeilingBytes",
+          "flag": "diskCeilingBytesPresent"
+        },
+        {
+          "field": "uploadCeilingBytes",
+          "flag": "uploadCeilingBytesPresent"
+        }
+      ]
     },
     {
       "id": 76,
@@ -1685,7 +1695,17 @@ export const APP_RPC_METADATA = Object.freeze({
         "response": "@peartube/set-network-policy-response",
         "send": false,
         "requestStream": false,
-        "responseStream": false
+        "responseStream": false,
+        "presenceFields": [
+          {
+            "field": "diskCeilingBytes",
+            "flag": "diskCeilingBytesPresent"
+          },
+          {
+            "field": "uploadCeilingBytes",
+            "flag": "uploadCeilingBytesPresent"
+          }
+        ]
       },
       {
         "id": 63,

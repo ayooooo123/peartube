@@ -211,57 +211,114 @@ export function createArchiveManager(options = {}) {
         if (Number(input.policyVersion) !== assessment.policyVersion || assessment.policyVersion !== policyVersion) {
           return rejection('policy-changed', context)
         }
+        if (now() < assessment.issuedAt) return rejection('assessment-not-yet-valid', context)
         if (now() > assessment.expiresAt) return rejection('assessment-expired', context)
         if (!assessment.eligible) return rejection('not-eligible', context)
 
-        // Consume and persist before recollection/deletion so concurrent confirmations
-        // cannot race through the same user acknowledgement.
-        assessment.consumed = true
-        await persist()
+        let authorizationAttempted = false
+        let authorizationResult = null
+        let authorizationPersistenceError = null
+        const authorize = async (locked = {}) => {
+          if (authorizationAttempted) return rejection('locked-revalidation-used', context)
+          authorizationAttempted = true
 
-        let freshEvidence
-        let confidence
-        try {
-          freshEvidence = normalizeArchiveEvidence({
-            ...(await collectEvidence(publicationId)),
+          let freshEvidence
+          let freshDigest = ''
+          let reason = typeof locked.refusalReason === 'string' ? locked.refusalReason : null
+          if (!reason) {
+            try {
+              const lockedCollectEvidence = typeof locked.collectEvidence === 'function'
+                ? locked.collectEvidence
+                : collectEvidence
+              freshEvidence = normalizeArchiveEvidence({
+                ...(await lockedCollectEvidence(publicationId)),
+                publicationId,
+                policyVersion,
+              })
+              const confidence = assessArchiveConfidence(freshEvidence)
+              freshDigest = digestEvidence(confidence.evidence)
+              if (freshEvidence.activePlayback) reason = 'playback-active'
+              else if (freshDigest !== assessment.evidenceDigest) reason = 'evidence-changed'
+              else if (!confidence.eligible) reason = 'not-eligible'
+            } catch {
+              reason = 'evidence-unavailable'
+            }
+          }
+
+          if (reason) {
+            const response = rejection(reason, context)
+            try {
+              await recordAudit({
+                publicationId,
+                assessmentId,
+                outcome: 'rejected',
+                reason,
+                ...(freshDigest ? { evidenceDigest: freshDigest } : {}),
+                observedAt: now(),
+              })
+            } catch (error) {
+              authorizationPersistenceError = error
+              throw error
+            }
+            authorizationResult = { response, authorized: false }
+            return response
+          }
+
+          // The lock holder persists both nonce consumption and authorization
+          // before it is allowed to mutate the source core.
+          assessment.consumed = true
+          try {
+            await recordAudit({
+              publicationId,
+              assessmentId,
+              outcome: 'authorized',
+              evidenceDigest: freshDigest,
+              observedAt: now(),
+            })
+          } catch (error) {
+            assessment.consumed = false
+            authorizationPersistenceError = error
+            throw error
+          }
+          const response = {
+            success: true,
+            accepted: true,
             publicationId,
-            policyVersion,
-          })
-          confidence = assessArchiveConfidence(freshEvidence)
-        } catch {
-          const result = rejection('evidence-unavailable', context)
-          await recordAudit({ publicationId, assessmentId, outcome: 'rejected', reason: result.reason, observedAt: now() })
-          return result
+            assessmentId,
+            evidenceDigest: freshDigest,
+            evidence: freshEvidence,
+          }
+          authorizationResult = { response, authorized: true }
+          return response
         }
-        const freshDigest = digestEvidence(confidence.evidence)
-        let reason = null
-        if (freshEvidence.activePlayback) reason = 'playback-active'
-        else if (freshDigest !== assessment.evidenceDigest) reason = 'evidence-changed'
-        else if (!confidence.eligible) reason = 'not-eligible'
-        if (reason) {
-          const result = rejection(reason, context)
-          await recordAudit({ publicationId, assessmentId, outcome: 'rejected', reason, evidenceDigest: freshDigest, observedAt: now() })
-          return result
-        }
-
-        await recordAudit({
-          publicationId,
-          assessmentId,
-          outcome: 'authorized',
-          evidenceDigest: freshDigest,
-          observedAt: now(),
-        })
 
         let deletion
-        try { deletion = await deleteSource({ publicationId, assessment, evidence: freshEvidence }) } catch {
+        try {
+          deletion = await deleteSource({ publicationId, assessment, authorize })
+        } catch (error) {
+          if (error === authorizationPersistenceError) throw error
           deletion = { success: false, reason: 'delete-failed' }
+        }
+        if (authorizationResult?.authorized === false) return authorizationResult.response
+        if ((!authorizationAttempted || !authorizationResult?.authorized) && deletion?.success) {
+          deletion = { success: false, reason: 'locked-revalidation-required' }
         }
         if (!deletion?.success) {
           const reason = String(deletion?.reason || 'delete-failed')
           const result = rejection(reason, context)
-          await recordAudit({ publicationId, assessmentId, outcome: 'failed', reason, evidenceDigest: freshDigest, observedAt: now() })
+          await recordAudit({
+            publicationId,
+            assessmentId,
+            outcome: 'failed',
+            reason,
+            ...(authorizationResult?.response?.evidenceDigest
+              ? { evidenceDigest: authorizationResult.response.evidenceDigest }
+              : {}),
+            observedAt: now(),
+          })
           return result
         }
+        const freshDigest = authorizationResult.response.evidenceDigest
         const freedBytes = Number.isSafeInteger(Number(deletion.freedBytes)) && Number(deletion.freedBytes) >= 0
           ? Number(deletion.freedBytes)
           : 0

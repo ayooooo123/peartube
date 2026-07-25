@@ -65,6 +65,10 @@ function fakeSwarm () {
       destroyed: 0,
       flushed: async () => {},
       destroy () { this.destroyed++ },
+      suspended: 0,
+      resumed: 0,
+      async suspend () { this.suspended++ },
+      async resume () { this.resumed++ },
     }
     swarm.joins.push(handle)
     return handle
@@ -130,6 +134,50 @@ test('startup republishes only persisted writable catalogs with accepted project
 
   t.is(swarm.joins.length, 2, 'bootstrap and persisted non-empty publisher scopes are joined')
   t.ok(runtime.getDiagnostics().topics.some(topic => topic.purpose === 'publisher'))
+  await runtime.close()
+})
+
+test('persisted runtime policy gates discovery startup and resumes without duplicate scopes', async (t) => {
+  const swarm = fakeSwarm()
+  const runtime = createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    initialNetworkPolicy: {
+      networkEnabled: false,
+      uploadPermission: 'disabled',
+      uploadCeilingBytes: 0,
+      diskCeilingBytes: 0,
+    },
+  })
+
+  await runtime.start()
+  t.is(swarm.joins.length, 0, 'forbidden persisted network policy applies before discovery starts')
+
+  await runtime.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 1024,
+    diskCeilingBytes: 1024,
+  })
+  t.is(swarm.joins.length, 1)
+
+  await runtime.applyNetworkPolicy({
+    networkEnabled: false,
+    uploadPermission: 'disabled',
+    uploadCeilingBytes: 0,
+    diskCeilingBytes: 0,
+  })
+  t.is(swarm.joins[0].suspended, 1)
+  t.is(runtime.getDiagnostics().sessions.length, 0)
+
+  await runtime.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 1024,
+    diskCeilingBytes: 1024,
+  })
+  t.is(swarm.joins.length, 1, 'resume reuses the existing bounded scope')
+  t.is(swarm.joins[0].resumed, 1)
   await runtime.close()
 })
 
@@ -509,13 +557,14 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
     [2, bytes(1024, 2)],
     [3, bytes(96 * 1024, 3)],
     [4, bytes(1024, 4)],
+    [5, bytes(200 * 1024, 5)],
   ])
   const received = new Map()
   const pledge = createArchivePledge({
     archivistId: archivist.publicKey,
     publicationId: bytes(32, 57),
     renditionId: bytes(32, 58),
-    ranges: [{ coreKey, start: 2, end: 5 }],
+    ranges: [{ coreKey, start: 2, end: 6 }],
     retentionUntil: 10_000,
     issuedAt: 10,
     uploadCeilingBytes: 256 * 1024,
@@ -557,8 +606,26 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   }
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
-  const runtimeA = createScopedNetworkRuntime({ swarm: swarmA, store: { get: () => sourceCore } })
-  const runtimeB = createScopedNetworkRuntime({ swarm: swarmB, store: { get: () => targetCore } })
+  const runtimeA = createScopedNetworkRuntime({
+    swarm: swarmA,
+    store: { get: () => sourceCore },
+    initialNetworkPolicy: {
+      networkEnabled: true,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 1024,
+      diskCeilingBytes: 1024 * 1024,
+    },
+  })
+  const runtimeB = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: { get: () => targetCore },
+    initialNetworkPolicy: {
+      networkEnabled: true,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: 1024 * 1024,
+      diskCeilingBytes: 1024 * 1024,
+    },
+  })
   await runtimeA.start()
   await runtimeB.start()
   const pair = connectionPair()
@@ -567,13 +634,44 @@ test('archive sessions transfer only pledge-authorized blocks over their scoped 
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey })
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey })
   await settle()
-  await runtimeA.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 5 })
-  await runtimeB.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 5 })
-  for (let attempt = 0; attempt < 20 && received.size < 3; attempt++) await settle()
+  await runtimeA.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
+  await runtimeB.retainAuthorizedArchive({ pledge, coreKey, start: 2, end: 6 })
+  for (let attempt = 0; attempt < 20 && received.size < 1; attempt++) await settle()
+  t.alike([...received.keys()], [2], 'the runtime upload ceiling stops the next oversized transfer')
+  await runtimeA.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 256 * 1024,
+    diskCeilingBytes: 1024 * 1024,
+  })
+  await runtimeB.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 1024 * 1024,
+    diskCeilingBytes: 1024 * 1024,
+  })
+  for (let attempt = 0; attempt < 30 && received.size < 3; attempt++) await settle()
 
   t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4])
+  const committedUploadBytes = runtimeA.getDiagnostics().policy.uploadedBytes
+  t.ok(committedUploadBytes > 0)
+  await runtimeA.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 0,
+    diskCeilingBytes: 1024 * 1024,
+  })
+  t.is(runtimeA.getDiagnostics().policy.uploadedBytes, committedUploadBytes, 'lower ceilings preserve committed upload accounting')
+  await runtimeA.applyNetworkPolicy({
+    networkEnabled: true,
+    uploadPermission: 'enabled',
+    uploadCeilingBytes: 256 * 1024,
+    diskCeilingBytes: 1024 * 1024,
+  })
+  for (let attempt = 0; attempt < 20; attempt++) await settle()
+  t.alike([...received.keys()].sort((a, b) => a - b), [2, 3, 4], 'policy toggles do not reset committed upload accounting')
   t.is(received.has(1), false, 'the peer never receives a block below its pledged range')
-  t.is(received.has(5), false, 'the peer never receives a block at or above its pledged range end')
+  t.is(received.has(5), false, 'the peer never receives a block exceeding the runtime upload ceiling')
   const challengeProof = await runtimeA.createAuthorizedArchiveChallengeProof({
     archiveId: pledge.pledgeId,
     coreKey,

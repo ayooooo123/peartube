@@ -381,7 +381,7 @@ test('backend orchestrator starts scoped networking without a legacy feed startu
   assert.doesNotMatch(source, /startupGate\.noteFeedSync\(\)/)
 })
 
-test('publisher root vault stays privileged while desktop exposes only public signer intents', () => {
+test('publisher root vault stays privileged while desktop exposes only bounded catalog lifecycle', () => {
   const bunMain = readAppFile('src/bun/index.ts')
   const mobileBackend = readAppFile('backend/mobile-start.mjs')
   const desktopWorker = readAppFile('workers/desktop/index.ts')
@@ -398,18 +398,15 @@ test('publisher root vault stays privileged while desktop exposes only public si
   assert.match(bunMain, /getPrivilegedPublisherSignerBridge/)
   assert.doesNotMatch(bunMain, /globalThis.*PublisherKeyVault/, 'root vault must not be exposed as mutable process-global state')
   assert.ok(rendererRpcBlock, 'desktop renderer RPC block should exist')
-  for (const requestName of [
-    'publisherCreateRoot',
-    'publisherBeginUserIntent',
-    'publisherSignPreparedRecord',
-    'publisherCompleteIntent',
-    'publisherCancelIntent',
-  ]) {
-    assert.match(rendererRpcBlock, new RegExp(`${requestName}:\\s*async`))
-  }
+  assert.match(rendererRpcBlock, /publisherEnsureLocalCatalog:\s*async/)
+  assert.doesNotMatch(
+    rendererRpcBlock,
+    /publisherCreateRoot|publisherBeginUserIntent|publisherSignPreparedRecord|publisherCompleteIntent|publisherCancelIntent/,
+  )
   assert.doesNotMatch(rendererRpcBlock, /signDigest|vault|secretKey|privateKey|rootSecret|seed/i)
   assert.doesNotMatch(mobileBackend, /publisher-key-vault|expo-secure-store/)
   assert.doesNotMatch(desktopWorker, /publisher-key-vault|signDigest|getSecret/)
-  assert.match(webRpc, /publisherSigner \? 'shell' : 'renderer'/)
-  assert.match(webRpc, /publisherSigner === window\.bridge\?\.publisherSigner/)
+  assert.match(webRpc, /runtime: 'renderer'/)
+  assert.match(webRpc, /window\.bridge\?\.ensureLocalPublisher/)
+  assert.doesNotMatch(webRpc, /publisherSigner === window\.bridge\?\.publisherSigner/)
 })

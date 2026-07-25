@@ -565,6 +565,36 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "localWriterKey",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "localSignerKey",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "writable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "namespaceInitialized",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "admitted",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -6346,6 +6376,18 @@
           "name": "uploadCeilingBytes",
           "required": false,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "diskCeilingBytesPresent",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "uploadCeilingBytesPresent",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {

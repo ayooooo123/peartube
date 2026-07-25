@@ -662,20 +662,94 @@ export function createPublisherApi(options = {}) {
     return cloneBinding(binding, publisherId)
   }
 
+  async function localCatalogState(binding, publisherId) {
+    const catalog = binding?.catalog
+    if (!catalog || typeof catalog.waitForWritable !== 'function' ||
+        typeof catalog.getAuthorizationState !== 'function') {
+      fail('PUBLISHER_CATALOG_UNAVAILABLE')
+    }
+    if (await catalog.waitForWritable() !== true || catalog.writable !== true) {
+      fail('PUBLISHER_CATALOG_NOT_WRITABLE')
+    }
+    const localWriterKey = exactBytes(catalog.localWriterKey, 32, 'PUBLISHER_LOCAL_WRITER_UNAVAILABLE')
+    const localSignerKey = exactBytes(catalog.localSignerKey, 32, 'PUBLISHER_LOCAL_SIGNER_UNAVAILABLE')
+    const authorization = await catalog.getAuthorizationState()
+    const writerKeyHex = publisherHex(localWriterKey)
+    const signerKeyHex = publisherHex(localSignerKey)
+    const writer = authorization?.writers?.find(candidate =>
+      candidate?.key === writerKeyHex && candidate?.signerKey === signerKeyHex
+    )
+    const capabilities = writer?.capabilities
+    const admitted = Boolean(
+      writer &&
+      !writer.revocation &&
+      Number.isSafeInteger(writer.expiresAt) &&
+      writer.expiresAt >= safeUint(now()) &&
+      Array.isArray(capabilities) &&
+      capabilities.includes('publish') &&
+      capabilities.includes('claim')
+    )
+    return {
+      publisherId: b4a.from(publisherId),
+      localWriterKey,
+      localSignerKey,
+      writable: true,
+      namespaceInitialized: Boolean(authorization),
+      admitted
+    }
+  }
+
+  async function assertOnlyWritableBinding(registry, publisherId) {
+    if (typeof registry.getWritableBindings !== 'function') fail('PUBLISHER_CATALOG_UNAVAILABLE')
+    const bindings = await registry.getWritableBindings()
+    if (!Array.isArray(bindings) || bindings.length !== 1 ||
+        !equalBytes(bindings[0]?.publisherId, publisherId)) {
+      fail(bindings?.length > 1 ? 'PUBLISHER_CATALOG_AMBIGUOUS' : 'PUBLISHER_CATALOG_NOT_WRITABLE')
+    }
+  }
+
+  async function completeAdmissionLifecycle(binding) {
+    const completeMigration = options.ctx?.completePublicationV1Migration
+    if (typeof completeMigration !== 'function') return
+    if (typeof binding?.catalog?.waitForWritable !== 'function' ||
+        await binding.catalog.waitForWritable() !== true ||
+        binding.catalog.writable !== true) {
+      fail('PUBLISHER_CATALOG_NOT_WRITABLE')
+    }
+    const result = await completeMigration()
+    if (result?.status !== 'complete') fail('PUBLISHER_MIGRATION_PENDING')
+  }
+
+
   return {
     async provisionPublisherCatalog(request = {}) {
       try {
         const registry = activeCatalogRegistry()
-        if (typeof registry.provision !== 'function') fail('PUBLISHER_CATALOG_UNAVAILABLE')
+        if (typeof registry.provision !== 'function' || typeof registry.getWritableBindings !== 'function') {
+          fail('PUBLISHER_CATALOG_UNAVAILABLE')
+        }
         const publisherId = parsePublisherId(request.publisherId)
         const genesisRootKey = exactBytes(request.genesisRootKey, 32)
         if (!equalBytes(derivePublisherId(genesisRootKey), publisherId)) fail('PUBLISHER_ID_MISMATCH')
+        const existingWritable = await registry.getWritableBindings()
+        if (!Array.isArray(existingWritable) ||
+            existingWritable.some(candidate => !equalBytes(candidate?.publisherId, publisherId))) {
+          fail('PUBLISHER_CATALOG_AMBIGUOUS')
+        }
         const binding = cloneBinding(await registry.provision(publisherId, genesisRootKey), publisherId)
         if (!equalBytes(binding.genesisRootKey, genesisRootKey)) fail('PUBLISHER_CATALOG_MISMATCH')
+        const state = await localCatalogState(binding, publisherId)
+        await assertOnlyWritableBinding(registry, publisherId)
+        if (state.admitted) await completeAdmissionLifecycle(binding)
         return {
           success: true,
           publisherId: publisherHex(publisherId),
           catalogBootstrapKey: b4a.from(binding.catalogBootstrapKey),
+          localWriterKey: b4a.from(state.localWriterKey),
+          localSignerKey: b4a.from(state.localSignerKey),
+          writable: state.writable,
+          namespaceInitialized: state.namespaceInitialized,
+          admitted: state.admitted,
           errorCode: null
         }
       } catch (error) {
@@ -683,6 +757,11 @@ export function createPublisherApi(options = {}) {
           success: false,
           publisherId: typeof request.publisherId === 'string' ? request.publisherId : '',
           catalogBootstrapKey: b4a.alloc(0),
+          localWriterKey: b4a.alloc(0),
+          localSignerKey: b4a.alloc(0),
+          writable: false,
+          namespaceInitialized: false,
+          admitted: false,
           errorCode: stableCode(error, 'PUBLISHER_CATALOG_PROVISION_FAILED')
         }
       }
@@ -890,6 +969,9 @@ export function createPublisherApi(options = {}) {
           } catch (error) {
             if (error instanceof PublisherApiError) throw error
             fail('PUBLISHER_CATALOG_APPEND_FAILED')
+          }
+          if (intent.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION) {
+            await completeAdmissionLifecycle(binding)
           }
           return {
             intentId: intent.intentId,

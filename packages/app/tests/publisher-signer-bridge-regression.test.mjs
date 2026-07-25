@@ -95,15 +95,16 @@ async function createFixture(overrides = {}) {
 
 async function beginSingle(fixture) {
   const body = b4a.from('revoke writer')
+  const preparedBody = b4a.from(body)
   const intent = await fixture.bridge.beginUserIntent({
     publisherId: 'a'.repeat(64),
     recordType: 'publisher.writer-revocation',
     body,
     displaySummaryJson: '{"action":"revoke writer"}',
     intentExpiresAt: NOW + 60_000,
-    userInitiated: true,
   })
-  return { intent, prepared: singlePrepared(fixture.keyPair.publicKey, intent.intentId, { body }) }
+  body.fill(0)
+  return { intent, prepared: singlePrepared(fixture.keyPair.publicKey, intent.intentId, { body: preparedBody }) }
 }
 
 test('publisher signer bridge binds exact canonical prepare bytes and exposes only purpose-specific signing', async () => {
@@ -135,7 +136,6 @@ test('publisher signer bridge derives a root transition id and returns one signe
     body,
     displaySummaryJson: '{"action":"rotate root"}',
     intentExpiresAt: NOW + 60_000,
-    userInitiated: true,
   })
   const unsigned = {
     recordType: 'publisher.root-transition',
@@ -225,7 +225,6 @@ test('locked vault failures are stable and redact shell credential errors', asyn
       body: b4a.from('namespace'),
       displaySummaryJson: '{}',
       intentExpiresAt: NOW + 60_000,
-      userInitiated: true,
     }),
     (error) => error?.code === 'PUBLISHER_SIGNER_VAULT_UNAVAILABLE' &&
       !error.message.includes('device-lock-secret-path'),
@@ -233,7 +232,7 @@ test('locked vault failures are stable and redact shell credential errors', asyn
   fs.rmSync(fixture.tempDir, { recursive: true, force: true })
 })
 
-test('background intents and substituted vault signatures are rejected with redacted stable errors', async () => {
+test('renderer authorization flags and substituted vault signatures are rejected with redacted stable errors', async () => {
   const fixture = await createFixture({
     vault: {
       async getPublicKey() { return crypto.keyPair(b4a.alloc(32, 42)).publicKey },
@@ -248,8 +247,8 @@ test('background intents and substituted vault signatures are rejected with reda
     body: b4a.from('namespace'),
     displaySummaryJson: '{}',
     intentExpiresAt: NOW + 60_000,
-    userInitiated: false,
-  }), /BACKGROUND_FORBIDDEN/)
+    userInitiated: true,
+  }), /INVALID_INTENT/)
   const { intent, prepared } = await beginSingle(fixture)
   await assert.rejects(
     () => fixture.bridge.signPreparedRecord(intent.intentId, prepared),

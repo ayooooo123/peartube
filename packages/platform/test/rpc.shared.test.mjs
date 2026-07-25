@@ -603,20 +603,20 @@ test('platform runner session carries the shell signer only on explicitly inject
   }])
 })
 
-test('native facade accepts injected shell signer while web facade hard-rejects renderer signing', () => {
+test('native facade accepts an injected shell signer while web stays renderer-forbidden', () => {
   const nativeSource = fs.readFileSync(path.join(platformRoot, 'src/rpc.native.ts'), 'utf8')
   const webSource = fs.readFileSync(path.join(platformRoot, 'src/rpc.web.ts'), 'utf8')
   const nativeRunnerSource = fs.readFileSync(path.join(platformRoot, 'src/runner.native.ts'), 'utf8')
-  const webRunnerSource = fs.readFileSync(path.join(platformRoot, 'src/runner.web.ts'), 'utf8')
 
   assert.match(nativeSource, /publisherSigner\?: PublisherSignerBridgeLike/)
   assert.match(nativeSource, /createPublisherRootOperationRpc\(/)
   assert.match(nativeSource, /getPublisherSigner:/)
-  assert.match(webSource, /runtime: publisherSigner \? 'shell' : 'renderer'/)
-  assert.match(webSource, /createPublisherRootOperationRpc\(/)
+  assert.match(webSource, /runtime: 'renderer'/)
+  assert.match(webSource, /createPublisherRootOperationRpc\([\s\S]*?null,[\s\S]*?runtime: 'renderer'/)
+  assert.match(webSource, /registerPublisherBackendRelay/)
+  assert.match(webSource, /ensureLocalPublisherCatalog/)
+  assert.doesNotMatch(webSource, /publisherSigner\?: PublisherSignerBridgeLike/)
   assert.match(nativeRunnerSource, /publisherSigner: options\.publisherSigner/)
-  assert.match(webRunnerSource, /const \{ publisherSigner, \.\.\.transportOptions \} = options/)
-  assert.match(webRunnerSource, /publisherSigner: publisherSigner \?\? undefined/)
 })
 
 test('operability facade exposes complete local network policy RPC', async () => {

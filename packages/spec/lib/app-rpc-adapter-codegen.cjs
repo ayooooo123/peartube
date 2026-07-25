@@ -210,8 +210,12 @@ function readHrpcSchema(hrpcJsonPath, schemaJsonPath) {
       const fieldNames = new Set((message.fields || []).map((field) => field.name))
       const presenceFields = []
       for (const field of message.fields || []) {
-        if (field.type !== 'bool' || !field.name.endsWith('Provided')) continue
-        const valueField = field.name.slice(0, -'Provided'.length)
+        if (field.type !== 'bool') continue
+        const suffix = field.name.endsWith('Provided')
+          ? 'Provided'
+          : (field.name.endsWith('Present') ? 'Present' : null)
+        if (!suffix) continue
+        const valueField = field.name.slice(0, -suffix.length)
         if (!fieldNames.has(valueField)) continue
         presenceFields.push({ field: valueField, flag: field.name })
       }

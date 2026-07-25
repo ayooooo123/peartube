@@ -28,12 +28,20 @@ function confirmation(assessment, overrides = {}) {
   }
 }
 
+function lockedDeletion(operation) {
+  return async (input) => {
+    const authorization = await input.authorize()
+    if (!authorization.success) return authorization
+    return operation(input, authorization)
+  }
+}
+
 test('source offload requires exact explicit confirmation then deletes once', async (t) => {
   let deletions = 0
   const manager = createArchiveManager({
     now: () => 100,
     collectEvidence: async () => durableEvidence(),
-    deleteSource: async () => ({ success: true, freedBytes: ++deletions * 4096 }),
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: ++deletions * 4096 })),
   })
   const assessment = await manager.createOffloadAssessment({ publicationId })
   t.is(assessment.success, true)
@@ -54,7 +62,7 @@ test('concurrent confirmations atomically consume one nonce', async (t) => {
   const manager = createArchiveManager({
     now: () => 100,
     collectEvidence: async () => durableEvidence(),
-    deleteSource: async () => ({ success: true, freedBytes: ++deletions }),
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: ++deletions })),
   })
   const assessment = await manager.createOffloadAssessment({ publicationId })
   const results = await Promise.all([
@@ -66,7 +74,7 @@ test('concurrent confirmations atomically consume one nonce', async (t) => {
 })
 
 test('confirmation rejects binding changes without consuming the valid confirmation', async (t) => {
-  const manager = createArchiveManager({ now: () => 100, collectEvidence: async () => durableEvidence(), deleteSource: async () => ({ success: true, freedBytes: 1 }) })
+  const manager = createArchiveManager({ now: () => 100, collectEvidence: async () => durableEvidence(), deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: 1 })) })
   const assessment = await manager.createOffloadAssessment({ publicationId })
   t.is((await manager.confirmSourceOffload(confirmation(assessment, { publicationId: 'b'.repeat(64) }))).reason, 'publication-mismatch')
   t.is((await manager.confirmSourceOffload(confirmation(assessment, { evidenceDigest: 'b'.repeat(64) }))).reason, 'evidence-mismatch')
@@ -81,7 +89,7 @@ test('confirmation recollects evidence and rejects change or active playback', a
   const manager = createArchiveManager({
     now: () => 100,
     collectEvidence: async () => evidence,
-    deleteSource: async () => ({ success: true, freedBytes: ++deletions }),
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: ++deletions })),
   })
   const changed = await manager.createOffloadAssessment({ publicationId })
   evidence = durableEvidence({ publisherDeviceCopies: [], viewerFullCopies: 10 })
@@ -92,6 +100,37 @@ test('confirmation recollects evidence and rejects change or active playback', a
   evidence = durableEvidence({ activePlayback: true })
   t.is((await manager.confirmSourceOffload(confirmation(active))).reason, 'playback-active')
   t.is(deletions, 0)
+})
+
+test('locked revalidation refuses changed evidence without consuming the confirmation', async (t) => {
+  let evidence = durableEvidence()
+  let deletions = 0
+  let enterLockedDeletion
+  let releaseLockedDeletion
+  const lockedDeletionEntered = new Promise(resolve => { enterLockedDeletion = resolve })
+  const lockedDeletionRelease = new Promise(resolve => { releaseLockedDeletion = resolve })
+  const manager = createArchiveManager({
+    now: () => 100,
+    collectEvidence: async () => evidence,
+    deleteSource: async ({ authorize }) => {
+      enterLockedDeletion()
+      await lockedDeletionRelease
+      const authorization = await authorize()
+      if (!authorization.success) return authorization
+      return { success: true, freedBytes: ++deletions }
+    },
+  })
+  const assessment = await manager.createOffloadAssessment({ publicationId })
+  const pending = manager.confirmSourceOffload(confirmation(assessment))
+  await lockedDeletionEntered
+  evidence = durableEvidence({ publisherDeviceCopies: [], viewerFullCopies: 10 })
+  releaseLockedDeletion()
+
+  t.is((await pending).reason, 'evidence-changed')
+  t.is(deletions, 0)
+  evidence = durableEvidence()
+  t.is((await manager.confirmSourceOffload(confirmation(assessment))).success, true)
+  t.is(deletions, 1)
 })
 
 test('anonymous viewers never produce an eligible assessment', async (t) => {
@@ -108,7 +147,7 @@ test('delete failures are audited and cannot be retried with the consumed acknow
   const manager = createArchiveManager({
     now: () => 100,
     collectEvidence: async () => durableEvidence(),
-    deleteSource: async () => { throw new Error('device busy') },
+    deleteSource: lockedDeletion(async () => { throw new Error('device busy') }),
   })
   const assessment = await manager.createOffloadAssessment({ publicationId })
   t.is((await manager.confirmSourceOffload(confirmation(assessment))).reason, 'delete-failed')
@@ -125,11 +164,11 @@ test('source deletion starts only after an authorization audit is durable', asyn
       async load () { return null },
       async save () {
         saves++
-        if (saves === 3) throw new Error('audit disk full')
+        if (saves === 2) throw new Error('audit disk full')
       },
     },
     collectEvidence: async () => durableEvidence(),
-    deleteSource: async () => ({ success: true, freedBytes: ++deletions }),
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: ++deletions })),
   })
   const assessment = await manager.createOffloadAssessment({ publicationId })
 
@@ -143,11 +182,57 @@ test('pending assessments and consumed nonces survive restart', async (t) => {
     async load () { return state == null ? null : structuredClone(state) },
     async save (next) { state = structuredClone(next) },
   }
-  const first = createArchiveManager({ now: () => 100, repository, collectEvidence: async () => durableEvidence(), deleteSource: async () => ({ success: true, freedBytes: 2 }) })
+  const first = createArchiveManager({ now: () => 100, repository, collectEvidence: async () => durableEvidence(), deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: 2 })) })
   const assessment = await first.createOffloadAssessment({ publicationId })
   await first.confirmSourceOffload(confirmation(assessment))
   const restarted = createArchiveManager({ now: () => 101, repository, collectEvidence: async () => durableEvidence() })
   await restarted.ready
   t.is((await restarted.confirmSourceOffload(confirmation(assessment))).reason, 'nonce-used')
   t.alike((await restarted.getAuditLog()).map(record => record.outcome), ['authorized', 'deleted'])
+})
+
+test('locked refusal audit and retryable nonce survive restart', async (t) => {
+  let state = null
+  let evidence = durableEvidence()
+  let deletions = 0
+  const repository = {
+    async load () { return state == null ? null : structuredClone(state) },
+    async save (next) { state = structuredClone(next) },
+  }
+  const first = createArchiveManager({
+    now: () => 100,
+    repository,
+    collectEvidence: async () => evidence,
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: ++deletions })),
+  })
+  const assessment = await first.createOffloadAssessment({ publicationId })
+  evidence = durableEvidence({ publisherDeviceCopies: [], viewerFullCopies: 10 })
+  t.is((await first.confirmSourceOffload(confirmation(assessment))).reason, 'evidence-changed')
+
+  evidence = durableEvidence()
+  const restarted = createArchiveManager({
+    now: () => 101,
+    repository,
+    collectEvidence: async () => evidence,
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: ++deletions })),
+  })
+  await restarted.ready
+  t.is((await restarted.confirmSourceOffload(confirmation(assessment))).success, true)
+  t.is(deletions, 1)
+  t.alike(
+    (await restarted.getAuditLog()).map(record => [record.outcome, record.reason || null]),
+    [['rejected', 'evidence-changed'], ['authorized', null], ['deleted', null]],
+  )
+})
+
+test('confirmation fails closed before the assessment issue time', async (t) => {
+  let now = 100
+  const manager = createArchiveManager({
+    now: () => now,
+    collectEvidence: async () => durableEvidence(),
+    deleteSource: lockedDeletion(async () => ({ success: true, freedBytes: 1 })),
+  })
+  const assessment = await manager.createOffloadAssessment({ publicationId })
+  now = 99
+  t.is((await manager.confirmSourceOffload(confirmation(assessment))).reason, 'assessment-not-yet-valid')
 })

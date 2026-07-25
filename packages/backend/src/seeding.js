@@ -460,6 +460,25 @@ export class SeedingManager {
     console.log('[SeedingManager] Updated config:', this.config);
   }
 
+  async applyNetworkPolicy({ diskCeilingBytes } = {}) {
+    const ceiling = Number(diskCeilingBytes)
+    if (!Number.isSafeInteger(ceiling) || ceiling < 0) {
+      throw new TypeError('diskCeilingBytes must be a non-negative safe integer')
+    }
+    const previousBytes = this.config.maxStorageGB * 1024 * 1024 * 1024
+    this.config = {
+      ...this.config,
+      maxStorageGB: ceiling / (1024 * 1024 * 1024)
+    }
+    await this.metaDb.put('seeding-config', this.config)
+    if (ceiling < previousBytes) {
+      const partials = await this.clearDownloadIntents()
+      if (partials.clearedBlob) await this.flushClearedBlobRanges('policy partial download clear')
+    }
+    await this.enforceQuota()
+    return { diskCeilingBytes: ceiling }
+  }
+
   /**
    * Get seeding status
    * @returns {Promise<Object>}

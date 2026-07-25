@@ -173,6 +173,10 @@ test('participation defaults off, enforces local capacity, and releases custody 
   const accepted = await network.ingestRequest(request.envelope)
   t.is(accepted.status, 'accepted')
   t.is(network.getStatus().reservedBytes, 512)
+  const lowered = await network.setParticipation({ enabled: true, capacityBytes: 256 })
+  t.is(lowered.enabled, true)
+  t.is(lowered.capacityBytes, 256)
+  t.is(lowered.reservedBytes, 0, 'lowering the disk policy releases oversized archive reservations')
 
   const optedOut = await network.setParticipation({ enabled: false })
   t.is(optedOut.enabled, false)
@@ -477,6 +481,49 @@ test('archive participation restores retained pledges and expiry timers after re
   t.is(restarted.getStatus().acceptedRequests, 0)
   t.is(restarted.getStatus().reservedBytes, 0)
   t.is(restartedScoped.released.length, 1)
+})
+
+test('disabled persisted retention policy releases reservations before archive startup', async (t) => {
+  let state = null
+  const repository = {
+    async load () { return state == null ? null : structuredClone(state) },
+    async save (next) { state = structuredClone(next) },
+  }
+  const pledge = createArchivePledge({
+    archivistId: volunteer.publicKey,
+    publicationId,
+    renditionId,
+    ranges,
+    retentionUntil: 2_000,
+    uploadCeilingBytes: 1024,
+    issuedAt: 1_000,
+    nonce: 'disabled-restart',
+    keyPair: volunteer,
+  })
+  const policy = createArchivePolicy({ capacityBytes: 1024, now: () => 1_000, repository })
+  await policy.ready
+  t.is((await policy.reserve({
+    pledgeId: pledge.pledgeId,
+    bytes: 512,
+    expiresAt: 2_000,
+    pledgeEnvelope: pledge.envelope,
+  })).accepted, true)
+
+  const scoped = scopedRecorder()
+  const restartedPolicy = createArchivePolicy({ capacityBytes: 1024, now: () => 1_000, repository })
+  const restarted = createPermissionlessArchiveNetwork({
+    keyPair: volunteer,
+    now: () => 1_000,
+    enabled: false,
+    capacityBytes: 1024,
+    scopedNetwork: scoped,
+    archivePolicy: restartedPolicy,
+  })
+  await restarted.ready
+
+  t.is((await restartedPolicy.snapshot()).reservedBytes, 0)
+  t.is(scoped.retained.length, 0)
+  t.is(scoped.released.length, 1)
 })
 
 test('archive participation policy persists across backend restarts', async (t) => {

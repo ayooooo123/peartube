@@ -30,7 +30,9 @@ test('chaos: migration killed while running before checkpoint retries from prior
 
 test('chaos: offload assessment killed before confirmation retains source and fails closed', { timeout: TIMEOUT_MS * 2 }, async (t) => {
   const result = await run(t, 'offload-assessment-before-confirmation')
-  assert.deepEqual(result.confirmation, { accepted: false, reason: 'assessment-not-found' })
+  assert.equal(result.confirmation.accepted, false)
+  assert.equal(result.confirmation.reason, 'assessment-not-found')
+  assert.equal(result.confirmation.errorCode, 'SOURCE_OFFLOAD_ASSESSMENT_NOT_FOUND')
   assert.equal(result.sourceRetained, true)
 })
 

@@ -610,15 +610,23 @@ const encoding22 = {
 // @peartube/provision-publisher-catalog-response
 const encoding23 = {
   preencode(state, m) {
-    state.end++ // max flag is 4 so always one byte
+    state.end++ // max flag is 32 so always one byte
     c.string.preencode(state, m.publisherId)
     c.buffer.preencode(state, m.catalogBootstrapKey)
 
     if (m.errorCode) c.string.preencode(state, m.errorCode)
     if (m.error) c.string.preencode(state, m.error)
+    c.buffer.preencode(state, m.localWriterKey)
+    c.buffer.preencode(state, m.localSignerKey)
   },
   encode(state, m) {
-    const flags = (m.success ? 1 : 0) | (m.errorCode ? 2 : 0) | (m.error ? 4 : 0)
+    const flags =
+      (m.success ? 1 : 0) |
+      (m.errorCode ? 2 : 0) |
+      (m.error ? 4 : 0) |
+      (m.writable ? 8 : 0) |
+      (m.namespaceInitialized ? 16 : 0) |
+      (m.admitted ? 32 : 0)
 
     c.uint.encode(state, flags)
     c.string.encode(state, m.publisherId)
@@ -626,6 +634,8 @@ const encoding23 = {
 
     if (m.errorCode) c.string.encode(state, m.errorCode)
     if (m.error) c.string.encode(state, m.error)
+    c.buffer.encode(state, m.localWriterKey)
+    c.buffer.encode(state, m.localSignerKey)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -635,7 +645,12 @@ const encoding23 = {
       publisherId: c.string.decode(state),
       catalogBootstrapKey: c.buffer.decode(state),
       errorCode: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      error: (flags & 4) !== 0 ? c.string.decode(state) : null
+      error: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      localWriterKey: c.buffer.decode(state),
+      localSignerKey: c.buffer.decode(state),
+      writable: (flags & 8) !== 0,
+      namespaceInitialized: (flags & 16) !== 0,
+      admitted: (flags & 32) !== 0
     }
   }
 }
@@ -5835,7 +5850,82 @@ const encoding194 = {
 }
 
 // @peartube/set-network-policy-request
-const encoding195 = encoding194
+const encoding195 = {
+  preencode(state, m) {
+    const flags =
+      (m.uploadPermission ? 1 : 0) |
+      (m.meteredNetwork ? 2 : 0) |
+      (m.backgroundMode ? 4 : 0) |
+      (m.diskCeilingBytes ? 8 : 0) |
+      (m.uploadCeilingBytes ? 16 : 0) |
+      (m.diskCeilingBytesPresent ? 32 : 0) |
+      (m.uploadCeilingBytesPresent ? 64 : 0) |
+      (m.retentionMode ? 128 : 0) |
+      (m.followedPublishersJson ? 256 : 0) |
+      (m.followedIndexesJson ? 512 : 0) |
+      (m.trustedModerationFeedsJson ? 1024 : 0) |
+      (m.aiAnalysis ? 2048 : 0)
+
+    c.uint.preencode(state, flags)
+
+    if (m.uploadPermission) c.string.preencode(state, m.uploadPermission)
+    if (m.meteredNetwork) c.string.preencode(state, m.meteredNetwork)
+    if (m.backgroundMode) c.string.preencode(state, m.backgroundMode)
+    if (m.diskCeilingBytes) c.uint.preencode(state, m.diskCeilingBytes)
+    if (m.uploadCeilingBytes) c.uint.preencode(state, m.uploadCeilingBytes)
+    if (m.retentionMode) c.string.preencode(state, m.retentionMode)
+    if (m.followedPublishersJson) c.string.preencode(state, m.followedPublishersJson)
+    if (m.followedIndexesJson) c.string.preencode(state, m.followedIndexesJson)
+    if (m.trustedModerationFeedsJson) c.string.preencode(state, m.trustedModerationFeedsJson)
+    if (m.aiAnalysis) c.string.preencode(state, m.aiAnalysis)
+  },
+  encode(state, m) {
+    const flags =
+      (m.uploadPermission ? 1 : 0) |
+      (m.meteredNetwork ? 2 : 0) |
+      (m.backgroundMode ? 4 : 0) |
+      (m.diskCeilingBytes ? 8 : 0) |
+      (m.uploadCeilingBytes ? 16 : 0) |
+      (m.diskCeilingBytesPresent ? 32 : 0) |
+      (m.uploadCeilingBytesPresent ? 64 : 0) |
+      (m.retentionMode ? 128 : 0) |
+      (m.followedPublishersJson ? 256 : 0) |
+      (m.followedIndexesJson ? 512 : 0) |
+      (m.trustedModerationFeedsJson ? 1024 : 0) |
+      (m.aiAnalysis ? 2048 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.uploadPermission) c.string.encode(state, m.uploadPermission)
+    if (m.meteredNetwork) c.string.encode(state, m.meteredNetwork)
+    if (m.backgroundMode) c.string.encode(state, m.backgroundMode)
+    if (m.diskCeilingBytes) c.uint.encode(state, m.diskCeilingBytes)
+    if (m.uploadCeilingBytes) c.uint.encode(state, m.uploadCeilingBytes)
+    if (m.retentionMode) c.string.encode(state, m.retentionMode)
+    if (m.followedPublishersJson) c.string.encode(state, m.followedPublishersJson)
+    if (m.followedIndexesJson) c.string.encode(state, m.followedIndexesJson)
+    if (m.trustedModerationFeedsJson) c.string.encode(state, m.trustedModerationFeedsJson)
+    if (m.aiAnalysis) c.string.encode(state, m.aiAnalysis)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      uploadPermission: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      meteredNetwork: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      backgroundMode: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      diskCeilingBytes: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
+      uploadCeilingBytes: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
+      diskCeilingBytesPresent: (flags & 32) !== 0,
+      uploadCeilingBytesPresent: (flags & 64) !== 0,
+      retentionMode: (flags & 128) !== 0 ? c.string.decode(state) : null,
+      followedPublishersJson: (flags & 256) !== 0 ? c.string.decode(state) : null,
+      followedIndexesJson: (flags & 512) !== 0 ? c.string.decode(state) : null,
+      trustedModerationFeedsJson: (flags & 1024) !== 0 ? c.string.decode(state) : null,
+      aiAnalysis: (flags & 2048) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
 
 // @peartube/set-network-policy-response
 const encoding196 = encoding66

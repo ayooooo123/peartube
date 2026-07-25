@@ -11,8 +11,10 @@ import { Electroview } from 'electrobun/view'
 import { Buffer } from 'buffer'
 import type {
   PearTubeRPC,
-  PublisherBeginIntentParams,
   PublisherPreparedRecord,
+  PublisherProvisionResponse,
+  PublisherSignedRecord,
+  PublisherSubmitResponse,
 } from '../shared/rpc-types'
 
 
@@ -29,10 +31,104 @@ if (typeof (globalThis as any).global === 'undefined') {
   ;(globalThis as any).global = globalThis
 }
 
-// ── Electrobun RPC (minimal — just for lifecycle) ───────────────────────
+type PublisherBackendRelay = {
+  provisionPublisherCatalog(request: {
+    publisherId: string
+    genesisRootKey: Uint8Array
+  }): Promise<Omit<PublisherProvisionResponse, 'catalogBootstrapKey' | 'localWriterKey' | 'localSignerKey'> & {
+    catalogBootstrapKey: Uint8Array
+    localWriterKey: Uint8Array
+    localSignerKey: Uint8Array
+  }>
+  preparePublisherRootOperation(request: Omit<
+    PublisherPreparedRecord,
+    'success' | 'unsignedBytes' | 'candidateRecordId' | 'signerPublicKey' |
+    'bodyLength' | 'expiresAt' | 'error'
+  > & {
+    signerPublicKey: Uint8Array
+    displaySummaryJson: string
+    expiresInMs: number
+  }): Promise<Omit<PublisherPreparedRecord, 'unsignedBytes' | 'candidateRecordId' | 'signerPublicKey'> & {
+    unsignedBytes: Uint8Array
+    candidateRecordId: Uint8Array
+    signerPublicKey: Uint8Array
+  }>
+  submitPublisherRootOperation(request: Omit<
+    PublisherSignedRecord,
+    'unsignedBytes' | 'candidateRecordId' | 'signer' | 'signerPublicKey' | 'signature' | 'allowedSigners'
+  > & {
+    unsignedBytes: Uint8Array
+    candidateRecordId: Uint8Array
+    signer: Uint8Array
+    signerPublicKey: Uint8Array
+    signature: Uint8Array
+    allowedSigners?: Uint8Array[] | null
+  }): Promise<Omit<
+    PublisherSubmitResponse,
+    'recordId' | 'transitionId' | 'signer' | 'signerPublicKey' | 'signature'
+  > & {
+    recordId: Uint8Array
+    transitionId?: Uint8Array | null
+    signer: Uint8Array
+    signerPublicKey: Uint8Array
+    signature: Uint8Array
+  }>
+}
+
+let publisherBackendRelay: PublisherBackendRelay | null = null
+
+// ── Electrobun RPC (minimal lifecycle plus public backend record relay) ──
 const rpc = Electroview.defineRPC<PearTubeRPC>({
   handlers: {
-    requests: {},
+    requests: {
+      async publisherProvisionCatalog(request) {
+        if (!publisherBackendRelay) throw new Error('Publisher backend relay unavailable')
+        const response = await publisherBackendRelay.provisionPublisherCatalog({
+          publisherId: request.publisherId,
+          genesisRootKey: new Uint8Array(request.genesisRootKey),
+        })
+        return {
+          ...response,
+          catalogBootstrapKey: Array.from(response.catalogBootstrapKey),
+          localWriterKey: Array.from(response.localWriterKey),
+          localSignerKey: Array.from(response.localSignerKey),
+        }
+      },
+      async publisherPrepareRootOperation(request) {
+        if (!publisherBackendRelay) throw new Error('Publisher backend relay unavailable')
+        const response = await publisherBackendRelay.preparePublisherRootOperation({
+          ...request,
+          body: new Uint8Array(request.body),
+          signerPublicKey: new Uint8Array(request.signerPublicKey),
+        })
+        return {
+          ...response,
+          unsignedBytes: Array.from(response.unsignedBytes),
+          candidateRecordId: Array.from(response.candidateRecordId),
+          signerPublicKey: Array.from(response.signerPublicKey),
+        }
+      },
+      async publisherSubmitRootOperation(request) {
+        if (!publisherBackendRelay) throw new Error('Publisher backend relay unavailable')
+        const response = await publisherBackendRelay.submitPublisherRootOperation({
+          ...request,
+          unsignedBytes: new Uint8Array(request.unsignedBytes),
+          candidateRecordId: new Uint8Array(request.candidateRecordId),
+          signer: new Uint8Array(request.signer),
+          signerPublicKey: new Uint8Array(request.signerPublicKey),
+          signature: new Uint8Array(request.signature),
+          allowedSigners: request.allowedSigners?.map((key) => new Uint8Array(key)) ?? request.allowedSigners,
+        })
+        return {
+          ...response,
+          recordId: Array.from(response.recordId),
+          transitionId: response.transitionId ? Array.from(response.transitionId) : response.transitionId,
+          signer: Array.from(response.signer),
+          signerPublicKey: Array.from(response.signerPublicKey),
+          signature: Array.from(response.signature),
+        }
+      },
+    },
     messages: {},
   },
 })
@@ -103,67 +199,6 @@ function getIpcPort(): Promise<number> {
   return ipcPortPromise
 }
 
-function createPublisherSignerProxy(requests: typeof rpc.proxy.request) {
-  return Object.freeze({
-    async beginUserIntent(request: Omit<PublisherBeginIntentParams, 'body'> & { body: Uint8Array }) {
-      const intent = await requests.publisherBeginUserIntent({
-        ...request,
-        body: Array.from(request.body),
-      })
-      return {
-        intentId: intent.intentId,
-        signerPublicKey: new Uint8Array(intent.signerPublicKey),
-      }
-    },
-
-    async signPreparedRecord(
-      intentId: string,
-      prepared: Omit<
-        PublisherPreparedRecord,
-        'unsignedBytes' | 'candidateRecordId' | 'signerPublicKey'
-      > & {
-        unsignedBytes: Uint8Array
-        candidateRecordId: Uint8Array
-        signerPublicKey: Uint8Array
-      },
-    ) {
-      const signed = await requests.publisherSignPreparedRecord({
-        intentId,
-        prepared: {
-          ...prepared,
-          unsignedBytes: Array.from(prepared.unsignedBytes),
-          candidateRecordId: Array.from(prepared.candidateRecordId),
-          signerPublicKey: Array.from(prepared.signerPublicKey),
-        },
-      })
-      return {
-        ...signed,
-        unsignedBytes: new Uint8Array(signed.unsignedBytes),
-        candidateRecordId: new Uint8Array(signed.candidateRecordId),
-        signer: new Uint8Array(signed.signer),
-        signerPublicKey: new Uint8Array(signed.signerPublicKey),
-        signature: new Uint8Array(signed.signature),
-        allowedSigners: signed.allowedSigners?.map((key) => new Uint8Array(key)) ?? signed.allowedSigners,
-      }
-    },
-
-    completeIntent(intentId: string) {
-      void requests.publisherCompleteIntent({ intentId }).catch(() => {})
-    },
-
-    cancelIntent(intentId: string) {
-      void requests.publisherCancelIntent({ intentId }).catch(() => {})
-    },
-  })
-}
-
-async function publisherCreateRoot() {
-  const created = await rpc.proxy.request.publisherCreateRoot({})
-  return {
-    publisherId: created.publisherId,
-    publicKey: new Uint8Array(created.publicKey),
-  }
-}
 
 // ── window.bridge ───────────────────────────────────────────────────────
 const bridge = {
@@ -174,8 +209,18 @@ const bridge = {
   applyUpdate: async () => {},
   appRestart: async () => { window.location.reload() },
   onPearEvent(_name: string, _listener: Function) { return () => {} },
-  publisherCreateRoot,
-  publisherSigner: createPublisherSignerProxy(rpc.proxy.request),
+  registerPublisherBackendRelay(relay: PublisherBackendRelay) {
+    if (publisherBackendRelay) throw new Error('Publisher backend relay is already registered')
+    if (!relay || typeof relay.provisionPublisherCatalog !== 'function' ||
+        typeof relay.preparePublisherRootOperation !== 'function' ||
+        typeof relay.submitPublisherRootOperation !== 'function') {
+      throw new Error('Invalid publisher backend relay')
+    }
+    publisherBackendRelay = Object.freeze(relay)
+  },
+  async ensureLocalPublisher() {
+    return rpc.proxy.request.publisherEnsureLocalCatalog({ action: 'ensure-local-publisher' })
+  },
 
   async startWorker(specifier: string): Promise<boolean> {
     if (ipcSocket?.readyState === WebSocket.OPEN) return true

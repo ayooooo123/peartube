@@ -41,7 +41,10 @@ test('archivist pledge and possession challenge survive adversarial source offlo
         { deviceId: 'phone', physicalDeviceId: 'phone-b', connected: true, fullCopy: true, publisherControlled: true },
       ],
     }),
-    deleteSource: async () => ({ success: true, freedBytes: 1024 }),
+    deleteSource: async ({ authorize }) => {
+      const authorization = await authorize()
+      return authorization.success ? { success: true, freedBytes: 1024 } : authorization
+    },
   })
   const assessment = await manager.createOffloadAssessment({ publicationId })
   t.is((await manager.confirmSourceOffload({

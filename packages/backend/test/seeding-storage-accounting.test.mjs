@@ -175,6 +175,23 @@ test('quota enforcement evicts tracked cache once the cached bytes exceed the li
   t.is(store.storage.compactCalls, 1)
 })
 
+test('network policy applies an exact byte disk ceiling including zero', async (t) => {
+  const store = createStore({ diskUsageBytes: 1, clearDiskUsageBytes: 1 })
+  const manager = new SeedingManager(store, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 20 })
+  await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
+    byteLength: 1,
+    blobId: '3:5:0:1234',
+    blobsCoreKey: coreA
+  })
+
+  await manager.applyNetworkPolicy({ diskCeilingBytes: 0 })
+
+  t.is(manager.getQuotaBudget().maxBytes, 0)
+  t.is(manager.getActiveSeeds().length, 0)
+  t.alike(store.get(Buffer.from(coreA, 'hex')).clearCalls, [{ start: 3, end: 8 }])
+})
+
 test('quota enforcement leaves cache intact when only the user\'s uploads exceed the limit', async (t) => {
   // 10 GB on disk is dominated by the user's own uploaded videos (never tracked
   // as seeds); only 4 GB is cached from the network. Lowering the limit to 5 GB

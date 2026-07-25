@@ -618,35 +618,33 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
           }
         })
 
-        // Initialize
-        const desktopShell = window as Window & {
-          bridge?: { publisherSigner?: unknown }
-        }
-        await platformRPC.initPlatformRPC({
-          publisherSigner: desktopShell.bridge?.publisherSigner,
-        })
-      } else {
+        await platformRPC.initPlatformRPC()
+      }
+
+      // Upload UI cannot become ready until the privileged Bun shell has
+      // provisioned, initialized, and admitted the one local publisher catalog.
+      const publisher = await platformRPC.ensureLocalPublisherCatalog()
+      console.log('[App] Local publisher catalog ready:', publisher.publisherId)
+
+      if (alreadyInitialized) {
         // Already initialized - restore from cache or load fresh
         console.log('[App] RPC already initialized, cached state:', cachedAppState ? 'yes' : 'no')
         setBlobServerPort(platformRPC.getBlobServerPort())
 
         if (cachedAppState) {
-          // State already restored from cache in useState initializers
-          // Just mark as ready immediately for instant navigation
           console.log('[App] Using cached state for instant navigation')
           setReady(true)
           setLoading(false)
-          // Optionally refresh in background to catch any updates
-          // (don't await - let it happen async)
           loadInitialData().catch(() => {})
-          return // Early return since we already set ready/loading
-        } else {
-          // No cache, need to load
-          await loadInitialData()
+          return
         }
+        await loadInitialData()
       }
     } catch (err) {
       console.error('[App] Failed to initialize Pear backend:', err)
+      setReady(false)
+      setLoading(false)
+      return
     }
 
     setReady(true)

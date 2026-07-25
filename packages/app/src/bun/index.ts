@@ -15,7 +15,7 @@ import { existsSync } from 'fs'
 import { execSync } from 'child_process'
 import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
-import { createDesktopPublisherRpcHandlers } from '../../lib/publisher-shell-service'
+import { createPublisherShellService } from '../../lib/publisher-shell-service'
 import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
 
 type LegacyPublisherRootMigrationRequest = {
@@ -89,9 +89,72 @@ const privilegedPublisherSignerBridge = createPublisherSignerBridge({
   runtime: 'desktop-main',
   vault: publisherKeyVault,
 })
-const publisherRequestHandlers = createDesktopPublisherRpcHandlers({
-  vault: publisherKeyVault,
+const publisherShellService = createPublisherShellService({
+  shell: publisherKeyVault,
   signer: privilegedPublisherSignerBridge,
+  async confirmRootOperation(summary) {
+    const response = await Electrobun.Utils.showMessageBox({
+      type: 'question',
+      title: 'Confirm publisher setup',
+      message: summary.action === 'create-publisher-namespace'
+        ? 'Create the local publisher namespace?'
+        : 'Admit this device to publish uploads?',
+      detail: `${JSON.stringify(summary)}\n\nOnly continue if you initiated this exact publisher setup step.`,
+      buttons: ['Confirm publisher operation', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    return response.response === 0
+  },
+  publisherRpc: {
+    async provisionPublisherCatalog(request) {
+      if (!mainWindow) throw new Error('Publisher renderer relay unavailable')
+      const response = await mainWindow.webview.rpc.proxy.request.publisherProvisionCatalog({
+        publisherId: request.publisherId,
+        genesisRootKey: Array.from(request.genesisRootKey),
+      })
+      return {
+        ...response,
+        catalogBootstrapKey: new Uint8Array(response.catalogBootstrapKey),
+        localWriterKey: new Uint8Array(response.localWriterKey),
+        localSignerKey: new Uint8Array(response.localSignerKey),
+      }
+    },
+    async preparePublisherRootOperation(request) {
+      if (!mainWindow) throw new Error('Publisher renderer relay unavailable')
+      const response = await mainWindow.webview.rpc.proxy.request.publisherPrepareRootOperation({
+        ...request,
+        body: Array.from(request.body),
+        signerPublicKey: Array.from(request.signerPublicKey),
+      })
+      return {
+        ...response,
+        unsignedBytes: new Uint8Array(response.unsignedBytes),
+        candidateRecordId: new Uint8Array(response.candidateRecordId),
+        signerPublicKey: new Uint8Array(response.signerPublicKey),
+      }
+    },
+    async submitPublisherRootOperation(request) {
+      if (!mainWindow) throw new Error('Publisher renderer relay unavailable')
+      const response = await mainWindow.webview.rpc.proxy.request.publisherSubmitRootOperation({
+        ...request,
+        unsignedBytes: Array.from(request.unsignedBytes),
+        candidateRecordId: Array.from(request.candidateRecordId),
+        signer: Array.from(request.signer),
+        signerPublicKey: Array.from(request.signerPublicKey),
+        signature: Array.from(request.signature),
+        allowedSigners: request.allowedSigners?.map((key) => Array.from(key)) ?? request.allowedSigners,
+      })
+      return {
+        ...response,
+        recordId: new Uint8Array(response.recordId),
+        transitionId: response.transitionId ? new Uint8Array(response.transitionId) : response.transitionId,
+        signer: new Uint8Array(response.signer),
+        signerPublicKey: new Uint8Array(response.signerPublicKey),
+        signature: new Uint8Array(response.signature),
+      }
+    },
+  },
 })
 let legacyPublisherRootPreflightSettled = false
 
@@ -298,11 +361,8 @@ const appRPC = BrowserView.defineRPC<PearTubeRPC>({
         rendererReady = true
         return { blobServerPort }
       },
-      publisherCreateRoot: async (request) => publisherRequestHandlers.publisherCreateRoot(request),
-      publisherBeginUserIntent: async (request) => publisherRequestHandlers.publisherBeginUserIntent(request),
-      publisherSignPreparedRecord: async (request) => publisherRequestHandlers.publisherSignPreparedRecord(request),
-      publisherCompleteIntent: async (request) => publisherRequestHandlers.publisherCompleteIntent(request),
-      publisherCancelIntent: async (request) => publisherRequestHandlers.publisherCancelIntent(request),
+      publisherEnsureLocalCatalog: async (request) =>
+        publisherShellService.publisherEnsureLocalCatalog(request),
     },
     messages: {
       workerWrite: () => {

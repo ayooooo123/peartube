@@ -1,6 +1,23 @@
 import b4a from 'b4a'
 
-import { hashCanonical } from '../publisher/canonical.js'
+import {
+  createPublicationManifest,
+  createRenditionDescriptor,
+  encodePublicationManifest,
+} from '../assets/index.js'
+import { parseBlobRef } from '../blob-ref.js'
+import {
+  createEntityReference,
+  createMediaClaim,
+  encodeMediaClaimEnvelope,
+} from '../media-graph/index.js'
+import {
+  PUBLISHER_RECORD_TYPES,
+  hashCanonical,
+} from '../publisher/canonical.js'
+
+const CHECKPOINT_KEY = 'migration:publication-v1:checkpoint'
+const CHECKPOINT_VERSION = 1
 
 function hexDigest(domain, body) {
   return b4a.toString(hashCanonical(domain, body), 'hex')
@@ -30,10 +47,9 @@ export function migratePublicationV1(legacy = {}, options = {}) {
   const completed = new Set(options.checkpoint?.completedLegacySourceIds || [])
   const publications = []
   const claims = []
-  const startIndex = options.checkpoint ? 0 : 0
   let processed = 0
 
-  for (let i = startIndex; i < videos.length; i++) {
+  for (let i = 0; i < videos.length; i++) {
     const video = videos[i]
     if (completed.has(video.legacySourceId)) continue
     const basis = { publisherId, legacySourceId: video.legacySourceId, contentHash: video.contentHash, tombstone: video.deleted === true }
@@ -76,4 +92,424 @@ export function migratePublicationV1(legacy = {}, options = {}) {
   }
 
   return { publisherId, publications, claims, checkpoint: { completedLegacySourceIds: Array.from(completed).sort() } }
+}
+
+export class PublicationV1MigrationError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.name = 'PublicationV1MigrationError'
+    this.code = code
+  }
+}
+
+function initialCheckpoint() {
+  return {
+    version: CHECKPOINT_VERSION,
+    status: 'pending',
+    pending: null,
+    completed: [],
+    quarantined: [],
+  }
+}
+
+function validateCheckpoint(value) {
+  if (value == null) return initialCheckpoint()
+  if (!value || value.version !== CHECKPOINT_VERSION ||
+      !['pending', 'running', 'complete', 'failed'].includes(value.status) ||
+      !Array.isArray(value.completed) || !Array.isArray(value.quarantined)) {
+    throw new PublicationV1MigrationError('PUBLICATION_V1_CHECKPOINT_INVALID', 'publication v1 migration checkpoint is invalid')
+  }
+  return {
+    version: CHECKPOINT_VERSION,
+    status: value.status,
+    pending: value.pending || null,
+    completed: value.completed.map(entry => ({ ...entry })),
+    quarantined: value.quarantined.map(entry => ({ ...entry })),
+  }
+}
+
+export function createPublicationV1CheckpointRepository(metaDb, options = {}) {
+  if (!metaDb || typeof metaDb.get !== 'function' || typeof metaDb.put !== 'function') {
+    throw new TypeError('publication v1 checkpoint repository requires metaDb get/put')
+  }
+  const key = options.key || CHECKPOINT_KEY
+  return Object.freeze({
+    async load() {
+      return validateCheckpoint((await metaDb.get(key))?.value)
+    },
+    async save(checkpoint) {
+      const normalized = validateCheckpoint(checkpoint)
+      await metaDb.put(key, normalized)
+      return normalized
+    },
+  })
+}
+
+export function createPublicationV1LegacyRepository({ identityManager, loadChannel } = {}) {
+  if (!identityManager || typeof identityManager.getIdentities !== 'function') {
+    throw new TypeError('publication v1 legacy repository requires identityManager.getIdentities')
+  }
+  if (typeof loadChannel !== 'function') {
+    throw new TypeError('publication v1 legacy repository requires loadChannel')
+  }
+  return Object.freeze({
+    async list() {
+      const sources = []
+      const identities = [...identityManager.getIdentities()]
+        .sort((left, right) => String(left.driveKey).localeCompare(String(right.driveKey)))
+      for (const identity of identities) {
+        const sourceKey = String(identity.driveKey || '').toLowerCase()
+        if (!/^[0-9a-f]{64}$/.test(sourceKey)) {
+          sources.push({
+            source: 'legacy-owner-channel',
+            sourceKey,
+            ownerPublisherId: String(identity.publicKey || ''),
+            video: null,
+          })
+          continue
+        }
+        const channel = await loadChannel(sourceKey, identity)
+        if (!channel || typeof channel.listVideos !== 'function') {
+          throw new PublicationV1MigrationError('PUBLICATION_V1_SOURCE_UNAVAILABLE', `legacy channel ${sourceKey} is unavailable`)
+        }
+        const videos = await channel.listVideos()
+        if (!Array.isArray(videos)) {
+          throw new PublicationV1MigrationError('PUBLICATION_V1_SOURCE_MALFORMED', `legacy channel ${sourceKey} returned an invalid video list`)
+        }
+        for (const video of videos) {
+          sources.push({
+            source: 'legacy-owner-channel',
+            sourceKey,
+            ownerPublisherId: String(identity.publicKey || ''),
+            video: { ...video },
+          })
+        }
+      }
+      return sources.sort((left, right) => {
+        const sourceOrder = left.sourceKey.localeCompare(right.sourceKey)
+        return sourceOrder || String(left.video?.id || '').localeCompare(String(right.video?.id || ''))
+      })
+    },
+  })
+}
+
+function sourceIdentity(source) {
+  return `${String(source?.sourceKey || '').toLowerCase()}:${String(source?.video?.id || '')}`
+}
+
+function malformed(message) {
+  throw new PublicationV1MigrationError('PUBLICATION_V1_SOURCE_MALFORMED', message)
+}
+
+function sourceProvenance(source, parsedBlob) {
+  const video = source.video
+  const provenance = {
+    source: 'legacy-owner-channel',
+    sourceKey: source.sourceKey.toLowerCase(),
+    ownerPublisherId: source.ownerPublisherId.toLowerCase(),
+    legacySourceId: video.id,
+    blobsCoreKey: parsedBlob.blobsCoreKey,
+    blobId: parsedBlob.blobId,
+  }
+  if (typeof video.contentFingerprint === 'string') provenance.contentFingerprint = video.contentFingerprint
+  if (typeof video.mimeType === 'string') provenance.mimeType = video.mimeType
+  if (Number.isSafeInteger(video.uploadedAt) && video.uploadedAt >= 0) provenance.uploadedAt = video.uploadedAt
+  if (typeof video.sourceProvider === 'string') provenance.sourceProvider = video.sourceProvider
+  if (typeof video.sourceVideoId === 'string') provenance.sourceVideoId = video.sourceVideoId
+  return provenance
+}
+
+function normalizeSource(source) {
+  if (!source || source.source !== 'legacy-owner-channel' ||
+      typeof source.sourceKey !== 'string' || !/^[0-9a-f]{64}$/i.test(source.sourceKey) ||
+      typeof source.ownerPublisherId !== 'string' || !/^[0-9a-f]{64}$/i.test(source.ownerPublisherId) ||
+      !source.video || typeof source.video !== 'object') {
+    malformed('legacy publication source descriptor is malformed')
+  }
+  const video = source.video
+  if (typeof video.id !== 'string' || video.id.length < 1 || video.id.length > 256) malformed('legacy publication id is malformed')
+  if (typeof video.title !== 'string' || video.title.length < 1 || video.title.length > 512) malformed('legacy publication title is malformed')
+  if (video.description != null && (typeof video.description !== 'string' || video.description.length > 4096)) {
+    malformed('legacy publication description is malformed')
+  }
+  const parsedBlob = parseBlobRef(video)
+  if (!parsedBlob) malformed('legacy publication blob reference is malformed')
+  const fingerprint = typeof video.contentFingerprint === 'string' && /^sha256:[0-9a-f]{64}$/.test(video.contentFingerprint)
+    ? video.contentFingerprint.slice(7)
+    : hexDigest('peartube.publication-v1.legacy-rendition.v1', {
+        sourceKey: source.sourceKey.toLowerCase(),
+        legacySourceId: video.id,
+        blobsCoreKey: parsedBlob.blobsCoreKey,
+        blobId: parsedBlob.blobId,
+        byteLength: parsedBlob.blob.byteLength,
+      })
+  return {
+    source: {
+      source: 'legacy-owner-channel',
+      sourceKey: source.sourceKey.toLowerCase(),
+      ownerPublisherId: String(source.ownerPublisherId || ''),
+      video: { ...video },
+    },
+    parsedBlob,
+    fingerprint,
+    provenance: sourceProvenance(source, parsedBlob),
+  }
+}
+
+function writerFor(authorization, deviceKeyPair, now) {
+  const signerKey = b4a.toString(deviceKeyPair.publicKey, 'hex')
+  return authorization?.writers?.find(candidate =>
+    candidate.signerKey === signerKey &&
+    candidate.revocation == null &&
+    candidate.expiresAt >= now &&
+    candidate.capabilities?.includes('publish') &&
+    candidate.capabilities?.includes('claim')
+  ) || null
+}
+
+function createMigrationPlan({ normalized, binding, writer, sequence, signedAt, deviceKeyPair }) {
+  const publisherId = b4a.from(binding.publisherId)
+  const { video } = normalized.source
+  const { blob } = normalized.parsedBlob
+  const rendition = createRenditionDescriptor({
+    purpose: 'original',
+    format: typeof video.mimeType === 'string' && video.mimeType ? video.mimeType : 'application/octet-stream',
+    core: {
+      key: normalized.parsedBlob.blobsCoreKey,
+      length: blob.blockOffset + blob.blockLength,
+      treeHash: normalized.fingerprint,
+      byteLength: blob.byteLength,
+    },
+  })
+  const manifest = createPublicationManifest({
+    publisherId,
+    sequence,
+    title: video.title,
+    description: video.description || null,
+    renditions: [rendition],
+    provenance: [{
+      type: 'legacy-publication-v1',
+      ...normalized.provenance,
+      renditionId: rendition.renditionId,
+      start: blob.blockOffset,
+      end: blob.blockOffset + blob.blockLength,
+    }],
+    keyPair: deviceKeyPair,
+    signedAt,
+  })
+  const subject = createEntityReference({
+    entityKind: 'publication',
+    namespace: 'issuer-native',
+    issuerRootKey: publisherId,
+    issuerLocalId: sourceIdentity(normalized.source),
+  })
+  const claim = createMediaClaim({
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [subject],
+    payload: {
+      title: video.title,
+      description: video.description || null,
+      publicationId: manifest.publicationId,
+      provenance: normalized.provenance,
+    },
+    confidence: 1000,
+    issuerSequence: sequence + 1,
+    policyEpoch: writer.admissionPolicyEpoch,
+    keyPair: deviceKeyPair,
+    signedAt,
+  })
+  return {
+    publicationId: manifest.publicationId,
+    claimIds: [claim.claimId],
+    candidates: [{
+      recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
+      sequence,
+      body: {
+        publicationId: b4a.from(manifest.publicationId, 'hex'),
+        manifestId: b4a.from(manifest.body.manifestId, 'hex'),
+        payload: encodePublicationManifest(manifest),
+      },
+    }, {
+      recordType: PUBLISHER_RECORD_TYPES.CLAIM,
+      sequence: sequence + 1,
+      body: {
+        claimId: b4a.from(claim.claimId, 'hex'),
+        claimType: claim.body.claimType,
+        payload: encodeMediaClaimEnvelope(claim.envelope),
+      },
+    }],
+  }
+}
+
+async function projectionsExist(catalog, plan) {
+  if (typeof catalog.getProjection !== 'function') return false
+  if (!await catalog.getProjection('publication', b4a.from(plan.publicationId, 'hex'))) return false
+  for (const claimId of plan.claimIds) {
+    if (!await catalog.getProjection('claim', b4a.from(claimId, 'hex'))) return false
+  }
+  return true
+}
+
+function summary(checkpoint) {
+  return {
+    status: checkpoint.status,
+    importedPublications: checkpoint.completed.length,
+    importedClaims: checkpoint.completed.reduce((count, entry) => count + entry.claimIds.length, 0),
+    quarantined: checkpoint.quarantined.length,
+  }
+}
+
+export function createPublicationV1StartupLifecycle({ migrate, startDiscovery } = {}) {
+  if (typeof migrate !== 'function') throw new TypeError('publication v1 startup lifecycle requires migrate')
+  if (typeof startDiscovery !== 'function') throw new TypeError('publication v1 startup lifecycle requires startDiscovery')
+  let inFlight = null
+  let completed = null
+  let discoveryStarted = false
+
+  const complete = () => {
+    if (completed) return Promise.resolve(completed)
+    if (inFlight) return inFlight
+    inFlight = (async () => {
+      const result = await migrate()
+      if (result?.status !== 'complete') return result
+      if (!discoveryStarted) {
+        await startDiscovery()
+        discoveryStarted = true
+      }
+      completed = result
+      return result
+    })().finally(() => {
+      inFlight = null
+    })
+    return inFlight
+  }
+
+  return Object.freeze({
+    initialize: complete,
+    complete,
+    get ready() { return completed !== null },
+  })
+}
+
+export async function runPublicationV1StartupMigration(options = {}) {
+  const {
+    sourceRepository,
+    checkpointRepository,
+    resolveCatalog,
+    deviceKeyPair,
+    mediaCatalogProjection,
+    afterCatalogCommit,
+  } = options
+  if (!sourceRepository || typeof sourceRepository.list !== 'function') throw new TypeError('publication v1 migration requires sourceRepository.list')
+  if (!checkpointRepository || typeof checkpointRepository.load !== 'function' || typeof checkpointRepository.save !== 'function') {
+    throw new TypeError('publication v1 migration requires checkpointRepository load/save')
+  }
+  if (typeof resolveCatalog !== 'function') throw new TypeError('publication v1 migration requires resolveCatalog')
+  if (!deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) throw new TypeError('publication v1 migration requires deviceKeyPair')
+  const now = typeof options.now === 'function' ? options.now : () => Date.now()
+
+  let checkpoint = await checkpointRepository.load()
+  const sources = await sourceRepository.list()
+  const completed = new Map(checkpoint.completed.map(entry => [entry.sourceKey, entry]))
+  if (sources.length === 0) {
+    checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'complete', pending: null })
+    await mediaCatalogProjection?.rebuild?.()
+    return summary(checkpoint)
+  }
+
+  checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'running' })
+  for (const source of sources) {
+    const sourceKey = sourceIdentity(source)
+    if (completed.has(sourceKey)) continue
+    let normalized
+    try {
+      normalized = normalizeSource(source)
+    } catch (error) {
+      const quarantine = {
+        sourceKey,
+        code: error?.code || 'PUBLICATION_V1_SOURCE_MALFORMED',
+        message: error?.message || 'legacy publication is malformed',
+      }
+      const quarantined = checkpoint.quarantined.filter(entry => entry.sourceKey !== sourceKey)
+      quarantined.push(quarantine)
+      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed', quarantined })
+      throw error
+    }
+
+    const binding = await resolveCatalog(normalized.source)
+    if (!binding) {
+      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
+      return summary(checkpoint)
+    }
+    const catalog = binding.catalog
+    if (!catalog?.writable || typeof catalog.getAuthorizationState !== 'function' ||
+        typeof catalog.createLocalOperation !== 'function' ||
+        typeof catalog.appendBatchAndConfirm !== 'function') {
+      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
+      return summary(checkpoint)
+    }
+    const currentTime = now()
+    const authorization = await catalog.getAuthorizationState()
+    const writer = writerFor(authorization, deviceKeyPair, currentTime)
+    if (!writer || !catalog.localSignerKey || !b4a.equals(catalog.localSignerKey, deviceKeyPair.publicKey)) {
+      checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'pending' })
+      return summary(checkpoint)
+    }
+
+    const pending = checkpoint.pending?.sourceKey === sourceKey ? checkpoint.pending : null
+    const sequence = pending?.sequence ?? writer.lastAcceptedSequence + 1
+    const signedAt = pending?.signedAt ?? currentTime
+    if (!Number.isSafeInteger(sequence) || sequence < writer.firstAcceptedSequence ||
+        !Number.isSafeInteger(signedAt) || signedAt < 0) {
+      throw new PublicationV1MigrationError('PUBLICATION_V1_WRITER_UNAVAILABLE', 'publisher writer sequence is unavailable')
+    }
+    if (!pending) {
+      checkpoint = await checkpointRepository.save({
+        ...checkpoint,
+        pending: {
+          sourceKey,
+          publisherId: b4a.toString(binding.publisherId, 'hex'),
+          sequence,
+          signedAt,
+        },
+      })
+    }
+    const plan = createMigrationPlan({ normalized, binding, writer, sequence, signedAt, deviceKeyPair })
+    let committed = await projectionsExist(catalog, plan)
+    if (!committed) {
+      const operations = []
+      for (const candidate of plan.candidates) {
+        operations.push(await catalog.createLocalOperation({
+          ...candidate,
+          policyEpoch: writer.admissionPolicyEpoch,
+          signedAt,
+        }))
+      }
+      const receipts = await catalog.appendBatchAndConfirm(operations)
+      committed = Array.isArray(receipts) && receipts.length === operations.length &&
+        receipts.every(receipt => receipt?.accepted === true)
+      if (!committed) {
+        await catalog.update?.()
+        committed = await projectionsExist(catalog, plan)
+      }
+      if (!committed) {
+        checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'failed' })
+        throw new PublicationV1MigrationError('PUBLICATION_V1_CATALOG_REJECTED', 'publisher catalog rejected legacy publication migration')
+      }
+      await afterCatalogCommit?.({ sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() })
+    }
+    const entry = { sourceKey, publicationId: plan.publicationId, claimIds: plan.claimIds.slice() }
+    checkpoint = await checkpointRepository.save({
+      ...checkpoint,
+      status: 'running',
+      pending: null,
+      completed: [...checkpoint.completed.filter(value => value.sourceKey !== sourceKey), entry]
+        .sort((left, right) => left.sourceKey.localeCompare(right.sourceKey)),
+    })
+    completed.set(sourceKey, entry)
+  }
+
+  checkpoint = await checkpointRepository.save({ ...checkpoint, status: 'complete', pending: null })
+  await mediaCatalogProjection?.rebuild?.()
+  return summary(checkpoint)
 }

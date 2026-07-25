@@ -17,8 +17,8 @@ import {
   createPersonalRpc,
   createPublisherRootOperationRpc,
 } from './rpc.shared';
-import type { PublisherRootIntentRequest, PublisherSignerBridgeLike, StorageStatsResponse } from './rpc.shared';
-import { createWebRunner, resolveWebPublisherSigner } from './runner.web';
+import type { ProtocolClientLike, PublisherRootIntentRequest, StorageStatsResponse } from './rpc.shared';
+import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
 // Worker specifier for Electron bridge path
@@ -38,8 +38,14 @@ declare global {
       onWorkerStdout(specifier: string, listener: (data: any) => void): () => void;
       onWorkerStderr(specifier: string, listener: (data: any) => void): () => void;
       onWorkerExit(specifier: string, listener: (code: number) => void): () => void;
-      publisherSigner?: PublisherSignerBridgeLike;
-
+      registerPublisherBackendRelay?(relay: NonNullable<ProtocolClientLike['publisher']>): void;
+      ensureLocalPublisher?(): Promise<{
+        status: 'ready';
+        publisherId: string;
+        catalogBootstrapKey: Uint8Array | number[];
+        writable: true;
+        admitted: true;
+      }>;
     };
     PearWorkerClient?: {
       isConnected: boolean;
@@ -171,8 +177,7 @@ function waitForPearWorkerClient(timeoutMs = 10000) {
 // Module state
 let _blobServerPort: number | null = null;
 let _isInitialized = false;
-let injectedPublisherSigner: PublisherSignerBridgeLike | null = null;
-
+let publisherRelayRegistered = false;
 
 const mainRunner = createWebRunner({ connectTransport });
 
@@ -184,7 +189,7 @@ const mainBridge = createPlatformRpcBridge({
     return 'pear-desktop';
   },
   getPublisherSigner() {
-    return injectedPublisherSigner;
+    return null;
   },
 });
 
@@ -208,24 +213,15 @@ export const events = mainBridge.events;
  * This initializes the PearWorkerClient which spawns the worker process.
  * The worker-client.js script must be loaded before calling this.
  */
-export async function initPlatformRPC(
-  options: { publisherSigner?: PublisherSignerBridgeLike } = {},
-): Promise<void> {
+export async function initPlatformRPC(): Promise<void> {
   if (typeof window === 'undefined') {
     throw new Error('Platform RPC can only be initialized in browser context');
   }
-
-  const publisherSigner = options.publisherSigner === window.bridge?.publisherSigner
-    ? resolveWebPublisherSigner(options.publisherSigner, window.bridge?.publisherSigner)
-    : null;
 
   if (_isInitialized && mainBridge.isInitialized()) {
     console.log('[Platform RPC] Already initialized');
     return;
   }
-  injectedPublisherSigner = publisherSigner;
-
-
 
   // Electron bridge path: window.bridge is set by preload.js — skip PearWorkerClient
   // Legacy pear run path: wait for PearWorkerClient from worker-client.js
@@ -237,12 +233,22 @@ export async function initPlatformRPC(
 
   try {
     await mainBridge.init();
+    if (window.bridge?.registerPublisherBackendRelay && !publisherRelayRegistered) {
+      window.bridge.registerPublisherBackendRelay(Object.freeze({
+        provisionPublisherCatalog: (request) =>
+          ensurePublisherProtocolClient().publisher.provisionPublisherCatalog(request),
+        preparePublisherRootOperation: (request) =>
+          ensurePublisherProtocolClient().publisher.preparePublisherRootOperation(request),
+        submitPublisherRootOperation: (request) =>
+          ensurePublisherProtocolClient().publisher.submitPublisherRootOperation(request),
+      }));
+      publisherRelayRegistered = true;
+    }
 
     _blobServerPort = mainBridge.getBlobServerPort();
     console.log('[Platform RPC] Initialized, blobServerPort:', _blobServerPort);
   } catch (err) {
     console.error('[Platform RPC] Failed to initialize:', err);
-    injectedPublisherSigner = null;
     throw err;
   }
 }
@@ -254,14 +260,11 @@ export function terminatePlatformRPC(): void {
   if (!mainBridge.isInitialized()) {
     _isInitialized = false;
     _blobServerPort = null;
-    injectedPublisherSigner = null;
     return;
   }
 
   _isInitialized = false;
   _blobServerPort = null;
-  injectedPublisherSigner = null;
-
 
   void mainBridge.terminate().catch((err) => {
     console.error('[Platform RPC] Failed to terminate:', err);
@@ -310,12 +313,25 @@ function ensurePublisherProtocolClient() {
   return { publisher: client.publisher };
 }
 function createWebPublisherRootOperationRpc() {
-  const publisherSigner = mainBridge.getPublisherSigner();
   return createPublisherRootOperationRpc(
     ensurePublisherProtocolClient,
-    publisherSigner,
-    { runtime: publisherSigner ? 'shell' : 'renderer' },
+    null,
+    { runtime: 'renderer' },
   );
+}
+
+export async function ensureLocalPublisherCatalog() {
+  if (typeof window === 'undefined' || !window.bridge?.ensureLocalPublisher) {
+    throw new Error('Privileged publisher lifecycle is unavailable');
+  }
+  const result = await window.bridge.ensureLocalPublisher();
+  if (result.status !== 'ready' || result.writable !== true || result.admitted !== true) {
+    throw new Error('Publisher catalog is not ready');
+  }
+  return {
+    ...result,
+    catalogBootstrapKey: new Uint8Array(result.catalogBootstrapKey),
+  };
 }
 
 

@@ -18,6 +18,7 @@ const CHALLENGE_FAILURE_CODES = new Set([
 const OFFLOAD_REJECTION_REASONS = new Set([
   'assessment-not-found',
   'nonce-used',
+  'assessment-not-yet-valid',
   'assessment-expired',
   'irrecoverable-risk-not-confirmed',
   'publication-mismatch',

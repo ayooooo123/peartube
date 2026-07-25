@@ -251,6 +251,59 @@ async function serializeCatalogWrite(catalog, task) {
   }
 }
 
+function markUploadCommitState(error, state) {
+  const target = error && typeof error === 'object' ? error : new Error(String(error || 'Upload failed'));
+  try {
+    Object.defineProperty(target, state, { value: true, configurable: false, enumerable: false });
+  } catch {
+    target[state] = true;
+  }
+  return target;
+}
+
+async function catalogOperationsAreAbsent(catalog, operations) {
+  if (typeof catalog?.getOperationReceipt !== 'function') return false;
+  try {
+    const receipts = await Promise.all(operations.map(operation => {
+      const operationId = operation?.recordId || operation?.transitionId;
+      if (!operationId) throw new Error('operation id unavailable');
+      return catalog.getOperationReceipt(operationId);
+    }));
+    return receipts.every(receipt => receipt?.accepted !== true);
+  } catch {
+    return false;
+  }
+}
+
+async function appendImmutablePublication(catalog, signedOperations) {
+  let receipts;
+  try {
+    receipts = await catalog.appendBatchAndConfirm(signedOperations);
+  } catch (error) {
+    if (!await catalogOperationsAreAbsent(catalog, signedOperations)) {
+      throw markUploadCommitState(error, 'uploadCommitUncertain');
+    }
+    throw error;
+  }
+  if (!Array.isArray(receipts) || receipts.length !== signedOperations.length ||
+      receipts.some(receipt => receipt?.accepted !== true)) {
+    const error = new Error('Publisher catalog rejected upload projection');
+    if (receipts?.some?.(receipt => receipt?.accepted === true)) {
+      throw markUploadCommitState(error, 'uploadCommitUncertain');
+    }
+    throw error;
+  }
+  return receipts;
+}
+
+async function rollbackUploadedBlob(channel, blobResult) {
+  if (!channel?.blobs || typeof channel.blobs.clear !== 'function') {
+    throw new Error('Upload rollback is unavailable');
+  }
+  await channel.blobs.clear(blobResult);
+}
+
+
 async function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, runtime = {}) {
   const { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
   if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return metadata;
@@ -378,11 +431,7 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       signedAt: currentTime
     }))
   }
-  const receipts = await catalog.appendBatchAndConfirm(signedOperations)
-  if (!Array.isArray(receipts) || receipts.length !== signedOperations.length ||
-      receipts.some(receipt => receipt?.accepted !== true)) {
-    throw new Error('Publisher catalog rejected upload projection')
-  }
+  await appendImmutablePublication(catalog, signedOperations)
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
     manifestId: manifest.body.manifestId,
@@ -392,8 +441,12 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
     claimIds: claims.map(claim => claim.claimId),
     manifest
   };
-  await mediaCatalogProjection?.rebuild?.();
-  await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
+  try {
+    await mediaCatalogProjection?.rebuild?.();
+    await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
+  } catch (error) {
+    throw markUploadCommitState(error, 'uploadCommitSucceeded');
+  }
   return metadata;
   });
 }
@@ -507,6 +560,8 @@ export function createUploadManager({
      * @returns {Promise<UploadResult>}
      */
     async uploadFromPath(channel, filePath, options, fs, onProgress) {
+      let blobResult = null;
+      let immutableCommitConfirmed = false;
 
       try {
         if (!channel.blobs) {
@@ -567,7 +622,7 @@ export function createUploadManager({
         let lastProgressUpdate = Date.now();
 
         // Use streaming upload for large files
-        const blobResult = await new Promise((resolve, reject) => {
+        blobResult = await new Promise((resolve, reject) => {
           const writeStream = channel.blobs.createWriteStream();
           const readStream = fs.createReadStream(filePath);
 
@@ -606,7 +661,6 @@ export function createUploadManager({
         const avgSpeed = fileSize / totalTime;
         console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
 
-        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
 
         // Complete the validated metadata with generated upload values
         buildVideoMetadata(
@@ -620,6 +674,8 @@ export function createUploadManager({
           ...publicationRuntime,
           publisherId: options.publisherId
         });
+        immutableCommitConfirmed = Boolean(metadata.immutablePublication);
+        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {
@@ -634,6 +690,14 @@ export function createUploadManager({
           metadata
         };
       } catch (err) {
+        if (blobResult && !immutableCommitConfirmed &&
+            err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
+          try {
+            await rollbackUploadedBlob(channel, blobResult);
+          } catch {
+            err = new Error('Upload failed and rollback could not be completed');
+          }
+        }
         console.error('[Upload] Failed:', err.message);
         return {
           success: false,
@@ -652,6 +716,8 @@ export function createUploadManager({
      * @returns {Promise<UploadResult>}
      */
     async uploadFromBuffer(channel, buffer, options, onProgress) {
+      let blobResult = null;
+      let immutableCommitConfirmed = false;
 
       try {
         if (!channel.blobs) {
@@ -670,13 +736,12 @@ export function createUploadManager({
         console.log(`[Upload] Starting buffer upload (${(fileSize / 1024 / 1024).toFixed(2)} MB), MIME: ${mimeType}`);
 
         // Store video bytes in Hyperblobs
-        const blobResult = await channel.putBlob(buffer);
+        blobResult = await channel.putBlob(buffer);
 
         if (onProgress) {
           onProgress(100, fileSize, fileSize);
         }
 
-        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
 
         // Complete the validated metadata with generated upload values
         buildVideoMetadata(
@@ -690,6 +755,8 @@ export function createUploadManager({
           ...publicationRuntime,
           publisherId: options.publisherId
         });
+        immutableCommitConfirmed = Boolean(metadata.immutablePublication);
+        await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {
@@ -704,6 +771,14 @@ export function createUploadManager({
           metadata
         };
       } catch (err) {
+        if (blobResult && !immutableCommitConfirmed &&
+            err?.uploadCommitSucceeded !== true && err?.uploadCommitUncertain !== true) {
+          try {
+            await rollbackUploadedBlob(channel, blobResult);
+          } catch {
+            err = new Error('Upload failed and rollback could not be completed');
+          }
+        }
         console.error('[Upload] Failed:', err.message);
         return {
           success: false,

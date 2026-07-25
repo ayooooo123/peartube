@@ -18,6 +18,8 @@ import {
   isPlaybackActive,
   loadChannel,
   shutdownBackend,
+  resumeNetworking,
+  suspendNetworking,
 } from './storage.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
@@ -25,12 +27,26 @@ import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
 import { getOrCreateDurableOperabilityServices } from './api/operability.js'
+import {
+  assertNetworkPolicyRuntimeSupported,
+  createNetworkPolicyRuntime,
+  createPolicyApi,
+  loadNetworkPolicy,
+  resolveNetworkPolicyForEnvironment,
+} from './api/policy.js'
 import { createIdentityManager } from './identity.js';
 import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
 import { createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
+import {
+  createPublicationV1CheckpointRepository,
+  createPublicationV1LegacyRepository,
+  createPublicationV1StartupLifecycle,
+  runPublicationV1StartupMigration,
+} from './migrations/publication-v1.js'
+import { derivePublisherId } from './publisher/index.js'
 import {
   authorizeArchiveRequestFromManifestStore,
   createArchiveStore,
@@ -234,6 +250,7 @@ export async function createBackendContext(config) {
     peerScorer = null,
     seedPin = {},
     archive = {},
+    networkPolicy = {},
     ipcLog: _ipcLog,
     onMediaGraphUpdate,
   } = config;
@@ -393,6 +410,20 @@ export async function createBackendContext(config) {
 
   try {
   // Phase 2: Create managers (synchronous, fast)
+  const networkPolicyStore = ctx.metaDb
+  const initialNetworkPolicy = await loadNetworkPolicy({
+    store: networkPolicyStore,
+    defaults: networkPolicy,
+  })
+  assertNetworkPolicyRuntimeSupported(initialNetworkPolicy)
+  const initialNetworkEnvironment = {
+    metered: network.metered === true,
+    background: false,
+  }
+  const initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
+    initialNetworkPolicy,
+    initialNetworkEnvironment,
+  )
   const deviceKeyPair = ctx.swarm?.keyPair
   const deviceSigner = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
     ? Object.freeze({
@@ -429,7 +460,6 @@ export async function createBackendContext(config) {
   ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
   ctx.assetManifestStore = mediaCatalogProjection.assetManifestStore
   lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
-  await mediaCatalogProjection.rebuild()
   scopedNetwork = createScopedNetworkRuntime({
     swarm: ctx.swarm,
     store: ctx.store,
@@ -447,10 +477,10 @@ export async function createBackendContext(config) {
       }
     },
     retainArchiveCore,
+    initialNetworkPolicy: initialRuntimeNetworkPolicy,
   })
   ctx.scopedNetwork = scopedNetwork
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
-  await scopedNetwork.start()
   const configuredOperabilityServices = config.operability?.services
     ? await Promise.resolve(config.operability.services)
     : config.operability?.servicesPromise
@@ -480,6 +510,9 @@ export async function createBackendContext(config) {
   })
   await archivePolicy.ready
 
+  const desiredArchiveParticipationEnabled =
+    archive.enabled !== false &&
+    initialNetworkPolicy.retentionMode === 'archive-pledges'
   const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
     ? createPermissionlessArchiveNetwork({
         keyPair: deviceKeyPair,
@@ -494,7 +527,7 @@ export async function createBackendContext(config) {
             await ctx.metaDb.put(archiveParticipationStateKey, state)
           },
         },
-        enabled: archive.enabled,
+        enabled: false,
         capacityBytes: archive.capacityBytes,
         maxRequestBytes: archive.maxRequestBytes,
         diagnostics: archiveDiagnostics,
@@ -601,6 +634,7 @@ export async function createBackendContext(config) {
 
   // Phase 5: Initialize seeding manager (fast - just loads config from db)
   await seedingManager.init();
+  await seedingManager.applyNetworkPolicy(initialNetworkPolicy)
   await appendDebugLine('[orchestrator] seedingManager.init done')
   ipcLog('[orchestrator] seedingManager.init done')
 
@@ -634,10 +668,96 @@ export async function createBackendContext(config) {
   await appendDebugLine('[orchestrator] loadIdentities done')
   ipcLog('[orchestrator] loadIdentities done')
 
+  const publicationV1SourceRepository = createPublicationV1LegacyRepository({
+    identityManager,
+    loadChannel: (driveKey, identity) => loadChannel(ctx, driveKey, {
+      preferWritable: true,
+      deferPublicProjection: true,
+      writerKeyName: identity?.channelWriterKeyName || null,
+    }),
+  })
+  const publicationV1CheckpointRepository = createPublicationV1CheckpointRepository(ctx.metaDb)
+  let networkPolicyRuntime = null
+  let pendingNetworkPolicy = initialNetworkPolicy
+  const publicationV1Startup = createPublicationV1StartupLifecycle({
+    migrate: () => runPublicationV1StartupMigration({
+      sourceRepository: publicationV1SourceRepository,
+      checkpointRepository: publicationV1CheckpointRepository,
+      resolveCatalog: async source => {
+        const genesisRootKey = b4a.from(source.ownerPublisherId, 'hex')
+        const publisherId = derivePublisherId(genesisRootKey)
+        try {
+          return await catalogRegistry.resolve(publisherId)
+        } catch (error) {
+          if (error?.code === 'PUBLISHER_CATALOG_UNAVAILABLE' ||
+              /PUBLISHER_CATALOG_UNAVAILABLE/.test(error?.message || '')) return null
+          throw error
+        }
+      },
+      deviceKeyPair,
+      mediaCatalogProjection,
+    }),
+    startDiscovery: async () => {
+      await scopedNetwork.start()
+      if (networkPolicyRuntime) {
+        await networkPolicyRuntime.start(pendingNetworkPolicy)
+      } else if (permissionlessArchiveNetwork && desiredArchiveParticipationEnabled) {
+        await permissionlessArchiveNetwork.setParticipation({
+          enabled: true,
+          capacityBytes: archive.capacityBytes,
+          maxRequestBytes: archive.maxRequestBytes,
+          acceptanceProbability: archive.acceptanceProbability,
+        })
+      }
+    },
+  })
+  let startupMayCommitStoredProtocol = false
+  const completePublicationV1Migration = async () => {
+    const migration = await publicationV1Startup.complete()
+    ctx.publicationV1Migration = migration
+    if (migration?.status === 'complete' && startupMayCommitStoredProtocol) {
+      ctx.storedProtocol?.commit()
+    }
+    return migration
+  }
+  ctx.completePublicationV1Migration = completePublicationV1Migration
+  lifecycle.own('publication v1 migration hook', () => {
+    if (ctx.completePublicationV1Migration === completePublicationV1Migration) {
+      ctx.completePublicationV1Migration = null
+    }
+  })
+  await completePublicationV1Migration()
+
   // Open the active identity's private multi-writer personal store (subscriptions,
   // playlists, watch history, settings) and expose it on ctx. Best-effort: a
   // failure here must not block backend startup.
   await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
+
+  networkPolicyRuntime = createNetworkPolicyRuntime({
+    initialPolicy: initialNetworkPolicy,
+    scopedNetwork,
+    seedingManager,
+    archiveNetwork: archive.enabled === false ? null : permissionlessArchiveNetwork,
+    ...initialNetworkEnvironment,
+    suspendTransport: suspendNetworking,
+    resumeTransport: resumeNetworking,
+  })
+  if (publicationV1Startup.ready) await networkPolicyRuntime.start()
+  ctx.networkPolicyRuntime = networkPolicyRuntime
+  ctx.networkPolicyStore = networkPolicyStore
+  ctx.onNetworkPolicyChange = async policy => {
+    pendingNetworkPolicy = policy
+    if (!publicationV1Startup.ready) {
+      return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
+    }
+    return networkPolicyRuntime.apply(policy)
+  }
+  const policyApi = createPolicyApi({
+    store: networkPolicyStore,
+    initialPolicy: initialNetworkPolicy,
+    onPolicyChange: ctx.onNetworkPolicyChange,
+    validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
+  })
 
   // Phase 6: Create the universal API over the single scoped P2P runtime.
   const api = createApi({
@@ -648,6 +768,8 @@ export async function createBackendContext(config) {
     catalogRegistry,
     scopedNetwork,
     permissionlessArchiveNetwork,
+    policyApi,
+    networkPolicyRuntime,
   });
 
 
@@ -680,7 +802,8 @@ export async function createBackendContext(config) {
   // The marker is the durable readiness commit. Keep it last: identities,
   // managers, migrations, seed-pin, and discovery must all initialize before a
   // later host is allowed to treat this state as fully written by this version.
-  ctx.storedProtocol?.commit()
+  startupMayCommitStoredProtocol = true
+  if (publicationV1Startup.ready) ctx.storedProtocol?.commit()
 
   // Return result - heavy channel warming happens in background
   const result = {

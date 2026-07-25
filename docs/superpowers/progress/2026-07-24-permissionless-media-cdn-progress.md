@@ -97,15 +97,21 @@ Post-plan archive/offload hardening is also complete:
 
 The post-hardening physical Android rerun is complete on the attached arm64 device. A clean JDK 17 build installed and launched the refreshed app; the first live pass exposed Bare's missing `AbortController` global during backend startup and an omitted pairing API spread that made profile `listDevices` fail through HRPC. Both blockers now have focused regressions, regenerated backend bundles, and physical-device confirmation: the backend reaches `BACKEND READY`, `SmokeChannel` survives restart, and the profile resolves its local device without an error banner.
 
-Fresh final verification:
+Final release verification also caught and fixed a fail-open source-offload clock path: confirmations now reject clocks earlier than the persisted assessment issue time with a structured diagnostic code. The stale async archive diagnostics and crash fixtures now await durable operations, validate exact one-block possession proofs, and exercise both Node and Bare process recovery.
+
+The final combative release review found six real production-wiring defects despite the green component suites. All are closed: publication-v1 migration is now a durable startup gate; the privileged publisher shell owns fresh/upgrade catalog provisioning, writer admission, canonical confirmation, and root signing; renderer-selected signing semantics are absent; failed immutable upload commits clear newly written blobs without deleting uncertain accepted records; persisted network policy is loaded before manager startup and reconfigures the scoped network, seeding quota, and archive participation paths; omitted HRPC ceilings no longer decode as explicit zero; and source-offload evidence/eligibility/playback state is recollected inside the source-core mutation lock immediately before clear.
+
+Fresh final verification after the release-blocker repairs:
 
 ```text
-app regression suite: 411/411 tests passed
-root npm test: spec 22/22 (309 assertions), backend passed, host 30/30 (91 assertions)
-root npm run typecheck: passed
+integrated migration/publisher/policy/offload focus: 124/124 tests, 710/710 assertions
+app regression suite: 445/445 tests passed
+root npm test: spec 23/23 (313 assertions), backend full suite passed, host 30/30 (91 assertions)
+platform: 37/37 tests passed; supported root TypeScript check passed
 archive/adversarial suite: 11/11 tests (38 assertions) passed
+process crash-recovery matrix: 15/15 passed, including Node and Bare mobile backend restart
 desktop native-addon smoke: passed
-mobile backend bundles and native generated contracts: regenerated and passed
+schema, HRPC, mobile backend bundles, and quarantined Swift contract artifacts: regenerated; native generated contract test 1/1 (9 assertions) passed
 ```
 
 The broad, non-project app `npx tsc --noEmit` command still reports 68 standing diagnostics across 41 legacy UI/dependency/desktop files. The supported root typecheck remains clean.

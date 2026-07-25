@@ -27,11 +27,11 @@ function externalLink() {
 
 function twitchPlayer(parameters, parent) {
   if (!parent) return officialEmbed(null, true)
-  const url = new URL('https://player.twitch.tv/')
-  for (const [name, value] of parameters) url.searchParams.set(name, value)
-  url.searchParams.set('parent', parent)
-  url.searchParams.set('autoplay', 'false')
-  return officialEmbed(url.toString(), true)
+  const embedAddress = new URL('https://player.twitch.tv/')
+  for (const [name, value] of parameters) embedAddress.searchParams.set(name, value)
+  embedAddress.searchParams.set('parent', parent)
+  embedAddress.searchParams.set('autoplay', 'false')
+  return officialEmbed(embedAddress.toString(), true)
 }
 
 function resolveProvider(namespace, identifier, parent) {
@@ -55,11 +55,11 @@ function resolveProvider(namespace, identifier, parent) {
     case 'twitch-clip': {
       let playback = officialEmbed(null, true)
       if (parent) {
-        const url = new URL('https://clips.twitch.tv/embed')
-        url.searchParams.set('clip', identifier)
-        url.searchParams.set('parent', parent)
-        url.searchParams.set('autoplay', 'false')
-        playback = officialEmbed(url.toString(), true)
+        const embedAddress = new URL('https://clips.twitch.tv/embed')
+        embedAddress.searchParams.set('clip', identifier)
+        embedAddress.searchParams.set('parent', parent)
+        embedAddress.searchParams.set('autoplay', 'false')
+        playback = officialEmbed(embedAddress.toString(), true)
       }
       return {
         canonicalUrl: `https://clips.twitch.tv/${encoded}`,

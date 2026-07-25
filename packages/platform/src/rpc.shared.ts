@@ -338,6 +338,11 @@ type PublisherProtocolClient = {
       success: boolean
       publisherId: string
       catalogBootstrapKey: Uint8Array
+      localWriterKey: Uint8Array
+      localSignerKey: Uint8Array
+      writable: boolean
+      namespaceInitialized: boolean
+      admitted: boolean
       errorCode?: string | null
       error?: string | null
     }>

@@ -1,32 +1,15 @@
 /**
  * Electrobun RPC types for PearTube desktop.
  *
- * Binary backend traffic stays on the WebSocket relay. Publisher root
- * authorization is the only typed JSON request surface because it must cross
- * from the renderer into the privileged Bun process.
+ * Binary backend traffic stays on the WebSocket relay. The renderer may ask
+ * Bun for one narrow lifecycle workflow and may relay public backend records,
+ * but it never receives a root signer or chooses root-operation bytes.
  */
 export type PublisherRootRecordType =
   | 'publisher.namespace'
   | 'publisher.writer-admission'
   | 'publisher.writer-revocation'
   | 'publisher.root-transition'
-
-export type PublisherBeginIntentParams = {
-  publisherId: string
-  recordType: PublisherRootRecordType
-  body: number[]
-  displaySummaryJson?: string | null
-  intentExpiresAt: number
-  issuedAt?: number | null
-  expiresAt?: number | null
-  expiresInMs?: number | null
-  userInitiated: true
-}
-
-export type PublisherBeginIntentResponse = {
-  intentId: string
-  signerPublicKey: number[]
-}
 
 export type PublisherPreparedRecord = {
   intentId: string
@@ -57,20 +40,60 @@ export type PublisherSignedRecord = {
   allowedSigners?: number[][] | null
 }
 
-export type PublisherCreateRootResponse = {
+export type PublisherProvisionResponse = {
+  success: boolean
   publisherId: string
-  publicKey: number[]
+  catalogBootstrapKey: number[]
+  localWriterKey: number[]
+  localSignerKey: number[]
+  writable: boolean
+  namespaceInitialized: boolean
+  admitted: boolean
+  errorCode?: string | null
+  error?: string | null
 }
 
-export type PublisherSignerRequestHandlers = {
-  publisherCreateRoot(params: Record<string, never>): Promise<PublisherCreateRootResponse>
-  publisherBeginUserIntent(params: PublisherBeginIntentParams): Promise<PublisherBeginIntentResponse>
-  publisherSignPreparedRecord(params: {
-    intentId: string
-    prepared: PublisherPreparedRecord
-  }): Promise<PublisherSignedRecord>
-  publisherCompleteIntent(params: { intentId: string }): Promise<{ ok: true }>
-  publisherCancelIntent(params: { intentId: string }): Promise<{ ok: true }>
+export type PublisherSubmitResponse = {
+  intentId: string
+  success: boolean
+  valid: boolean
+  complete: boolean
+  reason?: string | null
+  publisherId: string
+  recordType: PublisherRootRecordType
+  recordId: number[]
+  transitionId?: number[] | null
+  signer: number[]
+  signerPublicKey: number[]
+  signature: number[]
+  pendingSignatureCount?: number | null
+  pendingExpiresAt?: number | null
+}
+
+export type PublisherLifecycleResponse = {
+  status: 'ready'
+  publisherId: string
+  catalogBootstrapKey: number[]
+  writable: true
+  admitted: true
+}
+
+export type PublisherLifecycleRequestHandlers = {
+  publisherEnsureLocalCatalog(params: {
+    action: 'ensure-local-publisher'
+  }): Promise<PublisherLifecycleResponse>
+}
+
+type PublisherPrepareRequest = {
+  intentId: string
+  publisherId: string
+  recordType: PublisherRootRecordType
+  signerPublicKey: number[]
+  body: number[]
+  displaySummaryJson: string
+  intentExpiresAt: number
+  issuedAt: number
+  expiresInMs: number
 }
 
 export type PearTubeRPC = {
@@ -79,34 +102,32 @@ export type PearTubeRPC = {
     requests: {
       startWorker: { params: { specifier: string }; response: { ok: boolean } }
       viewReady: { params: Record<string, never>; response: { blobServerPort: number | null } }
-      publisherCreateRoot: {
-        params: Record<string, never>
-        response: PublisherCreateRootResponse
-      }
-      publisherBeginUserIntent: {
-        params: PublisherBeginIntentParams
-        response: PublisherBeginIntentResponse
-      }
-      publisherSignPreparedRecord: {
-        params: { intentId: string; prepared: PublisherPreparedRecord }
-        response: PublisherSignedRecord
-      }
-      publisherCompleteIntent: {
-        params: { intentId: string }
-        response: { ok: true }
-      }
-      publisherCancelIntent: {
-        params: { intentId: string }
-        response: { ok: true }
+      publisherEnsureLocalCatalog: {
+        params: { action: 'ensure-local-publisher' }
+        response: PublisherLifecycleResponse
       }
     }
     messages: {
       workerWrite: { specifier: string; data: number[] }
     }
   }
-  // Handled by Renderer (Bun calls these)
+  // Handled by Renderer (Bun calls these). These methods relay public HRPC
+  // records only; Bun independently constructs and validates every root intent.
   webview: {
-    requests: Record<string, never>
+    requests: {
+      publisherProvisionCatalog: {
+        params: { publisherId: string; genesisRootKey: number[] }
+        response: PublisherProvisionResponse
+      }
+      publisherPrepareRootOperation: {
+        params: PublisherPrepareRequest
+        response: PublisherPreparedRecord
+      }
+      publisherSubmitRootOperation: {
+        params: PublisherSignedRecord
+        response: PublisherSubmitResponse
+      }
+    }
     messages: {
       onWorkerIPC: { specifier: string; data: number[] }
       onWorkerStdout: { specifier: string; data: string }

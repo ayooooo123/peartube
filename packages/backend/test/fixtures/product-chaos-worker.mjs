@@ -7,7 +7,7 @@ import crypto from 'hypercore-crypto'
 import Hyperblobs from 'hyperblobs'
 
 import { createBackend } from '../../src/backend-entry.js'
-import { createArchiveChallenge, createArchiveChallengeResponse, verifyArchiveChallengeResponse } from '../../src/archive/challenge.js'
+import { createArchiveChallenge, createArchiveChallengeResponse, createArchivePossessionProof, verifyArchiveChallengeResponse } from '../../src/archive/challenge.js'
 import { createArchiveManager } from '../../src/archive/manager.js'
 import { createArchivePledge } from '../../src/archive/pledge.js'
 import { createPublicationBatch } from '../../src/assets/publication-batch.js'
@@ -191,18 +191,28 @@ async function migrationBeforeCheckpoint() {
 async function offloadBeforeConfirmation() {
   const publicationId = 'a'.repeat(64)
   if (phase === 'prepare') {
-    const manager = createArchiveManager({ now: () => 100 })
-    const assessment = manager.createOffloadAssessment({ publicationId, evidence: { durable: true }, expiresAt: 200 })
+    const manager = createArchiveManager({
+      now: () => 100,
+      collectEvidence: async () => ({
+        byteLength: 4096,
+        localPhysicalDeviceId: 'desktop-a',
+        publisherDeviceCopies: [
+          { deviceId: 'phone', physicalDeviceId: 'phone-b', connected: true, fullCopy: true, publisherControlled: true },
+        ],
+      }),
+    })
+    const assessment = await manager.createOffloadAssessment({ publicationId })
     await writeJson(controlPath, { assessment, sourceRetained: true })
     return barrier('offload-assessed')
   }
   const control = await readJson(controlPath)
   const manager = createArchiveManager({ now: () => 150 })
-  const confirmation = manager.confirmSourceOffload({
+  const confirmation = await manager.confirmSourceOffload({
     publicationId,
     assessmentId: control.assessment.assessmentId,
     evidenceDigest: control.assessment.evidenceDigest,
     confirmationNonce: control.assessment.confirmationNonce,
+    policyVersion: control.assessment.policyVersion,
     confirmIrrecoverableRisk: true,
   })
   result({ confirmation, sourceRetained: control.sourceRetained })
@@ -369,14 +379,15 @@ function archiveFixture() {
     uploadCeilingBytes: 1024, keyPair: archivist, issuedAt: 100,
   }).envelope
   const challenge = createArchiveChallenge({
-    pledgeEnvelope, auditorEntropy: seed(84), coreKey, range: { start: 0, end: 4 },
+    pledgeEnvelope, auditorEntropy: seed(84), coreKey, range: { start: 0, end: 1 },
     deadline: 200, auditorPublicKey: auditor.publicKey,
   })
+  const proofBytes = b4a.from('bounded-hypercore-proof')
   const response = createArchiveChallengeResponse({
-    challenge, pledgeEnvelope, proof: 'feedface', transportPeerId: hex(transport.publicKey),
+    challenge, pledgeEnvelope, proof: createArchivePossessionProof({ challenge, proofBytes }), transportPeerId: hex(transport.publicKey),
     keyPair: archivist, issuedAt: 100,
   })
-  return { challenge, pledgeEnvelope, response, transportPeerId: hex(transport.publicKey) }
+  return { challenge, pledgeEnvelope, proofBytes, response, transportPeerId: hex(transport.publicKey) }
 }
 
 async function archiveClockJumps() {
@@ -385,7 +396,12 @@ async function archiveClockJumps() {
     await writeJson(controlPath, { responseId: hex(fixture.response.responseId) })
     return barrier('archive-proof-written')
   }
-  const verifyAt = now => verifyArchiveChallengeResponse(fixture.response.envelope, { ...fixture, now })
+  const verifyAt = now => verifyArchiveChallengeResponse(fixture.response.envelope, {
+    ...fixture,
+    now,
+    replayCache: new Set(),
+    verifyProof: async () => true,
+  })
   result({
     inWindow: Boolean(await verifyAt(150)),
     backwardAccepted: Boolean(await verifyAt(50)),
@@ -407,17 +423,33 @@ async function moderationClockJumps() {
   })
 }
 
-function confirmAssessmentAt(createAt, confirmAt) {
+async function confirmAssessmentAt(createAt, confirmAt) {
   let now = createAt
-  const manager = createArchiveManager({ now: () => now })
   const publicationId = 'a'.repeat(64)
-  const assessment = manager.createOffloadAssessment({ publicationId, evidence: { durable: true }, expiresAt: 200 })
+  const evidence = {
+    byteLength: 4096,
+    localPhysicalDeviceId: 'desktop-a',
+    publisherDeviceCopies: [
+      { deviceId: 'phone', physicalDeviceId: 'phone-b', connected: true, fullCopy: true, publisherControlled: true },
+    ],
+  }
+  const manager = createArchiveManager({
+    now: () => now,
+    collectEvidence: async () => evidence,
+    deleteSource: async ({ authorize }) => {
+      const authorization = await authorize()
+      return authorization.success ? { success: true, freedBytes: evidence.byteLength } : authorization
+    },
+    assessmentTtlMs: 100,
+  })
+  const assessment = await manager.createOffloadAssessment({ publicationId })
   now = confirmAt
   return manager.confirmSourceOffload({
     publicationId,
     assessmentId: assessment.assessmentId,
     evidenceDigest: assessment.evidenceDigest,
     confirmationNonce: assessment.confirmationNonce,
+    policyVersion: assessment.policyVersion,
     confirmIrrecoverableRisk: true,
   })
 }
@@ -428,9 +460,9 @@ async function offloadClockJumps() {
     return barrier('offload-token-written')
   }
   result({
-    inWindow: confirmAssessmentAt(100, 150),
-    backward: confirmAssessmentAt(100, 50),
-    forward: confirmAssessmentAt(100, 201),
+    inWindow: await confirmAssessmentAt(100, 150),
+    backward: await confirmAssessmentAt(100, 50),
+    forward: await confirmAssessmentAt(100, 201),
   })
 }
 

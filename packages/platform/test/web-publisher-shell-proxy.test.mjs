@@ -166,12 +166,11 @@ test('trusted web shell proxy authorizes while absent or direct renderer signers
   }
 })
 
-test('web RPC accepts only the window bridge signer identity and selects shell runtime only for it', () => {
+test('web RPC never accepts a renderer signer and only relays public publisher records to Bun', () => {
   const source = fs.readFileSync(path.join(platformRoot, 'src/rpc.web.ts'), 'utf8')
-  assert.match(source, /publisherSigner\?: PublisherSignerBridgeLike/)
-  assert.match(source, /publisherSigner === window\.bridge\?\.publisherSigner/)
-  assert.match(source, /getPublisherSigner\(\)/)
-  assert.match(source, /publisherSigner \? 'shell' : 'renderer'/)
-  assert.match(source, /provisionPublisherCatalog/)
-  assert.doesNotMatch(source, /createPublisherRootOperationRpc\([\s\S]{0,160}null,[\s\S]{0,80}runtime: 'renderer'/)
+  assert.doesNotMatch(source, /publisherSigner\?: PublisherSignerBridgeLike/)
+  assert.doesNotMatch(source, /window\.bridge\?\.publisherSigner/)
+  assert.match(source, /registerPublisherBackendRelay/)
+  assert.match(source, /ensureLocalPublisherCatalog/)
+  assert.match(source, /createPublisherRootOperationRpc\([\s\S]*?null,[\s\S]*?runtime: 'renderer'/)
 })

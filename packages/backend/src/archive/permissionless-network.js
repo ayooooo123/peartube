@@ -437,6 +437,21 @@ export function createPermissionlessArchiveNetwork(options = {}) {
     recordCapacity()
   }
 
+  async function releasePersistedReservations() {
+    await archivePolicy?.ready
+    const snapshot = await archivePolicy?.snapshot?.()
+    for (const reservation of snapshot?.reservations || []) {
+      await archivePolicy.release({ pledgeId: reservation.pledgeId }).catch(() => {})
+      await scopedNetwork.releaseAuthorizedArchive({ archiveId: reservation.pledgeId }).catch(() => {})
+      archiveStore?.putObservation?.({
+        pledgeId: reservation.pledgeId,
+        status: 'pledge-expired',
+        observedAt: now(),
+      })
+    }
+    recordCapacity()
+  }
+
   async function suspendLocalPledges() {
     for (const record of localArchivistPledges.values()) {
       cancelRetentionTimer(record.pledge.pledgeId)
@@ -527,6 +542,11 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         ? acceptanceProbability
         : probability(policy.acceptanceProbability, acceptanceProbability)
       const nextEnabled = policy.enabled === undefined ? enabled : policy.enabled === true
+      const locallyReservedBytes = [...localArchivistPledges.values()]
+        .reduce((total, record) => total + record.bytes, 0)
+      if (nextCapacity < locallyReservedBytes) {
+        await releaseLocalPledges()
+      }
       if (nextCapacity !== capacityBytes) {
         const updated = await archivePolicy?.setCapacity?.(nextCapacity)
         if (updated?.accepted === false) return { ...this.getStatus(), errorCode: 'ARCHIVE_CAPACITY_EXHAUSTED' }
@@ -894,7 +914,8 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   }
   const ready = (async () => {
     await restoreParticipation()
-    await restoreLocalPledges()
+    if (enabled) await restoreLocalPledges()
+    else await releasePersistedReservations()
     if (enabled) await ensureDiscovery()
   })()
   service.ready = ready

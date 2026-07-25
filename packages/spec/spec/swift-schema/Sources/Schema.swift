@@ -11826,18 +11826,22 @@ public struct SetNetworkPolicyRequest {
   public var backgroundMode: String?
   public var diskCeilingBytes: UInt?
   public var uploadCeilingBytes: UInt?
+  public var diskCeilingBytesPresent: Bool
+  public var uploadCeilingBytesPresent: Bool
   public var retentionMode: String?
   public var followedPublishersJson: String?
   public var followedIndexesJson: String?
   public var trustedModerationFeedsJson: String?
   public var aiAnalysis: String?
 
-  public init(uploadPermission: String? = nil, meteredNetwork: String? = nil, backgroundMode: String? = nil, diskCeilingBytes: UInt? = nil, uploadCeilingBytes: UInt? = nil, retentionMode: String? = nil, followedPublishersJson: String? = nil, followedIndexesJson: String? = nil, trustedModerationFeedsJson: String? = nil, aiAnalysis: String? = nil) {
+  public init(uploadPermission: String? = nil, meteredNetwork: String? = nil, backgroundMode: String? = nil, diskCeilingBytes: UInt? = nil, uploadCeilingBytes: UInt? = nil, diskCeilingBytesPresent: Bool = false, uploadCeilingBytesPresent: Bool = false, retentionMode: String? = nil, followedPublishersJson: String? = nil, followedIndexesJson: String? = nil, trustedModerationFeedsJson: String? = nil, aiAnalysis: String? = nil) {
     self.uploadPermission = uploadPermission
     self.meteredNetwork = meteredNetwork
     self.backgroundMode = backgroundMode
     self.diskCeilingBytes = diskCeilingBytes
     self.uploadCeilingBytes = uploadCeilingBytes
+    self.diskCeilingBytesPresent = diskCeilingBytesPresent
+    self.uploadCeilingBytesPresent = uploadCeilingBytesPresent
     self.retentionMode = retentionMode
     self.followedPublishersJson = followedPublishersJson
     self.followedIndexesJson = followedIndexesJson
@@ -11870,11 +11874,13 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     if value.backgroundMode != nil { flags |= 4 }
     if value.diskCeilingBytes != nil { flags |= 8 }
     if value.uploadCeilingBytes != nil { flags |= 16 }
-    if value.retentionMode != nil { flags |= 32 }
-    if value.followedPublishersJson != nil { flags |= 64 }
-    if value.followedIndexesJson != nil { flags |= 128 }
-    if value.trustedModerationFeedsJson != nil { flags |= 256 }
-    if value.aiAnalysis != nil { flags |= 512 }
+    if value.diskCeilingBytesPresent { flags |= 32 }
+    if value.uploadCeilingBytesPresent { flags |= 64 }
+    if value.retentionMode != nil { flags |= 128 }
+    if value.followedPublishersJson != nil { flags |= 256 }
+    if value.followedIndexesJson != nil { flags |= 512 }
+    if value.trustedModerationFeedsJson != nil { flags |= 1024 }
+    if value.aiAnalysis != nil { flags |= 2048 }
 
     Primitive.UInt().preencode(&state, flags)
     if let v = value.uploadPermission { _uploadPermissionCodec.preencode(&state, v) }
@@ -11896,11 +11902,13 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     if value.backgroundMode != nil { flags |= 4 }
     if value.diskCeilingBytes != nil { flags |= 8 }
     if value.uploadCeilingBytes != nil { flags |= 16 }
-    if value.retentionMode != nil { flags |= 32 }
-    if value.followedPublishersJson != nil { flags |= 64 }
-    if value.followedIndexesJson != nil { flags |= 128 }
-    if value.trustedModerationFeedsJson != nil { flags |= 256 }
-    if value.aiAnalysis != nil { flags |= 512 }
+    if value.diskCeilingBytesPresent { flags |= 32 }
+    if value.uploadCeilingBytesPresent { flags |= 64 }
+    if value.retentionMode != nil { flags |= 128 }
+    if value.followedPublishersJson != nil { flags |= 256 }
+    if value.followedIndexesJson != nil { flags |= 512 }
+    if value.trustedModerationFeedsJson != nil { flags |= 1024 }
+    if value.aiAnalysis != nil { flags |= 2048 }
 
     try Primitive.UInt().encode(&state, flags)
     if let v = value.uploadPermission { try _uploadPermissionCodec.encode(&state, v) }
@@ -11922,17 +11930,19 @@ public struct SetNetworkPolicyRequestCodec: Codec {
     let _r2: String? = (flags & 4) != 0 ? try _backgroundModeCodec.decode(&state) : nil
     let _r3: UInt? = (flags & 8) != 0 ? try _diskCeilingBytesCodec.decode(&state) : nil
     let _r4: UInt? = (flags & 16) != 0 ? try _uploadCeilingBytesCodec.decode(&state) : nil
-    let _r5: String? = (flags & 32) != 0 ? try _retentionModeCodec.decode(&state) : nil
-    let _r6: String? = (flags & 64) != 0 ? try _followedPublishersJsonCodec.decode(&state) : nil
-    let _r7: String? = (flags & 128) != 0 ? try _followedIndexesJsonCodec.decode(&state) : nil
-    let _r8: String? = (flags & 256) != 0 ? try _trustedModerationFeedsJsonCodec.decode(&state) : nil
-    let _r9: String? = (flags & 512) != 0 ? try _aiAnalysisCodec.decode(&state) : nil
+    let _r5: String? = (flags & 128) != 0 ? try _retentionModeCodec.decode(&state) : nil
+    let _r6: String? = (flags & 256) != 0 ? try _followedPublishersJsonCodec.decode(&state) : nil
+    let _r7: String? = (flags & 512) != 0 ? try _followedIndexesJsonCodec.decode(&state) : nil
+    let _r8: String? = (flags & 1024) != 0 ? try _trustedModerationFeedsJsonCodec.decode(&state) : nil
+    let _r9: String? = (flags & 2048) != 0 ? try _aiAnalysisCodec.decode(&state) : nil
     return SetNetworkPolicyRequest(
       uploadPermission: _r0,
       meteredNetwork: _r1,
       backgroundMode: _r2,
       diskCeilingBytes: _r3,
       uploadCeilingBytes: _r4,
+      diskCeilingBytesPresent: (flags & 32) != 0,
+      uploadCeilingBytesPresent: (flags & 64) != 0,
       retentionMode: _r5,
       followedPublishersJson: _r6,
       followedIndexesJson: _r7,

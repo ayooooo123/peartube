@@ -355,6 +355,44 @@ export function createScopedNetworkRuntime (options = {}) {
   let status = 'idle'
   let nextRequestId = 1
   let listening = false
+  const hasInitialNetworkPolicy = options.initialNetworkPolicy != null
+  const initialNetworkPolicy = options.initialNetworkPolicy || {}
+  let networkEnabled = hasInitialNetworkPolicy ? initialNetworkPolicy.networkEnabled !== false : true
+  let uploadPermission = hasInitialNetworkPolicy
+    ? String(initialNetworkPolicy.uploadPermission || 'disabled')
+    : 'enabled'
+  let uploadCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.uploadCeilingBytes || 0)
+    : Number.MAX_SAFE_INTEGER
+  let diskCeilingBytes = hasInitialNetworkPolicy
+    ? Number(initialNetworkPolicy.diskCeilingBytes || 0)
+    : Number.MAX_SAFE_INTEGER
+  let uploadAllowed = hasInitialNetworkPolicy
+    ? (initialNetworkPolicy.uploadAllowed ?? (
+        networkEnabled && uploadPermission === 'enabled' && uploadCeilingBytes > 0
+      ))
+    : true
+  let uploadedBytes = 0
+  let networkPolicyEpoch = 0
+
+  function reservePolicyUpload (bytes) {
+    const amount = Number(bytes)
+    if (!uploadAllowed || !networkEnabled || !Number.isSafeInteger(amount) || amount < 0 ||
+        uploadedBytes + amount > uploadCeilingBytes) return null
+    uploadedBytes += amount
+    let committed = false
+    let released = false
+    return {
+      commit () {
+        committed = true
+      },
+      release () {
+        if (released || committed) return
+        released = true
+        uploadedBytes -= amount
+      },
+    }
+  }
 
   function recordProtocolError (scope, peerId, error) {
     recentErrors.push({
@@ -372,6 +410,34 @@ export function createScopedNetworkRuntime (options = {}) {
     return scopes.get(id) || null
   }
 
+  function ensureScopeDiscovery (scope) {
+    if (!networkEnabled || scope.closed) return null
+    if (scope.discovery) {
+      if (scope.discoverySuspended) {
+        scope.discoverySuspended = false
+        void Promise.resolve(scope.discovery.resume?.()).catch(() => {})
+      }
+      return scope.discovery
+    }
+    const discovery = swarm.join(scope.topic, { server: true, client: true })
+    scope.discovery = discovery
+    scope.discoverySuspended = false
+    Promise.resolve(discovery?.flushed?.()).catch(() => {})
+    return discovery
+  }
+
+  async function suspendScopeDiscovery (scope) {
+    if (!scope.discovery || scope.discoverySuspended) return
+    if (typeof scope.discovery.suspend === 'function') {
+      await scope.discovery.suspend()
+      scope.discoverySuspended = true
+      return
+    }
+    await cleanupResource(scope.discovery, ['destroy', 'close'])
+    scope.discovery = null
+    scope.discoverySuspended = false
+  }
+
   function joinScope ({ purpose, topic, scopeId, mode, ...metadata }) {
     const topicBuffer = exactBuffer(topic, 32, 'topic')
     const id = `${purpose}:${topicHex(topicBuffer)}`
@@ -380,7 +446,6 @@ export function createScopedNetworkRuntime (options = {}) {
       scope.modes.add(mode)
       return { scope, created: false }
     }
-    const discovery = swarm.join(topicBuffer, { server: true, client: true })
     scope = {
       id,
       purpose,
@@ -389,16 +454,19 @@ export function createScopedNetworkRuntime (options = {}) {
       scopeId: String(scopeId),
       modes: new Set([mode]),
       sessions: new Map(),
-      discovery,
+      discovery: null,
+      discoverySuspended: false,
       closed: false,
       ...metadata,
     }
     scopes.set(id, scope)
     counters.joinedTopics++
-    Promise.resolve(discovery?.flushed?.()).catch(() => {})
-    for (const [connection, info] of activeConnections) {
-      if (info?.client === false) continue
-      attachScope(scope, connection, info)
+    ensureScopeDiscovery(scope)
+    if (networkEnabled) {
+      for (const [connection, info] of activeConnections) {
+        if (info?.client === false) continue
+        attachScope(scope, connection, info)
+      }
     }
     return { scope, created: true }
   }
@@ -452,7 +520,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const frame = encodePeerFrame({ purpose, type, requestId: nextRequestId++, payload })
     const sender = tracked.channel?.messages?.[0] || tracked.message
     if (!sender?.send) return false
-    sender.send(frame, tracked.channel)
+    if (sender.send(frame, tracked.channel) === false) return false
     counters.outboundFrames++
     return true
   }
@@ -492,7 +560,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function pumpAssetSession (scope, tracked) {
-    if (scope.closed || tracked.closed || tracked.state !== 'active' || tracked.assetRequestIndex !== null) return
+    if (!networkEnabled || scope.closed || tracked.closed || tracked.state !== 'active' || tracked.assetRequestIndex !== null) return
     const index = await nextAssetIndex(scope, tracked)
     if (index === null || scope.closed || tracked.closed) return
     tracked.assetRequestIndex = index
@@ -569,9 +637,9 @@ export function createScopedNetworkRuntime (options = {}) {
       fail('asset block request is outside the authorized monotonic range')
     }
     tracked.assetServing = true
-    tracked.assetLastServed = index
+    const policyEpoch = networkPolicyEpoch
     try {
-      if (!await scope.core.has?.(index)) {
+      if (!uploadAllowed || !networkEnabled || !await scope.core.has?.(index)) {
         sendScopedFrame(tracked, 'asset', 'asset-block-unavailable', encodeAssetIndex(index))
         return
       }
@@ -580,19 +648,29 @@ export function createScopedNetworkRuntime (options = {}) {
         upgrade: { start: 0, length: scope.core.length },
       })
       const value = b4a.from(proof?.block?.value || [])
-      if (proof?.block?.index !== index || value.byteLength > MAX_ASSET_BLOCK_BYTES) {
+      const reservation = policyEpoch === networkPolicyEpoch
+        ? reservePolicyUpload(value.byteLength)
+        : null
+      if (!reservation || proof?.block?.index !== index || value.byteLength > MAX_ASSET_BLOCK_BYTES) {
+        reservation?.release()
         sendScopedFrame(tracked, 'asset', 'asset-block-unavailable', encodeAssetIndex(index))
         return
       }
       const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
       if (canBatch) tracked.channel.cork()
+      let sent = false
       try {
-        sendScopedFrame(tracked, 'asset', 'asset-block-proof', encodeAssetProof(index, proof, value))
-        for (let offset = 0; offset < value.byteLength; offset += ASSET_CHUNK_BYTES) {
+        sent = sendScopedFrame(tracked, 'asset', 'asset-block-proof', encodeAssetProof(index, proof, value))
+        for (let offset = 0; sent && offset < value.byteLength; offset += ASSET_CHUNK_BYTES) {
           const chunk = value.subarray(offset, Math.min(value.byteLength, offset + ASSET_CHUNK_BYTES))
-          sendScopedFrame(tracked, 'asset', 'asset-block-chunk', encodeAssetChunk(index, offset, chunk))
+          sent = sendScopedFrame(tracked, 'asset', 'asset-block-chunk', encodeAssetChunk(index, offset, chunk))
+        }
+        if (sent) {
+          tracked.assetLastServed = index
+          reservation.commit()
         }
       } finally {
+        reservation.release()
         if (canBatch) tracked.channel.uncork()
       }
     } finally {
@@ -752,7 +830,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function pumpArchiveSession (scope, tracked) {
-    if (scope.archiveDiscovery || scope.closed || tracked.closed || tracked.state !== 'active' || tracked.archiveRequest) return
+    if (!networkEnabled || scope.archiveDiscovery || scope.closed || tracked.closed || tracked.state !== 'active' || tracked.archiveRequest) return
     const request = await nextArchiveBlock(scope, tracked)
     if (!request || scope.closed || tracked.closed) return
     tracked.archiveRequest = request
@@ -786,9 +864,9 @@ export function createScopedNetworkRuntime (options = {}) {
       fail('archive block request is outside the authorized monotonic range')
     }
     tracked.archiveServing = true
-    tracked.archiveLastServed.set(resource.resourceId, request.index)
+    const policyEpoch = networkPolicyEpoch
     try {
-      if (!await resource.core.has?.(request.index)) {
+      if (!uploadAllowed || !networkEnabled || !await resource.core.has?.(request.index)) {
         sendScopedFrame(tracked, 'archive', 'archive-block-unavailable', encodeArchiveBlockRef(request.coreKey, request.index))
         return
       }
@@ -798,21 +876,31 @@ export function createScopedNetworkRuntime (options = {}) {
       })
       const value = b4a.from(proof?.block?.value || [])
       const ceiling = scope.archiveUploadCeilingBytes
-      if (proof?.block?.index !== request.index || value.byteLength > MAX_ASSET_BLOCK_BYTES ||
+      const reservation = policyEpoch === networkPolicyEpoch
+        ? reservePolicyUpload(value.byteLength)
+        : null
+      if (!reservation || proof?.block?.index !== request.index || value.byteLength > MAX_ASSET_BLOCK_BYTES ||
           tracked.archiveServedBytes + value.byteLength > ceiling) {
+        reservation?.release()
         sendScopedFrame(tracked, 'archive', 'archive-block-unavailable', encodeArchiveBlockRef(request.coreKey, request.index))
         return
       }
-      tracked.archiveServedBytes += value.byteLength
       const canBatch = typeof tracked.channel?.cork === 'function' && typeof tracked.channel?.uncork === 'function'
       if (canBatch) tracked.channel.cork()
+      let sent = false
       try {
-        sendScopedFrame(tracked, 'archive', 'archive-block-proof', encodeArchiveProof(request.coreKey, request.index, proof, value))
-        for (let offset = 0; offset < value.byteLength; offset += ASSET_CHUNK_BYTES) {
+        sent = sendScopedFrame(tracked, 'archive', 'archive-block-proof', encodeArchiveProof(request.coreKey, request.index, proof, value))
+        for (let offset = 0; sent && offset < value.byteLength; offset += ASSET_CHUNK_BYTES) {
           const chunk = value.subarray(offset, Math.min(value.byteLength, offset + ASSET_CHUNK_BYTES))
-          sendScopedFrame(tracked, 'archive', 'archive-block-chunk', encodeAssetChunk(request.index, offset, chunk))
+          sent = sendScopedFrame(tracked, 'archive', 'archive-block-chunk', encodeAssetChunk(request.index, offset, chunk))
+        }
+        if (sent) {
+          tracked.archiveServedBytes += value.byteLength
+          tracked.archiveLastServed.set(resource.resourceId, request.index)
+          reservation.commit()
         }
       } finally {
+        reservation.release()
         if (canBatch) tracked.channel.uncork()
       }
     } finally {
@@ -1022,6 +1110,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function authorizeScopeConnection (scope, { peerId, connection, requestedCoreKey, tracked } = {}) {
+    if (!networkEnabled) return { status: 'rejected', reason: 'network-policy-disabled' }
     if (!scope || scope.closed) return { status: 'rejected', reason: 'scope-not-retained' }
     if (scope.purpose === 'bootstrap') return { status: 'authorized', action: 'metadata-only' }
     if (scope.purpose === 'publisher') {
@@ -1062,6 +1151,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function attachScope (scope, connection, info) {
+    if (!networkEnabled || scope.closed) return
     const remoteKey = connectionKey(connection, info)
     if (scope.sessions.has(remoteKey)) return scope.sessions.get(remoteKey)
     const mux = muxFactory(connection)
@@ -1187,6 +1277,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
 
   function handleConnection (connection, info = {}) {
+    if (!networkEnabled) return
     const firstSeen = !activeConnections.has(connection)
     activeConnections.set(connection, info)
     const mux = muxFactory(connection)
@@ -1236,10 +1327,8 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
-  async function start () {
-    if (status === 'closed') fail('runtime is closed')
-    if (status === 'active') return { status: 'active' }
-    status = 'active'
+  async function activateNetwork () {
+    if (status !== 'active' || !networkEnabled) return
     if (!listening) {
       swarm.on?.('connection', handleConnection)
       listening = true
@@ -1253,7 +1342,83 @@ export function createScopedNetworkRuntime (options = {}) {
       })
     }
     await restoreLocalPublisherScopes()
+    for (const scope of scopes.values()) ensureScopeDiscovery(scope)
     for (const connection of swarm.connections || []) handleConnection(connection)
+    for (const [connection, info] of activeConnections) handleConnection(connection, info)
+  }
+
+  async function deactivateNetwork () {
+    if (listening) {
+      swarm.off?.('connection', handleConnection)
+      swarm.removeListener?.('connection', handleConnection)
+      listening = false
+    }
+    for (const scope of scopes.values()) {
+      for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'network-policy-disabled')
+    }
+    await Promise.allSettled([...scopes.values()].map(scope => suspendScopeDiscovery(scope)))
+  }
+
+  async function restartTransferSessions (closeSessions = false) {
+    for (const scope of scopes.values()) {
+      scope.assetFailures?.clear()
+      scope.archiveFailures?.clear()
+      if (!closeSessions) continue
+      for (const peerId of [...scope.sessions.keys()]) {
+        if (scope.purpose === 'asset' || scope.purpose === 'archive') {
+          closeSession(scope, peerId, 'network-policy-changed')
+        }
+      }
+    }
+    if (!networkEnabled || status !== 'active') return
+    for (const [connection, info] of activeConnections) {
+      if (info?.client === false) continue
+      for (const scope of scopes.values()) attachScope(scope, connection, info)
+    }
+    await Promise.all([...scopes.values()].flatMap(scope => [
+      pumpAssetSessions(scope),
+      pumpArchiveSessions(scope),
+    ]))
+  }
+
+  async function applyNetworkPolicy (policy = {}) {
+    const nextUploadPermission = String(policy.uploadPermission || 'disabled')
+    const nextUploadCeilingBytes = Number(policy.uploadCeilingBytes ?? 0)
+    const nextDiskCeilingBytes = Number(policy.diskCeilingBytes ?? diskCeilingBytes)
+    if (!['disabled', 'manual', 'enabled'].includes(nextUploadPermission)) fail('invalid upload permission')
+    if (!Number.isSafeInteger(nextUploadCeilingBytes) || nextUploadCeilingBytes < 0) fail('invalid upload ceiling')
+    if (!Number.isSafeInteger(nextDiskCeilingBytes) || nextDiskCeilingBytes < 0) fail('invalid disk ceiling')
+
+    const wasNetworkEnabled = networkEnabled
+    const wasUploadAllowed = uploadAllowed
+    networkEnabled = policy.networkEnabled !== false
+    uploadPermission = nextUploadPermission
+    uploadCeilingBytes = nextUploadCeilingBytes
+    diskCeilingBytes = nextDiskCeilingBytes
+    uploadAllowed = policy.uploadAllowed ?? (
+      networkEnabled && uploadPermission === 'enabled' && uploadCeilingBytes > 0
+    )
+    networkPolicyEpoch++
+
+    if (wasNetworkEnabled && !networkEnabled) await deactivateNetwork()
+    else if (!wasNetworkEnabled && networkEnabled) await activateNetwork()
+    await restartTransferSessions(wasUploadAllowed && !uploadAllowed)
+    return {
+      networkEnabled,
+      uploadAllowed,
+      uploadPermission,
+      uploadCeilingBytes,
+      uploadedBytes,
+      diskCeilingBytes,
+      policyEpoch: networkPolicyEpoch,
+    }
+  }
+
+  async function start () {
+    if (status === 'closed') fail('runtime is closed')
+    if (status === 'active') return { status: 'active' }
+    status = 'active'
+    if (networkEnabled) await activateNetwork()
     return { status: 'active' }
   }
 
@@ -1687,7 +1852,24 @@ export function createScopedNetworkRuntime (options = {}) {
       })
     }
     sessions.sort((left, right) => left.peerId.localeCompare(right.peerId) || left.topicHex.localeCompare(right.topicHex))
-    return { status, protocolMajor, networkId, topics: topicList, sessions, counters: { ...counters }, recentErrors: recentErrors.map(error => ({ ...error })) }
+    return {
+      status,
+      protocolMajor,
+      networkId,
+      topics: topicList,
+      sessions,
+      policy: {
+        networkEnabled,
+        uploadAllowed,
+        uploadPermission,
+        uploadCeilingBytes,
+        uploadedBytes,
+        diskCeilingBytes,
+        policyEpoch: networkPolicyEpoch,
+      },
+      counters: { ...counters },
+      recentErrors: recentErrors.map(error => ({ ...error })),
+    }
   }
 
   function isPeerConnected (peerId) {
@@ -1727,6 +1909,7 @@ export function createScopedNetworkRuntime (options = {}) {
 
   return {
     start,
+    applyNetworkPolicy,
     followPublisher,
     unfollowPublisher,
     publishLocalPublisherCatalog,

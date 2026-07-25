@@ -126,6 +126,57 @@ test('generated app RPC facade marks explicitly provided optional request fields
   t.is(captured.limitProvided, true)
 })
 
+test('generated network policy patch flags derive from own ceiling properties', async (t) => {
+  const captured = []
+  const client = createGeneratedAppRpcClient({
+    rpc: {
+      setNetworkPolicy(request) {
+        captured.push(request)
+        return { success: true }
+      }
+    },
+    async ready() {},
+    createMissingMethodError(methodName) {
+      return new Error(`missing:${methodName}`)
+    },
+    normalizeError(error) {
+      return error
+    }
+  })
+
+  await client.system.setNetworkPolicy({ uploadPermission: 'enabled' })
+  await client.system.setNetworkPolicy({ diskCeilingBytes: 0 })
+  await client.system.setNetworkPolicy({ uploadCeilingBytes: 0 })
+
+  t.alike(captured, [
+    { uploadPermission: 'enabled' },
+    { diskCeilingBytes: 0, diskCeilingBytesPresent: true },
+    { uploadCeilingBytes: 0, uploadCeilingBytesPresent: true }
+  ])
+})
+
+test('network policy HRPC distinguishes omitted ceilings from explicit zero', async (t) => {
+  const schema = await import('@peartube/spec/schema')
+  const encoding = schema.getEncoding('@peartube/set-network-policy-request')
+
+  const unrelated = c.decode(encoding, c.encode(encoding, { uploadPermission: 'enabled' }))
+  t.is(unrelated.diskCeilingBytes, 0)
+  t.is(unrelated.uploadCeilingBytes, 0)
+  t.is(unrelated.diskCeilingBytesPresent, false)
+  t.is(unrelated.uploadCeilingBytesPresent, false)
+
+  const explicitZero = c.decode(encoding, c.encode(encoding, {
+    diskCeilingBytes: 0,
+    diskCeilingBytesPresent: true,
+    uploadCeilingBytes: 0,
+    uploadCeilingBytesPresent: true
+  }))
+  t.is(explicitZero.diskCeilingBytes, 0)
+  t.is(explicitZero.uploadCeilingBytes, 0)
+  t.is(explicitZero.diskCeilingBytesPresent, true)
+  t.is(explicitZero.uploadCeilingBytesPresent, true)
+})
+
 test('generated media catalog method preserves explicit limit presence', async (t) => {
   const captured = []
   const client = createGeneratedAppRpcClient({

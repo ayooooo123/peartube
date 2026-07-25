@@ -100,12 +100,7 @@ function validateLegacyRootMigrationRequest(input, crypto, b4a) {
 }
 
 
-function accountName(publisherId) {
-  if (typeof publisherId !== 'string' || !/^[a-z0-9._:-]{16,160}$/i.test(publisherId)) {
-    throw new Error('invalid publisherId')
-  }
-  return publisherId
-}
+const BUN_PUBLISHER_ROOT_ACCOUNT = 'active-publisher-root'
 
 function serializeRoot({ publicKey, secretKey, b4a }) {
   return JSON.stringify({
@@ -126,32 +121,55 @@ function parseRoot(raw, b4a) {
 }
 
 export function createBunPublisherKeyVault(options = {}) {
-  async function entryFor(publisherId) {
+  async function entryFor() {
     const keyring = await loadKeyring(options.keyringLoader)
-    return new keyring.AsyncEntry(BUN_PUBLISHER_ROOT_SERVICE, accountName(publisherId))
+    return new keyring.AsyncEntry(BUN_PUBLISHER_ROOT_SERVICE, BUN_PUBLISHER_ROOT_ACCOUNT)
   }
 
   async function loadRoot(publisherId) {
-    const [entry, b4a] = await Promise.all([entryFor(publisherId), loadB4a(options.b4aLoader)])
+    const [entry, b4a] = await Promise.all([entryFor(), loadB4a(options.b4aLoader)])
     const raw = await entry.getPassword()
-    return { root: parseRoot(raw, b4a), b4a, entry }
+    const root = parseRoot(raw, b4a)
+    if (root && publisherId !== undefined) assertPublisherId(publisherId, root.publicKey, b4a)
+    return { root, b4a, entry }
+  }
+
+  async function createRoot(input = {}) {
+    let keyPair
+    let existingRoot
+    try {
+      const [crypto, b4a, loaded] = await Promise.all([
+        loadCrypto(options.cryptoLoader),
+        loadB4a(options.b4aLoader),
+        loadRoot(input.publisherId),
+      ])
+      existingRoot = loaded.root
+      if (existingRoot) {
+        if (input.seed) {
+          keyPair = crypto.keyPair(toBuffer(input.seed, b4a, 'seed'))
+          if (!b4a.equals(keyPair.publicKey, existingRoot.publicKey)) throw new Error('active publisher root mismatch')
+        }
+        const publisherId = assertPublisherId(input.publisherId, existingRoot.publicKey, b4a)
+        return { publisherId, publicKey: toHex(existingRoot.publicKey, b4a, 'publicKey') }
+      }
+      keyPair = input.seed ? crypto.keyPair(toBuffer(input.seed, b4a, 'seed')) : crypto.keyPair()
+      const publisherId = assertPublisherId(input.publisherId, keyPair.publicKey, b4a)
+      const entry = await entryFor()
+      await entry.setPassword(serializeRoot({ publicKey: keyPair.publicKey, secretKey: keyPair.secretKey, b4a }))
+      return { publisherId, publicKey: toHex(keyPair.publicKey, b4a, 'publicKey') }
+    } catch (error) {
+      throw redactPublisherVaultError(error)
+    } finally {
+      keyPair?.secretKey?.fill?.(0)
+      existingRoot?.secretKey?.fill?.(0)
+    }
   }
 
   return {
-    async createRoot(input = {}) {
-      let keyPair
-      try {
-        const [crypto, b4a] = await Promise.all([loadCrypto(options.cryptoLoader), loadB4a(options.b4aLoader)])
-        keyPair = input.seed ? crypto.keyPair(toBuffer(input.seed, b4a, 'seed')) : crypto.keyPair()
-        const publisherId = assertPublisherId(input.publisherId, keyPair.publicKey, b4a)
-        const entry = await entryFor(publisherId)
-        await entry.setPassword(serializeRoot({ publicKey: keyPair.publicKey, secretKey: keyPair.secretKey, b4a }))
-        return { publisherId, publicKey: toHex(keyPair.publicKey, b4a, 'publicKey') }
-      } catch (error) {
-        throw redactPublisherVaultError(error)
-      } finally {
-        keyPair?.secretKey?.fill?.(0)
-      }
+    createRoot,
+
+    async getOrCreateRoot() {
+      return createRoot({})
     },
 
     async importRoot(input = {}) {
@@ -162,8 +180,13 @@ export function createBunPublisherKeyVault(options = {}) {
         secretKey = toBuffer(input.secretKey, b4a, 'secretKey')
         assertKeyContinuity(publicKey, secretKey, crypto, b4a)
         const publisherId = assertPublisherId(input.publisherId, publicKey, b4a)
-        const entry = await entryFor(publisherId)
-        await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
+        const { root: existing, entry } = await loadRoot()
+        try {
+          if (existing && !b4a.equals(existing.publicKey, publicKey)) throw new Error('active publisher root mismatch')
+          await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
+        } finally {
+          existing?.secretKey?.fill?.(0)
+        }
         return { publisherId, publicKey: toHex(publicKey, b4a, 'publicKey') }
       } catch (error) {
         throw redactPublisherVaultError(error)
@@ -182,8 +205,13 @@ export function createBunPublisherKeyVault(options = {}) {
         challenge = validated.challenge
         const publicKey = validated.publicKey
         const publisherId = assertPublisherId(undefined, publicKey, b4a)
-        const entry = await entryFor(publisherId)
-        await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
+        const { root: existing, entry } = await loadRoot()
+        try {
+          if (existing && !b4a.equals(existing.publicKey, publicKey)) throw new Error('active publisher root mismatch')
+          await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
+        } finally {
+          existing?.secretKey?.fill?.(0)
+        }
         return {
           version: LEGACY_ROOT_MIGRATION_VERSION,
           durable: true,
@@ -199,11 +227,15 @@ export function createBunPublisherKeyVault(options = {}) {
     },
 
     async getPublicKey(input = {}) {
+      let root
       try {
-        const { root } = await loadRoot(input.publisherId)
-        return root ? root.publicKey : null
+        const loaded = await loadRoot(input.publisherId)
+        root = loaded.root
+        return root ? loaded.b4a.from(root.publicKey) : null
       } catch (error) {
         throw redactPublisherVaultError(error)
+      } finally {
+        root?.secretKey?.fill?.(0)
       }
     },
 
@@ -231,13 +263,18 @@ export function createBunPublisherKeyVault(options = {}) {
     },
 
     async deleteRoot(input = {}) {
+      let root
       try {
-        const entry = await entryFor(input.publisherId)
-        if (typeof entry.deletePassword === 'function') await entry.deletePassword()
-        else await entry.deleteCredential()
+        const loaded = await loadRoot(input.publisherId)
+        root = loaded.root
+        if (typeof loaded.entry.deletePassword === 'function') await loaded.entry.deletePassword()
+        else await loaded.entry.deleteCredential()
         return { ok: true }
       } catch (error) {
         throw redactPublisherVaultError(error)
+      }
+      finally {
+        root?.secretKey?.fill?.(0)
       }
     },
   }

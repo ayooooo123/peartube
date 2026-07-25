@@ -1,27 +1,23 @@
 import {
   createPublisherNamespaceDescriptor,
+  decodePublisherNamespaceDescriptor,
+  decodePublisherOperationBody,
   encodePublisherNamespaceDescriptor,
+  encodePublisherOperationBody,
 } from '@peartube/backend/publisher'
 
 import type {
-  PublisherBeginIntentParams,
-  PublisherBeginIntentResponse,
-  PublisherCreateRootResponse,
+  PublisherLifecycleRequestHandlers,
   PublisherPreparedRecord,
   PublisherRootRecordType,
   PublisherSignedRecord,
-  PublisherSignerRequestHandlers,
 } from '../src/shared/rpc-types'
 
 const PUBLISHER_ID_PATTERN = /^[0-9a-f]{64}$/
 const INTENT_ID_PATTERN = /^[0-9a-f]{32}$/
 const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/
-const ROOT_RECORD_TYPES: Record<PublisherRootRecordType, true> = {
-  'publisher.namespace': true,
-  'publisher.writer-admission': true,
-  'publisher.writer-revocation': true,
-  'publisher.root-transition': true,
-}
+const WRITER_CAPABILITIES = Object.freeze(['claim', 'publish'] as const)
+const WRITER_EXPIRY = Number.MAX_SAFE_INTEGER
 
 export const MAX_PUBLISHER_BODY_BYTES = 256 * 1024
 export const MAX_PUBLISHER_UNSIGNED_BYTES = 1024 * 1024
@@ -49,8 +45,18 @@ type PrivilegedSignedRecord = {
   allowedSigners?: Uint8Array[] | null
 }
 
+type RootIntent = {
+  publisherId: string
+  recordType: PublisherRootRecordType
+  body: Uint8Array
+  displaySummaryJson: string
+  intentExpiresAt: number
+  issuedAt: number
+  expiresInMs: number
+}
+
 export type PublisherSignerLike = {
-  beginUserIntent(request: Omit<PublisherBeginIntentParams, 'body'> & { body: Uint8Array }): Promise<{
+  beginUserIntent(request: RootIntent): Promise<{
     intentId: string
     signerPublicKey: Uint8Array
   }>
@@ -60,48 +66,66 @@ export type PublisherSignerLike = {
 }
 
 export type PublisherRootVaultLike = {
-  createRoot(input?: Record<string, never>): Promise<{
+  getOrCreateRoot(): Promise<{
     publisherId: string
     publicKey: string | Uint8Array
   }>
 }
-type PublisherShellRoot = {
+
+type ProvisionedCatalog = {
+  success: boolean
   publisherId: string
-  publicKey: string | Uint8Array
+  catalogBootstrapKey: Uint8Array
+  localWriterKey: Uint8Array
+  localSignerKey: Uint8Array
+  writable: boolean
+  namespaceInitialized: boolean
+  admitted: boolean
+  errorCode?: string | null
+  error?: string | null
 }
 
+type PublisherShellSummary = Readonly<Record<string, string | number | readonly string[]>>
+
 type PublisherShellWorkflowDependencies = {
-  shell: {
-    createRoot(): Promise<PublisherShellRoot>
-  }
+  shell: PublisherRootVaultLike
+  signer: PublisherSignerLike
+  confirmRootOperation(summary: PublisherShellSummary): Promise<boolean>
   publisherRpc: {
     provisionPublisherCatalog(request: {
       publisherId: string
       genesisRootKey: Uint8Array
-    }): Promise<{
+    }): Promise<ProvisionedCatalog>
+    preparePublisherRootOperation(request: RootIntent & {
+      intentId: string
+      signerPublicKey: Uint8Array
+    }): Promise<PrivilegedPreparedRecord>
+    submitPublisherRootOperation(request: PrivilegedSignedRecord): Promise<{
+      intentId: string
       success: boolean
+      complete: boolean
       publisherId: string
-      catalogBootstrapKey: Uint8Array
-      errorCode?: string | null
-      error?: string | null
+      recordType: PublisherRootRecordType
+      recordId: Uint8Array
+      signer: Uint8Array
+      reason?: string | null
     }>
-    authorizePublisherRootOperation(request: {
-      publisherId: string
-      recordType: 'publisher.namespace'
-      body: Uint8Array
-      displaySummaryJson: string | null
-      intentExpiresAt: number
-      userInitiated: true
-    }): Promise<{ success: boolean } & Record<string, unknown>>
   }
   now?: () => number
+  randomBytes?: (length: number) => Uint8Array
   intentTtlMs?: number
 }
 
-
-type DesktopPublisherHandlerDependencies = {
-  signer: PublisherSignerLike
-  vault: PublisherRootVaultLike
+type DesktopPublisherLifecycleDependencies = {
+  publisherShell: {
+    ensureLocalPublisher(): Promise<{
+      status: 'ready'
+      publisherId: string
+      catalogBootstrapKey?: Uint8Array
+      writable: true
+      admitted: true
+    }>
+  }
 }
 
 function shellError(code: string): Error {
@@ -130,15 +154,6 @@ function requiredString(value: unknown, pattern: RegExp): string {
   return value
 }
 
-function boundedNullableString(value: unknown): string | null | undefined {
-  if (value === undefined) return undefined
-  if (value === null) return null
-  if (typeof value !== 'string' || value.length > MAX_PUBLISHER_SUMMARY_CHARS) {
-    throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
-  }
-  return value
-}
-
 function safeInteger(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
@@ -146,42 +161,29 @@ function safeInteger(value: unknown): number {
   return value as number
 }
 
-function boolean(value: unknown): boolean {
-  if (typeof value !== 'boolean') throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
-  return value
-}
-
-function rootRecordType(value: unknown): PublisherRootRecordType {
-  if (typeof value !== 'string' || !Object.hasOwn(ROOT_RECORD_TYPES, value)) {
-    throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
-  }
-  return value as PublisherRootRecordType
-}
-
-function jsonBytes(value: unknown, maximum: number, exactLength?: number): Uint8Array {
-  if (!Array.isArray(value) || value.length > maximum || (exactLength !== undefined && value.length !== exactLength)) {
-    throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
-  }
-  const output = new Uint8Array(value.length)
-  for (let index = 0; index < value.length; index++) {
-    const byte = value[index]
-    if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
-      throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
+function normalizedBytes(value: unknown, maximum: number, exactLength?: number): Uint8Array {
+  let output: Uint8Array
+  if (value instanceof Uint8Array) output = value
+  else if (Array.isArray(value)) {
+    output = new Uint8Array(value.length)
+    for (let index = 0; index < value.length; index++) {
+      const byte = value[index]
+      if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+        throw shellError('PUBLISHER_SHELL_INVALID_RESPONSE')
+      }
+      output[index] = byte
     }
-    output[index] = byte
-  }
-  return output
-}
-
-function publicBytes(value: unknown, maximum: number, exactLength?: number): number[] {
-  if (!(value instanceof Uint8Array) || value.byteLength > maximum || (exactLength !== undefined && value.byteLength !== exactLength)) {
+  } else {
     throw shellError('PUBLISHER_SHELL_INVALID_RESPONSE')
   }
-  return Array.from(value)
+  if (output.byteLength > maximum || (exactLength !== undefined && output.byteLength !== exactLength)) {
+    throw shellError('PUBLISHER_SHELL_INVALID_RESPONSE')
+  }
+  return output.slice()
 }
 
 function normalizedPublicKey(value: unknown): Uint8Array {
-  if (value instanceof Uint8Array && value.byteLength === 32) return value
+  if (value instanceof Uint8Array && value.byteLength === 32) return value.slice()
   if (typeof value !== 'string' || !HEX_PUBLIC_KEY_PATTERN.test(value)) {
     throw shellError('PUBLISHER_SHELL_INVALID_RESPONSE')
   }
@@ -192,43 +194,21 @@ function normalizedPublicKey(value: unknown): Uint8Array {
   return output
 }
 
-function publicKeyBytes(value: unknown): number[] {
-  return Array.from(normalizedPublicKey(value))
+function equalBytes(left: unknown, right: unknown): boolean {
+  if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array) || left.byteLength !== right.byteLength) return false
+  let difference = 0
+  for (let index = 0; index < left.byteLength; index++) difference |= left[index] ^ right[index]
+  return difference === 0
 }
 
-async function privileged<T>(code: string, action: () => T | Promise<T>): Promise<T> {
-  try {
-    return await action()
-  } catch {
-    throw shellError(code)
-  }
+function hex(value: Uint8Array): string {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function parseIntentRequest(input: unknown): Omit<PublisherBeginIntentParams, 'body'> & { body: Uint8Array } {
-  const value = record(input)
-  exactKeys(value, [
-    'publisherId',
-    'recordType',
-    'body',
-    'displaySummaryJson',
-    'intentExpiresAt',
-    'issuedAt',
-    'expiresAt',
-    'expiresInMs',
-    'userInitiated',
-  ])
-  if (value.userInitiated !== true) throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
-  return {
-    publisherId: requiredString(value.publisherId, PUBLISHER_ID_PATTERN),
-    recordType: rootRecordType(value.recordType),
-    body: jsonBytes(value.body, MAX_PUBLISHER_BODY_BYTES),
-    displaySummaryJson: boundedNullableString(value.displaySummaryJson),
-    intentExpiresAt: safeInteger(value.intentExpiresAt),
-    issuedAt: value.issuedAt == null ? value.issuedAt as null | undefined : safeInteger(value.issuedAt),
-    expiresAt: value.expiresAt == null ? value.expiresAt as null | undefined : safeInteger(value.expiresAt),
-    expiresInMs: value.expiresInMs == null ? value.expiresInMs as null | undefined : safeInteger(value.expiresInMs),
-    userInitiated: true,
-  }
+function summaryJson(summary: PublisherShellSummary): string {
+  const value = JSON.stringify(summary)
+  if (value.length > MAX_PUBLISHER_SUMMARY_CHARS) throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
+  return value
 }
 
 function parsePreparedRecord(input: unknown): PrivilegedPreparedRecord {
@@ -250,176 +230,253 @@ function parsePreparedRecord(input: unknown): PrivilegedPreparedRecord {
   ])
   return {
     intentId: requiredString(value.intentId, INTENT_ID_PATTERN),
-    success: boolean(value.success),
+    success: value.success === true,
     publisherId: requiredString(value.publisherId, PUBLISHER_ID_PATTERN),
-    recordType: rootRecordType(value.recordType),
-    unsignedBytes: jsonBytes(value.unsignedBytes, MAX_PUBLISHER_UNSIGNED_BYTES),
-    candidateRecordId: jsonBytes(value.candidateRecordId, 32, 32),
-    signerPublicKey: jsonBytes(value.signerPublicKey, 32, 32),
+    recordType: requiredRootRecordType(value.recordType),
+    unsignedBytes: normalizedBytes(value.unsignedBytes, MAX_PUBLISHER_UNSIGNED_BYTES),
+    candidateRecordId: normalizedBytes(value.candidateRecordId, 32, 32),
+    signerPublicKey: normalizedBytes(value.signerPublicKey, 32, 32),
     intentExpiresAt: safeInteger(value.intentExpiresAt),
     bodyLength: safeInteger(value.bodyLength),
     issuedAt: safeInteger(value.issuedAt),
     expiresAt: safeInteger(value.expiresAt),
-    displaySummaryJson: boundedNullableString(value.displaySummaryJson),
-    error: boundedNullableString(value.error),
+    displaySummaryJson: typeof value.displaySummaryJson === 'string' ? value.displaySummaryJson : null,
+    error: typeof value.error === 'string' ? value.error : null,
   }
 }
 
-function serializeSignedRecord(value: PrivilegedSignedRecord): PublisherSignedRecord {
-  const output: PublisherSignedRecord = {
-    intentId: requiredString(value.intentId, INTENT_ID_PATTERN),
-    publisherId: requiredString(value.publisherId, PUBLISHER_ID_PATTERN),
-    recordType: rootRecordType(value.recordType),
-    unsignedBytes: publicBytes(value.unsignedBytes, MAX_PUBLISHER_UNSIGNED_BYTES),
-    candidateRecordId: publicBytes(value.candidateRecordId, 32, 32),
-    displaySummaryJson: boundedNullableString(value.displaySummaryJson),
-    signer: publicBytes(value.signer, 32, 32),
-    signerPublicKey: publicBytes(value.signerPublicKey, 32, 32),
-    signature: publicBytes(value.signature, 64, 64),
+function requiredRootRecordType(value: unknown): PublisherRootRecordType {
+  if (value !== 'publisher.namespace' && value !== 'publisher.writer-admission' &&
+      value !== 'publisher.writer-revocation' && value !== 'publisher.root-transition') {
+    throw shellError('PUBLISHER_SHELL_INVALID_RESPONSE')
   }
-  if (value.allowedSigners !== undefined) {
-    if (value.allowedSigners !== null && !Array.isArray(value.allowedSigners)) {
-      throw shellError('PUBLISHER_SHELL_INVALID_RESPONSE')
-    }
-    output.allowedSigners = value.allowedSigners?.map((entry) => publicBytes(entry, 32, 32)) ?? null
-  }
-  return output
+  return value
 }
 
-export function createDesktopPublisherRpcHandlers(
-  dependencies: DesktopPublisherHandlerDependencies,
-): PublisherSignerRequestHandlers {
-  const { signer, vault } = dependencies
-
+function parseProvisionedCatalog(input: unknown, publisherId: string): ProvisionedCatalog {
+  const value = record(input)
+  exactKeys(value, [
+    'success',
+    'publisherId',
+    'catalogBootstrapKey',
+    'localWriterKey',
+    'localSignerKey',
+    'writable',
+    'namespaceInitialized',
+    'admitted',
+    'errorCode',
+    'error',
+  ])
+  if (value.success !== true || value.publisherId !== publisherId || value.writable !== true) {
+    throw shellError('PUBLISHER_SHELL_PROVISION_FAILED')
+  }
   return {
-    async publisherCreateRoot(input): Promise<PublisherCreateRootResponse> {
-      const value = record(input)
-      exactKeys(value, [])
-      const created = await privileged('PUBLISHER_SHELL_CREATE_FAILED', () => vault.createRoot({}))
-      return {
-        publisherId: requiredString(created.publisherId, PUBLISHER_ID_PATTERN),
-        publicKey: publicKeyBytes(created.publicKey),
-      }
-    },
+    success: true,
+    publisherId,
+    catalogBootstrapKey: normalizedBytes(value.catalogBootstrapKey, 32, 32),
+    localWriterKey: normalizedBytes(value.localWriterKey, 32, 32),
+    localSignerKey: normalizedBytes(value.localSignerKey, 32, 32),
+    writable: true,
+    namespaceInitialized: value.namespaceInitialized === true,
+    admitted: value.admitted === true,
+  }
+}
 
-    async publisherBeginUserIntent(input): Promise<PublisherBeginIntentResponse> {
-      const request = parseIntentRequest(input)
-      const intent = await privileged('PUBLISHER_SHELL_BEGIN_FAILED', () => signer.beginUserIntent(request))
-      return {
-        intentId: requiredString(intent.intentId, INTENT_ID_PATTERN),
-        signerPublicKey: publicBytes(intent.signerPublicKey, 32, 32),
-      }
-    },
-
-    async publisherSignPreparedRecord(input): Promise<PublisherSignedRecord> {
-      let intentId: string | null = null
-      try {
-        const value = record(input)
-        exactKeys(value, ['intentId', 'prepared'])
-        intentId = requiredString(value.intentId, INTENT_ID_PATTERN)
-        const prepared = parsePreparedRecord(value.prepared)
-        if (prepared.intentId !== intentId) throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
-        const signed = await signer.signPreparedRecord(intentId, prepared)
-        return serializeSignedRecord(signed)
-      } catch {
-        if (intentId) {
-          try { await signer.cancelIntent(intentId) } catch {}
-        }
-        throw shellError('PUBLISHER_SHELL_SIGN_FAILED')
-      }
-    },
-
-    async publisherCompleteIntent(input): Promise<{ ok: true }> {
-      const value = record(input)
-      exactKeys(value, ['intentId'])
-      const intentId = requiredString(value.intentId, INTENT_ID_PATTERN)
-      await privileged('PUBLISHER_SHELL_COMPLETE_FAILED', () => signer.completeIntent(intentId))
-      return { ok: true }
-    },
-
-    async publisherCancelIntent(input): Promise<{ ok: true }> {
-      const value = record(input)
-      exactKeys(value, ['intentId'])
-      const intentId = requiredString(value.intentId, INTENT_ID_PATTERN)
-      await privileged('PUBLISHER_SHELL_CANCEL_FAILED', () => signer.cancelIntent(intentId))
-      return { ok: true }
-    },
+async function privileged<T>(code: string, action: () => T | Promise<T>): Promise<T> {
+  try {
+    return await action()
+  } catch (error) {
+    if ((error as Error & { code?: string })?.code === 'PUBLISHER_SHELL_CONFIRMATION_DECLINED') throw error
+    throw shellError(code)
   }
 }
 
 export function createPublisherShellService(dependencies: PublisherShellWorkflowDependencies) {
   const now = dependencies.now ?? (() => Date.now())
+  const randomBytes = dependencies.randomBytes ?? ((length: number) => {
+    const output = new Uint8Array(length)
+    if (!globalThis.crypto?.getRandomValues) throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
+    globalThis.crypto.getRandomValues(output)
+    return output
+  })
   const intentTtlMs = dependencies.intentTtlMs ?? 2 * 60_000
   if (!Number.isSafeInteger(intentTtlMs) || intentTtlMs < 1 || intentTtlMs > 5 * 60_000) {
     throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
   }
+  let inFlight: Promise<{
+    status: 'ready'
+    publisherId: string
+    catalogBootstrapKey: Uint8Array
+    writable: true
+    admitted: true
+  }> | null = null
 
-  return {
-    async createPublisherNamespace(
-      input: { displaySummaryJson?: string | null } = {},
-    ) {
-      const value = record(input)
-      exactKeys(value, ['displaySummaryJson'])
-      const displaySummaryJson = boundedNullableString(value.displaySummaryJson) ?? null
+  async function provision(publisherId: string, genesisRootKey: Uint8Array): Promise<ProvisionedCatalog> {
+    const response = await dependencies.publisherRpc.provisionPublisherCatalog({ publisherId, genesisRootKey })
+    return parseProvisionedCatalog(response, publisherId)
+  }
 
-      const created = await privileged(
-        'PUBLISHER_SHELL_CREATE_FAILED',
-        () => dependencies.shell.createRoot(),
-      )
-      const publisherId = requiredString(created.publisherId, PUBLISHER_ID_PATTERN)
-      const genesisRootKey = normalizedPublicKey(created.publicKey)
-
-      const provision = await privileged(
-        'PUBLISHER_SHELL_PROVISION_FAILED',
-        () => dependencies.publisherRpc.provisionPublisherCatalog({
-          publisherId,
-          genesisRootKey,
-        }),
-      )
-      if (
-        provision.success !== true ||
-        provision.publisherId !== publisherId ||
-        !(provision.catalogBootstrapKey instanceof Uint8Array) ||
-        provision.catalogBootstrapKey.byteLength !== 32
-      ) {
-        throw shellError('PUBLISHER_SHELL_PROVISION_FAILED')
+  async function authorizeExactRootOperation({
+    publisherId,
+    recordType,
+    body,
+    summary,
+  }: {
+    publisherId: string
+    recordType: PublisherRootRecordType
+    body: Uint8Array
+    summary: PublisherShellSummary
+  }): Promise<void> {
+    if (body.byteLength > MAX_PUBLISHER_BODY_BYTES) throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
+    if (await dependencies.confirmRootOperation(summary) !== true) {
+      throw shellError('PUBLISHER_SHELL_CONFIRMATION_DECLINED')
+    }
+    const currentTime = safeInteger(now())
+    if (currentTime > Number.MAX_SAFE_INTEGER - intentTtlMs) {
+      throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
+    }
+    const request: RootIntent = {
+      publisherId,
+      recordType,
+      body: body.slice(),
+      displaySummaryJson: summaryJson(summary),
+      issuedAt: currentTime,
+      expiresInMs: intentTtlMs,
+      intentExpiresAt: currentTime + intentTtlMs,
+    }
+    let intentId: string | null = null
+    try {
+      const intent = await dependencies.signer.beginUserIntent(request)
+      intentId = requiredString(intent.intentId, INTENT_ID_PATTERN)
+      const signerPublicKey = normalizedBytes(intent.signerPublicKey, 32, 32)
+      const prepared = parsePreparedRecord(await dependencies.publisherRpc.preparePublisherRootOperation({
+        ...request,
+        intentId,
+        signerPublicKey,
+      }))
+      if (prepared.intentId !== intentId || prepared.publisherId !== publisherId ||
+          prepared.recordType !== recordType || prepared.success !== true) {
+        throw shellError('PUBLISHER_SHELL_PREPARE_FAILED')
       }
+      const signed = await dependencies.signer.signPreparedRecord(intentId, prepared)
+      const submitted = await dependencies.publisherRpc.submitPublisherRootOperation(signed)
+      if (submitted?.success !== true || submitted.complete !== true ||
+          submitted.intentId !== intentId || submitted.publisherId !== publisherId ||
+          submitted.recordType !== recordType ||
+          !equalBytes(submitted.recordId, signed.candidateRecordId) ||
+          !equalBytes(submitted.signer, signed.signer)) {
+        throw shellError('PUBLISHER_SHELL_SUBMIT_FAILED')
+      }
+      await dependencies.signer.completeIntent(intentId)
+      intentId = null
+    } catch (error) {
+      if (intentId) {
+        try { await dependencies.signer.cancelIntent(intentId) } catch {}
+      }
+      throw error
+    } finally {
+      body.fill(0)
+    }
+  }
 
+  async function ensureLocalPublisher() {
+    const root = await privileged('PUBLISHER_SHELL_ROOT_FAILED', () => dependencies.shell.getOrCreateRoot())
+    const publisherId = requiredString(root.publisherId, PUBLISHER_ID_PATTERN)
+    const genesisRootKey = normalizedPublicKey(root.publicKey)
+    let catalog = await privileged('PUBLISHER_SHELL_PROVISION_FAILED', () => provision(publisherId, genesisRootKey))
+
+    if (!catalog.namespaceInitialized) {
       const body = await privileged('PUBLISHER_SHELL_NAMESPACE_FAILED', () => (
         encodePublisherNamespaceDescriptor(createPublisherNamespaceDescriptor({
           genesisRootKey,
-          catalogBootstrapKey: provision.catalogBootstrapKey,
+          catalogBootstrapKey: catalog.catalogBootstrapKey,
         }))
       ))
-      const currentTime = now()
-      if (!Number.isSafeInteger(currentTime) || currentTime < 0) {
-        throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
-      }
-      const intentExpiresAt = currentTime + intentTtlMs
-      if (!Number.isSafeInteger(intentExpiresAt)) {
-        throw shellError('PUBLISHER_SHELL_INVALID_CONFIGURATION')
-      }
+      const descriptor = decodePublisherNamespaceDescriptor(body)
+      const summary = Object.freeze({
+        action: 'create-publisher-namespace',
+        publisherId,
+        catalogBootstrapKey: hex(descriptor.catalogBootstrapKey),
+      })
+      await privileged('PUBLISHER_SHELL_AUTHORIZE_FAILED', () => authorizeExactRootOperation({
+        publisherId,
+        recordType: 'publisher.namespace',
+        body,
+        summary,
+      }))
+      catalog = await privileged('PUBLISHER_SHELL_PROVISION_FAILED', () => provision(publisherId, genesisRootKey))
+    }
 
-      const authorization = await privileged(
-        'PUBLISHER_SHELL_AUTHORIZE_FAILED',
-        () => dependencies.publisherRpc.authorizePublisherRootOperation({
-          publisherId,
-          recordType: 'publisher.namespace',
-          body,
-          displaySummaryJson,
-          intentExpiresAt,
-          userInitiated: true,
-        }),
-      )
-      if (authorization.success !== true) {
-        throw shellError('PUBLISHER_SHELL_AUTHORIZE_FAILED')
-      }
+    if (!catalog.namespaceInitialized) throw shellError('PUBLISHER_SHELL_NAMESPACE_FAILED')
+    if (!catalog.admitted) {
+      const body = await privileged('PUBLISHER_SHELL_ADMISSION_FAILED', () => encodePublisherOperationBody(
+        'publisher.writer-admission',
+        {
+          writerKey: catalog.localWriterKey,
+          signerKey: catalog.localSignerKey,
+          capabilities: [...WRITER_CAPABILITIES],
+          firstAcceptedSequence: 1,
+          expiresAt: WRITER_EXPIRY,
+          admissionNonce: normalizedBytes(randomBytes(16), 16, 16),
+        },
+      ))
+      const admission = decodePublisherOperationBody('publisher.writer-admission', body)
+      const summary = Object.freeze({
+        action: 'admit-local-publisher-device',
+        publisherId,
+        writerKey: hex(admission.writerKey),
+        signerKey: hex(admission.signerKey),
+        capabilities: Object.freeze([...admission.capabilities]),
+        expiresAt: admission.expiresAt,
+      })
+      await privileged('PUBLISHER_SHELL_ADMISSION_FAILED', () => authorizeExactRootOperation({
+        publisherId,
+        recordType: 'publisher.writer-admission',
+        body,
+        summary,
+      }))
+      catalog = await privileged('PUBLISHER_SHELL_PROVISION_FAILED', () => provision(publisherId, genesisRootKey))
+    }
 
+    if (!catalog.writable || !catalog.admitted) throw shellError('PUBLISHER_SHELL_NOT_READY')
+    return {
+      status: 'ready' as const,
+      publisherId,
+      catalogBootstrapKey: catalog.catalogBootstrapKey.slice(),
+      writable: true as const,
+      admitted: true as const,
+    }
+  }
+
+  return {
+    ensureLocalPublisher() {
+      if (inFlight) return inFlight
+      inFlight = ensureLocalPublisher().finally(() => { inFlight = null })
+      return inFlight
+    },
+  }
+}
+
+export function createDesktopPublisherLifecycleHandlers(
+  dependencies: DesktopPublisherLifecycleDependencies,
+): PublisherLifecycleRequestHandlers {
+  return {
+    async publisherEnsureLocalCatalog(input) {
+      const value = record(input)
+      exactKeys(value, ['action'])
+      if (value.action !== 'ensure-local-publisher') {
+        throw shellError('PUBLISHER_SHELL_INVALID_REQUEST')
+      }
+      const result = await dependencies.publisherShell.ensureLocalPublisher()
       return {
-        root: { publisherId, publicKey: genesisRootKey },
-        provision,
-        authorization,
+        status: result.status,
+        publisherId: requiredString(result.publisherId, PUBLISHER_ID_PATTERN),
+        catalogBootstrapKey: Array.from(normalizedBytes(result.catalogBootstrapKey, 32, 32)),
+        writable: result.writable,
+        admitted: result.admitted,
       }
     },
   }
 }
+
+export type { PrivilegedPreparedRecord, PrivilegedSignedRecord, PublisherShellSummary }

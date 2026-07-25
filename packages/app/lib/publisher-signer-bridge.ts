@@ -20,6 +20,16 @@ const ROOT_RECORD_TYPES = new Set([
   'publisher.writer-revocation',
   'publisher.root-transition',
 ])
+const ROOT_INTENT_FIELDS = Object.freeze({
+  publisherId: true,
+  recordType: true,
+  body: true,
+  displaySummaryJson: true,
+  intentExpiresAt: true,
+  issuedAt: true,
+  expiresAt: true,
+  expiresInMs: true,
+})
 const ROOT_TRANSITION_RECORD_TYPE = 'publisher.root-transition'
 const RECORD_ID_BYTES = 32
 const PUBLIC_KEY_BYTES = 32
@@ -115,8 +125,11 @@ export function createPublisherSignerBridge(options = {}) {
 
   return {
     async beginUserIntent(request = {}) {
-      if (request.userInitiated !== true) throw signerError('PUBLISHER_SIGNER_BACKGROUND_FORBIDDEN')
-      if (!request.publisherId) throw signerError('PUBLISHER_SIGNER_INVALID_INTENT')
+      if (!request || typeof request !== 'object' || Array.isArray(request) ||
+          Object.keys(request).some(field => !Object.hasOwn(ROOT_INTENT_FIELDS, field)) ||
+          !request.publisherId) {
+        throw signerError('PUBLISHER_SIGNER_INVALID_INTENT')
+      }
       assertRootRecordType(request.recordType)
       const currentTime = now()
       if (!Number.isSafeInteger(request.intentExpiresAt) || request.intentExpiresAt <= currentTime || request.intentExpiresAt > currentTime + MAX_INTENT_TTL_MS) {
@@ -138,7 +151,7 @@ export function createPublisherSignerBridge(options = {}) {
         intentId,
         publisherId: request.publisherId,
         recordType: request.recordType,
-        body: body.slice(),
+        body: Uint8Array.from(body),
         displaySummaryJson: request.displaySummaryJson ?? null,
         intentExpiresAt: request.intentExpiresAt,
         signerPublicKey: signerPublicKey.slice(),

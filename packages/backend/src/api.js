@@ -752,6 +752,8 @@ export function createApi({
   catalogRegistry,
   scopedNetwork,
   permissionlessArchiveNetwork = ctx?.permissionlessArchiveNetwork,
+  policyApi = null,
+  networkPolicyRuntime = ctx?.networkPolicyRuntime || null,
   sourceOffload = {},
   loadChannel = storageLoadChannel,
   loadPublicBee = storageLoadPublicBee,
@@ -768,6 +770,10 @@ export function createApi({
     ctx,
     seedingManager,
     ...(operability || {})
+  })
+  const localPolicyApi = policyApi || createPolicyApi({
+    store: ctx.networkPolicyStore || ctx.metaDb || new Map(),
+    onPolicyChange: ctx.onNetworkPolicyChange,
   })
 
   async function isMultiWriterChannelKey(channelKey) {
@@ -1948,6 +1954,18 @@ export function createApi({
     return locators
   }
 
+  function sameSourceLocators(left, right) {
+    return left.length === right.length && left.every((locator, index) => {
+      const other = right[index]
+      return locator.renditionId === other.renditionId &&
+        locator.coreKey === other.coreKey &&
+        locator.start === other.start &&
+        locator.end === other.end &&
+        locator.blobId === other.blobId &&
+        locator.byteLength === other.byteLength
+    })
+  }
+
   async function resolveOwnedPublication(publicationId) {
     const manifest = await ctx?.assetManifestStore?.getManifest?.(publicationId)
     if (!manifest || manifest.publicationId !== publicationId) throw new Error('publication manifest not found')
@@ -1972,6 +1990,10 @@ export function createApi({
     if (typeof sourceOffload.isPlaybackActive === 'function' &&
         sourceOffload.isPlaybackActive({ locators }) === true) return true
     for (const active of activeOnDemandPlaybackStats.values()) {
+      const key = active?.core?.key ? b4a.toString(b4a.from(active.core.key), 'hex') : null
+      if (key && keys.has(key)) return true
+    }
+    for (const active of activePrefetchCores.values()) {
       const key = active?.core?.key ? b4a.toString(b4a.from(active.core.key), 'hex') : null
       if (key && keys.has(key)) return true
     }
@@ -2013,8 +2035,8 @@ export function createApi({
     }
   }
 
-  async function collectSourceOffloadEvidence(publicationId) {
-    const { manifest, locators } = await resolveOwnedPublication(publicationId)
+  async function collectSourceOffloadEvidence(publicationId, resolvedPublication = null) {
+    const { manifest, locators } = resolvedPublication || await resolveOwnedPublication(publicationId)
     const supplied = typeof sourceOffload.collectEvidence === 'function'
       ? await sourceOffload.collectEvidence({ publicationId, manifest, locators })
       : null
@@ -2067,32 +2089,40 @@ export function createApi({
     }
   }
 
-  async function deleteConfirmedPublicationSource({ publicationId }, sourceMutationLocked = false) {
+  async function deleteConfirmedPublicationSource(request, sourceMutationLocked = false, expectedLocators = null) {
+    const { publicationId, authorize } = request
     const { manifest, locators } = await resolveOwnedPublication(publicationId)
     if (!sourceMutationLocked) {
       return withSourceMutationLocks(
         locators.map(locator => locator.coreKey),
-        () => deleteConfirmedPublicationSource({ publicationId }, true)
+        () => deleteConfirmedPublicationSource(request, true, locators)
       )
     }
-    if (sourceIsActivelyPlaying(locators)) return { success: false, reason: 'playback-active' }
-    if (sourceIsManuallyPinned(locators)) return { success: false, reason: 'source-pinned' }
+    if (typeof authorize !== 'function') return { success: false, reason: 'locked-revalidation-required' }
+    if (expectedLocators && !sameSourceLocators(expectedLocators, locators)) {
+      return authorize({ refusalReason: 'evidence-changed' })
+    }
+    if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+
+    const collectLockedEvidence = () => collectSourceOffloadEvidence(publicationId, { manifest, locators })
     if (typeof sourceOffload.deleteSource === 'function') {
+      const authorization = await authorize({ collectEvidence: collectLockedEvidence })
+      if (!authorization.success) return authorization
       return sourceOffload.deleteSource({ publicationId, manifest, locators })
     }
+
     const locator = locators[0]
     const core = ctx.store.get({ key: b4a.from(locator.coreKey, 'hex') })
     const ownership = ownManagedApiResource(core, 'close')
     try {
       await core.ready()
-      if (sourceIsActivelyPlaying(locators)) return { success: false, reason: 'playback-active' }
-      if (sourceIsManuallyPinned(locators)) return { success: false, reason: 'source-pinned' }
+      if (sourceIsManuallyPinned(locators)) return authorize({ refusalReason: 'source-pinned' })
+      const authorization = await authorize({ collectEvidence: collectLockedEvidence })
+      if (!authorization.success) return authorization
       if (typeof core.clear !== 'function') return { success: false, reason: 'delete-unavailable' }
       await core.clear(locator.start, locator.end)
       await collectCorestoreGarbage(ctx.store, { label: 'confirmed source offload', log: console.warn })
       return { success: true, freedBytes: locator.byteLength }
-    } catch {
-      return { success: false, reason: 'delete-failed' }
     } finally {
       await ownership.cleanup()
     }
@@ -2246,8 +2276,12 @@ export function createApi({
           return { success: false, error: 'Invalid blob range' }
         }
 
-        const core = ctx.store.get({ key: b4a.from(blobsCoreKey, 'hex') })
-        const coreOwnership = ownPrefetchCore(prefetchKey, core)
+        let core
+        let coreOwnership
+        await withSourceMutationLocks([blobsCoreKey], () => {
+          core = ctx.store.get({ key: b4a.from(blobsCoreKey, 'hex') })
+          coreOwnership = ownPrefetchCore(prefetchKey, core)
+        })
         let releaseBlobRef = null
         let discoveryHandle = null
         const releasePrefetchGuards = () => {
@@ -3747,9 +3781,10 @@ export function createApi({
     ...createNetworkLifecycleApi({
       onPlaybackActive: cancelScheduledQuotaSweep,
       onPlaybackInactive: scheduleQuotaSweepAfterPlayback,
+      networkPolicyRuntime,
     }),
     // Local policy controls
-    ...createPolicyApi({ store: ctx.networkPolicyStore || ctx.metaDb?.sub?.('network-policy') || new Map(), onPolicyChange: ctx.onNetworkPolicyChange }),
+    ...localPolicyApi,
   };
   return api
 }

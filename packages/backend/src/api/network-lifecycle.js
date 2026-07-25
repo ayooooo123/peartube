@@ -10,6 +10,7 @@ import {
 export function createNetworkLifecycleApi({
   onPlaybackActive,
   onPlaybackInactive,
+  networkPolicyRuntime,
 } = {}) {
   return {
     /**
@@ -19,7 +20,11 @@ export function createNetworkLifecycleApi({
      */
     async suspendNetwork() {
       try {
-        await suspendNetworking()
+        if (networkPolicyRuntime?.setEnvironment) {
+          await networkPolicyRuntime.setEnvironment({ background: true })
+        } else {
+          await suspendNetworking()
+        }
         return { success: true }
       } catch (err) {
         console.error('[API] suspendNetwork error:', err.message)
@@ -33,7 +38,11 @@ export function createNetworkLifecycleApi({
      */
     async resumeNetwork() {
       try {
-        await resumeNetworking()
+        if (networkPolicyRuntime?.setEnvironment) {
+          await networkPolicyRuntime.setEnvironment({ background: false })
+        } else {
+          await resumeNetworking()
+        }
         return { success: true }
       } catch (err) {
         console.error('[API] resumeNetwork error:', err.message)

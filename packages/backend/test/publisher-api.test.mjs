@@ -37,6 +37,32 @@ function createCatalogRegistry({ catalogKey = bytes(32, 100), appendError = null
   let binding = null
   const catalog = {
     key: b4a.from(catalogKey),
+    writable: true,
+    localWriterKey: b4a.from(catalogKey),
+    localSignerKey: bytes(32, 99),
+    async waitForWritable() {
+      return true
+    },
+    async getAuthorizationState() {
+      const namespace = appended.find(value => value.recordType === PUBLISHER_RECORD_TYPES.NAMESPACE)
+      if (!namespace) return null
+      const writers = appended
+        .filter(value => value.recordType === PUBLISHER_RECORD_TYPES.WRITER_ADMISSION)
+        .map(value => {
+          const body = decodePublisherOperationBody(value.recordType, value.canonicalBody)
+          return {
+            key: hex(body.writerKey),
+            signerKey: hex(body.signerKey),
+            capabilities: body.capabilities,
+            firstAcceptedSequence: body.firstAcceptedSequence,
+            lastAcceptedSequence: body.firstAcceptedSequence - 1,
+            expiresAt: body.expiresAt,
+            admissionPolicyEpoch: 0,
+            revocation: null
+          }
+        })
+      return { policyEpoch: 0, policySequence: writers.length, writers }
+    },
     async getOperationReceipt(operationId) {
       return appended.some(value => b4a.equals(value.recordId || value.transitionId, operationId))
         ? { accepted: true }
@@ -94,6 +120,9 @@ function createCatalogRegistry({ catalogKey = bytes(32, 100), appendError = null
     async provision() {
       return binding
     },
+    async getWritableBindings() {
+      return binding ? [binding] : []
+    },
     async resolve() {
       return binding
     },
@@ -125,7 +154,8 @@ function createNamespaceFixture(options = {}) {
   const api = publisherApiModule.createPublisherApi({
     now: () => clock,
     catalogRegistry: registry,
-    maxIntents: options.maxIntents
+    maxIntents: options.maxIntents,
+    ctx: options.ctx,
   })
   return {
     api,
@@ -216,6 +246,54 @@ test('prepare uses canonical verification-only records and pins a provisioned na
   t.is(mismatch.success, false)
   t.is(mismatch.error, 'PUBLISHER_CATALOG_MISMATCH')
 })
+test('provision reports one writable local catalog with public writer and signer keys', async (t) => {
+  const root = crypto.keyPair(bytes(32, 17))
+  const publisherId = derivePublisherId(root.publicKey)
+  const localWriterKey = bytes(32, 18)
+  const localSignerKey = bytes(32, 19)
+  let writableChecks = 0
+  const binding = {
+    publisherId,
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 20),
+    catalog: {
+      writable: true,
+      key: bytes(32, 20),
+      localWriterKey,
+      localSignerKey,
+      async waitForWritable() {
+        writableChecks++
+        return true
+      },
+      async getAuthorizationState() {
+        return null
+      }
+    }
+  }
+  const registry = {
+    async getWritableBindings() {
+      return [binding]
+    },
+    async provision() {
+      return binding
+    }
+  }
+  const api = publisherApiModule.createPublisherApi({ catalogRegistry: registry, now: () => NOW })
+
+  const provisioned = await api.provisionPublisherCatalog({
+    publisherId: hex(publisherId),
+    genesisRootKey: root.publicKey
+  })
+
+  t.is(provisioned.success, true)
+  t.is(provisioned.writable, true)
+  t.is(provisioned.namespaceInitialized, false)
+  t.is(provisioned.admitted, false)
+  t.alike(provisioned.localWriterKey, localWriterKey)
+  t.alike(provisioned.localSignerKey, localSignerKey)
+  t.is(writableChecks, 1)
+})
+
 test('shell root intent path admits and revokes the normal device writer without importing root material', async t => {
   const fixture = createNamespaceFixture()
   const writerKey = bytes(32, 40)
@@ -248,6 +326,39 @@ test('shell root intent path admits and revokes the normal device writer without
     t.is(submitted.complete, true)
   }
   t.is(fixture.registry.appended.length, 2)
+})
+
+test('writer admission fails closed while legacy publication migration is pending', async t => {
+  let migrationChecks = 0
+  const fixture = createNamespaceFixture({
+    ctx: {
+      async completePublicationV1Migration() {
+        migrationChecks++
+        return { status: 'pending' }
+      }
+    }
+  })
+  const recordType = PUBLISHER_RECORD_TYPES.WRITER_ADMISSION
+  const prepared = await fixture.api.preparePublisherRootOperation(prepareRequest(fixture, 62, {
+    recordType,
+    signerPublicKey: fixture.root.publicKey,
+    body: encodePublisherOperationBody(recordType, {
+      writerKey: fixture.registry.catalog.localWriterKey,
+      signerKey: fixture.registry.catalog.localSignerKey,
+      capabilities: ['claim', 'publish'],
+      firstAcceptedSequence: 1,
+      expiresAt: NOW + 100_000,
+      admissionNonce: bytes(16, 44)
+    }),
+    expiresInMs: 0
+  }))
+  t.is(prepared.success, true)
+  const submitted = await fixture.api.submitPublisherRootOperation(
+    signedSubmitRequest(fixture, prepared)
+  )
+  t.is(submitted.success, false)
+  t.is(submitted.reason, 'PUBLISHER_MIGRATION_PENDING')
+  t.is(migrationChecks, 1)
 })
 
 
@@ -303,7 +414,14 @@ test('real context registry durably applies a provisioned namespace genesis befo
   await metadataCore.ready()
   const metaDb = new Hyperbee(metadataCore, { keyEncoding: 'utf-8', valueEncoding: 'json' })
   await metaDb.ready()
-  const registry = publisherApiModule.createPublisherCatalogRegistry({ store, metaDb }, { now: () => NOW })
+  const device = crypto.keyPair(bytes(32, 71))
+  const registry = publisherApiModule.createPublisherCatalogRegistry({ store, metaDb }, {
+    now: () => NOW,
+    deviceSigner: {
+      signerKey: device.publicKey,
+      sign: preimage => crypto.sign(preimage, device.secretKey)
+    }
+  })
   try {
     const root = crypto.keyPair(bytes(32, 70))
     const publisherId = derivePublisherId(root.publicKey)

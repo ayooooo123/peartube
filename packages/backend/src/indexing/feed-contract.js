@@ -1,10 +1,15 @@
 import b4a from 'b4a'
 
 import { encodeCanonical, toHex } from '../publisher/canonical.js'
-import { createSignedEnvelope, verifySignedEnvelope } from '../records/signed-envelope.js'
+import { createApplicationEnvelope, verifyApplicationEnvelope } from '../records/application-envelope.js'
+import {
+  assertProtocolCompatibility,
+  createProtocolAdvertisement
+} from '../network/version.js'
 
 export const INDEX_FEED_PAGE_RECORD_TYPE = 'peartube.index.feed-page.v1'
 export const MAX_INDEX_FEED_RECORDS = 128
+export const INDEX_FEED_CAPABILITY = 'index-feed:v1'
 
 function hex32(value, name) {
   return toHex(value, 32, name)
@@ -39,6 +44,9 @@ function normalizeRecord(record = {}) {
 export function createIndexFeedPage(input = {}) {
   const records = input.records || []
   if (!Array.isArray(records) || records.length > MAX_INDEX_FEED_RECORDS) throw new Error('too many index records')
+  const compatibility = createProtocolAdvertisement(input, {
+    requiredCapabilities: [INDEX_FEED_CAPABILITY],
+  })
   const body = {
     version: 1,
     curatorId: hex32(input.curatorId, 'curatorId'),
@@ -46,8 +54,9 @@ export function createIndexFeedPage(input = {}) {
     nextCursor: input.nextCursor == null ? null : boundedString(input.nextCursor, 'nextCursor', 256, true),
     records: records.map(normalizeRecord),
     issuedAt: Number(input.issuedAt || 0),
+    ...compatibility,
   }
-  const envelope = createSignedEnvelope({ recordType: INDEX_FEED_PAGE_RECORD_TYPE, body: encodeCanonical(body), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
+  const envelope = createApplicationEnvelope({ recordType: INDEX_FEED_PAGE_RECORD_TYPE, body: encodeCanonical(body), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
   envelope.recordIdHex = hex32(envelope.recordId, 'recordId')
   return { pageId: envelope.recordIdHex, body, envelope }
 }
@@ -56,9 +65,14 @@ export async function verifyIndexFeedPage(envelope, options = {}) {
   let body
   try { body = JSON.parse(b4a.toString(envelope.body)) } catch { return false }
   if (options.curatorId && body.curatorId !== hex32(options.curatorId, 'curatorId')) return false
-  const ok = await verifySignedEnvelope(envelope, { recordType: INDEX_FEED_PAGE_RECORD_TYPE, now: options.now, allowedSigners: [b4a.from(body.curatorId, 'hex')] })
+  const ok = await verifyApplicationEnvelope(envelope, { recordType: INDEX_FEED_PAGE_RECORD_TYPE, now: options.now, allowedSigners: [b4a.from(body.curatorId, 'hex')] })
   if (!ok) return false
   const signer = envelope.signer ? hex32(envelope.signer, 'signer') : null
   if (signer !== body.curatorId) return false
+  assertProtocolCompatibility(body, {
+    protocolMajor: options.protocolMajor,
+    supportedCapabilities: options.supportedCapabilities || [INDEX_FEED_CAPABILITY],
+    mandatoryCapabilities: [INDEX_FEED_CAPABILITY],
+  })
   return { pageId: hex32(envelope.recordId, 'recordId'), body, envelope }
 }

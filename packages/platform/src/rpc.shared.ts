@@ -1,5 +1,76 @@
-import type { PROTOCOL_VERSION } from '@peartube/host'
+import type {
+  AssessSourceOffloadRequest,
+  AssessSourceOffloadResponse,
+  ConfirmSourceOffloadRequest,
+  ConfirmSourceOffloadResponse,
+  ArchiveOperatorStatusResponse,
+  ArchiveParticipationStatusResponse,
+  ExportMigrationReportResponse,
+  ExportPortableStateResponse,
+  GetPublisherDeviceStatusRequest,
+  GetPublisherDeviceStatusResponse,
+  MigrationStatusRequest,
+  MigrationStatusResponse,
+  PreviewStorageLimitResponse,
+  RestorePortableStateRequest,
+  RestorePortableStateResponse,
+  RetryMigrationResponse,
+  RequestArchivePublicationRequest,
+  RequestArchivePublicationResponse,
+  SetArchiveParticipationRequest,
+  StorageStatsResponse,
+  PreparePublisherRootOperationRequest,
+  PreparePublisherRootOperationResponse,
+  SubmitPublisherRootOperationRequest,
+  SubmitPublisherRootOperationResponse,
+} from '@peartube/host'
+import type {
+  MediaAgentContributionsResponse,
+  MediaAgentResponse,
+  MediaCatalogResponse,
+  MediaClaimProvenanceResponse,
+  MediaCollectionItemsResponse,
+  MediaEntityResponse,
+  MediaPageRequest,
+  PublicationSourcesResponse,
+  SetSourcePreferenceResponse,
+} from '@peartube/host'
+import { PROTOCOL_VERSION } from '@peartube/host/contracts'
 import { PROTOCOL_EVENTS } from '@peartube/host/events'
+
+export type {
+  AssessSourceOffloadRequest,
+  AssessSourceOffloadResponse,
+  ConfirmSourceOffloadRequest,
+  ConfirmSourceOffloadResponse,
+  ArchiveOperatorStatusResponse,
+  ArchiveParticipationStatusResponse,
+  ExportMigrationReportResponse,
+  ExportPortableStateResponse,
+  GetPublisherDeviceStatusRequest,
+  GetPublisherDeviceStatusResponse,
+  MigrationStatusRequest,
+  MigrationStatusResponse,
+  PreviewStorageLimitResponse,
+  RestorePortableStateRequest,
+  RestorePortableStateResponse,
+  RetryMigrationResponse,
+  RequestArchivePublicationRequest,
+  RequestArchivePublicationResponse,
+  SetArchiveParticipationRequest,
+  StorageStatsResponse,
+}
+export type {
+  MediaAgentContributionsResponse,
+  MediaAgentResponse,
+  MediaCatalogResponse,
+  MediaClaimProvenanceResponse,
+  MediaCollectionItemsResponse,
+  MediaEntityResponse,
+  MediaPageRequest,
+  PublicationSourcesResponse,
+  SetSourcePreferenceResponse,
+}
 
 export type HostProtocolVersion = typeof PROTOCOL_VERSION
 
@@ -126,6 +197,8 @@ export type HostErrorData = {
   code: string
   message: string
   retryable: boolean
+  storedVersion?: number | null
+  expectedVersion?: number | null
 }
 
 export type NetworkStatusData = {
@@ -133,19 +206,15 @@ export type NetworkStatusData = {
   peerCount?: number
   swarmConnections?: number
   swarmPeers?: number
-  feedConnections?: number
-  feedEntries?: number
   channelsLoaded?: number
   swarmOffline?: boolean
   swarmOfflineReason?: string | null
   swarmListenResolved?: boolean
   peerPoolJoined?: boolean
-  publicFeedDiscoveryJoined?: boolean
   recommendedBoundary?: string | null
   network?: any
   startupTiming?: any
   doctor?: any
-  directPeerDial?: any
 }
 
 export type PlatformLifecycleEvent =
@@ -178,12 +247,15 @@ export type PlatformRunner = {
     storagePath: string
     entrypoint: string
     args?: string[]
+    protocolVersion: HostProtocolVersion
+    publisherSigner?: PublisherSignerBridgeLike | null
   }): Promise<PlatformRunnerSession>
 }
 
 export type PlatformRunnerSession = {
   stream: any
   client?: ProtocolClientLike
+  publisherSigner?: PublisherSignerBridgeLike
   waitUntilReady(): Promise<HostReadyData>
   terminate(): Promise<void>
   onLifecycle(cb: (event: PlatformLifecycleEvent) => void): () => void
@@ -198,7 +270,87 @@ type ChannelCatalogProtocolClient = {
   channel: Partial<ChannelCatalogMethods> & Record<string, (request?: unknown) => Promise<unknown>>
 }
 
-export type ProtocolClientLike = ChannelCatalogProtocolClient & {
+type MediaGraphEntityRequest = {
+  entityId: string
+  includeClaims?: boolean
+  includeConflicts?: boolean
+}
+
+type MediaGraphProtocolRequest = MediaPageRequest & {
+  limitProvided?: boolean
+}
+
+type MediaGraphMethods = {
+  getMediaCatalog(request: MediaGraphProtocolRequest): Promise<MediaCatalogResponse>
+  getMediaEntity(request: MediaGraphEntityRequest): Promise<MediaEntityResponse>
+  getMediaCollection(request: MediaGraphEntityRequest): Promise<MediaEntityResponse>
+  getMediaCollectionItems(request: MediaGraphProtocolRequest & {
+    collectionEntityId: string
+  }): Promise<MediaCollectionItemsResponse>
+  getMediaAgent(request: MediaGraphEntityRequest): Promise<MediaAgentResponse>
+  getAgentContributions(request: MediaGraphProtocolRequest & {
+    agentEntityId: string
+  }): Promise<MediaAgentContributionsResponse>
+  getPublicationSources(request: MediaGraphProtocolRequest & {
+    entityId: string
+  }): Promise<PublicationSourcesResponse>
+  getClaimProvenance(request: {
+    claimId: string
+  }): Promise<MediaClaimProvenanceResponse>
+  setSourcePreference(request: {
+    entityId: string
+    publicationId: string
+    preferred: boolean
+  }): Promise<SetSourcePreferenceResponse>
+}
+
+type MediaGraphProtocolClient = {
+  ready(): Promise<HostReadyData>
+  mediaGraph: Partial<MediaGraphMethods> & Record<string, unknown>
+}
+
+export type PublisherRootIntentRequest = Omit<
+  PreparePublisherRootOperationRequest,
+  'intentId' | 'signerPublicKey'
+> & {
+  userInitiated: true
+}
+
+export type PublisherSignerBridgeLike = {
+  beginUserIntent(request: PublisherRootIntentRequest): Promise<{
+    intentId: string
+    signerPublicKey: Uint8Array
+  }>
+  signPreparedRecord(
+    intentId: string,
+    prepared: PreparePublisherRootOperationResponse,
+  ): Promise<SubmitPublisherRootOperationRequest>
+  completeIntent(intentId: string): void
+  cancelIntent(intentId: string): void
+}
+
+type PublisherProtocolClient = {
+  publisher: {
+    provisionPublisherCatalog(request: {
+      publisherId: string
+      genesisRootKey: Uint8Array
+    }): Promise<{
+      success: boolean
+      publisherId: string
+      catalogBootstrapKey: Uint8Array
+      errorCode?: string | null
+      error?: string | null
+    }>
+    preparePublisherRootOperation(
+      request: PreparePublisherRootOperationRequest,
+    ): Promise<PreparePublisherRootOperationResponse>
+    submitPublisherRootOperation(
+      request: SubmitPublisherRootOperationRequest,
+    ): Promise<SubmitPublisherRootOperationResponse>
+  }
+}
+
+export type ProtocolClientLike = ChannelCatalogProtocolClient & MediaGraphProtocolClient & {
   rpc: any
   events: {
     on(event: string, listener: (payload: any) => void): () => void
@@ -206,15 +358,17 @@ export type ProtocolClientLike = ChannelCatalogProtocolClient & {
   system?: {
     getSwarmStatus?(request?: any): Promise<NetworkStatusData>
   }
+  publisher?: PublisherProtocolClient['publisher']
 }
 
 type ReadyCallback = (data: HostReadyData) => void
-type ErrorCallback = (data: { message: string; code?: string; retryable?: boolean }) => void
+type ErrorCallback = (data: { message: string; code?: string; retryable?: boolean; storedVersion?: number | null; expectedVersion?: number | null }) => void
 type VideoStatsCallback = (data: any) => void
 type UploadProgressCallback = (data: any) => void
 type DownloadProgressCallback = (data: any) => void
 type TranscodeProgressCallback = (data: any) => void
-type FeedUpdateCallback = (data: any) => void
+export type MediaGraphUpdateData = { revision: string; changedCount: number }
+type MediaGraphUpdateCallback = (data: MediaGraphUpdateData) => void
 type NetworkStatusCallback = (data: NetworkStatusData) => void
 type CastDeviceFoundCallback = (data: any) => void
 type CastDeviceLostCallback = (data: any) => void
@@ -230,7 +384,7 @@ type PlatformCallbacks = {
   uploadProgress: UploadProgressCallback[]
   downloadProgress: DownloadProgressCallback[]
   transcodeProgress: TranscodeProgressCallback[]
-  feedUpdate: FeedUpdateCallback[]
+  mediaGraphUpdate: MediaGraphUpdateCallback[]
   networkStatus: NetworkStatusCallback[]
   castDeviceFound: CastDeviceFoundCallback[]
   castDeviceLost: CastDeviceLostCallback[]
@@ -244,12 +398,18 @@ type PlatformRpcBridgeOptions = {
   entrypoint: string
   getStoragePath(): string
   getArgs?(): string[]
+  getPublisherSigner?(): PublisherSignerBridgeLike | null
   createProtocolClientImpl?: (options: { stream: any }) => ProtocolClientLike
 }
 
 function removeCallback<T>(callbacks: T[], callback: T) {
   const index = callbacks.indexOf(callback)
   if (index !== -1) callbacks.splice(index, 1)
+}
+
+function errorField(error: unknown, key: string): unknown {
+  if (!error || typeof error !== 'object' || !(key in error)) return undefined
+  return error[key as keyof typeof error]
 }
 
 function createCallbackStore(): PlatformCallbacks {
@@ -260,7 +420,7 @@ function createCallbackStore(): PlatformCallbacks {
     videoStats: [],
     uploadProgress: [],
     downloadProgress: [],
-    feedUpdate: [],
+    mediaGraphUpdate: [],
     transcodeProgress: [],
     networkStatus: [],
     castDeviceFound: [],
@@ -310,7 +470,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     safeDispatch(callbacks.ready, data)
   }
 
-  const dispatchError = (data: { message: string; code?: string; retryable?: boolean }) => {
+  const dispatchError = (data: { message: string; code?: string; retryable?: boolean; storedVersion?: number | null; expectedVersion?: number | null }) => {
     safeDispatch(callbacks.error, data)
   }
 
@@ -327,7 +487,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       nextClient.events.on(PROTOCOL_EVENTS.UPLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.uploadProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.LOG, (data: any) => safeDispatch(callbacks.log, data)),
       nextClient.events.on(PROTOCOL_EVENTS.DOWNLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.downloadProgress, data)),
-      nextClient.events.on(PROTOCOL_EVENTS.FEED_UPDATED, (data: any) => safeDispatch(callbacks.feedUpdate, data)),
+      nextClient.events.on(PROTOCOL_EVENTS.MEDIA_GRAPH_UPDATED, (data: MediaGraphUpdateData) => safeDispatch(callbacks.mediaGraphUpdate, data)),
       nextClient.events.on(PROTOCOL_EVENTS.TRANSCODE_PROGRESS, (data: any) => safeDispatch(callbacks.transcodeProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.NETWORK_STATUS, (data: any) => safeDispatch(callbacks.networkStatus, data)),
       nextClient.events.on(PROTOCOL_EVENTS.VIDEO_STATS, (data: any) => safeDispatch(callbacks.videoStats, data)),
@@ -348,7 +508,9 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       dispatchError({
         code: event.code,
         message: event.message,
-        retryable: event.retryable
+        retryable: event.retryable,
+        storedVersion: event.storedVersion,
+        expectedVersion: event.expectedVersion
       })
       return
     }
@@ -396,9 +558,9 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
         callbacks.transcodeProgress.push(callback)
         return () => removeCallback(callbacks.transcodeProgress, callback)
       },
-      onFeedUpdate(callback: FeedUpdateCallback) {
-        callbacks.feedUpdate.push(callback)
-        return () => removeCallback(callbacks.feedUpdate, callback)
+      onMediaGraphUpdate(callback: MediaGraphUpdateCallback) {
+        callbacks.mediaGraphUpdate.push(callback)
+        return () => removeCallback(callbacks.mediaGraphUpdate, callback)
       },
       onNetworkStatus(callback: NetworkStatusCallback) {
         callbacks.networkStatus.push(callback)
@@ -431,7 +593,9 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
           platform: options.platform,
           storagePath: options.getStoragePath(),
           entrypoint: options.entrypoint,
-          args: options.getArgs?.() ?? []
+          args: options.getArgs?.() ?? [],
+          publisherSigner: options.getPublisherSigner?.() ?? null,
+          protocolVersion: PROTOCOL_VERSION
         })
 
         const nextClient = nextSession.client ?? createClient?.({ stream: nextSession.stream })
@@ -456,6 +620,10 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
         await initPromise
       } catch (error) {
         const activeSession = session
+        const errorCode = errorField(error, 'code')
+        const retryable = errorField(error, 'retryable')
+        const storedVersion = errorField(error, 'storedVersion')
+        const expectedVersion = errorField(error, 'expectedVersion')
         teardownSubscriptions()
         session = null
         client = null
@@ -464,9 +632,11 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
         lastReady = null
         await activeSession?.terminate?.().catch(() => {})
         dispatchError({
-          code: (error as any)?.code,
+          code: typeof errorCode === 'string' ? errorCode : undefined,
           message: error instanceof Error ? error.message : String(error),
-          retryable: Boolean((error as any)?.retryable)
+          retryable: Boolean(retryable),
+          storedVersion: typeof storedVersion === 'number' && Number.isSafeInteger(storedVersion) ? storedVersion : undefined,
+          expectedVersion: typeof expectedVersion === 'number' && Number.isSafeInteger(expectedVersion) ? expectedVersion : undefined,
         })
         throw error
       } finally {
@@ -499,6 +669,10 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       return client
     },
 
+    getPublisherSigner() {
+      return session?.publisherSigner ?? null
+    },
+
     getRpc() {
       return client?.rpc ?? null
     }
@@ -524,6 +698,169 @@ export function createChannelCatalogRpc(ensureClient: () => ChannelCatalogProtoc
         : request
       return channel.getContentItems(protocolRequest)
     }
+  }
+}
+
+function withLimitPresence<T extends MediaPageRequest>(request: T): T & { limitProvided?: boolean } {
+  return Object.hasOwn(request, 'limit')
+    ? { ...request, limitProvided: true }
+    : request
+}
+
+export function createMediaGraphRpc(ensureClient: () => MediaGraphProtocolClient) {
+  return {
+    async getMediaCatalog(request: MediaPageRequest = {}) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getMediaCatalog
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getMediaCatalog')
+      return handler(withLimitPresence(request))
+    },
+    async getMediaEntity(request: MediaGraphEntityRequest) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getMediaEntity
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getMediaEntity')
+      return handler(request)
+    },
+    async getMediaCollection(request: MediaGraphEntityRequest) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getMediaCollection
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getMediaCollection')
+      return handler(request)
+    },
+    async getMediaCollectionItems(request: MediaPageRequest & { collectionEntityId: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getMediaCollectionItems
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getMediaCollectionItems')
+      return handler(withLimitPresence(request))
+    },
+    async getMediaAgent(request: MediaGraphEntityRequest) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getMediaAgent
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getMediaAgent')
+      return handler(request)
+    },
+    async getAgentContributions(request: MediaPageRequest & { agentEntityId: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getAgentContributions
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getAgentContributions')
+      return handler(withLimitPresence(request))
+    },
+    async getPublicationSources(request: MediaPageRequest & { entityId: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getPublicationSources
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getPublicationSources')
+      return handler(withLimitPresence(request))
+    },
+    async getClaimProvenance(request: { claimId: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getClaimProvenance
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getClaimProvenance')
+      return handler(request)
+    },
+    async setSourcePreference(request: { entityId: string; publicationId: string; preferred: boolean }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.setSourcePreference
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.setSourcePreference')
+      return handler(request)
+    },
+  }
+}
+
+export const PUBLISHER_SIGNER_PROTOCOL_ERRORS = Object.freeze({
+  RENDERER_FORBIDDEN: 'PUBLISHER_SIGNER_RENDERER_FORBIDDEN',
+  UNAVAILABLE: 'PUBLISHER_SIGNER_UNAVAILABLE',
+  SUBSTITUTION: 'PUBLISHER_SIGNER_SUBSTITUTION',
+} as const)
+
+class PublisherSignerProtocolError extends Error {
+  readonly code: string
+
+  constructor(code: string) {
+    super(`Publisher signer error: ${code}`)
+    this.name = 'PublisherSignerProtocolError'
+    this.code = code
+  }
+}
+
+function publisherSignerProtocolError(code: string): PublisherSignerProtocolError {
+  return new PublisherSignerProtocolError(code)
+}
+
+function equalPublisherBytes(left: unknown, right: unknown): boolean {
+  if (!(left instanceof Uint8Array) || !(right instanceof Uint8Array)) return false
+  if (left.byteLength !== right.byteLength) return false
+  let difference = 0
+  for (let index = 0; index < left.byteLength; index++) {
+    difference |= left[index] ^ right[index]
+  }
+  return difference === 0
+}
+
+function assertPublisherSubmissionBinding(
+  signed: SubmitPublisherRootOperationRequest,
+  submitted: SubmitPublisherRootOperationResponse,
+): void {
+  if (!submitted.success || !submitted.valid) return
+  if (
+    !equalPublisherBytes(signed.candidateRecordId, submitted.recordId) ||
+    !equalPublisherBytes(signed.signerPublicKey, submitted.signerPublicKey) ||
+    !equalPublisherBytes(signed.signature, submitted.signature)
+  ) {
+    throw publisherSignerProtocolError(PUBLISHER_SIGNER_PROTOCOL_ERRORS.SUBSTITUTION)
+  }
+}
+
+export function createPublisherRootOperationRpc(
+  ensureClient: () => PublisherProtocolClient,
+  signerBridge: PublisherSignerBridgeLike | null,
+  options: { runtime?: 'shell' | 'renderer' } = {},
+) {
+  return {
+    async provisionPublisherCatalog(request: { publisherId: string; genesisRootKey: Uint8Array }) {
+      if (options.runtime === 'renderer') {
+        throw publisherSignerProtocolError(PUBLISHER_SIGNER_PROTOCOL_ERRORS.RENDERER_FORBIDDEN)
+      }
+      return ensureClient().publisher.provisionPublisherCatalog(request)
+    },
+
+    async authorizePublisherRootOperation(
+      request: PublisherRootIntentRequest,
+    ): Promise<SubmitPublisherRootOperationResponse> {
+      if (options.runtime === 'renderer') {
+        throw publisherSignerProtocolError(PUBLISHER_SIGNER_PROTOCOL_ERRORS.RENDERER_FORBIDDEN)
+      }
+      if (!signerBridge || request.userInitiated !== true) {
+        throw publisherSignerProtocolError(PUBLISHER_SIGNER_PROTOCOL_ERRORS.UNAVAILABLE)
+      }
+
+      const { userInitiated: _userInitiated, ...publicRequest } = request
+      const intent = await signerBridge.beginUserIntent(request)
+      try {
+        const prepared = await ensureClient().publisher.preparePublisherRootOperation({
+          ...publicRequest,
+          intentId: intent.intentId,
+          signerPublicKey: intent.signerPublicKey,
+        })
+        const signed = await signerBridge.signPreparedRecord(intent.intentId, prepared)
+        const submitted = await ensureClient().publisher.submitPublisherRootOperation(signed)
+        assertPublisherSubmissionBinding(signed, submitted)
+        if (submitted.success) signerBridge.completeIntent(intent.intentId)
+        else signerBridge.cancelIntent(intent.intentId)
+        return submitted
+      } catch (error) {
+        signerBridge.cancelIntent(intent.intentId)
+        throw error
+      }
+    },
   }
 }
 
@@ -589,4 +926,84 @@ export function createPersonalRpc(ensureRPC: () => any) {
       return ensureRPC().provisionPersonalEncryption(req);
     }
   };
+}
+
+/**
+ * Operability/recovery RPC methods shared by native and web. Buffer and array
+ * limits are part of the imported host contract and are enforced by handlers.
+ */
+export function createOperabilityRpc(ensureRPC: () => any) {
+  return {
+    async getMigrationStatus(
+      request: MigrationStatusRequest,
+    ): Promise<MigrationStatusResponse> {
+      return ensureRPC().getMigrationStatus(request)
+    },
+
+    async retryMigration(
+      request: MigrationStatusRequest,
+    ): Promise<RetryMigrationResponse> {
+      return ensureRPC().retryMigration(request)
+    },
+
+    async exportMigrationReport(
+      request: MigrationStatusRequest,
+    ): Promise<ExportMigrationReportResponse> {
+      return ensureRPC().exportMigrationReport(request)
+    },
+
+    async getPublisherDeviceStatus(
+      request: GetPublisherDeviceStatusRequest = {},
+    ): Promise<GetPublisherDeviceStatusResponse> {
+      return ensureRPC().getPublisherDeviceStatus(request)
+    },
+
+    async exportPortableState(): Promise<ExportPortableStateResponse> {
+      return ensureRPC().exportPortableState({})
+    },
+
+    async restorePortableState(
+      request: RestorePortableStateRequest,
+    ): Promise<RestorePortableStateResponse> {
+      return ensureRPC().restorePortableState(request)
+    },
+
+    async assessSourceOffload(
+      request: AssessSourceOffloadRequest,
+    ): Promise<AssessSourceOffloadResponse> {
+      return ensureRPC().assessSourceOffload(request)
+    },
+
+    async confirmSourceOffload(
+      request: ConfirmSourceOffloadRequest,
+    ): Promise<ConfirmSourceOffloadResponse> {
+      return ensureRPC().confirmSourceOffload(request)
+    },
+
+    async previewStorageLimit(
+      request: { maxBytes: number },
+    ): Promise<PreviewStorageLimitResponse> {
+      return ensureRPC().previewStorageLimit(request)
+    },
+
+    async getArchiveOperatorStatus(): Promise<ArchiveOperatorStatusResponse> {
+      return ensureRPC().getArchiveOperatorStatus({})
+    },
+
+    async getArchiveParticipation(): Promise<ArchiveParticipationStatusResponse> {
+      return ensureRPC().getArchiveParticipation({})
+    },
+
+    async setArchiveParticipation(
+      request: SetArchiveParticipationRequest,
+    ): Promise<ArchiveParticipationStatusResponse> {
+      return ensureRPC().setArchiveParticipation(request)
+    },
+
+    async requestArchivePublication(
+      request: RequestArchivePublicationRequest,
+    ): Promise<RequestArchivePublicationResponse> {
+      return ensureRPC().requestArchivePublication(request)
+    },
+  }
 }

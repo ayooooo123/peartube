@@ -1,7 +1,15 @@
 // @ts-nocheck
+import { derivePublisherId } from '@peartube/backend/publisher'
+import { publisherRootSignaturePreimage } from '../../lib/publisher-signer-bridge'
 
 export const BUN_PUBLISHER_ROOT_SERVICE = 'peartube.publisher-root.v1'
 export const BUN_PUBLISHER_ROOT_RECORD_VERSION = 1
+const LEGACY_ROOT_MIGRATION_VERSION = 1
+const LEGACY_ROOT_CHALLENGE_DOMAIN = 'peartube:legacy-publisher-root-migration:v1\0'
+const PUBLISHER_PUBLIC_KEY_BYTES = 32
+const PUBLISHER_SECRET_KEY_BYTES = 64
+const MIGRATION_NONCE_BYTES = 32
+
 
 export function redactPublisherVaultError(error, code = 'publisher-vault-error') {
   const safe = new Error(code)
@@ -44,6 +52,54 @@ function toHex(value, b4a, name) {
   return b4a.toString(toBuffer(value, b4a, name), 'hex')
 }
 
+function publisherIdFor(publicKey, b4a) {
+  return b4a.toString(derivePublisherId(toBuffer(publicKey, b4a, 'publicKey')), 'hex')
+}
+
+function assertPublisherId(publisherId, publicKey, b4a) {
+  const derived = publisherIdFor(publicKey, b4a)
+  if (publisherId !== undefined && publisherId !== derived) throw new Error('publisherId does not match root public key')
+  return derived
+}
+
+function assertKeyContinuity(publicKey, secretKey, crypto, b4a) {
+  const challenge = b4a.from('peartube/publisher-root-import/v1')
+  const signature = crypto.sign(challenge, secretKey)
+  if (crypto.verify(challenge, signature, publicKey) !== true) throw new Error('publisher root key mismatch')
+}
+function validateLegacyRootMigrationRequest(input, crypto, b4a) {
+  if (input?.version !== LEGACY_ROOT_MIGRATION_VERSION) throw new Error('unsupported legacy root migration')
+
+  let secretKey
+  let challenge
+  try {
+    const publicKey = toBuffer(input.identityPublicKey, b4a, 'identityPublicKey')
+    secretKey = toBuffer(input.secretKey, b4a, 'secretKey')
+    challenge = toBuffer(input.challenge, b4a, 'challenge')
+    const domain = b4a.from(LEGACY_ROOT_CHALLENGE_DOMAIN)
+    const expectedChallengeBytes = domain.byteLength + PUBLISHER_PUBLIC_KEY_BYTES + MIGRATION_NONCE_BYTES
+
+    if (publicKey.byteLength !== PUBLISHER_PUBLIC_KEY_BYTES ||
+        secretKey.byteLength !== PUBLISHER_SECRET_KEY_BYTES ||
+        challenge.byteLength !== expectedChallengeBytes ||
+        !b4a.equals(challenge.subarray(0, domain.byteLength), domain) ||
+        !b4a.equals(
+          challenge.subarray(domain.byteLength, domain.byteLength + PUBLISHER_PUBLIC_KEY_BYTES),
+          publicKey,
+        )) {
+      throw new Error('invalid legacy root migration')
+    }
+
+    assertKeyContinuity(publicKey, secretKey, crypto, b4a)
+    return { publicKey, secretKey, challenge }
+  } catch (error) {
+    secretKey?.fill?.(0)
+    challenge?.fill?.(0)
+    throw error
+  }
+}
+
+
 function accountName(publisherId) {
   if (typeof publisherId !== 'string' || !/^[a-z0-9._:-]{16,160}$/i.test(publisherId)) {
     throw new Error('invalid publisherId')
@@ -54,8 +110,8 @@ function accountName(publisherId) {
 function serializeRoot({ publicKey, secretKey, b4a }) {
   return JSON.stringify({
     version: BUN_PUBLISHER_ROOT_RECORD_VERSION,
-    publicKey: toHex(publicKey, b4a, 'publicKey'),
-    secretKey: toHex(secretKey, b4a, 'secretKey'),
+    publicKey: b4a.toString(publicKey, 'hex'),
+    secretKey: b4a.toString(secretKey, 'hex'),
   })
 }
 
@@ -83,30 +139,62 @@ export function createBunPublisherKeyVault(options = {}) {
 
   return {
     async createRoot(input = {}) {
+      let keyPair
       try {
         const [crypto, b4a] = await Promise.all([loadCrypto(options.cryptoLoader), loadB4a(options.b4aLoader)])
-        const keyPair = input.seed ? crypto.keyPair(toBuffer(input.seed, b4a, 'seed')) : crypto.keyPair()
-        const publicKey = toHex(keyPair.publicKey, b4a, 'publicKey')
-        const publisherId = input.publisherId || `publisher:${publicKey}`
+        keyPair = input.seed ? crypto.keyPair(toBuffer(input.seed, b4a, 'seed')) : crypto.keyPair()
+        const publisherId = assertPublisherId(input.publisherId, keyPair.publicKey, b4a)
         const entry = await entryFor(publisherId)
         await entry.setPassword(serializeRoot({ publicKey: keyPair.publicKey, secretKey: keyPair.secretKey, b4a }))
-        return { publisherId, publicKey }
+        return { publisherId, publicKey: toHex(keyPair.publicKey, b4a, 'publicKey') }
       } catch (error) {
         throw redactPublisherVaultError(error)
+      } finally {
+        keyPair?.secretKey?.fill?.(0)
       }
     },
 
     async importRoot(input = {}) {
+      let secretKey
       try {
-        const b4a = await loadB4a(options.b4aLoader)
+        const [crypto, b4a] = await Promise.all([loadCrypto(options.cryptoLoader), loadB4a(options.b4aLoader)])
         const publicKey = toBuffer(input.publicKey, b4a, 'publicKey')
-        const secretKey = toBuffer(input.secretKey, b4a, 'secretKey')
-        const publisherId = input.publisherId || `publisher:${toHex(publicKey, b4a, 'publicKey')}`
+        secretKey = toBuffer(input.secretKey, b4a, 'secretKey')
+        assertKeyContinuity(publicKey, secretKey, crypto, b4a)
+        const publisherId = assertPublisherId(input.publisherId, publicKey, b4a)
         const entry = await entryFor(publisherId)
         await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
         return { publisherId, publicKey: toHex(publicKey, b4a, 'publicKey') }
       } catch (error) {
         throw redactPublisherVaultError(error)
+      } finally {
+        secretKey?.fill?.(0)
+      }
+    },
+
+    async importLegacyRootMigration(input = {}) {
+      let secretKey
+      let challenge
+      try {
+        const [crypto, b4a] = await Promise.all([loadCrypto(options.cryptoLoader), loadB4a(options.b4aLoader)])
+        const validated = validateLegacyRootMigrationRequest(input, crypto, b4a)
+        secretKey = validated.secretKey
+        challenge = validated.challenge
+        const publicKey = validated.publicKey
+        const publisherId = assertPublisherId(undefined, publicKey, b4a)
+        const entry = await entryFor(publisherId)
+        await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
+        return {
+          version: LEGACY_ROOT_MIGRATION_VERSION,
+          durable: true,
+          publicKey: b4a.from(publicKey),
+          challengeSignature: crypto.sign(challenge, secretKey),
+        }
+      } catch (error) {
+        throw redactPublisherVaultError(error)
+      } finally {
+        secretKey?.fill?.(0)
+        challenge?.fill?.(0)
       }
     },
 
@@ -119,17 +207,26 @@ export function createBunPublisherKeyVault(options = {}) {
       }
     },
 
-    async signDigest(input = {}) {
+    async signProtocolRecord(input = {}) {
+      let root
+      let preimage
       try {
-        const [crypto, b4a] = await Promise.all([loadCrypto(options.cryptoLoader), loadB4a(options.b4aLoader)])
-        const { root } = await loadRoot(input.publisherId)
+        const crypto = await loadCrypto(options.cryptoLoader)
+        ;({ root } = await loadRoot(input.publisherId))
         if (!root) throw new Error('publisher root missing')
+        const protocolRequest = input.recordType === 'publisher.root-transition'
+          ? { recordType: input.recordType, transitionId: input.transitionId }
+          : { recordType: input.recordType, recordId: input.recordId }
+        preimage = publisherRootSignaturePreimage(protocolRequest)
         return {
-          signer: root.publicKey,
-          signature: crypto.sign(toBuffer(input.signingDigest, b4a, 'signingDigest'), root.secretKey),
+          signerPublicKey: root.publicKey,
+          signature: crypto.sign(preimage, root.secretKey),
         }
       } catch (error) {
         throw redactPublisherVaultError(error)
+      } finally {
+        root?.secretKey?.fill?.(0)
+        preimage?.fill?.(0)
       }
     },
 

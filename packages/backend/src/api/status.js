@@ -1,11 +1,9 @@
 // Status API group, extracted from api.js.
 import b4a from 'b4a'
-import crypto from 'hypercore-crypto'
 import { getNetworkStats } from '../storage.js'
-import { PROTOCOL_NAME } from '../types.js'
 import { describeScopedTopic } from '../network/topics.js'
 
-export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
+export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
   return {
     /**
      * Get backend status
@@ -26,22 +24,12 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
      * @returns {Object}
      */
     getSwarmStatus() {
-      const topicHex = b4a.toString(crypto.data(b4a.from(PROTOCOL_NAME, 'utf-8')), 'hex')
-      const scopedTopics = [
+      const scopedTopics = ctx.scopedNetwork?.getDiagnostics?.().topics || [
         describeScopedTopic('bootstrap', { networkId: ctx.networkId || 'peartube-main', protocolMajor: 1 }),
       ]
       const networkDebug = getNetworkStats()
-      const feedStats = publicFeed?.getStats?.() || {}
-      // Report what the user can actually SEE. The raw entries map includes
-      // hidden/filtered entries, so diagnostics (and the home screen's
-      // discovery-state classifier) were fed counts that didn't match the
-      // rendered feed.
-      const visibleFeedEntries = (() => {
-        try { return publicFeed?.getFeed?.()?.length ?? (publicFeed?.entries?.size || 0) } catch { return publicFeed?.entries?.size || 0 }
-      })()
       const startupTiming = {
         storage: networkDebug?.startupTiming || null,
-        publicFeed: feedStats.startupTiming || null,
       }
       const doctor = {
         dht: {
@@ -52,7 +40,7 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
         },
         discovery: {
           peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-            discoveredPeers: feedStats.directPeerDial?.discoveredPeers || 0,
+          discoveredPeers: networkDebug?.hyperswarm?.recentPeers?.length || 0,
           recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
         },
         socket: {
@@ -61,12 +49,6 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
           connecting: Number(ctx.swarm?.connecting || 0),
           recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
           peerStates: networkDebug?.hyperswarm?.peerStates || [],
-        },
-        feed: {
-          feedConnections: publicFeed?.feedConnections?.size || 0,
-          feedEntries: visibleFeedEntries,
-          directPeerDial: feedStats.directPeerDial || null,
-          lastHaveFeed: feedStats.lastHaveFeed || null,
         },
         playback: {
           lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
@@ -80,8 +62,6 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
       return {
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
-        feedConnections: publicFeed?.feedConnections?.size || 0,
-        feedEntries: visibleFeedEntries,
         scopedTopics,
         network: networkDebug,
         startupTiming,
@@ -93,7 +73,7 @@ export function createStatusApi({ ctx, publicFeed, recentPlaybackTimings }) {
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',
-        channelsLoaded: Math.max(ctx.channels?.size || 0, visibleFeedEntries),
+        channelsLoaded: ctx.channels?.size || 0,
       }
     },
   }

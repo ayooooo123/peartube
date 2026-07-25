@@ -68,11 +68,11 @@ const PLAYBACK_ERROR_RECOVERY_PROGRESS_SEC = 2
 // The playingChange/statusChange guards only run when the native player emits
 // an event. A play() issued while the native/html element is mid source-replace
 // can be dropped, leaving the player parked at readyToPlay + paused with no
-// further events — so videos open frozen on the first frame. Verify shortly
-// after each play request that the player actually started, re-asserting with
-// backoff (0.1s/0.2s/0.4s/0.8s) until the first real play event arrives.
+// further events — so videos open frozen on the first frame. Poll the exposed
+// HTML video ref and re-assert play with bounded backoff through slow P2P startup
+// (0.1s through 6.4s; 12.7s total) until the first real play event arrives.
 const AUTOPLAY_VERIFY_BASE_DELAY_MS = 100
-const AUTOPLAY_VERIFY_MAX_ATTEMPTS = 4
+const AUTOPLAY_VERIFY_MAX_ATTEMPTS = 7
 const WEB_MEDIA_START_EVENTS = ['loadedmetadata', 'loadeddata', 'canplay'] as const
 
 function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
@@ -154,6 +154,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const playbackRateRef = useRef(playbackRate)
   const notificationControlsRef = useRef(showNotificationControls)
   const onErrorRef = useRef(onError)
+  const onPausedRef = useRef(onPaused)
   const sourceReplaceGenerationRef = useRef(0)
   const lastPlaybackPositionSecRef = useRef(0)
   const errorRecoveryAttemptsRef = useRef(0)
@@ -245,6 +246,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     onErrorRef.current = onError
   }, [onError])
 
+  useEffect(() => {
+    onPausedRef.current = onPaused
+  }, [onPaused])
+
   const clearAutoplayVerify = useCallback(() => {
     if (autoplayVerifyTimerRef.current) {
       clearTimeout(autoplayVerifyTimerRef.current)
@@ -270,12 +275,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       scheduleAutoplayVerify()
     }
     const handlePlaying = () => {
-      hasReceivedPlayEventRef.current = true
-      if (playbackStartedAtRef.current === null) {
-        playbackStartedAtRef.current = Date.now()
+      if (isPlayingRef.current && !hasReceivedPlayEventRef.current) {
+        scheduleAutoplayVerify()
       }
-      clearAutoplayVerify()
-      onPlaying?.()
     }
     const handlePause = () => {
       if (hasReceivedPlayEventRef.current || !isPlayingRef.current) return
@@ -317,8 +319,22 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [player])
 
   const scheduleAutoplayVerify = useCallback((attempt: number = 0) => {
+    if (attempt === 0 && autoplayVerifyTimerRef.current) return
     clearAutoplayVerify()
-    if (attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS) return
+    if (attempt >= AUTOPLAY_VERIFY_MAX_ATTEMPTS) {
+      if (
+        Platform.OS === 'web' &&
+        isPlayingRef.current &&
+        !hasReceivedPlayEventRef.current
+      ) {
+        const webVideo = getWebNativeVideoElement()
+        if (webVideo?.paused) {
+          isPlayingRef.current = false
+          onPausedRef.current?.()
+        }
+      }
+      return
+    }
     autoplayVerifyTimerRef.current = setTimeout(() => {
       autoplayVerifyTimerRef.current = null
       if (hasReceivedPlayEventRef.current || !isPlayingRef.current) return
@@ -651,6 +667,16 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     }
     if (currentTime > 0.1) {
       hasAdvancedRef.current = true
+      if (Platform.OS === 'web' && isPlayingRef.current && !hasReceivedPlayEventRef.current) {
+        pipExitPlayingRef.current = false
+        seekPlaybackRecoveryUntilRef.current = 0
+        if (playbackStartedAtRef.current === null) {
+          playbackStartedAtRef.current = Date.now()
+        }
+        onPlaying?.()
+        hasReceivedPlayEventRef.current = true
+        clearAutoplayVerify()
+      }
     }
 
     onProgress?.({
@@ -661,6 +687,13 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
   useEventListener(player, 'playingChange', ({ isPlaying: nativePlaying }) => {
     if (useMseBackend) return
+    if (nativePlaying && Platform.OS === 'web') {
+      // expo-video web reports `playingChange` from HTMLMediaElement's optimistic
+      // `play` event. Only the later DOM `playing` event proves media is advancing.
+      attachWebVideoStartListeners()
+      scheduleAutoplayVerify()
+      return
+    }
     if (nativePlaying && playbackStartedAtRef.current === null) {
       playbackStartedAtRef.current = Date.now()
     }
@@ -713,11 +746,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (status === 'error') {
       console.error('[PearInlineVideoView] error:', error)
       if (!isUnrecoverableSourceError(error) && tryRecoverFromPlaybackError()) return
-      // Browsers surface the fatal MediaError at error.error.code (e.g. code 4,
-      // MEDIA_ERR_SRC_NOT_SUPPORTED, for a container/codec the webview can't
-      // demux — MKV, HEVC, etc.). Forward the nested code/message, not just the
-      // top-level ones, so the desktop watch page (index.web.tsx) sees code 4
-      // and flips to the MSE backend that remuxes MKV→fMP4 via mediabunny.
+      // Browsers surface fatal MediaError details under error.error. Forward
+      // the nested code and message so the active route can select a compatible
+      // playback backend when the native element cannot demux the source.
       const raw: unknown = error
       let code: number | undefined
       let message: string | undefined

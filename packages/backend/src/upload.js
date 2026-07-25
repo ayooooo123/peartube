@@ -16,7 +16,17 @@ import b4a from 'b4a';
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
 import { normalizeContentDetails } from './channel/structured-content.js';
-import { createPublicationManifest, createRenditionDescriptor } from './assets/index.js';
+import {
+  createPublicationManifest,
+  createRenditionDescriptor,
+  encodePublicationManifest,
+} from './assets/index.js';
+import {
+  createEntityReference,
+  createMediaClaim,
+  encodeMediaClaimEnvelope,
+} from './media-graph/index.js';
+import { PUBLISHER_RECORD_TYPES } from './publisher/canonical.js';
 
 /**
  * Detect MIME type from file magic bytes
@@ -225,38 +235,167 @@ function uploadTreeHash(metadata, blobResult, channel, fileSize) {
   return hashUploadFallback(metadata, blobResult, channel, fileSize);
 }
 
-function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, options = {}) {
-  const keyPair = options.immutablePublisherKeyPair || null;
-  if (!keyPair?.publicKey || !keyPair?.secretKey) return metadata;
-  const sequence = options.immutablePublicationSequence ?? metadata.uploadedAt ?? Date.now();
+const catalogWriteQueues = new WeakMap();
+
+async function serializeCatalogWrite(catalog, task) {
+  const previous = catalogWriteQueues.get(catalog) || Promise.resolve();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  catalogWriteQueues.set(catalog, gate);
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (catalogWriteQueues.get(catalog) === gate) catalogWriteQueues.delete(catalog);
+  }
+}
+
+async function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, runtime = {}) {
+  const { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair } = runtime;
+  if (!catalogRegistry || !deviceKeyPair?.publicKey || !deviceKeyPair?.secretKey) return metadata;
+  const currentTime = runtime.now();
+  const requestedPublisherId = runtime.publisherId;
+  const bindings = requestedPublisherId
+    ? [await catalogRegistry.resolve(requestedPublisherId)]
+    : await catalogRegistry.getWritableBindings();
+  if (!Array.isArray(bindings) || bindings.length !== 1) {
+    throw new Error(bindings?.length ? 'Upload publisher catalog is ambiguous' : 'No admitted publisher catalog is available');
+  }
+  const binding = bindings[0];
+  const catalog = binding?.catalog;
+  const publisherId = b4a.from(binding?.publisherId || []);
+  if (publisherId.byteLength !== 32 || !catalog?.writable ||
+      typeof catalog.getAuthorizationState !== 'function' ||
+      typeof catalog.createLocalOperation !== 'function' ||
+      typeof catalog.appendBatchAndConfirm !== 'function') {
+    throw new Error('Upload publisher catalog is unavailable');
+  }
+  return serializeCatalogWrite(catalog, async () => {
+  const authorization = await catalog.getAuthorizationState();
+  const signerKey = b4a.toString(deviceKeyPair.publicKey, 'hex');
+  const writer = authorization?.writers?.find(candidate => candidate.signerKey === signerKey);
+  if (!writer || writer.revocation || writer.expiresAt < currentTime ||
+      !writer.capabilities?.includes('publish') || !writer.capabilities?.includes('claim') ||
+      !catalog.localSignerKey || !b4a.equals(catalog.localSignerKey, deviceKeyPair.publicKey)) {
+    throw new Error('Local device is not currently authorized to publish and claim');
+  }
+  const firstSequence = writer.lastAcceptedSequence + 1;
+  if (!Number.isSafeInteger(firstSequence) || firstSequence < writer.firstAcceptedSequence) {
+    throw new Error('Publisher writer sequence is unavailable');
+  }
+  const blockOffset = Number(blobResult.blockOffset || 0);
+  const blockLength = Number(blobResult.blockLength || 1);
+  if (!Number.isSafeInteger(blockOffset) || blockOffset < 0 || !Number.isSafeInteger(blockLength) || blockLength < 1) {
+    throw new Error('Uploaded blob range is invalid');
+  }
   const rendition = createRenditionDescriptor({
     purpose: 'original',
     format: String(mimeType || metadata.mimeType || 'video/mp4'),
     core: {
       key: channel.blobsKeyHex,
-      length: Number(blobResult.blockLength || 1),
+      length: blockOffset + blockLength,
       treeHash: uploadTreeHash(metadata, blobResult, channel, fileSize),
       byteLength: fileSize
     }
   });
   const manifest = createPublicationManifest({
-    publisherId: keyPair.publicKey,
-    sequence,
+    publisherId,
+    sequence: firstSequence,
     title: metadata.title || metadata.id,
     description: metadata.description || null,
     renditions: [rendition],
-    provenance: [{ type: 'upload', videoId: metadata.id, blobId: blobResult.id, blobsCoreKey: channel.blobsKeyHex }],
-    keyPair
+    provenance: [{
+      type: 'upload',
+      videoId: metadata.id,
+      blobId: blobResult.id,
+      coreKey: channel.blobsKeyHex,
+      renditionId: rendition.renditionId,
+      start: blockOffset,
+      end: blockOffset + blockLength
+    }],
+    keyPair: deviceKeyPair,
+    signedAt: currentTime
   });
+  const subjectRef = createEntityReference({
+    entityKind: 'work',
+    namespace: 'issuer-native',
+    issuerRootKey: publisherId,
+    issuerLocalId: metadata.id
+  });
+  const claims = [
+    createMediaClaim({
+      claimType: 'EntityMetadataClaim',
+      subjectRefs: [subjectRef],
+      payload: {
+        title: metadata.title || metadata.id,
+        description: metadata.description || null,
+        publicationId: manifest.publicationId
+      },
+      confidence: 1000,
+      issuerSequence: firstSequence + 1,
+      policyEpoch: writer.admissionPolicyEpoch,
+      keyPair: deviceKeyPair,
+      signedAt: currentTime
+    }),
+    createMediaClaim({
+      claimType: 'AvailabilityObservation',
+      subjectRefs: [subjectRef],
+      payload: {
+        publicationId: manifest.publicationId,
+        renditionId: rendition.renditionId,
+        availabilityStatus: 'available'
+      },
+      confidence: 1000,
+      issuerSequence: firstSequence + 2,
+      policyEpoch: writer.admissionPolicyEpoch,
+      keyPair: deviceKeyPair,
+      signedAt: currentTime
+    })
+  ];
+  const operations = [{
+    recordType: PUBLISHER_RECORD_TYPES.PUBLICATION,
+    sequence: firstSequence,
+    body: {
+      publicationId: b4a.from(manifest.publicationId, 'hex'),
+      manifestId: b4a.from(manifest.body.manifestId, 'hex'),
+      payload: encodePublicationManifest(manifest)
+    }
+  }, ...claims.map((claim, index) => ({
+    recordType: PUBLISHER_RECORD_TYPES.CLAIM,
+    sequence: firstSequence + index + 1,
+    body: {
+      claimId: b4a.from(claim.claimId, 'hex'),
+      claimType: claim.body.claimType,
+      payload: encodeMediaClaimEnvelope(claim.envelope)
+    }
+  }))];
+  const signedOperations = []
+  for (const candidate of operations) {
+    signedOperations.push(await catalog.createLocalOperation({
+      ...candidate,
+      policyEpoch: writer.admissionPolicyEpoch,
+      signedAt: currentTime
+    }))
+  }
+  const receipts = await catalog.appendBatchAndConfirm(signedOperations)
+  if (!Array.isArray(receipts) || receipts.length !== signedOperations.length ||
+      receipts.some(receipt => receipt?.accepted !== true)) {
+    throw new Error('Publisher catalog rejected upload projection')
+  }
   metadata.immutablePublication = {
     publicationId: manifest.publicationId,
     manifestId: manifest.body.manifestId,
     renditionId: rendition.renditionId,
     publisherId: manifest.body.publisherId,
-    sequence,
+    sequence: firstSequence,
+    claimIds: claims.map(claim => claim.claimId),
     manifest
   };
+  await mediaCatalogProjection?.rebuild?.();
+  await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
   return metadata;
+  });
 }
 
 /**
@@ -317,7 +456,15 @@ function maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize
  * @param {StorageContext} deps.ctx - Storage context
  * @returns {Object} Upload manager API
  */
-export function createUploadManager({ ctx }) {
+export function createUploadManager({
+  ctx,
+  catalogRegistry = null,
+  mediaCatalogProjection = null,
+  scopedNetwork = null,
+  deviceKeyPair = null,
+  now = () => Date.now()
+}) {
+  const publicationRuntime = { catalogRegistry, mediaCatalogProjection, scopedNetwork, deviceKeyPair, now };
   /**
    * Probe the uploaded MP4 for its playback profile (moov position +
    * keyframe index) and persist it for range prioritization at playback
@@ -469,7 +616,10 @@ export function createUploadManager({ ctx }) {
           fileSize,
           mimeType
         );
-        maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, options);
+        await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
+          ...publicationRuntime,
+          publisherId: options.publisherId
+        });
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {
@@ -536,7 +686,10 @@ export function createUploadManager({ ctx }) {
           fileSize,
           mimeType
         );
-        maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, options);
+        await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
+          ...publicationRuntime,
+          publisherId: options.publisherId
+        });
 
         // Store metadata in channel HyperDB
         await channel.addVideo(metadata, {

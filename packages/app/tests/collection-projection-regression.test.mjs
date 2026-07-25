@@ -8,16 +8,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(__dirname, '..')
 const read = rel => fs.readFileSync(path.join(appRoot, rel), 'utf8')
 
-test('collection route renders completeness and missing member placeholders from graph RPC', () => {
-  const route = read('app/collection/[id].tsx')
+test('collection page renders completeness and missing member placeholders from graph RPC', () => {
+  const route = read('components/routes/CollectionPage.tsx')
   assert.match(route, /mediaGraph.getMediaCollection/)
   assert.match(route, /mediaGraph.getMediaCollectionItems/)
   assert.match(route, /CollectionCompleteness/)
   assert.match(route, /missing|placeholder/i)
 })
 
-test('creator route assembles roles across publisher claims without making publisher the global owner', () => {
-  const route = read('app/creator/[id].tsx')
+test('creator page assembles roles across publisher claims without making publisher the global owner', () => {
+  const route = read('components/routes/CreatorPage.tsx')
   assert.match(route, /mediaGraph.getMediaAgent/)
   assert.match(route, /mediaGraph.getAgentContributions/)
   assert.match(route, /publisher/i)

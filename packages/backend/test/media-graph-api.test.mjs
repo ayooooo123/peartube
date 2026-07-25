@@ -124,12 +124,89 @@ test('media graph API orders publication sources by score and local source prefe
   const scored = await api.getPublicationSources({ entityId: subject.entityId })
   t.is(scored.success, true)
   t.is(scored.items[0].publicationId, high.publicationId)
+  t.is(scored.items[0].selected, true)
+  t.ok(Array.isArray(scored.items[0].selectionReasonCodes))
+  t.ok(Array.isArray(scored.items[1].rejectionReasonCodes))
+  t.ok(Array.isArray(scored.items[0].introductionPublisherIds))
+  t.ok(Array.isArray(scored.items[0].introductionIndexIds))
+  t.ok(Array.isArray(scored.items[0].moderationFeedIds))
+  t.ok(Array.isArray(scored.items[0].claimConflictIds))
+  t.ok(Array.isArray(scored.items[0].provenanceClaimIds))
+  t.is(typeof scored.items[0].scorePublisherTrust, 'number')
+  t.is(typeof scored.items[0].scoreAvailability, 'number')
+  t.is(scored.items[0].availabilityState, 'available')
 
   const preference = await api.setSourcePreference({ entityId: subject.entityId, publicationId: low.publicationId, preferred: true })
   t.is(preference.success, true)
   const preferred = await api.getPublicationSources({ entityId: subject.entityId })
   t.is(preferred.items[0].publicationId, low.publicationId)
   t.is(preferred.items[0].preferred, true)
+})
+
+test('media graph API never auto-selects an unverified or unavailable playback source', async (t) => {
+  const { api, mediaGraphStore } = await fixture()
+  const subject = workRef('untrusted-only')
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [subject],
+    payload: { publicationId: 'missing-signed-manifest', availabilityStatus: 'available' },
+    confidence: 900,
+    keyPair: publisherA,
+  })
+
+  const sources = await api.getPublicationSources({ entityId: subject.entityId })
+  t.is(sources.success, true)
+  t.is(sources.items.length, 1)
+  t.is(sources.items[0].selected, false)
+  t.ok(sources.items[0].rejectionReasonCodes.includes('UNAUTHORIZED_PUBLICATION'))
+
+  const entity = await api.getMediaEntity({ entityId: subject.entityId })
+  t.is(entity.success, true)
+  t.is(entity.entity.sources[0].selected, false)
+  t.ok(entity.entity.sources[0].rejectionReasonCodes.includes('UNAUTHORIZED_PUBLICATION'))
+})
+
+test('media graph API translates signed diagnostic components to schema-safe uints', async t => {
+  const api = createMediaGraphApi({
+    mediaGraphStore: {
+      getClaimsBySubject: () => [{
+        claimId: 'claim-1',
+        issuer: 'publisher-1',
+        revoked: false,
+        body: {
+          claimType: 'AvailabilityObservation',
+          confidence: 10,
+          payload: {
+            publicationId: 'publication-1',
+            availabilityStatus: 'available',
+            moderationPenalty: 2
+          }
+        }
+      }]
+    },
+    assetManifestStore: {
+      getManifest: () => ({
+        publicationId: 'publication-1',
+        body: {
+          publisherId: 'publisher-1',
+          manifestId: 'manifest-1',
+          renditions: [{ renditionId: 'rendition-1' }]
+        }
+      })
+    },
+    sourcePreferenceStore: new Map()
+  })
+
+  const result = await api.getPublicationSources({ entityId: 'entity-1' })
+  t.is(result.success, true)
+  t.is(result.items[0].scoreModerationPenalty, 40)
+  for (const field of [
+    'scoreMetadataConfidence',
+    'scorePublisherTrust',
+    'scoreAvailability',
+    'scoreFormatSupport',
+    'scoreModerationPenalty'
+  ]) t.ok(Number.isSafeInteger(result.items[0][field]) && result.items[0][field] >= 0)
 })
 
 test('claim provenance lookup returns typed local claim summaries', async (t) => {

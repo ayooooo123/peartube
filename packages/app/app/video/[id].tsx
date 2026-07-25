@@ -104,7 +104,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     const fetchGlobalStatus = async () => {
       try {
         const swarmStatus = await appRpc?.getSwarmStatus?.()
-        const connectionCount = swarmStatus?.swarmConnections ?? swarmStatus?.feedConnections ?? 0
+        const connectionCount = swarmStatus?.swarmConnections ?? 0
         if (mounted) {
           setGlobalConnections(connectionCount)
         }
@@ -140,13 +140,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const videoPeerCount = stats?.peerCount ?? 0
   const downloadSpeedValue = Number(stats?.speedMBps ?? 0)
   const uploadSpeedValue = Number(stats?.uploadSpeedMBps ?? 0)
-  const sessionDownloadedBytes = Number(stats?.downloadedBytes ?? 0)
-  const sessionDownloadedBlocks = Number(stats?.downloadedBlocks ?? 0)
-  const hasPlayableProgress = Boolean(
-    sessionDownloadedBytes > 0 ||
-    sessionDownloadedBlocks > 0 ||
-    downloadSpeedValue > 0
-  )
+  const hasPlayableProgress = downloadSpeedValue > 0
   const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
   const uploadSpeedText = Number.isFinite(uploadSpeedValue) ? uploadSpeedValue.toFixed(2) : '0.00'
 

@@ -17,6 +17,7 @@ import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 import * as watchHistory from './watch-history'
 
 const WATCH_HISTORY_WRITE_INTERVAL_MS = 10000
+const STARTUP_AUTOPLAY_GUARD_MS = 3000
 
 /**
  * Persist local watch progress and feed the backend recommender.
@@ -291,6 +292,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const pendingSeekSecondsRef = useRef<number | null>(null)
   const lastPlaybackStartKeyRef = useRef<string | null>(null)
   const lastPlaybackStartAtRef = useRef(0)
+  const startupAutoplayGuardRef = useRef<{ key: string; until: number } | null>(null)
   const queuedPlaybackStartRef = useRef<{ video: VideoData; url: string; source: string } | null>(null)
   const playbackStartDrainTimerRef = useRef<NodeJS.Timeout | null>(null)
   const playbackStartInFlightRef = useRef(false)
@@ -511,6 +513,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       lastClosedUrlRef.current = null
       lastClosedTimeRef.current = null
     }
+    startupAutoplayGuardRef.current = null
     currentVideoRef.current = null
     videoUrlRef.current = null
 
@@ -842,6 +845,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     lastPlaybackStartKeyRef.current = playbackKey
     lastPlaybackStartAtRef.current = now
 
+    currentVideoRef.current = video
+    videoUrlRef.current = url
+    startupAutoplayGuardRef.current = {
+      key: playbackKey,
+      until: now + STARTUP_AUTOPLAY_GUARD_MS,
+    }
+    setDesiredPlaying(true)
     try {
       getPlayerPort()?.stop?.()
       getPlayerPort()?.pause?.()
@@ -855,10 +865,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     pipTransitionInFlightRef.current = false
     isInPipModeRef.current = false
     setPlaybackSession((prev) => prev + 1)
-    currentVideoRef.current = video
-    videoUrlRef.current = url
     dispatch({ type: 'LOAD_VIDEO', source: 'loadAndPlayVideo', video, url })
-    setDesiredPlaying(true)
     setVideoStats(null)
     const cachedStats = _videoStatsEventEmitter.getLatest(video.channelKey, video.path || video.id)
     if (cachedStats) {
@@ -964,6 +971,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Pause video
   const pauseVideo = useCallback(() => {
     if (__DEV__) console.log('[VideoPlayerContext] Pausing video')
+    startupAutoplayGuardRef.current = null
     if (Platform.OS === 'web') {
       try {
         getPlayerPort()?.pause?.()
@@ -1223,6 +1231,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const onPlaying = useCallback(() => {
     if (__DEV__) console.log('[VideoPlayerContext] Player playing')
+    startupAutoplayGuardRef.current = null
     if (Platform.OS === 'ios') {
       iosIgnorePausedUntilRef.current = 0
     }
@@ -1240,6 +1249,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       if (__DEV__) console.log('[VideoPlayerContext] Ignoring transient iOS paused event during source swap')
       return
     }
+    const startupGuard = startupAutoplayGuardRef.current
+    if (
+      startupGuard &&
+      Date.now() <= startupGuard.until &&
+      lastPlaybackStartKeyRef.current === startupGuard.key
+    ) {
+      setDesiredPlaying(true)
+      try {
+        getPlayerPort()?.play?.()
+      } catch {}
+      return
+    }
+    if (startupGuard) startupAutoplayGuardRef.current = null
     if (pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
       reassertNativePlayAfterPipExit('player-paused-during-pip-exit')
 
@@ -1269,7 +1291,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       // A deliberate pause is a good resume point — persist it immediately.
       recordWatchProgressSafe(currentVideoRef.current, currentTimeRef.current, durationRef.current)
     }
-  }, [getPlayerPort, reassertNativePlayAfterPipExit])
+  }, [getPlayerPort, reassertNativePlayAfterPipExit, setDesiredPlaying])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     if (__DEV__) console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)

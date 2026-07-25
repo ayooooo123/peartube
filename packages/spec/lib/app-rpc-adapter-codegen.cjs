@@ -10,7 +10,10 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-swarm-status',
     'get-blob-server-port',
     'get-network-policy',
-    'set-network-policy'
+    'set-network-policy',
+    'get-migration-status',
+    'retry-migration',
+    'export-migration-report'
   ],
   identity: [
     'create-identity',
@@ -24,14 +27,22 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'bootstrap-device',
     'attest-device',
     'verify-attestation',
-    'prepare-publisher-root-operation',
-    'submit-publisher-root-operation'
   ],
-  feed: [
-    'refresh-feed',
-    'submit-to-feed',
-    'unpublish-from-feed',
-    'is-channel-published',
+  publisher: [
+    'provision-publisher-catalog',
+    'prepare-publisher-root-operation',
+    'submit-publisher-root-operation',
+    'get-publisher-device-status',
+    'export-portable-state',
+    'restore-portable-state'
+  ],
+  channel: [
+    'get-channel',
+    'get-channel-meta',
+    'get-content-catalog',
+    'get-content-items',
+    'update-channel',
+    'update-channel-avatar',
     'subscribe-channel',
     'unsubscribe-channel',
     'get-subscriptions',
@@ -41,15 +52,8 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'unpin-channel',
     'get-pinned-channels'
   ],
-  channel: [
-    'get-channel',
-    'get-channel-meta',
-    'get-content-catalog',
-    'get-content-items',
-    'update-channel',
-    'update-channel-avatar'
-  ],
   mediaGraph: [
+    'get-media-catalog',
     'get-media-entity',
     'get-media-collection',
     'get-media-collection-items',
@@ -116,8 +120,13 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-storage-stats',
     'set-storage-limit',
     'clear-cache',
-    'assess-upload-offload',
-    'offload-upload',
+    'assess-source-offload',
+    'confirm-source-offload',
+    'preview-storage-limit',
+    'get-archive-operator-status',
+    'get-archive-participation',
+    'set-archive-participation',
+    'request-archive-publication'
   ],
   search: [
     'search-videos',
@@ -168,7 +177,7 @@ const PLATFORM_ONLY_COMMANDS = Object.freeze([
   'event-error',
   'event-upload-progress',
   'event-download-progress',
-  'event-feed-update',
+  'event-media-graph-update',
   'event-log',
   'event-video-stats',
   'event-transcode-progress',

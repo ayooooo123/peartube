@@ -65,14 +65,12 @@ test('network trust is normalized and forwarded without duplication', (t) => {
   const hexB = 'B'.repeat(64)
   const config = {
     network: {
-      trustedRelayKeys: [` ${hexA} `, hexB, hexA, 'not-hex', ''],
-      blindPeerMirrors: [hexB.toLowerCase(), hexB]
+      trustedRelayKeys: [` ${hexA} `, hexB, hexA, 'not-hex', '']
     }
   }
   const prefs = resolveAddPreferences({ flags: {}, env: {}, config })
-  t.alike(prefs.network.trustedRelayKeys, [hexA, hexB.toLowerCase()], 'lowercased, deduped, invalid dropped')
-  t.alike(prefs.network.blindPeerMirrors, [hexB.toLowerCase()])
-  t.alike(normalizeNetworkTrust({ trustedRelayKeys: [hexA, hexA] }).trustedRelayKeys, [hexA])
+  t.alike(prefs.network, { trustedRelayKeys: [hexA, hexB.toLowerCase()] }, 'only authenticated relay keys are forwarded')
+  t.alike(normalizeNetworkTrust({ trustedRelayKeys: [hexA, hexA] }), { trustedRelayKeys: [hexA] })
 })
 
 test('content config update preserves unrelated keys and comments and reports secrets', (t) => {
@@ -118,6 +116,5 @@ test('relay keys merge from flags, env, and config and dedupe', (t) => {
     env: { PEARTUBE_RELAYS: `${k2} ${k3}` },
     config: { network: { trustedRelayKeys: [k1] } }
   })
-  t.alike(prefs.network.trustedRelayKeys, [k1, k2, k3], 'merged across sources and deduped')
-  t.alike(prefs.network.blindPeerMirrors, [], 'relay keys do not leak into the mirror list')
+  t.alike(prefs.network, { trustedRelayKeys: [k1, k2, k3] }, 'merged across sources and deduped')
 })

@@ -32,7 +32,7 @@ test('mobile watch page keeps live context stats ahead of stale polled stats', (
   )
 })
 
-test('mobile watch page does not keep saying reaching out once playback has byte progress', () => {
+test('mobile watch page does not infer live streaming from aggregate cache progress', () => {
   const source = read('app/video/[id].tsx')
   const barStart = source.indexOf('function P2PStatsBar')
   assert.notEqual(barStart, -1, 'expected mobile watch page P2PStatsBar')
@@ -40,18 +40,13 @@ test('mobile watch page does not keep saying reaching out once playback has byte
 
   assert.match(
     barBlock,
-    /const hasPlayableProgress =/,
-    'stats bar should classify playable byte or block progress separately from peers',
-  )
-  assert.match(
-    barBlock,
-    /sessionDownloadedBytes > 0[\s\S]*sessionDownloadedBlocks > 0[\s\S]*downloadSpeedValue > 0/,
-    'streaming state should depend on bytes from the active playback session, not sampled aggregate progress',
+    /const hasPlayableProgress = downloadSpeedValue > 0/,
+    'streaming state should require observed live transfer speed',
   )
   assert.doesNotMatch(
     barBlock,
-    /Number\(stats\?\.progress \?\? 0\) > 0/,
-    'sampled aggregate progress should not clear the reaching-out/preparing state by itself',
+    /hasPlayableProgress = [^\n]*(?:downloadedBytes|downloadedBlocks|stats\?\.progress)/,
+    'aggregate cache progress must not be presented as live streaming',
   )
 })
 

@@ -4,7 +4,6 @@ import { test } from 'node:test'
 
 const mseBackendPath = new URL('../components/video-player/WebMseVideoBackend.web.tsx', import.meta.url)
 const inlineViewPath = new URL('../components/video-player/PearInlineVideoView.tsx', import.meta.url)
-const desktopWatchPath = new URL('../app/(tabs)/index.web.tsx', import.meta.url)
 
 async function source(url) {
   return readFile(url, 'utf8')
@@ -158,41 +157,4 @@ test('format errors skip stall recovery so the desktop MSE fallback still trigge
     /!isUnrecoverableSourceError\(error\) && tryRecoverFromPlaybackError\(\)/,
     'recovery must be skipped for format errors (code 4) so the watch page can fall back to the MSE backend immediately'
   )
-})
-
-test('desktop watch page sends MSE through PearInlineVideoView instead of rendering a second player branch', async () => {
-  const src = await source(desktopWatchPath)
-  const pearStart = src.indexOf('<PearInlineVideoView')
-  assert.notEqual(pearStart, -1, 'watch page should render PearInlineVideoView for active video playback')
-  const pearEnd = src.indexOf('/>', pearStart)
-  assert.notEqual(pearEnd, -1, 'watch page PearInlineVideoView props should be inspectable')
-  const pearBlock = src.slice(pearStart, pearEnd)
-
-  assert.doesNotMatch(src, /import \{ MseVideoPlayer \}/, 'watch page should not import a separate MSE player')
-  assert.doesNotMatch(src, /<MseVideoPlayer\b/, 'watch page should not render a separate MSE player branch')
-  assert.match(pearBlock, /webPlaybackBackend=\{useMseBackend \? 'mse' : 'native'\}/, 'MSE must be selected as a PearInlineVideoView backend')
-  assert.match(pearBlock, /requestCompatPlayback=\{requestCompatPlayback\}/, 'compat playback requests should stay wired through the inline player')
-})
-
-test('desktop watch page switches to the MSE backend only after native unsupported-source errors', async () => {
-  const src = await source(desktopWatchPath)
-  const mseSwitches = src.match(/setMseBackendWatchKey\(watchPageKey\)/g) || []
-
-  assert.equal(mseSwitches.length, 1, 'watch page should switch to MSE only from the unsupported-source error path')
-  assert.match(
-    src,
-    /if \(!useMseBackend && code == 4\) \{[\s\S]*Native player failed \(code 4\), switching to MSE backend[\s\S]*setMseBackendWatchKey\(watchPageKey\)/,
-    'native MEDIA_ERR_SRC_NOT_SUPPORTED/code 4 errors should switch to the MSE backend',
-  )
-})
-
-test('desktop watch page does not use timeout watchdogs to select MSE for generic native stalls', async () => {
-  const src = await source(desktopWatchPath)
-
-  assert.doesNotMatch(src, /INLINE_PLAYER_LOAD_FALLBACK_MS/, 'metadata load timeouts should not select the MSE backend')
-  assert.doesNotMatch(src, /INLINE_PLAYER_STALL_FALLBACK_MS/, 'startup stall timeouts should not select the MSE backend')
-  assert.doesNotMatch(src, /inlinePlayerLoadedAt|setInlinePlayerLoadedAt/, 'metadata load watchdog state should not exist')
-  assert.doesNotMatch(src, /inlinePlayerStartedAt|setInlinePlayerStartedAt/, 'startup stall watchdog state should not exist')
-  assert.doesNotMatch(src, /Inline player did not load metadata[\s\S]*setMseBackendWatchKey/, 'metadata timeout should not switch to MSE')
-  assert.doesNotMatch(src, /Inline player stalled[\s\S]*setMseBackendWatchKey/, 'generic startup stall should not switch to MSE')
 })

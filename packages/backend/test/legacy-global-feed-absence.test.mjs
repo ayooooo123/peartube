@@ -7,6 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '../../..')
 const productionRoots = [
   'packages/backend/src',
+  'packages/cli/src',
   'packages/app',
   'packages/core/src',
   'packages/spec',
@@ -32,11 +33,18 @@ const forbidden = [
 const allowed = new Set([
   'packages/backend/src/migrations/publication-v1.js',
 ])
+const ignoredDirectories = new Set([
+  '.expo',
+  'build',
+  'desktop-build',
+  'dist',
+  'node_modules',
+])
 
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'tests' || entry.name === 'test') continue
+    if (ignoredDirectories.has(entry.name) || entry.name === '.git' || entry.name === 'tests' || entry.name === 'test') continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) walk(full, out)
     else if (/\.(js|mjs|cjs|ts|tsx|json|schema)$/.test(entry.name)) out.push(full)

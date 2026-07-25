@@ -1,6 +1,5 @@
-// Pure thumbnail-URL selection shared by the native feed/discover screens.
-// Kept in plain .mjs (like feed-thumbnail-resolve-key.mjs) so the behavior can be
-// unit-tested directly without transpiling the .ts wrapper.
+// Pure thumbnail-URL selection shared by native and web media surfaces.
+// Kept in plain .mjs so the behavior can be unit-tested without transpiling.
 
 const LOOPBACK_THUMBNAIL_URL_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i
 

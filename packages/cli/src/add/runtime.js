@@ -1,13 +1,18 @@
-import { createBackendContext } from '@peartube/backend/orchestrator'
-import { shutdownBackend } from '@peartube/backend/storage'
+import { createBackendContext } from '@peartube/backend'
+import { PROTOCOL_VERSION } from '@peartube/host/contracts'
 import { createDiagnosticScope } from './diagnostic-scope.js'
 import { normalizeNetworkTrust } from './preferences.js'
 
 // Opens the universal PearTube backend for a single `peartube add` command,
-// forwarding normalized trusted-relay / blind-peer configuration and routing
-// legacy console.* diagnostics to the injected stderr logger. Never spins up a
-// second backend or shells out for P2P behavior.
-export async function openAddRuntime ({ storagePath, network = {}, logger, target = console } = {}) {
+// forwarding authenticated relay configuration and routing backend diagnostics
+// to the injected stderr logger.
+export async function openAddRuntime ({
+  storagePath,
+  network = {},
+  logger,
+  target = console,
+  backendFactory = createBackendContext
+} = {}) {
   if (!storagePath) throw new Error('openAddRuntime requires a storagePath')
   if (!logger || typeof logger.log !== 'function') throw new Error('openAddRuntime requires a logger')
 
@@ -17,12 +22,13 @@ export async function openAddRuntime ({ storagePath, network = {}, logger, targe
   let backend
   try {
     const trust = normalizeNetworkTrust(network)
-    backend = await createBackendContext({
+    backend = await backendFactory({
       storagePath,
+      platform: 'cli',
+      role: 'hybrid',
+      expectedProtocolVersion: PROTOCOL_VERSION,
       network: {
-        ...network,
-        trustedRelayKeys: trust.trustedRelayKeys,
-        blindPeerMirrors: trust.blindPeerMirrors
+        trustedRelayKeys: trust.trustedRelayKeys
       },
       ipcLog: (message) => {
         const emit = logger.debug || logger.log
@@ -40,13 +46,12 @@ export async function openAddRuntime ({ storagePath, network = {}, logger, targe
     api: backend.api,
     identityManager: backend.identityManager,
     uploadManager: backend.uploadManager,
-    publicFeed: backend.publicFeed,
     seedingManager: backend.seedingManager,
     seedPinClients: backend.seedPinClients,
     metadataBee: backend.ctx?.metaDb || null,
     async close () {
       try {
-        await shutdownBackend(backend.ctx)
+        await backend.destroy()
       } finally {
         scope.restore()
       }

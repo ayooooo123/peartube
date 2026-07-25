@@ -335,16 +335,18 @@ test('unknown commands, flags, duplicate flags, and contradictory coordinates ar
   )
 })
 
-test('repeatable --relay collects every key while other flags stay scalar', (t) => {
+test('repeatable --relay collects authenticated relay keys and removed mirror flags fail closed', (t) => {
   const parsed = parsePeartubeArgv([
     'add', 'https://media.example/clip.mp4',
     '--type', 'video',
     '--title', 'Clip',
     '--relay', 'k1',
     '--relay', 'k2',
-    '--blind-peer', 'm1',
     '--yes'
   ], nonTty)
   t.alike(parsed.flags.relay, ['k1', 'k2'], 'relay keys accumulate')
-  t.alike(parsed.flags.blindPeer, ['m1'], 'blind-peer keys accumulate')
+  t.exception(
+    () => parsePeartubeArgv(['add', 'clip', '--blind-peer', 'm1'], nonTty),
+    /Unknown argument --blind-peer/
+  )
 })

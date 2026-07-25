@@ -2,7 +2,12 @@ import test from 'brittle'
 import crypto from 'hypercore-crypto'
 
 import { createPublicationBatch } from '../src/assets/index.js'
-import { createPublisherCatalogPage } from '../src/discovery/publisher-protocol.js'
+import {
+  PUBLISHER_CATALOG_PAGE_RECORD_TYPE,
+  createPublisherCatalogPage
+} from '../src/discovery/publisher-protocol.js'
+import { encodeCanonical } from '../src/publisher/canonical.js'
+import { createApplicationEnvelope } from '../src/records/application-envelope.js'
 import { createPublisherManager } from '../src/discovery/publisher-manager.js'
 
 const publisher = crypto.keyPair(Buffer.alloc(32, 1))
@@ -52,4 +57,50 @@ test('publisher manager rejects forks/stale cursors and stops discovery on unsub
   const result = await manager.syncPublisher({ publisherId, startCursor: '0', fetchPage: async () => bad })
   t.is(result.status, 'quarantined')
   t.is(result.errorCode, 'STALE_OR_FORKED_CURSOR')
+})
+
+test('publisher manager quarantines unsupported catalog requirements before ingest or fallback', async (t) => {
+  const ingested = []
+  const manager = createPublisherManager({ ingestBatch: async batch => ingested.push(batch) })
+  const incompatible = createPublisherCatalogPage({
+    publisherId,
+    pageCursor: '0',
+    nextCursor: null,
+    catalogHead: 'a'.repeat(64),
+    batches: [sealedBatch(1)],
+    requiredCapabilities: ['future-global-feed-fallback:v1'],
+    keyPair: publisher,
+  })
+  const result = await manager.syncPublisher({
+    publisherId,
+    startCursor: '0',
+    fetchPage: async () => incompatible,
+  })
+  t.is(result.status, 'quarantined')
+  t.is(result.errorCode, 'PROTOCOL_CAPABILITY_UNSUPPORTED')
+  t.alike(ingested, [], 'incompatible catalogs never project batches or fall back to a global feed')
+})
+
+test('publisher manager quarantines noncanonical compatibility advertisements with a stable code', async (t) => {
+  const ingested = []
+  const valid = page('0', null, 1)
+  const malformedBody = {
+    ...valid.body,
+    requiredCapabilities: ['z-extension:v1', ...valid.body.requiredCapabilities],
+  }
+  const malformedEnvelope = createApplicationEnvelope({
+    recordType: PUBLISHER_CATALOG_PAGE_RECORD_TYPE,
+    body: encodeCanonical(malformedBody),
+    keyPair: publisher,
+    issuedAt: malformedBody.issuedAt,
+  })
+  const manager = createPublisherManager({ ingestBatch: async batch => ingested.push(batch) })
+  const result = await manager.syncPublisher({
+    publisherId,
+    startCursor: '0',
+    fetchPage: async () => ({ envelope: malformedEnvelope }),
+  })
+  t.is(result.status, 'quarantined')
+  t.is(result.errorCode, 'PROTOCOL_ADVERTISEMENT_REQUIRED')
+  t.alike(ingested, [])
 })

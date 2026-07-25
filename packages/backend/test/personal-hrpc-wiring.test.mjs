@@ -14,6 +14,7 @@ import Corestore from 'corestore'
 import { registerSharedHandlers, SHARED_HANDLER_NAMES } from '../src/hrpc-handlers.js'
 import { createApi } from '../src/api.js'
 import { PersonalStore } from '../src/personal/personal-store.js'
+import { installSeedPinIdentityMutationHooks } from '../src/seed-pin/index.js'
 
 const PERSONAL_HANDLERS = [
   'GetPlaylists', 'GetPlaylistItems', 'CreatePlaylist', 'UpdatePlaylist', 'DeletePlaylist',
@@ -26,16 +27,38 @@ test('raw personal encryption secret is not exposed as a shared app HRPC handler
   t.absent(SHARED_HANDLER_NAMES.includes('GetPersonalEncryptionSecret'), 'shared app RPC must not expose key export')
 })
 
-test('identity switching awaits personal store activation before returning', (t) => {
-  const source = fs.readFileSync(new URL('../src/orchestrator.js', import.meta.url), 'utf8')
-  t.ok(
-    source.includes('await refreshActivePersonalStore(publicKey)'),
-    'setActiveIdentity wrapper should await personal store activation',
-  )
-  t.ok(
-    source.includes('await refreshActivePersonalStore(result?.publicKey)'),
-    'createIdentity wrapper should await personal store activation',
-  )
+test('identity mutation hooks await personal store activation before returning', async (t) => {
+  let releaseActivation
+  const activation = new Promise((resolve) => { releaseActivation = resolve })
+  const events = []
+  const identityManager = {
+    async setActiveIdentity(publicKey) {
+      events.push(`identity:${publicKey}`)
+      return { publicKey }
+    },
+  }
+  const removeHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async () => {
+      events.push('personal:start')
+      await activation
+      events.push('personal:ready')
+    },
+  })
+
+  let settled = false
+  const pending = identityManager.setActiveIdentity('publisher').then((result) => {
+    settled = true
+    return result
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  t.is(settled, false)
+  t.alike(events, ['identity:publisher', 'personal:start'])
+  releaseActivation()
+  t.alike(await pending, { publicKey: 'publisher' })
+  t.alike(events, ['identity:publisher', 'personal:start', 'personal:ready'])
+  removeHooks()
 })
 
 test('personal-sync commands are registered as shared handlers', (t) => {
@@ -53,7 +76,7 @@ test('personal-sync HRPC commands round-trip through the api + PersonalStore', a
 
   // Minimal ctx: createApi only needs ctx.personal for these methods.
   const ctx = { personal, metaDb: { async get () { return null }, async put () {} }, channels: new Map() }
-  const api = createApi({ ctx, publicFeed: null, seedingManager: null, videoStats: null })
+  const api = createApi({ ctx, seedingManager: null, videoStats: null })
 
   // Capture registered handlers from a fake rpc exposing on<Name>(fn).
   const handlers = {}

@@ -9,15 +9,11 @@ import { PROTOCOL_VERSION } from '../../host/src/contracts.js'
 const FULL_SWARM_STATUS = {
   swarmConnections: 0,
   swarmPeers: 5,
-  feedConnections: 0,
-  feedEntries: 0,
   channelsLoaded: 2,
   swarmOffline: false,
   swarmOfflineReason: null,
   swarmListenResolved: true,
   peerPoolJoined: true,
-  publicFeedDiscoveryJoined: true,
-  feedTopicHex: 'abcd',
   recommendedBoundary: 'transport-socket',
   network: {
     hyperswarm: {
@@ -25,19 +21,14 @@ const FULL_SWARM_STATUS = {
       allConnections: [{ key: 'peer' }],
     },
   },
-  startupTiming: { storage: { elapsedMs: 123 }, publicFeed: { elapsedMs: 45 } },
+  startupTiming: { storage: { elapsedMs: 123 } },
   doctor: {
     recommendedBoundary: 'transport-socket',
-    feed: {
-      directPeerDial: {
-        discoveredPeers: 5,
-        swarmConnecting: 3,
-      },
-    },
+    discovery: { discoveredPeers: 5 },
   },
 }
 
-test('shared runtime GetSwarmStatus forwards full transport diagnostics', async () => {
+test('shared runtime GetSwarmStatus forwards scoped transport diagnostics', async () => {
   const handlers = buildSharedSystemHandlers(
     { api: { getSwarmStatus: () => FULL_SWARM_STATUS } },
     { protocolVersion: PROTOCOL_VERSION }
@@ -48,10 +39,9 @@ test('shared runtime GetSwarmStatus forwards full transport diagnostics', async 
   assert.deepEqual(result.network, FULL_SWARM_STATUS.network)
   assert.deepEqual(result.startupTiming, FULL_SWARM_STATUS.startupTiming)
   assert.deepEqual(result.doctor, FULL_SWARM_STATUS.doctor)
-  assert.deepEqual(result.directPeerDial, FULL_SWARM_STATUS.doctor.feed.directPeerDial)
 })
 
-test('mobile GetSwarmStatus forwards full transport diagnostics', async () => {
+test('mobile GetSwarmStatus forwards scoped transport diagnostics', async () => {
   const backend = {}
   const rpc = {}
   attachMobileHandlers(backend, {
@@ -72,37 +62,23 @@ test('mobile GetSwarmStatus forwards full transport diagnostics', async () => {
   assert.deepEqual(result.network, FULL_SWARM_STATUS.network)
   assert.deepEqual(result.startupTiming, FULL_SWARM_STATUS.startupTiming)
   assert.deepEqual(result.doctor, FULL_SWARM_STATUS.doctor)
-  assert.deepEqual(result.directPeerDial, FULL_SWARM_STATUS.doctor.feed.directPeerDial)
 })
 
-test('backend swarm status reports visible feed entries and channels, not only opened channel objects', () => {
+test('backend swarm status reports scoped discovery and locally opened channels', () => {
   const api = createApi({
     ctx: {
-      channels: new Map(),
+      channels: new Map([['first', {}], ['second', {}]]),
       swarm: {
         connections: new Set([{}]),
         peers: new Map(),
         keyPair: { publicKey: Buffer.alloc(32, 1) },
       },
     },
-    publicFeed: {
-      feedConnections: new Set([{}]),
-      entries: new Map([['hidden-raw-entry', {}]]),
-      getFeed() {
-        return [
-          { driveKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32), source: 'peer' },
-          { driveKey: 'cc'.repeat(32), publicBeeKey: 'dd'.repeat(32), source: 'relay-cache' },
-        ]
-      },
-      getStats() {
-        return { peerCount: 1, feedConnections: 1, startupTiming: null, directPeerDial: null }
-      },
-    },
   })
 
   const status = api.getSwarmStatus()
 
-  assert.equal(status.feedEntries, 2)
+  assert.equal('feedEntries' in status, false)
   assert.equal(status.channelsLoaded, 2)
   assert.equal(status.doctor.recommendedBoundary, 'content-playback-or-ui')
   assert.deepEqual(status.scopedTopics.map(topic => topic.role), ['bootstrap'])

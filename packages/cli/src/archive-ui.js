@@ -9,12 +9,16 @@ function escapeHtml(value) {
 
 export function renderArchiveTui(model = {}) {
   const status = model.status || {}
-  const seeding = status.seeding || {}
+  const runtime = status.runtime || {}
+  const network = runtime.network || {}
+  const publisher = runtime.publisher || {}
+  const bootstrap = runtime.bootstrap || {}
+  const assets = runtime.assets || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
   const lines = [
     'PearTube Relay Archive Console',
     '================================',
-    `Peers: ${status.peers || 0}  Feed entries: ${status.feedEntries || 0}  Seeded videos: ${seeding.videos || 0}`,
+    `Peers: ${network.peers || 0}  Publisher catalogs: ${publisher.catalogs || 0}  Bootstrap locators: ${bootstrap.locators || 0}  Retained renditions: ${assets.retainedRenditions || 0}`,
     '',
     'Anonymous channel archival',
     'Paste a YouTube video URL or channel URL, import into a local relay-owned channel, then Publish to network.',
@@ -425,11 +429,9 @@ export function renderArchiveWebHome(model = {}) {
         </section>
 
         <section class="card" id="devices">
-          <h2>Linked creator devices</h2>
-          <p class="sub">Authorize a creator's device so this relay always mirrors their uploads and livestreams — guaranteeing their content a peer. Paste the 64-character device key from their PearTube app.</p>
-          ${link.relayMirrorKey
-            ? `<p class="sub" style="margin-bottom:6px">This relay's mirror key (creators' apps adopt this automatically over P2P):</p><code class="mono-key">${escapeHtml(link.relayMirrorKey)}</code>`
-            : '<p class="note">Relay mirror key appears once the blind peer is running.</p>'}
+          <h2>Authorized creator devices</h2>
+          <p class="sub">Authorize a creator's public device key for bounded catalog publication and seed retention. Secret keys and transport identifiers are never accepted.</p>
+          <p class="note">Seed retention is ${link.seedPin?.enabled ? 'enabled' : 'disabled'}; ${Number(link.seedPin?.authorizedClients || 0)} client(s) authorized.</p>
           <form method="post" action="/clients" style="margin-top:14px">
             <label>Creator device key<input name="key" required placeholder="64-character hex device key"></label>
             <label>Device label (optional)<input name="label" placeholder="e.g. Alice's phone"></label>

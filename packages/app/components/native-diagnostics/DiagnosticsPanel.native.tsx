@@ -1,19 +1,24 @@
 import React, { useMemo } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { colors } from '@/lib/colors'
-import type { SeedingStatus, StorageStats, SwarmStatus } from './types'
+import type { ArchiveOperatorStatus } from '@/lib/storage-operability.js'
+import ArchiveOperatorDiagnostics from './ArchiveOperatorDiagnostics'
+import type {
+  ScopedNetworkDiagnostics,
+  ScopedNetworkSession,
+  ScopedNetworkTopic,
+  SeedingStatus,
+  StorageStats,
+  SwarmStatus,
+} from './types'
 
 interface DiagnosticsPanelProps {
   swarmStatus: SwarmStatus | null
   storageStats: StorageStats | null
   seedingStatus: SeedingStatus | null
+  operatorStatus: ArchiveOperatorStatus | null
   loading?: boolean
   onRefresh?: () => void
-}
-
-function boolLabel(value?: boolean | null) {
-  if (value === null || value === undefined) return '—'
-  return value ? 'On' : 'Off'
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) {
@@ -25,10 +30,62 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   )
 }
 
+function isScopedTopic(value: unknown): value is ScopedNetworkTopic {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && 'purpose' in value
+    && typeof value.purpose === 'string'
+    && 'topicHex' in value
+    && typeof value.topicHex === 'string'
+    && 'scopeId' in value
+    && typeof value.scopeId === 'string'
+    && 'modes' in value
+    && Array.isArray(value.modes)
+    && 'sessions' in value
+    && typeof value.sessions === 'number',
+  )
+}
+
+function isScopedSession(value: unknown): value is ScopedNetworkSession {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && 'peerId' in value
+    && typeof value.peerId === 'string'
+    && 'purpose' in value
+    && typeof value.purpose === 'string'
+    && 'topicHex' in value
+    && typeof value.topicHex === 'string'
+    && 'state' in value
+    && typeof value.state === 'string',
+  )
+}
+
+function parseScopedDiagnostics(raw: string | null | undefined): ScopedNetworkDiagnostics | null {
+  if (!raw) return null
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (!value || typeof value !== 'object') return null
+    const topics = 'topics' in value && Array.isArray(value.topics) ? value.topics.filter(isScopedTopic) : []
+    const sessions = 'sessions' in value && Array.isArray(value.sessions) ? value.sessions.filter(isScopedSession) : []
+    return {
+      status: 'status' in value && typeof value.status === 'string' ? value.status : undefined,
+      protocolMajor: 'protocolMajor' in value && typeof value.protocolMajor === 'number' ? value.protocolMajor : undefined,
+      networkId: 'networkId' in value && typeof value.networkId === 'string' ? value.networkId : undefined,
+      topics,
+      sessions,
+    }
+  } catch {
+    return null
+  }
+}
+
 export default function DiagnosticsPanel({
   swarmStatus,
   storageStats,
   seedingStatus,
+  operatorStatus,
   loading,
   onRefresh,
 }: DiagnosticsPanelProps) {
@@ -36,46 +93,28 @@ export default function DiagnosticsPanel({
     if (!storageStats?.maxBytes) return 0
     return Math.max(0, Math.min(1, storageStats.usedBytes / storageStats.maxBytes))
   }, [storageStats])
-
-  // Over HRPC the doctor/network detail arrives JSON-encoded (the wire
-  // schema has no nested object fields), so fall back to parsing it.
-  const network = useMemo(() => {
-    if (swarmStatus?.network) return swarmStatus.network
-    for (const raw of [swarmStatus?.doctorJson, swarmStatus?.networkJson]) {
-      if (typeof raw === 'string' && raw) {
-        try { return JSON.parse(raw) } catch { /* fall through to next source */ }
-      }
-    }
-    return null
-  }, [swarmStatus])
-
+  const network = useMemo(
+    () => swarmStatus?.network || parseScopedDiagnostics(swarmStatus?.networkJson),
+    [swarmStatus],
+  )
+  const topics = network?.topics || []
+  const sessions = network?.sessions || []
   const p2pLabel = swarmStatus?.swarmOffline
     ? 'Network paused'
     : swarmStatus?.connected
       ? 'Connected to peers'
       : 'Searching for peers'
 
-  const boundary = network?.recommendedBoundary ?? swarmStatus?.recommendedBoundary
-  const discoveryPeers = network?.discovery?.discoveredPeers ?? swarmStatus?.peerCount ?? 0
-  const feedConnections = network?.feed?.feedConnections ?? swarmStatus?.feedConnections ?? 0
-  const dht = network?.dht
-  const lastHaveFeed = network?.feed?.lastHaveFeed
-  const lastPlayback = network?.playback?.lastPreparePlayback
-
   return (
     <View style={styles.root}>
       <View style={styles.headerRow}>
         <View style={{ flex: 1 }}>
           <Text style={styles.sectionTitle}>Network diagnostics</Text>
-          <Text style={styles.sectionSubtitle}>P2P status, cache meters, and network info.</Text>
+          <Text style={styles.sectionSubtitle}>Scoped P2P sessions, cache meters, and archive state.</Text>
         </View>
         {onRefresh ? (
           <Pressable onPress={onRefresh} disabled={loading} style={styles.refreshButton} accessibilityRole="button" accessibilityLabel="Refresh diagnostics">
-            {loading ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <Text style={styles.refreshText}>Refresh</Text>
-            )}
+            {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={styles.refreshText}>Refresh</Text>}
           </Pressable>
         ) : null}
       </View>
@@ -85,26 +124,15 @@ export default function DiagnosticsPanel({
         <Text style={styles.statusText}>{p2pLabel}</Text>
         <View style={styles.metricRow}>
           <Metric label="Connections" value={swarmStatus?.swarmConnections ?? swarmStatus?.peerCount ?? 0} />
-          <Metric label="Feed links" value={feedConnections} />
-          <Metric label="Discovered peers" value={discoveryPeers} />
+          <Metric label="Scoped topics" value={topics.length} />
+          <Metric label="Scoped sessions" value={sessions.length} />
         </View>
         <Text style={styles.detailText}>
           {swarmStatus?.swarmListenResolved ? 'Listening socket resolved' : 'Listening socket pending'}
           {swarmStatus?.peerPoolJoined ? ' • peer pool joined' : ''}
-          {swarmStatus?.publicFeedDiscoveryJoined ? ' • public feed joined' : ''}
         </Text>
-        {swarmStatus?.swarmOfflineReason ? (
-          <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text>
-        ) : null}
-        {boundary ? <Text style={styles.boundaryText}>Boundary: {boundary}</Text> : null}
-        {lastHaveFeed ? (
-          <Text style={styles.detailText}>
-            Last gossip: {lastHaveFeed.received ?? 0} received • {lastHaveFeed.accepted ?? 0} accepted • {lastHaveFeed.rejected ?? 0} rejected
-            {lastHaveFeed.lastRejectReason ? ` (${lastHaveFeed.lastRejectReason})` : ''}
-          </Text>
-        ) : (
-          <Text style={styles.detailText}>No gossip received yet this session.</Text>
-        )}
+        {swarmStatus?.swarmOfflineReason ? <Text style={styles.detailText}>Pause reason: {swarmStatus.swarmOfflineReason}</Text> : null}
+        {swarmStatus?.recommendedBoundary ? <Text style={styles.boundaryText}>Boundary: {swarmStatus.recommendedBoundary}</Text> : null}
       </View>
 
       <View style={styles.card}>
@@ -125,41 +153,18 @@ export default function DiagnosticsPanel({
         ) : null}
       </View>
 
-      {lastPlayback ? (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Playback timing</Text>
-          <Text style={styles.statusText}>
-            {lastPlayback.videoId || 'unknown video'}
-            {lastPlayback.readyForPlayback === true ? ' • ready' : lastPlayback.readyForPlayback === false ? ' • not ready' : ''}
-          </Text>
-          <View style={styles.metricRow}>
-            <Metric label="Total" value={`${lastPlayback.stages?.totalMs ?? '—'} ms`} />
-            <Metric label="URL" value={`${lastPlayback.stages?.urlResolvedMs ?? '—'} ms`} />
-            <Metric label="Head block" value={`${lastPlayback.stages?.headBlockMs ?? '—'} ms`} />
-          </View>
-          <Text style={styles.detailText}>
-            Hints: {lastPlayback.stages?.hintsMs ?? '—'} ms • Core ready: {lastPlayback.stages?.blobCoreReadyMs ?? '—'} ms
-            {' '}• Peers retained: {lastPlayback.stages?.peersRetainedMs ?? '—'} ms
-          </Text>
-          <Text style={styles.detailText}>
-            First blob peer: {lastPlayback.stages?.firstBlobPeerMs ?? '—'} ms • Warmup done: {lastPlayback.stages?.warmupDoneMs ?? '—'} ms
-            {' '}• Blob peers: {lastPlayback.peerCount ?? '—'}
-          </Text>
-        </View>
-      ) : null}
+      <ArchiveOperatorDiagnostics operatorStatus={operatorStatus} />
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Network info</Text>
+        <Text style={styles.cardTitle}>Scoped network</Text>
         <View style={styles.metricRow}>
-          <Metric label="DHT online" value={boolLabel(dht?.online)} />
-          <Metric label="Bootstrapped" value={boolLabel(dht?.bootstrapped)} />
-          <Metric label="Firewalled" value={boolLabel(dht?.firewalled)} />
+          <Metric label="Status" value={network?.status || 'starting'} />
+          <Metric label="Protocol" value={network?.protocolMajor ?? '—'} />
+          <Metric label="Peers" value={swarmStatus?.swarmPeers ?? 0} />
         </View>
+        <Text style={styles.detailText}>Network: {network?.networkId || 'default'}</Text>
         <Text style={styles.detailText}>
-          Feed entries: {swarmStatus?.feedEntries ?? 0} • Channels loaded: {swarmStatus?.channelsLoaded ?? 0}
-        </Text>
-        <Text style={styles.detailText}>
-          Discovery peers: {discoveryPeers} • Peer pool: {boolLabel(swarmStatus?.peerPoolJoined)}
+          Active purposes: {topics.length > 0 ? [...new Set(topics.map((topic) => topic.purpose))].sort().join(', ') : 'none'}
         </Text>
       </View>
     </View>
@@ -167,94 +172,21 @@ export default function DiagnosticsPanel({
 }
 
 const styles = StyleSheet.create({
-  root: {
-    padding: 16,
-    gap: 12,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  sectionSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: colors.textMuted,
-  },
-  refreshButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: colors.glass,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    minWidth: 72,
-    alignItems: 'center',
-  },
-  refreshText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  card: {
-    backgroundColor: colors.bg,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    gap: 8,
-  },
-  cardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  statusText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textSecondary,
-  },
-  metricRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  metric: {
-    flex: 1,
-    minWidth: 0,
-  },
-  metricLabel: {
-    fontSize: 11,
-    color: colors.textMuted,
-  },
-  metricValue: {
-    marginTop: 2,
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  detailText: {
-    fontSize: 12,
-    color: colors.textMuted,
-  },
-  boundaryText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  track: {
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: colors.glass,
-    overflow: 'hidden',
-  },
-  fill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: colors.swarm,
-  },
+  root: { padding: 16, gap: 12 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  sectionSubtitle: { marginTop: 2, fontSize: 12, color: colors.textMuted },
+  refreshButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.glass, borderWidth: 1, borderColor: colors.glassBorder, minWidth: 72, alignItems: 'center' },
+  refreshText: { fontSize: 13, fontWeight: '700', color: colors.primary },
+  card: { backgroundColor: colors.bg, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: colors.glassBorder, gap: 8 },
+  cardTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+  statusText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  metricRow: { flexDirection: 'row', gap: 12 },
+  metric: { flex: 1, minWidth: 0 },
+  metricLabel: { fontSize: 11, color: colors.textMuted },
+  metricValue: { marginTop: 2, fontSize: 16, fontWeight: '700', color: colors.text },
+  detailText: { fontSize: 12, color: colors.textMuted },
+  boundaryText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  track: { height: 8, borderRadius: 999, backgroundColor: colors.glass, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: 999, backgroundColor: colors.swarm },
 })

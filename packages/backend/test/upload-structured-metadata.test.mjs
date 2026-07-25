@@ -483,23 +483,3 @@ test('both paths snapshot allowlisted options once before caller mutation or upl
   t.alike(bufferState.reads, expectedOptionReads(), 'buffer reads each allowlisted field exactly once')
   t.is(bufferChannel.addVideoCalls.length, 1, 'buffer has no late validation failure')
 })
-
-test('optional immutable upload publication attaches signed manifest metadata without changing legacy defaults', async (t) => {
-  const manager = createUploadManager({ ctx: {} })
-  const channel = makeChannel()
-  const publisher = crypto.keyPair(Buffer.alloc(32, 7))
-  const options = {
-    ...richOptions(),
-    immutablePublisherKeyPair: publisher,
-    immutablePublicationSequence: 42
-  }
-
-  const result = await manager.uploadFromBuffer(channel, FIXTURE_BYTES, options)
-
-  t.is(result.success, true)
-  t.ok(result.metadata.immutablePublication?.publicationId)
-  t.is(result.metadata.immutablePublication.sequence, 42)
-  t.is(result.metadata.immutablePublication.manifest.body.renditions[0].core.key, BLOBS_CORE_KEY)
-  t.is(result.metadata.immutablePublication.manifest.body.renditions[0].core.byteLength, FIXTURE_BYTES.length)
-  t.is(channel.addVideoCalls[0].metadata.immutablePublication.publicationId, result.metadata.immutablePublication.publicationId)
-})

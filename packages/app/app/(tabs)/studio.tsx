@@ -19,6 +19,7 @@ import { Chip, EmptyState } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import type { Video } from '@peartube/core'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -118,9 +119,20 @@ export default function StudioScreen() {
   const [preparingVideo, setPreparingVideo] = useState(false) // Android: copying picked file into cache
   const tempVideoUriRef = useRef<string | null>(null) // app-cache copy we created; deleted after upload/reset
   const [editingVideo, setEditingVideo] = useState<any>(null)
-  // Per-video "free up local space" state. A video is only offloadable once a
-  // full copy is provably seeded elsewhere (backend assessUploadOffload).
-  const [offloadInfo, setOffloadInfo] = useState<Record<string, { eligible: boolean; byteLength: number; offloaded?: boolean; busy?: boolean }>>({})
+  // Per-publication source-offload assessments. Eligibility is only a prompt to
+  // request explicit confirmation; the backend rechecks and consumes the nonce.
+  const [offloadInfo, setOffloadInfo] = useState<Record<string, {
+    eligible: boolean
+    byteLength: number
+    publicationId?: string
+    assessmentId?: string
+    evidenceDigest?: string
+    confirmationNonce?: string
+    policyVersion?: number
+    limitations?: string[]
+    offloaded?: boolean
+    busy?: boolean
+  }>>({})
   const assessedOffloadRef = useRef<Set<string>>(new Set())
   const tabBarMetrics = useTabBarMetrics()
   const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
@@ -704,69 +716,115 @@ export default function StudioScreen() {
     </View>
   )
 
-  // Quietly assess which of my uploads can be safely offloaded (a full copy is
-  // seeded elsewhere). Best-effort, once per video; the action only appears when
-  // eligible so we never invite deleting an under-replicated source copy.
+  // Quietly assess immutable publication sources. The destructive operation
+  // remains unavailable until the backend issues a fresh, evidence-bound nonce.
   useEffect(() => {
-    const assess = (rpc as any)?.assessUploadOffload
+    const assess = rpc?.assessSourceOffload
     if (typeof assess !== 'function' || !identity?.driveKey) return
-    const mine = videos.filter((v: any) => v.channelKey === identity.driveKey)
+    const mine = videos.filter((v) => v.channelKey === identity.driveKey)
     let cancelled = false
     ;(async () => {
       for (const v of mine) {
         if (cancelled) return
-        if (assessedOffloadRef.current.has(v.id)) continue
-        assessedOffloadRef.current.add(v.id)
+        const publicationId = v.immutablePublication?.publicationId || v.publicationId
+        if (!publicationId || assessedOffloadRef.current.has(publicationId)) continue
+        assessedOffloadRef.current.add(publicationId)
         try {
-          const res = await assess({ channelKey: identity.driveKey, videoId: v.id })
+          const res = await assess({ publicationId })
           if (cancelled) return
           setOffloadInfo((prev) => ({
             ...prev,
-            [v.id]: { eligible: !!res?.eligible, byteLength: Number(res?.byteLength) || 0 },
+            [v.id]: {
+              eligible: res?.success === true && res?.eligible === true,
+              byteLength: Number(res?.byteLength) || 0,
+              publicationId: res?.publicationId,
+              assessmentId: res?.assessmentId,
+              evidenceDigest: res?.evidenceDigest,
+              confirmationNonce: res?.confirmationNonce,
+              policyVersion: res?.policyVersion,
+              limitations: Array.isArray(res?.limitations) ? res.limitations : [],
+            },
           }))
         } catch {
-          assessedOffloadRef.current.delete(v.id)
+          assessedOffloadRef.current.delete(publicationId)
         }
       }
     })()
     return () => { cancelled = true }
   }, [videos, identity?.driveKey, rpc])
 
-  const handleOffloadVideo = async (item: any) => {
+  const handleOffloadVideo = async (item: Video) => {
     const info = offloadInfo[item.id]
-    const freed = info?.byteLength ? ` (${formatBytes(info.byteLength)})` : ''
-    const confirmed = await new Promise<boolean>((resolve) => {
-      const msg = `Free up local space for "${item.title}"?${freed}\n\nThe video stays published — a full copy is confirmed seeded elsewhere, and it re-downloads from the network if needed.`
-      if (Platform.OS === 'web') {
-        resolve(window.confirm(msg))
-      } else {
-        Alert.alert('Free up space', msg, [
-          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-          { text: 'Free up', style: 'destructive', onPress: () => resolve(true) },
-        ])
-      }
-    })
-    if (!confirmed) return
-
+    if (!info?.publicationId || typeof rpc?.assessSourceOffload !== 'function') return
     setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: true } }))
+
     try {
-      const res = await (rpc as any)?.offloadUpload({ channelKey: identity?.driveKey, videoId: item.id })
-      if (res?.success) {
-        setOffloadInfo((prev) => ({ ...prev, [item.id]: { eligible: false, byteLength: info?.byteLength || 0, offloaded: true, busy: false } }))
-      } else {
-        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
-        const detail = res?.reason === 'playback-active'
-          ? 'Stop playback and try again.'
-          : 'It may not be fully backed up elsewhere yet.'
-        const m = `Couldn't free up space. ${detail}`
+      const fresh = await rpc?.assessSourceOffload({ publicationId: info.publicationId })
+      if (!fresh?.success || !fresh.eligible || !fresh.publicationId || !fresh.assessmentId ||
+          !fresh.evidenceDigest || !fresh.confirmationNonce || !fresh.policyVersion) {
+        assessedOffloadRef.current.delete(info.publicationId)
+        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
+        const m = `Source offload is no longer safe. ${fresh?.reason || 'Current archive evidence is insufficient.'}`
         if (Platform.OS === 'web') window.alert(m)
-        else Alert.alert('Free up space', m)
+        else Alert.alert('Source offload stopped', m)
+        return
       }
-    } catch (err: any) {
-      setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
-      const m = err?.message || 'Failed to free up space'
+
+      const freshInfo = {
+        eligible: true,
+        byteLength: Number(fresh.byteLength) || 0,
+        publicationId: fresh.publicationId,
+        assessmentId: fresh.assessmentId,
+        evidenceDigest: fresh.evidenceDigest,
+        confirmationNonce: fresh.confirmationNonce,
+        policyVersion: fresh.policyVersion,
+        limitations: Array.isArray(fresh.limitations) ? fresh.limitations : [],
+        busy: true,
+      }
+      setOffloadInfo((prev) => ({ ...prev, [item.id]: freshInfo }))
+      const freed = freshInfo.byteLength ? ` (${formatBytes(freshInfo.byteLength)})` : ''
+      const limitations = freshInfo.limitations.length
+        ? `\n\nEvidence limitations:\n${freshInfo.limitations.map((value: string) => `• ${value}`).join('\n')}`
+        : ''
+      const confirmed = await new Promise<boolean>((resolve) => {
+        const msg = `Delete this device's source bytes for "${item.title}"${freed}?\n\nPublication: ${fresh.publicationId}\n\nThis cannot guarantee the media remains recoverable. Other copies may disappear after confirmation.${limitations}\n\nContinue only if you accept permanent loss risk.`
+        if (Platform.OS === 'web') {
+          resolve(window.confirm(msg))
+        } else {
+          Alert.alert('Confirm source offload', msg, [
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'I understand — delete source', style: 'destructive', onPress: () => resolve(true) },
+          ])
+        }
+      })
+      if (!confirmed) {
+        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], busy: false } }))
+        return
+      }
+
+      const res = await rpc?.confirmSourceOffload({
+        publicationId: fresh.publicationId,
+        assessmentId: fresh.assessmentId,
+        evidenceDigest: fresh.evidenceDigest,
+        confirmationNonce: fresh.confirmationNonce,
+        policyVersion: fresh.policyVersion,
+        confirmIrrecoverableRisk: true,
+      })
+      if (res?.success) {
+        setOffloadInfo((prev) => ({ ...prev, [item.id]: { eligible: false, byteLength: freshInfo.byteLength, publicationId: fresh.publicationId, offloaded: true, busy: false } }))
+      } else {
+        assessedOffloadRef.current.delete(fresh.publicationId)
+        setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
+        const m = `Couldn't delete the local source. ${res?.reason || 'The evidence or policy changed; reassess before trying again.'}`
+        if (Platform.OS === 'web') window.alert(m)
+        else Alert.alert('Source offload stopped', m)
+      }
+    } catch (err: unknown) {
+      assessedOffloadRef.current.delete(info.publicationId)
+      setOffloadInfo((prev) => ({ ...prev, [item.id]: { ...prev[item.id], eligible: false, busy: false } }))
+      const m = err instanceof Error ? err.message : 'Failed to delete local source'
       if (Platform.OS === 'web') window.alert(m)
-      else Alert.alert('Free up space', m)
+      else Alert.alert('Source offload stopped', m)
     }
   }
 

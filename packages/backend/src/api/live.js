@@ -1,7 +1,7 @@
 // Live API group, extracted from api.js.
 import { createLiveBroadcastService, createLivePlaybackService } from '../live/index.js'
 
-export function createLiveApi({ ctx, publicFeed }) {
+export function createLiveApi({ ctx }) {
   // Live services are lazy: most sessions never broadcast or watch live.
   let liveBroadcast = null
   let livePlayback = null
@@ -22,28 +22,6 @@ export function createLiveApi({ ctx, publicFeed }) {
     return livePlayback
   }
 
-  // Re-announce the channel's full set of active live sessions on the feed
-  // (an empty set clears the live badge network-wide). Best-effort: feed
-  // gossip must never fail a broadcast lifecycle call.
-  function announceChannelLiveStreams(channelKey) {
-    if (!channelKey || !liveBroadcast || typeof publicFeed?.setChannelLiveStreams !== 'function') return
-    try {
-      const liveStreams = []
-      for (const session of liveBroadcast.sessions.values()) {
-        if (session.state !== 'live') continue
-        if ((session.writer?.descriptor?.channelKey || null) !== channelKey) continue
-        liveStreams.push({
-          videoId: session.videoId,
-          liveCoreKey: session.liveCoreKey,
-          title: session.writer?.descriptor?.title || null,
-          startedAt: session.startedAt,
-        })
-      }
-      publicFeed.setChannelLiveStreams(channelKey, liveStreams)
-    } catch (err) {
-      console.log('[API] live feed announce skipped:', err?.message || err)
-    }
-  }
 
   function toLivestreamStatus(stats) {
     if (!stats) return undefined
@@ -80,7 +58,6 @@ export function createLiveApi({ ctx, publicFeed }) {
           height: Number(options.height) || 0,
         })
         console.log('[API] startLivestream:', session.videoId, 'core:', session.liveCoreKey.slice(0, 16))
-        announceChannelLiveStreams(options.channelKey)
         return { success: true, videoId: session.videoId, liveCoreKey: session.liveCoreKey }
       } catch (err) {
         console.error('[API] startLivestream failed:', err?.message || err)
@@ -95,9 +72,7 @@ export function createLiveApi({ ctx, publicFeed }) {
      */
     async stopLivestream(videoId) {
       try {
-        const session = getLiveBroadcast().getSession(videoId)
         const stats = await getLiveBroadcast().stopBroadcast(videoId)
-        announceChannelLiveStreams(session?.writer?.descriptor?.channelKey)
         return { success: true, status: toLivestreamStatus(stats) }
       } catch (err) {
         return { success: false, error: err?.message || String(err) }

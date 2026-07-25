@@ -1,3 +1,5 @@
+import { isMediaSourcePlayable } from './media-source-selection.js'
+
 function asArray(value) {
   return Array.isArray(value) ? value : []
 }
@@ -11,7 +13,7 @@ function normalizeSource(source = {}, index = 0) {
     renditionId,
     publisherId: source.publisherId ?? null,
     sourceProvider: source.sourceProvider ?? source.provider ?? null,
-    playable: source.playable === true,
+    playable: isMediaSourcePlayable(source),
     score: Number.isFinite(source.score) ? source.score : 0,
     playbackRef: renditionId ? { publicationId, renditionId } : null,
   }
@@ -21,7 +23,7 @@ export function projectMediaEntityGraph(input = {}) {
   const entity = input.entity || {}
   const sources = asArray(input.publications ?? input.sources).map(normalizeSource)
   const playable = sources.filter(source => source.playable).sort((a, b) => b.score - a.score || a.publicationId.localeCompare(b.publicationId))
-  const primarySource = playable[0] || sources[0] || null
+  const primarySource = playable[0] || null
   const collectionItems = asArray(input.collectionItems).map((item, index) => ({
     entityId: String(item.entityId || item.id || `item:${index}`),
     title: item.title ?? null,

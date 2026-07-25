@@ -128,6 +128,7 @@ test('createBackend exposes universal core as the entry runtime composition root
   let readyPayload = null
   const lifecycle = []
   let contextPlatform = null
+  let contextExpectedProtocolVersion = null
   let releaseBackendDestroy = null
   const backendDestroyGate = new Promise((resolve) => {
     releaseBackendDestroy = resolve
@@ -145,6 +146,7 @@ test('createBackend exposes universal core as the entry runtime composition root
     onReady(payload) { readyPayload = payload },
     createBackendContext: async (contextOptions) => {
       contextPlatform = contextOptions.platform
+      contextExpectedProtocolVersion = contextOptions.expectedProtocolVersion
       return {
         ctx: { metaDb },
         api: {},
@@ -185,6 +187,7 @@ test('createBackend exposes universal core as the entry runtime composition root
   t.is(readyPayload.protocolVersion, 42)
   t.is(session.rpc.ready.protocolVersion, 42)
   t.is(contextPlatform, 'desktop')
+  t.is(contextExpectedProtocolVersion, 42)
   t.ok(lifecycle.includes('hc:init'))
   t.is(contextPlatform, 'desktop')
   t.ok(lifecycle.includes('hc:start'))
@@ -200,4 +203,46 @@ test('createBackend exposes universal core as the entry runtime composition root
   await Promise.all([firstDestroy, secondDestroy])
   t.is(session.core.state, 'shutdown')
   t.is(lifecycle.filter((entry) => entry === 'backend:destroy').length, 1)
+})
+
+test('stored protocol rejection happens before RPC handlers or readiness are exposed', async (t) => {
+  let rpcConstructed = false
+  let readyCalls = 0
+  let errorCalls = 0
+  const error = Object.assign(new Error('Stored protocol version 5 is unsupported; expected 4'), {
+    code: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+    storedVersion: 5,
+    expectedVersion: 4,
+  })
+
+  try {
+    await backendEntry.createBackend({
+      storagePath: '/tmp/peartube-entry-stored-protocol-rejection',
+      stream: {},
+      platform: 'desktop',
+      protocolVersion: 4,
+      createBackendContext: async () => {
+        throw error
+      },
+      onReady() {
+        readyCalls += 1
+      },
+      onError(received) {
+        errorCalls += 1
+        t.is(received, error)
+      },
+      HRPCImpl: class MockHRPC {
+        constructor() {
+          rpcConstructed = true
+        }
+      },
+    })
+    t.fail('unsupported stored state must reject backend startup')
+  } catch (received) {
+    t.is(received, error)
+  }
+
+  t.is(rpcConstructed, false)
+  t.is(readyCalls, 0)
+  t.is(errorCalls, 1)
 })

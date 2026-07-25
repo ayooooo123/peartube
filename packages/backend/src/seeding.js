@@ -10,6 +10,40 @@ import { collectCorestoreGarbage } from './corestore-gc.js';
 
 const DEFAULT_STORAGE_MAINTENANCE_DELAY_MS = 30000
 
+export const STORAGE_CATEGORY_FIELDS = Object.freeze([
+  'ownedOriginalBytes',
+  'immutablePublicationBytes',
+  'pledgedArchiveBytes',
+  'localCacheBytes',
+  'thumbnailBytes',
+  'indexBytes',
+  'temporaryTransferBytes'
+])
+
+function normalizeStorageBytes(value) {
+  return Math.max(0, Math.round(Number(value) || 0))
+}
+
+export function buildStorageCategoryTotals(usage = {}) {
+  const categories = {}
+  for (const field of STORAGE_CATEGORY_FIELDS) {
+    categories[field] = normalizeStorageBytes(usage[field])
+  }
+  const protectedBytes = categories.ownedOriginalBytes
+    + categories.immutablePublicationBytes
+    + categories.pledgedArchiveBytes
+  const evictableBytes = categories.localCacheBytes
+    + categories.thumbnailBytes
+    + categories.indexBytes
+    + categories.temporaryTransferBytes
+  return {
+    ...categories,
+    totalCategorizedBytes: protectedBytes + evictableBytes,
+    evictableBytes,
+    protectedBytes
+  }
+}
+
 /**
  * @typedef {import('./types.js').SeedingConfig} SeedingConfig
  * @typedef {import('./types.js').SeedInfo} SeedInfo
@@ -67,9 +101,20 @@ export function fullDownloadFitsQuota(headroomBytes, remainingBytes) {
   return headroom >= remaining
 }
 
+const SEED_REASON_PRIORITY = Object.freeze({
+  watched: 1,
+  subscribed: 2,
+  pinned: 3,
+  pledged: 4,
+  archive: 4
+})
+
+function isProtectedSeedReason(reason) {
+  return reason === 'pinned' || reason === 'pledged' || reason === 'archive'
+}
+
 function mergeSeedReason(existingReason, nextReason) {
-  const priority = { watched: 1, subscribed: 2, pinned: 3 }
-  return (priority[nextReason] || 0) > (priority[existingReason] || 0)
+  return (SEED_REASON_PRIORITY[nextReason] || 0) > (SEED_REASON_PRIORITY[existingReason] || 0)
     ? nextReason
     : existingReason
 }
@@ -99,25 +144,21 @@ export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
    * @param {import('hyperbee')} metaDb - Metadata database
-   * @param {{ getDiskUsageBytes?: () => number | Promise<number>, isCacheClearBlocked?: () => boolean, storageMaintenanceDelayMs?: number, setTimer?: typeof setTimeout, clearTimer?: typeof clearTimeout }} [options]
+   * @param {{ getDiskUsageBytes?: () => number | Promise<number>, getStorageCategoryUsage?: () => Object | Promise<Object>, isCacheClearBlocked?: () => boolean, storageMaintenanceDelayMs?: number, setTimer?: typeof setTimeout, clearTimer?: typeof clearTimeout }} [options]
    */
   constructor(store, metaDb, options = {}) {
     this.store = store;
     this.metaDb = metaDb;
     this.identityManager = options.identityManager || null;
-    // Optional blind-peering client: lets deliberately-retained content (pinned
-    // channels, subscriptions — which include the user's own published channel)
-    // be mirrored to always-on blind peers, so it stays available while this
-    // device is offline.
-    this.blindPeering = options.blindPeering || null;
-    /** @type {Set<string>} blobsCoreKeys already delegated to blind peers (dedup) */
-    this._mirroredBlobCores = new Set();
     // Sub-encoded metaDb keyspaces (download intents live here).
     this.metaSubspaces = options.metaSubspaces || null;
     this.requiresIdentityAuthorization = Object.prototype.hasOwnProperty.call(options, 'identityManager');
     this.getDiskUsageBytes = typeof options.getDiskUsageBytes === 'function'
       ? options.getDiskUsageBytes
       : (typeof store?.getDiskUsageBytes === 'function' ? () => store.getDiskUsageBytes() : null);
+    this.getStorageCategoryUsage = typeof options.getStorageCategoryUsage === 'function'
+      ? options.getStorageCategoryUsage
+      : null;
     this.isCacheClearBlocked = typeof options.isCacheClearBlocked === 'function'
       ? options.isCacheClearBlocked
       : null;
@@ -275,75 +316,15 @@ export class SeedingManager {
       }
       console.log('[SeedingManager] Loaded', this.activeSeeds.size, 'active seeds');
     }
-
-    // Re-delegate retained content to blind peers on startup so availability is
-    // restored after a restart (and as new mirrors are later discovered).
-    for (const seed of this.activeSeeds.values()) {
-      this.mirrorSeedToBlindPeers(seed)
-    }
   }
 
-  /**
-   * Re-run blind-peer delegation across all retained seeds. Called after new
-   * mirrors are discovered so previously-skipped seeds (no mirrors at the time)
-   * get delegated.
-   */
-  remirrorAllSeeds() {
-    let count = 0
-    for (const seed of this.activeSeeds.values()) {
-      if (this.mirrorSeedToBlindPeers(seed)) count++
-    }
-    return count
-  }
-
-  /**
-   * Only deliberately-retained content (pinned / subscribed) is mirrored to
-   * blind peers — transient watch-cache is not, to avoid spending a mirror's
-   * storage on content the user merely viewed.
-   * @param {string | undefined} reason
-   */
-  _seedReasonWantsMirror(reason) {
-    return reason === 'pinned' || reason === 'subscribed'
-  }
-
-  /**
-   * Delegate a seed's blob (and thumbnail) cores to the blind-peering mirrors so
-   * they stay available while this device is offline. Best-effort and idempotent
-   * (dedups by blobsCoreKey); a no-op when no blindPeering client/mirrors exist.
-   * @param {SeedInfo & { thumbnailBlobsCoreKey?: string | null }} seedInfo
-   * @returns {boolean} whether any new core was delegated
-   */
-  mirrorSeedToBlindPeers(seedInfo) {
-    try {
-      const bp = this.blindPeering
-      if (!bp?.enabled || typeof bp.addCore !== 'function') return false
-      if (!this._seedReasonWantsMirror(seedInfo?.reason)) return false
-      const activeMirrors = bp.getActiveMirrorKeys?.() || []
-      if (activeMirrors.length === 0) return false
-
-      let mirrored = false
-      for (const rawKey of [seedInfo?.blobsCoreKey, seedInfo?.thumbnailBlobsCoreKey]) {
-        const hex = normalizeBlobsCoreKey(rawKey)
-        if (!hex || this._mirroredBlobCores.has(hex)) continue
-        // store.get() opens a session blind-peering keeps for replication; it
-        // releases it via the core's own 'close' event, so we hand it off.
-        const core = this.store.get(Buffer.from(hex, 'hex'))
-        this._mirroredBlobCores.add(hex)
-        if (bp.addCore(core)) mirrored = true
-      }
-      return mirrored
-    } catch (err) {
-      console.log('[SeedingManager] blind-peer mirror failed:', err?.message)
-      return false
-    }
-  }
 
   /**
    * Add a seed for a video
    * @param {string} driveKey
    * @param {string} videoPath
-   * @param {'watched'|'pinned'|'subscribed'} reason
-   * @param {{blockLength?: number, byteLength?: number, publicBeeKey?: string | null, blobId?: string | null, blobsCoreKey?: string | null, thumbnailBlobId?: string | null, thumbnailBlobsCoreKey?: string | null, mimeType?: string | null, thumbnailMimeType?: string | null}} [blobInfo]
+   * @param {'watched'|'pinned'|'subscribed'|'pledged'|'archive'} reason
+   * @param {{blockLength?: number, byteLength?: number, thumbnailByteLength?: number, publicBeeKey?: string | null, blobId?: string | null, blobsCoreKey?: string | null, thumbnailBlobId?: string | null, thumbnailBlobsCoreKey?: string | null, mimeType?: string | null, thumbnailMimeType?: string | null}} [blobInfo]
    * @param {{protectSelf?: boolean, protectedKeys?: string[] | Set<string>}} [options]
    * @returns {Promise<boolean>}
    */
@@ -366,6 +347,9 @@ export class SeedingManager {
         reason: mergeSeedReason(existing.reason, reason),
         blocks: blobInfo?.blockLength || existing.blocks || 0,
         bytes: normalizeByteLength(blobInfo, existing.bytes || 0),
+        thumbnailBytes: blobInfo?.thumbnailByteLength == null
+          ? normalizeStorageBytes(existing.thumbnailBytes)
+          : normalizeStorageBytes(blobInfo.thumbnailByteLength),
         publicBeeKey: blobInfo?.publicBeeKey || existing.publicBeeKey || null,
         blobId: blobInfo?.blobId || existing.blobId || null,
         blobsCoreKey: blobInfo?.blobsCoreKey || existing.blobsCoreKey || null,
@@ -376,7 +360,6 @@ export class SeedingManager {
       }
       this.activeSeeds.set(key, updatedSeedInfo)
       await this.persistSeeds()
-      this.mirrorSeedToBlindPeers(updatedSeedInfo)
       const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
       if (options.protectSelf) protectedKeys.add(key)
       await this.enforceQuota({ protectedKeys });
@@ -391,6 +374,7 @@ export class SeedingManager {
       addedAt: Date.now(),
       blocks: blobInfo?.blockLength || 0,
       bytes: normalizeByteLength(blobInfo, 0),
+      thumbnailBytes: normalizeStorageBytes(blobInfo?.thumbnailByteLength),
       publicBeeKey: blobInfo?.publicBeeKey || null,
       blobId: blobInfo?.blobId || null,
       blobsCoreKey: blobInfo?.blobsCoreKey || null,
@@ -402,7 +386,6 @@ export class SeedingManager {
 
     this.activeSeeds.set(key, seedInfo);
     await this.persistSeeds();
-    this.mirrorSeedToBlindPeers(seedInfo)
 
     console.log('[SeedingManager] Added seed:', videoPath, 'reason:', reason, 'bytes:', seedInfo.bytes);
 
@@ -513,6 +496,91 @@ export class SeedingManager {
     return total;
   }
 
+  _planStorageLimit(requestedMaxBytes, options = {}) {
+    const currentUsedBytes = Array.from(this.activeSeeds.values())
+      .reduce((total, seed) => total + normalizeStorageBytes(seed.bytes), 0)
+    const maxBytes = Number(requestedMaxBytes)
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      return {
+        preview: {
+          success: false,
+          requestedMaxBytes: 0,
+          currentUsedBytes,
+          requiredEvictionBytes: 0,
+          evictableBytes: 0,
+          protectedBytes: currentUsedBytes,
+          affectedSeedCount: 0,
+          affectedCategories: [],
+          consequences: [],
+          feasible: false,
+          errorCode: 'INVALID_STORAGE_LIMIT'
+        },
+        candidates: []
+      }
+    }
+
+    const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
+    const orderedSeeds = Array.from(this.activeSeeds.entries())
+      .map(([key, info]) => ({ key, ...info }))
+      .sort((a, b) => {
+        const priorityDiff = (SEED_REASON_PRIORITY[a.reason] || 0) - (SEED_REASON_PRIORITY[b.reason] || 0)
+        if (priorityDiff !== 0) return priorityDiff
+        const ageDiff = normalizeStorageBytes(a.addedAt) - normalizeStorageBytes(b.addedAt)
+        if (ageDiff !== 0) return ageDiff
+        return a.key.localeCompare(b.key)
+      })
+
+    const evictableSeeds = []
+    let evictableBytes = 0
+    let protectedBytes = 0
+    for (const seed of orderedSeeds) {
+      const bytes = normalizeStorageBytes(seed.bytes)
+      if (isProtectedSeedReason(seed.reason)
+        || (options.ignoreTransientProtection !== true
+          && (protectedKeys.has(seed.key) || this.shouldSkipSeedClear(seed)))) {
+        protectedBytes += bytes
+      } else {
+        evictableSeeds.push(seed)
+        evictableBytes += bytes
+      }
+    }
+
+    const requiredEvictionBytes = Math.max(0, currentUsedBytes - maxBytes)
+    const candidates = []
+    let plannedEvictionBytes = 0
+    for (const seed of evictableSeeds) {
+      if (plannedEvictionBytes >= requiredEvictionBytes) break
+      candidates.push(seed)
+      plannedEvictionBytes += normalizeStorageBytes(seed.bytes)
+    }
+    const affectedSeedCount = candidates.length
+    const consequences = affectedSeedCount === 0
+      ? []
+      : [
+          `${affectedSeedCount} local cache seed${affectedSeedCount === 1 ? '' : 's'} will stop seeding on this device.`,
+          'Evicted content may become unavailable if no other peer retains it.'
+        ]
+    const feasible = requiredEvictionBytes <= evictableBytes
+    const preview = {
+      success: true,
+      requestedMaxBytes: maxBytes,
+      currentUsedBytes,
+      requiredEvictionBytes,
+      evictableBytes,
+      protectedBytes,
+      affectedSeedCount,
+      affectedCategories: affectedSeedCount === 0 ? [] : ['localCacheBytes'],
+      consequences,
+      feasible
+    }
+    if (!feasible) preview.errorCode = 'STORAGE_LIMIT_INFEASIBLE'
+    return { preview, candidates }
+  }
+
+  previewStorageLimit(input = {}, options = {}) {
+    return this._planStorageLimit(input?.maxBytes, options).preview
+  }
+
   /**
    * Update the locally cached byte accounting for an already tracked seed.
    * This is cache bookkeeping, not an explicit channel/seeding mutation, so it
@@ -583,7 +651,6 @@ export class SeedingManager {
   }
 
   async _enforceQuotaOnce(options = {}) {
-    const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
     // The quota bounds content cached from the network (tracked seeds). The
     // user's own uploaded/published videos live in the same corestore but are
@@ -592,38 +659,15 @@ export class SeedingManager {
     // cache, so doing so would evict the user's seeded cache to make room for
     // their own uploads — i.e. charge uploads against a limit they don't belong
     // to.
-    let trackedBytes = this.calculateStorage();
+    const plan = this._planStorageLimit(maxBytes, options)
+    if (plan.preview.requiredEvictionBytes === 0) return;
 
-    if (trackedBytes <= maxBytes) {
-      return; // Under quota
-    }
+    console.log('[SeedingManager] Over cache quota, tracked:', plan.preview.currentUsedBytes, 'max:', maxBytes);
 
-    console.log('[SeedingManager] Over cache quota, tracked:', trackedBytes, 'max:', maxBytes);
-
-    // Get seeds sorted by priority (pinned > subscribed > watched) then by age
-    const seeds = Array.from(this.activeSeeds.entries())
-      .map(([key, info]) => ({ key, ...info }))
-      .sort((a, b) => {
-        // Priority order: pinned (keep) > subscribed > watched (remove first)
-        const priorityOrder = { pinned: 3, subscribed: 2, watched: 1 };
-        const priorityDiff = (priorityOrder[a.reason] || 0) - (priorityOrder[b.reason] || 0);
-        if (priorityDiff !== 0) return priorityDiff;
-
-        // Older first for same priority
-        return a.addedAt - b.addedAt;
-      });
-
-    // Remove oldest/lowest priority seeds until under quota
     let clearedBlob = false;
-    for (const seed of seeds) {
-      if (trackedBytes <= maxBytes) break;
-      if (seed.reason === 'pinned') continue; // Never remove pinned
-      if (protectedKeys.has(seed.key) || this.shouldSkipSeedClear(seed)) continue;
-
+    for (const seed of plan.candidates) {
       this.activeSeeds.delete(seed.key);
       clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
-      const seedBytes = Math.max(0, Number(seed.bytes) || 0);
-      trackedBytes = Math.max(0, trackedBytes - seedBytes);
       console.log('[SeedingManager] Removed seed to meet quota:', seed.key.slice(0, 32));
     }
 
@@ -635,34 +679,47 @@ export class SeedingManager {
   }
 
   /**
-   * Clear the Hypercore block range for a cached seed.
-   * @param {SeedInfo & { blobId?: string | object | null, blobsCoreKey?: string | null }} seed
+   * Clear the main and thumbnail Hypercore block ranges for a cached seed.
+   * @param {SeedInfo & { blobId?: string | object | null, blobsCoreKey?: string | null, thumbnailBlobId?: string | object | null, thumbnailBlobsCoreKey?: string | null }} seed
    * @returns {Promise<boolean>}
    */
   async clearSeedBlob(seed) {
-    const ref = normalizeSeedBlobRef(seed);
-    if (!ref) return false;
+    const refs = [
+      normalizeSeedBlobRef(seed),
+      normalizeSeedBlobRef({
+        blobId: seed?.thumbnailBlobId,
+        blobsCoreKey: seed?.thumbnailBlobsCoreKey
+      })
+    ].filter(Boolean)
+    const seen = new Set()
+    let cleared = false
 
-    let core = null;
-    try {
-      core = this.store.get(Buffer.from(ref.blobsCoreKey, 'hex'));
-      await core.ready?.();
-      const start = ref.blob.blockOffset;
-      const end = ref.blob.blockOffset + ref.blob.blockLength;
-      if (typeof core.clear === 'function') {
-        await core.clear(start, end);
-        console.log('[SeedingManager] Cleared cached blob range:', ref.blobsCoreKey.slice(0, 16), start, end);
-        return true;
+    for (const ref of refs) {
+      const refKey = `${ref.blobsCoreKey}:${ref.blobId}`
+      if (seen.has(refKey)) continue
+      seen.add(refKey)
+
+      let core = null;
+      try {
+        core = this.store.get(Buffer.from(ref.blobsCoreKey, 'hex'));
+        await core.ready?.();
+        const start = ref.blob.blockOffset;
+        const end = ref.blob.blockOffset + ref.blob.blockLength;
+        if (typeof core.clear === 'function') {
+          await core.clear(start, end);
+          cleared = true
+          console.log('[SeedingManager] Cleared cached blob range:', ref.blobsCoreKey.slice(0, 16), start, end);
+        }
+      } catch (err) {
+        console.log('[SeedingManager] Failed to clear cached blob range:', err?.message);
+      } finally {
+        // store.get() opened a fresh session for this clear; release it so
+        // evictions don't accumulate open core sessions.
+        try { await core?.close?.(); } catch { /* best effort */ }
       }
-    } catch (err) {
-      console.log('[SeedingManager] Failed to clear cached blob range:', err?.message);
-    } finally {
-      // store.get() opened a fresh session for this clear; release it so
-      // evictions don't accumulate open core sessions.
-      try { await core?.close?.(); } catch { /* best effort */ }
     }
 
-    return false;
+    return cleared;
   }
 
   /**
@@ -683,7 +740,7 @@ export class SeedingManager {
       const intent = entry?.value
       if (!intent?.driveKey || !intent?.videoPath) continue
       const seedKey = `${intent.driveKey}:${intent.videoPath}`
-      if (excludeKeys.has(seedKey) || this.shouldSkipSeedClear(intent)) continue
+      if (isProtectedSeedReason(intent.reason) || excludeKeys.has(seedKey) || this.shouldSkipSeedClear(intent)) continue
       // entry.key is the decoded sub key (`${driveKey}:${videoPath}`).
       entries.push({ key: entry.key, seedKey, intent })
     }
@@ -770,6 +827,11 @@ export class SeedingManager {
     const previousMaxStorageGB = this.config.maxStorageGB;
     if (gb < 1) gb = 1;
     if (gb > 100) gb = 100;
+    const preview = this._planStorageLimit(
+      gb * 1024 * 1024 * 1024,
+      { ...options, ignoreTransientProtection: true }
+    ).preview
+    if (!preview.success || !preview.feasible) return preview;
     this.config.maxStorageGB = gb;
     await this.metaDb.put('seeding-config', this.config);
     console.log('[SeedingManager] Set max storage to', gb, 'GB');
@@ -781,6 +843,7 @@ export class SeedingManager {
     }
     // Enforce quota with the new limit after any lower-limit partial cleanup.
     await this.enforceQuota();
+    return preview;
   }
 
   async getTotalStorageBytes() {
@@ -811,12 +874,53 @@ export class SeedingManager {
     return { maxBytes, usageBytes, headroomBytes: Math.max(0, maxBytes - usageBytes) };
   }
 
-  buildStorageStats(totalStorageBytes = null) {
+  buildTrackedStorageCategoryUsage() {
+    const usage = buildStorageCategoryTotals()
+    for (const seed of this.activeSeeds.values()) {
+      const bytes = normalizeStorageBytes(seed.bytes)
+      if (seed.reason === 'pledged' || seed.reason === 'archive') {
+        usage.pledgedArchiveBytes += bytes
+      } else if (seed.reason === 'pinned') {
+        usage.immutablePublicationBytes += bytes
+      } else {
+        usage.localCacheBytes += bytes
+      }
+      usage.thumbnailBytes += normalizeStorageBytes(seed.thumbnailBytes)
+    }
+    return usage
+  }
+
+  async loadAdditionalStorageCategoryUsage() {
+    if (!this.getStorageCategoryUsage) return {}
+    try {
+      const usage = await this.getStorageCategoryUsage()
+      return usage && typeof usage === 'object' ? usage : {}
+    } catch (err) {
+      console.log('[SeedingManager] Failed to measure storage categories:', err?.message)
+      return {}
+    }
+  }
+
+  buildStorageStats(totalStorageBytes = null, additionalCategoryUsage = {}) {
     const usedBytes = Math.round(this.calculateStorage());
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    const trackedUsage = this.buildTrackedStorageCategoryUsage()
+    const combinedUsage = {}
+    for (const field of STORAGE_CATEGORY_FIELDS) {
+      combinedUsage[field] = normalizeStorageBytes(trackedUsage[field])
+        + normalizeStorageBytes(additionalCategoryUsage[field])
+    }
+    let categories = buildStorageCategoryTotals(combinedUsage)
     const measuredTotal = Number.isFinite(totalStorageBytes) && totalStorageBytes >= 0
       ? Math.round(totalStorageBytes)
-      : usedBytes;
+      : Math.max(usedBytes, categories.totalCategorizedBytes);
+    const uncategorizedBytes = Math.max(0, measuredTotal - categories.totalCategorizedBytes)
+    if (uncategorizedBytes > 0) {
+      categories = buildStorageCategoryTotals({
+        ...categories,
+        ownedOriginalBytes: categories.ownedOriginalBytes + uncategorizedBytes
+      })
+    }
     const untrackedStorageBytes = Math.max(0, measuredTotal - usedBytes);
     return {
       usedBytes,
@@ -828,7 +932,8 @@ export class SeedingManager {
       totalStorageBytes: measuredTotal,
       totalStorageGB: formatBytesAsGB(measuredTotal),
       untrackedStorageBytes,
-      untrackedStorageGB: formatBytesAsGB(untrackedStorageBytes)
+      untrackedStorageGB: formatBytesAsGB(untrackedStorageBytes),
+      ...categories
     };
   }
 
@@ -838,14 +943,18 @@ export class SeedingManager {
 
   /**
    * Get storage stats for UI display
-   * @returns {Promise<{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number, totalStorageBytes: number, totalStorageGB: string, untrackedStorageBytes: number, untrackedStorageGB: string }>}
+   * @returns {Promise<Object>}
    */
   async getStorageStats() {
-    return this.buildStorageStats(await this.getTotalStorageBytes());
+    const [totalStorageBytes, additionalCategoryUsage] = await Promise.all([
+      this.getTotalStorageBytes(),
+      this.loadAdditionalStorageCategoryUsage()
+    ])
+    return this.buildStorageStats(totalStorageBytes, additionalCategoryUsage);
   }
 
   /**
-   * Clear all non-pinned cached content
+   * Clear all ordinary cache while preserving pinned and archive commitments.
    * @returns {Promise<{ clearedBytes: number, totalStorageBytes: number, totalStorageGB: string, untrackedStorageBytes: number, untrackedStorageGB: string }>} bytes cleared and post-clear total storage snapshot
    */
   async clearCache(options = {}) {
@@ -860,8 +969,8 @@ export class SeedingManager {
     let clearedBlob = false;
 
     for (const [key, seed] of this.activeSeeds.entries()) {
-      if (seed.reason !== 'pinned' && !this.shouldSkipSeedClear(seed)) {
-        clearedBytes += seed.bytes || 0;
+      if (!isProtectedSeedReason(seed.reason) && !this.shouldSkipSeedClear(seed)) {
+        clearedBytes += normalizeStorageBytes(seed.bytes) + normalizeStorageBytes(seed.thumbnailBytes);
         toRemove.push(key);
       }
     }

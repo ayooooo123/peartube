@@ -40,7 +40,7 @@ export function createSeedingApi({ ctx, seedingManager, loadChannel, isSeedingAu
           if (isSeedingAuthorizationError(err)) return { success: false, error: err.message }
           throw err
         }
-        await loadChannel(ctx, driveKey)
+        await loadChannel(driveKey)
         return { success: true }
       }
       return { success: false, error: 'Invalid request' }
@@ -74,6 +74,14 @@ export function createSeedingApi({ ctx, seedingManager, loadChannel, isSeedingAu
         return { channels: seedingManager.getPinnedChannels() }
       }
       return { channels: [] }
+    },
+
+    async setStorageLimit(maxGB) {
+      if (!seedingManager || !Number.isFinite(Number(maxGB)) || Number(maxGB) < 0) {
+        return { success: false, error: 'Invalid storage limit' }
+      }
+      await seedingManager.setMaxStorageGB(Number(maxGB), { authorized: true })
+      return { success: true }
     },
   }
 }

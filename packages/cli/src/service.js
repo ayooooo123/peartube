@@ -1,9 +1,8 @@
 import { createCliLogger } from './cli-logger.js'
-import { evaluateCandidate } from './admission.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
-import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader, deriveArchiveSourceIdentity } from './archive-manager.js'
+import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
@@ -11,16 +10,14 @@ import { RelayClassificationStore } from './classification/store.js'
 import { createTmdbClassifier, createTmdbDiscoverClient } from './classification/tmdb.js'
 import { RelaySettings, resolveTmdbOptions } from './settings.js'
 import { TrustedClients, mergeTrustedClientKeys } from './trusted-clients.js'
-import { buildWriterKeyName, classifySourceUrl } from './archive/source-id.js'
+import { classifySourceUrl } from './archive/source-id.js'
 import { createStorageGuard } from './storage-guard.js'
 import tmdbFetch from '#fetch'
 
-const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
 
 export async function createRelayService({
   config,
   runtimeFactory,
-  mirrorChannel,
   writeStatusFile = writeRelayStatus,
   logger = createCliLogger(config?.logging?.level || 'info'),
   catalog = null,
@@ -33,7 +30,6 @@ export async function createRelayService({
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
-  if (typeof mirrorChannel !== 'function') throw new Error('mirrorChannel is required')
 
   const relayCatalog = catalog || await RelayCatalog.open({
     storagePath: config.storage.path,
@@ -69,16 +65,15 @@ export async function createRelayService({
   let classifier = createTmdbClassifier(tmdbOptions())
   let tmdbDiscover = createTmdbDiscoverClient(tmdbOptions())
 
-  // Merge persisted trusted client device keys into the blind-peer trusted set
-  // before the runtime (and its blind peer) is built, so authorized creator
-  // devices are mirrored on the next start.
+  // Merge persisted operator-authorized client keys into the bounded seed-pin
+  // policy before the universal backend starts.
   const trustedClients = await TrustedClients.open({
     storagePath: config.storage.path,
     trustedClientsPath: config.paths.trustedClients
   })
-  config.network = config.network || {}
-  config.network.trustedBlindPeerClients = mergeTrustedClientKeys(
-    config.network.trustedBlindPeerClients,
+  config.seedPin = config.seedPin || {}
+  config.seedPin.trustedClients = mergeTrustedClientKeys(
+    config.seedPin.trustedClients,
     trustedClients.keys()
   )
 
@@ -89,7 +84,6 @@ export async function createRelayService({
   let queue = Promise.resolve()
   let heartbeatTimer = null
   let localMirrorTimer = null
-  let quotaSweepTimer = null
   let localMirrorRunning = false
   let archiveConsole = null
   const localMirrorState = createLocalDriveMirrorState()
@@ -104,54 +98,6 @@ export async function createRelayService({
     })
   }
 
-  function getPreviewBlobSignature(previewVideos) {
-    if (!Array.isArray(previewVideos) || previewVideos.length === 0) return ''
-    return previewVideos
-      .filter((video) => video?.blobsCoreKey && video?.blobId)
-      .map((video) => [
-        String(video.blobsCoreKey).toLowerCase(),
-        String(video.blobId),
-        video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey).toLowerCase() : '',
-        video?.thumbnailBlobId ? String(video.thumbnailBlobId) : ''
-      ].join(':'))
-      .sort()
-      .join('|')
-  }
-
-  function getAcceptedRefreshDecision(existing, candidate, now) {
-    const unavailable = {
-      refresh: false,
-      skip: false,
-      incomingSignature: ''
-    }
-    if (!existing?.channelKey) return unavailable
-    if (!Array.isArray(candidate?.previewVideos)) return unavailable
-
-    const incomingSignature = getPreviewBlobSignature(candidate.previewVideos)
-    const existingSignature = getPreviewBlobSignature(existing.previewVideos)
-    if (!incomingSignature) return unavailable
-
-    const lastAttemptSignature = existing.lastMirrorPreviewSignature || ''
-    const lastAttemptAt = Number(existing.lastMirrorAttemptAt || 0) || 0
-    const retryAfterMs = MIRROR_RETRY_COOLDOWN_MS - (now - lastAttemptAt)
-    if (!existingSignature && lastAttemptSignature === incomingSignature && retryAfterMs > 0) {
-      return {
-        refresh: false,
-        skip: true,
-        reason: 'preview-refresh-cooldown',
-        incomingSignature,
-        retryAfterMs
-      }
-    }
-
-    return {
-      refresh: true,
-      skip: false,
-      reason: 'accepted-preview-refresh',
-      incomingSignature,
-      retryAfterMs: 0
-    }
-  }
 
   async function runLocalMirrorOnce(localMirrorConfig = config.archive?.localMirror || {}) {
     if (!localMirrorConfig?.enabled) return null
@@ -230,13 +176,13 @@ export async function createRelayService({
   }
 
   async function persistStatus() {
+    const runtimeStats = typeof runtime.getDiagnostics === 'function'
+      ? await runtime.getDiagnostics()
+      : {}
     currentStatus = buildRelayStatus({
       config,
       catalog: relayCatalog,
-      runtimeStats: runtime.getNetworkStats?.() || {},
-      // Derive creator stats from the catalog (in-memory, always fresh). The
-      // persisted creators DB is refreshed off the hot path (heartbeat, archive
-      // completion, add-creator) for the console/CLI views.
+      runtimeStats,
       trustedClientsCount: trustedClients.list().length
     })
 
@@ -244,486 +190,99 @@ export async function createRelayService({
     return currentStatus
   }
 
-  // Reclaim disk when the discovery cache exceeds the storage budget. Deliberate
-  // uploads / allowlisted seeds (retentionClass private/allowlist) are protected;
-  // only network-discovered cache blob ranges are cleared, lowest priority first.
-  async function enforceStorageQuota() {
-    if (typeof runtime.cacheManager?.enforceQuota !== 'function') return null
-    const store = runtime.ctx?.store
-    try {
-      const result = await runtime.cacheManager.enforceQuota({
-        retentionClassOf: (driveKey) => relayCatalog.getChannel?.(driveKey)?.retentionClass || 'discovery',
-        collectGarbage: async () => {
-          const storage = store?.storage
-          if (!storage) return
-          try { await storage.flush?.() } catch { /* best effort */ }
-          try { await storage.compact?.() } catch { /* best effort */ }
-        },
-        onEvicted: async (driveKey) => {
-          // Stop advertising the evicted channel: drop it from the CLI catalog
-          // and the public feed so peers no longer see this relay as serving it.
-          await Promise.resolve(relayCatalog.removeChannel(driveKey)).catch(() => {})
-          await Promise.resolve(runtime.publicFeed?.unpublishChannel?.(driveKey)).catch(() => {})
-        },
-        log: (...args) => logger.status?.debug?.(args.map(String).join(' ')),
-      })
-      if (result && result.evicted.length > 0) {
-        logger.relay.info('Relay storage quota enforced', {
-          evicted: result.evicted.length,
-          freedBytes: result.freedBytes,
-          clearedRanges: result.clearedRanges,
-          usedBytes: runtime.cacheManager.getTotalBytes?.() || 0,
-          maxBytes: config.storage?.maxBytes || 0,
-        })
-        await persistStatus()
-      }
-      return result
-    } catch (err) {
-      logger.relay?.warn?.('Relay storage quota enforcement failed', { error: err?.message || String(err) })
-      return null
-    }
-  }
-
-  const basePublishRelayCatalogEntry = typeof runtime.publishRelayCatalogEntry === 'function'
-    ? runtime.publishRelayCatalogEntry.bind(runtime)
-    : null
-
-  async function persistRuntimeRelayCatalogEntry(entry = {}) {
-    const channelKey = entry.channelKey || entry.driveKey
-    const publicBeeKey = entry.publicBeeKey || null
-    if (!channelKey || !publicBeeKey) return null
-    const existing = relayCatalog.getChannel(channelKey)
-
-    const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-    const unavailableVideos = Array.isArray(entry.unavailableVideos) ? entry.unavailableVideos : []
-    const manifestUpdatedAt = Number(entry.manifestUpdatedAt || entry.mirroredAt || entry.lastSeenAt || nowFn()) || Date.now()
-    const source = entry.source === 'relay-cache' && existing?.source === 'archive-job'
-      ? existing.source
-      : (entry.source || existing?.source || 'relay-cache')
-    const retentionClass = entry.retentionClass || existing?.retentionClass || (source === 'archive-job' ? 'private' : 'discovery')
-    const record = {
-      ...entry,
-      channelKey,
-      driveKey: entry.driveKey || channelKey,
-      publicBeeKey,
-      source,
-      retentionClass,
-      relayRole: entry.relayRole || 'cache',
-      relayServing: entry.relayServing !== false,
-      lastSeenAt: Number(entry.lastSeenAt || manifestUpdatedAt) || manifestUpdatedAt,
-      mirroredAt: Number(entry.mirroredAt || manifestUpdatedAt) || manifestUpdatedAt,
-      previewVideos,
-      unavailableVideos,
-      videoCount: Number(entry.videoCount || previewVideos.length || unavailableVideos.length || 0) || 0,
-      manifestUpdatedAt
-    }
-
-    const persisted = await relayCatalog.upsertChannel(record)
-    await persistStatus()
-    return persisted
-  }
-
-  runtime.publishRelayCatalogEntry = async (entry = {}) => {
-    const published = basePublishRelayCatalogEntry
-      ? await basePublishRelayCatalogEntry(entry)
-      : entry
-    const catalogEntry = published && typeof published === 'object'
-      ? { ...entry, ...published }
-      : entry
-    const persisted = await persistRuntimeRelayCatalogEntry(catalogEntry)
-    return published || persisted
-  }
-
   async function processCandidate(candidate) {
-    if (closed) {
-      return { accepted: false, reason: 'closed' }
+    if (closed) return { accepted: false, reason: 'closed' }
+    if (!candidate?.publisherId || !candidate?.namespaceDescriptor) {
+      return { accepted: false, reason: 'publisher-descriptor-required' }
     }
-    // Stop mirroring new content when storage-dir usage reaches the budget or
-    // the volume is low on free disk, so full-core seeding downloads can't fill
-    // the disk and crash the relay.
     if (!storageGuard.canIngest()) {
-      const snap = storageGuard.snapshot()
-      logger.status?.warn?.('Storage threshold reached; refusing new mirror', {
-        reason: snap.overBudget ? 'over-budget' : 'low-disk',
-        usedBytes: snap.usedBytes,
-        maxBytes: snap.maxBytes,
-        freeBytes: snap.freeBytes,
-        minFreeBytes: snap.minFreeBytes
-      })
-      return { accepted: false, reason: snap.overBudget ? 'storage-over-budget' : 'storage-low' }
-    }
-
-    const now = Number(nowFn()) || Date.now()
-    const resolved = runtime.resolveCandidate
-      ? await runtime.resolveCandidate(candidate)
-      : candidate
-
-    const existingChannel = relayCatalog.getChannel(resolved.channelKey)
-    const refreshDecision = getAcceptedRefreshDecision(existingChannel, resolved, now)
-    const refreshAcceptedChannel = refreshDecision.refresh
-
-    if (refreshDecision.skip) {
-      const retentionClass = existingChannel.retentionClass || resolved.retentionClass || 'discovery'
-      const source = existingChannel.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
-        ? existingChannel.source
-        : (resolved.source || existingChannel.source || 'discovered')
-      await relayCatalog.upsertChannel({
-        channelKey: resolved.channelKey,
-        ownerKey: resolved.ownerKey || existingChannel.ownerKey || null,
-        publicBeeKey: resolved.publicBeeKey || existingChannel.publicBeeKey || null,
-        source,
-        retentionClass,
-        lastDecisionReason: refreshDecision.reason,
-        lastSeenAt: now
-      })
-      logger.mirror.debug('Accepted channel refresh skipped during mirror retry cooldown', {
-        channelKey: resolved.channelKey,
-        ownerKey: resolved.ownerKey || existingChannel.ownerKey || null,
-        retryAfterMs: Math.ceil(refreshDecision.retryAfterMs)
-      })
-      await persistStatus()
-      return { accepted: true, retentionClass, reason: refreshDecision.reason }
-    }
-
-    const decision = refreshAcceptedChannel
-      ? {
-        accepted: true,
-        reason: refreshDecision.reason,
-        retentionClass: existingChannel.retentionClass || resolved.retentionClass || 'discovery'
+      const snapshot = storageGuard.snapshot()
+      return {
+        accepted: false,
+        reason: snapshot.overBudget ? 'storage-over-budget' : 'storage-low'
       }
-      : evaluateCandidate({
-        candidate: resolved,
-        config,
-        acceptedChannels: new Set(relayCatalog.getChannels().map((channel) => channel.channelKey)),
-        ownerCounts: relayCatalog.getOwnerCounts()
-      })
-
-    if (!decision.accepted) {
-      logger.admission.info('Candidate rejected', {
-        channelKey: resolved.channelKey,
-        ownerKey: resolved.ownerKey || null,
-        source: resolved.source || 'discovered',
-        reason: decision.reason
-      })
-      await persistStatus()
-      return decision
     }
-
-    const acceptedSource = existingChannel?.source === 'archive-job' && (!resolved.source || resolved.source === 'discovered' || resolved.source === 'relay-cache')
-      ? existingChannel.source
-      : (resolved.source || 'discovered')
-    const baseRecord = {
-      channelKey: resolved.channelKey,
-      ownerKey: resolved.ownerKey || null,
-      publicBeeKey: resolved.publicBeeKey || null,
-      source: acceptedSource,
-      retentionClass: decision.retentionClass,
-      lastDecisionReason: decision.reason,
-      lastSeenAt: now
-    }
-    const incomingPreviewSignature = refreshDecision.incomingSignature || getPreviewBlobSignature(resolved.previewVideos)
-    const mirrorAttemptRecord = incomingPreviewSignature
-      ? {
-        lastMirrorAttemptAt: now,
-        lastMirrorPreviewSignature: incomingPreviewSignature
-      }
-      : {}
-
-    await relayCatalog.upsertChannel(baseRecord)
-
     try {
-      logger.admission.info('Candidate accepted', {
-        channelKey: resolved.channelKey,
-        ownerKey: resolved.ownerKey || null,
-        source: resolved.source || 'discovered',
-        retentionClass: decision.retentionClass,
-        reason: decision.reason
+      const followed = await runtime.followPublisher({
+        publisherId: candidate.publisherId,
+        namespaceDescriptor: candidate.namespaceDescriptor
       })
-
-      const mirrorStats = await mirrorChannel(resolved, {
-        config,
-        runtime,
-        logger,
-        catalog: relayCatalog,
-        decision
+      const catalog = await runtime.resolvePublisherCatalog({
+        publisherId: candidate.publisherId
       })
-
-      const mirrorUnavailableVideos = Array.isArray(mirrorStats?.unavailableVideos) ? mirrorStats.unavailableVideos : []
-      const hasUnavailableVideos = mirrorUnavailableVideos.length > 0
-      const mirrorReturnedPreviewVideos = Array.isArray(mirrorStats?.previewVideos)
-      const refreshedPreviewVideos = mirrorReturnedPreviewVideos
-        ? mirrorStats.previewVideos
-        : (hasUnavailableVideos
-            ? []
-            : (Array.isArray(existingChannel?.previewVideos) && existingChannel.previewVideos.length > 0
-                ? existingChannel.previewVideos
-                : undefined))
-
-      await relayCatalog.upsertChannel({
-        ...baseRecord,
-        ...mirrorAttemptRecord,
-        bytes: mirrorStats?.bytesDownloaded || 0,
-        videosFound: mirrorStats?.videosFound || 0,
-        videosDownloaded: mirrorStats?.videosDownloaded || 0,
-        mirroredAt: now,
-        lastError: mirrorStats?.lastError || null,
-        previewVideos: refreshedPreviewVideos,
-        unavailableVideos: hasUnavailableVideos ? mirrorUnavailableVideos : [],
-        videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
-        manifestUpdatedAt: now
-      })
-
-      if (refreshAcceptedChannel) {
-        logger.mirror.info('Accepted channel refreshed from preview refs', {
-          channelKey: resolved.channelKey,
-          ownerKey: resolved.ownerKey || null,
-          videosDownloaded: mirrorStats?.videosDownloaded || 0,
-          bytesDownloaded: mirrorStats?.bytesDownloaded || 0
-        })
+      await persistStatus()
+      return {
+        accepted: followed?.status === 'following' || followed?.status === 'already-following',
+        reason: followed?.status || 'publisher-follow-failed',
+        publisherId: candidate.publisherId,
+        catalog
       }
-
-      if (resolved.publicBeeKey) {
-        const seedPreviewVideos = Array.isArray(mirrorStats?.previewVideos)
-          ? mirrorStats.previewVideos
-          : (hasUnavailableVideos ? [] : (Array.isArray(resolved.previewVideos) ? resolved.previewVideos : []))
-        const persistedPreviewVideos = seedPreviewVideos.length > 0
-          ? seedPreviewVideos
-          : (hasUnavailableVideos || mirrorReturnedPreviewVideos ? [] : (Array.isArray(existingChannel?.previewVideos) ? existingChannel.previewVideos : []))
-        await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered', {
-          previewVideos: seedPreviewVideos,
-          clearPreviewVideos: hasUnavailableVideos
-        }).catch(() => {})
-        const seedStats = await runtime.seeder?.seedChannel?.({
-          driveKey: resolved.channelKey,
-          publicBeeKey: resolved.publicBeeKey,
-          previewVideos: seedPreviewVideos
-        }).catch(() => null)
-        const catalogEntry = {
-          ...(seedStats?.catalogEntry || {
-            schema: 'peartube.relayCatalog',
-            catalogVersion: 1,
-            driveKey: resolved.channelKey,
-            publicBeeKey: resolved.publicBeeKey,
-            source: 'relay-cache',
-            relayRole: 'cache',
-            relayServing: true,
-            previewVideos: persistedPreviewVideos,
-            unavailableVideos: mirrorUnavailableVideos,
-            videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
-            manifestUpdatedAt: now
-          }),
-          ...(baseRecord.source === 'archive-job'
-              ? { source: 'archive-job', retentionClass: 'private' }
-              : {})
-        }
-        await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
-      }
-
-      logger.mirror.info('Channel mirrored', {
-        channelKey: resolved.channelKey,
-        ownerKey: resolved.ownerKey || null,
-        retentionClass: decision.retentionClass,
-        bytesDownloaded: mirrorStats?.bytesDownloaded || 0,
-        videosFound: mirrorStats?.videosFound || 0,
-        videosDownloaded: mirrorStats?.videosDownloaded || 0
+    } catch (error) {
+      logger.admission?.warn?.('Publisher catalog follow failed', {
+        error: error?.message || String(error)
       })
-    } catch (err) {
-      await relayCatalog.upsertChannel({
-        ...baseRecord,
-        ...mirrorAttemptRecord,
-        videosDownloaded: 0,
-        bytes: 0,
-        previewVideos: [],
-        videoCount: 0,
-        lastError: err?.message || String(err)
-      })
-
-      logger.mirror.error('Channel mirror failed', {
-        channelKey: resolved.channelKey,
-        ownerKey: resolved.ownerKey || null,
-        retentionClass: decision.retentionClass,
-        error: err?.message || String(err)
-      })
+      return { accepted: false, reason: 'publisher-follow-failed' }
     }
-
-    await persistStatus()
-    return { accepted: true, retentionClass: decision.retentionClass, reason: decision.reason }
   }
 
-  function unpublishedArchiveChannelKeys(jobs) {
-    return new Set((jobs || [])
-      .filter((job) =>
-        job?.status === 'completed' &&
-        job?.publish === false &&
-        job?.channelKey)
-      .map((job) => job.channelKey))
-  }
-
-  async function readUnpublishedArchiveChannelKeys() {
-    if (!runtime.ctx?.metaDb) return new Set()
-    const jobs = await createArchiveJobStore({ metaDb: runtime.ctx.metaDb }).listJobs()
-    return unpublishedArchiveChannelKeys(jobs)
-  }
-
-  async function scrubUnpublishedArchiveChannelsBeforeRuntimeStart() {
-    const channelKeys = await readUnpublishedArchiveChannelKeys()
-    if (channelKeys.size === 0) return channelKeys
-
-    await runtime.cacheManager?.init?.()
-    for (const channelKey of channelKeys) {
-      runtime.publicFeed?.hideChannel?.(channelKey)
-      await runtime.cacheManager?.removeChannel?.(channelKey)
-      await relayCatalog.removeChannel(channelKey)
-    }
-    return channelKeys
-  }
-
-  async function repairCompletedArchiveProjection(job, unpublishedChannelKeys = new Set()) {
-    if (job?.publish === false) return { repaired: false, reason: 'not-published' }
-    if (!job?.channelKey) return { repaired: false, reason: 'missing-channel-key' }
-    if (unpublishedChannelKeys.has(job.channelKey)) {
-      return { repaired: false, reason: 'channel-contains-unpublished-archive' }
-    }
-    // The channel is fully published (passed the unpublished gate); clear any
-    // stale hidden marker from a prior session so submitToFeed can re-add it.
-    runtime.publicFeed?.unhideChannel?.(job.channelKey)
-    if (typeof runtime.api?.submitToFeed !== 'function') {
-      throw new Error('Backend submitToFeed API is unavailable')
-    }
-
-    const privateInput = runtime.ctx?.metaDb && job?.id
-      ? await createArchiveJobStore({ metaDb: runtime.ctx.metaDb }).getPrivateInput(job.id)
-      : null
-    const sourceIdentity = deriveArchiveSourceIdentity(privateInput || {})
-    const loadOptions = sourceIdentity?.sourceId
-      ? {
-          preferWritable: true,
-          writerKeyName: buildWriterKeyName(sourceIdentity.sourceId)
-        }
-      : undefined
-    // Grouped per-title archive channels are created without a channel/root
-    // descriptor, so remote strict feed peers drop them (missing-signed-descriptor)
-    // even though they appear in the relay's own local feed. Sign the descriptor
-    // (idempotent) with the relay identity's device attestation before
-    // (re)publishing so submitToFeed can attach it and peers accept the entry.
-    if (loadOptions?.writerKeyName && typeof runtime.identityManager?.signChannelRootDescriptorForOwnedChannel === 'function') {
-      const signResult = await runtime.identityManager.signChannelRootDescriptorForOwnedChannel(job.channelKey, {
-        profile: { name: job.channelName || sourceIdentity?.creatorName || 'Archive' },
-        loadOptions
-      }).catch((err) => ({ ok: false, reason: err?.message || String(err) }))
-      if (!signResult?.ok) {
-        logger.archive?.warn?.('Archive channel descriptor signing skipped', {
-          channelKey: job.channelKey,
-          reason: signResult?.reason || 'unavailable'
-        })
-      }
-    }
-    const result = await runtime.api.submitToFeed(job.channelKey, loadOptions)
-    if (!result?.success) {
-      throw new Error(result?.error || `Unable to repair public projection for ${job.channelKey}`)
-    }
-    return { repaired: true }
-  }
-
-  async function publishArchiveJobToFeed(job, { unpublishedChannelKeys = null } = {}) {
+  async function publishArchiveJob(job) {
     if (closed) return { published: false, reason: 'closed' }
     if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
     if (job?.publish === false) return { published: false, reason: 'not-published' }
-    if (!job?.channelKey || !job?.publicBeeKey || !job?.previewVideo?.id) {
-      return { published: false, reason: 'missing-refs' }
+    if (!job?.publisherId || !job?.previewVideo?.id) {
+      return { published: false, reason: 'missing-publisher-assets' }
     }
-    if (!unpublishedChannelKeys && runtime.ctx?.metaDb) {
-      unpublishedChannelKeys = await readUnpublishedArchiveChannelKeys()
-    }
-    if (unpublishedChannelKeys?.has(job.channelKey)) {
-      return { published: false, reason: 'channel-contains-unpublished-archive' }
-    }
-    // Fully-published channel: clear any stale hidden marker before submitting,
-    // otherwise addEntry/submitChannel silently refuse a previously-hidden key.
-    runtime.publicFeed?.unhideChannel?.(job.channelKey)
-
 
     const classifiedPreview = await classifyPreviewVideo(job.previewVideo)
-    const shapePreview = (video) => ({
-      ...video,
-      publicBeeKey: video.publicBeeKey || job.publicBeeKey || null,
-      channelKey: job.channelKey,
-      driveKey: job.channelKey,
-      relayBacked: true,
-      source: video.source || 'relay-cache',
-      relayRole: video.relayRole || 'cache',
-      relayServing: true,
-      availability: video.availability || 'playable',
-      byteAvailability: video.byteAvailability || video.availability || 'playable'
+    const publication = classifiedPreview?.immutablePublication
+    const published = await runtime.publishPublisherCatalog({
+      publisherId: job.publisherId
     })
-    // Publish the channel with ALL of its completed archives (union by id), not
-    // just this job's video. Otherwise archiving one episode into a channel
-    // replaces the channel's other episodes in the feed/catalog (upsert/submit
-    // overwrite previewVideos), so previously archived episodes vanish.
-    let channelCompleted = []
-    if (runtime.ctx?.metaDb) {
-      const previewStore = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
-      const completedByChannel = await previewStore.getCompletedVideoPreviewsByChannel().catch(() => new Map())
-      channelCompleted = completedByChannel.get(job.channelKey) || []
+    if (published?.status !== 'published' && published?.status !== 'already-published') {
+      return { published: false, reason: published?.status || 'catalog-publication-failed' }
     }
-    const previewsById = new Map()
-    for (const video of channelCompleted) { if (video?.id) previewsById.set(video.id, shapePreview(video)) }
-    previewsById.set(classifiedPreview.id || job.previewVideo.id, shapePreview(classifiedPreview))
-    const previewVideos = Array.from(previewsById.values())
-    const manifestUpdatedAt = Number(job.completedAt || job.updatedAt || nowFn()) || Date.now()
 
+    const retained = []
+    if (publication?.manifest && publication?.renditionId) {
+      retained.push(await runtime.retainRendition({
+        manifest: publication.manifest,
+        renditionId: publication.renditionId
+      }))
+    }
+    if (classifiedPreview?.archivePledge && classifiedPreview?.blobsCoreKey) {
+      const [start, length] = String(classifiedPreview.blobId || '').split(':').map(Number)
+      if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && length > 0) {
+        retained.push(await runtime.retainArchive({
+          pledge: classifiedPreview.archivePledge,
+          coreKey: classifiedPreview.blobsCoreKey,
+          start,
+          end: start + length
+        }))
+      }
+    }
+
+    const observedAt = Number(job.completedAt || job.updatedAt || nowFn()) || Date.now()
+    const existing = relayCatalog.getChannel(job.channelKey)
+    const previews = new Map((existing?.previewVideos || []).filter(video => video?.id).map(video => [video.id, video]))
+    previews.set(classifiedPreview.id, classifiedPreview)
+    const previewVideos = Array.from(previews.values())
     await relayCatalog.upsertChannel({
       channelKey: job.channelKey,
-      publicBeeKey: job.publicBeeKey,
+      publisherId: job.publisherId,
+      publicBeeKey: job.publicBeeKey || null,
       source: 'archive-job',
       retentionClass: 'private',
-      relayRole: 'cache',
-      relayServing: true,
       lastDecisionReason: 'archive-completed',
-      lastSeenAt: manifestUpdatedAt,
-      mirroredAt: manifestUpdatedAt,
+      lastSeenAt: observedAt,
+      mirroredAt: observedAt,
       previewVideos,
       unavailableVideos: [],
       videoCount: previewVideos.length,
-      manifestUpdatedAt
+      manifestUpdatedAt: observedAt
     })
-
-    await runtime.cacheManager?.addChannel?.(job.channelKey, job.publicBeeKey, 'private', {
-      previewVideos
-    }).catch(() => {})
-    await runtime.publicFeed?.submitChannel?.(job.channelKey, job.publicBeeKey, {
-      channelName: job.channelName || previewVideos[0]?.channelName || null,
-      previewVideos,
-      videoCount: previewVideos.length,
-      manifestUpdatedAt
-    }).catch(() => {})
-    const seedStats = await runtime.seeder?.seedChannel?.({
-      driveKey: job.channelKey,
-      publicBeeKey: job.publicBeeKey,
-      previewVideos
-    }).catch(() => null)
-    const catalogEntry = seedStats?.catalogEntry || {
-      schema: 'peartube.relayCatalog',
-      catalogVersion: 1,
-      driveKey: job.channelKey,
-      publicBeeKey: job.publicBeeKey,
-      source: 'archive-job',
-      retentionClass: 'private',
-      relayRole: 'cache',
-      relayServing: true,
-      previewVideos,
-      unavailableVideos: [],
-      videoCount: previewVideos.length,
-      manifestUpdatedAt
-    }
-    await runtime.publishRelayCatalogEntry?.({
-      ...catalogEntry,
-      source: 'archive-job',
-      retentionClass: 'private'
-    }).catch(() => {})
     await syncCreators()
     await persistStatus()
-    return { published: true, previewVideos: previewVideos.length }
+    return { published: true, previewVideos: previewVideos.length, retained: retained.length }
   }
 
   function scheduleCandidate(candidate) {
@@ -761,16 +320,15 @@ export async function createRelayService({
     getTrustedClients() {
       return trustedClients.list()
     },
-    // Authorize a creator's device to delegate uploads to this relay's blind
-    // peer. Persisted immediately; merged into the live trusted set on the next
-    // relay start (and best-effort live-applied if the runtime supports it).
+    // Persist operator authorization for bounded catalog and seed-retention
+    // requests, then refresh the universal runtime policy when supported.
     async authorizeClient({ key, label = null } = {}) {
       const record = await trustedClients.add({ key, label })
-      config.network.trustedBlindPeerClients = mergeTrustedClientKeys(
-        config.network.trustedBlindPeerClients,
+      config.seedPin.trustedClients = mergeTrustedClientKeys(
+        config.seedPin.trustedClients,
         trustedClients.keys()
       )
-      const liveApplied = Boolean(await runtime.addTrustedBlindPeerClients?.([record.key]).catch?.(() => false))
+      const liveApplied = Boolean(await runtime.refreshAuthorization?.(config.seedPin.trustedClients).catch?.(() => false))
       logger.relay?.info?.('Authorized trusted client device', { key: record.key, label: record.label, liveApplied })
       await persistStatus()
       return { client: record, liveApplied }
@@ -778,23 +336,23 @@ export async function createRelayService({
     async revokeClient(key) {
       const removed = await trustedClients.remove(key)
       if (removed) {
-        config.network.trustedBlindPeerClients = mergeTrustedClientKeys([], trustedClients.keys())
+        config.seedPin.trustedClients = mergeTrustedClientKeys([], trustedClients.keys())
+        await runtime.refreshAuthorization?.(config.seedPin.trustedClients).catch?.(() => false)
         await persistStatus()
       }
       return { removed: Boolean(removed) }
     },
-    // The descriptor a creator's app/QR needs to link this relay: the relay's
-    // blind-peer mirror key (which their client delegates uploads to). The
-    // mirror key is also auto-advertised over the P2P feed.
     getLinkDescriptor() {
-      const status = service.getStatus?.() || {}
-      const blindPeer = status.runtime?.blindPeer || null
       return {
         schema: 'peartube.relayLink',
-        version: 1,
-        relayMirrorKey: blindPeer?.publicKey || null,
-        blindPeerEnabled: Boolean(blindPeer?.enabled),
-        trustedClients: trustedClients.list().length
+        version: 2,
+        seedPin: {
+          enabled: config.seedPin.enabled !== false,
+          authorizedClients: trustedClients.list().length
+        },
+        archive: {
+          enabled: config.archive?.enabled !== false
+        }
       }
     },
     async setTmdbSettings({ apiKey, enabled } = {}) {
@@ -901,13 +459,8 @@ export async function createRelayService({
         })
       }
 
-      const unpublishedArchiveChannels =
-        await scrubUnpublishedArchiveChannelsBeforeRuntimeStart()
       const runtimeStartedAt = Date.now()
       await runtime.start?.()
-      for (const channelKey of unpublishedArchiveChannels) {
-        await runtime.publicFeed?.unpublishChannel?.(channelKey)
-      }
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
 
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
@@ -922,48 +475,28 @@ export async function createRelayService({
         }))
       }
 
-      for (const channelKey of config.admission.channels || []) {
-        await scheduleCandidate({
-          channelKey,
-          source: 'config'
-        })
-      }
 
       const status = await persistStatus()
       logger.relay.info('Relay started', {
-        peers: status.runtime.peers,
-        connections: status.runtime.connections,
-        feedPeers: status.runtime.feedPeers,
-        feedConnections: status.runtime.feedConnections,
-        feedEntries: status.runtime.feedEntries,
-        mirroredChannels: status.summary.totalChannels
+        peers: status.runtime.network?.peers || 0,
+        connections: status.runtime.network?.connections || 0,
+        publisherCatalogs: status.runtime.publisher?.catalogs || 0,
+        bootstrapLocators: status.runtime.bootstrap?.locators || 0,
+        retainedRenditions: status.runtime.assets?.retainedRenditions || 0,
+        archivedChannels: status.summary.totalChannels
       })
 
-      // Republish completed archive jobs to the public feed in the BACKGROUND.
-      // Each preview is re-classified against TMDB (network), so a backlog must
-      // never block startup or the already-listening web console.
+      // Reconcile completed archives against authenticated publisher catalogs
+      // and authorized asset retention without blocking operator startup.
       if (runtime.ctx?.metaDb) {
         void (async () => {
           const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
           const jobs = await store.listJobs().catch(() => [])
-          const unpublishedChannelKeys = unpublishedArchiveChannelKeys(jobs)
           for (const job of jobs) {
             if (closed) break
-            if (job?.status !== 'completed') continue
-            let repair
-            try {
-              repair = await repairCompletedArchiveProjection(job, unpublishedChannelKeys)
-            } catch (err) {
-              logger.archive.warn('Completed archive job projection repair failed', {
-                id: job.id || null,
-                channelKey: job.channelKey || null,
-                error: err?.message || String(err)
-              })
-              continue
-            }
-            if (!repair.repaired) continue
-            await publishArchiveJobToFeed(job, { unpublishedChannelKeys }).catch((err) => {
-              logger.archive.warn('Completed archive job feed publication failed', {
+            if (job?.status !== 'completed' || job?.publish === false) continue
+            await publishArchiveJob(job).catch((err) => {
+              logger.archive.warn('Completed archive reconciliation failed', {
                 id: job.id || null,
                 videoId: job.videoId || null,
                 error: err?.message || String(err)
@@ -999,63 +532,35 @@ export async function createRelayService({
         try {
           await syncCreators()
           const heartbeatStatus = await persistStatus()
-          const directPeerDial = heartbeatStatus.runtime.directPeerDial || {}
-          if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {
+          const network = heartbeatStatus.runtime.network || {}
+          if ((network.peers || 0) > 0 && (network.connections || 0) === 0) {
             logger.status.warn('Relay discovered peers without sockets', {
-              peers: heartbeatStatus.runtime.peers,
-              connections: heartbeatStatus.runtime.connections,
-              discoveredPeers: directPeerDial.discoveredPeers || 0,
-              pending: directPeerDial.pending || 0,
-              queued: directPeerDial.queued || 0,
-              skipped: directPeerDial.skipped || 0,
-              failed: directPeerDial.failed || 0,
-              connected: directPeerDial.connected || 0,
-              lastReason: directPeerDial.lastReason || null,
-              swarmConnecting: directPeerDial.swarmConnecting || 0,
-              swarmAllConnections: directPeerDial.swarmAllConnections || 0,
-              swarmExplicitPeers: directPeerDial.swarmExplicitPeers || 0,
-              swarmQueueSize: directPeerDial.swarmQueueSize || 0,
-              dialPeers: Array.isArray(directPeerDial.peers) ? directPeerDial.peers : [],
-              hyperswarm: heartbeatStatus.runtime.hyperswarm || null
+              peers: network.peers,
+              connections: network.connections,
+              networkStatus: network.status || 'unknown'
             })
           }
-          const dht = heartbeatStatus.runtime.dht || {}
-          if ((heartbeatStatus.runtime.peers || 0) === 0 && dht.bootstrapped === false) {
+          if ((network.peers || 0) === 0 && network.dht?.bootstrapped === false) {
             logger.status.warn('Relay DHT has no discovered peers and is not bootstrapped', {
-              peers: heartbeatStatus.runtime.peers || 0,
-              connections: heartbeatStatus.runtime.connections || 0,
-              bootstrapped: dht.bootstrapped,
-              firewalled: dht.firewalled ?? null,
-              online: dht.online ?? null,
-              ephemeral: dht.ephemeral ?? null,
-              publicFeedDiscoveryJoined: Boolean(heartbeatStatus.runtime.publicFeedDiscoveryJoined),
-              peerPoolJoined: Boolean(heartbeatStatus.runtime.peerPoolJoined),
-              swarmListenResolved: Boolean(heartbeatStatus.runtime.swarmListenResolved),
-              swarmOffline: Boolean(heartbeatStatus.runtime.swarmOffline),
-              swarmOfflineReason: heartbeatStatus.runtime.swarmOfflineReason || null,
-              hyperswarm: heartbeatStatus.runtime.hyperswarm || null
+              peers: network.peers || 0,
+              connections: network.connections || 0,
+              bootstrapped: network.dht.bootstrapped,
+              firewalled: network.dht.firewalled ?? null,
+              online: network.dht.online ?? null,
+              listenResolved: Boolean(network.listenResolved),
+              offline: Boolean(network.offline),
+              offlineReason: network.offlineReason || null
             })
-          }
-          if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {
-            const recovery = runtime.runPeerRecovery?.('relay-heartbeat') || null
-            if (recovery) {
-              logger.status.warn('Relay observed peers without sockets; leaving dialing to Hyperswarm', recovery)
-            }
           }
           logger.status.info('Relay heartbeat', {
-            peers: heartbeatStatus.runtime.peers,
-            connections: heartbeatStatus.runtime.connections,
-            feedPeers: heartbeatStatus.runtime.feedPeers,
-            feedConnections: heartbeatStatus.runtime.feedConnections,
-            feedEntries: heartbeatStatus.runtime.feedEntries,
-            mirroredChannels: heartbeatStatus.summary.totalChannels,
-            discoveredPeers: directPeerDial.discoveredPeers || 0,
-            dialPending: directPeerDial.pending || 0,
-            dialQueued: directPeerDial.queued || 0,
-            dialSkipped: directPeerDial.skipped || 0,
-            dialFailed: directPeerDial.failed || 0,
-            dialConnected: directPeerDial.connected || 0,
-            dialLastReason: directPeerDial.lastReason || null
+            peers: network.peers || 0,
+            connections: network.connections || 0,
+            publisherCatalogs: heartbeatStatus.runtime.publisher?.catalogs || 0,
+            followedPublishers: heartbeatStatus.runtime.publisher?.followed || 0,
+            bootstrapLocators: heartbeatStatus.runtime.bootstrap?.locators || 0,
+            retainedRenditions: heartbeatStatus.runtime.assets?.retainedRenditions || 0,
+            activeArchivePledges: heartbeatStatus.runtime.archive?.activePledgeCount || 0,
+            activeSeeds: heartbeatStatus.runtime.seedRetention?.activeSeeds || 0
           })
         } catch (err) {
           logger.status.error('Relay heartbeat failed', {
@@ -1064,20 +569,14 @@ export async function createRelayService({
         }
       }, 30_000)
 
-      // Periodically reclaim disk if the discovery cache exceeds the budget.
-      const quotaSweepMs = Math.max(30_000, Number(config.storage?.quotaSweepMs) || 60_000)
-      const runQuotaSweep = () => enforceStorageQuota().catch(() => {})
-      quotaSweepTimer = setIntervalFn(runQuotaSweep, quotaSweepMs)
-      quotaSweepTimer?.unref?.()
-      runQuotaSweep()
 
       return service
     },
     async processCandidate(candidate) {
       return scheduleCandidate(candidate)
     },
-    async publishArchiveJobToFeed(job) {
-      return publishArchiveJobToFeed(job)
+    async publishArchiveJob(job) {
+      return publishArchiveJob(job)
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
@@ -1119,7 +618,7 @@ export async function createRelayService({
           runtime,
           fs: runtimeFsModule
         }),
-        onCompleted: (job) => service.publishArchiveJobToFeed(job)
+        onCompleted: (job) => service.publishArchiveJob(job)
       })
       const job = await manager.enqueue(input)
       if (runNow) return manager.runJob(job.id)
@@ -1139,7 +638,7 @@ export async function createRelayService({
       return currentStatus || buildRelayStatus({
         config,
         catalog: relayCatalog,
-        runtimeStats: runtime.getNetworkStats?.() || {}
+        runtimeStats: {}
       })
     },
     async close() {
@@ -1152,17 +651,13 @@ export async function createRelayService({
         clearIntervalFn(localMirrorTimer)
         localMirrorTimer = null
       }
-      if (quotaSweepTimer) {
-        clearIntervalFn(quotaSweepTimer)
-        quotaSweepTimer = null
-      }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})
         archiveConsole = null
       }
       await queue.catch(() => {})
-      await runtime.close?.()
       await persistStatus()
+      await runtime.close?.()
     }
   }
 

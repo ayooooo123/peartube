@@ -37,7 +37,7 @@ test('P2PStatsBar does not report video connected from global swarm fallback', (
   )
   assert.match(
     source,
-    /const connectionCount = swarmStatus\?\.swarmConnections \?\? swarmStatus\?\.feedConnections \?\? 0/,
+    /const connectionCount = swarmStatus\?\.swarmConnections \?\? 0/,
     'network diagnostics should use explicit connection counts, not discovered peer candidates',
   )
 })

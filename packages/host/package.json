@@ -11,7 +11,8 @@
     "./start-host": "./src/start-host.js",
     "./sidecar-entry": "./src/sidecar-entry.js",
     "./events": "./src/event-map.js",
-    "./create-client": "./src/create-client.js"
+    "./create-client": "./src/create-client.js",
+    "./contracts": "./src/contracts.js"
   },
   "scripts": {
     "test": "brittle test/*.test.mjs"

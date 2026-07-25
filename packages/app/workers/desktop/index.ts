@@ -468,8 +468,8 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   autoAttachSharedAppHandlers: true,
   onReady: (data: any) => { console.log('[Worker] Backend ready, blob port:', data?.blobServerPort) },
   onError: (err: any) => { console.error('[Worker] Backend error:', err?.message || err) },
-  onFeedUpdate: () => {
-    try { _rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' }) } catch {}
+  onMediaGraphUpdate: (update: { revision: string; changedCount: number }) => {
+    try { _rpc?.eventMediaGraphUpdate?.({ revision: update.revision, changedCount: update.changedCount }) } catch {}
   },
   onVideoStats: (driveKey: string, videoPath: string, stats: any) => {
     try {
@@ -478,7 +478,7 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   },
 })
 rpc = _rpc
-const { ctx, api, identityManager, uploadManager, videoStats, initializeIdentityFromMnemonic } = backend as any
+const { ctx, api, identityManager, uploadManager, videoStats, initializeIdentityFromMnemonic, scopedNetwork } = backend as any
 const missingDesktopServices = [
   ctx ? null : 'ctx',
   api ? null : 'api',
@@ -512,19 +512,6 @@ console.log('[Worker] Backend initialized, attaching desktop handler methods...'
 // We attach all handler implementations now, before any RPC call arrives.
 
 const B = backend as any
-const refreshPublishedChannelFeed = async (driveKey: string | null | undefined) => {
-  if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
-  try {
-    const status = await api.isChannelPublished(driveKey)
-    if (!status?.published) return
-    const result = await api.submitToFeed(driveKey)
-    if (result?.success === false) {
-      console.log('[Worker] uploadVideo feed gossip refresh skipped:', result.error || 'submitToFeed failed')
-    }
-  } catch (err: any) {
-    console.log('[Worker] uploadVideo feed gossip refresh failed (non-fatal):', err?.message)
-  }
-}
 B.getChannel = async (r: any) => ({ channel: await api.getChannel(r.publicKey || '') })
 B.getChannelMeta = async (r: any) => { const m = await api.getChannelMeta(r.channelKey, r.publicBeeKey || null); return { name: m.name, description: m.description, videoCount: m.videoCount || 0 } }
 B.updateChannel = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; return api.updateChannel(a.driveKey, { name: r.name, description: r.description, avatar: r.avatar }) }
@@ -552,6 +539,13 @@ B.listVideos = async (r: any) => {
       mimeType: v?.mimeType ? String(v.mimeType) : null,
       availability: v?.availability ? String(v.availability) : null,
       playbackSupport: v?.playbackSupport ? String(v.playbackSupport) : null,
+      publicationId: v?.publicationId ? String(v.publicationId) : null,
+      immutablePublication: v?.immutablePublication?.publicationId ? {
+        publicationId: String(v.immutablePublication.publicationId),
+        manifestId: v.immutablePublication.manifestId ? String(v.immutablePublication.manifestId) : null,
+        renditionId: v.immutablePublication.renditionId ? String(v.immutablePublication.renditionId) : null,
+        publisherId: v.immutablePublication.publisherId ? String(v.immutablePublication.publisherId) : null,
+      } : null,
       publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : null,
       width: Number(v?.width) || 0,
       height: Number(v?.height) || 0,
@@ -633,24 +627,18 @@ B.joinChannel = async (r: any) => { await api.subscribeChannel(r.channelKey); re
 B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getIdentities().length > 0, blobServerPort: getBlobPort() } })
 B.getSwarmStatus = async () => {
   const s = api.getSwarmStatus()
+  const scopedDiagnostics = scopedNetwork?.getDiagnostics?.() || null
   return {
-    ...s,
     connected: (s.swarmConnections || 0) > 0,
     peerCount: s.swarmConnections || 0,
     swarmConnections: s.swarmConnections || 0,
     swarmPeers: s.swarmPeers || 0,
-    feedConnections: s.feedConnections || 0,
-    feedEntries: s.feedEntries || 0,
-    channelsLoaded: s.channelsLoaded || 0,
-    network: s.network || null,
-    startupTiming: s.startupTiming || null,
-    doctor: s.doctor || null,
-    directPeerDial: s.directPeerDial || s.doctor?.feed?.directPeerDial || null,
+    networkJson: scopedDiagnostics ? JSON.stringify(scopedDiagnostics) : null,
+    startupTimingJson: s.startupTiming ? JSON.stringify(s.startupTiming) : null,
     swarmOffline: Boolean(s.swarmOffline),
     swarmOfflineReason: s.swarmOfflineReason || null,
     swarmListenResolved: Boolean(s.swarmListenResolved),
     peerPoolJoined: Boolean(s.peerPoolJoined),
-    publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
     recommendedBoundary: s.recommendedBoundary || s.doctor?.recommendedBoundary || null,
   }
 }
@@ -738,7 +726,6 @@ B.uploadVideo = async (r: any) => {
   if (result.success && result.videoId && !r.skipThumbnailGeneration) {
     try { const t = await generateAndStoreThumbnail(r.filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
   }
-  await refreshPublishedChannelFeed(active.driveKey)
   return { video: { id: result.videoId || '', title: r.title || '', description: r.description || '', channelKey: active.driveKey } }
 }
 B.pickVideoFile = async () => { const r = await pickVideoFile(); return { filePath: r.filePath || null, name: r.name || null, size: r.size || 0, cancelled: r.cancelled || false } }
@@ -813,7 +800,7 @@ B.eventReady = () => {}
 B.eventError = (data: any) => { if (data?.message) console.error('[HRPC] Client error:', data.message) }
 B.eventUploadProgress = () => {}
 B.eventDownloadProgress = () => {}
-B.eventFeedUpdate = () => {}
+B.eventMediaGraphUpdate = () => {}
 B.eventLog = () => {}
 B.eventVideoStats = () => {}
 B.eventCastDeviceFound = () => {}

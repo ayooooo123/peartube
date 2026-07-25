@@ -9,8 +9,16 @@
  */
 
 import { createProtocolClient } from '@peartube/host';
-import { createChannelCatalogRpc, createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
-import { createWebRunner } from './runner.web';
+import {
+  createChannelCatalogRpc,
+  createMediaGraphRpc,
+  createOperabilityRpc,
+  createPlatformRpcBridge,
+  createPersonalRpc,
+  createPublisherRootOperationRpc,
+} from './rpc.shared';
+import type { PublisherRootIntentRequest, PublisherSignerBridgeLike, StorageStatsResponse } from './rpc.shared';
+import { createWebRunner, resolveWebPublisherSigner } from './runner.web';
 import type { VideoStats } from './types';
 
 // Worker specifier for Electron bridge path
@@ -30,6 +38,8 @@ declare global {
       onWorkerStdout(specifier: string, listener: (data: any) => void): () => void;
       onWorkerStderr(specifier: string, listener: (data: any) => void): () => void;
       onWorkerExit(specifier: string, listener: (code: number) => void): () => void;
+      publisherSigner?: PublisherSignerBridgeLike;
+
     };
     PearWorkerClient?: {
       isConnected: boolean;
@@ -161,6 +171,8 @@ function waitForPearWorkerClient(timeoutMs = 10000) {
 // Module state
 let _blobServerPort: number | null = null;
 let _isInitialized = false;
+let injectedPublisherSigner: PublisherSignerBridgeLike | null = null;
+
 
 const mainRunner = createWebRunner({ connectTransport });
 
@@ -170,7 +182,10 @@ const mainBridge = createPlatformRpcBridge({
   entrypoint: 'legacy-desktop',
   getStoragePath() {
     return 'pear-desktop';
-  }
+  },
+  getPublisherSigner() {
+    return injectedPublisherSigner;
+  },
 });
 
 mainBridge.events.onReady((data: any) => {
@@ -193,15 +208,24 @@ export const events = mainBridge.events;
  * This initializes the PearWorkerClient which spawns the worker process.
  * The worker-client.js script must be loaded before calling this.
  */
-export async function initPlatformRPC(): Promise<void> {
+export async function initPlatformRPC(
+  options: { publisherSigner?: PublisherSignerBridgeLike } = {},
+): Promise<void> {
+  if (typeof window === 'undefined') {
+    throw new Error('Platform RPC can only be initialized in browser context');
+  }
+
+  const publisherSigner = options.publisherSigner === window.bridge?.publisherSigner
+    ? resolveWebPublisherSigner(options.publisherSigner, window.bridge?.publisherSigner)
+    : null;
+
   if (_isInitialized && mainBridge.isInitialized()) {
     console.log('[Platform RPC] Already initialized');
     return;
   }
+  injectedPublisherSigner = publisherSigner;
 
-  if (typeof window === 'undefined') {
-    throw new Error('Platform RPC can only be initialized in browser context');
-  }
+
 
   // Electron bridge path: window.bridge is set by preload.js — skip PearWorkerClient
   // Legacy pear run path: wait for PearWorkerClient from worker-client.js
@@ -218,6 +242,7 @@ export async function initPlatformRPC(): Promise<void> {
     console.log('[Platform RPC] Initialized, blobServerPort:', _blobServerPort);
   } catch (err) {
     console.error('[Platform RPC] Failed to initialize:', err);
+    injectedPublisherSigner = null;
     throw err;
   }
 }
@@ -229,11 +254,14 @@ export function terminatePlatformRPC(): void {
   if (!mainBridge.isInitialized()) {
     _isInitialized = false;
     _blobServerPort = null;
+    injectedPublisherSigner = null;
     return;
   }
 
   _isInitialized = false;
   _blobServerPort = null;
+  injectedPublisherSigner = null;
+
 
   void mainBridge.terminate().catch((err) => {
     console.error('[Platform RPC] Failed to terminate:', err);
@@ -274,6 +302,23 @@ function ensureProtocolClient() {
   return client;
 }
 
+function ensurePublisherProtocolClient() {
+  const client = ensureProtocolClient();
+  if (!client.publisher) {
+    throw new Error('Host protocol client does not expose publisher root operations');
+  }
+  return { publisher: client.publisher };
+}
+function createWebPublisherRootOperationRpc() {
+  const publisherSigner = mainBridge.getPublisherSigner();
+  return createPublisherRootOperationRpc(
+    ensurePublisherProtocolClient,
+    publisherSigner,
+    { runtime: publisherSigner ? 'shell' : 'renderer' },
+  );
+}
+
+
 // Helper to normalize string or object params
 function normalizeParam<T extends string>(
   arg: T | { [K in T]: string },
@@ -296,6 +341,16 @@ export const rpc = {
   ...createPersonalRpc(ensureRPC),
   // Structured channel catalog
   ...createChannelCatalogRpc(ensureProtocolClient),
+  // Typed media graph queries with bounded page presence.
+  ...createMediaGraphRpc(ensureProtocolClient),
+  // Bounded operability, recovery, storage-preview, and archive diagnostics
+  ...createOperabilityRpc(ensureRPC),
+  async provisionPublisherCatalog(request: { publisherId: string; genesisRootKey: Uint8Array }) {
+    return createWebPublisherRootOperationRpc().provisionPublisherCatalog(request);
+  },
+  async authorizePublisherRootOperation(request: PublisherRootIntentRequest) {
+    return createWebPublisherRootOperationRpc().authorizePublisherRootOperation(request);
+  },
 
 
   // Identity
@@ -445,24 +500,6 @@ export const rpc = {
     return ensureRPC().getSubscriptions({});
   },
 
-  // Public Feed
-
-
-  async refreshFeed() {
-    return ensureRPC().refreshFeed({});
-  },
-
-  async submitToFeed() {
-    return ensureRPC().submitToFeed({});
-  },
-
-  async unpublishFromFeed(): Promise<{ success: boolean }> {
-    return ensureRPC().unpublishFromFeed({});
-  },
-
-  async isChannelPublished(): Promise<{ published: boolean }> {
-    return ensureRPC().isChannelPublished({});
-  },
 
   async hideChannel(channelKeyOrReq: string | { channelKey: string }) {
     const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
@@ -533,7 +570,7 @@ export const rpc = {
   },
 
   // Storage management
-  async getStorageStats(): Promise<{ usedBytes: number; maxBytes: number; usedGB: string; maxGB: number; seedCount: number; pinnedCount: number; totalStorageBytes?: number; totalStorageGB?: string; untrackedStorageBytes?: number; untrackedStorageGB?: string }> {
+  async getStorageStats(): Promise<StorageStatsResponse> {
     return ensureRPC().getStorageStats({});
   },
 

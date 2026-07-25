@@ -11,7 +11,7 @@ function ensureParentDir(path) {
   if (separatorIndex > 0) ensureDir(path.slice(0, separatorIndex))
 }
 
-/** A blind-peer client key is a 64-char hex (the device's noise/swarm key). */
+/** An operator-authorized client public key is exact 32-byte lowercase hex. */
 export function normalizeClientKey(value) {
   const raw = String(value || '').trim().toLowerCase()
   return /^[a-f0-9]{64}$/.test(raw) ? raw : null
@@ -23,15 +23,9 @@ function readStore(path) {
 }
 
 /**
- * Persisted allow-list of client device keys the relay trusts to delegate
- * uploads to its blind peer. This is the operator-facing "link my device" list:
- * a creator's phone publishes its device key, the operator authorizes it here,
- * and the relay then mirrors that device's uploads/livestreams so they always
- * have at least one peer.
- *
- * The store is the source of truth shared by the CLI (which edits it directly)
- * and the running relay (which merges it into its blind-peer trusted set at
- * startup, and best-effort live-applies new keys).
+ * Persisted allow-list of client public keys authorized for bounded catalog and
+ * seed-retention requests. The relay never stores transport identifiers or
+ * secret key material here.
  */
 export class TrustedClients {
   constructor({ storagePath, trustedClientsPath, data }) {
@@ -88,10 +82,7 @@ export class TrustedClients {
   }
 }
 
-/**
- * Union of statically-configured trusted client keys and the persisted
- * allow-list. Used when the relay builds its blind-peer trusted set.
- */
+/** Union of configured and persisted operator-authorized client keys. */
 export function mergeTrustedClientKeys(configuredKeys = [], persistedKeys = []) {
   const set = new Set()
   for (const key of [...(configuredKeys || []), ...(persistedKeys || [])]) {

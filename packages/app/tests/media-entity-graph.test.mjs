@@ -7,8 +7,8 @@ test('projects one work with alternate publications, creator roles, provenance, 
   const projected = projectMediaEntityGraph({
     entity: { entityId: 'work:alpha', title: 'Alpha', creator: 'Alice' },
     publications: [
-      { publicationId: 'pub-a', publisherId: 'publisher-a', sourceProvider: 'Publisher A', renditionId: 'rend-a', playable: true },
-      { publicationId: 'pub-b', publisherId: 'publisher-b', sourceProvider: 'Publisher B', renditionId: 'rend-b', playable: true },
+      { publicationId: 'pub-a', publisherId: 'publisher-a', sourceProvider: 'Publisher A', renditionId: 'rend-a', availabilityState: 'available', rejectionReasonCodes: [] },
+      { publicationId: 'pub-b', publisherId: 'publisher-b', sourceProvider: 'Publisher B', renditionId: 'rend-b', availabilityState: 'available', rejectionReasonCodes: [] },
     ],
     contributions: [
       { agentId: 'agent:alice', name: 'Alice', role: 'performer' },
@@ -23,6 +23,21 @@ test('projects one work with alternate publications, creator roles, provenance, 
   assert.deepEqual(projected.creatorRoles.map(role => role.role).sort(), ['director', 'performer'])
   assert.deepEqual(projected.provenance, ['claim-a', 'claim-b'])
   assert.equal(projected.conflicts.length, 1)
+})
+
+test('entity projection never falls back to an unauthorized first source', () => {
+  const projected = projectMediaEntityGraph({
+    entity: { entityId: 'work:blocked', title: 'Blocked' },
+    publications: [{
+      publicationId: 'pub-blocked',
+      renditionId: 'rend-blocked',
+      playable: true,
+      availabilityState: 'available',
+      rejectionReasonCodes: ['UNAUTHORIZED_PUBLICATION'],
+    }],
+  })
+  assert.equal(projected.primarySource, null)
+  assert.equal(projected.playbackRef, null)
 })
 
 test('partial collections preserve placeholders and do not collapse remasters', () => {

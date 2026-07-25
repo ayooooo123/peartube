@@ -12,7 +12,6 @@ export {
   pairDevice
 } from './storage.js';
 
-export { createContentPublication, createImmutableContentPublication } from './content-publication.js';
 export {
   CONTENT_REPLICATION_CHECKPOINT_VERSION,
   createContentReplication
@@ -31,6 +30,12 @@ export { SeedingManager } from './seeding.js';
 
 // API - Shared backend methods
 export { assessDurableManifest, createApi } from './api.js';
+export {
+  createDurableOperabilityServices,
+  createOperabilityApi,
+  createPortableStateRepositoryAdapter,
+  getOrCreateDurableOperabilityServices
+} from './api/operability.js';
 export {
   canonicalDurabilityRefKey,
   canonicalizeDurabilityRefs,
@@ -54,6 +59,10 @@ export {
   generateMnemonic,
   validateMnemonic
 } from './identity.js';
+export {
+  migrateLegacyPublisherRootsInMetaDb,
+  runLegacyPublisherRootPreflight
+} from './legacy-publisher-root-preflight.js';
 
 // Video Upload
 export { createUploadManager } from './upload.js';

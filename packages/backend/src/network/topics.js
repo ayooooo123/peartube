@@ -56,6 +56,13 @@ export function deriveLiveTopic(input = {}) {
   })
 }
 
+export function deriveArchiveDiscoveryTopic(input = {}) {
+  return topic('archive-discovery', {
+    protocolMajor: cleanMajor(input.protocolMajor),
+    networkId: cleanString(input.networkId || 'peartube-main', 'networkId'),
+  })
+}
+
 export function deriveArchiveTopic(input = {}) {
   return topic('archive', {
     protocolMajor: cleanMajor(input.protocolMajor),
@@ -73,6 +80,8 @@ export function describeScopedTopic(role, input = {}) {
       return { role, protocolMajor: cleanMajor(input.protocolMajor), renditionId: cleanString(input.renditionId, 'renditionId'), topicHex: topicHex(deriveAssetTopic(input)) }
     case 'live':
       return { role, protocolMajor: cleanMajor(input.protocolMajor), eventId: cleanString(input.eventId, 'eventId'), epoch: Number(input.epoch || 0), topicHex: topicHex(deriveLiveTopic(input)) }
+    case 'archive-discovery':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), networkId: cleanString(input.networkId || 'peartube-main', 'networkId'), topicHex: topicHex(deriveArchiveDiscoveryTopic(input)) }
     case 'archive':
       return { role, protocolMajor: cleanMajor(input.protocolMajor), archiveId: cleanString(input.archiveId, 'archiveId'), topicHex: topicHex(deriveArchiveTopic(input)) }
     default:

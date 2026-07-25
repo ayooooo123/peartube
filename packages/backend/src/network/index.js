@@ -1,5 +1,7 @@
 export * from './frame.js'
+export * from './version.js'
 export * from './replay-window.js'
 export * from './admission.js'
 export * from './peer-session.js'
 export * from './topics.js'
+export * from './scoped-runtime.js'

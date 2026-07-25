@@ -1,7 +1,12 @@
 import b4a from 'b4a'
 
 import { encodeCanonical, hashCanonical, normalizeNonNegativeInteger, sortPlain, toHex } from '../publisher/canonical.js'
-import { createSignedEnvelope, verifySignedEnvelope } from '../records/signed-envelope.js'
+import {
+  createApplicationEnvelope,
+  decodeApplicationEnvelope,
+  encodeApplicationEnvelope,
+  verifyApplicationEnvelope,
+} from '../records/application-envelope.js'
 import { createRenditionDescriptor } from './rendition.js'
 
 export const MANIFEST_VERSION = 1
@@ -64,7 +69,7 @@ export function createPublicationManifest(input = {}) {
     unsignedBody,
     ...unsignedBody,
   })
-  const envelope = createSignedEnvelope({
+  const envelope = createApplicationEnvelope({
     recordType: MANIFEST_RECORD_TYPE,
     body: encodeCanonical(body),
     keyPair: input.keyPair,
@@ -72,6 +77,69 @@ export function createPublicationManifest(input = {}) {
     expiresAt: input.expiresAt,
   })
   return { publicationId, body, envelope }
+}
+
+export function encodePublicationManifest(manifest) {
+  if (!manifest?.body || !manifest?.envelope) throw new Error('publication manifest is required')
+  if (!b4a.equals(manifest.envelope.body, encodeCanonical(manifest.body))) {
+    throw new Error('publication manifest envelope body mismatch')
+  }
+  return encodeApplicationEnvelope(manifest.envelope)
+}
+
+export function decodePublicationManifest(input) {
+  const envelope = decodeApplicationEnvelope(input)
+  let parsed
+  try {
+    parsed = JSON.parse(b4a.toString(envelope.body))
+  } catch {
+    throw new Error('publication manifest body is not canonical JSON')
+  }
+  const unsignedBody = unsignedManifestBody(parsed?.unsignedBody)
+  const manifestId = deriveManifestId({ unsignedBody })
+  const body = sortPlain({ manifestId, unsignedBody, ...unsignedBody })
+  if (!b4a.equals(envelope.body, encodeCanonical(body))) {
+    throw new Error('publication manifest body is noncanonical')
+  }
+  return {
+    publicationId: derivePublicationId({ publisherId: body.publisherId, manifestId }),
+    body,
+    envelope,
+  }
+}
+
+export async function verifyCatalogPublicationManifest(manifest, options = {}) {
+  if (!manifest?.body || !manifest?.envelope) return false
+  let publisherId
+  let publicationId
+  let manifestId
+  let signer
+  try {
+    publisherId = toHex(options.publisherId, 32, 'publisherId')
+    publicationId = toHex(options.publicationId, 32, 'publicationId')
+    manifestId = toHex(options.manifestId, 32, 'manifestId')
+    signer = toHex(options.signer, 32, 'signer')
+  } catch {
+    return false
+  }
+  if (manifest.body.publisherId !== publisherId ||
+      manifest.publicationId !== publicationId ||
+      manifest.body.manifestId !== manifestId ||
+      toHex(manifest.envelope.signer, 32, 'manifest signer') !== signer) {
+    return false
+  }
+  let canonical
+  try {
+    canonical = encodePublicationManifest(manifest)
+    if (options.payload && !b4a.equals(canonical, options.payload)) return false
+  } catch {
+    return false
+  }
+  return verifyApplicationEnvelope(manifest.envelope, {
+    recordType: MANIFEST_RECORD_TYPE,
+    now: options.now,
+    authorizeSigner: candidate => toHex(candidate, 32, 'candidate signer') === signer,
+  })
 }
 
 export async function verifyPublicationManifest(manifest, options = {}) {
@@ -82,7 +150,7 @@ export async function verifyPublicationManifest(manifest, options = {}) {
   if (manifest.publicationId !== expectedPublicationId) return false
   const signer = manifest.envelope.signer ? toHex(manifest.envelope.signer, 32, 'signer') : null
   if (signer !== manifest.body.publisherId) return false
-  const verified = await verifySignedEnvelope(manifest.envelope, {
+  const verified = await verifyApplicationEnvelope(manifest.envelope, {
     ...options,
     recordType: MANIFEST_RECORD_TYPE,
   })

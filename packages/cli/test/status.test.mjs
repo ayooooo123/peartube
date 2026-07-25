@@ -78,23 +78,20 @@ test('buildRelayStatus orders eviction candidates by retention class', async (t)
       },
       catalog,
       runtimeStats: {
-        peers: 2,
-        connections: 1,
-        feedPeers: 2,
-        feedConnections: 2,
-        feedEntries: 3
+        network: { peers: 2, connections: 1, offline: false },
+        publisher: { catalogs: 2, followed: 1 },
+        assets: { retainedRenditions: 3 }
       }
     })
 
     t.is(status.summary.totalChannels, 3)
     t.is(status.summary.protectedChannels, 2)
     t.is(status.summary.usedBytes, 7168)
-    t.is(status.runtime.peers, 2)
-    t.is(status.runtime.feedPeers, 2)
-    t.is(status.runtime.feedConnections, 2)
-    t.is(status.runtime.feedChannelCandidates, 2)
-    t.is(status.runtime.candidateConnections, 2)
-    t.is(status.runtime.feedEntries, 3)
+    t.is(status.runtime.network.peers, 2)
+    t.is(status.runtime.network.connections, 1)
+    t.is(status.runtime.publisher.catalogs, 2)
+    t.is(status.runtime.publisher.followed, 1)
+    t.is(status.runtime.assets.retainedRenditions, 3)
     t.is(status.evictionCandidates[0].channelKey, 'discover-1')
     t.is(status.evictionCandidates[1].channelKey, 'allow-1')
     t.is(status.evictionCandidates[2].channelKey, 'private-1')
@@ -110,11 +107,9 @@ test('readRelayStatus returns persisted runtime stats when present', async (t) =
   try {
     const status = {
       runtime: {
-        peers: 7,
-        connections: 5,
-        feedPeers: 4,
-        feedConnections: 4,
-        feedEntries: 12
+        network: { peers: 7, connections: 5 },
+        publisher: { catalogs: 4 },
+        assets: { retainedRenditions: 12 }
       }
     }
 
@@ -122,18 +117,17 @@ test('readRelayStatus returns persisted runtime stats when present', async (t) =
 
     const loaded = readRelayStatus(statusPath)
 
-    t.is(loaded.runtime.peers, 7)
-    t.is(loaded.runtime.connections, 5)
-    t.is(loaded.runtime.feedPeers, 4)
-    t.is(loaded.runtime.feedConnections, 4)
-    t.is(loaded.runtime.feedEntries, 12)
+    t.is(loaded.runtime.network.peers, 7)
+    t.is(loaded.runtime.network.connections, 5)
+    t.is(loaded.runtime.publisher.catalogs, 4)
+    t.is(loaded.runtime.assets.retainedRenditions, 12)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('buildRelayStatus distinguishes feed candidates from open feed connections', async (t) => {
-  const dir = makeTempDir('peartube-relay-status-feed-semantics-')
+test('buildRelayStatus preserves scoped network and publisher diagnostics', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-scoped-semantics-')
 
   try {
     const catalog = await RelayCatalog.open({ storagePath: dir })
@@ -145,34 +139,30 @@ test('buildRelayStatus distinguishes feed candidates from open feed connections'
       },
       catalog,
       runtimeStats: {
-        peers: 3,
-        connections: 1,
-        feedPeers: 4,
-        feedConnections: 1,
-        feedChannelCandidates: 4,
-        candidateConnections: 4,
-        rememberedPeerCandidates: 6,
-        feedEntries: 5
+        network: { peers: 3, connections: 1, offline: false },
+        publisher: { catalogs: 4, followed: 2, lastErrorCode: null },
+        bootstrap: { joined: true, locators: 6, rejected: 1, maxLocators: 32 },
+        assets: { retainedRenditions: 5, activeSessions: 2, maxSessions: 8 }
       }
     })
 
-    t.is(status.runtime.feedPeers, 4, 'legacy feedPeers field remains available')
-    t.is(status.runtime.feedChannelCandidates, 4)
-    t.is(status.runtime.candidateConnections, 4)
-    t.is(status.runtime.feedConnections, 1)
-    t.is(status.runtime.rememberedPeerCandidates, 6)
+    t.is(status.runtime.network.peers, 3)
+    t.is(status.runtime.publisher.catalogs, 4)
+    t.is(status.runtime.bootstrap.locators, 6)
+    t.is(status.runtime.assets.activeSessions, 2)
 
     const formatted = formatRelayStatus(status)
-    t.ok(formatted.includes('feedPeerCandidates: 4'))
-    t.ok(formatted.includes('feedConnections: 1'))
-    t.ok(formatted.includes('rememberedPeerCandidates: 6'))
+    t.ok(formatted.includes('network: peers=3 connections=1 offline=false'))
+    t.ok(formatted.includes('publisher: catalogs=4 followed=2 lastError=none'))
+    t.ok(formatted.includes('bootstrap: joined=true locators=6 rejected=1 limit=32'))
+    t.ok(formatted.includes('assets: retainedRenditions=5 activeSessions=2 limit=8'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
 
-test('buildRelayStatus surfaces network doctor boundary diagnostics', async (t) => {
+test('buildRelayStatus surfaces scoped DHT boundary diagnostics', async (t) => {
   const dir = makeTempDir('peartube-relay-status-doctor-')
 
   try {
@@ -185,21 +175,21 @@ test('buildRelayStatus surfaces network doctor boundary diagnostics', async (t) 
       },
       catalog,
       runtimeStats: {
-        peers: 2,
-        connections: 0,
-        feedConnections: 0,
-        doctor: {
-          recommendedBoundary: 'transport-socket',
-          discovery: { discoveredPeers: 2 },
-          socket: { swarmConnections: 0 },
-          feed: { feedConnections: 0 }
+        network: {
+          peers: 2,
+          connections: 0,
+          offline: true,
+          offlineReason: 'transport-unreachable',
+          listenResolved: true,
+          dht: { bootstrapped: true, firewalled: true, online: false }
         }
       }
     })
 
-    t.is(status.runtime.doctor.recommendedBoundary, 'transport-socket')
+    t.is(status.runtime.network.offlineReason, 'transport-unreachable')
     const formatted = formatRelayStatus(status)
-    t.ok(formatted.includes('doctor: boundary=transport-socket discovered=2 sockets=0 feedConnections=0'))
+    t.ok(formatted.includes('network: peers=2 connections=0 offline=true reason=transport-unreachable listenResolved=true'))
+    t.ok(formatted.includes('dht: bootstrapped=true firewalled=true online=false'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

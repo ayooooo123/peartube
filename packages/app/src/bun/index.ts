@@ -13,10 +13,38 @@ import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
 import { existsSync } from 'fs'
 import { execSync } from 'child_process'
+import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
+import { createDesktopPublisherRpcHandlers } from '../../lib/publisher-shell-service'
+import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
+
+type LegacyPublisherRootMigrationRequest = {
+  version: 1
+  identityPublicKey: string | Uint8Array
+  secretKey: string | Uint8Array
+  challenge: string | Uint8Array
+}
+
+type LegacyPublisherRootPreflightSummary = {
+  status: string
+  scanned: number
+  migrated: number
+  remaining: number
+  errorCode?: string
+}
+
+
+
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_NAME = 'PearTube'
+
+
+// This accessor exists only in the Bun main bundle. It is deliberately absent
+// from BrowserView RPC, the web renderer bundle, and the Bare backend worker.
+export function getPrivilegedPublisherSignerBridge() {
+  return privilegedPublisherSignerBridge
+}
 
 // ── Kill stale workers holding the Corestore lock ───────────────────────
 // If a previous session crashed or was force-killed, the bare-sidecar
@@ -57,10 +85,47 @@ function getStoragePath(): string {
 const appCodeDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const storagePath = getStoragePath()
 const publisherKeyVault = createBunPublisherKeyVault()
-;(globalThis as any).__peartubePublisherKeyVault = publisherKeyVault
+const privilegedPublisherSignerBridge = createPublisherSignerBridge({
+  runtime: 'desktop-main',
+  vault: publisherKeyVault,
+})
+const publisherRequestHandlers = createDesktopPublisherRpcHandlers({
+  vault: publisherKeyVault,
+  signer: privilegedPublisherSignerBridge,
+})
+let legacyPublisherRootPreflightSettled = false
+
+const legacyPublisherRootPreflightPromise = runLegacyPublisherRootPreflight({
+  storagePath,
+  migrateLegacyPublisherRoot: (request: LegacyPublisherRootMigrationRequest) =>
+    publisherKeyVault.importLegacyRootMigration(request),
+  waitForLock: false,
+}).then((summary: LegacyPublisherRootPreflightSummary) => {
+  if (summary.status === 'complete' && summary.migrated > 0) {
+    console.log('[main] Legacy publisher-root migration completed:', summary.migrated)
+  }
+  return summary
+}).catch(() => ({
+  status: 'unavailable',
+  scanned: 0,
+  migrated: 0,
+  remaining: 0,
+  errorCode: 'MIGRATION_UNAVAILABLE',
+}))
+.finally(() => {
+  legacyPublisherRootPreflightSettled = true
+})
+
+
+
 
 function getWorker(specifier: string) {
+  if (!legacyPublisherRootPreflightSettled) {
+    throw new Error('legacy publisher-root preflight pending')
+  }
   if (workers.has(specifier)) return workers.get(specifier)
+
+
 
   // Resolve worker path relative to app code directory
   // specifier is like '/pear/build/workers/core/index.js' or '/workers/core/index.js'
@@ -172,21 +237,18 @@ function startIPCWebSocket() {
     websocket: {
       open(ws) {
         console.log('[main] IPC WebSocket connected')
-        let worker: any = null
         try {
-          worker = getWorker(BACKEND_WORKER)
-        } catch (err: any) {
-          console.error('[main] IPC WebSocket worker startup failed:', err?.message || err)
+          const worker = getWorker(BACKEND_WORKER)
+          // Pipe: worker IPC → WebSocket → renderer
+          const forwardWorkerData = (d: Buffer) => {
+            if (ws.readyState === 1) ws.sendBinary(d)
+          }
+          Object.assign(ws, { data: { worker, forwardWorkerData } })
+          worker.on('data', forwardWorkerData)
+        } catch {
+          console.error('[main] IPC WebSocket worker startup failed')
           try { ws.close(1011, 'worker startup failed') } catch { /* best effort */ }
-          return
         }
-
-        // Pipe: worker IPC → WebSocket → renderer
-        const forwardWorkerData = (d: Buffer) => {
-          if (ws.readyState === 1) ws.sendBinary(d)
-        }
-        ;(ws as any).data = { worker, forwardWorkerData }
-        worker.on('data', forwardWorkerData)
       },
       message(ws, message) {
         // Pipe: renderer → WebSocket → worker IPC
@@ -236,6 +298,11 @@ const appRPC = BrowserView.defineRPC<PearTubeRPC>({
         rendererReady = true
         return { blobServerPort }
       },
+      publisherCreateRoot: async (request) => publisherRequestHandlers.publisherCreateRoot(request),
+      publisherBeginUserIntent: async (request) => publisherRequestHandlers.publisherBeginUserIntent(request),
+      publisherSignPreparedRecord: async (request) => publisherRequestHandlers.publisherSignPreparedRecord(request),
+      publisherCompleteIntent: async (request) => publisherRequestHandlers.publisherCompleteIntent(request),
+      publisherCancelIntent: async (request) => publisherRequestHandlers.publisherCancelIntent(request),
     },
     messages: {
       workerWrite: () => {
@@ -327,6 +394,7 @@ function stopStaticServer() {
 
 // ── Create Window ───────────────────────────────────────────────────────
 async function createWindow() {
+  await legacyPublisherRootPreflightPromise
   await startStaticServer()
   startIPCWebSocket()
 

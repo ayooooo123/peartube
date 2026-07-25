@@ -149,7 +149,6 @@ test('mirror refresh guard skips overlapping runs instead of mutating seeding st
     onEvent: (event) => events.push(event),
     createBackendContext: async () => ({
       ctx: {},
-      publicFeed: { getFeed: () => [{ driveKey: 'drive', source: 'local', previewVideos: [{ videoPath: 'video.mp4' }] }] },
       seedingManager: {
         getActiveSeeds: () => [],
         getPinnedChannels: () => [],
@@ -160,6 +159,12 @@ test('mirror refresh guard skips overlapping runs instead of mutating seeding st
     }),
     createGossipService: () => ({}),
     createStorageService: () => ({}),
+    createMirrorSeedWorker: ({ backend }) => ({
+      async refresh() {
+        await backend.seedingManager.addSeed()
+        return { refreshed: true }
+      },
+    }),
   })
 
   await core.init()

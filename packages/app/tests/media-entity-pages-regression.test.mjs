@@ -8,8 +8,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const appRoot = path.resolve(__dirname, '..')
 const read = rel => fs.readFileSync(path.join(appRoot, rel), 'utf8')
 
-test('media entity routes expose sources, provenance, conflicts, archive state, and contribution roles', () => {
-  const route = read('app/media/[id].tsx')
+test('media entity page exposes sources, provenance, conflicts, archive state, and contribution roles', () => {
+  const route = read('components/routes/MediaEntityPage.tsx')
   for (const token of ['SourceSelector', 'ProvenancePanel', 'ConflictNotice', 'ArchiveStatus', 'ContributionList', 'mediaGraph.getMediaEntity', 'mediaGraph.getPublicationSources']) {
     assert.ok(route.includes(token), `missing ${token}`)
   }

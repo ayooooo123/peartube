@@ -43,6 +43,13 @@ export interface Video {
   thumbnail?: string;
   category?: string;
   creatorName?: string | null;
+  publicationId?: string;
+  immutablePublication?: {
+    publicationId: string;
+    manifestId?: string;
+    renditionId?: string;
+    publisherId?: string;
+  };
 }
 
 /**
@@ -50,7 +57,7 @@ export interface Video {
  *
  * NOTE: This type is used across mobile + desktop UI.
  * Keep it permissive enough to cover fields that may be present depending on
- * where the data originated (feed, search, player, RPC, etc).
+ * where the data originated (media catalog, search, player, RPC, etc).
  */
 export interface VideoData extends Video {
   channel?: {
@@ -164,51 +171,93 @@ export interface RPCResponse<T = unknown> {
 }
 
 // ============================================
-// Public Feed Types (P2P Discovery)
+// Media Catalog Types
 // ============================================
 
-/**
- * A single entry in the public feed - represents a discovered channel
- */
-export interface PublicFeedEntry {
-  driveKey: string;       // Channel key
-  addedAt: number;        // Unix timestamp when discovered
-  source: 'peer' | 'local'; // How we learned about it
-  channelKey?: string;
-  publicBeeKey?: string | null;
-  channelName?: string | null;
-  videoCount?: number;
-  peerCount?: number;
-  lastSeen?: number;
-  manifestUpdatedAt?: number;
-  previewVideos?: Array<{
-    id: string;
-    title?: string;
-    creatorName?: string | null;
-    uploadedAt?: number;
-    duration?: number;
-    thumbnail?: string | null;
-    blobId?: string | null;
-    blobsCoreKey?: string | null;
-    mimeType?: string | null;
-    availability?: 'playable' | 'unavailable' | 'unknown';
-    thumbnailBlobId?: string | null;
-    thumbnailBlobsCoreKey?: string | null;
-    thumbnailMimeType?: string | null;
-  }>;
+export interface MediaRenditionDescriptor {
+  renditionId: string;
+  purpose: string;
+  format: string;
+  coreKey: string;
+  coreLength: number;
+  treeHash: string;
+  byteLength: number;
+  segmentIndexId?: string | null;
+}
+
+export interface MediaPublicationSource {
+  publicationId: string;
+  publisherId: string;
+  manifestId?: string | null;
+  renditionId?: string | null;
+  score?: number | null;
+  availabilityScore?: number | null;
+  formatSupport?: number | null;
+  moderationPenalty?: number | null;
+  preferred?: boolean | null;
+  selected?: boolean | null;
+  selectionReasonCodes?: string[] | null;
+  rejectionReasonCodes?: string[] | null;
+  introductionPublisherIds?: string[] | null;
+  introductionIndexIds?: string[] | null;
+  moderationFeedIds?: string[] | null;
+  claimConflictIds?: string[] | null;
+  provenanceClaimIds?: string[] | null;
+  scoreMetadataConfidence?: number | null;
+  scorePublisherTrust?: number | null;
+  scoreAvailability?: number | null;
+  scoreFormatSupport?: number | null;
+  scoreModerationPenalty?: number | null;
+  archiveState?: string | null;
+  cacheState?: string | null;
+  availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null;
+  stale?: boolean | null;
+  incomplete?: boolean | null;
+}
+
+export interface MediaEntitySummary {
+  entityId: string;
+  entityKind: string;
+  localClusterId?: string | null;
+  title?: string | null;
+  subtitle?: string | null;
+  claimCount?: number | null;
+  conflictCount?: number | null;
+  sources: MediaPublicationSource[];
+  renditions: MediaRenditionDescriptor[];
+}
+
+export interface MediaPageRequest {
+  cursor?: string;
+  limit?: number;
+}
+
+export interface MediaCatalogResult {
+  success: boolean;
+  errorCode?: string | null;
+  error?: string | null;
+  items: MediaEntitySummary[];
+  nextCursor?: string | null;
+}
+
+export interface MediaGraphUpdate {
+  revision: string;
+  changedCount: number;
+}
+
+export interface MediaCatalogState {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  items: MediaEntitySummary[];
+  nextCursor?: string;
+  errorCode?: string;
+  error?: string;
+  revision?: string;
+  refreshing: boolean;
+  loadingMore: boolean;
 }
 
 /**
- * State of the public feed
- */
-export interface PublicFeedState {
-  status: 'idle' | 'requesting' | 'ready';
-  entries: PublicFeedEntry[];
-  lastRefresh: number | null;
-}
-
-/**
- * Channel metadata fetched lazily from the drive itself
+ * Channel metadata fetched lazily from an explicitly selected channel.
  */
 export interface ChannelMetadata {
   name?: string;
@@ -217,19 +266,3 @@ export interface ChannelMetadata {
   videoCount?: number;
   driveKey?: string;
 }
-
-/**
- * Result from media graph discovery calls
- */
-export interface PublicFeedResult {
-  entries: PublicFeedEntry[];
-  stats: { totalEntries: number; hiddenCount: number; peerCount: number };
-}
-
-/**
- * Message types for public feed protocol over hyperswarm
- */
-export type FeedMessage =
-  | { type: 'NEED_FEED' }
-  | { type: 'FEED_RESPONSE'; keys: string[] }
-  | { type: 'SUBMIT_CHANNEL'; key: string };

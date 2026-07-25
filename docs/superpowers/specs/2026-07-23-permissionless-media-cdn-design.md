@@ -113,6 +113,14 @@ A publisher signature proves provenance, not media safety. Container probing, th
 
 The design guarantees integrity and provenance for signed records and Hypercore blocks. It does not guarantee metadata truth, global availability, anonymity, erasure, safe decoder behavior, or universal moderation.
 
+## Privacy Model
+
+PearTube does not provide anonymity. Publisher and index follows, catalog fetches, asset requests, archive challenges and pledges, and seeding join observable network topics or exchange data with peers. Those peers and network observers may correlate IP addresses, requested topics, timing, and repeated participation across sessions. mDNS and other local discovery can also reveal that a device is running PearTube to nearby networks.
+
+Trust weights, source ranking, moderation decisions, retention choices, and the decision to accept an index or moderation feed are evaluated locally. That local policy is not a privacy layer: fetching a publisher, index, moderation feed, or asset and serving retained bytes remains network-visible even when the resulting allow, block, or ranking decision never leaves the device.
+
+Product copy and settings must distinguish local policy from network-visible fetch and seeding behavior. They must not imply that encrypted peer connections conceal peer IP addresses, topic participation, public signatures, or archive activity, and must not claim anonymity or traffic-analysis resistance.
+
 ## Media Entity Graph
 
 PearTube keeps five media identity domains distinct and adds one non-media identity domain for creators and contributors.
@@ -705,6 +713,75 @@ liveTopic = hash(
 Only the authorized event writer appends media to an epoch core. Viewers reject regressions, skipped transition proofs, expired epochs, and descriptors that do not chain to the catalog event. Late joiners resolve the current signed epoch through the publisher catalog, fetch the bounded initialization/index window, then join that epoch topic.
 
 An `ended` or `aborted` record closes new epoch traffic. Sealing validates the final epoch chain and publishes immutable recording and optional DVR renditions through the normal manifest/catalog commit path. A sealed recording is a normal publication; mutable live cores are never reused as indefinitely growing CDN allocation units.
+
+## Versioned Compatibility and Deprecation Policy
+
+Publisher namespace descriptors, publisher catalog pages, bootstrap locators, and
+curator/index-feed pages carry the same signed compatibility advertisement:
+
+- `minimumProtocolMajor`, the protocol major required to interpret the record;
+- `protocolMinor`, the additive producer minor; and
+- `requiredCapabilities`, a canonical list of behavior the consumer must
+  implement before it may open, project, or follow references from the record.
+
+The current protocol supports exactly major `1`. A record whose
+`minimumProtocolMajor` is not the locally selected major is rejected; the field
+does not authorize cross-major interpretation. Minor changes are compatible
+when every required capability is supported. Unknown optional, bounded,
+length-delimited minor data may be ignored only where its containing schema
+marks it optional. Unknown required capability identifiers always fail closed.
+
+Capability identifiers are lowercase ASCII protocol identifiers. Producers
+deduplicate and lexicographically sort them before signing. Consumers require
+that canonical order rather than silently normalizing signed remote input. A
+compatibility advertisement contains at most 32 identifiers, each at most 64
+UTF-8 bytes and at most 2,048 bytes in total. The mandatory surface identifiers
+for this major are `publisher-catalog:v1`,
+`publisher-catalog-page:v1`, `bootstrap-locator:v1`, and `index-feed:v1`.
+
+Compatibility rejection happens after authenticity validation but before
+catalog batch ingestion, index projection, catalog-chain traversal, or opening
+referenced data. The stable machine-readable errors are:
+
+- `PROTOCOL_ADVERTISEMENT_REQUIRED` for absent or partial compatibility
+  metadata;
+- `PROTOCOL_MAJOR_UNSUPPORTED` for a major mismatch; and
+- `PROTOCOL_CAPABILITY_UNSUPPORTED` for the first unsupported identifier in
+  canonical order.
+
+An omitted compatibility advertisement is not an implicit major-1 default.
+Code accepting an older persisted encoding must provide a complete explicit
+legacy declaration—major, minor, and required capabilities—and that declaration
+still passes the same local-major and capability checks. The only production
+exception at this cutover is an already persisted version-1 publisher namespace
+descriptor. The first rebuild binds the exception to the exact previously
+accepted signed genesis operation ID, migrates the derived descriptor to the
+canonical advertised encoding, and retains only that bounded durable marker for
+subsequent rebuilds. Fresh or merely byte-equivalent legacy genesis candidates
+remain invalid. The legacy declaration is fixed to major 1 and
+`publisher-catalog:v1`. Online bootstrap locators, publisher catalog pages,
+and index pages must advertise compatibility; their verifiers do not opt into
+an omission fallback.
+
+The persisted-descriptor exception lasts for two stable release trains that
+emit the new fields, and no less than 90 days after the first such stable
+release. Removal requires a release note and a migration/export path verified
+against retained version-1 fixtures. After the window, omission returns
+`PROTOCOL_ADVERTISEMENT_REQUIRED`; it never selects another discovery plane.
+Major support ends only in a release that can preserve or export local
+publisher evidence before refusing the old state.
+
+A bundled client encountering stored backend state from another major must stop
+before opening or projecting that state and present an upgrade or verified
+export/restore path. It must not start a differently versioned bundled backend
+against the store, reinterpret the state as a minor change, or query a remote
+service as recovery.
+
+Compatibility pressure never restores the deleted global-feed data plane,
+generic Corestore replication, unsigned mirror steering, or their RPC aliases.
+An incompatible publisher/index remains quarantined at its last verified
+checkpoint. Users may upgrade, migrate/export, or unsubscribe; the client does
+not silently downgrade or fall back.
 
 ## Peer Wire Protocol
 

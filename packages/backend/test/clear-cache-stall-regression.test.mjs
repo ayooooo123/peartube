@@ -135,11 +135,16 @@ test('clearCache cancels live prefetch downloads before clearing blocks', (t) =>
   // them; the clear/download race thrashes storage and the cache never
   // actually shrinks.
   const clearCacheStart = apiSource.indexOf('async clearCache(')
+  const cleanupStart = apiSource.indexOf('async function cleanupRangeRequest(')
   t.ok(clearCacheStart !== -1, 'expected api.clearCache')
+  t.ok(cleanupStart !== -1, 'expected shared active-range cleanup')
   const clearCache = apiSource.slice(clearCacheStart, clearCacheStart + 1600)
+  const cleanupRangeRequest = apiSource.slice(cleanupStart, cleanupStart + 1800)
 
-  t.ok(/activeRangeRequests\.entries\(\)/.test(clearCache), 'clearCache iterates active prefetch sessions')
-  t.ok(/request\.cancel\?\.\(\)/.test(clearCache), 'clearCache flags sessions cancelled so their timers cannot restart downloads')
-  t.ok(clearCache.indexOf('activeRangeRequests.delete') < clearCache.indexOf('seedingManager.clearCache'),
+  t.ok(/activeRangeRequests\.keys\(\)/.test(clearCache), 'clearCache iterates active prefetch sessions')
+  t.ok(/cleanupRangeRequest\(key\)/.test(clearCache), 'clearCache uses the shared cancellation path')
+  t.ok(/request\.cancel\?\.\(\)|request\.cancel\(\)/.test(cleanupRangeRequest), 'active range cleanup cancels the download')
+  t.ok(/request\.release\?\.\(\)/.test(cleanupRangeRequest), 'active range cleanup releases quota and blob guards')
+  t.ok(clearCache.indexOf('cleanupRangeRequest') < clearCache.indexOf('seedingManager.clearCache'),
     'downloads are cancelled before seed blocks are cleared')
 })

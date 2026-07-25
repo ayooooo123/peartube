@@ -37,7 +37,7 @@ test('supported entity kinds cover media, collection, agent, and publisher domai
 test('known external namespaces normalize deterministically without title-derived identity', (t) => {
   const refs = [
     ['work', 'youtube-video', ' AbC_123-xyZ '],
-    ['agent', 'youtube-channel', ' UCabc123 '],
+    ['agent', 'youtube-channel', ' UC_x5XG1OV2P6uZZ5FSM9Ttw '],
     ['recording', 'musicbrainz-recording', '550E8400-E29B-41D4-A716-446655440000'],
     ['edition', 'musicbrainz-release', '550e8400-e29b-41d4-a716-446655440000'],
     ['collection', 'tmdb-tv', ' 1399 '],
@@ -71,7 +71,7 @@ test('issuer-native references are issuer scoped and do not collide with externa
     issuerRootKey: b4a.alloc(32, 8),
     issuerLocalId: 'local-show:s1:e1',
   })
-  const external = createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: 'local-show:s1:e1' })
+  const external = createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: 'dQw4w9WgXcQ' })
 
   t.alike(native.entityId, deriveNativeEntityId({ entityKind: 'work', issuerRootKey, issuerLocalId: 'local-show:s1:e1' }))
   t.unlike(native.entityId, sameLocalOtherIssuer.entityId)

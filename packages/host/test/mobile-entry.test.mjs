@@ -1,7 +1,7 @@
 import test from 'brittle'
 
 import { startHost } from '../src/start-host.js'
-import { PROTOCOL_VERSION } from '../src/contracts.js'
+import { HOST_ERROR_CODES, PROTOCOL_VERSION } from '../src/contracts.js'
 import { startMobileBackend } from '../../app/backend/mobile-entry.mjs'
 
 function createFakeStream() {
@@ -55,6 +55,7 @@ test('startMobileBackend delegates startup through the shared host contract', as
   t.is(attachedBackend?.mobileHandlersAttached, true)
   t.is(attachedBackend?.castHandlersAttached, true)
   t.alike(capturedBackendOptions.args, ['backend.bundle.js'])
+  t.is(capturedBackendOptions.protocolVersion, PROTOCOL_VERSION)
 
   await session.terminate()
 
@@ -66,6 +67,7 @@ test('startMobileBackend preserves serialized launch options for runtime backend
     __peartubeLaunchOptions: true,
     network: { relayPeers: ['relay-a'] },
     swarmOptions: { knownPeers: ['relay-a'] },
+    protocolVersion: PROTOCOL_VERSION,
   }
   let capturedBackendOptions = null
 
@@ -90,6 +92,33 @@ test('startMobileBackend preserves serialized launch options for runtime backend
   t.is(ready.blobServerPort, 6123)
   t.is(ready.protocolVersion, PROTOCOL_VERSION)
   t.alike(capturedBackendOptions.args, [JSON.stringify(launchOptions), 'downloader-worker.bundle.js'])
+  t.is(capturedBackendOptions.protocolVersion, PROTOCOL_VERSION)
 
   await session.terminate()
+})
+
+test('startMobileBackend rejects a stale cached worklet bundle before host startup', async (t) => {
+  let startHostCalls = 0
+  const launchOptions = {
+    __peartubeLaunchOptions: true,
+    protocolVersion: PROTOCOL_VERSION + 1,
+  }
+
+  try {
+    await startMobileBackend({
+      storagePath: '/tmp/peartube-mobile',
+      stream: createFakeStream(),
+      args: [JSON.stringify(launchOptions)],
+      startHostImpl: async () => {
+        startHostCalls += 1
+      },
+    })
+    t.fail('stale cached mobile backend must not start')
+  } catch (error) {
+    t.is(error.code, HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH)
+    t.is(error.storedVersion, PROTOCOL_VERSION)
+    t.is(error.expectedVersion, PROTOCOL_VERSION + 1)
+  }
+
+  t.is(startHostCalls, 0)
 })

@@ -1,16 +1,9 @@
 /**
- * PublicChannelBee - Simple auto-replicating channel index
+ * PublicChannelBee - legacy local channel projection
  *
- * This provides simple HyperDB-backed storage for public channel data.
- * It auto-replicates via store.replicate() without any special setup.
- *
- * Use cases:
- * - Public feed discovery (viewers load this typed public index)
- * - Instant video list sync
- * - Channel metadata
- *
- * Single-writer: Only the channel owner can write. But anyone can read
- * once they have the key, and it replicates automatically.
+ * This typed HyperDB projection remains readable for local migration and
+ * compatibility paths. It does not own discovery or replication; network
+ * access is authorized by the scoped publisher and asset runtime.
  */
 
 import HyperDB from 'hyperdb'

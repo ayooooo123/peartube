@@ -55,11 +55,17 @@ test('native hosts explicitly select their backend platform policy', () => {
     /setIsShuttingDown/,
     'mobile runtime must use its backend context lifecycle instead of module-global shutdown state',
   )
+  assert.match(
+    mobileRuntimeSource,
+    /await shutdownBackend\(ctx\)/,
+    'mobile runtime shutdown must delegate to the backend context lifecycle owner',
+  )
   const buildMobileBackendContextOptions = loadBuildMobileBackendContextOptions()
   const network = { bootstrap: ['mobile-bootstrap'] }
   const contextOptions = buildMobileBackendContextOptions({ platform: 'mobile', network })
   assert.equal(contextOptions.platform, 'mobile')
   assert.equal(contextOptions.network, network)
+  assert.equal(contextOptions.expectedProtocolVersion, undefined)
   assert.match(
     mobileRuntimeSource,
     /createBackendContext\(buildMobileBackendContextOptions\(\{/,
@@ -163,6 +169,23 @@ test('mobile backend startup lock cleanup removes db LOCK files before orchestra
   assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
 })
 
+test('mobile rejects unsupported stored protocol before lock cleanup or backend data readiness', () => {
+  const source = readAppFile('backend/index.mjs')
+  const preflightIndex = source.indexOf('prepareStoredProtocolState({')
+  const mkdirIndex = source.indexOf('fs.mkdirSync(storageDir')
+  const ownerLockIndex = source.indexOf('await acquireOwnerLock(storageDir)')
+  const staleLockIndex = source.indexOf('\n  removeStaleLocks(storageDir)')
+  const handlerReadyIndex = source.indexOf('handlersRegistered = true')
+
+  assert.notEqual(preflightIndex, -1)
+  assert.ok(preflightIndex < mkdirIndex)
+  assert.ok(preflightIndex < ownerLockIndex)
+  assert.ok(preflightIndex < staleLockIndex)
+  assert.ok(preflightIndex < handlerReadyIndex)
+  assert.match(source, /rpc\?\.eventError\?\.\(\{ code, message: readinessMessage, retryable: false \}\)/)
+  assert.match(source, /storedVersion=.*expectedVersion=/)
+})
+
 test('mobile backend consumes launch options before downloader worker args', () => {
   const source = readAppFile('backend/index.mjs')
   const parseMobileLaunchArgsForTest = loadParseMobileLaunchArgsForTest()
@@ -192,6 +215,11 @@ test('mobile backend consumes launch options before downloader worker args', () 
     source,
     /swarmOptions: launchOptions\?\.swarmOptions/,
     'createBackendContext should receive launchOptions.swarmOptions',
+  )
+  assert.match(
+    source,
+    /expectedProtocolVersion: protocolVersion/,
+    'createBackendContext should receive the protocol version validated by the host',
   )
   assert.match(
     source,
@@ -234,11 +262,11 @@ test('mobile backend parses launch options after entrypoint and preserves downlo
   assert.deepEqual(parsed.workerArgs, ['/tmp/downloader.bundle'])
 })
 
-test('mobile backend registers host-owned timers and locks on the backend cleanup stack', () => {
+test('mobile backend registers the owner lock without a global refresh timer', () => {
   const source = readAppFile('backend/index.mjs')
 
-  assert.match(source, /ctx\.registerCleanup\?\.\('mobile feed refresh interval'/)
   assert.match(source, /ctx\.registerCleanup\?\.\('mobile backend owner lock'/)
+  assert.doesNotMatch(source, /feed refresh interval|setInterval/)
 })
 
 test('desktop worker registers cast proxy and transcode cleanup on the backend cleanup stack', () => {
@@ -279,11 +307,16 @@ test('native root layout does not expose RPC context before the platform bridge 
   )
 })
 
-test('backend orchestrator records peers discovered on the single shared topic', () => {
-  const source = readWorkspaceFile('backend/src/orchestrator.js')
+test('backend orchestrator starts scoped discovery and accounts for scoped peer sessions', () => {
+  const orchestrator = readWorkspaceFile('backend/src/orchestrator.js')
+  const runtime = readWorkspaceFile('backend/src/network/scoped-runtime.js')
 
-  assert.match(source, /ctx\.swarm\.on\('peer'/)
-  assert.match(source, /publicFeed\.handleDiscoveredPeer\(peer, topic\)/)
+  assert.match(orchestrator, /createScopedNetworkRuntime/)
+  assert.match(orchestrator, /await scopedNetwork\.start\(\)/)
+  assert.match(runtime, /activeConnections\.set\(connection, info\)/)
+  assert.match(runtime, /scope\.sessions\.set\(remoteKey,\s*tracked\)/)
+  assert.match(runtime, /for\s*\(const session of scope\.sessions\.values\(\)\)\s*sessions\.push\(\{/)
+  assert.doesNotMatch(orchestrator, /publicFeed\.handleDiscoveredPeer/)
 })
 
 test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
@@ -295,7 +328,6 @@ test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
     'network',
     'startupTiming',
     'doctor',
-    'directPeerDial',
     'swarmOffline',
     'swarmOfflineReason',
     'swarmListenResolved',
@@ -303,54 +335,81 @@ test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
   ]) {
     assert.match(handlerBlock, new RegExp(field), `getSwarmStatus should expose ${field}`)
   }
+  assert.doesNotMatch(handlerBlock, /feedConnections|feedEntries|directPeerDial/)
 })
 
-test('desktop worker forwards feed update events and full swarm diagnostics', () => {
+test('desktop worker forwards media graph updates and scoped swarm diagnostics', () => {
   const source = readAppFile('workers/desktop/index.ts')
 
-  assert.match(source, /onFeedUpdate:\s*\(\) => \{[\s\S]*?eventFeedUpdate\?\.\(\{ channelKey: 'feed', action: 'update' \}\)/)
-  assert.doesNotMatch(source, /B\.getCanonicalFeed = B\.getPublicFeed/)
+  assert.match(source, /onMediaGraphUpdate:\s*\(update: \{ revision: string; changedCount: number \}\) => \{[\s\S]*?eventMediaGraphUpdate/)
 
   const swarmStatusBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\}/)?.[1] ?? ''
   assert.ok(swarmStatusBlock, 'desktop getSwarmStatus handler should exist')
   assert.match(swarmStatusBlock, /api\.getSwarmStatus\(\)/)
   for (const field of [
-    'network',
-    'startupTiming',
-    'doctor',
-    'directPeerDial',
+    'scopedDiagnostics',
+    'networkJson',
+    'startupTimingJson',
     'swarmOffline',
     'swarmOfflineReason',
     'swarmListenResolved',
     'peerPoolJoined',
-    'feedConnections',
-    'feedEntries',
   ]) {
     assert.match(swarmStatusBlock, new RegExp(field), `desktop getSwarmStatus should expose ${field}`)
   }
+  assert.doesNotMatch(swarmStatusBlock, /feedConnections|feedEntries|directPeerDial/)
 })
 
-test('desktop worker re-gossips already-published channels after upload metadata settles', () => {
+test('desktop upload relies on the catalog publication path without feed re-submission', () => {
   const source = readAppFile('workers/desktop/index.ts')
   const uploadStart = source.indexOf('B.uploadVideo = async (r: any) => {')
   const uploadEnd = source.indexOf('B.pickVideoFile = async', uploadStart)
   const uploadBlock = uploadStart >= 0 && uploadEnd > uploadStart ? source.slice(uploadStart, uploadEnd) : ''
 
   assert.ok(uploadBlock, 'desktop uploadVideo handler should exist')
-  assert.match(source, /const refreshPublishedChannelFeed = async/)
-  assert.match(uploadBlock, /await refreshPublishedChannelFeed\(active\.driveKey\)/)
-  assert.ok(
-    uploadBlock.indexOf('channel.updateVideo') < uploadBlock.indexOf('await refreshPublishedChannelFeed(active.driveKey)'),
-    'desktop feed gossip refresh should happen after thumbnail metadata update',
-  )
+  assert.doesNotMatch(source, /refreshPublishedChannelFeed|submitToFeed/)
+  assert.doesNotMatch(uploadBlock, /refreshPublishedChannelFeed|submitToFeed/)
 })
 
-test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {
+test('backend orchestrator starts scoped networking without a legacy feed startup or sync gate', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 
-  assert.match(source, /createStartupGate/)
-  assert.match(source, /STARTUP_GATE_WARMUP_WAIT_MS/)
-  assert.match(source, /startupGate\.waitUntilOpen\(\{ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS \}\)/)
-  assert.match(source, /publicFeed startup gate timed out; continuing backend warmup offline/)
+  assert.match(source, /await scopedNetwork\.start\(\)/)
+  assert.match(source, /scoped-network startup gate timed out; continuing backend warmup offline/)
+  assert.doesNotMatch(source, /publicFeed startup gate/)
   assert.doesNotMatch(source, /publicFeed\.requestFeedsFromPeers\(\)/)
+  assert.doesNotMatch(source, /startupGate\.noteFeedSync\(\)/)
+})
+
+test('publisher root vault stays privileged while desktop exposes only public signer intents', () => {
+  const bunMain = readAppFile('src/bun/index.ts')
+  const mobileBackend = readAppFile('backend/mobile-start.mjs')
+  const desktopWorker = readAppFile('workers/desktop/index.ts')
+  const webRpc = readWorkspaceFile('platform/src/rpc.web.ts')
+  const rpcStart = bunMain.indexOf('BrowserView.defineRPC')
+  const rpcEnd = bunMain.indexOf('// ── Static File Server', rpcStart)
+  const rendererRpcBlock = rpcStart >= 0 && rpcEnd > rpcStart
+    ? bunMain.slice(rpcStart, rpcEnd)
+    : ''
+
+  assert.match(bunMain, /createBunPublisherKeyVault/)
+  assert.match(bunMain, /createPublisherSignerBridge/)
+  assert.match(bunMain, /runtime: 'desktop-main'/)
+  assert.match(bunMain, /getPrivilegedPublisherSignerBridge/)
+  assert.doesNotMatch(bunMain, /globalThis.*PublisherKeyVault/, 'root vault must not be exposed as mutable process-global state')
+  assert.ok(rendererRpcBlock, 'desktop renderer RPC block should exist')
+  for (const requestName of [
+    'publisherCreateRoot',
+    'publisherBeginUserIntent',
+    'publisherSignPreparedRecord',
+    'publisherCompleteIntent',
+    'publisherCancelIntent',
+  ]) {
+    assert.match(rendererRpcBlock, new RegExp(`${requestName}:\\s*async`))
+  }
+  assert.doesNotMatch(rendererRpcBlock, /signDigest|vault|secretKey|privateKey|rootSecret|seed/i)
+  assert.doesNotMatch(mobileBackend, /publisher-key-vault|expo-secure-store/)
+  assert.doesNotMatch(desktopWorker, /publisher-key-vault|signDigest|getSecret/)
+  assert.match(webRpc, /publisherSigner \? 'shell' : 'renderer'/)
+  assert.match(webRpc, /publisherSigner === window\.bridge\?\.publisherSigner/)
 })

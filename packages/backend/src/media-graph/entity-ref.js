@@ -8,6 +8,7 @@ import {
   sortPlain,
   toHex,
 } from '../publisher/canonical.js'
+import { normalizeExternalIdentifier } from './external-identifiers.js'
 
 export const MEDIA_ENTITY_REF_VERSION = 1
 export const MEDIA_ENTITY_ID_DOMAIN = 'peartube.media-graph.entity-id.v1'
@@ -116,6 +117,8 @@ function normalizeVersion(value, name) {
 }
 
 function normalizeIdentifier(namespace, identifier) {
+  const external = normalizeExternalIdentifier(namespace, identifier)
+  if (external !== null) return external
   if (typeof identifier !== 'string') throw new Error('identifier must be a string')
   let next = identifier.trim()
   if (next.length === 0 || next.length > 512) throw new Error('identifier must be bounded')

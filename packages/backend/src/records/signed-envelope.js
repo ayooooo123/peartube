@@ -1,243 +1,143 @@
 import b4a from 'b4a'
-import c from 'compact-encoding'
-import crypto from 'hypercore-crypto'
+import {
+  RECORD_LIMITS, assertBytes, assertInput, assertUint, encodePreimage, equalBytes, fail,
+  fieldSize, readField, readVarint, utf8, varintLength, writeField, writeVarint
+} from './canonical.js'
 
-export const SIGNED_ENVELOPE_VERSION = 1
-export const MAX_SIGNED_BODY_BYTES = 64 * 1024
-export const MAX_RECORD_TYPE_BYTES = 128
-export const RECORD_ID_DOMAIN = 'peartube.signed-envelope.record-id.v1'
-export const SIGNATURE_DOMAIN = 'peartube.signed-envelope.signature.v1'
+const VARIANT = 1
+const SIGNATURE_DOMAIN = 'peartube/signed-record-signature/v1'
 
-const RECORD_TYPE_RE = /^[a-z0-9][a-z0-9._:-]*$/i
-
-export function toHex(value, name = 'buffer') {
-  return b4a.toString(normalizeBuffer(value, name), 'hex')
+function normalizeUnsigned (value) {
+  if (!value || typeof value !== 'object') fail('envelope must be an object')
+  const recordTypeBytes = utf8(value.recordType, 'recordType', RECORD_LIMITS.maxRecordTypeBytes)
+  assertUint(value.schemaMajor, 'schemaMajor', 255)
+  assertUint(value.schemaMinor, 'schemaMinor', 255)
+  assertBytes(value.issuerIdentityKey, RECORD_LIMITS.keyBytes, 'issuerIdentityKey')
+  assertBytes(value.signerKey, RECORD_LIMITS.keyBytes, 'signerKey')
+  assertUint(value.policyEpoch, 'policyEpoch')
+  const hasSequence = value.issuerSequence !== undefined && value.issuerSequence !== null
+  if (hasSequence) assertUint(value.issuerSequence, 'issuerSequence')
+  assertUint(value.signedAt, 'signedAt')
+  const hasExpiry = value.expiresAt !== undefined && value.expiresAt !== null
+  if (hasExpiry) assertUint(value.expiresAt, 'expiresAt')
+  if (!value.canonicalBody || value.canonicalBody.byteLength > RECORD_LIMITS.maxBodyBytes) fail('canonicalBody exceeds its byte limit')
+  if (!(b4a.isBuffer(value.canonicalBody) || value.canonicalBody instanceof Uint8Array)) fail('canonicalBody must be bytes')
+  if (value.bodyLength !== undefined && value.bodyLength !== value.canonicalBody.byteLength) fail('bodyLength does not match canonicalBody')
+  return { recordTypeBytes, hasSequence, hasExpiry }
 }
 
-export function normalizeBuffer(value, name = 'buffer') {
-  if (b4a.isBuffer(value) || value instanceof Uint8Array) return b4a.from(value)
-  if (typeof value === 'string') {
-    if (!/^(?:[0-9a-f]{2})+$/i.test(value)) throw new Error(`${name} must be hex`)
-    return b4a.from(value, 'hex')
-  }
-  throw new Error(`${name} must be a buffer or hex string`)
+export function encodeUnsignedSignedEnvelope (value) {
+  const { recordTypeBytes, hasSequence, hasExpiry } = normalizeUnsigned(value)
+  const length = 1 + fieldSize(recordTypeBytes) + varintLength(value.schemaMajor) + varintLength(value.schemaMinor) +
+    32 + 32 + varintLength(value.policyEpoch) + 1 + (hasSequence ? varintLength(value.issuerSequence) : 0) +
+    varintLength(value.signedAt) + 1 + (hasExpiry ? varintLength(value.expiresAt) : 0) +
+    varintLength(value.canonicalBody.byteLength) + value.canonicalBody.byteLength
+  if (length + 96 > RECORD_LIMITS.maxEnvelopeBytes) fail('envelope exceeds its byte limit')
+  const out = b4a.allocUnsafe(length)
+  let offset = 0
+  out[offset++] = VARIANT
+  offset = writeField(out, offset, recordTypeBytes)
+  offset = writeVarint(out, offset, value.schemaMajor)
+  offset = writeVarint(out, offset, value.schemaMinor)
+  out.set(value.issuerIdentityKey, offset); offset += 32
+  out.set(value.signerKey, offset); offset += 32
+  offset = writeVarint(out, offset, value.policyEpoch)
+  out[offset++] = hasSequence ? 1 : 0
+  if (hasSequence) offset = writeVarint(out, offset, value.issuerSequence)
+  offset = writeVarint(out, offset, value.signedAt)
+  out[offset++] = hasExpiry ? 1 : 0
+  if (hasExpiry) offset = writeVarint(out, offset, value.expiresAt)
+  offset = writeVarint(out, offset, value.canonicalBody.byteLength)
+  out.set(value.canonicalBody, offset)
+  return out
 }
 
-export function normalizeFixed(value, size, name) {
-  const buf = normalizeBuffer(value, name)
-  if (buf.byteLength !== size) throw new Error(`${name} must be ${size} bytes`)
-  return buf
+export function encodeSignedEnvelope (value) {
+  const unsigned = encodeUnsignedSignedEnvelope(value)
+  assertBytes(value.recordId, 32, 'recordId')
+  assertBytes(value.signature, 64, 'signature')
+  return b4a.concat([unsigned, value.recordId, value.signature])
 }
 
-export function normalizePublicKey(value, name = 'signer') {
-  return normalizeFixed(value, 32, name)
+function decodeUnsigned (state) {
+  if (readVarint(state, 'variant', 255) !== VARIANT) fail('unknown envelope variant')
+  const recordType = b4a.toString(readField(state, 'recordType', RECORD_LIMITS.maxRecordTypeBytes))
+  const schemaMajor = readVarint(state, 'schemaMajor', 255)
+  const schemaMinor = readVarint(state, 'schemaMinor', 255)
+  const issuerIdentityKey = readFixed(state, 'issuerIdentityKey', 32)
+  const signerKey = readFixed(state, 'signerKey', 32)
+  const policyEpoch = readVarint(state, 'policyEpoch')
+  const sequenceTag = readVarint(state, 'issuerSequence variant', 1)
+  const issuerSequence = sequenceTag ? readVarint(state, 'issuerSequence') : undefined
+  const signedAt = readVarint(state, 'signedAt')
+  const expiryTag = readVarint(state, 'expiresAt variant', 1)
+  const expiresAt = expiryTag ? readVarint(state, 'expiresAt') : undefined
+  const canonicalBody = readField(state, 'canonicalBody', RECORD_LIMITS.maxBodyBytes)
+  return { recordType, schemaMajor, schemaMinor, issuerIdentityKey, signerKey, policyEpoch, issuerSequence, signedAt, expiresAt, bodyLength: canonicalBody.byteLength, canonicalBody }
+}
+function readFixed (state, name, length) {
+  if (state.offset + length > state.buffer.byteLength) fail(`truncated ${name}`)
+  const value = state.buffer.subarray(state.offset, state.offset + length); state.offset += length; return value
 }
 
-export function normalizeSignature(value, name = 'signature') {
-  return normalizeFixed(value, 64, name)
+export function decodeUnsignedSignedEnvelope (input) {
+  assertInput(input)
+  const state = { buffer: input, offset: 0 }
+  const value = decodeUnsigned(state)
+  if (state.offset !== input.byteLength) fail('trailing bytes')
+  if (!equalBytes(encodeUnsignedSignedEnvelope(value), input)) fail('non-canonical envelope encoding')
+  return value
 }
 
-export function normalizeRecordType(recordType) {
-  if (typeof recordType !== 'string' || recordType.length === 0) {
-    throw new Error('recordType is required')
-  }
-  const bytes = b4a.byteLength(recordType)
-  if (bytes > MAX_RECORD_TYPE_BYTES) throw new Error('recordType exceeds maximum length')
-  if (!RECORD_TYPE_RE.test(recordType)) throw new Error('recordType must be domain separated')
-  return recordType
+export function decodeSignedEnvelope (input) {
+  assertInput(input)
+  const state = { buffer: input, offset: 0 }
+  const value = decodeUnsigned(state)
+  value.recordId = readFixed(state, 'recordId', 32)
+  value.signature = readFixed(state, 'signature', 64)
+  if (state.offset !== input.byteLength) fail('trailing bytes')
+  if (!equalBytes(encodeSignedEnvelope(value), input)) fail('non-canonical envelope encoding')
+  return value
 }
 
-function normalizeTimestamp(value, name) {
-  const next = value == null ? 0 : Number(value)
-  if (!Number.isSafeInteger(next) || next < 0) throw new Error(`${name} must be a non-negative safe integer`)
-  return next
+export function signedRecordSignaturePreimage (value) {
+  return encodePreimage(SIGNATURE_DOMAIN, value.recordType, value.recordId)
 }
 
-function normalizeNonce(value) {
-  if (value == null) return null
-  return normalizeFixed(value, 32, 'nonce')
+export function prepareSignedEnvelope (value, { hash } = {}) {
+  if (typeof hash !== 'function') fail('hash function is required')
+  const normalized = { ...value, bodyLength: value?.canonicalBody?.byteLength }
+  const recordId = hash(encodeUnsignedSignedEnvelope(normalized))
+  assertBytes(recordId, 32, 'hash output')
+  return { ...normalized, recordId }
 }
 
-export function normalizeUnsignedRecord(input = {}, options = {}) {
-  const body = normalizeBuffer(input.body ?? b4a.alloc(0), 'body')
-  const maxBodyBytes = options.maxBodyBytes ?? MAX_SIGNED_BODY_BYTES
-  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) throw new Error('maxBodyBytes must be a non-negative safe integer')
-  if (body.byteLength > maxBodyBytes) throw new Error('body length exceeds maximum')
-
-  const issuedAt = normalizeTimestamp(input.issuedAt, 'issuedAt')
-  const expiresAt = normalizeTimestamp(input.expiresAt, 'expiresAt')
-  if (expiresAt > 0 && issuedAt > 0 && expiresAt < issuedAt) throw new Error('expiresAt must be greater than issuedAt')
-
-  return {
-    version: SIGNED_ENVELOPE_VERSION,
-    recordType: normalizeRecordType(input.recordType),
-    issuedAt,
-    expiresAt,
-    nonce: normalizeNonce(input.nonce),
-    body,
-    bodyLength: body.byteLength,
-  }
+export function attachSignedEnvelopeSignature (prepared, signature) {
+  assertBytes(prepared?.recordId, 32, 'recordId')
+  assertBytes(signature, 64, 'signature')
+  return { ...prepared, signature }
 }
 
-export function encodeUnsignedRecord(input = {}, options = {}) {
-  const record = normalizeUnsignedRecord(input, options)
-  return b4a.concat([
-    c.encode(c.uint, record.version),
-    c.encode(c.string, record.recordType),
-    c.encode(c.uint, record.issuedAt),
-    c.encode(c.uint, record.expiresAt),
-    c.encode(c.bool, Boolean(record.nonce)),
-    record.nonce ? c.encode(c.fixed32, record.nonce) : b4a.alloc(0),
-    c.encode(c.uint, record.bodyLength),
-    record.body,
-  ])
-}
-
-export function decodeUnsignedRecordFromState(state, options = {}) {
-  const maxBodyBytes = options.maxBodyBytes ?? MAX_SIGNED_BODY_BYTES
-  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) throw new Error('maxBodyBytes must be a non-negative safe integer')
-
-  const version = c.uint.decode(state)
-  if (version !== SIGNED_ENVELOPE_VERSION) throw new Error(`unsupported signed envelope version: ${version}`)
-  const recordType = normalizeRecordType(c.string.decode(state))
-  const issuedAt = normalizeTimestamp(c.uint.decode(state), 'issuedAt')
-  const expiresAt = normalizeTimestamp(c.uint.decode(state), 'expiresAt')
-  const hasNonce = c.bool.decode(state)
-  const nonce = hasNonce ? c.fixed32.decode(state) : null
-  const bodyLength = c.uint.decode(state)
-  if (bodyLength > maxBodyBytes) throw new Error('body length exceeds maximum')
-  if (state.end - state.start < bodyLength) throw new Error('body length exceeds available frame bytes')
-  const body = state.buffer.subarray(state.start, state.start + bodyLength)
-  state.start += bodyLength
-  const unsigned = normalizeUnsignedRecord({ recordType, issuedAt, expiresAt, nonce, body }, { maxBodyBytes })
-  return {
-    ...unsigned,
-    recordId: deriveRecordId(unsigned),
-  }
-}
-
-export function decodeUnsignedRecord(buffer, options = {}) {
-  const frame = normalizeBuffer(buffer, 'encoded unsigned record')
-  const state = c.state(0, frame.byteLength, frame)
-  const record = decodeUnsignedRecordFromState(state, options)
-  if (state.start !== state.end) throw new Error('trailing bytes after unsigned record')
-  return record
-}
-
-export function hashDomain(domain, payload) {
-  return crypto.hash(b4a.concat([
-    c.encode(c.string, domain),
-    c.encode(c.uint, payload.byteLength),
-    payload,
-  ]))
-}
-
-export function deriveRecordId(input = {}, options = {}) {
-  return hashDomain(RECORD_ID_DOMAIN, encodeUnsignedRecord(input, options))
-}
-
-export function deriveSigningDigest(recordId) {
-  return hashDomain(SIGNATURE_DOMAIN, normalizeFixed(recordId, 32, 'recordId'))
-}
-
-export function createSignedEnvelope(input = {}) {
-  const unsigned = normalizeUnsignedRecord(input)
-  const keyPair = input.keyPair
-  if (!keyPair?.publicKey || !keyPair?.secretKey) throw new Error('keyPair with publicKey and secretKey is required')
-  const signer = normalizePublicKey(keyPair.publicKey, 'keyPair.publicKey')
-  const recordId = deriveRecordId(unsigned)
-  const signature = crypto.sign(deriveSigningDigest(recordId), keyPair.secretKey)
-  return {
-    ...unsigned,
-    recordId,
-    signer,
-    signature,
-  }
-}
-
-export function encodeSignedEnvelope(envelope, options = {}) {
-  const unsigned = normalizeUnsignedRecord(envelope, options)
-  const computedRecordId = deriveRecordId(unsigned, options)
-  const recordId = envelope.recordId ? normalizeFixed(envelope.recordId, 32, 'recordId') : computedRecordId
-  if (!b4a.equals(recordId, computedRecordId)) throw new Error('recordId mismatch')
-  const signer = normalizePublicKey(envelope.signer, 'signer')
-  const signature = normalizeSignature(envelope.signature, 'signature')
-  return b4a.concat([
-    encodeUnsignedRecord(unsigned, options),
-    c.encode(c.fixed32, recordId),
-    c.encode(c.fixed32, signer),
-    c.encode(c.fixed64, signature),
-  ])
-}
-
-export function decodeSignedEnvelope(buffer, options = {}) {
-  const frame = normalizeBuffer(buffer, 'signed envelope')
-  const state = c.state(0, frame.byteLength, frame)
-  const unsigned = decodeUnsignedRecordFromState(state, options)
-  const recordId = c.fixed32.decode(state)
-  const signer = c.fixed32.decode(state)
-  const signature = c.fixed64.decode(state)
-  if (state.start !== state.end) throw new Error('trailing bytes after signed envelope')
-  if (!b4a.equals(recordId, unsigned.recordId)) throw new Error('recordId mismatch')
-  return {
-    ...unsigned,
-    recordId,
-    signer,
-    signature,
-  }
-}
-
-export function hasAuthorizationContext(options = {}) {
-  return Boolean(options.allowedSigners || options.authorizeSigner)
-}
-
-export function isSignerAuthorized(signer, options = {}) {
-  if (!hasAuthorizationContext(options)) {
-    throw new Error('explicit authorization context is required')
-  }
-  if (typeof options.authorizeSigner === 'function') {
-    return Boolean(options.authorizeSigner(signer))
-  }
-  const signerHex = toHex(signer, 'signer')
-  for (const allowed of options.allowedSigners || []) {
-    if (toHex(allowed, 'allowed signer') === signerHex) return true
-  }
-  return false
-}
-
-function replayKey(envelope) {
-  if (!envelope.nonce) return null
-  return `${toHex(envelope.signer, 'signer')}:${toHex(envelope.nonce, 'nonce')}`
-}
-
-export async function verifySignedEnvelope(envelope, options = {}) {
-  const normalized = {
-    ...normalizeUnsignedRecord(envelope, options),
-    recordId: normalizeFixed(envelope.recordId, 32, 'recordId'),
-    signer: normalizePublicKey(envelope.signer, 'signer'),
-    signature: normalizeSignature(envelope.signature, 'signature'),
-  }
-
-  if (options.recordType && normalized.recordType !== options.recordType) return false
-  if (options.requireNonce && !normalized.nonce) return false
-  if (!isSignerAuthorized(normalized.signer, options)) return false
-
-  const now = options.now == null ? 0 : normalizeTimestamp(options.now, 'now')
-  if (now > 0) {
-    if (normalized.issuedAt > 0 && normalized.issuedAt > now) return false
-    if (normalized.expiresAt > 0 && normalized.expiresAt < now) return false
-  }
-
-  const computedRecordId = deriveRecordId(normalized, options)
-  if (!b4a.equals(computedRecordId, normalized.recordId)) return false
-  const ok = crypto.verify(deriveSigningDigest(normalized.recordId), normalized.signature, normalized.signer)
-  if (!ok) return false
-
-  const key = replayKey(normalized)
-  if (key && options.replayCache) {
-    if (options.replayCache.has(key)) return false
-    if (options.consumeNonce) options.replayCache.add(key)
-  }
-
-  return true
+export function verifySignedEnvelope (value, { hash, verifySignature, authorization } = {}) {
+  if (!authorization || typeof authorization !== 'object') fail('explicit authorization context is required')
+  if (typeof hash !== 'function' || typeof verifySignature !== 'function') fail('crypto providers are required')
+  const canonical = encodeSignedEnvelope(value)
+  const decoded = decodeSignedEnvelope(canonical)
+  const candidate = hash(encodeUnsignedSignedEnvelope(decoded))
+  assertBytes(candidate, 32, 'hash output')
+  if (!equalBytes(candidate, decoded.recordId)) fail('recordId mismatch')
+  const verified = verifySignature(decoded.signature, signedRecordSignaturePreimage(decoded), decoded.signerKey)
+  if (verified !== true) fail('signature verification failed')
+  if (!equalBytes(authorization.issuerIdentityKey, decoded.issuerIdentityKey)) fail('issuer authorization mismatch')
+  if (authorization.policyEpoch !== decoded.policyEpoch) fail('policy epoch is stale')
+  if (typeof authorization.authorizeSequence !== 'function' || authorization.authorizeSequence(decoded) !== true) fail('issuer sequence is not authorized')
+  if (typeof authorization.authorizeSigner !== 'function' || authorization.authorizeSigner(decoded) !== true) fail('signer is not authorized')
+  assertUint(authorization.now, 'authorization now')
+  const skew = authorization.maxClockSkew ?? 0
+  assertUint(skew, 'maxClockSkew')
+  if (decoded.expiresAt !== undefined && decoded.expiresAt < decoded.signedAt) fail('expiresAt precedes signedAt')
+  if (decoded.signedAt > authorization.now && decoded.signedAt - authorization.now > skew) fail('record is future-issued')
+  if (decoded.expiresAt !== undefined && authorization.now > decoded.expiresAt && authorization.now - decoded.expiresAt > skew) fail('record expired')
+  if (typeof authorization.claimReplay !== 'function' || authorization.claimReplay(decoded.recordId, decoded) !== true) fail('record replay rejected')
+  return { valid: true, envelope: decoded }
 }

@@ -126,10 +126,7 @@ export const DEFAULT_RELAY_CONFIG = {
   network: {
     announce: true,
     bootstrap: 'default',
-    blindPeer: true,
-    // 0 = derive from storage.maxBytes at runtime. Caps autonomous mirror bytes.
-    blindPeerMaxBytes: 0,
-    trustedBlindPeerClients: []
+    trustedRelayKeys: []
   },
   archive: DEFAULT_ARCHIVE_CONFIG,
   classification: DEFAULT_CLASSIFICATION_CONFIG,

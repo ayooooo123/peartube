@@ -1,11 +1,8 @@
 // Ingestion gate that enforces the relay's defined storage threshold.
 //
-// The relay's storage.maxBytes eviction budget only bounds the CacheManager's
-// tracked discovery previews. Full-core seeding downloads (blindPeer.addCore ->
-// core.download(0,-1)) and archive imports write far more to the corestore than
-// the CacheManager tracks, so a relay can fill the disk and crash with ENOSPC
-// while still "under budget". CacheManager.enforceQuota can't reclaim those
-// bytes (they aren't tracked), so the only reliable defense is to STOP growth.
+// Backend retention is quota-bounded, while archive imports can still consume
+// the operator volume before the next maintenance pass. This independent gate
+// prevents new ingestion at the configured storage or free-space boundary.
 //
 // This guard measures two signals and refuses new ingestion when either trips:
 //   1. actual storage-dir bytes >= storage.maxBytes  (the defined threshold;

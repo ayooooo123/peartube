@@ -3,8 +3,7 @@
  *
  * The backend's logWatchEvent is write-only and in-memory (it only feeds the
  * recommender), so resume positions are persisted app-side: a JSON file on
- * native (same dual-import pattern as feed-snapshot-storage.ts) and
- * localStorage on web/desktop.
+ * native and localStorage on web/desktop.
  */
 import { Platform } from 'react-native'
 

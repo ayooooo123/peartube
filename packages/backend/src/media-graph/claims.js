@@ -1,12 +1,6 @@
 import b4a from 'b4a'
 
-import {
-  createSignedEnvelope,
-  decodeSignedEnvelope,
-  encodeSignedEnvelope,
-  normalizeBuffer,
-  verifySignedEnvelope,
-} from '../records/signed-envelope.js'
+import { createApplicationEnvelope, decodeApplicationEnvelope, encodeApplicationEnvelope, normalizeBuffer, verifyApplicationEnvelope } from '../records/application-envelope.js'
 import {
   encodeCanonical,
   normalizeBytes,
@@ -75,7 +69,7 @@ export function decodeMediaClaimBody(buffer) {
 
 export function createMediaClaimEnvelope(input = {}) {
   const body = input.body ? normalizeBuffer(input.body, 'body') : encodeMediaClaimBody(input)
-  return createSignedEnvelope({
+  return createApplicationEnvelope({
     recordType: MEDIA_CLAIM_RECORD_TYPE,
     body,
     keyPair: input.keyPair,
@@ -86,15 +80,15 @@ export function createMediaClaimEnvelope(input = {}) {
 }
 
 export function encodeMediaClaimEnvelope(envelope, options = {}) {
-  return encodeSignedEnvelope(envelope, options)
+  return encodeApplicationEnvelope(envelope, options)
 }
 
 export function decodeMediaClaimEnvelope(buffer, options = {}) {
-  return decodeSignedEnvelope(buffer, options)
+  return decodeApplicationEnvelope(buffer, options)
 }
 
 export async function verifyMediaClaimEnvelope(envelope, options = {}) {
-  const verified = await verifySignedEnvelope(envelope, {
+  const verified = await verifyApplicationEnvelope(envelope, {
     ...options,
     recordType: MEDIA_CLAIM_RECORD_TYPE,
   })
@@ -189,7 +183,7 @@ export function createMediaClaim(input = {}) {
     throw new Error(`${claimType} does not expire`)
   }
   const body = normalizeClaimBody(input)
-  const envelope = createSignedEnvelope({
+  const envelope = createApplicationEnvelope({
     recordType: TASK3_MEDIA_CLAIM_RECORD_TYPE,
     body: encodeClaimBody(body),
     keyPair: input.keyPair,
@@ -209,7 +203,7 @@ function signerHex(envelope) {
 }
 
 export async function verifyMediaClaim(envelope, options = {}) {
-  const verified = await verifySignedEnvelope(envelope, {
+  const verified = await verifyApplicationEnvelope(envelope, {
     ...options,
     recordType: TASK3_MEDIA_CLAIM_RECORD_TYPE,
   })

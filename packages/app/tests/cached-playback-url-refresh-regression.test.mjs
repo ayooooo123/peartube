@@ -12,14 +12,6 @@ function read(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 }
 
-test('home playback prepares the backend before opening cached local URLs', () => {
-  const source = read('app/(tabs)/index.tsx')
-
-  assert.doesNotMatch(source, /getCachedVideoUrl/)
-  assert.doesNotMatch(source, /loadAndPlayVideo\(video, cachedUrl\)/)
-  assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/)
-  assert.match(source, /if \(result\?\.url\) \{[\s\S]*loadAndPlayVideo\(video, result\.url\)/)
-})
 
 test('watch page playback prepares the backend before opening cached local URLs', () => {
   const source = read('app/video/[id].tsx')
@@ -37,13 +29,4 @@ test('studio playback prepares the backend before opening cached local URLs', ()
   assert.doesNotMatch(source, /loadAndPlayVideo\(video, cachedUrl\)/)
   assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/)
   assert.match(source, /if \(result\?\.url\) \{[\s\S]*loadAndPlayVideo\(video, result\.url\)/)
-})
-
-test('shorts playback prepares the backend before opening cached local URLs', () => {
-  const source = read('app/(tabs)/discover.tsx')
-
-  assert.doesNotMatch(source, /getCachedVideoUrl/)
-  assert.doesNotMatch(source, /setShortsVideoUrl\(cachedUrl\)/)
-  assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/)
-  assert.match(source, /if \(result\?\.url\) \{[\s\S]*setShortsVideoUrl\(result\.url\)[\s\S]*setShortsPlaybackSession/)
 })

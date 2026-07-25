@@ -16,6 +16,9 @@ function cloneManifest(manifest) {
 
 export function createAssetManifestStore(options = {}) {
   const trustedSigners = new Set((options.trustedSigners || []).map(signerHex))
+  const verifyManifest = typeof options.verifyManifest === 'function'
+    ? options.verifyManifest
+    : (manifest, verifyOptions) => verifyPublicationManifest(manifest, verifyOptions)
   const byPublication = new Map()
   const byPublisherSequence = new Map()
   const byRendition = new Map()
@@ -37,7 +40,7 @@ export function createAssetManifestStore(options = {}) {
         return { status: 'conflict', publicationId }
       }
       const allowedSigners = Array.from(trustedSigners)
-      const ok = await verifyPublicationManifest(manifest, { allowedSigners })
+      const ok = await verifyManifest(manifest, { allowedSigners })
       if (!ok) {
         quarantined.push(manifest)
         return { status: 'quarantined' }

@@ -599,7 +599,6 @@ export const styles = StyleSheet.create({
     marginTop: 4,
     maxWidth: '100%',
     textAlign: 'center',
-    numberOfLines: 1,
   },
   actionLabelActive: {
     color: colors.primary,

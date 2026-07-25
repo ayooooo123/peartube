@@ -12,10 +12,11 @@ async function source(url) {
 test('preparePlayback/getVideoUrl delegates known blob refs to the instant playback service', async () => {
   const src = await source(apiPath)
 
-  const directBlobKeyStart = src.indexOf('if (blobId && blobsCoreKey)')
-  assert.notEqual(directBlobKeyStart, -1, 'expected direct blobId/blobsCoreKey fast path')
-  const directBlobKeyBlock = src.slice(directBlobKeyStart, src.indexOf('const meta = await this.getVideoData', directBlobKeyStart))
-  assert.match(directBlobKeyBlock, /blobPlayback\.resolveDirectBlobUrl\(\{[\s\S]*blobsCoreKey,[\s\S]*blobId,/, 'direct blobId/blobsCoreKey playback must delegate to the instant playback service')
+  const getVideoUrlStart = src.indexOf('async getVideoUrl')
+  assert.notEqual(getVideoUrlStart, -1, 'expected getVideoUrl implementation')
+  const directBlobKeyBlock = src.slice(getVideoUrlStart, src.indexOf('const meta = await this.getVideoData', getVideoUrlStart))
+  assert.match(directBlobKeyBlock, /if \(playbackBlobRef\?\.blobId && playbackBlobRef\?\.blobsCoreKey\)/, 'expected normalized direct blob fast path')
+  assert.match(directBlobKeyBlock, /blobPlayback\.resolveDirectBlobUrl\(\{[\s\S]*blobsCoreKey: playbackBlobRef\.blobsCoreKey,[\s\S]*blobId: playbackBlobRef\.blobId,/, 'direct blob playback must delegate to the instant playback service')
 
   const metaStart = src.indexOf('return blobPlayback.resolveFromMetadata(meta')
   assert.notEqual(metaStart, -1, 'expected metadata playback fallback to use playback service')

@@ -72,10 +72,10 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
         }
       }
     },
-    async publishChannel(channelInfo, options) {
-      calls.push(['publish', channelInfo.channelKey, options.previewVideos.map((video) => video.blobId)])
+    async publishCatalog(channelInfo) {
+      calls.push(['publish', channelInfo.channelKey, channelInfo.previewVideos.map((video) => video.blobId)])
     },
-    async seedChannel(channelInfo) {
+    async retainAssets(channelInfo) {
       calls.push(['seed', channelInfo.previewVideos.map((video) => video.blobsCoreKey)])
     }
   }
@@ -119,10 +119,10 @@ test('mirrorLocalDriveToRelayChannel marks local containers playable with unveri
         }
       }
     },
-    async publishChannel(_channelInfo, options) {
-      publishedPreview = options.previewVideos[0]
+    async publishCatalog(channelInfo) {
+      publishedPreview = channelInfo.previewVideos[0]
     },
-    async seedChannel() {}
+    async retainAssets() {}
   }
 
   await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
@@ -155,10 +155,10 @@ test('mirrorLocalDriveToRelayChannel republishes and reseeds cached local previe
       imports.push(filePath)
       return { videoId: `video-${imports.length}`, metadata: { size: sizes[filePath], blobId: `blob-${imports.length}`, blobsCoreKey: 'cc'.repeat(32) } }
     },
-    async publishChannel(_channelInfo, options) {
-      published.push(options.previewVideos.map((video) => video.blobId))
+    async publishCatalog(channelInfo) {
+      published.push(channelInfo.previewVideos.map((video) => video.blobId))
     },
-    async seedChannel(channelInfo) {
+    async retainAssets(channelInfo) {
       seeded.push(channelInfo.previewVideos.map((video) => video.blobsCoreKey))
     }
   }
@@ -224,10 +224,10 @@ test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed l
         }
       }
     },
-    async publishChannel(_channelInfo, options) {
-      publishedPreviews.push(...options.previewVideos)
+    async publishCatalog(channelInfo) {
+      publishedPreviews.push(...channelInfo.previewVideos)
     },
-    async seedChannel() {}
+    async retainAssets() {}
   }
 
   const result = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
@@ -304,10 +304,10 @@ test('mirrorLocalDriveToRelayChannel groups yt-dlp imports by creator channel id
         }
       }
     },
-    async publishChannel(channelInfo, options) {
-      published.push({ channelKey: channelInfo.channelKey, titles: options.previewVideos.map((video) => video.title) })
+    async publishCatalog(channelInfo) {
+      published.push({ channelKey: channelInfo.channelKey, titles: channelInfo.previewVideos.map((video) => video.title) })
     },
-    async seedChannel(channelInfo) {
+    async retainAssets(channelInfo) {
       seeded.push({ channelKey: channelInfo.channelKey, refs: channelInfo.previewVideos.map((video) => video.blobsCoreKey) })
     }
   }

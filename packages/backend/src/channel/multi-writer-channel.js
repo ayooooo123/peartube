@@ -2,6 +2,7 @@ import ReadyResource from 'ready-resource'
 import HyperDB from 'hyperdb'
 import Hyperblobs from 'hyperblobs'
 import BlindPairing from 'blind-pairing'
+import Protomux from 'protomux'
 import z32 from 'z32'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
@@ -277,6 +278,8 @@ export class MultiWriterChannel extends ReadyResource {
     this._lastVideoLogicalClock = 0
     this._localRateLimits = new Map()
     this._pairingSetupDone = false
+    this._replicatedConnections = new WeakSet()
+    this._replicateConnection = null
     this._claimWriteTail = Promise.resolve()
 
     this.ready().catch(() => {})
@@ -699,6 +702,11 @@ export class MultiWriterChannel extends ReadyResource {
       } catch {
         // Activation failures do not prevent resource cleanup.
       }
+    }
+    if (this._replicateConnection && this.swarm) {
+      this.swarm.off?.('connection', this._replicateConnection)
+      this.swarm.removeListener?.('connection', this._replicateConnection)
+      this._replicateConnection = null
     }
     if (this._channelDiscovery) {
       await destroyResource(this._channelDiscovery)
@@ -1330,6 +1338,13 @@ export class MultiWriterChannel extends ReadyResource {
         // best effort
       }
     }
+    this._replicateConnection = (connection) => {
+      if (!connection || this._replicatedConnections.has(connection) || !this.core) return
+      this._replicatedConnections.add(connection)
+      this.core.replicate(Protomux.from(connection), { live: true })
+    }
+    swarm.on('connection', this._replicateConnection)
+    for (const connection of swarm.connections || []) this._replicateConnection(connection)
     if (!this.writable) return
     this.pairing = new BlindPairing(swarm)
     this.pairingMember = this.pairing.addMember({

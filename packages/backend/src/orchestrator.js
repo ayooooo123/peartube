@@ -5,28 +5,38 @@
  * It initializes storage, managers, and wires up all components.
  *
  * Usage:
- *   const backend = await createBackendContext({ storagePath: '/path/to/storage' });
- *   const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
+ *   const backend = await createBackendContext({ storagePath: '/path/to/storage', expectedProtocolVersion: hostProtocolVersion });
+ *   const { ctx, api, identityManager, uploadManager, scopedNetwork, seedingManager, videoStats } = backend;
  */
 
+import crypto from 'hypercore-crypto'
+import b4a from 'b4a'
 import {
+  DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   initializeStorage,
   createBackendLifecycle,
   isPlaybackActive,
   loadChannel,
-  retainPublicBeeContentDiscovery,
-  retainSwarmDiscovery,
   shutdownBackend,
 } from './storage.js';
-import { createContentPublication } from './content-publication.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
 import { createPlaybackWindowCache } from './playback-window-cache.js';
 import { createPlaybackForwardFill } from './playback-forward-fill.js';
 import { createApi } from './api.js';
+import { getOrCreateDurableOperabilityServices } from './api/operability.js'
 import { createIdentityManager } from './identity.js';
 import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
+import { createPublisherCatalogRegistry } from './api/publisher.js'
+import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
+import { createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
+import {
+  authorizeArchiveRequestFromManifestStore,
+  createArchiveStore,
+  createArchivePolicy,
+  createPermissionlessArchiveNetwork,
+} from './archive/index.js'
 import {
   createBackendSeedPinAdmission,
   registerSeedPinProtocol,
@@ -34,25 +44,6 @@ import {
   resolveSeedPinClientAuth,
 } from './seed-pin/index.js';
 
-function createNoopFeed() {
-  return {
-    feedConnections: new Set(),
-    feedDiscovery: null,
-    getFeed: () => [],
-    start: async () => {},
-    stop: async () => {},
-    addStopHook: () => null,
-    setOnRelayMirrorKey: () => {},
-    setOnFeedUpdate: () => {},
-    setOnFeedConnectionOpen: () => {},
-    setOnFeedSync: () => {},
-    handleDiscoveredPeer: () => false,
-    handleConnection: () => {},
-    setAvailabilityHintProvider: () => {},
-    setFeedSnapshotProvider: () => {},
-    setSignedDescriptorProvider: () => {},
-  }
-}
 
 import {
   readIdentityKeyFile,
@@ -92,6 +83,8 @@ export function buildStorageConfig(config, primaryKey) {
     platform: config.platform ?? 'desktop',
     network: config.network ?? {},
     swarmOptions: config.swarmOptions ?? {},
+    expectedProtocolVersion: config.expectedProtocolVersion,
+    storedProtocolMigrations: config.storedProtocolMigrations ?? DEFAULT_STORED_PROTOCOL_MIGRATIONS,
     lifecycle: config.lifecycle,
   }
 }
@@ -157,15 +150,13 @@ function isContextShuttingDown(ctx) {
  * @property {string} storagePath - Path to storage directory
  * @property {string} [blobServerHost] - Hostname to use when generating blob URLs
  * @property {string} [blobServerBindHost] - Host to bind the blob server listener
- * @property {() => void} [onFeedUpdate] - Callback when feed updates
  * @property {(driveKey: string, videoPath: string, stats: any) => void} [onStatsUpdate] - Callback for video stats
  */
 
 /**
  * @typedef {Object} BackendContext
  * @property {import('./types.js').StorageContext} ctx - Storage context
- * @property {ReturnType<typeof createApi>} api - API methods
- * @property {object} publicFeed - scoped discovery facade
+ * @property {ReturnType<typeof createScopedNetworkRuntime>} scopedNetwork - scoped P2P runtime
  * @property {SeedingManager} seedingManager - Seeding manager
  * @property {VideoStatsTracker} videoStats - Video stats tracker
  * @property {ReturnType<typeof createIdentityManager>} identityManager - Identity manager
@@ -186,280 +177,44 @@ async function warmChannels(ctx, channelKeys, label) {
   }
 }
 
-const OWNED_PUBLICATION_RECONCILER = Symbol('owned-content-publication-reconciler')
 
-function createOwnedPublicationReconciler({
-  ctx,
-  publicFeed,
-  log,
-  retryBaseMs,
-  retryMaxMs,
-}) {
-  const entries = new Map()
-  const timers = new Map()
-  const timerOwnership = new Map()
-  const attempts = new Map()
-  const state = {
-    stopped: false,
-    publicFeed,
-    log,
-    retryBaseMs,
-    retryMaxMs,
-    removeStopHook: null,
-    async execute(entry) {
-      const pending = timers.get(entry.channelKey)
-      if (pending) {
-        clearTimeout(pending)
-        timerOwnership.get(entry.channelKey)?.release()
-        timerOwnership.delete(entry.channelKey)
-        timers.delete(entry.channelKey)
-      }
-      try {
-        const result = await entry.publication.reconcileCanonicalClaims({
-          channelKey: entry.channelKey,
-          publicBeeKey: entry.channel.publicBee.keyHex,
-        })
-        attempts.delete(entry.channelKey)
-        return result
-      } catch (err) {
-        state.schedule(entry)
-        throw err
-      }
-    },
-    schedule(entry) {
-      if (state.stopped || timers.has(entry.channelKey)) return
-      const attempt = (attempts.get(entry.channelKey) || 0) + 1
-      attempts.set(entry.channelKey, attempt)
-      const delay = Math.min(
-        state.retryMaxMs,
-        state.retryBaseMs * (2 ** Math.min(attempt - 1, 16)),
-      )
-      const timer = setTimeout(async () => {
-        timers.delete(entry.channelKey)
-        timerOwnership.get(entry.channelKey)?.release()
-        timerOwnership.delete(entry.channelKey)
-        if (state.stopped) return
-        try {
-          await state.execute(entry)
-        } catch (err) {
-          state.log.warn?.(
-            '[Orchestrator] Retried canonical reconciliation failed:',
-            entry.channelKey.slice(0, 16),
-            err?.message || err,
-          )
-        }
-      }, delay)
-      timer.unref?.()
-      const ownership = ctx?.lifecycle?.ownTimer(`publication retry ${entry.channelKey.slice(0, 16)}`, timer)
-      if (ownership) timerOwnership.set(entry.channelKey, ownership)
-      timers.set(entry.channelKey, timer)
-    },
-    stop() {
-      if (state.stopped) return
-      state.stopped = true
-      for (const timer of timers.values()) clearTimeout(timer)
-      for (const ownership of timerOwnership.values()) ownership.release()
-      timerOwnership.clear()
-      timers.clear()
-      attempts.clear()
-      for (const entry of entries.values()) {
-        entry.publicBee?.setOnCanonicalClaimsSynchronized?.(null)
-      }
-      entries.clear()
-      if (ctx?.[OWNED_PUBLICATION_RECONCILER] === state) {
-        delete ctx[OWNED_PUBLICATION_RECONCILER]
-      }
-    },
-    entries,
-    timers,
-    attempts,
-  }
-  state.removeStopHook = publicFeed?.addStopHook?.(() => state.stop()) || null
-  return state
-}
-
-export async function reconcileOwnedContentPublications({
+export async function startBackendSeedPin({
   ctx,
   identityManager,
-  publicFeed,
-  log = console,
-  retryBaseMs = 250,
-  retryMaxMs = 30000,
-} = {}) {
-  const summary = { checked: 0, reconciled: 0, deferred: 0, failed: 0 }
-  let coordinator = ctx?.[OWNED_PUBLICATION_RECONCILER]
-  if (!coordinator || coordinator.stopped || coordinator.publicFeed !== publicFeed) {
-    coordinator?.stop()
-    coordinator = createOwnedPublicationReconciler({
-      ctx,
-      publicFeed,
-      log,
-      retryBaseMs: Math.max(1, Number(retryBaseMs) || 250),
-      retryMaxMs: Math.max(1, Number(retryMaxMs) || 30000),
-    })
-    ctx[OWNED_PUBLICATION_RECONCILER] = coordinator
-    ctx?.lifecycle?.ownResource('publication reconciler', coordinator, 'stop', 2000)
-  } else {
-    coordinator.log = log
-    coordinator.retryBaseMs = Math.max(1, Number(retryBaseMs) || coordinator.retryBaseMs)
-    coordinator.retryMaxMs = Math.max(
-      coordinator.retryBaseMs,
-      Number(retryMaxMs) || coordinator.retryMaxMs,
-    )
-  }
-
-  const identities = identityManager?.getIdentities?.() || []
-  const ownedKeys = Array.from(new Set(identities
-    .map((identity) => identity?.channelKey || identity?.driveKey)
-    .filter((key) => typeof key === 'string' && key.length > 0)
-    .map((key) => key.toLowerCase())))
-
-  for (const channelKey of ownedKeys) {
-    summary.checked++
-    const channel = ctx?.channels?.get?.(channelKey)
-    if (!channel?.publicBee) {
-      summary.failed++
-      log.warn?.('[Orchestrator] Owned-channel reconciliation skipped: channel unavailable', channelKey.slice(0, 16))
-      continue
-    }
-
-    let entry = coordinator.entries.get(channelKey)
-    if (!entry || entry.channel !== channel || entry.publicBee !== channel.publicBee) {
-      entry?.publicBee?.setOnCanonicalClaimsSynchronized?.(null)
-      entry = {
-        channelKey,
-        channel,
-        publicBee: channel.publicBee,
-        publication: createContentPublication({ channel, publicFeed }),
-        handler: null,
-      }
-      coordinator.entries.set(channelKey, entry)
-    }
-    entry.handler = async () => {
-      try {
-        await coordinator.execute(entry)
-      } catch (err) {
-        log.warn?.(
-          '[Orchestrator] Post-sync canonical reconciliation failed:',
-          channelKey.slice(0, 16),
-          err?.message || err,
-        )
-      }
-    }
-    channel.publicBee.setOnCanonicalClaimsSynchronized?.(entry.handler)
-
-    try {
-      const result = await coordinator.execute(entry)
-      if (result.status === 'deferred') summary.deferred++
-      else summary.reconciled++
-    } catch (err) {
-      summary.failed++
-      log.warn?.(
-        '[Orchestrator] Startup canonical reconciliation failed:',
-        channelKey.slice(0, 16),
-        err?.message || err,
-      )
-    }
-  }
-  return summary
-}
-export function installOwnedContentPublicationIdentityHooks({
-  ctx,
-  identityManager,
-  publicFeed,
-  refreshActivePersonalStore = async () => {},
-  refreshSeedPinClientAuth = async () => {},
-  log = console,
-} = {}) {
-  return installSeedPinIdentityMutationHooks({
-    identityManager,
-    onMutation: async ({ label, reconcile }) => {
-      const activePublicKey = identityManager.getActivePublicKey?.() || null
-      let personalFailed = false
-      if (activePublicKey) {
-        try {
-          await refreshActivePersonalStore(activePublicKey)
-        } catch (error) {
-          personalFailed = true
-          log.warn?.(`[Orchestrator] ${label} personal store refresh failed:`, error?.message || error)
-        }
-      }
-      try {
-        await refreshSeedPinClientAuth({
-          failClosed: personalFailed || activePublicKey === null,
-        })
-      } catch (error) {
-        log.warn?.(`[Orchestrator] ${label} seed-pin auth refresh failed:`, error?.message || error)
-      }
-      if (reconcile) {
-        await reconcileOwnedContentPublications({
-          ctx,
-          identityManager,
-          publicFeed,
-          log,
-        }).catch((error) => {
-          log.warn?.(`[Orchestrator] ${label} reconciliation failed:`, error?.message || error)
-        })
-      }
-    },
-  })
-}
-
-export async function startBackendSeedPinBeforeDiscovery({
-  ctx,
-  identityManager,
-  publicFeed,
   seedPin = {},
   register = registerSeedPinProtocol,
   resolveClientAuth = resolveSeedPinClientAuth,
   createAdmission = createBackendSeedPinAdmission,
 } = {}) {
-  if (!publicFeed || typeof publicFeed.start !== 'function') {
-    throw new TypeError('publicFeed.start is required')
-  }
   const enabled = seedPin?.enabled !== false
-  let registration = null
-  let registrationOwnership = null
-  if (enabled) {
-    const clientAuthResolver = () => resolveClientAuth({ ctx, identityManager })
-    const admission = typeof seedPin?.admission === 'function'
-      ? seedPin.admission
-      : createAdmission({ identityManager })
-    const { enabled: _enabled, admission: _admission, ...registrationOptions } = seedPin || {}
-    registration = register(ctx, {
-      ...registrationOptions,
-      enabled: true,
-      admission,
-      resolveClientAuth: clientAuthResolver,
-    })
-    registrationOwnership = ctx?.lifecycle?.own('seed-pin registration', async () => {
-      await registration?.unregister?.()
-      if (ctx?.seedPinRegistration === registration) ctx.seedPinRegistration = null
-    }, 2000)
-    ctx.seedPinRegistration = registration
-    await registration?.ready
-    await registration?.refreshClientAuth?.()
-  }
-
-  const discovery = Promise.resolve()
-    .then(() => publicFeed.start())
-    .catch(async error => {
-      if (registrationOwnership) await registrationOwnership.cleanup()
-      else await registration?.unregister?.()
-      throw error
-    })
-  return { registration, discovery }
+  if (!enabled) return null
+  const clientAuthResolver = () => resolveClientAuth({ ctx, identityManager })
+  const admission = typeof seedPin?.admission === 'function'
+    ? seedPin.admission
+    : createAdmission({ identityManager })
+  const { enabled: _enabled, admission: _admission, ...registrationOptions } = seedPin || {}
+  const registration = register(ctx, {
+    ...registrationOptions,
+    enabled: true,
+    admission,
+    resolveClientAuth: clientAuthResolver,
+  })
+  ctx?.lifecycle?.own('seed-pin registration', async () => {
+    await registration?.unregister?.()
+    if (ctx?.seedPinRegistration === registration) ctx.seedPinRegistration = null
+  }, 2000)
+  ctx.seedPinRegistration = registration
+  await registration?.ready
+  await registration?.refreshClientAuth?.()
+  return registration
 }
 
 /**
  * Create and initialize the complete backend context.
  *
- * This function:
- * 1. Initializes storage (Corestore, Hyperbee, BlobServer, Hyperswarm)
- * 2. Creates all managers (PublicFeed, Seeding, VideoStats, Identity, Upload)
- * 3. Wires up swarm connection handling for replication and feed protocol
- * 4. Starts the public feed discovery
- * 5. Loads existing identities and their channels (in background)
+ * This function initializes storage, managers, bounded scoped discovery, and
+ * the universal API before returning. Heavy local channel warming remains
+ * deferred so startup is not coupled to remote peer availability.
  *
  * @param {BackendConfig} config - Configuration options
  * @returns {Promise<BackendContext>} - All backend components
@@ -470,16 +225,22 @@ export async function createBackendContext(config) {
     platform = 'desktop',
     blobServerHost,
     blobServerBindHost,
-    onFeedUpdate,
     onStatsUpdate,
     corestoreWaitForLock = false,
     disableStandalonePrimaryKeyFile = false,
     network = {},
     swarmOptions = {},
+    expectedProtocolVersion,
     peerScorer = null,
     seedPin = {},
-    ipcLog: _ipcLog
+    archive = {},
+    ipcLog: _ipcLog,
+    onMediaGraphUpdate,
   } = config;
+
+  if (!Number.isSafeInteger(expectedProtocolVersion) || expectedProtocolVersion <= 0) {
+    throw new TypeError('createBackendContext requires a host-provided expectedProtocolVersion')
+  }
 
   const ipcLog = typeof _ipcLog === 'function' ? _ipcLog : () => {}
   const lifecycle = config.lifecycle || createBackendLifecycle()
@@ -632,11 +393,110 @@ export async function createBackendContext(config) {
 
   try {
   // Phase 2: Create managers (synchronous, fast)
-  const publicFeed = createNoopFeed()
-  ctx.publicFeed = publicFeed
+  const deviceKeyPair = ctx.swarm?.keyPair
+  const deviceSigner = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
+    ? Object.freeze({
+        signerKey: b4a.from(deviceKeyPair.publicKey),
+        sign: preimage => crypto.sign(b4a.from(preimage), deviceKeyPair.secretKey)
+      })
+    : null
+  const catalogRegistry = createPublisherCatalogRegistry(ctx, {
+    now: () => Date.now(),
+    deviceSigner
+  })
+  lifecycle.ownResource('publisher catalog registry', catalogRegistry, 'close', 5000)
+  let scopedNetwork = null
+  const mediaCatalogProjection = createPublisherCatalogProjection({
+    catalogRegistry,
+    now: () => Date.now(),
+    onUpdate: event => typeof onMediaGraphUpdate === 'function'
+      ? onMediaGraphUpdate(event)
+      : undefined
+  })
+  ctx.mediaCatalogProjection = mediaCatalogProjection
+  ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
+  ctx.assetManifestStore = mediaCatalogProjection.assetManifestStore
+  lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
+  await mediaCatalogProjection.rebuild()
+  scopedNetwork = createScopedNetworkRuntime({
+    swarm: ctx.swarm,
+    store: ctx.store,
+    catalogRegistry,
+    networkId: network.networkId,
+    bootstrapEnabled: network.bootstrapEnabled,
+    trustedBootstrapSigners: network.trustedBootstrapSigners,
+    trustedBootstrapRootIds: network.trustedBootstrapRootIds,
+    authorizePublication: request => mediaCatalogProjection.authorizeRendition(request),
+    onCatalogUpdate: async () => {
+      try {
+        await mediaCatalogProjection.rebuild()
+      } finally {
+        await scopedNetwork?.revalidateRetainedRenditions?.()
+      }
+    },
+  })
+  ctx.scopedNetwork = scopedNetwork
+  lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
+  await scopedNetwork.start()
+  const configuredOperabilityServices = config.operability?.services
+    ? await Promise.resolve(config.operability.services)
+    : config.operability?.servicesPromise
+      ? await Promise.resolve(config.operability.servicesPromise)
+      : await getOrCreateDurableOperabilityServices({ ctx, operability: config.operability })
+  const archiveDiagnostics = configuredOperabilityServices?.archiveDiagnostics || null
+  ctx.archiveDiagnostics = archiveDiagnostics
+  const archiveStore = createArchiveStore({
+    diagnostics: archiveDiagnostics,
+    maxObservations: archive.maxObservations,
+    now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+  })
+  const archiveReservationStateKey = 'archive:retention-reservations:v1'
+  const archivePolicy = createArchivePolicy({
+    capacityBytes: archive.capacityBytes,
+    diagnostics: archiveDiagnostics,
+    now: typeof archive.now === 'function' ? archive.now : () => Date.now(),
+    repository: {
+      async load() {
+        return (await ctx.metaDb.get(archiveReservationStateKey))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put(archiveReservationStateKey, state)
+      },
+    },
+  })
+  await archivePolicy.ready
+
+  const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
+    ? createPermissionlessArchiveNetwork({
+        keyPair: deviceKeyPair,
+        scopedNetwork,
+        archiveStore,
+        archivePolicy,
+        enabled: archive.enabled === true,
+        capacityBytes: archive.capacityBytes,
+        maxRequestBytes: archive.maxRequestBytes,
+        diagnostics: archiveDiagnostics,
+        peerScorer,
+        challengeIntervalMs: archive.challengeIntervalMs,
+        challengeTimeoutMs: archive.challengeTimeoutMs,
+        acceptanceProbability: archive.acceptanceProbability,
+        random: archive.random,
+        now: archive.now,
+        authorizeRequest: request => authorizeArchiveRequestFromManifestStore(request, {
+          manifestStore: mediaCatalogProjection.assetManifestStore,
+          authorizeRendition: input => mediaCatalogProjection.authorizeRendition(input),
+        }),
+      })
+    : null
+  await permissionlessArchiveNetwork?.ready
+  ctx.archiveStore = archiveStore
+  ctx.archivePolicy = archivePolicy
+  ctx.permissionlessArchiveNetwork = permissionlessArchiveNetwork
+  if (permissionlessArchiveNetwork) {
+    lifecycle.ownResource('permissionless archive network', permissionlessArchiveNetwork, 'close', 5000)
+  }
   ctx.trustedRelayKeys = Array.isArray(network.trustedRelayKeys) ? network.trustedRelayKeys.slice() : []
   ctx.refreshTrustedRelayKeys = async () => ctx.trustedRelayKeys
-  ctx.blindPeering = { enabled: false, addMirrorKeys: () => 0, close: async () => {} }
 
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
@@ -657,21 +517,19 @@ export async function createBackendContext(config) {
     ctx.personal = null
     await personalManager.setActive(pk)
   }
-  installOwnedContentPublicationIdentityHooks({
-    ctx,
+  const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({
     identityManager,
-    publicFeed,
-    refreshActivePersonalStore,
-    refreshSeedPinClientAuth: options =>
-      ctx.seedPinRegistration?.refreshClientAuth?.(options),
-    log: console,
+    onMutation: async () => {
+      await refreshActivePersonalStore()
+      await ctx.seedPinRegistration?.refreshClientAuth?.()
+    },
   })
+  lifecycle.own('identity mutation hooks', removeIdentityMutationHooks, 2000)
 
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
     identityManager,
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath),
     isCacheClearBlocked: isPlaybackActive,
-    blindPeering: ctx.blindPeering,
     metaSubspaces: ctx.metaSubspaces
   });
   lifecycle.own('seeding manager', async () => {
@@ -680,20 +538,6 @@ export async function createBackendContext(config) {
     await seedingManager.flushSeedPersist?.()
   }, 2000)
 
-  // Feed discovery: when a relay-serving feed entry advertises its blind-peer
-  // mirror key, adopt it as a mirror and re-mirror retained content to it.
-  if (ctx.blindPeering?.enabled) {
-    publicFeed.setOnRelayMirrorKey((mirrorKeyHex) => {
-      try {
-        if (ctx.blindPeering.addMirrorKeys(mirrorKeyHex) > 0) {
-          console.log('[Orchestrator] Adopted blind-peer mirror from feed:', mirrorKeyHex.slice(0, 16))
-          seedingManager.remirrorAllSeeds()
-        }
-      } catch (err) {
-        console.warn('[Orchestrator] Mirror adoption failed:', err?.message)
-      }
-    })
-  }
 
   // Keep a single playing video from filling the disk: trim already-played
   // blocks behind a bounded seek-back window while it streams. Unlike the
@@ -714,43 +558,20 @@ export async function createBackendContext(config) {
   ctx.playbackForwardFill = playbackForwardFill;
   ctx.registerCleanup?.('playback forward fill stop', () => playbackForwardFill.stop?.(), { timeoutMs: 1000 })
 
-  const uploadManager = createUploadManager({ ctx });
+  const uploadManager = createUploadManager({
+    ctx,
+    catalogRegistry,
+    mediaCatalogProjection,
+    scopedNetwork,
+    deviceKeyPair
+  });
   lifecycle.ownResource('upload manager', uploadManager)
 
-  // Phase 3: Wire up callbacks
-  if (onFeedUpdate) {
-    publicFeed.setOnFeedUpdate(onFeedUpdate);
-  }
-  publicFeed.setOnFeedConnectionOpen(() => {
-    startupGate.noteFeedChannelOpen()
-  })
-  publicFeed.setOnFeedSync(() => {
-    startupGate.noteFeedSync()
-  })
 
   if (onStatsUpdate) {
     videoStats.setOnStatsUpdate(onStatsUpdate);
   }
 
-  // Phase 4: Wire up swarm connection handling
-  ctx.swarm.on('peer', (peer, topic) => {
-    try {
-      const handled = publicFeed.handleDiscoveredPeer(peer, topic)
-      if (handled) startupGate.noteSwarmPeer()
-    } catch (err) {
-      console.error('[Orchestrator] publicFeed.handleDiscoveredPeer failed:', err?.message)
-    }
-  })
-
-  ctx.swarm.on('connection', (conn, info) => {
-    console.log('[Orchestrator] Swarm connection received, passing to publicFeed.handleConnection');
-    startupGate.noteSwarmPeer()
-    try {
-      publicFeed.handleConnection(conn, info);
-    } catch (err) {
-      console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
-    }
-  });
 
   ipcLog('[orchestrator] seedingManager.init starting')
   await appendDebugLine('[orchestrator] seedingManager.init starting')
@@ -795,24 +616,17 @@ export async function createBackendContext(config) {
   // failure here must not block backend startup.
   await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
 
-  // Phase 6: Create unified API before feed start so the initial HAVE_FEED
-  // exchange can already include local availability hints and serving manifests.
+  // Phase 6: Create the universal API over the single scoped P2P runtime.
   const api = createApi({
     ctx,
-    publicFeed,
     seedingManager,
-    videoStats
+    videoStats,
+    operability: config.operability,
+    catalogRegistry,
+    scopedNetwork,
+    permissionlessArchiveNetwork,
   });
 
-  if (typeof api.getAvailabilityHints === 'function') {
-    publicFeed.setAvailabilityHintProvider((requests, conn) => api.getAvailabilityHints(requests, conn))
-  }
-  if (typeof api.getFeedSnapshotEntries === 'function') {
-    publicFeed.setFeedSnapshotProvider((entries) => api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
-  }
-  if (typeof api.getChannelSignedDescriptor === 'function') {
-    publicFeed.setSignedDescriptorProvider((driveKey) => api.getChannelSignedDescriptor(driveKey))
-  }
 
   // Sender auth requires the stored descriptor proof, so backfill completes
   // before seed-pin registration and discovery.
@@ -823,48 +637,41 @@ export async function createBackendContext(config) {
     ipcLog('[orchestrator] descriptor backfill failed: ' + (err?.message || err))
   }
 
-  let seedPinStartup
+  let seedPinRegistration
   try {
-    seedPinStartup = await startBackendSeedPinBeforeDiscovery({
+    seedPinRegistration = await startBackendSeedPin({
       ctx,
       identityManager,
-      publicFeed,
       seedPin,
     })
   } catch (error) {
     await shutdownBackend(ctx).catch(() => {})
     throw error
   }
-  const seedPinRegistration = seedPinStartup.registration
   ctx.registerCleanup?.('seed-pin unregister', async () => {
     const registration = ctx.seedPinRegistration
     await registration?.unregister?.()
     if (ctx.seedPinRegistration === registration) ctx.seedPinRegistration = null
   }, { timeoutMs: 2000 })
-  const publicFeedStartPromise = seedPinStartup.discovery
 
-
-  // Registration is live before discovery. A discovery failure first tears down
-  // seed-pin, then the remaining runtime, so no mux/listener/store resources leak.
-  try {
-    await publicFeedStartPromise
-  } catch (error) {
-    await shutdownBackend(ctx).catch(() => {})
-    throw error
-  }
-  await appendDebugLine('[orchestrator] publicFeed.start done')
-  ipcLog('[orchestrator] publicFeed.start done')
+  // The marker is the durable readiness commit. Keep it last: identities,
+  // managers, migrations, seed-pin, and discovery must all initialize before a
+  // later host is allowed to treat this state as fully written by this version.
+  ctx.storedProtocol?.commit()
 
   // Return result - heavy channel warming happens in background
   const result = {
     ctx,
     api,
-    publicFeed,
+    scopedNetwork,
     seedingManager,
     videoStats,
     identityManager,
     personalManager,
     uploadManager,
+    mediaCatalogProjection,
+    archiveStore,
+    permissionlessArchiveNetwork,
     seedPin: seedPinRegistration,
     seedPinClients: seedPinRegistration?.clients || null,
     async destroy() {
@@ -882,8 +689,7 @@ export async function createBackendContext(config) {
   ipcLog('[orchestrator] ===== BACKEND READY =====')
   console.log('[Orchestrator] Identities loaded:', identityManager.getIdentities().length);
 
-  // Phase 8: Heavy initialization in background (non-blocking)
-  // Drive warming and feed discovery can happen after UI is ready
+  // Phase 8: Heavy local initialization in background (non-blocking).
   lifecycle.defer('backend warm-up', async (signal) => {
     // Early return if shutdown was initiated during deferred init setup
     if (signal.aborted || isContextShuttingDown(ctx)) {
@@ -898,7 +704,7 @@ export async function createBackendContext(config) {
     try {
       const startupMilestones = await startupGate.waitUntilOpen({ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS })
       if (!startupMilestones) {
-        console.log('[Orchestrator] publicFeed startup gate timed out; continuing backend warmup offline')
+        console.log('[Orchestrator] scoped-network startup gate timed out; continuing backend warmup offline')
       } else {
         console.log('[Orchestrator] Startup gate opened, beginning deferred warm-up')
       }
@@ -918,21 +724,8 @@ export async function createBackendContext(config) {
         console.error('[Orchestrator] Identity background init error:', e?.message)
       }
       if (signal.aborted) return
-      const publicationReconciliation = await reconcileOwnedContentPublications({
-        ctx,
-        identityManager,
-        publicFeed,
-        log: console,
-      }).catch((err) => {
-        console.warn('[Orchestrator] Owned-channel startup reconciliation failed:', err?.message || err)
-        return null
-      })
-      if (publicationReconciliation) {
-        ipcLog('[orchestrator] canonical reconciliation: ' + JSON.stringify(publicationReconciliation))
-      }
-
-      // Start public feed discovery
-      // Warm subscribed / pinned / seeding channels (can be slow)
+      // Warm local subscribed / pinned / seeding channels without opening
+      // unverified remote cores; scoped retention is explicit through the API.
       if (signal.aborted || isContextShuttingDown(ctx)) return
       try {
         const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
@@ -942,29 +735,6 @@ export async function createBackendContext(config) {
         const seeds = seedingManager.getActiveSeeds?.() || []
         const seedKeys = seeds.map((s) => s.driveKey).filter(Boolean) || []
 
-        // Restore old relay-like serving behavior for normal clients: persisted
-        // watched/seeded entries retain their blob-core discovery immediately,
-        // without waiting for full channel hydration.
-        for (const seed of seeds) {
-          if (signal.aborted) return
-          if (seed?.blobsCoreKey && ctx.store) {
-            try {
-              const core = ctx.store.get(Buffer.from(seed.blobsCoreKey, 'hex'))
-              ctx.ownResource?.(`seed blob core ${seed.blobsCoreKey.slice(0, 16)}`, core, 'close')
-              await core?.ready?.()
-              if (signal.aborted) return
-              if (core?.discoveryKey) retainSwarmDiscovery(ctx, core.discoveryKey, { label: `seed:${seed.blobsCoreKey.slice(0, 16)}` })
-            } catch {
-              // Discovery retention is best-effort during startup warmup.
-            }
-          }
-          if (seed?.publicBeeKey) {
-            await retainPublicBeeContentDiscovery(ctx, seed.publicBeeKey, {
-              label: `seed:${seed.driveKey?.slice?.(0, 16) || 'channel'}`
-            })
-            if (signal.aborted) return
-          }
-        }
 
         await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds')
         // Skip prefetch - it was causing errors and slowing things down

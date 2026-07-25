@@ -40,7 +40,7 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
     (totalBlocks > 0 && downloadedBlocks >= totalBlocks) ||
     (totalBytes > 0 && downloadedBytes >= totalBytes)
   )
-  const hasPlayableProgress = hasDownloadedBytes || hasDownloadedBlocks || Number(stats?.progress ?? 0) > 0
+  const hasPlayableProgress = downloadSpeed > 0
   const hasProgressDetails = hasBytes || hasBlocks || isCached
 
   const getStatusLine = (): string => {

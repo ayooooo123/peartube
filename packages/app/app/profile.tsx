@@ -20,13 +20,21 @@ import * as Clipboard from 'expo-clipboard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import DiagnosticsPanel from '@/components/native-diagnostics/DiagnosticsPanel'
+import StorageOperabilityDetails from '@/components/StorageOperabilityDetails'
 import { NativeSwitch } from '@/components/native-ui'
 import { useApp, colors } from './_layout'
 import { GlassCard, SectionHeader } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
+import {
+  buildStorageLimitConfirmationCopy,
+  runStorageLimitChange,
+  type ArchiveOperatorStatus,
+  type StorageCategoryStats,
+  type StorageLimitPreview,
+} from '@/lib/storage-operability.js'
 
-interface StorageStats {
+interface StorageStats extends StorageCategoryStats {
   usedBytes: number
   maxBytes: number
   usedGB: string
@@ -42,6 +50,19 @@ interface StorageStats {
   untrackedStorageGB?: string
 }
 
+interface ArchiveParticipationStatus {
+  success: boolean
+  enabled: boolean
+  capacityBytes: number
+  maxRequestBytes: number
+  reservedBytes: number
+  availableBytes: number
+  acceptedRequests: number
+  receivedPledges: number
+  acceptancePermille: number
+  errorCode?: string | null
+}
+
 interface TranscodeSettings {
   videoToolboxDecodeEnabled: boolean
   videoToolboxDecodeLocked?: boolean
@@ -53,12 +74,20 @@ interface TranscodeSettings {
   videoToolboxHwMapSource?: string
 }
 
+function formatArchiveBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB'
+  const gib = bytes / GIB
+  return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GB`
+}
+
 /** Network-support presets are cache budgets — the knob that actually feeds peers. */
 const SUPPORT_PRESETS: Array<{ label: string; gb: number; blurb: string }> = [
   { label: 'Light', gb: 5, blurb: 'Host a little for the network' },
   { label: 'Balanced', gb: 20, blurb: 'A solid contribution' },
   { label: 'Generous', gb: 50, blurb: 'Keep lots of videos alive' },
 ]
+
+const GIB = 1024 ** 3
 
 function notify(title: string, message?: string) {
   if (Platform.OS === 'web') {
@@ -79,6 +108,18 @@ function confirmDestructive(title: string, message: string, confirmLabel: string
   ])
 }
 
+function requestStorageLimitConfirmation(title: string, message: string): Promise<boolean> {
+  if (Platform.OS === 'web') {
+    return Promise.resolve(typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`))
+  }
+  const { promise, resolve } = Promise.withResolvers<boolean>()
+  Alert.alert(title, message, [
+    { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+    { text: 'Reduce and evict', style: 'destructive', onPress: () => resolve(true) },
+  ])
+  return promise
+}
+
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -92,11 +133,12 @@ export default function ProfileScreen() {
   const [restoreOpen, setRestoreOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [storageLimitPreview, setStorageLimitPreview] = useState<StorageLimitPreview | null>(null)
   const [customStorageLimit, setCustomStorageLimit] = useState('')
   const [storageLimitSaving, setStorageLimitSaving] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
-  const [isPublished, setIsPublished] = useState(false)
-  const [publishLoading, setPublishLoading] = useState(false)
+  const [archiveParticipation, setArchiveParticipation] = useState<ArchiveParticipationStatus | null>(null)
+  const [archiveParticipationSaving, setArchiveParticipationSaving] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   // Devices
@@ -116,18 +158,8 @@ export default function ProfileScreen() {
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [swarmStatus, setSwarmStatus] = useState<any | null>(null)
   const [seedingStatus, setSeedingStatus] = useState<any | null>(null)
+  const [archiveOperatorStatus, setArchiveOperatorStatus] = useState<ArchiveOperatorStatus | null>(null)
 
-  const checkPublishStatus = useCallback(async () => {
-    if (!rpc || !identity?.driveKey) return
-    try {
-      const result = await rpc.isChannelPublished()
-      setIsPublished(result.published)
-    } catch (err) {
-      console.error('[Profile] Failed to check publish status:', err)
-    }
-  }, [rpc, identity?.driveKey])
-
-  useEffect(() => { checkPublishStatus() }, [checkPublishStatus])
 
   const loadStorageStats = useCallback(async () => {
     if (!rpc) return
@@ -142,16 +174,31 @@ export default function ProfileScreen() {
 
   useEffect(() => { loadStorageStats() }, [loadStorageStats])
 
+  const loadArchiveParticipation = useCallback(async () => {
+    if (!rpc || typeof rpc.getArchiveParticipation !== 'function') return
+    try {
+      const status = await rpc.getArchiveParticipation()
+      setArchiveParticipation(status || null)
+    } catch (err) {
+      console.error('[Profile] Failed to load archive participation:', err)
+      setArchiveParticipation(null)
+    }
+  }, [rpc])
+
+  useEffect(() => { loadArchiveParticipation() }, [loadArchiveParticipation])
+
   const loadDiagnostics = useCallback(async () => {
     if (!rpc) return
     setDiagnosticsLoading(true)
     try {
-      const [swarm, seeding] = await Promise.all([
-        typeof (rpc as any)?.getSwarmStatus === 'function' ? (rpc as any).getSwarmStatus() : Promise.resolve(null),
-        typeof (rpc as any)?.getSeedingStatus === 'function' ? (rpc as any).getSeedingStatus() : Promise.resolve(null),
+      const [swarm, seeding, operatorStatus] = await Promise.all([
+        typeof rpc.getSwarmStatus === 'function' ? rpc.getSwarmStatus().catch(() => null) : Promise.resolve(null),
+        typeof rpc.getSeedingStatus === 'function' ? rpc.getSeedingStatus().catch(() => null) : Promise.resolve(null),
+        typeof rpc.getArchiveOperatorStatus === 'function' ? rpc.getArchiveOperatorStatus().catch(() => null) : Promise.resolve(null),
       ])
       setSwarmStatus(swarm || null)
       setSeedingStatus(seeding || null)
+      setArchiveOperatorStatus(operatorStatus || null)
     } catch (err) {
       console.error('[Profile] Failed to load diagnostics:', err)
     } finally {
@@ -253,19 +300,44 @@ export default function ProfileScreen() {
     }
   }
 
-  const handleStorageLimitChange = async (newLimit: number) => {
+  const applyStorageLimit = async (boundedLimit: number) => {
     if (!rpc) return
+    const result = await rpc.setStorageLimit(boundedLimit)
+    if (result?.success === false) throw new Error('Failed to set storage limit')
+  }
+
+  const handleStorageLimitChange = async (newLimit: number) => {
+    if (!rpc || !storageStats) return
     const boundedLimit = Math.max(1, Math.min(100, Math.round(newLimit)))
+    const requestedMaxBytes = boundedLimit * GIB
     setCustomStorageLimit(String(boundedLimit))
     setStorageLimitSaving(true)
+
     try {
-      const result = await rpc.setStorageLimit(boundedLimit)
-      if (result?.success === false) throw new Error('Failed to set storage limit')
+      const result = await runStorageLimitChange({
+        currentMaxBytes: storageStats.maxBytes,
+        requestedMaxBytes,
+        previewStorageLimit: (request) => rpc.previewStorageLimit(request),
+        confirm: (previewView) => requestStorageLimitConfirmation(
+          `Reduce cache budget to ${boundedLimit} GB?`,
+          buildStorageLimitConfirmationCopy(previewView),
+        ),
+        apply: () => applyStorageLimit(boundedLimit),
+      })
+      setStorageLimitPreview(result.preview)
+
+      if (result.status === 'blocked') {
+        notify('Limit cannot be applied', result.previewView?.summary || 'Safe eviction could not be verified.')
+        return
+      }
+      if (result.status === 'cancelled') return
+
       await loadStorageStats()
+      setStorageLimitPreview(null)
       haptics.success()
-    } catch (err: any) {
-      console.error('[Profile] Failed to set storage limit:', err)
-      notify('Error', err?.message || 'Failed to set storage limit')
+    } catch (err: unknown) {
+      console.error('[Profile] Failed to update storage limit:', err)
+      notify('Limit not changed', err instanceof Error ? err.message : 'Safe eviction could not be verified.')
       await loadStorageStats()
     } finally {
       setStorageLimitSaving(false)
@@ -280,6 +352,31 @@ export default function ProfileScreen() {
       return
     }
     await handleStorageLimitChange(parsed)
+  }
+
+  const handleArchiveParticipationChange = async (enabled: boolean) => {
+    if (!rpc || typeof rpc.setArchiveParticipation !== 'function' || archiveParticipationSaving) return
+    const defaultCapacity = Math.max(GIB, Math.min(storageStats?.maxBytes || (5 * GIB), 5 * GIB))
+    const capacityBytes = archiveParticipation?.capacityBytes || defaultCapacity
+    const maxRequestBytes = Math.min(archiveParticipation?.maxRequestBytes || capacityBytes, capacityBytes)
+    const acceptancePermille = archiveParticipation?.acceptancePermille ?? 250
+    setArchiveParticipationSaving(true)
+    try {
+      const status = await rpc.setArchiveParticipation({
+        enabled,
+        capacityBytes,
+        maxRequestBytes,
+        acceptancePermille,
+      })
+      if (!status?.success) throw new Error(status?.errorCode || 'Archive participation is unavailable')
+      setArchiveParticipation(status)
+      haptics.success()
+    } catch (err: unknown) {
+      notify('Archive setting not changed', err instanceof Error ? err.message : 'The backend rejected this setting.')
+      await loadArchiveParticipation()
+    } finally {
+      setArchiveParticipationSaving(false)
+    }
   }
 
   const handleClearCache = () => {
@@ -342,14 +439,11 @@ export default function ProfileScreen() {
       const newIdentity = await createIdentity(newName.trim())
       setNewName('')
       // The recovery phrase is derived at creation and never persisted by the
-      // backend — this is the only chance to show it. The publish prompt waits
-      // until the user confirms they saved it.
+      // backend — this is the only chance to show it.
       const phrase = newIdentity?.seedPhrase
       if (typeof phrase === 'string' && phrase.trim().length > 0) {
         setRecoveryPhrase(phrase.trim())
-        return
       }
-      promptPublishNewChannel()
     } catch (err: any) {
       notify('Error', err.message || 'Failed to create channel')
     } finally {
@@ -357,28 +451,6 @@ export default function ProfileScreen() {
     }
   }
 
-  const promptPublishNewChannel = () => {
-    if (!rpc || Platform.OS === 'web') return
-    Alert.alert(
-      'Share your channel?',
-      'Add your channel to the public feed so others can discover it. You can keep it private if you prefer.',
-      [
-        { text: 'Keep private', style: 'cancel' },
-        {
-          text: 'Publish',
-          onPress: async () => {
-            try {
-              const result = await rpc.submitToFeed({})
-              if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
-              setIsPublished(true)
-            } catch (err) {
-              console.error('Failed to publish to feed:', err)
-            }
-          },
-        },
-      ]
-    )
-  }
 
   const confirmRecoveryPhraseSaved = () => {
     confirmDestructive(
@@ -387,7 +459,6 @@ export default function ProfileScreen() {
       "I've saved it",
       () => {
         setRecoveryPhrase(null)
-        promptPublishNewChannel()
       }
     )
   }
@@ -421,43 +492,6 @@ export default function ProfileScreen() {
     }
   }
 
-  const togglePublish = () => {
-    if (!identity?.driveKey || !rpc) return
-    if (isPublished) {
-      confirmDestructive(
-        'Unpublish channel',
-        'Your channel will no longer be discoverable on the public feed.',
-        'Unpublish',
-        async () => {
-          setPublishLoading(true)
-          try {
-            await rpc.unpublishFromFeed()
-            setIsPublished(false)
-          } catch (err) {
-            console.error('Failed to unpublish:', err)
-            notify('Error', 'Failed to unpublish channel')
-          } finally {
-            setPublishLoading(false)
-          }
-        }
-      )
-    } else {
-      setPublishLoading(true)
-      ;(async () => {
-        try {
-          const result = await rpc.submitToFeed()
-          if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
-          setIsPublished(true)
-          haptics.success()
-        } catch (err) {
-          console.error('Failed to publish:', err)
-          notify('Error', 'Failed to publish channel')
-        } finally {
-          setPublishLoading(false)
-        }
-      })()
-    }
-  }
 
   // The budget tracks cache fetched from the network (seeded content). The
   // user's own uploads live in the same store but are never charged against
@@ -561,6 +595,7 @@ export default function ProfileScreen() {
                 swarmStatus={swarmStatus}
                 storageStats={storageStats}
                 seedingStatus={seedingStatus}
+                operatorStatus={archiveOperatorStatus}
                 loading={diagnosticsLoading}
                 onRefresh={loadDiagnostics}
               />
@@ -622,6 +657,7 @@ export default function ProfileScreen() {
             <>
               <Feather name="rotate-ccw" size={15} color={colors.text} />
               <Text style={styles.secondaryLabel}>Restore channel</Text>
+
             </>
           )}
         </Pressable>
@@ -674,6 +710,8 @@ export default function ProfileScreen() {
           </View>
         ) : null}
 
+        <StorageOperabilityDetails stats={storageStats} preview={storageLimitPreview} />
+
         <View style={styles.presetRow}>
           {SUPPORT_PRESETS.map((preset) => {
             const selected = currentGB === preset.gb
@@ -717,6 +755,36 @@ export default function ProfileScreen() {
           </Text>
         ) : null}
 
+        <View style={styles.archiveParticipation}>
+          <View style={styles.archiveParticipationCopy}>
+            <View style={styles.archiveTitleRow}>
+              <Feather name="archive" size={14} color={archiveParticipation?.enabled ? colors.swarm : colors.textMuted} />
+              <Text style={styles.archiveTitle}>Volunteer archive</Text>
+            </View>
+            <Text style={styles.archiveDescription}>
+              Randomly accept complete-copy requests from publishers. No allowlist or operator account required.
+            </Text>
+            <Text style={styles.archiveStatus}>
+              {typeof rpc?.getArchiveParticipation !== 'function'
+                ? 'Unavailable in this backend'
+                : !archiveParticipation
+                  ? 'Loading archive status…'
+                  : !archiveParticipation.success
+                    ? `Unavailable · ${archiveParticipation.errorCode || 'backend rejected status'}`
+                    : archiveParticipation.enabled
+                      ? `${formatArchiveBytes(archiveParticipation.reservedBytes)} pledged of ${formatArchiveBytes(archiveParticipation.capacityBytes)} · ${archiveParticipation.acceptedRequests} accepted`
+                      : 'Off · no new archive requests will be accepted'}
+            </Text>
+          </View>
+          <NativeSwitch
+            value={archiveParticipation?.enabled === true}
+            onValueChange={handleArchiveParticipationChange}
+            disabled={!archiveParticipation?.success || archiveParticipationSaving}
+            trackColor={{ false: colors.border, true: colors.primary }}
+            thumbColor={colors.text}
+          />
+        </View>
+
         <Pressable
           onPress={handleClearCache}
           disabled={clearingCache}
@@ -743,10 +811,6 @@ export default function ProfileScreen() {
             </View>
             <View style={{ flex: 1, marginLeft: 14 }}>
               <Text style={styles.identityName} numberOfLines={1}>{identity.name}</Text>
-              <View style={styles.publishRow}>
-                <View style={[styles.publishDot, { backgroundColor: isPublished ? colors.primary : colors.textDisabled }]} />
-                <Text style={styles.publishLabel}>{isPublished ? 'On the public feed' : 'Private channel'}</Text>
-              </View>
             </View>
           </View>
 
@@ -764,16 +828,6 @@ export default function ProfileScreen() {
             </Pressable>
           </View>
 
-          <Pressable
-            onPress={togglePublish}
-            disabled={publishLoading}
-            style={[styles.ghostButton, publishLoading && { opacity: 0.6 }]}
-          >
-            <Feather name={isPublished ? 'eye-off' : 'globe'} size={14} color={isPublished ? colors.textMuted : colors.primary} />
-            <Text style={[styles.ghostLabel, !isPublished && { color: colors.primary }]}>
-              {publishLoading ? 'Updating…' : isPublished ? 'Unpublish from public feed' : 'Publish to public feed'}
-            </Text>
-          </Pressable>
         </GlassCard>
 
         {/* Devices */}
@@ -879,6 +933,17 @@ export default function ProfileScreen() {
           </GlassCard>
         )}
 
+        <GlassCard padded={false} style={styles.sectionCard}>
+          <Pressable onPress={() => router.push('/maintenance')} style={styles.advancedToggle} accessibilityRole="button">
+            <Feather name="archive" size={15} color={colors.textMuted} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.advancedLabel}>Maintenance & portable backup</Text>
+              <Text style={styles.cardMeta}>Migration status, reports, export, and restore</Text>
+            </View>
+            <Feather name="chevron-right" size={17} color={colors.textMuted} />
+          </Pressable>
+        </GlassCard>
+
         {/* Storage / network support */}
         <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
         {renderStorageCard()}
@@ -940,6 +1005,7 @@ export default function ProfileScreen() {
                   swarmStatus={swarmStatus}
                   storageStats={storageStats}
                   seedingStatus={seedingStatus}
+                  operatorStatus={archiveOperatorStatus}
                   loading={diagnosticsLoading}
                   onRefresh={loadDiagnostics}
                 />
@@ -1264,6 +1330,40 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     marginTop: 12,
+  },
+  archiveParticipation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.glassBorder,
+  },
+  archiveParticipationCopy: {
+    flex: 1,
+  },
+  archiveTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  archiveTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  archiveDescription: {
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 5,
+  },
+  archiveStatus: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 7,
   },
   advancedToggle: {
     flexDirection: 'row',

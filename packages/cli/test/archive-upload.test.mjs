@@ -39,7 +39,7 @@ function harness () {
       },
       async setThumbnailFromBuffer () { return { success: false } }
     },
-    api: { submitToFeed: async () => ({ success: true }) },
+    api: {},
     runtime: {},
     fs: {}
   })

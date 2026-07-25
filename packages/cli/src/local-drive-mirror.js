@@ -366,8 +366,8 @@ export async function mirrorLocalDriveToRelayChannel({
 
   for (const channelInfo of channelInfoByKey.values()) {
     if (channelInfo.previewVideos.length > 0) {
-      await publisher.publishChannel(channelInfo, { previewVideos: channelInfo.previewVideos })
-      await publisher.seedChannel({ ...channelInfo, previewVideos: channelInfo.previewVideos })
+      await publisher.publishCatalog(channelInfo)
+      await publisher.retainAssets({ ...channelInfo, previewVideos: channelInfo.previewVideos })
     }
   }
 

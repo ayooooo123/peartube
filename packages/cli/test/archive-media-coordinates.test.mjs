@@ -27,15 +27,15 @@ function harness () {
   const channelStub = { blobs: {}, publicBeeKey: 'pb1', getMetadata: async () => ({}) }
   const publisher = createArchivePublisher({
     identityManager: {
-      getActiveIdentity: () => ({ driveKey: 'ck1', channelKey: 'ck1' }),
+      getActiveIdentity: () => ({ publicKey: 'publisher-1', driveKey: 'ck1', channelKey: 'ck1' }),
       getActiveChannel: async () => channelStub
     },
     uploadManager: {
       async uploadFromPath (channel, filePath, options) { calls.upload.push(options); return { success: true, videoId: 'v1', metadata: {} } },
       async setThumbnailFromBuffer () { return { success: false } }
     },
-    api: { submitToFeed: async () => ({ success: true }) },
-    runtime: {},
+    api: {},
+    runtime: { publishPublisherCatalog: async () => ({ status: 'published' }) },
     fs: {}
   })
   const manager = createArchiveManager({ store, downloader, publisher })

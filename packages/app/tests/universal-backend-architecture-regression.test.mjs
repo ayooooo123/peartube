@@ -18,7 +18,7 @@ test('top-level developer docs describe the current universal backend architectu
   const agents = readWorkspaceFile('AGENTS.md')
 
   for (const source of [readme, agents]) {
-    assert.match(source, /universal backend/i)
+    assert.match(source, /(?:universal backend|shared backend contract)/i)
     assert.match(source, /@peartube\/host/)
     assert.match(source, /Electrobun/)
     assert.doesNotMatch(source, /pear-src/)
@@ -47,5 +47,5 @@ test('shared protocol exposes network status for universal clients', () => {
   assert.match(platformBridge, /networkStatus/)
   assert.match(backendRuntime, /swarmListenResolved/)
   assert.match(schema, /swarmListenResolved/)
-  assert.match(schema, /feedEntries/)
+  assert.doesNotMatch(schema, /feedEntries|feedConnections|directPeerDial/)
 })

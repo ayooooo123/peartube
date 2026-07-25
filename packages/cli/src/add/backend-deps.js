@@ -2,13 +2,8 @@ import fs from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import b4a from 'b4a'
 import { loadChannel } from '@peartube/backend/storage'
 import { deriveImportClaimantId } from '@peartube/backend/structured-content'
-import { createContentPublication } from '@peartube/backend/content-publication'
-import { createContentReplication } from '@peartube/backend/content-replication'
-import { resolveSeedPinClientAuth } from '@peartube/backend/seed-pin'
-import { assessDurableManifest } from '@peartube/backend/api'
 import { createYtDlpDownloader } from '../archive-manager.js'
 import { fingerprintFile } from './bulk/source-scanner.js'
 import { itemIdentity } from './duplicate-check.js'
@@ -21,9 +16,7 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
   const ctx = runtime.ctx
   const identityManager = runtime.identityManager
   const uploadManager = runtime.uploadManager
-  const publicFeed = runtime.publicFeed
   let channelRef = null
-  let publication = null
 
   async function ensureChannel () {
     if (channelRef) return channelRef
@@ -50,10 +43,6 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
 
   function channelHandle (channel) {
     return channel && channel._channel ? channel._channel : channelRef
-  }
-  async function publicationFor (channel) {
-    if (!publication) publication = createContentPublication({ channel, publicFeed })
-    return publication
   }
 
   return {
@@ -131,7 +120,6 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
         videoId,
         title: item.title || 'Untitled',
         description: item.description || '',
-        publicationState: 'replicationPending',
         contentKind: item.contentKind || 'video',
         sourceProvider: item.sourceProvider || 'local',
         sourceVideoId: item.sourceVideoId || videoId,
@@ -150,97 +138,48 @@ export function createBackendExecutorDeps ({ runtime, jobStore, preferences, fet
     },
 
     async requestPin () {
-      // Pinning + durability are driven by awaitDurable via content replication.
+      // Retention is authorized by the immutable publication manifest below.
     },
 
     async awaitDurable ({ channel, videoId }) {
-      const trusted = preferences.network?.trustedRelayKeys || []
-      if (trusted.length === 0) {
-        emitProgress('No trusted relay configured; keeping the draft local (replicationPending).')
-        return { verified: false }
-      }
       const ch = channelHandle(channel)
       const video = await ch.getVideo(videoId)
-      if (!video || !video.blobId || !video.blobsCoreKey) {
-        emitProgress('Uploaded video record is missing blob refs; staying replicationPending.')
+      const publication = video?.immutablePublication
+      if (!publication?.manifest || !publication?.renditionId) {
+        emitProgress('Uploaded video is missing its authenticated rendition manifest.')
         return { verified: false }
       }
-      const [blockOffset, blockLength, , byteLength] = String(video.blobId).split(':').map(Number)
-      const refs = [{ coreKey: video.blobsCoreKey, start: blockOffset, end: blockOffset + blockLength, kind: 'media' }]
-      const assets = { media: [0], thumbnail: null, artwork: { avatar: null, poster: null, banner: null, backdrop: null } }
-
-      const auth = await resolveSeedPinClientAuth({ ctx, identityManager }).catch(() => null)
-      const deviceProof = auth?.deviceProof
-      const signedDescriptor = auth?.signedDescriptor
-      if (!deviceProof || !signedDescriptor) {
-        emitProgress('Active identity device proof/descriptor unavailable; staying replicationPending.')
-        return { verified: false }
-      }
-
-      const checkpointKey = `content-add/v1/replication/${ch.keyHex}/${videoId}`
-      const publicationInstance = await publicationFor(ch)
-      const replication = createContentReplication({
-        publication: publicationInstance,
-        clients: runtime.seedPinClients instanceof Map ? runtime.seedPinClients : new Map(),
-        assessDurability: assessDurableManifest,
-        assessmentDeps: { store: ctx.store },
-        getTrustedRelayKeys: () => trusted,
-        getPairedDeviceKeys: () => [],
-        async readCheckpoint () { return (await ctx.metaDb.get(checkpointKey))?.value || null },
-        async writeCheckpoint (next, { expectedRevision }) {
-          const current = (await ctx.metaDb.get(checkpointKey))?.value || null
-          if ((current?.revision ?? null) !== expectedRevision) return false
-          await ctx.metaDb.put(checkpointKey, next)
-          return next
-        },
-        ordinaryRequired: 2,
-        maxClients: 8,
-        operationTimeoutMs: 30_000
+      const retained = await runtime.api.retainAuthorizedRendition({
+        manifest: publication.manifest,
+        renditionId: publication.renditionId
       })
-
-      const replicationInput = {
-        channelKey: ch.keyHex,
-        rowId: videoId,
-        refs,
-        assets,
-        totalBytes: Number.isSafeInteger(video.size) ? video.size : (Number.isSafeInteger(byteLength) ? byteLength : 1),
-        expiresAt: Date.now() + 10 * 60 * 1000,
-        deviceKeyPair: ctx.swarm.keyPair,
-        deviceProof,
-        signedDescriptor,
-        stagedDescriptor: signedDescriptor,
-        idempotencyKey: `content-add/${ch.keyHex}/${videoId}`
-      }
-
-      // Seed-pin runs over ctx.swarm connections; dial the trusted relays there
-      // (blind-peering uses a separate channel) so seedPinClients populates.
-      for (const key of trusted) {
-        try { ctx.swarm.joinPeer(b4a.from(key, 'hex')) } catch {}
-      }
-      emitProgress('Requesting durable pin from trusted relay…')
-      const deadline = Date.now() + 120_000
-      let attempts = 0
-      while (Date.now() < deadline) {
-        attempts += 1
-        let result
-        try {
-          result = await replication.replicate(replicationInput)
-        } catch (error) {
-          emitProgress(`Replication attempt failed: ${error.message}`)
-          return { verified: false }
-        }
-        if (result.status === 'published') return { verified: true, published: true }
-        emitProgress(`Awaiting durability (${result.status}, attempt ${attempts})…`)
-        await delay(2000)
-      }
-      return { verified: false }
+      const verified = retained?.status === 'retained' || retained?.status === 'already-retained'
+      if (verified) emitProgress('Authenticated rendition retained by the universal backend.')
+      return { verified, holders: verified ? ['local-authorized-retention'] : [] }
     },
 
     publication: {
-      async markDurabilityVerified (videoId) { return (await publicationFor(channelRef)).markDurabilityVerified(videoId) },
-      async project (input) { return (await publicationFor(channelRef)).project(input) },
-      async announce (input) { return (await publicationFor(channelRef)).announce(input) },
-      async finalize (videoId) { return (await publicationFor(channelRef)).finalize(videoId) }
+      async markDurabilityVerified (videoId) {
+        return channelRef.getVideo(videoId)
+      },
+      async project ({ videoId }) {
+        const publicBeeKey = channelRef.publicBeeKey || await channelRef.getPublicBeeKey?.()
+        return { channelKey: channelRef.keyHex, publicBeeKey, videoId }
+      },
+      async announce ({ videoId }) {
+        const video = await channelRef.getVideo(videoId)
+        const publisherId = video?.immutablePublication?.publisherId ||
+          video?.immutablePublication?.manifest?.body?.publisherId
+        if (!publisherId) throw new Error('publisher identity is unavailable')
+        const result = await runtime.api.publishLocalPublisherCatalog({ publisherId })
+        if (result?.status !== 'published' && result?.status !== 'already-published') {
+          throw new Error(`publisher catalog publication failed: ${result?.status || 'unknown'}`)
+        }
+        return result
+      },
+      async finalize (videoId) {
+        return channelRef.getVideo(videoId)
+      }
     }
   }
 }
@@ -249,8 +188,4 @@ function pruneUndefined (object) {
   const out = {}
   for (const [key, value] of Object.entries(object)) if (value !== undefined) out[key] = value
   return out
-}
-
-function delay (ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }

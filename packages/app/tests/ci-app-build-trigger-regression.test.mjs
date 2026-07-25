@@ -19,7 +19,7 @@ function workflowHeader(workflow) {
   return workflow.slice(0, index)
 }
 
-test('app build workflows only run on relevant main-path changes or manual dispatch', () => {
+test('app build workflows stay path-filtered without schedules or tag duplication', () => {
   const workflows = [
     ['build-mobile', readFile('.github/workflows/build-mobile.yml')],
     ['build-desktop', readFile('.github/workflows/build-desktop.yml')],
@@ -28,11 +28,6 @@ test('app build workflows only run on relevant main-path changes or manual dispa
   for (const [name, workflow] of workflows) {
     const header = workflowHeader(workflow)
 
-    assert.doesNotMatch(
-      header,
-      /pull_request:/,
-      `${name} should not build apps for pull requests`,
-    )
     assert.doesNotMatch(
       header,
       /schedule:/,

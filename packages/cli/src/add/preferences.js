@@ -36,18 +36,13 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
     ['config', content.ytDlpCookiesPath]
   ])
 
-  // Trusted relays drive durable publication (seed-pin). Merge --relay flags,
-  // PEARTUBE_RELAYS env, and configured keys; blind-peer mirrors stay a separate
-  // list. normalizeHexList validates/dedupes downstream.
+  // Trusted relay public keys authenticate bounded seed-pin and catalog
+  // exchanges. Merge all configured sources, then validate and dedupe once.
   const configNetwork = (config && typeof config.network === 'object' && config.network) || {}
   const relayKeys = [
     ...asArray(flags.relay),
     ...splitList(env.PEARTUBE_RELAYS),
     ...asArray(configNetwork.trustedRelayKeys)
-  ]
-  const mirrorKeys = [
-    ...asArray(flags.blindPeer),
-    ...asArray(configNetwork.blindPeerMirrors)
   ]
   return {
     storagePath: expandHome(firstString([flags.storage, content.storagePath], ADD_PREFERENCE_DEFAULTS.storagePath)),
@@ -59,7 +54,7 @@ export function resolveAddPreferences ({ flags = {}, env = {}, config = {} } = {
     searchLimit: firstNumber([flags.searchLimit, content.searchLimit], ADD_PREFERENCE_DEFAULTS.searchLimit),
     claimRetentionDays: firstNumber([content.claimRetentionDays], ADD_PREFERENCE_DEFAULTS.claimRetentionDays),
     relayUi: firstString([flags.relayUi, env.PEARTUBE_RELAY_UI, content.relayUi], '') || null,
-    network: normalizeNetworkTrust({ trustedRelayKeys: relayKeys, blindPeerMirrors: mirrorKeys })
+    network: normalizeNetworkTrust({ trustedRelayKeys: relayKeys })
   }
 }
 
@@ -83,8 +78,7 @@ export function redactPreferences (prefs) {
 export function normalizeNetworkTrust (network = {}) {
   const source = network && typeof network === 'object' ? network : {}
   return {
-    trustedRelayKeys: normalizeHexList(source.trustedRelayKeys),
-    blindPeerMirrors: normalizeHexList(source.blindPeerMirrors)
+    trustedRelayKeys: normalizeHexList(source.trustedRelayKeys)
   }
 }
 

@@ -1,6 +1,11 @@
 import { PROTOCOL_EVENTS } from '@peartube/host/events'
 
-import type { PlatformLifecycleEvent, PlatformRunner, ProtocolClientLike } from './rpc.shared'
+import type {
+  PlatformLifecycleEvent,
+  PlatformRunner,
+  ProtocolClientLike,
+  PublisherSignerBridgeLike,
+} from './rpc.shared'
 
 type WebRunnerDependencies = {
   connectTransport(options: {
@@ -29,11 +34,21 @@ function createLifecycleController() {
   }
 }
 
+export function resolveWebPublisherSigner(
+  publisherSigner: PublisherSignerBridgeLike | null | undefined,
+  shellBridgeSigner: PublisherSignerBridgeLike | null | undefined,
+): PublisherSignerBridgeLike | null {
+  return publisherSigner != null && publisherSigner === shellBridgeSigner
+    ? publisherSigner
+    : null
+}
+
 export function createWebRunner(dependencies: WebRunnerDependencies): PlatformRunner {
   return {
     async start(options) {
       const lifecycle = createLifecycleController()
-      const transport = await dependencies.connectTransport(options)
+      const { publisherSigner, ...transportOptions } = options
+      const transport = await dependencies.connectTransport(transportOptions)
       const client = transport.client
 
       if (!client) {
@@ -59,6 +74,7 @@ export function createWebRunner(dependencies: WebRunnerDependencies): PlatformRu
       return {
         stream: transport.stream,
         client,
+        publisherSigner: publisherSigner ?? undefined,
         waitUntilReady() {
           return readyPromise
         },

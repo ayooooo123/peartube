@@ -1,137 +1,103 @@
-import assert from 'node:assert/strict'
+import test from 'brittle'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import test from 'brittle'
 
-import { createPublisherApi } from '../src/api/publisher.js'
+import { createPublisherKeyProvider } from '../src/publisher/index.js'
 import {
-  deriveRecordId,
-  deriveSigningDigest,
-  verifySignedEnvelope,
-} from '../src/records/index.js'
-import {
-  createPublisherKeyProvider,
-  MAX_PREPARED_ROOT_OPERATION_BYTES,
-} from '../src/publisher/key-provider.js'
+  prepareSignedEnvelope,
+  attachSignedEnvelopeSignature,
+  signedRecordSignaturePreimage
+} from '@peartube/backend/records'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const bytes = (length, seed = 0) => b4a.from(Array.from({ length }, (_, index) => (seed + index) & 255))
 
-function keyPair(seedByte) {
-  return crypto.keyPair(b4a.alloc(32, seedByte))
+function throws (t, fn, pattern) {
+  try {
+    fn()
+  } catch (error) {
+    t.ok(pattern.test(error?.message || ''), `expected ${pattern}, received ${error?.message || error}`)
+    return
+  }
+  t.fail(`expected ${pattern} to be thrown`)
 }
 
-test('publisher key provider prepares bounded canonical bytes without platform vault access', async (t) => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'publisher', 'key-provider.js'), 'utf8')
-  assert.doesNotMatch(source, /expo-secure-store|@napi-rs\/keyring|publisher-key-vault|getSecret|secretKey|rootSecret/)
+function signedEnvelope() {
+  const signer = crypto.keyPair(bytes(32, 1))
+  const prepared = prepareSignedEnvelope({
+    recordType: 'publisher.publication',
+    schemaMajor: 1,
+    schemaMinor: 0,
+    issuerIdentityKey: bytes(32, 40),
+    signerKey: signer.publicKey,
+    policyEpoch: 3,
+    issuerSequence: 9,
+    signedAt: 1_700_000_000_000,
+    canonicalBody: b4a.from('bounded body')
+  }, { hash: crypto.hash })
+  return {
+    signer,
+    value: attachSignedEnvelopeSignature(prepared, crypto.sign(signedRecordSignaturePreimage(prepared), signer.secretKey))
+  }
+}
 
-  const provider = createPublisherKeyProvider({ now: () => 1000 })
-  const prepared = provider.preparePublisherRootOperation({
-    publisherId: 'ptpub:test',
-    recordType: 'publisher.root.operation.v1',
-    body: b4a.from('authorize-writer'),
-    displaySummary: { action: 'authorize writer', writer: 'device-a' },
-    expiresInMs: 60_000,
-  })
-
-  assert.equal(prepared.recordType, 'publisher.root.operation.v1')
-  assert.equal(prepared.expiresAt, 61_000)
-  assert.equal(prepared.unsignedBytes.byteLength <= MAX_PREPARED_ROOT_OPERATION_BYTES, true)
-  assert.deepEqual(prepared.candidateRecordId, deriveRecordId({
-    recordType: prepared.recordType,
-    body: b4a.from('authorize-writer'),
-    issuedAt: 1000,
-    expiresAt: 61_000,
-  }))
-  assert.deepEqual(prepared.displaySummary, { action: 'authorize writer', writer: 'device-a' })
-  assert.equal(Object.hasOwn(prepared, 'secretKey'), false)
-  t.pass('prepared canonical bytes without secret material')
+const authorization = value => ({
+  issuerIdentityKey: value.issuerIdentityKey,
+  policyEpoch: value.policyEpoch,
+  authorizeSigner: candidate => b4a.equals(candidate.signerKey, value.signerKey),
+  authorizeSequence: candidate => candidate.issuerSequence === value.issuerSequence,
+  claimReplay: () => true,
+  now: value.signedAt,
+  maxClockSkew: 0
 })
 
-test('publisher key provider accepts only signatures over the prepared candidate id', async (t) => {
-  const root = keyPair(7)
-  const attacker = keyPair(8)
-  const provider = createPublisherKeyProvider({ now: () => 1000 })
-  const prepared = provider.preparePublisherRootOperation({
-    publisherId: 'ptpub:test',
-    recordType: 'publisher.root.operation.v1',
-    body: b4a.from('rotate-root'),
-    expiresInMs: 60_000,
-  })
-  const signature = crypto.sign(deriveSigningDigest(prepared.candidateRecordId), root.secretKey)
+test('backend key provider exposes verification only and verifies real signed records', (t) => {
+  const provider = createPublisherKeyProvider()
+  const { value } = signedEnvelope()
 
-  const accepted = await provider.submitPublisherRootOperation({
-    prepared,
-    signer: root.publicKey,
-    signature,
-    allowedSigners: [root.publicKey],
-  })
-  assert.equal(accepted.valid, true)
-  assert.equal(await verifySignedEnvelope(accepted.envelope, { allowedSigners: [root.publicKey], now: 1000 }), true)
+  t.is(provider.verifySignedEnvelope(value, authorization(value)).valid, true)
+  t.is(typeof provider.hash, 'function')
+  t.is(typeof provider.verifySignature, 'function')
+  t.is(provider.sign, undefined)
+  t.is(provider.getSecret, undefined)
+  t.is(provider.exportSecret, undefined)
+  t.is(provider.secretKey, undefined)
+  t.ok(Object.isFrozen(provider), 'verification boundary cannot be extended with secret APIs')
 
-  const wrongSigner = await provider.submitPublisherRootOperation({
-    prepared,
-    signer: attacker.publicKey,
-    signature: crypto.sign(deriveSigningDigest(prepared.candidateRecordId), attacker.secretKey),
-    allowedSigners: [root.publicKey],
-  })
-  assert.equal(wrongSigner.valid, false)
-  assert.equal(wrongSigner.reason, 'signature-verification-failed')
-
-  const substituted = await provider.submitPublisherRootOperation({
-    prepared: { ...prepared, candidateRecordId: b4a.alloc(32, 9) },
-    signer: root.publicKey,
-    signature,
-    allowedSigners: [root.publicKey],
-  })
-  assert.equal(substituted.valid, false)
-  assert.equal(substituted.reason, 'candidate-record-id-mismatch')
-  t.pass('signature submit path is bound to prepared canonical bytes')
+  const tampered = { ...value, signature: b4a.from(value.signature) }
+  tampered.signature[0] ^= 1
+  throws(t, () => provider.verifySignedEnvelope(tampered, authorization(tampered)), /signature/)
 })
 
-test('publisher key provider rejects oversized prepared bodies before allocating signature work', (t) => {
-  const provider = createPublisherKeyProvider({ now: () => 1000 })
-  assert.throws(() => provider.preparePublisherRootOperation({
-    publisherId: 'ptpub:test',
-    recordType: 'publisher.root.operation.v1',
-    body: b4a.alloc(MAX_PREPARED_ROOT_OPERATION_BYTES + 1),
-  }), /body length exceeds/i)
-  t.pass('prepared body bound enforced')
+test('key provider rejects secret-bearing or signing dependencies before retaining them', (t) => {
+  for (const dependency of [
+    { secretKey: bytes(64, 1) },
+    { getSecret() {} },
+    { exportSecret() {} },
+    { sign() {} },
+    { signer: { signPreparedRecord() {} } }
+  ]) {
+    throws(t, () => createPublisherKeyProvider(dependency), /secret|signing|verification-only/)
+  }
 })
 
-test('publisher API prepares and submits shell-signed root operation payloads', async (t) => {
-  const root = keyPair(9)
-  const api = createPublisherApi({ now: () => 1000 })
-  const prepared = await api.preparePublisherRootOperation({
-    publisherId: 'ptpub:test',
-    recordType: 'publisher.root.operation.v1',
-    body: b4a.from('api-operation'),
-    displaySummaryJson: JSON.stringify({ action: 'api operation' }),
-    expiresInMs: 60_000,
+test('injected provider receives public verification inputs only and cannot mutate caller bytes', (t) => {
+  const { value } = signedEnvelope()
+  const calls = []
+  const provider = createPublisherKeyProvider({
+    hash(input) {
+      calls.push({ type: 'hash', input: b4a.from(input) })
+      return crypto.hash(input)
+    },
+    verifySignature(signature, preimage, publicKey) {
+      calls.push({ type: 'verify', signature: b4a.from(signature), preimage: b4a.from(preimage), publicKey: b4a.from(publicKey) })
+      return crypto.verify(preimage, signature, publicKey)
+    }
   })
 
-  assert.equal(prepared.success, true)
-  assert.equal(prepared.recordType, 'publisher.root.operation.v1')
-  assert.equal(prepared.bodyLength, 'api-operation'.length)
-
-  const signature = crypto.sign(deriveSigningDigest(prepared.candidateRecordId), root.secretKey)
-  const submitted = await api.submitPublisherRootOperation({
-    publisherId: prepared.publisherId,
-    recordType: prepared.recordType,
-    unsignedBytes: prepared.unsignedBytes,
-    candidateRecordId: prepared.candidateRecordId,
-    displaySummaryJson: prepared.displaySummaryJson,
-    signer: root.publicKey,
-    signature,
-    allowedSigners: [root.publicKey],
-  })
-
-  assert.equal(submitted.success, true)
-  assert.equal(submitted.valid, true)
-  assert.deepEqual(submitted.signer, root.publicKey)
-  assert.deepEqual(submitted.signature, signature)
-  t.pass('publisher API bridges canonical prepared bytes and shell signature')
+  t.is(provider.verifySignedEnvelope(value, authorization(value)).valid, true)
+  t.ok(calls.some(call => call.type === 'hash'))
+  const verification = calls.find(call => call.type === 'verify')
+  t.is(verification.publicKey.byteLength, 32)
+  t.is(verification.signature.byteLength, 64)
+  t.absent(calls.some(call => Object.hasOwn(call, 'secretKey')), 'no secret reaches verification dependency')
 })

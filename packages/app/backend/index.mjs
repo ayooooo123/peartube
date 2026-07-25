@@ -8,13 +8,14 @@
  */
 
 import { startMobileBackend as startMobileBackendContract } from './mobile-start.mjs'
-import { PROTOCOL_VERSION } from '@peartube/host'
 import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
 import * as specModule from '@peartube/spec'
 import * as orchestratorModule from '@peartube/backend/orchestrator'
 import * as storageModule from '@peartube/backend/storage'
 import { setHyperswarmModuleForRuntime } from '@peartube/backend/runtime-modules'
 import { isExpectedBlobRequestCancellation } from '@peartube/backend/blob-request-cancellation'
+import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
+
 import * as pathModule from 'bare-path'
 import * as fsModule from 'bare-fs'
 import * as b4aModule from 'b4a'
@@ -33,6 +34,8 @@ let shutdownBackend = null
 let setCastActive = null
 let isCastActive = null
 let prefetchVideoForCast = null
+let prepareStoredProtocolState = null
+let storedProtocolMigrations = null
 let generateAndStoreThumbnail = null
 let path = null
 let fs = null
@@ -60,6 +63,8 @@ async function loadBackendModules() {
   setCastActive = storageModule?.setCastActive
   isCastActive = storageModule?.isCastActive
   prefetchVideoForCast = storageModule?.prefetchVideoForCast
+  prepareStoredProtocolState = storageModule?.prepareStoredProtocolState
+  storedProtocolMigrations = storageModule?.DEFAULT_STORED_PROTOCOL_MIGRATIONS
   path = pathModule?.default ?? pathModule
   fs = fsModule?.default ?? fsModule
   b4a = b4aModule?.default ?? b4aModule
@@ -74,6 +79,8 @@ async function loadBackendModules() {
     setCastActive,
     isCastActive,
     prefetchVideoForCast,
+    prepareStoredProtocolState,
+    storedProtocolMigrations,
     path,
     fs,
     b4a
@@ -344,6 +351,191 @@ function parseMobileLaunchArgs(args = []) {
   return parseMobileLaunchArgsForTest(args)
 }
 
+const LEGACY_ROOT_PREFLIGHT_ENTRYPOINT = 'legacy-publisher-root-preflight'
+const LEGACY_ROOT_MAX_FRAME_BYTES = 8192
+const LEGACY_ROOT_MAX_REQUESTS = 64
+const LEGACY_ROOT_ACK_TIMEOUT_MS = 25000
+
+function fixedLegacyRootBytes(value, length, bytes) {
+  let result = null
+  if (typeof value === 'string' && value.length === length * 2 && /^[0-9a-f]+$/i.test(value)) {
+    result = bytes.from(value, 'hex')
+  } else if (bytes.isBuffer(value) || value instanceof Uint8Array) {
+    result = bytes.from(value)
+  }
+  return result?.byteLength === length ? result : null
+}
+
+function safeLegacyRootPreflightSummary(value) {
+  const status = ['complete', 'pending', 'no-legacy-roots', 'unavailable'].includes(value?.status)
+    ? value.status
+    : 'unavailable'
+  const count = (candidate) => Number.isFinite(candidate) && candidate > 0
+    ? Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(candidate))
+    : 0
+  const summary = {
+    status,
+    scanned: count(value?.scanned),
+    migrated: count(value?.migrated),
+    remaining: count(value?.remaining),
+  }
+  if (
+    status === 'unavailable' &&
+    ['STORAGE_LOCKED', 'STORAGE_UNAVAILABLE', 'MIGRATION_UNAVAILABLE'].includes(value?.errorCode)
+  ) {
+    summary.errorCode = value.errorCode
+  }
+  return summary
+}
+
+export async function startLegacyPublisherRootPreflightWorklet(options = {}) {
+  const IPC = options.stream ?? globalThis.BareKit?.IPC
+  const storagePath = options.storagePath ?? globalThis.Bare?.argv?.[0] ?? ''
+  const bytes = b4aModule?.default ?? b4aModule
+  const paths = pathModule?.default ?? pathModule
+  if (!IPC?.on || !IPC?.write || !storagePath) {
+    return safeLegacyRootPreflightSummary(null)
+  }
+
+  const parser = createJsonFrameParser()
+  let pendingFrameBytes = 0
+  let requestCount = 0
+  let pending = null
+
+  const clearPending = () => {
+    if (!pending) return
+    clearTimeout(pending.timer)
+    pending = null
+  }
+
+  const rejectPending = () => {
+    if (!pending) return
+    const reject = pending.reject
+    clearPending()
+    reject(new Error('MIGRATION_UNAVAILABLE'))
+  }
+
+  const onData = (chunk) => {
+    const text = typeof chunk === 'string' ? chunk : String(chunk ?? '')
+    pendingFrameBytes += text.length
+    if (pendingFrameBytes > LEGACY_ROOT_MAX_FRAME_BYTES) {
+      parser.reset()
+      pendingFrameBytes = 0
+      rejectPending()
+      return
+    }
+
+    const messages = parser.push(text)
+    if (messages.length > 0) pendingFrameBytes = 0
+    for (const message of messages) {
+      if (message?.type !== 'legacy-publisher-root-migration-ack' ||
+          !pending ||
+          message.id !== pending.id) continue
+
+      const resolve = pending.resolve
+      if (
+        message.ok !== true ||
+        message.version !== 1 ||
+        message.durable !== true
+      ) {
+        rejectPending()
+        continue
+      }
+      const publicKey = fixedLegacyRootBytes(message.publicKey, 32, bytes)
+      const challengeSignature = fixedLegacyRootBytes(message.challengeSignature, 64, bytes)
+      if (!publicKey || !challengeSignature) {
+        rejectPending()
+        continue
+      }
+      clearPending()
+      resolve({
+        version: 1,
+        durable: true,
+        publicKey,
+        challengeSignature,
+      })
+    }
+  }
+
+  const onClose = () => rejectPending()
+  IPC.on('data', onData)
+  IPC.on('close', onClose)
+  IPC.on('end', onClose)
+
+  const migrateLegacyPublisherRoot = async (request) => {
+    if (pending || requestCount >= LEGACY_ROOT_MAX_REQUESTS) {
+      throw new Error('MIGRATION_UNAVAILABLE')
+    }
+    const identityPublicKey = fixedLegacyRootBytes(request?.identityPublicKey, 32, bytes)
+    const secretKey = fixedLegacyRootBytes(request?.secretKey, 64, bytes)
+    const challenge = fixedLegacyRootBytes(request?.challenge, 108, bytes)
+    if (request?.version !== 1 || !identityPublicKey || !secretKey || !challenge) {
+      secretKey?.fill(0)
+      challenge?.fill(0)
+      throw new Error('MIGRATION_UNAVAILABLE')
+    }
+
+    requestCount += 1
+    const id = requestCount
+    let encoded = encodeJsonFrame({
+      type: 'legacy-publisher-root-migration-request',
+      id,
+      version: 1,
+      identityPublicKey: bytes.toString(identityPublicKey, 'hex'),
+      secretKey: bytes.toString(secretKey, 'hex'),
+      challenge: bytes.toString(challenge, 'hex'),
+    })
+    secretKey.fill(0)
+    challenge.fill(0)
+    if (encoded.length > LEGACY_ROOT_MAX_FRAME_BYTES) {
+      encoded = ''
+      throw new Error('MIGRATION_UNAVAILABLE')
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (pending?.id !== id) return
+        clearPending()
+        reject(new Error('MIGRATION_UNAVAILABLE'))
+      }, LEGACY_ROOT_ACK_TIMEOUT_MS)
+      pending = { id, resolve, reject, timer }
+      try {
+        IPC.write(bytes.from(encoded))
+      } catch {
+        clearPending()
+        reject(new Error('MIGRATION_UNAVAILABLE'))
+      } finally {
+        encoded = ''
+      }
+    })
+  }
+
+  let summary
+  try {
+    summary = safeLegacyRootPreflightSummary(await runLegacyPublisherRootPreflight({
+      storagePath: paths.join(storagePath, 'peartube-data'),
+      migrateLegacyPublisherRoot,
+      waitForLock: false,
+    }))
+  } catch {
+    summary = safeLegacyRootPreflightSummary(null)
+  } finally {
+    rejectPending()
+    try { IPC.removeListener?.('data', onData) } catch {}
+    try { IPC.removeListener?.('close', onClose) } catch {}
+    try { IPC.removeListener?.('end', onClose) } catch {}
+  }
+
+  try {
+    const resultFrame = encodeJsonFrame({
+      type: 'legacy-publisher-root-preflight-result',
+      summary,
+    })
+    if (resultFrame.length <= LEGACY_ROOT_MAX_FRAME_BYTES) IPC.write(bytes.from(resultFrame))
+  } catch {}
+  return summary
+}
+
 export function buildMobileBackendContextOptions(options = {}) {
   return { ...options, platform: 'mobile' }
 }
@@ -361,6 +553,7 @@ export async function createMobileRuntimeBackend(options = {}) {
     platform = 'mobile',
     stream,
     args = [],
+    protocolVersion,
     onReady = () => {},
     onError = () => {}
   } = options
@@ -390,15 +583,18 @@ export async function createMobileRuntimeBackend(options = {}) {
   let ownerLockFd = -1
   let backendCtx = null
   let closeCastProxyServer = () => {}
-  let feedRefreshInterval = null
   let shutdownInFlight = null
 
   function reportBackendError(label, error) {
     const message = error instanceof Error ? error.message : (typeof error === 'string' ? error : 'Unknown error')
+    const code = typeof error?.code === 'string' ? error.code : undefined
+    const readinessMessage = code === 'STORED_PROTOCOL_VERSION_UNSUPPORTED'
+      ? `${label}: ${message} (storedVersion=${Number.isSafeInteger(error?.storedVersion) ? error.storedVersion : 'unknown'}, expectedVersion=${Number.isSafeInteger(error?.expectedVersion) ? error.expectedVersion : 'unknown'})`
+      : `${label}: ${message}`
     console.error(`[Backend] ${label}:`, message)
     if (error?.stack) console.error(error.stack)
     try {
-      rpc?.eventError?.({ message: `${label}: ${message}` })
+      rpc?.eventError?.({ code, message: readinessMessage, retryable: false })
     } catch {}
     try {
       onError(error instanceof Error ? error : new Error(message))
@@ -525,6 +721,18 @@ function removeStaleLocks(storageDir) {
   ensureRpc()
 
   const storageDir = path.join(storagePath, 'peartube-data')
+  try {
+    prepareStoredProtocolState({
+      storagePath: storageDir,
+      expectedVersion: protocolVersion,
+      fs,
+      path,
+      migrations: storedProtocolMigrations,
+    })
+  } catch (error) {
+    reportBackendError('Backend init failed', error)
+    throw error
+  }
   try { fs.mkdirSync(storageDir, { recursive: true }) } catch {}
 
   try {
@@ -557,10 +765,14 @@ function removeStaleLocks(storageDir) {
       platform: 'mobile',
       network: launchOptions?.network,
       swarmOptions: launchOptions?.swarmOptions,
+      expectedProtocolVersion: protocolVersion,
       ipcLog,
-      onFeedUpdate: () => {
+      onMediaGraphUpdate: (update) => {
         try {
-          rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' })
+          rpc?.eventMediaGraphUpdate?.({
+            revision: update.revision,
+            changedCount: update.changedCount
+          })
         } catch {}
       },
       onStatsUpdate: (driveKey, videoPath, stats) => {
@@ -582,7 +794,6 @@ function removeStaleLocks(storageDir) {
     api,
     identityManager,
     uploadManager,
-    publicFeed,
     initializeIdentityFromMnemonic
   } = backend
 
@@ -687,7 +898,6 @@ function removeStaleLocks(storageDir) {
     if (shutdownInFlight) return shutdownInFlight
 
     shutdownInFlight = (async () => {
-      setIsShuttingDown(true)
       await shutdownBackend(ctx)
     })().finally(() => {
       shutdownInFlight = null
@@ -715,36 +925,17 @@ function removeStaleLocks(storageDir) {
   }
 
   const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
-  onReady({ blobServerPort: blobPort, protocolVersion: PROTOCOL_VERSION })
+  onReady({ blobServerPort: blobPort, protocolVersion })
 
   try {
     rpc.eventReady({
       blobServerPort: blobPort,
       blobServerHost: ctx.blobServerHost || '127.0.0.1'
     })
-    rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' })
   } catch (error) {
     console.error('[Backend] Failed to send eventReady:', error.message)
   }
 
-  feedRefreshInterval = setInterval(() => {
-    try {
-      publicFeed.requestFeedsFromPeers()
-      persistFeedCache()
-    } catch {}
-  }, 30000)
-  ctx.registerCleanup?.('mobile feed refresh interval', () => {
-    if (!feedRefreshInterval) return
-    clearInterval(feedRefreshInterval)
-    feedRefreshInterval = null
-  }, { timeoutMs: 100 })
-
-  publicFeed.setOnFeedUpdate(() => {
-    persistFeedCache()
-    try {
-      rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' })
-    } catch {}
-  })
 
   if (typeof Bare !== 'undefined' && Bare?.on) {
     Bare.on('exit', () => {
@@ -786,5 +977,9 @@ function removeStaleLocks(storageDir) {
 }
 
 if (globalThis.BareKit?.IPC && (typeof Bare !== 'undefined')) {
-  await startMobileBackend()
+  if (Bare.argv?.[1] === LEGACY_ROOT_PREFLIGHT_ENTRYPOINT) {
+    await startLegacyPublisherRootPreflightWorklet()
+  } else {
+    await startMobileBackend()
+  }
 }

@@ -22,8 +22,8 @@ class FakeHRPC {
       })
   }
 
-  onEventFeedUpdate(handler) {
-    this.handlers.feedUpdate = handler
+  onEventMediaGraphUpdate(handler) {
+    this.handlers.mediaGraphUpdate = handler
   }
 
   onEventLog(handler) {
@@ -44,25 +44,17 @@ class FakeHRPC {
       peerCount: 3,
       swarmConnections: 3,
       swarmPeers: 4,
-      feedConnections: 2,
-      feedEntries: 8,
       channelsLoaded: 5,
       swarmOffline: false,
       swarmListenResolved: true,
       peerPoolJoined: true,
-      publicFeedDiscoveryJoined: true,
-      feedTopicHex: 'feed-topic',
       recommendedBoundary: 'content-playback-or-ui',
       networkJson: JSON.stringify({ hyperswarm: { recentConnections: [{ type: 'client-attempt' }] } }),
       startupTimingJson: JSON.stringify({ events: [{ event: 'peer-discovered' }] }),
-      doctorJson: JSON.stringify({ recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } }),
-      directPeerDialJson: JSON.stringify({ discoveredPeers: 6, pending: 3 })
+      doctorJson: JSON.stringify({ recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } })
     })
   }
 
-  getCanonicalFeed() {
-    return Promise.resolve({ entries: [] })
-  }
 
   preparePlayback() {
     return Promise.resolve({ url: 'http://video.local/play' })
@@ -79,9 +71,17 @@ class FakeHRPC {
   getMediaEntity(request) {
     return Promise.resolve({ success: true, entity: { entityId: request.entityId, entityKind: 'work' }, claims: [], conflicts: [] })
   }
+
+  getMediaCatalog(request) {
+    return Promise.resolve({
+      success: true,
+      items: [{ entityId: 'work-1', entityKind: 'work', sources: [], renditions: [] }],
+      nextCursor: request.cursor ? null : 'cursor-2'
+    })
+  }
 }
 
-test('createProtocolClient remaps feed update events', async (t) => {
+test('createProtocolClient remaps media graph update events', async (t) => {
   FakeHRPC.instances.length = 0
   const events = []
   const readyEvents = []
@@ -95,7 +95,7 @@ test('createProtocolClient remaps feed update events', async (t) => {
     readyEvents.push(payload)
   })
 
-  client.events.on(PROTOCOL_EVENTS.FEED_UPDATED, (payload) => {
+  client.events.on(PROTOCOL_EVENTS.MEDIA_GRAPH_UPDATED, (payload) => {
     events.push(payload)
   })
 
@@ -104,9 +104,9 @@ test('createProtocolClient remaps feed update events', async (t) => {
   t.alike(ready, { blobServerPort: 9999, blobServerReady: true, blobServerError: null, protocolVersion: PROTOCOL_VERSION })
   t.alike(readyEvents[0], ready)
 
-  FakeHRPC.instances[0].handlers.feedUpdate({ action: 'update', channelKey: 'abc' })
+  FakeHRPC.instances[0].handlers.mediaGraphUpdate({ revision: '17', changedCount: 3 })
 
-  t.alike(events[0], { action: 'update', channelKey: 'abc' })
+  t.alike(events[0], { revision: '17', changedCount: 3 })
 })
 
 test('createProtocolClient propagates degraded blob server readiness and does not dedupe status changes', async (t) => {
@@ -189,7 +189,6 @@ test('createProtocolClient exposes generated app RPC namespace methods', async (
     HRPCImpl: FakeHRPC
   })
 
-  t.alike(await client.feed.getCanonicalFeed(), { entries: [] })
   t.alike(await client.video.preparePlayback({ channelKey: 'ch', videoId: 'v' }), { url: 'http://video.local/play' })
   t.alike(await client.shell.ffmpegDecodeAvailable(), { available: true })
   t.alike(await client.shell.transcodeStart({ sourceUrl: 'http://video.local/source.mp4' }), {
@@ -202,6 +201,20 @@ test('createProtocolClient exposes generated app RPC namespace methods', async (
     entity: { entityId: 'work-1', entityKind: 'work' },
     claims: [],
     conflicts: []
+  })
+})
+
+test('createProtocolClient exposes bounded media catalog through the media graph namespace', async (t) => {
+  FakeHRPC.instances.length = 0
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: FakeHRPC
+  })
+
+  t.alike(await client.mediaGraph.getMediaCatalog({ limit: 0 }), {
+    success: true,
+    items: [{ entityId: 'work-1', entityKind: 'work', sources: [], renditions: [] }],
+    nextCursor: 'cursor-2'
   })
 })
 
@@ -330,20 +343,15 @@ test('createProtocolClient emits normalized network status from the system names
     peerCount: 3,
     swarmConnections: 3,
     swarmPeers: 4,
-    feedConnections: 2,
-    feedEntries: 8,
     channelsLoaded: 5,
     swarmOffline: false,
     swarmOfflineReason: null,
     swarmListenResolved: true,
     peerPoolJoined: true,
-    publicFeedDiscoveryJoined: true,
-    feedTopicHex: 'feed-topic',
     recommendedBoundary: 'content-playback-or-ui',
     network: { hyperswarm: { recentConnections: [{ type: 'client-attempt' }] } },
     startupTiming: { events: [{ event: 'peer-discovered' }] },
-    doctor: { recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } },
-    directPeerDial: { discoveredPeers: 6, pending: 3 }
+    doctor: { recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } }
   })
   t.alike(networkEvents, [status])
 })
@@ -490,4 +498,93 @@ test('createProtocolClient rejects ready when the transport closes before host r
   t.is(error.code, HOST_ERROR_CODES.TRANSPORT_DISCONNECTED)
   t.is(error.retryable, true)
   t.is(error.message, 'Transport closed before host became ready: close')
+})
+
+test('createProtocolClient exposes typed publisher catalog provision, root prepare, and submit methods', async (t) => {
+  FakeHRPC.instances.length = 0
+  const calls = []
+
+  class PublisherHRPC extends FakeHRPC {
+    provisionPublisherCatalog(request) {
+      calls.push(['provision', request])
+      return Promise.resolve({
+        success: true,
+        publisherId: request.publisherId,
+        catalogBootstrapKey: Buffer.alloc(32, 6)
+      })
+    }
+
+    preparePublisherRootOperation(request) {
+      calls.push(['prepare', request])
+      return Promise.resolve({
+        intentId: request.intentId,
+        success: true,
+        publisherId: request.publisherId,
+        recordType: request.recordType,
+        unsignedBytes: Buffer.from([1, 2, 3]),
+        candidateRecordId: Buffer.alloc(32, 7),
+        signerPublicKey: request.signerPublicKey,
+        bodyLength: request.body.byteLength,
+        issuedAt: 1_700_000_000_000,
+        intentExpiresAt: request.intentExpiresAt,
+        expiresAt: 1_700_000_060_000,
+        displaySummaryJson: request.displaySummaryJson
+      })
+    }
+
+    submitPublisherRootOperation(request) {
+      calls.push(['submit', request])
+      return Promise.resolve({
+        success: true,
+        intentId: request.intentId,
+        valid: true,
+        complete: false,
+        publisherId: request.publisherId,
+        recordType: request.recordType,
+        recordId: request.candidateRecordId,
+        signer: request.signer,
+        signerPublicKey: request.signerPublicKey,
+        signature: request.signature
+      })
+    }
+  }
+
+  const client = createProtocolClient({ stream: {}, HRPCImpl: PublisherHRPC })
+  const provisionRequest = {
+    publisherId: 'a'.repeat(64),
+    genesisRootKey: Buffer.alloc(32, 2)
+  }
+  const provisioned = await client.publisher.provisionPublisherCatalog(provisionRequest)
+  const prepareRequest = {
+    intentId: 'intent-host',
+    publisherId: 'a'.repeat(64),
+    recordType: 'publisher.namespace',
+    signerPublicKey: Buffer.alloc(32, 3),
+    intentExpiresAt: 1_700_000_060_000,
+    body: Buffer.from([4, 5, 6]),
+    displaySummaryJson: '{"action":"create publisher"}'
+  }
+  const prepared = await client.publisher.preparePublisherRootOperation(prepareRequest)
+  const submitRequest = {
+    intentId: prepareRequest.intentId,
+    publisherId: prepareRequest.publisherId,
+    recordType: prepareRequest.recordType,
+    unsignedBytes: prepared.unsignedBytes,
+    candidateRecordId: prepared.candidateRecordId,
+    displaySummaryJson: prepared.displaySummaryJson,
+    signer: Buffer.alloc(32, 3),
+    signerPublicKey: prepareRequest.signerPublicKey,
+    signature: Buffer.alloc(64, 11)
+  }
+  const submitted = await client.publisher.submitPublisherRootOperation(submitRequest)
+
+  t.alike(calls, [
+    ['provision', provisionRequest],
+    ['prepare', prepareRequest],
+    ['submit', submitRequest]
+  ])
+  t.is(submitted.success, true)
+  t.is(provisioned.success, true)
+  t.is(submitted.complete, false)
+  t.is(submitted.valid, true)
 })

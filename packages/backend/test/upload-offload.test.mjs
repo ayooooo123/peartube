@@ -67,16 +67,16 @@ test('collectFullCopyPeers rejects malformed ranges', (t) => {
   t.is(collectFullCopyPeers(peers, {}).fullCopyKeys.length, 0)
 })
 
-test('a relay full copy alone makes an upload eligible (durable anchor)', (t) => {
+test('a configured relay full copy is diagnostic evidence but never deletion authority', (t) => {
   const result = assessOffloadEligibility({
     fullCopyKeys: [RELAY],
     relayKeys: [RELAY],
     deviceKeys: [DEVICE],
   })
-  t.ok(result.eligible)
+  t.absent(result.eligible)
   t.ok(result.relayHasFullCopy)
   t.absent(result.ownDeviceHasFullCopy)
-  t.ok(result.reasons.includes('relay-full-copy'))
+  t.alike(result.reasons, [])
 })
 
 test('an own-device full copy alone makes an upload eligible', (t) => {
@@ -99,15 +99,16 @@ test('a single anonymous live peer is NOT enough (below redundancy threshold)', 
   t.is(result.fullCopyPeers, 1)
 })
 
-test('enough independent live peers satisfy the redundancy threshold', (t) => {
+test('any number of independent live viewers remains transient and ineligible', (t) => {
   const result = assessOffloadEligibility({
     fullCopyKeys: [PEER1, PEER2],
+    fullCopyAnonymous: 10,
     relayKeys: [RELAY],
     deviceKeys: [DEVICE],
   })
-  t.ok(result.eligible)
-  t.is(result.fullCopyPeers, 2)
-  t.ok(result.reasons.some((r) => r.startsWith('peer-redundancy')))
+  t.absent(result.eligible)
+  t.is(result.fullCopyPeers, 12)
+  t.alike(result.reasons, [])
 })
 
 test('no full copies anywhere means never eligible', (t) => {
@@ -117,6 +118,6 @@ test('no full copies anywhere means never eligible', (t) => {
   t.alike(result.reasons, [])
 })
 
-test('default policy requires at least two live full copies', (t) => {
-  t.is(DEFAULT_OFFLOAD_POLICY.minFullCopyPeers, 2)
+test('legacy generic-peer threshold is permanently disabled', (t) => {
+  t.is(DEFAULT_OFFLOAD_POLICY.minFullCopyPeers, Number.MAX_SAFE_INTEGER)
 })

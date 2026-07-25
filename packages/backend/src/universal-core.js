@@ -801,10 +801,8 @@ export function createUniversalCore(options = {}) {
             if (mirrorRefreshInFlight) return { skipped: true, why: 'refresh already in flight' }
             mirrorRefreshInFlight = (async () => {
               try {
-                if (typeof mirrorWorker.refresh === 'function') return await mirrorWorker.refresh(reason)
-                const entries = backend?.publicFeed?.getFeed?.() || []
-                for (const entry of entries) await backend?.seedingManager?.addSeed?.(entry)
-                return { refreshed: true }
+                if (typeof mirrorWorker.refresh !== 'function') throw new Error('mirror seed worker is unavailable')
+                return await mirrorWorker.refresh(reason)
               } finally {
                 mirrorRefreshInFlight = null
               }

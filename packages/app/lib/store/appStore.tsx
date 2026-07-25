@@ -5,8 +5,8 @@
  * Platform-specific RPC calls are abstracted through actions.
  */
 
-import React, { createContext, useContext, useReducer, useRef, useMemo, ReactNode } from 'react';
-import type { Identity, Video, VideoData, PublicFeedEntry, ChannelMetadata, VideoStats } from '@peartube/core';
+import React, { createContext, useContext, useReducer, useMemo, ReactNode } from 'react';
+import type { Identity, Video, VideoData, MediaCatalogState, ChannelMetadata, VideoStats } from '@peartube/core';
 
 export type AppStoreState = {
   // Connection status
@@ -24,11 +24,9 @@ export type AppStoreState = {
   // Subscriptions
   subscriptions: { driveKey: string; name: string }[];
 
-  // Public feed
-  publicFeed: PublicFeedEntry[];
+  // Resolved media entities
+  mediaCatalog: MediaCatalogState;
   channelMetadata: Record<string, ChannelMetadata>;
-  feedLoading: boolean;
-  peerCount: number;
 
   // Platform-specific
   blobServerPort: number | null;
@@ -48,10 +46,8 @@ type Action =
   | { type: 'upsertVideo'; payload: Video }
   | { type: 'setChannelNames'; payload: Record<string, string> }
   | { type: 'setSubscriptions'; payload: { driveKey: string; name: string }[] }
-  | { type: 'setPublicFeed'; payload: PublicFeedEntry[] }
+  | { type: 'setMediaCatalog'; payload: MediaCatalogState }
   | { type: 'setChannelMetadata'; payload: Record<string, ChannelMetadata> }
-  | { type: 'setFeedLoading'; payload: boolean }
-  | { type: 'setPeerCount'; payload: number }
   | { type: 'setBlobServerPort'; payload: number | null }
   | { type: 'setCurrentVideo'; payload: { video: VideoData | null; driveKey: string | null } }
   | { type: 'setVideoStats'; payload: VideoStats | null };
@@ -64,10 +60,13 @@ const initialState: AppStoreState = {
   videos: [],
   channelNames: {},
   subscriptions: [],
-  publicFeed: [],
+  mediaCatalog: {
+    status: 'idle',
+    items: [],
+    refreshing: false,
+    loadingMore: false,
+  },
   channelMetadata: {},
-  feedLoading: false,
-  peerCount: 0,
   blobServerPort: null,
   currentVideo: null,
   currentVideoKey: null,
@@ -94,14 +93,10 @@ function reducer(state: AppStoreState, action: Action): AppStoreState {
       return { ...state, channelNames: action.payload };
     case 'setSubscriptions':
       return { ...state, subscriptions: action.payload };
-    case 'setPublicFeed':
-      return { ...state, publicFeed: action.payload };
+    case 'setMediaCatalog':
+      return { ...state, mediaCatalog: action.payload };
     case 'setChannelMetadata':
       return { ...state, channelMetadata: action.payload };
-    case 'setFeedLoading':
-      return { ...state, feedLoading: action.payload };
-    case 'setPeerCount':
-      return { ...state, peerCount: action.payload };
     case 'setBlobServerPort':
       return { ...state, blobServerPort: action.payload };
     case 'setCurrentVideo':
@@ -138,6 +133,3 @@ export const AppStoreProvider = ({ children }: { children: ReactNode }) => {
 };
 
 export const useAppStore = () => useContext(AppStoreContext);
-
-// Re-export types for convenience
-export type { AppStoreState };

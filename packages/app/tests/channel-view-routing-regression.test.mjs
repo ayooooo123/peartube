@@ -29,8 +29,8 @@ test('native channel page video cards navigate to the video route with channel c
 
   assert.match(
     source,
-    /publicBeeKey: channelPublicBeeKey \|\| undefined,[\s\S]*?videoData: JSON\.stringify/s,
-    'native channel videos should pass publicBeeKey as a route param before serialized videoData',
+    /publicBeeKey: playbackPayload\.publicBeeKey,[\s\S]*?videoData: JSON\.stringify/s,
+    'native channel videos should preserve the resolved publication key before serialized videoData',
   )
 
   assert.doesNotMatch(
@@ -44,7 +44,6 @@ test('channel route navigation encodes dynamic keys before path/hash concatenati
   const nativeHome = read('app/(tabs)/index.tsx')
   const subscriptions = read('app/(tabs)/subscriptions.tsx')
   const nativeVideo = read('app/video/[id].tsx')
-  const webHome = read('app/(tabs)/index.web.tsx')
   const webChannel = read('app/channel/[key].web.tsx')
 
   for (const [label, source] of [
@@ -59,41 +58,20 @@ test('channel route navigation encodes dynamic keys before path/hash concatenati
     )
   }
 
-  assert.match(webHome, /encodeURIComponent\(channelKey\)/, 'web watch-page channel navigation should encode channel keys')
-  assert.match(webHome, /encodeURIComponent\(viewingChannel\)/, 'web channel modal navigation should encode channel keys')
-  assert.match(webHome, /encodeURIComponent\(video\.channelKey\)/, 'web feed channel navigation should encode channel keys')
-  assert.match(webHome, /encodeURIComponent\(identity\.driveKey!\)/, 'web own-channel navigation should encode channel keys')
   assert.match(webChannel, /encodeURIComponent\(resolvedChannelKey\)/, 'web channel video navigation should encode channel keys')
 })
 
 test('web hash route parsing decodes watch and channel params safely', () => {
-  const webHome = read('app/(tabs)/index.web.tsx')
   const webChannel = read('app/channel/[key].web.tsx')
 
-  assert.match(webHome, /function safeDecodeURIComponent/, 'web home hash parser should use safe decoding')
-  assert.match(webHome, /channelKey: safeDecodeURIComponent\(parts\[1\]\)/, 'watch route channel key should be decoded')
-  assert.match(webHome, /videoId: safeDecodeURIComponent\(parts\[2\]\)/, 'watch route video id should be decoded')
   assert.match(webChannel, /function safeDecodeURIComponent/, 'web channel page hash parser should use safe decoding')
 })
 
 test('channel view preserves publicBeeKey across native and web navigation/data fetches', () => {
-  const nativeHome = read('app/(tabs)/index.tsx')
-  const subscriptions = read('app/(tabs)/subscriptions.tsx')
   const nativeVideo = read('app/video/[id].tsx')
   const nativeChannel = read('app/channel/[key].tsx')
-  const webHome = read('app/(tabs)/index.web.tsx')
   const webChannel = read('app/channel/[key].web.tsx')
 
-  assert.match(
-    nativeHome,
-    /router\.push\(\{ pathname: '\/channel\/\[key\]', params: \{ key: video\.channelKey, publicBeeKey: video\.publicBeeKey \|\| undefined \} \}\)/,
-    'native feed channel navigation should include publicBeeKey for remote channel reads',
-  )
-  assert.match(
-    subscriptions,
-    /router\.push\(\{ pathname: '\/channel\/\[key\]', params: \{ key: item\.channelKey, publicBeeKey: item\.publicBeeKey \|\| undefined \} \}\)/,
-    'subscription channel navigation should include publicBeeKey for remote channel reads',
-  )
   assert.match(
     nativeVideo,
     /router\.push\(\{ pathname: '\/channel\/\[key\]', params: \{ key: videoData\.channelKey, publicBeeKey: videoData\.publicBeeKey \|\| undefined \} \}\)/,
@@ -102,14 +80,9 @@ test('channel view preserves publicBeeKey across native and web navigation/data 
   assert.match(nativeVideo, /const rawPublicBeeParam = params\.publicBeeKey \?\? params\.publicBee/, 'native watch route should accept both publicBeeKey and legacy publicBee route params')
   assert.match(nativeVideo, /const fetchedVideoData = result\?\.video \|\| result/, 'native watch route should unwrap backend getVideoData responses before playback')
   assert.match(nativeVideo, /rpc\.getVideoData\(\{[\s\S]*?blobId: videoData\?\.blobId \|\| undefined,[\s\S]*?blobsCoreKey: videoData\?\.blobsCoreKey \|\| undefined,/s, 'native watch route should pass direct blob refs when refreshing video metadata')
-  assert.match(nativeChannel, /const channelPublicBeeKey = useMemo/, 'native channel view should resolve publicBeeKey route params')
-  assert.match(nativeChannel, /rpc\.getChannelMeta\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}(?: as any)?\)/, 'native channel metadata should pass publicBeeKey')
-  assert.match(nativeChannel, /rpc\.listVideos\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}(?: as any)?\)/, 'native channel video list should pass publicBeeKey')
-  assert.match(nativeChannel, /publicBeeKey: channelPublicBeeKey \|\| undefined/, 'native channel video navigation should preserve publicBeeKey')
+  assert.match(nativeChannel, /catalogController\.loadCatalog\(\{[\s\S]*channelKey,[\s\S]*publicBeeKey: channelPublicBeeKey,/s, 'native channel catalog should preserve the publication key')
+  assert.match(nativeChannel, /publicBeeKey: playbackPayload\.publicBeeKey/, 'native channel video navigation should preserve the publication key')
 
-  assert.match(webHome, /#\/channel\/\$\{encodeURIComponent\(channelKey\)\}\?publicBeeKey=\$\{encodeURIComponent\(publicBeeKey\)\}/, 'web watch channel navigation should include publicBeeKey in hash query')
-  assert.match(webHome, /#\/channel\/\$\{encodeURIComponent\(video\.channelKey\)\}\?publicBeeKey=\$\{encodeURIComponent\(video\.publicBeeKey\)\}/, 'web feed channel navigation should include publicBeeKey in hash query')
   assert.match(webChannel, /publicBeeKey: safeDecodeURIComponent\(params\.get\('publicBeeKey'\) \|\| ''\)/, 'web channel hash parser should decode publicBeeKey')
-  assert.match(webChannel, /rpc\.getChannelMeta\(\{ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey \|\| undefined \}\)/, 'web channel metadata should pass publicBeeKey')
-  assert.match(webChannel, /rpc\.listVideos\(\{ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey \|\| undefined \}\)/, 'web channel video list should pass publicBeeKey')
+  assert.match(webChannel, /catalogController\.loadCatalog\(\{[\s\S]*channelKey: resolvedChannelKey,[\s\S]*publicBeeKey: resolvedPublicBeeKey,/s, 'web channel catalog should preserve the publication key')
 })

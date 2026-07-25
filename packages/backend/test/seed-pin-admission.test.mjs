@@ -4,6 +4,7 @@ import test from 'brittle'
 import { createIdentityManager } from '../src/identity.js'
 import { createBackendSeedPinAdmission } from '../src/seed-pin/admission.js'
 import { resolveSeedPinClientAuth } from '../src/seed-pin/registration.js'
+import { startBackendSeedPin } from '../src/orchestrator.js'
 
 const OWNED_IDENTITY = '11'.repeat(32)
 const FOREIGN_IDENTITY = '12'.repeat(32)
@@ -64,6 +65,53 @@ test('backend admission fails closed on malformed facts, manager errors, and tra
   t.is(await admission({ verified: { ...verifiedFacts(), valid: false } }), false)
   t.is(await admission({ verified: { ...verifiedFacts(), identityPublicKey: OWNED_IDENTITY.toUpperCase() } }), false)
   t.is(await admission({ request: { manifest: { channelKey: OWNED_CHANNEL } } }), false, 'raw request fields are not authorization facts')
+})
+
+test('backend seed-pin startup wires live owner authorization into every receiver', async (t) => {
+  let registrationOptions = null
+  const identityManager = {
+    getSeedPinOwnershipFacts ({ identityPublicKey, channelKey }) {
+      return {
+        identityOwned: identityPublicKey === OWNED_IDENTITY,
+        channelAccess: channelKey === OWNED_CHANNEL ? 'owned' : null,
+      }
+    },
+  }
+  const registration = {
+    ready: Promise.resolve(),
+    refreshClientAuthCalls: 0,
+    async refreshClientAuth () { this.refreshClientAuthCalls++ },
+    async unregister () {},
+  }
+  const ctx = {
+    lifecycle: { own () {} },
+    seedPinRegistration: null,
+  }
+
+  const result = await startBackendSeedPin({
+    ctx,
+    identityManager,
+    register: (runtimeCtx, options) => {
+      t.is(runtimeCtx, ctx)
+      registrationOptions = options
+      return registration
+    },
+    resolveClientAuth: async () => null,
+  })
+
+  t.is(result, registration)
+  t.is(registration.refreshClientAuthCalls, 1)
+  t.is(await registrationOptions.admission({ verified: verifiedFacts() }), true)
+  t.is(
+    await registrationOptions.admission({ verified: verifiedFacts(FOREIGN_IDENTITY, OWNED_CHANNEL) }),
+    false,
+    'a valid foreign publisher signature is not sufficient for receiver admission',
+  )
+  t.is(
+    await registrationOptions.admission({ verified: verifiedFacts(OWNED_IDENTITY, FOREIGN_CHANNEL) }),
+    false,
+    'an unowned channel is rejected before storage or worker scheduling',
+  )
 })
 
 test('identity manager exposes narrow live owned/paired authorization facts', async (t) => {

@@ -112,6 +112,29 @@ function createManualScheduler() {
   }
 }
 
+test('backend lifecycle provides an abort signal when Bare has no AbortController global', () => {
+  const lifecycleModuleUrl = new URL('../src/storage.js', import.meta.url).href
+  const script = `
+    globalThis.AbortController = undefined
+    const { createBackendLifecycle } = await import(${JSON.stringify(lifecycleModuleUrl)})
+    const lifecycle = createBackendLifecycle()
+    let abortEvents = 0
+    let cleanups = 0
+    lifecycle.own('portable cleanup', () => { cleanups += 1 })
+    lifecycle.signal.addEventListener('abort', () => { throw new Error('listener failed') }, { once: true })
+    lifecycle.signal.addEventListener('abort', () => { abortEvents += 1 }, { once: true })
+    await lifecycle.shutdown()
+    await lifecycle.shutdown()
+    if (!lifecycle.signal.aborted || abortEvents !== 1 || cleanups !== 1) {
+      throw new Error('portable abort signal did not abort and clean up exactly once')
+    }
+  `
+
+  execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+    stdio: 'pipe',
+  })
+})
+
 test('backend lifecycle aborts deferred work and closes owned resources once in reverse order', async () => {
   const scheduler = createManualScheduler()
   const closeLog = []

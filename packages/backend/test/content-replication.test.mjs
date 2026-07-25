@@ -1268,7 +1268,6 @@ test('checkpoint CAS failure stops at the boundary and no bypass or direct write
     options: {
       publishAnyway () { bypassCalls++ },
       publicBee: { put () { bypassCalls++ } },
-      publicFeed: { add () { bypassCalls++ } },
     },
   })
 

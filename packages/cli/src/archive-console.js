@@ -206,12 +206,8 @@ export function annotateTmdbDiscoverItems(items = [], networkIndex = new Map()) 
   })
 }
 
-async function readPublishedChannels(metaDb) {
-  const node = await metaDb?.get?.('published-channels-v2').catch?.(() => null)
-  return Array.isArray(node?.value) ? node.value : []
-}
 
-export async function buildCatalogChannels({ channels = [], store = null, publicFeed = null, metaDb = null } = {}) {
+export async function buildCatalogChannels({ channels = [], store = null } = {}) {
   const previewsByChannel = await store?.getCompletedVideoPreviewsByChannel?.()
   const byKey = new Map()
 
@@ -223,27 +219,6 @@ export async function buildCatalogChannels({ channels = [], store = null, public
     if (normalized) byKey.set(channelKey, normalized)
   }
 
-  const feedEntries = typeof publicFeed?.getFeed === 'function'
-    ? publicFeed.getFeed()
-    : Array.from(publicFeed?.entries?.values?.() || [])
-
-  for (const entry of feedEntries || []) {
-    const channelKey = entry.channelKey || entry.driveKey
-    if (!channelKey || byKey.has(channelKey)) continue
-    const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-    if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
-    const normalized = normalizeCatalogChannel(entry, previewVideos)
-    if (normalized) byKey.set(channelKey, normalized)
-  }
-
-  for (const entry of await readPublishedChannels(metaDb)) {
-    const channelKey = entry.channelKey || entry.driveKey
-    if (!channelKey) continue
-    const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-    if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
-    const normalized = normalizeCatalogChannel({ source: 'local', relayRole: 'publisher', ...entry }, previewVideos)
-    if (normalized) byKey.set(channelKey, normalized)
-  }
 
   return Array.from(byKey.values())
 }
@@ -261,7 +236,7 @@ export async function createArchiveConsole({
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
-  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJobToFeed?.(job) })
+  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job) })
 
   // Read an archive submission as either a browser file upload
   // (multipart/form-data, streamed to disk) or a URL-encoded form. Returns the
@@ -293,9 +268,7 @@ export async function createArchiveConsole({
   async function getCatalogChannels() {
     return buildCatalogChannels({
       channels: service.catalog?.getChannels?.() || [],
-      store,
-      publicFeed: service.runtime?.publicFeed,
-      metaDb: service.runtime?.ctx?.metaDb
+      store
     })
   }
 
@@ -410,7 +383,7 @@ export async function createArchiveConsole({
           'access-control-allow-origin': '*',
           'cache-control': 'no-store'
         })
-        res.end(JSON.stringify(service.getLinkDescriptor?.() || { schema: 'peartube.relayLink', version: 1, relayMirrorKey: null }, null, 2))
+        res.end(JSON.stringify(service.getLinkDescriptor?.() || { schema: 'peartube.relayLink', version: 2, seedPin: { enabled: false, authorizedClients: 0 } }, null, 2))
         return
       }
 

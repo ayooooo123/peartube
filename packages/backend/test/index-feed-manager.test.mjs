@@ -40,3 +40,31 @@ test('index feed manager quarantines stale/forked pages and bounds spam without 
   t.is(forked.status, 'quarantined')
   t.alike(opened, [])
 })
+
+test('index feed manager quarantines unsupported requirements before projecting records', async (t) => {
+  const manager = createIndexFeedManager({ now: () => 10 })
+  manager.subscribe(curatorId)
+  const incompatible = createIndexFeedPage({
+    curatorId,
+    pageCursor: '0',
+    nextCursor: null,
+    records: [{
+      kind: 'publication-reference',
+      entityRef: 'work:future',
+      publicationId: 'c'.repeat(64),
+      publisherId: 'b'.repeat(64),
+    }],
+    requiredCapabilities: ['future-global-discovery:v1'],
+    keyPair: curator,
+    expiresAt: 100,
+  })
+
+  const result = await manager.syncFeed({
+    curatorId,
+    startCursor: '0',
+    fetchPage: async () => incompatible,
+  })
+  t.is(result.status, 'quarantined')
+  t.is(result.errorCode, 'PROTOCOL_CAPABILITY_UNSUPPORTED')
+  t.alike(manager.getRecords(), [], 'no record is projected and no deleted global-feed fallback is attempted')
+})

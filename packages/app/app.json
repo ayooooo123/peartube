@@ -2,7 +2,7 @@
   "expo": {
     "name": "PearTube",
     "slug": "peartube",
-    "version": "1.0.0",
+    "version": "0.2.38",
     "orientation": "default",
     "scheme": "peartube",
     "icon": "./assets/images/icon.png",
@@ -29,6 +29,7 @@
         "backgroundColor": "#0e0e10"
       },
       "package": "com.peartube.app",
+      "versionCode": 238,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",

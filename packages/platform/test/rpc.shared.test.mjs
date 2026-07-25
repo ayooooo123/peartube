@@ -13,11 +13,14 @@ async function loadCatalogModules() {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-platform-rpc-'))
   const hostRoot = path.join(repositoryRoot, 'packages/host/src')
   const hostEventsUrl = pathToFileURL(path.join(hostRoot, 'event-map.js')).href
+  const hostContractsUrl = pathToFileURL(path.join(hostRoot, 'contracts.js')).href
   const sharedSourcePath = path.join(platformRoot, 'src/rpc.shared.ts')
-  const sharedSource = fs.readFileSync(sharedSourcePath, 'utf8').replace(
-    "import { PROTOCOL_EVENTS } from '@peartube/host/events'",
-    `import { PROTOCOL_EVENTS } from '${hostEventsUrl}'`,
-  )
+  const sharedSource = fs.readFileSync(sharedSourcePath, 'utf8')
+    .replace("import { PROTOCOL_VERSION } from '@peartube/host/contracts'", `import { PROTOCOL_VERSION } from '${hostContractsUrl}'`)
+    .replace(
+      "import { PROTOCOL_EVENTS } from '@peartube/host/events'",
+      `import { PROTOCOL_EVENTS } from '${hostEventsUrl}'`,
+    )
   const sharedOutput = ts.transpileModule(sharedSource, {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
@@ -30,7 +33,7 @@ async function loadCatalogModules() {
 
   const hostSourcePath = path.join(hostRoot, 'create-client.js')
   const hostSource = fs.readFileSync(hostSourcePath, 'utf8')
-    .replace("from './contracts.js'", `from '${pathToFileURL(path.join(hostRoot, 'contracts.js')).href}'`)
+    .replace("from './contracts.js'", `from '${hostContractsUrl}'`)
     .replace("import DefaultHRPC from '@peartube/spec'", 'const DefaultHRPC = null')
     .replace(
       "from '@peartube/spec/app-rpc-adapter'",
@@ -155,6 +158,94 @@ test('native and web bridge chains use host readiness and generated request-pres
   await exercisePlatformCatalog('desktop')
 })
 
+test('shared media graph facade exposes every command and preserves catalog limit presence', async () => {
+  const { createMediaGraphRpc } = await loadCatalogModules()
+  const calls = []
+  const mediaGraph = {}
+  for (const method of [
+    'getMediaCatalog',
+    'getMediaEntity',
+    'getMediaCollection',
+    'getMediaCollectionItems',
+    'getMediaAgent',
+    'getAgentContributions',
+    'getPublicationSources',
+    'getClaimProvenance',
+    'setSourcePreference',
+  ]) {
+    mediaGraph[method] = async (request) => {
+      calls.push([method, request])
+      return { success: true, items: [] }
+    }
+  }
+  const rpc = createMediaGraphRpc(() => ({
+    ready: async () => {},
+    mediaGraph,
+  }))
+
+  await rpc.getMediaCatalog({ limit: 0 })
+  await rpc.getMediaCatalog({})
+  await rpc.getMediaEntity({ entityId: 'work-1' })
+  await rpc.getMediaCollection({ entityId: 'collection-1' })
+  await rpc.getMediaCollectionItems({ collectionEntityId: 'collection-1', limit: 2 })
+  await rpc.getMediaAgent({ entityId: 'agent-1' })
+  await rpc.getAgentContributions({ agentEntityId: 'agent-1' })
+  await rpc.getPublicationSources({ entityId: 'work-1' })
+  await rpc.getClaimProvenance({ claimId: 'claim-1' })
+  await rpc.setSourcePreference({ entityId: 'work-1', publicationId: 'publication-1', preferred: true })
+
+  assert.deepEqual(calls, [
+    ['getMediaCatalog', { limit: 0, limitProvided: true }],
+    ['getMediaCatalog', {}],
+    ['getMediaEntity', { entityId: 'work-1' }],
+    ['getMediaCollection', { entityId: 'collection-1' }],
+    ['getMediaCollectionItems', { collectionEntityId: 'collection-1', limit: 2, limitProvided: true }],
+    ['getMediaAgent', { entityId: 'agent-1' }],
+    ['getAgentContributions', { agentEntityId: 'agent-1' }],
+    ['getPublicationSources', { entityId: 'work-1' }],
+    ['getClaimProvenance', { claimId: 'claim-1' }],
+    ['setSourcePreference', { entityId: 'work-1', publicationId: 'publication-1', preferred: true }],
+  ])
+})
+
+test('platform bridge dispatches typed media graph updates', async () => {
+  const { PROTOCOL_VERSION, createPlatformRpcBridge } = await loadCatalogModules()
+  const listeners = new Map()
+  const client = {
+    rpc: {},
+    events: {
+      on(event, listener) {
+        listeners.set(event, listener)
+        return () => listeners.delete(event)
+      },
+    },
+    ready: async () => ({ blobServerPort: 9999, protocolVersion: PROTOCOL_VERSION }),
+    channel: {},
+    mediaGraph: {},
+  }
+  const bridge = createPlatformRpcBridge({
+    platform: 'desktop',
+    entrypoint: 'test-entry',
+    getStoragePath: () => '/tmp/peartube-platform-test',
+    runner: {
+      async start() {
+        return {
+          stream: {},
+          client,
+          waitUntilReady: () => client.ready(),
+          terminate: async () => {},
+          onLifecycle: () => () => {},
+        }
+      },
+    },
+  })
+  const updates = []
+  bridge.events.onMediaGraphUpdate((update) => updates.push(update))
+  await bridge.init()
+  listeners.get('mediaGraph.updated')({ revision: '42', changedCount: 5 })
+  assert.deepEqual(updates, [{ revision: '42', changedCount: 5 }])
+})
+
 test('shared facade waits and preserves limit presence for an injected direct protocol client', async () => {
   const { PROTOCOL_VERSION, createChannelCatalogRpc, createPlatformRpcBridge } = await loadCatalogModules()
   let resolveReady
@@ -238,10 +329,292 @@ test('shared facade waits and preserves limit presence for an injected direct pr
   assert.deepEqual(rejectedRawCalls, [])
 })
 
-test('native and web RPC facades use the shared catalog forwarding helper', () => {
+test('native and web RPC facades have identical media graph surfaces without feed compatibility', () => {
   for (const fileName of ['rpc.native.ts', 'rpc.web.ts']) {
     const source = fs.readFileSync(path.join(platformRoot, 'src', fileName), 'utf8')
     assert.match(source, /createChannelCatalogRpc/)
     assert.match(source, /\.\.\.createChannelCatalogRpc\(ensureProtocolClient\)/)
+    assert.match(source, /createMediaGraphRpc/)
+    assert.match(source, /\.\.\.createMediaGraphRpc\(ensureProtocolClient\)/)
+    for (const legacyName of [
+      'refreshFeed',
+      'submitToFeed',
+      'unpublishFromFeed',
+      'isChannelPublished',
+      'onEventFeedUpdate',
+    ]) {
+      assert.doesNotMatch(source, new RegExp(`\\b${legacyName}\\b`), `${fileName} removes ${legacyName}`)
+    }
   }
+})
+
+test('publisher shell workflow provisions, binds intent through prepare/sign/submit, and consumes accepted contributions', async () => {
+  const { createPublisherRootOperationRpc } = await loadCatalogModules()
+  const calls = []
+  const signerPublicKey = Buffer.alloc(32, 3)
+  const candidateRecordId = Buffer.alloc(32, 7)
+  const signature = Buffer.alloc(64, 11)
+  const request = {
+    publisherId: 'a'.repeat(64),
+    recordType: 'publisher.writer-revocation',
+    body: Buffer.from([1, 2, 3]),
+    displaySummaryJson: '{"action":"revoke writer"}',
+    intentExpiresAt: 1_700_000_060_000,
+    userInitiated: true
+  }
+  const prepared = {
+    intentId: 'intent-platform',
+    success: true,
+    publisherId: request.publisherId,
+    recordType: request.recordType,
+    unsignedBytes: Buffer.from([9, 8, 7]),
+    candidateRecordId,
+    signerPublicKey,
+    bodyLength: request.body.byteLength,
+    issuedAt: 1_700_000_000_000,
+    intentExpiresAt: request.intentExpiresAt,
+    displaySummaryJson: request.displaySummaryJson
+  }
+  const signed = {
+    intentId: prepared.intentId,
+    publisherId: prepared.publisherId,
+    recordType: prepared.recordType,
+    unsignedBytes: prepared.unsignedBytes,
+    candidateRecordId,
+    displaySummaryJson: prepared.displaySummaryJson,
+    signer: signerPublicKey,
+    signerPublicKey,
+    signature
+  }
+  const client = {
+    publisher: {
+      async provisionPublisherCatalog(value) {
+        calls.push(['provision', value])
+        return { success: true, publisherId: value.publisherId, catalogBootstrapKey: Buffer.alloc(32, 4) }
+      },
+      async preparePublisherRootOperation(value) {
+        calls.push(['prepare', value])
+        return prepared
+      },
+      async submitPublisherRootOperation(value) {
+        calls.push(['submit', value])
+        return {
+          intentId: value.intentId,
+          success: true,
+          valid: true,
+          complete: false,
+          recordId: candidateRecordId,
+          signer: signerPublicKey,
+          signerPublicKey,
+          signature
+        }
+      }
+    }
+  }
+  const signerBridge = {
+    async beginUserIntent(value) {
+      calls.push(['intent', value])
+      return { intentId: 'intent-platform', signerPublicKey }
+    },
+    async signPreparedRecord(intentId, value) {
+      calls.push(['sign', intentId, value])
+      return signed
+    },
+    completeIntent(intentId) {
+      calls.push(['complete', intentId])
+    },
+    cancelIntent() {
+      throw new Error('cancel should not run')
+    }
+  }
+  const publisher = createPublisherRootOperationRpc(() => client, signerBridge)
+  const provisionRequest = { publisherId: request.publisherId, genesisRootKey: Buffer.alloc(32, 5) }
+
+  const provisioned = await publisher.provisionPublisherCatalog(provisionRequest)
+  const result = await publisher.authorizePublisherRootOperation(request)
+
+  assert.deepEqual(calls, [
+    ['provision', provisionRequest],
+    ['intent', request],
+    ['prepare', {
+      publisherId: request.publisherId,
+      recordType: request.recordType,
+      body: request.body,
+      displaySummaryJson: request.displaySummaryJson,
+      intentExpiresAt: request.intentExpiresAt,
+      intentId: 'intent-platform',
+      signerPublicKey
+    }],
+    ['sign', 'intent-platform', prepared],
+    ['submit', signed],
+    ['complete', 'intent-platform']
+  ])
+  assert.equal(provisioned.success, true)
+  assert.equal(result.success, true)
+  assert.equal(result.complete, false)
+})
+
+test('publisher root workflow rejects renderer use and substituted submit identity', async () => {
+  const { createPublisherRootOperationRpc } = await loadCatalogModules()
+  const request = {
+    publisherId: 'a'.repeat(64),
+    recordType: 'publisher.namespace',
+    body: Buffer.from([1]),
+    displaySummaryJson: '{"action":"create publisher"}',
+    intentExpiresAt: 1_700_000_060_000,
+    userInitiated: true
+  }
+  const renderer = createPublisherRootOperationRpc(() => ({ publisher: {} }), null, { runtime: 'renderer' })
+  await assert.rejects(
+    renderer.authorizePublisherRootOperation(request),
+    (error) => error?.code === 'PUBLISHER_SIGNER_RENDERER_FORBIDDEN' && !error.message.includes('create publisher'),
+  )
+  await assert.rejects(
+    renderer.provisionPublisherCatalog({ publisherId: request.publisherId, genesisRootKey: Buffer.alloc(32) }),
+    (error) => error?.code === 'PUBLISHER_SIGNER_RENDERER_FORBIDDEN',
+  )
+
+  const signerPublicKey = Buffer.alloc(32, 3)
+  const candidateRecordId = Buffer.alloc(32, 7)
+  let canceled = 0
+  const bridge = {
+    async beginUserIntent() {
+      return { intentId: 'intent-substitution', signerPublicKey }
+    },
+    async signPreparedRecord() {
+      return {
+        intentId: 'intent-substitution',
+        publisherId: request.publisherId,
+        recordType: request.recordType,
+        unsignedBytes: Buffer.from([9]),
+        candidateRecordId,
+        signer: signerPublicKey,
+        signerPublicKey,
+        signature: Buffer.alloc(64, 11)
+      }
+    },
+    completeIntent() {
+      throw new Error('substituted echo must not complete the intent')
+    },
+    cancelIntent() {
+      canceled++
+    }
+  }
+  const publisher = createPublisherRootOperationRpc(() => ({
+    publisher: {
+      async preparePublisherRootOperation(value) {
+        return {
+          ...value,
+          success: true,
+          unsignedBytes: Buffer.from([9]),
+          candidateRecordId,
+          bodyLength: value.body.byteLength,
+          issuedAt: 1_700_000_000_000,
+          displaySummaryJson: value.displaySummaryJson
+        }
+      },
+      async submitPublisherRootOperation(value) {
+        return {
+          intentId: value.intentId,
+          success: true,
+          valid: true,
+          complete: true,
+          recordId: Buffer.alloc(32, 99),
+          signer: Buffer.alloc(32, 100),
+          signerPublicKey: Buffer.alloc(32, 100),
+          signature: Buffer.alloc(64, 101)
+        }
+      }
+    }
+  }), bridge)
+
+  await assert.rejects(
+    publisher.authorizePublisherRootOperation(request),
+    (error) => error?.code === 'PUBLISHER_SIGNER_SUBSTITUTION' &&
+      !error.message.includes('create publisher') &&
+      !error.message.includes(candidateRecordId.toString('hex')),
+  )
+  assert.equal(canceled, 1)
+})
+
+test('platform runner session carries the shell signer only on explicitly injected native startup', async () => {
+  const { createPlatformRpcBridge, PROTOCOL_VERSION } = await loadCatalogModules()
+  const signer = { beginUserIntent() {}, signPreparedRecord() {} }
+  let receivedOptions
+  const lifecycleListeners = new Set()
+  const platformErrors = []
+  const client = {
+    rpc: {},
+    events: { on: () => () => {} },
+    channel: {},
+    ready: async () => ({
+      blobServerPort: null,
+      blobServerReady: false,
+      blobServerError: null,
+      protocolVersion: PROTOCOL_VERSION
+    })
+  }
+  const runner = {
+    async start(options) {
+      receivedOptions = options
+      return {
+        stream: {},
+        client,
+        publisherSigner: options.publisherSigner,
+        waitUntilReady: client.ready,
+        terminate: async () => {},
+        onLifecycle(listener) {
+          lifecycleListeners.add(listener)
+          return () => lifecycleListeners.delete(listener)
+        }
+      }
+    }
+  }
+  const bridge = createPlatformRpcBridge({
+    platform: 'mobile',
+    runner,
+    entrypoint: 'mobile-entry',
+    getStoragePath: () => '/tmp/mobile',
+    getPublisherSigner: () => signer
+  })
+  bridge.events.onError((error) => platformErrors.push(error))
+
+  await bridge.init()
+
+  assert.equal(receivedOptions.publisherSigner, signer)
+  assert.equal(receivedOptions.protocolVersion, PROTOCOL_VERSION)
+  assert.equal(bridge.getPublisherSigner(), signer)
+  for (const listener of lifecycleListeners) {
+    listener({
+      type: 'host.error',
+      code: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+      message: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+      retryable: false,
+      storedVersion: 5,
+      expectedVersion: PROTOCOL_VERSION,
+    })
+  }
+  assert.deepEqual(platformErrors, [{
+    code: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+    message: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+    retryable: false,
+    storedVersion: 5,
+    expectedVersion: PROTOCOL_VERSION,
+  }])
+})
+
+test('native facade accepts injected shell signer while web facade hard-rejects renderer signing', () => {
+  const nativeSource = fs.readFileSync(path.join(platformRoot, 'src/rpc.native.ts'), 'utf8')
+  const webSource = fs.readFileSync(path.join(platformRoot, 'src/rpc.web.ts'), 'utf8')
+  const nativeRunnerSource = fs.readFileSync(path.join(platformRoot, 'src/runner.native.ts'), 'utf8')
+  const webRunnerSource = fs.readFileSync(path.join(platformRoot, 'src/runner.web.ts'), 'utf8')
+
+  assert.match(nativeSource, /publisherSigner\?: PublisherSignerBridgeLike/)
+  assert.match(nativeSource, /createPublisherRootOperationRpc\(/)
+  assert.match(nativeSource, /getPublisherSigner:/)
+  assert.match(webSource, /runtime: publisherSigner \? 'shell' : 'renderer'/)
+  assert.match(webSource, /createPublisherRootOperationRpc\(/)
+  assert.match(nativeRunnerSource, /publisherSigner: options\.publisherSigner/)
+  assert.match(webRunnerSource, /const \{ publisherSigner, \.\.\.transportOptions \} = options/)
+  assert.match(webRunnerSource, /publisherSigner: publisherSigner \?\? undefined/)
 })

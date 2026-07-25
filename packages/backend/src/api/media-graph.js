@@ -1,8 +1,11 @@
 import { resolveMediaEntity } from '../media-graph/resolver.js'
 import { selectPublicationSources } from '../media-graph/source-selector.js'
+import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 100
+const DEFAULT_CATALOG_PAGE_LIMIT = 20
+const MAX_CATALOG_PAGE_LIMIT = 50
 
 function okPage(items, nextCursor = null) {
   return { success: true, items, nextCursor }
@@ -36,6 +39,24 @@ function pageRows(rows, request = {}, keyOf = row => row.claimId) {
   if (request.cursor) {
     const index = rows.findIndex(row => keyOf(row) === request.cursor)
     if (index < 0) return { error: error('INVALID_CURSOR', 'Invalid media graph cursor', { items: [], nextCursor: null }) }
+    offset = index + 1
+  }
+  const page = rows.slice(offset, offset + limit)
+  const nextCursor = offset + limit < rows.length ? keyOf(page.at(-1)) : null
+  return { page, nextCursor }
+}
+
+function pageCatalogRows(rows, request = {}, keyOf = row => row.entityId) {
+  const limit = (!request.limitProvided && request.limit === undefined)
+    ? DEFAULT_CATALOG_PAGE_LIMIT
+    : Number(request.limit)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_CATALOG_PAGE_LIMIT) {
+    return { error: error('INVALID_LIMIT', 'Media catalog limit must be between 1 and 50', { items: [], nextCursor: null }) }
+  }
+  let offset = 0
+  if (request.cursor) {
+    const index = rows.findIndex(row => keyOf(row) === request.cursor)
+    if (index < 0) return { error: error('INVALID_CURSOR', 'Invalid media catalog cursor', { items: [], nextCursor: null }) }
     offset = index + 1
   }
   const page = rows.slice(offset, offset + limit)
@@ -119,19 +140,56 @@ function normalizePreferenceStore(store) {
 }
 
 function manifestSource(manifest, row, preferred, trust = {}) {
-  const rendition = manifest?.body?.renditions?.[0] || null
   const publisherId = manifest?.body?.publisherId || row.issuer
+  const rendition = manifest?.body?.renditions?.find(candidate => (
+    candidate && candidate.blocked !== true && candidate.superseded !== true &&
+    typeof candidate.renditionId === 'string' && candidate.renditionId.length > 0
+  )) || null
+  const publicationId = manifest?.publicationId || row.body.payload?.publicationId
   return {
-    publicationId: manifest?.publicationId || row.body.payload?.publicationId,
+    publicationId,
     publisherId,
     manifestId: manifest?.body?.manifestId || null,
     renditionId: rendition?.renditionId || null,
+    publicationAuthorized: Boolean(
+      manifest &&
+      rendition &&
+      manifest.publicationId === publicationId &&
+      manifest.body?.publisherId === publisherId
+    ),
     metadataConfidence: row.body.confidence || 0,
     publisherTrust: trust[publisherId] || 0,
     availabilityScore: row.body.payload?.availabilityStatus === 'available' ? 100 : 0,
     formatSupport: 100,
     moderationPenalty: row.body.payload?.moderationPenalty || 0,
+    availabilityState: row.body.payload?.availabilityStatus || 'unknown',
+    archiveState: row.body.payload?.archiveState,
+    cacheState: row.body.payload?.cacheState,
+    introductionPublisherIds: row.body.payload?.introductionPublisherIds || [row.issuer],
+    introductionIndexIds: row.body.payload?.introductionIndexIds || [],
+    moderationFeedIds: row.body.payload?.moderationFeedIds || [],
+    claimConflictIds: row.body.payload?.claimConflictIds || [],
+    provenanceClaimIds: row.body.payload?.provenanceClaimIds || [row.claimId],
+    stale: row.body.payload?.stale === true,
+    incomplete: row.body.payload?.incomplete === true,
     preferred,
+  }
+}
+
+function schemaUint(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return 0
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.round(number))
+}
+
+function sourceDiagnosticsResponse(item) {
+  return {
+    ...item,
+    scoreMetadataConfidence: schemaUint(item.scoreMetadataConfidence),
+    scorePublisherTrust: schemaUint(item.scorePublisherTrust),
+    scoreAvailability: schemaUint(item.scoreAvailability),
+    scoreFormatSupport: schemaUint(item.scoreFormatSupport),
+    scoreModerationPenalty: schemaUint(-Number(item.scoreModerationPenalty || 0))
   }
 }
 
@@ -141,18 +199,30 @@ function sourceResponse(source) {
     publisherId: source.publisherId,
     manifestId: source.manifestId,
     renditionId: source.renditionId,
-    score: Math.max(0, Math.round(source.score || 0)),
-    availabilityScore: source.availabilityScore,
-    formatSupport: source.formatSupport,
-    moderationPenalty: source.moderationPenalty,
+    score: schemaUint(source.score),
+    availabilityScore: schemaUint(source.availabilityScore),
+    formatSupport: schemaUint(source.formatSupport),
+    moderationPenalty: schemaUint(source.moderationPenalty),
     preferred: source.preferred === true,
+  }
+}
+
+function renditionResponse(rendition) {
+  return {
+    renditionId: rendition.renditionId,
+    purpose: rendition.purpose,
+    format: rendition.format,
+    coreKey: rendition.core.key,
+    coreLength: schemaUint(rendition.core.length),
+    treeHash: rendition.core.treeHash,
+    byteLength: schemaUint(rendition.core.byteLength),
   }
 }
 
 export function createMediaGraphApi(options = {}) {
   const mediaGraphStore = options.mediaGraphStore || options.ctx?.mediaGraphStore || null
   const assetManifestStore = options.assetManifestStore || options.ctx?.assetManifestStore || null
-  const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences)
+  const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences || options.ctx?.metaDb?.sub?.('media-source-preferences'))
   const trust = options.trust || options.ctx?.mediaGraphTrust || {}
 
   function requireGraphStore() {
@@ -181,6 +251,18 @@ export function createMediaGraphApi(options = {}) {
     })
   }
 
+  function decorateSources(sources) {
+    const diagnostics = new Map(projectSourceSelectionDiagnostics(sources, {
+      selectedPublicationId: sources[0]?.publicationId,
+      requireAuthorization: true,
+      now: options.now?.() ?? Date.now(),
+    }).map(item => [item.publicationId, sourceDiagnosticsResponse(item)]))
+    return sources.map(source => ({
+      ...sourceResponse(source),
+      ...(diagnostics.get(source.publicationId) || {}),
+    }))
+  }
+
   function resolveOrMissing(entityId) {
     const claims = mediaGraphStore.getClaimsBySubject(entityId)
     if (claims.length === 0) return null
@@ -202,7 +284,7 @@ export function createMediaGraphApi(options = {}) {
       displayName: resolved.metadata.displayName || resolved.metadata.title || null,
       claimCount: resolved.claims.length,
       conflictCount: resolved.conflicts.length,
-      sources: sources.map(sourceResponse),
+      sources: decorateSources(sources),
       renditions: [],
     }
     return {
@@ -214,6 +296,48 @@ export function createMediaGraphApi(options = {}) {
   }
 
   return {
+    async getMediaCatalog(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return { ...missingStore, items: [], nextCursor: null }
+      try {
+        await options.ctx?.mediaCatalogProjection?.update?.()
+      } catch {
+        return error('MEDIA_GRAPH_UPDATE_FAILED', 'Media graph projection update failed', { items: [], nextCursor: null })
+      }
+      const entityIds = new Set()
+      for (const claim of mediaGraphStore.getClaims()) {
+        if (claim.revoked) continue
+        for (const subject of claim.subjects || []) entityIds.add(subject)
+      }
+      const summaries = []
+      for (const entityId of [...entityIds].sort()) {
+        const resolved = resolveOrMissing(entityId)
+        if (!resolved) continue
+        const sources = await buildSources(entityId)
+        const renditions = new Map()
+        for (const source of sources) {
+          const manifest = assetManifestStore?.getManifest?.(source.publicationId)
+          for (const rendition of manifest?.body?.renditions || []) {
+            if (!rendition.blocked && !rendition.superseded) renditions.set(rendition.renditionId, renditionResponse(rendition))
+          }
+        }
+        summaries.push({
+          entityId,
+          entityKind: entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
+          localClusterId: resolved.localClusterId,
+          title: resolved.metadata.title || resolved.metadata.displayName || null,
+          subtitle: resolved.metadata.subtitle || null,
+          claimCount: resolved.claims.length,
+          conflictCount: resolved.conflicts.length,
+          sources: sources.map(sourceResponse),
+          renditions: [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId)),
+        })
+      }
+      const result = pageCatalogRows(summaries, request)
+      if (result.error) return result.error
+      return okPage(result.page, result.nextCursor)
+    },
+
     async getMediaEntity(request = {}) {
       return entityResult(request.entityId, request)
     },
@@ -264,9 +388,10 @@ export function createMediaGraphApi(options = {}) {
       const missingStore = requireGraphStore()
       if (missingStore) return { ...missingStore, items: [], nextCursor: null }
       const sources = await buildSources(request.entityId)
-      const result = pageRows(sources, request, source => source.publicationId)
+      const decorated = decorateSources(sources)
+      const result = pageRows(decorated, request, source => source.publicationId)
       if (result.error) return result.error
-      return okPage(result.page.map(sourceResponse), result.nextCursor)
+      return okPage(result.page, result.nextCursor)
     },
 
     async getClaimProvenance(request = {}) {

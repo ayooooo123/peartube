@@ -41,8 +41,8 @@ test('encodeJsonFrame emits parseable object JSON', () => {
 test('shared platform RPC preserves init error fidelity and transcode progress events', () => {
   const source = rpcSharedSource()
 
-  assert.match(source, /code: \(error as any\)\?\.code/, 'init failures should preserve error code')
-  assert.match(source, /retryable: Boolean\(\(error as any\)\?\.retryable\)/, 'init failures should preserve retryability')
+  assert.match(source, /const errorCode = errorField\(error, 'code'\)/, 'init failures should preserve error code')
+  assert.match(source, /retryable: Boolean\(retryable\)/, 'init failures should preserve retryability')
   assert.match(source, /PROTOCOL_EVENTS\.TRANSCODE_PROGRESS/, 'transcode progress should be bound through protocol events')
   assert.match(source, /onTranscodeProgress/, 'platform consumers should be able to subscribe to transcode progress')
 })

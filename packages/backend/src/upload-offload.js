@@ -1,22 +1,10 @@
 /**
- * Upload offload durability assessment.
+ * Legacy Hypercore peer-range inspection helpers.
  *
- * The user's own uploaded videos are the *source* copy — if the only local
- * copy is cleared while no one else holds the bytes, the video is permanently
- * lost from the network. So an upload may only be evicted from local disk once
- * we can prove, on-device, that a full copy lives elsewhere.
- *
- * Hypercore exposes each connected peer's remote availability (`remoteBitfield`
- * / `remoteContiguousLength`), so we can verify — without trusting a soft
- * "available" claim — that a peer actually holds every block of the blob's byte
- * range. We then classify each full-copy holder:
- *   - the always-on relay / blind peer (a durable anchor),
- *   - one of the user's own paired devices (a trusted anchor),
- *   - or a generic live peer (transient; only counts toward a redundancy
- *     threshold).
- *
- * Eligibility is satisfied by ANY of: a relay full copy, an own-device full
- * copy, or at least `minFullCopyPeers` independent live full copies.
+ * Raw peer availability is useful evidence, but it is never durability proof:
+ * viewers disconnect, anonymous Noise identities are cheap, and a configured
+ * relay key does not prove an intentional retention commitment. Source deletion
+ * is authorized only by the publication-bound archive assessment manager.
  */
 
 function toHexKey(value) {
@@ -38,11 +26,7 @@ function normalizeKeySet(keys) {
 }
 
 export const DEFAULT_OFFLOAD_POLICY = Object.freeze({
-  // Minimum number of independent live peers that must each hold the COMPLETE
-  // blob range before generic (untrusted, transient) peers alone can justify an
-  // eviction. A relay or own-device full copy is a standalone durable anchor and
-  // bypasses this count.
-  minFullCopyPeers: 2,
+  minFullCopyPeers: Number.MAX_SAFE_INTEGER,
 })
 
 /**
@@ -91,42 +75,28 @@ export function collectFullCopyPeers(peers, range) {
 }
 
 /**
- * Decide whether an upload is safe to evict locally, given who holds a full
- * copy and which keys are durable anchors (relay / own devices).
- * @param {{ fullCopyKeys?: string[], fullCopyAnonymous?: number, relayKeys?: any, deviceKeys?: any, policy?: { minFullCopyPeers: number } }} input
+ * Classify connected holders without treating transient or anonymous peers as
+ * source-deletion authority. This helper remains for diagnostics and legacy
+ * callers; new offload decisions use archive/confidence.js.
  */
 export function assessOffloadEligibility({
   fullCopyKeys = [],
   fullCopyAnonymous = 0,
   relayKeys = [],
   deviceKeys = [],
-  policy = DEFAULT_OFFLOAD_POLICY,
 } = {}) {
   const relaySet = normalizeKeySet(relayKeys)
   const deviceSet = normalizeKeySet(deviceKeys)
   const keys = Array.from(new Set((fullCopyKeys || []).map(toHexKey).filter(Boolean)))
-
-  const relayHasFullCopy = keys.some((k) => relaySet.has(k))
-  const ownDeviceHasFullCopy = keys.some((k) => deviceSet.has(k))
-  // Distinct full copies = identified peers + anonymous (no-key) holders.
+  const relayHasFullCopy = keys.some((key) => relaySet.has(key))
+  const ownDeviceHasFullCopy = keys.some((key) => deviceSet.has(key))
   const fullCopyPeers = keys.length + Math.max(0, Number(fullCopyAnonymous) || 0)
-
-  const minFullCopyPeers = Math.max(1, Number(policy?.minFullCopyPeers) || DEFAULT_OFFLOAD_POLICY.minFullCopyPeers)
-  const meetsRedundancy = fullCopyPeers >= minFullCopyPeers
-
-  const eligible = relayHasFullCopy || ownDeviceHasFullCopy || meetsRedundancy
-
-  const reasons = []
-  if (relayHasFullCopy) reasons.push('relay-full-copy')
-  if (ownDeviceHasFullCopy) reasons.push('own-device-full-copy')
-  if (meetsRedundancy) reasons.push(`peer-redundancy:${fullCopyPeers}`)
-
   return {
-    eligible,
+    eligible: ownDeviceHasFullCopy,
     fullCopyPeers,
     relayHasFullCopy,
     ownDeviceHasFullCopy,
-    minFullCopyPeers,
-    reasons,
+    minFullCopyPeers: Number.MAX_SAFE_INTEGER,
+    reasons: ownDeviceHasFullCopy ? ['own-device-full-copy'] : [],
   }
 }

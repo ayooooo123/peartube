@@ -7,25 +7,25 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(resolve(__dirname, '../components/video-player/P2PStatsBar.tsx'), 'utf8')
 
-test('P2P stats bar does not claim preparing when bytes are actively transferring', () => {
-  assert.match(source, /if \(downloadSpeed > 0\) return \{ color: '#fbbf24', label: 'Downloading' \}/)
+test('P2P stats bar reports active peer transfers as streaming', () => {
+  assert.match(
+    source,
+    /if \(peerCount > 0 && \(downloadSpeed > 0 \|\| stats\.status === 'downloading'\)\) \{[\s\S]*`Streaming from \$\{peerCount\}/,
+  )
 })
 
-test('P2P stats bar treats an actively loaded video as ready even when transfer speeds are momentarily idle', () => {
-  assert.match(source, /const hasPlayableProgress =/, 'stats bar should classify playable byte or block progress separately from transfer speed')
-  assert.match(source, /sessionDownloadedBytes > 0/, 'streaming state should use bytes downloaded during the active playback session')
-  assert.match(source, /sessionDownloadedBlocks > 0/, 'streaming state should use blocks downloaded during the active playback session')
-  assert.doesNotMatch(source, /Number\(stats\?\.progress \?\? 0\) > 0/, 'sampled aggregate progress must not be treated as live streaming')
-  assert.match(source, /if \(hasPlayableProgress\) return \{ color: '#60a5fa', label: 'Streaming' \}/, 'loaded playable progress should stay in streaming state instead of falling through to preparing')
+test('P2P stats bar does not infer live streaming from aggregate cache progress', () => {
+  assert.match(source, /const hasPlayableProgress = downloadSpeed > 0/)
+  assert.doesNotMatch(source, /hasPlayableProgress = [^\n]*(?:downloadedBytes|downloadedBlocks|stats\?\.progress)/)
 })
 
-test('P2P stats bar treats fully loaded videos as cached before streaming', () => {
-  const cachedCheckIndex = source.indexOf("if (isCached) return { color: '#4ade80', label: 'Cached' }")
-  const streamingCheckIndex = source.indexOf("if (hasPlayableProgress) return { color: '#60a5fa', label: 'Streaming' }")
+test('P2P stats bar treats fully loaded videos as saved before streaming', () => {
+  const cachedCheckIndex = source.indexOf("if (isCached) return 'Saved on this device'")
+  const streamingCheckIndex = source.indexOf('if (hasPlayableProgress) {')
 
-  assert.notEqual(cachedCheckIndex, -1, 'stats bar should normalize fully loaded videos to Cached')
-  assert.notEqual(streamingCheckIndex, -1, 'stats bar should still show Streaming for partial playable progress')
-  assert.ok(cachedCheckIndex < streamingCheckIndex, 'Cached must win over Streaming for fully cached videos')
+  assert.notEqual(cachedCheckIndex, -1, 'stats bar should normalize fully loaded videos to local saved state')
+  assert.notEqual(streamingCheckIndex, -1, 'stats bar should still show streaming for partial playable progress')
+  assert.ok(cachedCheckIndex < streamingCheckIndex, 'saved state must win over streaming for fully cached videos')
   assert.match(source, /stats\?\.status === 'complete'/, 'complete status should count as cached')
   assert.match(source, /Number\(stats\?\.progress \?\? 0\) >= 100/, '100% progress should count as cached')
   assert.match(source, /totalBlocks > 0 && downloadedBlocks >= totalBlocks/, 'all blocks downloaded should count as cached')

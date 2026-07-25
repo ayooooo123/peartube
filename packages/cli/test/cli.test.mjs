@@ -217,25 +217,6 @@ test('Dockerfile packages ffmpeg for yt-dlp archive merging', async (t) => {
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffprobe /usr/local/bin/ffprobe'), 'final image includes ffprobe executable')
 })
 
-test('relay runtime source wires client-equivalent feed availability providers', async (t) => {
-  const runtimePath = join(__dirname, '..', 'src', 'runtime.js')
-  const content = readFileSync(runtimePath, 'utf8')
-
-  t.ok(content.includes('publicFeed.setAvailabilityHintProvider'), 'relay runtime should answer availability hint requests over the feed protocol')
-  t.ok(content.includes('this.api.getAvailabilityHints(requests, conn)'), 'relay availability provider should use the same API path as clients')
-  t.ok(content.includes('publicFeed.setFeedSnapshotProvider'), 'relay runtime should gossip compact playable feed snapshots')
-  t.ok(content.includes('this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 })'), 'relay feed snapshot provider should use the same API path as clients')
-  t.ok(content.includes("ctx.swarm.on('peer'"), 'relay runtime should promote shared-topic peer discoveries into Hyperswarm socket candidates')
-  t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'relay runtime should pass discovered shared-topic peers through the same promotion path as app backends')
-})
-
-test('legacy relay init leaves shared-topic discovery under storage ownership', async (t) => {
-  const initPath = join(__dirname, '..', 'src', 'init.js')
-  const content = readFileSync(initPath, 'utf8')
-
-  t.absent(content.includes("ctx.swarm.on('peer', (peer, topic)"), 'legacy relay init should not install app-level shared-topic peer discovery hooks')
-  t.absent(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'legacy relay init should leave discovery diagnostics to the storage-owned swarm')
-})
 
 test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouTube bot checks', async (t) => {
   const dockerfile = readFileSync(join(__dirname, '..', 'Dockerfile'), 'utf8')

@@ -109,6 +109,91 @@ function bundleExists(bundle) {
   return fs.existsSync(resolveRepoPath(bundle.output))
 }
 
+const addonsRoot = path.join(
+  projectRoot,
+  'node_modules',
+  'react-native-bare-kit',
+  'android',
+  'src',
+  'main',
+  'addons',
+)
+
+// Parse a Bare addon soname like `libbare-buffer.3.6.1.so` into
+// { base: 'bare-buffer', version: '3.6.1' }. Returns null for non-addon libs.
+function parseAddonSoname(name) {
+  const match = /^lib(.+?)\.(\d+(?:\.\d+)*)\.so$/.exec(name)
+  if (!match) return null
+  return { base: match[1], version: match[2] }
+}
+
+// Map of addon base name -> Set of versions present in the installed
+// react-native-bare-kit addon source. Returns null when the source is absent
+// (e.g. dependencies not installed yet) so callers can skip the check.
+function readInstalledAddonVersions() {
+  if (!fs.existsSync(addonsRoot)) return null
+
+  const abiDirs = fs.readdirSync(addonsRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(addonsRoot, entry.name))
+  if (abiDirs.length === 0) return null
+
+  const byBase = new Map()
+  for (const dir of abiDirs) {
+    for (const entry of fs.readdirSync(dir)) {
+      const parsed = parseAddonSoname(entry)
+      if (!parsed) continue
+      if (!byBase.has(parsed.base)) byBase.set(parsed.base, new Set())
+      byBase.get(parsed.base).add(parsed.version)
+    }
+  }
+  return byBase
+}
+
+// Linked addon sonames the committed bundle output references, grouped as
+// base name -> Set of versions. A well-formed bundle links exactly one version
+// per base; more than one is itself a mismatch we surface.
+async function readBundleLinkedAddonVersions(bundle) {
+  const { collectAndroidLinkedAddonNames } = await import('./prune-android-bare-addons.mjs')
+  const sonames = collectAndroidLinkedAddonNames([resolveRepoPath(bundle.output)])
+  const byBase = new Map()
+  for (const soname of sonames) {
+    const parsed = parseAddonSoname(soname)
+    if (!parsed) continue
+    if (!byBase.has(parsed.base)) byBase.set(parsed.base, new Set())
+    byBase.get(parsed.base).add(parsed.version)
+  }
+  return byBase
+}
+
+// A committed bundle is consistent with the installed Bare runtime only when,
+// for every addon base it links, the installed addon source provides exactly
+// that one version. A missing version, a differing version, or a same-base
+// extra all mean the bundle was packed against a different react-native-bare-kit
+// than the one that will ship libbare-kit.so — the ABI skew that segfaults udx
+// inside uv_run on startup. Returns a list of human-readable mismatch reasons.
+async function findBundleAddonInconsistencies(bundle, installed) {
+  if (!installed) return []
+  const linked = await readBundleLinkedAddonVersions(bundle)
+  const reasons = []
+  for (const [base, versions] of linked) {
+    if (versions.size > 1) {
+      reasons.push(`${base}: bundle links multiple versions ${[...versions].sort().join(', ')}`)
+      continue
+    }
+    const [linkedVersion] = versions
+    const have = installed.get(base)
+    if (!have) {
+      reasons.push(`${base}@${linkedVersion}: not provided by installed react-native-bare-kit`)
+      continue
+    }
+    if (!have.has(linkedVersion) || have.size > 1) {
+      reasons.push(`${base}: bundle links ${linkedVersion}, runtime provides ${[...have].sort().join(', ')}`)
+    }
+  }
+  return reasons
+}
+
 function bundleIsFresh(bundle, sourceNewestMtimeMs) {
   const outputPath = resolveRepoPath(bundle.output)
   const stat = fs.existsSync(outputPath) ? fs.statSync(outputPath) : null

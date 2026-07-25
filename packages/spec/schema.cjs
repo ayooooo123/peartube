@@ -16,6 +16,19 @@ const HRPC_DIR = './spec/hrpc'
 const schema = Hyperschema.from(SCHEMA_DIR)
 const ns = schema.namespace('peartube')
 
+// Operability handler contract bounds. HRPC codecs describe wire types; every
+// producer and consumer MUST reject/truncate before crossing these limits.
+// MAX_MIGRATION_ID_BYTES = 64
+// MAX_MIGRATION_ERROR_MESSAGE_BYTES = 256
+// MAX_MIGRATION_REPORT_BYTES = 65_536
+// MAX_PORTABLE_MANIFEST_BYTES = 1_048_576
+// MAX_PORTABLE_ITEMS = 2_048
+// MAX_STORAGE_PREVIEW_ITEMS = 32 per affectedCategories/consequences array
+// MAX_ARCHIVE_OPERATOR_ITEMS = 64 recentFailureCodes
+// MAX_PUBLICATION_SOURCE_REASONS = 32 per reason-code array
+// MAX_PUBLICATION_SOURCE_INTRODUCERS = 64 per introducer/moderation-feed array
+// MAX_PUBLICATION_SOURCE_CLAIMS = 64 per conflict/provenance-claim array
+
 // ============================================
 // Common Types
 // ============================================
@@ -218,6 +231,25 @@ ns.register({
 // ============================================
 
 ns.register({
+  name: 'provision-publisher-catalog-request',
+  fields: [
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'genesisRootKey', type: 'buffer', required: true }
+  ]
+})
+
+ns.register({
+  name: 'provision-publisher-catalog-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'publisherId', type: 'string', required: true },
+    { name: 'catalogBootstrapKey', type: 'buffer', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
   name: 'prepare-publisher-root-operation-request',
   fields: [
     { name: 'publisherId', type: 'string', required: true },
@@ -226,7 +258,10 @@ ns.register({
     { name: 'displaySummaryJson', type: 'string', required: false },
     { name: 'issuedAt', type: 'uint', required: false },
     { name: 'expiresAt', type: 'uint', required: false },
-    { name: 'expiresInMs', type: 'uint', required: false }
+    { name: 'expiresInMs', type: 'uint', required: false },
+    { name: 'intentId', type: 'string', required: true },
+    { name: 'signerPublicKey', type: 'buffer', required: true },
+    { name: 'intentExpiresAt', type: 'uint', required: true }
   ]
 })
 
@@ -242,7 +277,10 @@ ns.register({
     { name: 'issuedAt', type: 'uint', required: true },
     { name: 'expiresAt', type: 'uint', required: true },
     { name: 'displaySummaryJson', type: 'string', required: false },
-    { name: 'error', type: 'string', required: false }
+    { name: 'error', type: 'string', required: false },
+    { name: 'intentId', type: 'string', required: true },
+    { name: 'signerPublicKey', type: 'buffer', required: true },
+    { name: 'intentExpiresAt', type: 'uint', required: true }
   ]
 })
 
@@ -256,7 +294,9 @@ ns.register({
     { name: 'displaySummaryJson', type: 'string', required: false },
     { name: 'signer', type: 'buffer', required: true },
     { name: 'signature', type: 'buffer', required: true },
-    { name: 'allowedSigners', type: 'buffer', array: true, required: false }
+    { name: 'allowedSigners', type: 'buffer', array: true, required: false },
+    { name: 'intentId', type: 'string', required: true },
+    { name: 'signerPublicKey', type: 'buffer', required: true }
   ]
 })
 
@@ -270,7 +310,10 @@ ns.register({
     { name: 'recordType', type: 'string', required: false },
     { name: 'recordId', type: 'buffer', required: true },
     { name: 'signer', type: 'buffer', required: true },
-    { name: 'signature', type: 'buffer', required: true }
+    { name: 'signature', type: 'buffer', required: true },
+    { name: 'intentId', type: 'string', required: true },
+    { name: 'signerPublicKey', type: 'buffer', required: true },
+    { name: 'complete', type: 'bool', required: true }
   ]
 })
 
@@ -482,13 +525,31 @@ ns.register({
   fields: [
     { name: 'publicationId', type: 'string', required: true },
     { name: 'publisherId', type: 'string', required: true },
-    { name: 'manifestId', type: 'string', required: true },
+    { name: 'manifestId', type: 'string', required: false },
     { name: 'renditionId', type: 'string', required: false },
     { name: 'score', type: 'uint', required: false },
     { name: 'availabilityScore', type: 'uint', required: false },
     { name: 'formatSupport', type: 'uint', required: false },
     { name: 'moderationPenalty', type: 'uint', required: false },
-    { name: 'preferred', type: 'bool', required: false }
+    { name: 'preferred', type: 'bool', required: false },
+    { name: 'selected', type: 'bool', required: false },
+    { name: 'selectionReasonCodes', type: 'string', array: true, required: false },
+    { name: 'rejectionReasonCodes', type: 'string', array: true, required: false },
+    { name: 'introductionPublisherIds', type: 'string', array: true, required: false },
+    { name: 'introductionIndexIds', type: 'string', array: true, required: false },
+    { name: 'moderationFeedIds', type: 'string', array: true, required: false },
+    { name: 'claimConflictIds', type: 'string', array: true, required: false },
+    { name: 'provenanceClaimIds', type: 'string', array: true, required: false },
+    { name: 'scoreMetadataConfidence', type: 'uint', required: false },
+    { name: 'scorePublisherTrust', type: 'uint', required: false },
+    { name: 'scoreAvailability', type: 'uint', required: false },
+    { name: 'scoreFormatSupport', type: 'uint', required: false },
+    { name: 'scoreModerationPenalty', type: 'uint', required: false },
+    { name: 'archiveState', type: 'string', required: false },
+    { name: 'cacheState', type: 'string', required: false },
+    { name: 'availabilityState', type: 'string', required: false },
+    { name: 'stale', type: 'bool', required: false },
+    { name: 'incomplete', type: 'bool', required: false },
   ]
 })
 
@@ -550,6 +611,17 @@ ns.register({
     { name: 'conflictCount', type: 'uint', required: false },
     { name: 'sources', type: '@peartube/media-publication-source', array: true },
     { name: 'renditions', type: '@peartube/media-rendition-descriptor', array: true }
+  ]
+})
+
+ns.register({
+  name: 'get-media-catalog-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'items', type: '@peartube/media-entity-summary', array: true, required: true },
+    { name: 'nextCursor', type: 'string', required: false }
   ]
 })
 
@@ -645,6 +717,16 @@ ns.register({
 // ============================================
 
 ns.register({
+  name: 'video-immutable-publication',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'manifestId', type: 'string', required: false },
+    { name: 'renditionId', type: 'string', required: false },
+    { name: 'publisherId', type: 'string', required: false },
+  ]
+})
+
+ns.register({
   name: 'video',
   fields: [
     { name: 'id', type: 'string', required: true },
@@ -670,6 +752,8 @@ ns.register({
     { name: 'hasHeadBlock', type: 'bool', required: false },
     { name: 'contiguousBlocks', type: 'uint', required: false },
     { name: 'readyForPlayback', type: 'bool', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'immutablePublication', type: '@peartube/video-immutable-publication', required: false },
   ]
 })
 
@@ -1295,118 +1379,6 @@ ns.register({
   ]
 })
 
-// ============================================
-// Public Feed Types
-// ============================================
-
-ns.register({
-  name: 'feed-entry-preview-video',
-  fields: [
-    { name: 'id', type: 'string', required: true },
-    { name: 'title', type: 'string', required: false },
-    { name: 'duration', type: 'uint', required: false },
-    { name: 'thumbnail', type: 'string', required: false },
-    { name: 'path', type: 'string', required: false },
-    { name: 'blobId', type: 'string', required: false },
-    { name: 'blobsCoreKey', type: 'string', required: false },
-    { name: 'mimeType', type: 'string', required: false },
-    { name: 'uploadedAt', type: 'uint', required: false },
-    { name: 'width', type: 'uint', required: false },
-    { name: 'height', type: 'uint', required: false },
-    { name: 'thumbnailBlobId', type: 'string', required: false },
-    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
-    { name: 'thumbnailMimeType', type: 'string', required: false },
-    { name: 'availability', type: 'string', required: false },
-    { name: 'description', type: 'string', required: false },
-    { name: 'thumbnailUrl', type: 'string', required: false },
-    { name: 'byteAvailability', type: 'string', required: false },
-    { name: 'channelKey', type: 'string', required: false },
-    { name: 'driveKey', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false },
-    { name: 'hasHeadBlock', type: 'bool', required: false },
-    { name: 'contiguousBlocks', type: 'uint', required: false },
-    { name: 'readyForPlayback', type: 'bool', required: false },
-  ]
-})
-
-ns.register({
-  name: 'feed-live-stream',
-  fields: [
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'liveCoreKey', type: 'string', required: true },
-    { name: 'title', type: 'string', required: false },
-    { name: 'startedAt', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'feed-entry',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'publicBeeKey', type: 'string', required: false },
-    { name: 'channelName', type: 'string', required: false },
-    { name: 'videoCount', type: 'uint', required: false },
-    { name: 'peerCount', type: 'uint', required: false },
-    { name: 'lastSeen', type: 'uint', required: false },
-    { name: 'source', type: 'string', required: false },
-    { name: 'manifestUpdatedAt', type: 'uint', required: false },
-    { name: 'previewVideos', type: '@peartube/feed-entry-preview-video', array: true },
-    { name: 'driveKey', type: 'string', required: false },
-    { name: 'relayRole', type: 'string', required: false },
-    { name: 'relayServing', type: 'bool', required: false },
-    { name: 'previewVideosHash', type: 'string', required: false },
-    { name: 'isLive', type: 'bool', required: false },
-    { name: 'liveStreams', type: '@peartube/feed-live-stream', array: true }
-  ]
-})
-
-ns.register({
-  name: 'refresh-feed-request',
-  fields: []
-})
-
-ns.register({
-  name: 'refresh-feed-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true }
-  ]
-})
-
-ns.register({
-  name: 'submit-to-feed-request',
-  fields: []
-})
-
-ns.register({
-  name: 'submit-to-feed-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true }
-  ]
-})
-
-ns.register({
-  name: 'unpublish-from-feed-request',
-  fields: []
-})
-
-ns.register({
-  name: 'unpublish-from-feed-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true }
-  ]
-})
-
-ns.register({
-  name: 'is-channel-published-request',
-  fields: []
-})
-
-ns.register({
-  name: 'is-channel-published-response',
-  fields: [
-    { name: 'published', type: 'bool', required: true }
-  ]
-})
 
 ns.register({
   name: 'hide-channel-request',
@@ -1451,18 +1423,14 @@ ns.register({
     { name: 'peerCount', type: 'uint', required: false },
     { name: 'swarmConnections', type: 'uint', required: false },
     { name: 'swarmPeers', type: 'uint', required: false },
-    { name: 'feedConnections', type: 'uint', required: false },
-    { name: 'feedEntries', type: 'uint', required: false },
     { name: 'channelsLoaded', type: 'uint', required: false },
     { name: 'swarmOffline', type: 'bool', required: false },
     { name: 'swarmOfflineReason', type: 'string', required: false },
     { name: 'swarmListenResolved', type: 'bool', required: false },
     { name: 'peerPoolJoined', type: 'bool', required: false },
-    { name: 'publicFeedDiscoveryJoined', type: 'bool', required: false },
     { name: 'networkJson', type: 'string', required: false },
     { name: 'startupTimingJson', type: 'string', required: false },
     { name: 'doctorJson', type: 'string', required: false },
-    { name: 'directPeerDialJson', type: 'string', required: false },
     { name: 'recommendedBoundary', type: 'string', required: false }
   ]
 })
@@ -1676,7 +1644,17 @@ ns.register({
     { name: 'totalStorageBytes', type: 'uint', required: false },
     { name: 'totalStorageGB', type: 'string', required: false },
     { name: 'untrackedStorageBytes', type: 'uint', required: false },
-    { name: 'untrackedStorageGB', type: 'string', required: false }
+    { name: 'untrackedStorageGB', type: 'string', required: false },
+    { name: 'ownedOriginalBytes', type: 'uint', required: false },
+    { name: 'immutablePublicationBytes', type: 'uint', required: false },
+    { name: 'pledgedArchiveBytes', type: 'uint', required: false },
+    { name: 'localCacheBytes', type: 'uint', required: false },
+    { name: 'thumbnailBytes', type: 'uint', required: false },
+    { name: 'indexBytes', type: 'uint', required: false },
+    { name: 'temporaryTransferBytes', type: 'uint', required: false },
+    { name: 'totalCategorizedBytes', type: 'uint', required: false },
+    { name: 'evictableBytes', type: 'uint', required: false },
+    { name: 'protectedBytes', type: 'uint', required: false },
   ]
 })
 
@@ -1691,6 +1669,276 @@ ns.register({
   name: 'set-storage-limit-response',
   fields: [
     { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+// ============================================
+// Operability and Recovery Types
+// ============================================
+
+ns.register({
+  name: 'get-migration-status-request',
+  fields: [
+    { name: 'migrationId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-migration-status-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'migrationId', type: 'string', required: true },
+    { name: 'state', type: 'string', required: true },
+    { name: 'version', type: 'uint', required: true },
+    { name: 'processedCount', type: 'uint', required: true },
+    { name: 'importedCount', type: 'uint', required: true },
+    { name: 'skippedCount', type: 'uint', required: true },
+    { name: 'quarantinedCount', type: 'uint', required: true },
+    { name: 'unsupportedCount', type: 'uint', required: true },
+    { name: 'remainingCount', type: 'uint', required: true },
+    { name: 'retryable', type: 'bool', required: true },
+    { name: 'updatedAt', type: 'uint', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'errorMessage', type: 'string', required: false },
+    { name: 'reportDigest', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'retry-migration-request',
+  fields: [
+    { name: 'migrationId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'retry-migration-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'migrationId', type: 'string', required: true },
+    { name: 'state', type: 'string', required: true },
+    { name: 'version', type: 'uint', required: true },
+    { name: 'processedCount', type: 'uint', required: true },
+    { name: 'importedCount', type: 'uint', required: true },
+    { name: 'skippedCount', type: 'uint', required: true },
+    { name: 'quarantinedCount', type: 'uint', required: true },
+    { name: 'unsupportedCount', type: 'uint', required: true },
+    { name: 'remainingCount', type: 'uint', required: true },
+    { name: 'retryable', type: 'bool', required: true },
+    { name: 'updatedAt', type: 'uint', required: true },
+    { name: 'joined', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'errorMessage', type: 'string', required: false },
+    { name: 'reportDigest', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'export-migration-report-request',
+  fields: [
+    { name: 'migrationId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'export-migration-report-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'migrationId', type: 'string', required: true },
+    { name: 'reportBytes', type: 'buffer', required: false },
+    { name: 'reportDigest', type: 'string', required: false },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-publisher-device-status-request',
+  fields: [
+    { name: 'publisherId', type: 'buffer', required: false },
+    { name: 'devicePublicKey', type: 'buffer', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-publisher-device-status-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'publisherId', type: 'buffer', required: false },
+    { name: 'devicePublicKey', type: 'buffer', required: false },
+    { name: 'status', type: 'string', required: true },
+    { name: 'reasonCode', type: 'string', required: false },
+    { name: 'canPublish', type: 'bool', required: true },
+    { name: 'canPlayLocal', type: 'bool', required: true },
+    { name: 'canExportLocal', type: 'bool', required: true },
+    { name: 'canDeleteLocal', type: 'bool', required: true },
+    { name: 'canRootTransition', type: 'bool', required: true },
+    { name: 'catalogEpoch', type: 'uint', required: false },
+    { name: 'policyEpoch', type: 'uint', required: false },
+    { name: 'admissionExpiresAt', type: 'uint', required: false },
+    { name: 'revocationCutoff', type: 'uint', required: false },
+    { name: 'legacyImportState', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'export-portable-state-request',
+  fields: []
+})
+
+ns.register({
+  name: 'export-portable-state-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'manifestBytes', type: 'buffer', required: false },
+    { name: 'manifestDigest', type: 'string', required: false },
+    { name: 'itemCount', type: 'uint', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'restore-portable-state-request',
+  fields: [
+    { name: 'manifestBytes', type: 'buffer', required: true },
+    { name: 'manifestDigest', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'restore-portable-state-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'importedCount', type: 'uint', required: true },
+    { name: 'skippedCount', type: 'uint', required: true },
+    { name: 'idempotent', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'preview-storage-limit-request',
+  fields: [
+    { name: 'maxBytes', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'preview-storage-limit-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'requestedMaxBytes', type: 'uint', required: true },
+    { name: 'currentUsedBytes', type: 'uint', required: true },
+    { name: 'requiredEvictionBytes', type: 'uint', required: true },
+    { name: 'evictableBytes', type: 'uint', required: true },
+    { name: 'protectedBytes', type: 'uint', required: true },
+    { name: 'affectedSeedCount', type: 'uint', required: true },
+    { name: 'affectedCategories', type: 'string', array: true },
+    { name: 'consequences', type: 'string', array: true },
+    { name: 'feasible', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-archive-operator-status-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-archive-operator-status-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'operatorMode', type: 'string', required: true },
+    { name: 'activePledgeCount', type: 'uint', required: true },
+    { name: 'healthyPledgeCount', type: 'uint', required: true },
+    { name: 'failedPledgeCount', type: 'uint', required: true },
+    { name: 'challengeSuccessCount', type: 'uint', required: true },
+    { name: 'challengeFailureCount', type: 'uint', required: true },
+    { name: 'capacityTotalBytes', type: 'uint', required: false },
+    { name: 'capacityReservedBytes', type: 'uint', required: false },
+    { name: 'capacityAvailableBytes', type: 'uint', required: false },
+    { name: 'capacityRejectionCount', type: 'uint', required: true },
+    { name: 'offloadRejectionCount', type: 'uint', required: true },
+    { name: 'recentFailureCodes', type: 'string', array: true },
+    { name: 'updatedAt', type: 'uint', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-archive-participation-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-archive-participation-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'enabled', type: 'bool', required: true },
+    { name: 'capacityBytes', type: 'uint', required: true },
+    { name: 'maxRequestBytes', type: 'uint', required: true },
+    { name: 'reservedBytes', type: 'uint', required: true },
+    { name: 'availableBytes', type: 'uint', required: true },
+    { name: 'acceptedRequests', type: 'uint', required: true },
+    { name: 'knownRequests', type: 'uint', required: true },
+    { name: 'receivedPledges', type: 'uint', required: true },
+    { name: 'randomRejections', type: 'uint', required: true },
+    { name: 'capacityRejections', type: 'uint', required: true },
+    { name: 'authorizationRejections', type: 'uint', required: true },
+    { name: 'acceptancePermille', type: 'uint', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-archive-participation-request',
+  fields: [
+    { name: 'enabled', type: 'bool', required: true },
+    { name: 'capacityBytes', type: 'uint', required: true },
+    { name: 'maxRequestBytes', type: 'uint', required: true },
+    { name: 'acceptancePermille', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-archive-participation-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'enabled', type: 'bool', required: true },
+    { name: 'capacityBytes', type: 'uint', required: true },
+    { name: 'maxRequestBytes', type: 'uint', required: true },
+    { name: 'reservedBytes', type: 'uint', required: true },
+    { name: 'availableBytes', type: 'uint', required: true },
+    { name: 'acceptedRequests', type: 'uint', required: true },
+    { name: 'knownRequests', type: 'uint', required: true },
+    { name: 'receivedPledges', type: 'uint', required: true },
+    { name: 'randomRejections', type: 'uint', required: true },
+    { name: 'capacityRejections', type: 'uint', required: true },
+    { name: 'authorizationRejections', type: 'uint', required: true },
+    { name: 'acceptancePermille', type: 'uint', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'request-archive-publication-request',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'renditionId', type: 'string', required: true },
+    { name: 'retentionUntil', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'request-archive-publication-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'status', type: 'string', required: true },
+    { name: 'requestId', type: 'string', required: true },
+    { name: 'errorCode', type: 'string', required: false }
   ]
 })
 
@@ -1753,43 +2001,56 @@ ns.register({
   ]
 })
 
-// Upload offload: free a local upload's bytes once a full copy is seeded elsewhere
+// Publisher-source offload: assessment and explicit, evidence-bound confirmation.
 ns.register({
-  name: 'assess-upload-offload-request',
+  name: 'assess-source-offload-request',
   fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true }
+    { name: 'publicationId', type: 'string', required: true }
   ]
 })
 
 ns.register({
-  name: 'assess-upload-offload-response',
-  fields: [
-    { name: 'eligible', type: 'bool', required: true },
-    { name: 'fullCopyPeers', type: 'uint', required: false },
-    { name: 'relayHasFullCopy', type: 'bool', required: false },
-    { name: 'ownDeviceHasFullCopy', type: 'bool', required: false },
-    { name: 'byteLength', type: 'uint', required: false },
-    { name: 'reason', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'offload-upload-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true }
-  ]
-})
-
-ns.register({
-  name: 'offload-upload-response',
+  name: 'assess-source-offload-response',
   fields: [
     { name: 'success', type: 'bool', required: true },
-    { name: 'freedBytes', type: 'uint', required: false },
-    { name: 'reason', type: 'string', required: false }
+    { name: 'eligible', type: 'bool', required: true },
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'assessmentId', type: 'string', required: true },
+    { name: 'evidenceDigest', type: 'string', required: true },
+    { name: 'confirmationNonce', type: 'string', required: true },
+    { name: 'expiresAt', type: 'uint', required: true },
+    { name: 'policyVersion', type: 'uint', required: true },
+    { name: 'byteLength', type: 'uint', required: true },
+    { name: 'limitations', type: 'string', array: true },
+    { name: 'errorCode', type: 'string', required: false }
   ]
 })
+
+ns.register({
+  name: 'confirm-source-offload-request',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'assessmentId', type: 'string', required: true },
+    { name: 'evidenceDigest', type: 'string', required: true },
+    { name: 'confirmationNonce', type: 'string', required: true },
+    { name: 'policyVersion', type: 'uint', required: true },
+    { name: 'confirmIrrecoverableRisk', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'confirm-source-offload-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'assessmentId', type: 'string', required: true },
+    { name: 'freedBytes', type: 'uint', required: true },
+    { name: 'auditId', type: 'string', required: false },
+    { name: 'reason', type: 'string', required: false },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
 
 // ============================================
 // Thumbnail/Metadata Types
@@ -2288,10 +2549,10 @@ ns.register({
 })
 
 ns.register({
-  name: 'event-feed-update',
+  name: 'event-media-graph-update',
   fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'action', type: 'string', required: true }
+    { name: 'revision', type: 'string', required: true },
+    { name: 'changedCount', type: 'uint', required: true }
   ]
 })
 
@@ -3063,6 +3324,7 @@ ns.register({
   ]
 })
 
+
 // Save schema to disk
 Hyperschema.toDisk(schema)
 
@@ -3118,6 +3380,12 @@ rpcNs.register({
   request: { name: '@peartube/attest-device-request', stream: false },
   response: { name: '@peartube/attest-device-response', stream: false }
 })
+rpcNs.register({
+  name: 'provision-publisher-catalog',
+  request: { name: '@peartube/provision-publisher-catalog-request', stream: false },
+  response: { name: '@peartube/provision-publisher-catalog-response', stream: false }
+})
+
 
 rpcNs.register({
   name: 'verify-attestation',
@@ -3347,30 +3615,6 @@ rpcNs.register({
   response: { name: '@peartube/join-channel-response', stream: false }
 })
 
-// Public Feed commands
-rpcNs.register({
-  name: 'refresh-feed',
-  request: { name: '@peartube/refresh-feed-request', stream: false },
-  response: { name: '@peartube/refresh-feed-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'submit-to-feed',
-  request: { name: '@peartube/submit-to-feed-request', stream: false },
-  response: { name: '@peartube/submit-to-feed-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'unpublish-from-feed',
-  request: { name: '@peartube/unpublish-from-feed-request', stream: false },
-  response: { name: '@peartube/unpublish-from-feed-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'is-channel-published',
-  request: { name: '@peartube/is-channel-published-request', stream: false },
-  response: { name: '@peartube/is-channel-published-response', stream: false }
-})
 
 rpcNs.register({
   name: 'hide-channel',
@@ -3485,6 +3729,26 @@ rpcNs.register({
   response: { name: '@peartube/set-storage-limit-response', stream: false }
 })
 
+for (const name of [
+  'get-migration-status',
+  'retry-migration',
+  'export-migration-report',
+  'get-publisher-device-status',
+  'export-portable-state',
+  'restore-portable-state',
+  'preview-storage-limit',
+  'get-archive-operator-status',
+  'get-archive-participation',
+  'set-archive-participation',
+  'request-archive-publication'
+]) {
+  rpcNs.register({
+    name,
+    request: { name: `@peartube/${name}-request`, stream: false },
+    response: { name: `@peartube/${name}-response`, stream: false }
+  })
+}
+
 rpcNs.register({
   name: 'get-network-policy',
   request: { name: '@peartube/get-network-policy-request', stream: false },
@@ -3504,15 +3768,15 @@ rpcNs.register({
 })
 
 rpcNs.register({
-  name: 'assess-upload-offload',
-  request: { name: '@peartube/assess-upload-offload-request', stream: false },
-  response: { name: '@peartube/assess-upload-offload-response', stream: false }
+  name: 'assess-source-offload',
+  request: { name: '@peartube/assess-source-offload-request', stream: false },
+  response: { name: '@peartube/assess-source-offload-response', stream: false }
 })
 
 rpcNs.register({
-  name: 'offload-upload',
-  request: { name: '@peartube/offload-upload-request', stream: false },
-  response: { name: '@peartube/offload-upload-response', stream: false }
+  name: 'confirm-source-offload',
+  request: { name: '@peartube/confirm-source-offload-request', stream: false },
+  response: { name: '@peartube/confirm-source-offload-response', stream: false }
 })
 
 // Thumbnail/Metadata commands
@@ -3638,8 +3902,8 @@ rpcNs.register({
 })
 
 rpcNs.register({
-  name: 'event-feed-update',
-  request: { name: '@peartube/event-feed-update', stream: false, send: true }
+  name: 'event-media-graph-update',
+  request: { name: '@peartube/event-media-graph-update', stream: false, send: true }
 })
 
 rpcNs.register({
@@ -3799,6 +4063,12 @@ rpcNs.register({
   name: 'update-video-metadata',
   request: { name: '@peartube/update-video-metadata-request', stream: false },
   response: { name: '@peartube/update-video-metadata-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-media-catalog',
+  request: { name: '@peartube/media-page-request', stream: false },
+  response: { name: '@peartube/get-media-catalog-response', stream: false }
 })
 
 // Media graph app-facing commands

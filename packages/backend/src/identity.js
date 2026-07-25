@@ -63,19 +63,194 @@ export function validateMnemonic(mnemonic) {
   return validatePearTubeMnemonic(mnemonic)
 }
 
+const LEGACY_ROOT_MIGRATION_VERSION = 1
+const LEGACY_ROOT_CHALLENGE_DOMAIN = b4a.from('peartube:legacy-publisher-root-migration:v1\0')
+const PUBLIC_KEY_BYTES = 32
+const SECRET_KEY_BYTES = 64
+const SIGNATURE_BYTES = 64
+
+function fixedBytes (value, length) {
+  if (typeof value === 'string') {
+    if (value.length !== length * 2 || !/^[0-9a-f]+$/i.test(value)) return null
+    return b4a.from(value, 'hex')
+  }
+
+  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
+    if (value.byteLength !== length) return null
+    return b4a.from(value)
+  }
+
+  // compact-encoding's JSON codec restores persisted Node Buffers as their
+  // JSON representation and persisted Bare Buffers as a plain byte array.
+  const jsonBytes = Array.isArray(value)
+    ? value
+    : value?.type === 'Buffer' && Array.isArray(value.data) ? value.data : null
+  if (jsonBytes?.length === length) {
+    for (const byte of jsonBytes) {
+      if (!Number.isInteger(byte) || byte < 0 || byte > 255) return null
+    }
+    return b4a.from(jsonBytes)
+  }
+
+  return null
+}
+
+function normalizeStoredIdentity (identity, activeIdentity) {
+  const channelKey = identity.channelKey || identity.driveKey || null
+  return {
+    ...identity,
+    // Backward compat: keep driveKey as the canonical channel key for app compatibility.
+    channelKey,
+    channelEncryptionKey: identity.channelEncryptionKey || null,
+    channelWriterKeyName: identity.channelWriterKeyName || null,
+    // Private per-identity multi-writer personal store (subscriptions,
+    // playlists, watch history, settings) shared across the user's devices.
+    personalKey: identity.personalKey || null,
+    driveKey: channelKey,
+    isActive: identity.publicKey === activeIdentity,
+    createdAt: typeof identity.createdAt === 'number' && identity.createdAt >= 0
+      ? identity.createdAt : Date.now(),
+  }
+}
+
+async function hasDurableLegacyRootAcknowledgement (identity, migrateLegacyPublisherRoot) {
+  let secretKey = fixedBytes(identity.secretKey, SECRET_KEY_BYTES)
+  let nonce = null
+  let challenge = null
+  let verificationChallenge = null
+
+  if (!secretKey) return false
+
+  try {
+    const publicKey = fixedBytes(identity.publicKey, PUBLIC_KEY_BYTES)
+    if (!publicKey) return false
+
+    nonce = crypto.randomBytes(32)
+    verificationChallenge = b4a.concat([
+      LEGACY_ROOT_CHALLENGE_DOMAIN,
+      publicKey,
+      nonce,
+    ])
+    challenge = b4a.from(verificationChallenge)
+
+    const acknowledgement = await migrateLegacyPublisherRoot({
+      version: LEGACY_ROOT_MIGRATION_VERSION,
+      identityPublicKey: identity.publicKey,
+      secretKey,
+      challenge,
+    })
+    if (!acknowledgement || typeof acknowledgement !== 'object' ||
+        acknowledgement.version !== LEGACY_ROOT_MIGRATION_VERSION ||
+        acknowledgement.durable !== true) {
+      return false
+    }
+
+    const acknowledgedPublicKey = fixedBytes(acknowledgement.publicKey, PUBLIC_KEY_BYTES)
+    const signature = fixedBytes(acknowledgement.challengeSignature, SIGNATURE_BYTES)
+    if (!acknowledgedPublicKey || !signature ||
+        !b4a.equals(acknowledgedPublicKey, publicKey)) {
+      return false
+    }
+
+    return crypto.verify(verificationChallenge, signature, publicKey)
+  } catch {
+    log.warn(' Legacy publisher-root migration attempt failed')
+    return false
+  } finally {
+    secretKey.fill(0)
+    nonce?.fill(0)
+    challenge?.fill(0)
+    verificationChallenge?.fill(0)
+    secretKey = null
+    nonce = null
+    challenge = null
+    verificationChallenge = null
+  }
+}
+
 /**
  * Create the identity manager
  *
  * @param {Object} deps
  * @param {StorageContext} deps.ctx - Storage context
+ * @param {Function} [deps.migrateLegacyPublisherRoot] - Authenticated local,
+ * migration-only transfer callback
  * @returns {Object} Identity manager API
  */
-export function createIdentityManager({ ctx }) {
+export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }) {
   /** @type {Identity[]} */
   let identities = [];
 
   /** @type {string|null} */
   let activeIdentity = null;
+
+  /** @type {Promise<void>|null} */
+  let loadPromise = null
+
+  async function performIdentityLoad () {
+    let stored
+    let storedActive
+    try {
+      stored = await ctx.metaDb.get('identities')
+      storedActive = await ctx.metaDb.get('activeIdentity')
+    } catch {
+      throw new Error('Identity metadata unavailable')
+    }
+
+    const loaded = Array.isArray(stored?.value) ? stored.value : []
+    if (storedActive?.value) activeIdentity = storedActive.value
+    log.info(` Loaded ${loaded.length} identities`)
+
+    const normalized = loaded
+      .filter(identity => identity && typeof identity.publicKey === 'string' && identity.publicKey)
+      .map(identity => normalizeStoredIdentity(identity, activeIdentity))
+    const hasLegacySource = normalized.some(identity =>
+      Object.prototype.hasOwnProperty.call(identity, 'secretKey')
+    )
+    // A persisted source is authoritative even if a completion marker is
+    // present. Only absence of the source proves a prior commit completed.
+    const candidate = normalized.slice()
+
+    if (typeof migrateLegacyPublisherRoot === 'function') {
+      for (let index = 0; index < candidate.length; index++) {
+        const identity = candidate[index]
+        if (!Object.prototype.hasOwnProperty.call(identity, 'secretKey')) continue
+
+        const acknowledged = await hasDurableLegacyRootAcknowledgement(
+          identity,
+          migrateLegacyPublisherRoot
+        )
+        if (!acknowledged) continue
+
+        const { secretKey, ...safeIdentity } = identity
+        candidate[index] = {
+          ...safeIdentity,
+          legacyPublisherRootMigration: {
+            version: LEGACY_ROOT_MIGRATION_VERSION,
+            status: 'completed',
+            publicKey: identity.publicKey,
+          },
+        }
+      }
+    }
+
+    try {
+      // One metadata write atomically commits both source deletion and the
+      // durable per-identity completion marker.
+      await ctx.metaDb.put('identities', candidate)
+      identities = candidate
+    } catch {
+      // A migration source remains the authoritative state until the atomic
+      // metadata write succeeds. Keep it in memory so later saves cannot
+      // accidentally commit a deletion that was never acknowledged durably.
+      identities = normalized
+      if (hasLegacySource) {
+        log.warn(' Legacy publisher-root migration persistence failed')
+        return
+      }
+      throw new Error('Identity persistence failed')
+    }
+  }
 
   return {
     /**
@@ -83,47 +258,13 @@ export function createIdentityManager({ ctx }) {
      * @returns {Promise<void>}
      */
     async loadIdentities() {
-      const stored = await ctx.metaDb.get('identities');
-      if (stored && stored.value) {
-        identities = stored.value;
-        log.info(` Loaded ${identities.length} identities`);
+      if (loadPromise) return loadPromise
+      loadPromise = performIdentityLoad()
+      try {
+        await loadPromise
+      } finally {
+        loadPromise = null
       }
-
-      // Load active identity
-      const storedActive = await ctx.metaDb.get('activeIdentity');
-      if (storedActive && storedActive.value) {
-        activeIdentity = storedActive.value;
-      }
-
-      // Normalize identities - drop malformed, mark active, STRIP SECRET KEYS
-      identities = (identities || [])
-        .filter(i => i && typeof i.publicKey === 'string' && i.publicKey)
-        .map(i => {
-          // SECURITY: Remove any persisted secretKey from legacy records
-          // This is a one-time migration to improve security posture
-          const { secretKey, ...safeIdentity } = i;
-          if (secretKey) {
-            log.info(' Stripped secretKey from identity:', i.publicKey?.slice(0, 16));
-          }
-          const channelKey = i.channelKey || i.driveKey || null
-          return {
-            ...safeIdentity,
-            // Backward compat: keep driveKey as the canonical channel key for app compatibility.
-            channelKey,
-            channelEncryptionKey: i.channelEncryptionKey || null,
-            channelWriterKeyName: i.channelWriterKeyName || null,
-            // Private per-identity multi-writer personal store (subscriptions,
-            // playlists, watch history, settings) shared across the user's devices.
-            personalKey: i.personalKey || null,
-            driveKey: channelKey,
-            isActive: i.publicKey === activeIdentity,
-            createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0
-              ? i.createdAt : Date.now(),
-          };
-        });
-
-      // Persist normalized form
-      await this.saveIdentities()
     },
 
     /**

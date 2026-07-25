@@ -4,10 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import {
-  classifyFeedDiscoveryState,
-  getAndroidDiscoveryPermissionRequests,
-} from '../lib/android-discovery-diagnostics.js'
+import { getAndroidDiscoveryPermissionRequests } from '../lib/android-discovery-diagnostics.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -67,84 +64,6 @@ test('Android discovery permission helper requests Nearby Wi-Fi only on Android 
   ])
 })
 
-test('feed discovery state distinguishes permission, transport, cached fallback, and empty discovery states', () => {
-  assert.deepEqual(classifyFeedDiscoveryState({ ready: false }), {
-    state: 'backend-starting',
-    recoverable: true,
-  })
-
-  assert.deepEqual(classifyFeedDiscoveryState({
-    ready: true,
-    permissionStatus: { nearbyWifi: 'denied' },
-  }), {
-    state: 'permission-degraded',
-    recoverable: true,
-    reason: 'nearby-wifi-denied',
-  })
-
-  assert.deepEqual(classifyFeedDiscoveryState({
-    ready: true,
-    entries: [],
-    videos: [],
-    swarmStatus: { doctor: { recommendedBoundary: 'transport-socket' } },
-  }), {
-    state: 'network-degraded',
-    recoverable: true,
-    reason: 'transport-socket',
-  })
-
-  assert.deepEqual(classifyFeedDiscoveryState({
-    ready: true,
-    entries: [],
-    videos: [],
-    hasCachedSnapshot: true,
-  }), {
-    state: 'cached-fallback',
-    recoverable: true,
-    reason: 'zero-peers-no-entries',
-  })
-
-  assert.deepEqual(classifyFeedDiscoveryState({
-    ready: true,
-    entries: [],
-    videos: [],
-  }), {
-    state: 'discovery-waiting',
-    recoverable: true,
-    reason: 'zero-peers-no-entries',
-  })
-
-  assert.deepEqual(classifyFeedDiscoveryState({
-    ready: true,
-    entries: [{ driveKey: 'live-feed' }],
-    videos: [],
-    swarmStatus: { feedEntries: 88, feedConnections: 0, swarmPeers: 8 },
-  }), {
-    state: 'hydrating',
-    recoverable: true,
-  })
-
-  assert.deepEqual(classifyFeedDiscoveryState({
-    ready: true,
-    entries: [],
-    videos: [],
-    swarmStatus: { swarmPeers: 8, swarmConnections: 0, feedConnections: 0, doctor: { recommendedBoundary: 'transport-socket' } },
-  }), {
-    state: 'network-degraded',
-    recoverable: true,
-    reason: 'transport-socket',
-  })
-})
-
-test('Home Discover separates feed counts from peers and does not call hydrating entries peerless', () => {
-  const source = readAppFile('app/(tabs)/index.tsx')
-
-  assert.match(source, /Feed: \{displayFeedEntries\}/, 'Home should show feed entries as Feed, not overload Channels or Peers')
-  assert.match(source, /Channels: \{displayChannels\}/, 'Home should still show visible/discovered channel count separately')
-  assert.doesNotMatch(source, /5 feed\/channel signals detected; waiting for playable previews/, 'Home should not show stale feed-channel signal copy from older builds')
-  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading video previews'/, 'hydrating feed entries should not be labeled as looking for peers')
-  assert.match(source, /Feed entries detected; resolving video preview metadata\./, 'hydrating detail should mention feed entries being resolved')
-})
 
 test('Android registers network discovery as a legacy BaseReactPackage so release new-architecture builds expose NativeModules.PeartubeNetworkDiscovery', () => {
   const packageSource = readAppFile('android/app/src/main/java/com/peartube/app/PeartubeNetworkDiscoveryPackage.kt')

@@ -31,8 +31,8 @@ export function createDeferredPublisher() {
     publisher: {
       ensureAnonymousChannel: forward('ensureAnonymousChannel'),
       importVideo: forward('importVideo'),
-      publishChannel: forward('publishChannel'),
-      seedChannel: forward('seedChannel')
+      publishCatalog: forward('publishCatalog'),
+      retainAssets: forward('retainAssets')
     },
     bind(realPublisher) {
       if (!realPublisher) throw new Error('bind requires a publisher')
@@ -439,23 +439,11 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     await channel.ensureLocalBlobDrive?.({ deviceName: 'archive' }).catch(() => {})
     if (!channel.blobs) throw new Error('source channel blobs not initialized')
     const publicBeeKey = await resolvePublicBeeKey(channel)
-    // A channel without a resolvable public bee key can't be published to the
-    // feed (publishArchiveJobToFeed drops it as 'missing-refs'), which would
-    // make the archive invisible. Throw so we fall back to the shared channel
-    // that is known to publish — grouping must never cost visibility.
     if (!channelKey || !publicBeeKey) throw new Error('source channel keys unavailable')
-
-    // Strict feed peers reject unsigned gossip entries. The shared anonymous
-    // channel is signed at identity creation, but a grouped per-title channel
-    // is created directly (createChannel) with no channel/root descriptor, so
-    // remote peers drop it (missing-signed-descriptor) even though it appears
-    // in the relay's own local feed. Vouch for it with the relay identity's
-    // device attestation; throw on failure so we fall back to the shared
-    // channel that is known to publish — grouping must never cost visibility.
-    await ensureRelayIdentity(name)
+    const relayIdentity = await ensureRelayIdentity(name)
     const signed = await identityManager.signChannelRootDescriptorForOwnedChannel?.(channel, { profile: { name } })
     if (!signed?.ok) throw new Error(`source channel descriptor signing failed: ${signed?.reason || 'unavailable'}`)
-    return { channel, channelKey, publicBeeKey }
+    return { channel, channelKey, publicBeeKey, publisherId: relayIdentity.publicKey }
   }
 
   // A grouped channel needs an active identity to vouch for its signed root
@@ -500,7 +488,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       if (!channel?.blobs) throw new Error('Anonymous channel blobs not initialized')
       const meta = await channel.getMetadata?.().catch(() => null)
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
-      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
+      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: identity.publicKey }
     },
     async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, publish }) {
       const result = await uploadManager.uploadFromPath(channel, filePath, {
@@ -550,44 +538,39 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       }
       return result
     },
-    async publishChannel({ channelKey }) {
-      return api.submitToFeed(channelKey)
-    },
-    async seedChannel({ channelKey, publicBeeKey, previewVideos }) {
-      if (channelKey && publicBeeKey) {
-        const playablePreviews = Array.isArray(previewVideos) ? previewVideos.filter(Boolean) : []
-        await runtime?.cacheManager?.addChannel?.(channelKey, publicBeeKey, 'private', {
-          previewVideos: playablePreviews
-        }).catch(() => {})
-        await runtime?.publicFeed?.submitChannel?.(channelKey, publicBeeKey, {
-          previewVideos: playablePreviews,
-          videoCount: playablePreviews.length,
-          manifestUpdatedAt: Date.now()
-        }).catch(() => {})
-        const seedStats = await runtime?.seeder?.seedChannel?.({
-          driveKey: channelKey,
-          publicBeeKey,
-          previewVideos: playablePreviews
-        }).catch(() => null)
-        const catalogEntry = seedStats?.catalogEntry || {
-          schema: 'peartube.relayCatalog',
-          catalogVersion: 1,
-          driveKey: channelKey,
-          publicBeeKey,
-          source: 'archive-job',
-          retentionClass: 'private',
-          relayRole: 'cache',
-          relayServing: true,
-          previewVideos: playablePreviews,
-          videoCount: playablePreviews.length,
-          manifestUpdatedAt: Date.now()
-        }
-        await runtime?.publishRelayCatalogEntry?.({
-          ...catalogEntry,
-          source: 'archive-job',
-          retentionClass: 'private'
-        }).catch(() => {})
+    async publishCatalog({ publisherId }) {
+      if (!publisherId || typeof runtime?.publishPublisherCatalog !== 'function') {
+        throw new Error('publisher catalog is unavailable')
       }
+      const result = await runtime.publishPublisherCatalog({ publisherId })
+      if (result?.status !== 'published' && result?.status !== 'already-published') {
+        throw new Error(`publisher catalog publication failed: ${result?.status || 'unknown'}`)
+      }
+      return result
+    },
+    async retainAssets({ previewVideos }) {
+      const results = []
+      for (const video of Array.isArray(previewVideos) ? previewVideos : []) {
+        const publication = video?.immutablePublication
+        if (publication?.manifest && publication?.renditionId && typeof runtime?.retainRendition === 'function') {
+          results.push(await runtime.retainRendition({
+            manifest: publication.manifest,
+            renditionId: publication.renditionId
+          }))
+        }
+        if (video?.archivePledge && video?.blobsCoreKey && typeof runtime?.retainArchive === 'function') {
+          const [start, length] = String(video.blobId || '').split(':').map(Number)
+          if (Number.isSafeInteger(start) && Number.isSafeInteger(length) && length > 0) {
+            results.push(await runtime.retainArchive({
+              pledge: video.archivePledge,
+              coreKey: video.blobsCoreKey,
+              start,
+              end: start + length
+            }))
+          }
+        }
+      }
+      return results
     }
   }
 }
@@ -692,8 +675,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
           thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
           thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null,
-          // Content-type coordinates ride the feed previews so clients can
-          // group/badge movies and episodes without loading the channel.
+          immutablePublication: importedMetadata.immutablePublication || null,
           ...deriveMediaCoordinates(privateInput),
           classification: privateInput.tmdbId ? {
             type: privateInput.tmdbType || 'movie',
@@ -708,8 +690,8 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         } : null
         logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
         if (privateInput.publish !== false) {
-          await publisher.publishChannel(channelInfo)
-          await publisher.seedChannel({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
+          await publisher.publishCatalog(channelInfo)
+          await publisher.retainAssets({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
         }
         logger?.archive?.info?.('[archive-stage] published', { id })
 
@@ -719,6 +701,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           videoId: imported.videoId,
           channelKey: channelInfo.channelKey,
           publicBeeKey: channelInfo.publicBeeKey || null,
+          publisherId: channelInfo.publisherId || null,
           previewVideo,
           completedAt: now(),
           error: null

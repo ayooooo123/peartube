@@ -33,6 +33,12 @@ test('generated app RPC metadata is deterministic and covers classified schema c
 
   t.ok(RUNTIME_ONLY_METHODS.includes('suspendNetwork'), 'documents runtime-only platform methods')
   t.ok(RUNTIME_ONLY_METHODS.includes('resumeNetwork'), 'documents runtime-only platform methods')
+  t.absent(APP_RPC_METADATA.namespaces.feed, 'legacy feed namespace is removed')
+  for (const command of ['refresh-feed', 'submit-to-feed', 'unpublish-from-feed', 'is-channel-published']) {
+    t.absent(APP_RPC_COMMANDS.includes(command), `${command} is not app-facing`)
+  }
+  t.ok(PLATFORM_ONLY_COMMANDS.includes('event-media-graph-update'), 'media graph update is platform-only')
+  t.absent(PLATFORM_ONLY_COMMANDS.includes('event-feed-update'), 'legacy feed event is removed')
 })
 
 test('generated app RPC methods cover backend handler registration surface', (t) => {
@@ -118,6 +124,33 @@ test('generated app RPC facade marks explicitly provided optional request fields
   t.ok(Object.hasOwn(captured, 'limit'))
   t.is(captured.limit, 0)
   t.is(captured.limitProvided, true)
+})
+
+test('generated media catalog method preserves explicit limit presence', async (t) => {
+  const captured = []
+  const client = createGeneratedAppRpcClient({
+    rpc: {
+      getMediaCatalog(request) {
+        captured.push(request)
+        return { success: true, items: [] }
+      }
+    },
+    async ready() {},
+    createMissingMethodError(methodName) {
+      return new Error(`missing:${methodName}`)
+    },
+    normalizeError(error) {
+      return error
+    }
+  })
+
+  await client.mediaGraph.getMediaCatalog({ limit: 0 })
+  await client.mediaGraph.getMediaCatalog({})
+
+  t.alike(captured, [
+    { limit: 0, limitProvided: true },
+    {}
+  ])
 })
 
 test('package exports resolve generated HRPC and schema entry points', async (t) => {

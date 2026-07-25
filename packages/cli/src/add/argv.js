@@ -27,8 +27,7 @@ const BOOLEAN_FLAGS = new Map([
 ])
 
 const REPEATABLE_FLAGS = new Map([
-  ['--relay', 'relay'],
-  ['--blind-peer', 'blindPeer']
+  ['--relay', 'relay']
 ])
 
 const EPISODE_COORDINATES = ['showId', 'season', 'episode']

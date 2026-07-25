@@ -344,6 +344,85 @@ test('prefetchVideo does not reserve the full blob size before bytes are cached'
   t.is(seedingManager.getStorageStatsSync().usedBytes, 0)
 })
 
+test('concurrent prefetches reserve quota before either download completes', async (t) => {
+  const metaDb = createMetaDb()
+  const store = createStore()
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
+  await seedingManager.init()
+  await seedingManager.setMaxStorageGB(5)
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
+
+  api.getVideoData = async (_driveKey, videoPath) => ({
+    id: videoPath,
+    path: videoPath,
+    blobId: '0:8:0:3221225472',
+    blobsCoreKey: videoPath.includes('first') ? coreA : coreB,
+    byteLength: 3 * GB,
+    mimeType: 'video/mp4'
+  })
+
+  const results = await Promise.all([
+    api.prefetchVideo('drive-a', 'videos/first.mp4'),
+    api.prefetchVideo('drive-b', 'videos/second.mp4')
+  ])
+
+  t.is(results.filter(result => result.message === 'Prefetch started').length, 1)
+  t.is(results.filter(result => result.message === 'Streaming within storage quota').length, 1)
+})
+
+test('setStorageLimit reports infeasible reductions without mutating the configured limit', async (t) => {
+  const metaDb = createMetaDb()
+  const store = createStore()
+  const seed = {
+    driveKey: 'drive-protected',
+    videoPath: 'videos/protected.mp4',
+    reason: 'pinned',
+    bytes: 6 * GB,
+    blobId: '0:6:0:6144',
+    blobsCoreKey: 'ac'.repeat(32),
+    addedAt: 1,
+    lastAccessedAt: 1,
+  }
+  metaDb.state.set('active-seeds', { [`${seed.driveKey}:${seed.videoPath}`]: seed })
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
+  await seedingManager.init()
+  await seedingManager.setMaxStorageGB(10, { authorized: true })
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces }, seedingManager })
+
+  const result = await api.setStorageLimit(5)
+
+  t.is(result.success, false)
+  t.is(result.errorCode, 'STORAGE_LIMIT_INFEASIBLE')
+  t.is(seedingManager.getMaxStorageGB(), 10)
+})
+
+test('lowering the storage limit cancels active prefetches before clearing their ranges', async (t) => {
+  const metaDb = createMetaDb()
+  const store = createStore()
+  const seedingManager = new SeedingManager(store, metaDb, { metaSubspaces: metaDb.subspaces })
+  await seedingManager.init()
+  await seedingManager.setMaxStorageGB(5)
+  const api = createApi({ ctx: { store, metaDb, metaSubspaces: metaDb.subspaces, swarm: null }, seedingManager })
+
+  api.getVideoData = async () => ({
+    id: 'active',
+    path: 'videos/active.mp4',
+    blobId: '0:8:0:4294967296',
+    blobsCoreKey: coreA,
+    byteLength: 4 * GB,
+    mimeType: 'video/mp4'
+  })
+
+  const prefetch = await api.prefetchVideo('drive-a', 'videos/active.mp4')
+  t.is(prefetch.message, 'Prefetch started')
+
+  const lowered = await api.setStorageLimit(1)
+
+  t.is(lowered.success, true)
+  t.is(store.cores.get(coreA).destroyedRanges, 1)
+  t.alike(store.cores.get(coreA).clearCalls, [{ start: 0, end: 8 }])
+})
+
 test('prefetchVideo corrects stale full-size watched seed accounting downward', async (t) => {
   const metaDb = createMetaDb()
   const store = createStore()

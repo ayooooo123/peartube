@@ -33,8 +33,6 @@ export class ChannelPairer extends ReadyResource {
     this.candidate = null
     this.channel = null
     this.discovery = null
-    // Track replicated connections for the pairing swarm we manage if we create one.
-    this._replicatedConns = new WeakSet()
 
     this._resolve = null
     this._reject = null
@@ -65,16 +63,6 @@ export class ChannelPairer extends ReadyResource {
     if (!this.swarm) {
       console.log('[ChannelPairer] Creating new Hyperswarm')
       this.swarm = new Hyperswarm()
-      // Use idempotent replication - check before calling store.replicate()
-      this.swarm.on('connection', (conn) => {
-        if (this._replicatedConns.has(conn)) {
-          console.log('[ChannelPairer] Connection already replicated, skipping')
-          return
-        }
-        this._replicatedConns.add(conn)
-        const pairingReplicationStream = conn
-        this.store.replicate(pairingReplicationStream)
-      })
     }
 
     console.log('[ChannelPairer] Getting local writer key...')
@@ -122,6 +110,7 @@ export class ChannelPairer extends ReadyResource {
           })
           this.opts.onChannel?.(this.channel)
           await this.channel.ready()
+          await this.channel.setupPairing(this.swarm)
           console.log('[ChannelPairer] Channel ready')
 
           // HyperDB has no Autobase waitForWritable path. The original device adds

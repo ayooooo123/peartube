@@ -1,7 +1,12 @@
 import b4a from 'b4a'
+import {
+  PROTOCOL_ERROR_CODES,
+  PROTOCOL_MAJOR,
+  PROTOCOL_MINOR,
+  ProtocolCompatibilityError
+} from './version.js'
 
-export const PROTOCOL_MAJOR = 1
-export const PROTOCOL_MINOR = 0
+export { PROTOCOL_MAJOR, PROTOCOL_MINOR }
 export const MAX_PEER_FRAME_BYTES = 64 * 1024
 export const FRAME_FLAG_OPTIONAL_TAG = 0x8000
 
@@ -11,6 +16,7 @@ const PURPOSE_CODES = new Map([
   ['asset', 3],
   ['live', 4],
   ['archive', 5],
+  ['archive-discovery', 6],
 ])
 const PURPOSE_NAMES = new Map(Array.from(PURPOSE_CODES, ([name, code]) => [code, name]))
 const TYPE_NAMES = new Map()
@@ -83,7 +89,13 @@ export function decodePeerFrame(buffer, options = {}) {
   if (declared !== buffer.byteLength - 4) throw new Error('truncated frame')
   const protocolMajor = buffer.readUInt8(offset++)
   const protocolMinor = buffer.readUInt8(offset++)
-  if (protocolMajor !== PROTOCOL_MAJOR) throw new Error('unsupported protocol major')
+  if (protocolMajor !== PROTOCOL_MAJOR) {
+    throw new ProtocolCompatibilityError(
+      PROTOCOL_ERROR_CODES.MAJOR_UNSUPPORTED,
+      'unsupported protocol major',
+      { minimumProtocolMajor: protocolMajor, supportedProtocolMajor: PROTOCOL_MAJOR }
+    )
+  }
   const purposeCode = buffer.readUInt8(offset++)
   const purpose = PURPOSE_NAMES.get(purposeCode)
   if (!purpose) throw new Error('unknown purpose')

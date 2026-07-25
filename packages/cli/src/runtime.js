@@ -1,489 +1,232 @@
-function buildNetworkDoctor({
-  dht,
-  peerPoolJoined,
-  publicFeedDiscoveryJoined,
-  directPeerDial,
-  networkDebug,
-  swarmPeers,
-  swarmConnections,
-  connecting,
-  feedConnections,
-  feedEntries
-}) {
-  const doctor = {
-    dht: {
-      bootstrapped: dht?.bootstrapped ?? null,
-      firewalled: dht?.firewalled ?? null,
-      online: dht?.online ?? null,
-      ephemeral: dht?.ephemeral ?? null,
-    },
-    discovery: {
-      peerPoolJoined: Boolean(peerPoolJoined),
-      publicFeedDiscoveryJoined: Boolean(publicFeedDiscoveryJoined),
-      discoveredPeers: directPeerDial?.discoveredPeers || 0,
-      recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
-    },
-    socket: {
-      swarmPeers: swarmPeers || 0,
-      swarmConnections: swarmConnections || 0,
-      connecting: connecting || 0,
-      recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
-      peerStates: networkDebug?.hyperswarm?.peerStates || [],
-    },
-    feed: {
-      feedConnections: feedConnections || 0,
-      feedEntries: feedEntries || 0,
-      directPeerDial: directPeerDial || null,
-    },
-    recommendedBoundary: null,
+import b4a from 'b4a'
+
+import { createBackendContext } from '@peartube/backend'
+import { PROTOCOL_VERSION } from '@peartube/host/contracts'
+
+const HEX_32 = /^[0-9a-f]{64}$/
+
+function normalizeHexList (values = []) {
+  if (!Array.isArray(values)) return []
+  const seen = new Set()
+  const normalized = []
+  for (const value of values) {
+    const hex = String(value || '').trim().toLowerCase()
+    if (!HEX_32.test(hex) || seen.has(hex)) continue
+    seen.add(hex)
+    normalized.push(hex)
   }
-  if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
-  else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
-  else if (doctor.socket.swarmConnections > 0 && doctor.feed.feedConnections === 0) doctor.recommendedBoundary = 'protomux-feed-open'
-  else if (doctor.feed.feedConnections > 0 && doctor.feed.feedEntries === 0) doctor.recommendedBoundary = 'feed-gossip'
-  else doctor.recommendedBoundary = 'content-playback-or-ui'
-  return doctor
+  return normalized
 }
 
-export async function createRelayRuntime({ config, logger, dependencies = null } = {}) {
-  const modules = dependencies ? null : await Promise.all([
-    import('@peartube/backend/storage'),
-    import('@peartube/backend/public-feed'),
-    import('./cache-manager.js'),
-    import('./seeding.js'),
-    import('@peartube/backend/relay-blind-peer'),
-    import('../../backend/src/identity-key-file.js')
-  ])
-  const storageModule = dependencies || modules[0]
-  const publicFeedModule = dependencies || modules[1]
-  const cacheModule = dependencies || modules[2]
-  const seedingModule = dependencies || modules[3]
-  const blindPeerModule = dependencies || modules[4]
-  const identityKeyFileModule = dependencies || modules[5]
-  const { initializeStorage, loadChannel, loadPublicBee, getNetworkStats } = storageModule
-  const { PublicFeedManager } = publicFeedModule
-  const { CacheManager } = cacheModule
-  const { createRelaySeeder } = seedingModule
-  const { createRelayBlindPeer } = blindPeerModule
-  const { readPrimaryKeyFile, writePrimaryKeyFile } = identityKeyFileModule
+function trustedSignerBytes (values) {
+  return normalizeHexList(values).map((hex) => b4a.from(hex, 'hex'))
+}
 
-  const storageRoot = config.storage.path
+function roleCount (values, role) {
+  if (!Array.isArray(values)) return 0
+  return values.reduce((count, value) => count + (value?.role === role ? 1 : 0), 0)
+}
 
-  // IMPORTANT: backend storage expects the top-level relay storage root here.
-  // The nested `<root>/corestore` directory is part of the normal on-disk layout.
-  // Relay runtime bypasses the backend orchestrator, so it must persist/reuse the
-  // Corestore primaryKey itself. Otherwise each restart opens the same storage
-  // with a new random primary key, which can produce device-file/Corestore errors.
-  let primaryKey = null
-  try {
-    primaryKey = await readPrimaryKeyFile(storageRoot)
-  } catch (err) {
-    logger.runtime?.warn('Failed to read relay primary-key file', {
-      error: err?.message || String(err),
-      storageRoot,
-    })
+function counter (counters, ...names) {
+  for (const name of names) {
+    const value = Number(counters?.[name])
+    if (Number.isSafeInteger(value) && value >= 0) return value
   }
+  return 0
+}
 
-  const storageOpenAt = Date.now()
-  const ctx = await initializeStorage({
-    storagePath: storageRoot,
-    primaryKey,
-    wrapTimeout: true,
-    // Docker/bind-mounted relay volumes can trip device-file inode/mtime validation
-    // across clean container restarts even with the same persisted primary key.
-    // The relay is a single-writer service, so disable device-file enforcement here.
-    corestoreAllowBackup: true,
-    // A relay without Hyperswarm is not a degraded local app; it cannot
-    // discover peers, gossip inventory, or serve retained content to the network.
-    requireNetwork: true
-  })
-  logger.runtime?.info('Relay storage opened', { storageOpenMs: Date.now() - storageOpenAt })
+export async function createRelayRuntime ({ config, logger, dependencies = null } = {}) {
+  if (!config?.storage?.path) throw new Error('relay runtime requires config.storage.path')
+  const backendFactory = dependencies?.createBackendContext || createBackendContext
+  const networkConfig = config.network || {}
+  const trustedBootstrapSigners = trustedSignerBytes(networkConfig.trustedBootstrapSigners)
+  const trustedBootstrapRootIds = normalizeHexList(networkConfig.trustedBootstrapRootIds)
+  const bootstrapEnabled = networkConfig.bootstrapEnabled !== false && config.discovery?.enabled !== false
+  const maxBytes = Number.isSafeInteger(config.storage.maxBytes) && config.storage.maxBytes > 0
+    ? config.storage.maxBytes
+    : 0
+  const maxConcurrent = Number.isSafeInteger(config.seedPin?.maxConcurrent) && config.seedPin.maxConcurrent > 0
+    ? config.seedPin.maxConcurrent
+    : 1
 
-  if (!primaryKey && ctx?.store?.primaryKey) {
-    try {
-      await writePrimaryKeyFile(storageRoot, ctx.store.primaryKey)
-      logger.runtime?.info('Persisted relay Corestore primary key', { storageRoot })
-    } catch (err) {
-      logger.runtime?.warn('Failed to persist relay primary-key file', {
-        error: err?.message || String(err),
-        storageRoot,
-      })
-    }
-  }
-
-  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
-  const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)
-  // Cap the relay's autonomous blind-peer mirror storage at the configured
-  // blind-peer budget, defaulting to the overall storage threshold. Relays are
-  // effectively fancy blind peers, so this is what keeps untrusted mirror bytes
-  // from filling the disk; relay-owned/seeded content is announced and exempt.
-  const configuredBlindPeerMax = Number(config?.network?.blindPeerMaxBytes)
-  const blindPeerMaxBytes = Number.isFinite(configuredBlindPeerMax) && configuredBlindPeerMax > 0
-    ? configuredBlindPeerMax
-    : (Number(config?.storage?.maxBytes) || 0)
-  const blindPeer = await createRelayBlindPeer({
-    ctx,
-    storagePath: storageRoot,
-    enabled: config?.network?.blindPeer !== false,
-    trustedPeerKeys: config?.network?.trustedBlindPeerClients || [],
-    maxBytes: blindPeerMaxBytes,
-    logger: logger.runtime || logger.relay || logger
-  })
-  const seeder = createRelaySeeder({
-    ctx,
-    loadPublicBee,
-    blindPeer,
-    logger: logger.runtime || logger.relay || logger
-  })
-  let candidateHandler = null
-
-  function discoveryAcceptsCandidates() {
-    if (config?.policy === 'allowlist') return false
-    if (config?.discovery?.enabled === false) return false
-    if (config?.discovery?.seedDiscovered === false) return false
-    return true
-  }
-
-  function getFeedEntries() {
-    return Array.from(publicFeed.getFeed?.() || publicFeed.entries.values())
-  }
-
-  function seedFeedEntries(reason) {
-    return seeder.seedFeedEntries(getFeedEntries()).catch((err) => {
-      logger.runtime?.warn('Relay feed-entry seeding refresh failed', {
-        reason,
-        error: err?.message || String(err)
-      })
-    })
-  }
-
-  function emitFeedEntries() {
-    if (typeof candidateHandler !== 'function') return
-    if (!discoveryAcceptsCandidates()) return
-
-    for (const entry of getFeedEntries()) {
-      if (!entry?.driveKey || !entry?.publicBeeKey) continue
-      candidateHandler({
-        channelKey: entry.driveKey,
-        publicBeeKey: entry.publicBeeKey || null,
-        source: entry.source === 'relay-cache' ? 'relay-cache' : 'discovered',
-        previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-      })
-    }
-  }
-
-  ctx.swarm.on('peer', (peer, topic) => {
-    try {
-      publicFeed.handleDiscoveredPeer(peer, topic)
-    } catch (err) {
-      logger.runtime?.warn('Shared-topic peer discovery promotion failed', { error: err?.message || String(err) })
-    }
+  const backend = await backendFactory({
+    storagePath: config.storage.path,
+    platform: 'relay',
+    role: 'relay',
+    expectedProtocolVersion: PROTOCOL_VERSION,
+    network: {
+      networkId: networkConfig.networkId || 'peartube-main',
+      trustedBootstrapSigners,
+      trustedBootstrapRootIds,
+      bootstrapEnabled
+    },
+    resources: {
+      profile: { maxBytesPerDay: maxBytes },
+      maxConcurrentSync: maxConcurrent,
+      maxConcurrentProofs: maxConcurrent,
+      maxConcurrentFetches: maxConcurrent
+    },
+    seedPin: config.seedPin || {},
+    operability: {
+      operatorMode: config.mode || 'community'
+    },
+    ipcLog: (message) => logger?.runtime?.debug?.(message)
   })
 
-  ctx.swarm.on('connection', (conn, info) => {
-    publicFeed.handleConnection(conn, info)
-  })
-
-  publicFeed.setOnFeedUpdate(() => {
-    try {
-      for (const entry of publicFeed.entries.values()) {
-        if (entry?.driveKey && entry?.publicBeeKey) {
-          cacheManager.addChannel(entry.driveKey, entry.publicBeeKey, 'discovered', {
-            previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-          }).catch(() => {})
-        }
-      }
-      seedFeedEntries('feed-update')
-      emitFeedEntries()
-    } catch (err) {
-      logger.runtime?.error('Feed update failed', { error: err?.message || String(err) })
-    }
-  })
+  if (!backend?.ctx || !backend?.api || typeof backend.destroy !== 'function') {
+    await backend?.destroy?.().catch(() => {})
+    throw new Error('universal backend returned an incomplete relay context')
+  }
 
   let closed = false
   let started = false
   const runtime = {
-    ctx,
-    publicFeed,
-    cacheManager,
-    seeder,
-    identityManager: null,
-    uploadManager: null,
-    seedPin: null,
-    seedPinClients: null,
-    uninstallSeedPinIdentityMutationHooks: null,
-    async publishRelayCatalogEntry(entry) {
-      if (!entry?.driveKey || !entry?.publicBeeKey) return null
-      const catalogEntry = {
-        schema: 'peartube.relayCatalog',
-        catalogVersion: 1,
-        source: 'relay-cache',
-        relayRole: 'cache',
-        relayServing: true,
-        // Advertise this relay's blind-peer mirror key so clients can delegate
-        // their own uploads to it for offline availability (feed discovery).
-        ...(blindPeer?.enabled && blindPeer.publicKey ? { relayMirrorKey: blindPeer.publicKey } : {}),
-        ...entry,
-        driveKey: entry.driveKey,
-        publicBeeKey: entry.publicBeeKey,
-        previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-      }
-      await publicFeed.submitRelayCatalogEntry?.(catalogEntry)
-      return catalogEntry
-    },
-    setCandidateHandler(handler) {
-      candidateHandler = handler
-    },
-    async start() {
-      if (started) return
+    backend,
+    ctx: backend.ctx,
+    api: backend.api,
+    scopedNetwork: backend.scopedNetwork,
+    seedingManager: backend.seedingManager,
+    identityManager: backend.identityManager,
+    uploadManager: backend.uploadManager,
+    seedPin: backend.seedPin,
+    seedPinClients: backend.seedPinClients,
+
+    async start () {
       if (closed) throw new Error('relay runtime is closed')
-      logger.runtime?.info('Initializing relay runtime', {
-        storagePath: config.storage.path,
-        storageRoot,
-        mode: config.mode,
-        policy: config.policy
+      if (started) return
+      started = true
+      logger?.runtime?.info?.('Relay universal backend ready', {
+        platform: 'relay',
+        networkId: networkConfig.networkId || 'peartube-main'
       })
-      try {
-        await cacheManager.init()
-
-        let runtimeModules = dependencies
-        if (!runtimeModules) {
-          const loaded = await Promise.all([
-            import('@peartube/backend/identity'),
-            import('@peartube/backend/upload'),
-            import('@peartube/backend/api'),
-            import('@peartube/backend/seed-pin'),
-            import('./seed-pin-admission.js'),
-          ])
-          runtimeModules = Object.assign({}, ...loaded)
-        }
-        const {
-          createIdentityManager,
-          createUploadManager,
-          createApi,
-          registerSeedPinProtocol,
-          installSeedPinIdentityMutationHooks,
-          resolveSeedPinClientAuth,
-          createRelaySeedPinAdmission,
-          createRelaySeedPinCapacityPolicy,
-          createRelaySeedPinReleasePolicy,
-        } = runtimeModules
-        this.identityManager = createIdentityManager({ ctx })
-        await this.identityManager.loadIdentities()
-        this.uploadManager = createUploadManager({ ctx })
-        this.api = createApi({ ctx, publicFeed, seedingManager: null, videoStats: null })
-
-        // Use the same feed snapshot and availability-hint plumbing as the normal
-        // PearTube backend before joining the feed swarm. Otherwise initial
-        // HAVE_FEED messages can omit playable relay-cache preview refs.
-        if (typeof this.api.getAvailabilityHints === 'function') {
-          publicFeed.setAvailabilityHintProvider((requests, conn) => this.api.getAvailabilityHints(requests, conn))
-        }
-        if (typeof this.api.getFeedSnapshotEntries === 'function') {
-          publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
-        }
-        if (typeof this.api.getChannelSignedDescriptor === 'function') {
-          publicFeed.setSignedDescriptorProvider((driveKey) => this.api.getChannelSignedDescriptor(driveKey))
-        }
-
-        // Relay-owned channels created before descriptor signing (or with the
-        // descriptor bound to the identity key) gossip entries strict peers
-        // reject. Re-sign them before announcing.
-        const descriptorSummary = await this.identityManager.ensureSignedChannelDescriptors?.()
-          .catch((err) => {
-            logger.runtime?.warn('Descriptor backfill failed', { error: err?.message || String(err) })
-            return null
-          })
-        if (descriptorSummary) {
-          logger.runtime?.info('Descriptor backfill complete', descriptorSummary)
-        }
-
-        if (config.seedPin.enabled) {
-          const admission = createRelaySeedPinAdmission({ config })
-          const releasePolicy = createRelaySeedPinReleasePolicy({
-            retentionDays: config.seedPin.retentionDays,
-          })
-          this.seedPin = registerSeedPinProtocol(ctx, {
-            enabled: true,
-            admission,
-            resolveClientAuth: () => resolveSeedPinClientAuth({ ctx, identityManager: this.identityManager }),
-            verificationLimiterOptions: { maxConcurrent: config.seedPin.maxConcurrent },
-            pinWorkerOptions: pinStore => ({
-              concurrency: config.seedPin.maxConcurrent,
-              capacityPolicy: createRelaySeedPinCapacityPolicy({
-                pinStore,
-                maxBytes: config.seedPin.maxBytes,
-              }),
-              releasePolicy,
-            }),
-          })
-          this.seedPinClients = this.seedPin.clients
-          ctx.seedPinRegistration = this.seedPin
-          await this.seedPin.ready
-          this.uninstallSeedPinIdentityMutationHooks = installSeedPinIdentityMutationHooks({
-            identityManager: this.identityManager,
-            onMutation: async ({ label }) => {
-              try {
-                await this.seedPin.refreshClientAuth?.()
-              } catch (error) {
-                try { await this.seedPin.refreshClientAuth?.({ failClosed: true }) } catch {}
-                logger.runtime?.warn('Seed pin identity refresh failed', {
-                  operation: label,
-                  error: error?.message || String(error),
-                })
-              }
-            },
-          })
-          await this.seedPin.refreshClientAuth?.()
-        }
-
-        // Seed-pin owns a sibling Protomux channel and must see existing/future
-        // authenticated streams before feed discovery starts creating more.
-        await publicFeed.start()
-
-        logger.runtime?.info('Relay runtime started', this.getNetworkStats())
-        started = true
-        // Seed the cached/discovered channel backlog in the BACKGROUND. Awaiting
-        // it blocks start() for minutes once many channels are cached, which
-        // stalls every consumer that waits on start() — notably the relay's
-        // archive publisher bind, leaving web uploads stuck in "running". The
-        // network, feed protocol, and API providers are already up by here;
-        // seeding only refreshes what we advertise, so it is safe to defer.
-        void (async () => {
-          try {
-            await seeder.seedCachedChannels(cacheManager)
-          } catch (err) {
-            logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
-          }
-          if (closed) return
-          try {
-            await seedFeedEntries('startup')
-            emitFeedEntries()
-          } catch (err) {
-            logger.runtime?.warn('Relay feed-entry startup seeding failed', { error: err?.message || String(err) })
-          }
-        })()
-      } catch (error) {
-        await this.close()
-        throw error
-      }
     },
-    requestFeedSync() {
-      try {
-        return publicFeed.requestFeedsFromPeers?.() || 0
-      } catch (err) {
-        logger.feed?.warn('Initial feed sync request failed', {
-          error: err?.message || String(err)
-        })
-        return 0
-      }
+
+    async followPublisher (request) {
+      return backend.api.followPublisher(request)
     },
-    async resolveCandidate(candidate) {
-      const resolved = {
-        ...candidate,
-        channelKey: candidate.channelKey || candidate.driveKey
-      }
 
-      if (resolved.publicBeeKey) {
-        try {
-          const bee = await loadPublicBee(ctx, resolved.publicBeeKey)
-          const meta = await bee.getMetadata().catch(() => null)
-          resolved.ownerKey = resolved.ownerKey || meta?.createdBy || meta?.publicKey || null
-        } catch (err) {
-          logger.runtime?.debug('Public bee metadata lookup failed', {
-            channelKey: resolved.channelKey,
-            error: err?.message || String(err)
-          })
-        }
-      }
-
-      if (!resolved.publicBeeKey || !resolved.ownerKey) {
-        try {
-          const channel = await loadChannel(ctx, resolved.channelKey)
-          const meta = await channel.getMetadata().catch(() => null)
-          resolved.publicBeeKey = resolved.publicBeeKey || channel.publicBeeKey || meta?.publicBeeKey || null
-          resolved.ownerKey = resolved.ownerKey || meta?.createdBy || meta?.publicKey || null
-        } catch (err) {
-          logger.runtime?.debug('Channel metadata lookup failed', {
-            channelKey: resolved.channelKey,
-            error: err?.message || String(err)
-          })
-        }
-      }
-
-      if (!resolved.ownerKey && resolved.publicBeeKey) {
-        try {
-          const bee = await loadPublicBee(ctx, resolved.publicBeeKey)
-          const meta = await bee.getMetadata().catch(() => null)
-          resolved.ownerKey = meta?.createdBy || meta?.publicKey || null
-        } catch (err) {
-          logger.runtime?.debug('Owner fallback lookup failed', {
-            channelKey: resolved.channelKey,
-            error: err?.message || String(err)
-          })
-        }
-      }
-
-      return resolved
+    async unfollowPublisher (request) {
+      return backend.api.unfollowPublisher(request)
     },
-    runPeerRecovery(reason = 'relay-runtime') {
-      return publicFeed.runBoundedPeerRecovery?.(reason) || { queued: 0, reason: 'unsupported' }
+
+    async publishPublisherCatalog (request) {
+      return backend.api.publishLocalPublisherCatalog(request)
     },
-    getNetworkStats() {
-      const feedStats = publicFeed.getStats?.() || {}
-      const storageStats = getNetworkStats?.() || {}
+
+    async resolvePublisherCatalog (request) {
+      return backend.api.resolveLocalPublisherCatalog(request)
+    },
+
+    async publishBootstrapLocator (request) {
+      return backend.api.publishBootstrapLocator(request)
+    },
+
+    async listBootstrapLocators () {
+      return backend.api.listBootstrapLocators()
+    },
+
+    async retainRendition (request) {
+      return backend.api.retainAuthorizedRendition(request)
+    },
+
+    async releaseRendition (request) {
+      return backend.api.releaseAuthorizedRendition(request)
+    },
+
+    async retainArchive (request) {
+      return backend.api.retainAuthorizedArchive(request)
+    },
+
+    async releaseArchive (request) {
+      return backend.api.releaseAuthorizedArchive(request)
+    },
+
+    async refreshAuthorization (trustedClients) {
+      if (typeof backend.api.refreshScopedAuthorization !== 'function') return false
+      const result = await backend.api.refreshScopedAuthorization({
+        trustedClients: normalizeHexList(trustedClients)
+      })
+      return result?.status === 'updated'
+    },
+
+    async requestCatalogSync () {
+      const locators = await backend.api.listBootstrapLocators()
+      return Array.isArray(locators) ? locators.length : 0
+    },
+
+    async resolveCandidate (candidate = {}) {
+      const publisherId = candidate.publisherId || null
+      if (!publisherId) return { ...candidate }
+      const catalog = await backend.api.resolveLocalPublisherCatalog({ publisherId })
+      return { ...candidate, publisherId, catalog }
+    },
+
+    setCandidateHandler () {
+      // Candidate delivery belongs to the backend's scoped publisher manager.
+      // Callers explicitly follow authenticated publishers through followPublisher.
+    },
+
+    async getDiagnostics () {
+      const [scoped, locators, seedRetention, archive, storage] = await Promise.all([
+        backend.api.getScopedNetworkDiagnostics(),
+        backend.api.listBootstrapLocators(),
+        backend.seedingManager?.getStatus?.() || {},
+        backend.api.getArchiveOperatorStatus?.({}) || {},
+        backend.api.getStorageStats?.() || {}
+      ])
+      const counters = scoped?.counters || {}
+      const swarm = backend.ctx?.swarm
+      const publisherTopics = roleCount(scoped?.topics, 'publisher')
+      const assetTopics = roleCount(scoped?.topics, 'asset')
       return {
-        peers: ctx.swarm?.peers?.size || 0,
-        connections: ctx.swarm?.connections?.size || 0,
-        feedPeers: feedStats.peerCount || 0,
-        feedConnections: feedStats.feedConnections || 0,
-        feedChannelCandidates: feedStats.feedChannelCandidates || 0,
-        candidateConnections: feedStats.candidateConnections || 0,
-        rememberedPeerCandidates: feedStats.rememberedPeerCandidates || 0,
-        feedEntries: feedStats.totalEntries || 0,
-        dht: {
-          bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
-          firewalled: ctx.swarm?.dht?.firewalled ?? null,
-          online: ctx.swarm?.dht?.online ?? null,
-          ephemeral: ctx.swarm?.dht?.ephemeral ?? null
+        network: {
+          status: scoped?.status || 'unknown',
+          protocolMajor: scoped?.protocolMajor ?? PROTOCOL_VERSION,
+          networkId: scoped?.networkId || networkConfig.networkId || 'peartube-main',
+          peers: swarm?.peers?.size || 0,
+          connections: swarm?.connections?.size || 0,
+          dht: {
+            bootstrapped: swarm?.dht?.bootstrapped ?? null,
+            firewalled: swarm?.dht?.firewalled ?? null,
+            online: swarm?.dht?.online ?? null
+          },
+          offline: Boolean(swarm?._peartubeOffline),
+          offlineReason: swarm?._peartubeOfflineReason || null,
+          listenResolved: Boolean(swarm?._peartubeListenResolved)
         },
-        publicFeedDiscoveryJoined: Boolean(publicFeed.feedDiscovery),
-        blindPeer: blindPeer.getStats?.() || null,
-        peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-        directPeerDial: feedStats.directPeerDial || null,
-        doctor: buildNetworkDoctor({
-          dht: ctx.swarm?.dht,
-          peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
-          publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
-          directPeerDial: feedStats.directPeerDial || null,
-          networkDebug: storageStats,
-          swarmPeers: ctx.swarm?.peers?.size || 0,
-          swarmConnections: ctx.swarm?.connections?.size || 0,
-          connecting: Number(ctx.swarm?.connecting || 0),
-          feedConnections: feedStats.feedConnections || 0,
-          feedEntries: feedStats.totalEntries || 0,
-        }),
-        hyperswarm: storageStats?.hyperswarm || null,
-        swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
-        swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
-        swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
-        seeding: seeder.getStats(),
+        publisher: {
+          catalogs: counter(counters, 'publisherCatalogs', 'catalogs') || publisherTopics,
+          followed: counter(counters, 'publishersFollowed', 'followedPublishers'),
+          lastErrorCode: scoped?.lastErrorCode || null
+        },
+        bootstrap: {
+          joined: bootstrapEnabled && scoped?.status === 'ready',
+          locators: Array.isArray(locators) ? locators.length : 0,
+          rejected: counter(counters, 'locatorsRejected', 'bootstrapRejected'),
+          maxLocators: counter(counters, 'maxLocators', 'bootstrapLimit')
+        },
+        assets: {
+          retainedRenditions: counter(counters, 'retainedRenditions'),
+          activeSessions: roleCount(scoped?.sessions, 'asset'),
+          topics: assetTopics,
+          maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
+        },
+        seedRetention: seedRetention || {},
+        archive: archive || {},
+        storage: storage || {}
       }
     },
-    async close() {
+
+    async getNetworkStats () {
+      return this.getDiagnostics()
+    },
+
+    async close () {
       if (closed) return
       closed = true
-      this.uninstallSeedPinIdentityMutationHooks?.()
-      this.uninstallSeedPinIdentityMutationHooks = null
-      try { await this.seedPin?.unregister?.() } catch (err) { logger.runtime?.debug('Seed pin close failed', { error: err?.message || String(err) }) }
-      if (ctx.seedPinRegistration === this.seedPin) ctx.seedPinRegistration = null
-      try { await publicFeed.stop() } catch (err) { logger.runtime?.debug('Public feed close failed', { error: err?.message || String(err) }) }
-      try { await seeder.close() } catch (err) { logger.runtime?.debug('Relay seeder close failed', { error: err?.message || String(err) }) }
-      try { await blindPeer.close?.() } catch (err) { logger.runtime?.debug('Relay blind peer close failed', { error: err?.message || String(err) }) }
-      try { await ctx.swarm.destroy() } catch (err) { logger.runtime?.debug('Swarm close failed', { error: err?.message || String(err) }) }
-      try { await ctx.blobServer?.close?.() } catch (err) { logger.runtime?.debug('Blob server close failed', { error: err?.message || String(err) }) }
-      try { await ctx.store.close() } catch (err) { logger.runtime?.debug('Store close failed', { error: err?.message || String(err) }) }
+      await backend.destroy()
     }
   }
+
   return runtime
 }

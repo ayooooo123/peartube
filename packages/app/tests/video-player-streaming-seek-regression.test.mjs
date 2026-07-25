@@ -46,7 +46,7 @@ test('PearInlineVideoView reasserts desired playback after seek buffering resolv
   )
   assert.match(
     statusBlock,
-    /status === 'readyToPlay'[\s\S]*Date\.now\(\) <= seekPlaybackRecoveryUntilRef\.current[\s\S]*isPlayingRef\.current[\s\S]*player\.play\(\)/,
+    /status === 'readyToPlay'[\s\S]*Date\.now\(\) <= seekPlaybackRecoveryUntilRef\.current[\s\S]*isPlayingRef\.current[\s\S]*requestNativePlayback\(\)/,
     'readyToPlay after a seek should reassert the desired playing state',
   )
 })

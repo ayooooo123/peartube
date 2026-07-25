@@ -1,4 +1,6 @@
 export * from './pledge.js'
+export * from './request.js'
+export * from './permissionless-network.js'
 export * from './challenge.js'
 export * from './protocol.js'
 export * from './store.js'

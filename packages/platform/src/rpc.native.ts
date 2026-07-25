@@ -6,14 +6,31 @@
  * Handles BareKit Worklet initialization, HRPC setup, and event subscriptions.
  */
 
-import { createChannelCatalogRpc, createPlatformRpcBridge, createPersonalRpc } from './rpc.shared';
-import { createNativeRunner } from './runner.native';
+import {
+  createChannelCatalogRpc,
+  createMediaGraphRpc,
+  createOperabilityRpc,
+  createPlatformRpcBridge,
+  createPersonalRpc,
+  createPublisherRootOperationRpc,
+} from './rpc.shared';
+import type {
+  PublisherRootIntentRequest,
+  PublisherSignerBridgeLike,
+  StorageStatsResponse,
+} from './rpc.shared';
+import {
+  createNativeRunner,
+  runNativeLegacyPublisherRootPreflight,
+} from './runner.native';
+import type { LegacyPublisherRootMigrationCallback } from './runner.native';
 import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js';
 import {
   createBundleCachePaths,
   normalizeBundleFilePath,
   shouldReusePersistedBundleCache,
 } from './native-bundle-cache.js';
+import { PROTOCOL_VERSION } from '@peartube/host/contracts'
 import type { VideoStats } from './types';
 
 declare function require(moduleName: string): any;
@@ -27,100 +44,6 @@ declare const Worklet: new () => {
   IPC: any;
 };
 
-// HRPC class from @peartube/spec
-declare const HRPC: new (stream: any) => {
-  createIdentity(req: { name: string }): Promise<any>;
-  getIdentity(req: {}): Promise<any>;
-  getIdentities(req: {}): Promise<any>;
-  setActiveIdentity(req: { publicKey: string }): Promise<any>;
-  listVideos(req: { channelKey: string }): Promise<any>;
-  getVideoUrl(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<any>;
-  preparePlayback(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<any>;
-  prefetchVideo(req: { channelKey: string; videoId: string; publicBeeKey?: string }): Promise<any>;
-  getVideoStats(req: { channelKey: string; videoId: string }): Promise<any>;
-  getVideoThumbnail(req: { channelKey: string; videoId: string; thumbnailBlobId?: string | null; thumbnailBlobsCoreKey?: string | null; thumbnailMimeType?: string | null }): Promise<any>;
-  setVideoThumbnail(req: { videoId: string; imageData: string; mimeType: string }): Promise<any>;
-  getChannel(req: { publicKey: string }): Promise<any>;
-  subscribeChannel(req: { channelKey: string }): Promise<any>;
-  joinChannel(req: { channelKey: string }): Promise<any>;
-  getSubscriptions(req: {}): Promise<any>;
-  refreshFeed(req: {}): Promise<any>;
-  submitToFeed(req: {}): Promise<any>;
-  unpublishFromFeed(req: {}): Promise<any>;
-  isChannelPublished(req: {}): Promise<any>;
-  getChannelMeta(req: { channelKey: string; publicBeeKey?: string | null }): Promise<any>;
-  createDeviceInvite(req: { channelKey: string }): Promise<any>;
-  pairDevice(req: { inviteCode: string; deviceName?: string }): Promise<any>;
-  listDevices(req: { channelKey: string }): Promise<any>;
-  searchVideos(req: { channelKey: string; query: string; topK?: number; federated?: boolean }): Promise<any>;
-  globalSearchVideos(req: { query: string; topK?: number }): Promise<any>;
-  indexVideoVectors(req: { channelKey: string; videoId: string }): Promise<any>;
-  addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string | null; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
-  listComments(req: { channelKey: string; videoId: string; page?: number; limit?: number; publicBeeKey?: string | null }): Promise<any>;
-  hideComment(req: { channelKey: string; videoId: string; commentId: string; publicBeeKey?: string | null }): Promise<any>;
-  removeComment(req: { channelKey: string; videoId: string; commentId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
-  addReaction(req: { channelKey: string; videoId: string; reactionType: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
-  removeReaction(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
-  getReactions(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
-  logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }): Promise<any>;
-  getRecommendations(req: { channelKey: string; limit?: number }): Promise<any>;
-  getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }): Promise<any>;
-  getStatus(req: {}): Promise<any>;
-  getSwarmStatus(req: {}): Promise<any>;
-  uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
-  downloadVideo(req: { channelKey: string; videoId: string; destPath: string }): Promise<any>;
-  updateChannel(req: { name?: string; description?: string; avatar?: string }): Promise<any>;
-  updateVideoMetadata(req: { channelKey: string; videoId: string; title?: string; description?: string; category?: string }): Promise<any>;
-  updateChannelAvatar(req: { imageData: string; mimeType: string }): Promise<any>;
-  deleteVideo(req: { videoId: string }): Promise<any>;
-  getVideoData(req: { channelKey: string; videoId: string }): Promise<any>;
-  pickVideoFile(req: {}): Promise<any>;
-  pickImageFile(req: {}): Promise<any>;
-  recoverIdentity(req: { seedPhrase: string; name?: string }): Promise<any>;
-  hideChannel(req: { channelKey: string }): Promise<any>;
-  unsubscribeChannel(req: { channelKey: string }): Promise<any>;
-  setVideoThumbnailFromFile(req: { videoId: string; filePath: string }): Promise<any>;
-  getTranscodeSettings(req: {}): Promise<any>;
-  setTranscodeSettings(req: { videoToolboxDecodeEnabled?: boolean; videoToolboxHwMapEnabled?: boolean }): Promise<any>;
-  getStorageStats(req: {}): Promise<any>;
-  setStorageLimit(req: { maxGB: number }): Promise<any>;
-  clearCache(req: {}): Promise<any>;
-  getSeedingStatus(req: {}): Promise<any>;
-  setSeedingConfig(req: { config: { enabled?: boolean; maxStorage?: number; maxBandwidth?: number } }): Promise<any>;
-  pinChannel(req: { channelKey: string }): Promise<any>;
-  unpinChannel(req: { channelKey: string }): Promise<any>;
-  getPinnedChannels(req: {}): Promise<any>;
-  retrySyncChannel(req: { channelKey: string }): Promise<any>;
-  castAvailable(req: {}): Promise<any>;
-  castStartDiscovery(req: {}): Promise<any>;
-  castStopDiscovery(req: {}): Promise<any>;
-  castGetDevices(req: {}): Promise<any>;
-  castAddManualDevice(req: { name: string; host: string; port?: number; protocol?: string }): Promise<any>;
-  castConnect(req: { deviceId: string }): Promise<any>;
-  castDisconnect(req: {}): Promise<any>;
-  castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number; duration?: number; forceTranscode?: boolean }): Promise<any>;
-  castPause(req: {}): Promise<any>;
-  castResume(req: {}): Promise<any>;
-  castStop(req: {}): Promise<any>;
-  castSeek(req: { time: number }): Promise<any>;
-  castSetVolume(req: { volume: number }): Promise<any>;
-  castGetState(req: {}): Promise<any>;
-  castIsConnected(req: {}): Promise<any>;
-  suspendNetwork(req: {}): Promise<any>;
-  resumeNetwork(req: {}): Promise<any>;
-  setPlaybackActive(req: { active: boolean }): Promise<any>;
-  onEventReady(handler: (data: any) => void): void;
-  onEventError(handler: (data: any) => void): void;
-  onEventVideoStats(handler: (data: any) => void): void;
-  onEventUploadProgress(handler: (data: any) => void): void;
-  onEventDownloadProgress(handler: (data: any) => void): void;
-  onEventFeedUpdate(handler: (data: any) => void): void;
-  onEventLog(handler: (data: any) => void): void;
-  onEventCastDeviceFound(handler: (data: any) => void): void;
-  onEventCastDeviceLost(handler: (data: any) => void): void;
-  onEventCastPlaybackState(handler: (data: any) => void): void;
-  onEventCastTimeUpdate(handler: (data: any) => void): void;
-};
 
 // FileSystem from expo-file-system
 declare const FileSystem: {
@@ -133,6 +56,7 @@ let _initPromise: Promise<void> | null = null;
 let _isInitialized = false;
 let _startupState: 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'error' = 'idle';
 let _isTerminating = false;
+let _publisherSignerBridge: PublisherSignerBridgeLike | null = null;
 const BACKEND_WORKLET_ID = '/peartube-backend-core.bundle'
 const SHUTDOWN_TIMEOUT_MS = 4000
 const BLOB_SERVER_HEALTH_TIMEOUT_MS = 1500
@@ -158,6 +82,22 @@ const nativeRuntimeConfig: {
   workerArgs: [],
 };
 
+function withHostProtocolLaunchOption(args: string[], protocolVersion: number): string[] {
+  const nextArgs = args.slice()
+  for (let index = 0; index < nextArgs.length; index += 1) {
+    const candidate = nextArgs[index]
+    if (typeof candidate !== 'string' || !candidate.trim().startsWith('{')) continue
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed?.__peartubeLaunchOptions !== true) continue
+      nextArgs[index] = JSON.stringify({ ...parsed, protocolVersion })
+      return nextArgs
+    } catch {}
+  }
+  nextArgs.unshift(JSON.stringify({ __peartubeLaunchOptions: true, protocolVersion }))
+  return nextArgs
+}
+
 const mainRunner = createNativeRunner({
   get WorkletCtor() {
     if (!nativeRuntimeConfig.WorkletCtor) {
@@ -173,7 +113,11 @@ const mainRunner = createNativeRunner({
   },
   workletId: BACKEND_WORKLET_ID,
   resolveLaunchArgs(options) {
-    return [options.storagePath, options.entrypoint, ...nativeRuntimeConfig.workerArgs];
+    return [
+      options.storagePath,
+      options.entrypoint,
+      ...withHostProtocolLaunchOption(nativeRuntimeConfig.workerArgs, options.protocolVersion),
+    ];
   },
 });
 
@@ -187,6 +131,7 @@ const mainBridge = createPlatformRpcBridge({
   getArgs() {
     return nativeRuntimeConfig.workerArgs;
   },
+  getPublisherSigner: () => _publisherSignerBridge,
 });
 
 mainBridge.events.onReady((data: any) => {
@@ -300,7 +245,6 @@ type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
 type DownloadProgressCallback = (data: { id: string; progress: number; bytesDownloaded?: number; totalBytes?: number }) => void;
-type FeedUpdateCallback = (data: { action?: string; channelKey?: string }) => void;
 type CastDeviceFoundCallback = (data: { device: { id: string; name: string; host: string; port: number; protocol: string } }) => void;
 type CastDeviceLostCallback = (data: { deviceId: string }) => void;
 type CastPlaybackStateCallback = (data: { state: string; error?: string }) => void;
@@ -578,12 +522,19 @@ export async function initPlatformRPC(config: {
   loadBackendSource?: () => Promise<string>;
   loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
   storagePath?: string;
+  publisherSigner?: PublisherSignerBridgeLike | null;
+  migrateLegacyPublisherRoot?: LegacyPublisherRootMigrationCallback;
+
   launchOptions?: {
     network?: Record<string, unknown>;
     swarmOptions?: Record<string, unknown>;
     player?: string;
   };
 } = {}): Promise<void> {
+  if (config.publisherSigner !== undefined) {
+    _publisherSignerBridge = config.publisherSigner;
+  }
+
   if (_isInitialized && await canReuseMainBridge('already initialized')) {
     return;
   }
@@ -680,6 +631,7 @@ export async function initPlatformRPC(config: {
         network: config.launchOptions.network,
         swarmOptions: config.launchOptions.swarmOptions,
         player: derivedPlayer ?? undefined,
+        protocolVersion: PROTOCOL_VERSION,
       })
       : null;
     nativeRuntimeConfig.workerArgs = [
@@ -695,6 +647,23 @@ export async function initPlatformRPC(config: {
 
     if (downloaderWorkerPath) {
       console.log('[Platform RPC] Downloader worker ready:', downloaderWorkerPath);
+    }
+
+    if (typeof config.migrateLegacyPublisherRoot === 'function') {
+      try {
+        const summary = await runNativeLegacyPublisherRootPreflight({
+          WorkletCtor: WorkletClass,
+          backendPath,
+          backendSource: backendPath ? '' : backendSource,
+          storagePath,
+          migrateLegacyPublisherRoot: config.migrateLegacyPublisherRoot,
+        });
+        if (summary.status === 'complete' && summary.migrated > 0) {
+          console.log('[Platform RPC] Legacy publisher-root migration completed:', summary.migrated);
+        }
+      } catch {
+        console.warn('[Platform RPC] Legacy publisher-root preflight unavailable');
+      }
     }
 
     _startupState = 'starting-worklet';
@@ -1000,6 +969,14 @@ function ensureProtocolClient() {
   return client;
 }
 
+function ensurePublisherProtocolClient() {
+  const client = ensureProtocolClient();
+  if (!client.publisher) {
+    throw new Error('Host protocol client does not expose publisher root operations');
+  }
+  return { publisher: client.publisher };
+}
+
 /**
  * RPC Client - Typed methods for backend communication
  * Methods accept either individual args or object params for flexibility
@@ -1009,6 +986,16 @@ export const rpc = {
   ...createPersonalRpc(ensureRPC),
   // Structured channel catalog
   ...createChannelCatalogRpc(ensureProtocolClient),
+  // Typed media graph queries with bounded page presence.
+  ...createMediaGraphRpc(ensureProtocolClient),
+  // Bounded operability, recovery, storage-preview, and archive diagnostics
+  ...createOperabilityRpc(ensureRPC),
+  async authorizePublisherRootOperation(request: PublisherRootIntentRequest) {
+    return createPublisherRootOperationRpc(
+      ensurePublisherProtocolClient,
+      mainBridge.getPublisherSigner(),
+    ).authorizePublisherRootOperation(request);
+  },
 
 
   // Identity
@@ -1115,24 +1102,6 @@ export const rpc = {
     return ensureRPC().getSubscriptions({});
   },
 
-  // Public Feed
-
-
-  async refreshFeed() {
-    return ensureRPC().refreshFeed({});
-  },
-
-  async submitToFeed(): Promise<{ success: boolean }> {
-    return ensureRPC().submitToFeed({});
-  },
-
-  async unpublishFromFeed(): Promise<{ success: boolean }> {
-    return ensureRPC().unpublishFromFeed({});
-  },
-
-  async isChannelPublished(): Promise<{ published: boolean }> {
-    return ensureRPC().isChannelPublished({});
-  },
 
   async getChannelMeta(
     channelKeyOrReq: string | { channelKey: string; publicBeeKey?: string | null },
@@ -1254,7 +1223,7 @@ export const rpc = {
   },
 
   // Storage management
-  async getStorageStats(): Promise<{ usedBytes: number; maxBytes: number; usedGB: string; maxGB: number; seedCount: number; pinnedCount: number; totalStorageBytes?: number; totalStorageGB?: string; untrackedStorageBytes?: number; untrackedStorageGB?: string }> {
+  async getStorageStats(): Promise<StorageStatsResponse> {
     return ensureRPC().getStorageStats({});
   },
 

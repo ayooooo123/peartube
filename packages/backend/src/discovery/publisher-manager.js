@@ -7,6 +7,7 @@ export function createPublisherManager(options = {}) {
   const maxPagesPerSync = Number(options.maxPagesPerSync || 32)
   const maxBatchesPerSync = Number(options.maxBatchesPerSync || 256)
   const ingestBatch = options.ingestBatch || (async () => {})
+  const supportedCapabilities = options.supportedCapabilities
 
   return {
     async followPublisher(publisherId) {
@@ -37,7 +38,19 @@ export function createPublisherManager(options = {}) {
           return { status: 'partial', nextCursor: cursor }
         }
         const page = await fetchPage(cursor)
-        const verified = await verifyPublisherCatalogPage(page?.envelope || page, { publisherId: id })
+        let verified
+        try {
+          verified = await verifyPublisherCatalogPage(page?.envelope || page, {
+            publisherId: id,
+            supportedCapabilities,
+          })
+        } catch (error) {
+          if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
+            quarantined.push({ publisherId: id, cursor, reason: error.code })
+            return { status: 'quarantined', errorCode: error.code }
+          }
+          throw error
+        }
         if (!verified) {
           quarantined.push({ publisherId: id, cursor, reason: 'invalid-page' })
           return { status: 'quarantined', errorCode: 'INVALID_PAGE' }

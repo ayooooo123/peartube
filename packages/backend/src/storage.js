@@ -23,7 +23,6 @@ import {
   resolveBareOrNodeFsModuleSync,
   resolveBareOrNodePathModuleSync,
 } from './runtime-modules.js'
-import { PROTOCOL_NAME } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
@@ -32,15 +31,60 @@ import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { serveVideoRangeHttpRequest } from './video-range-http.js'
 import { installExpectedBlobRequestCancellationHandler } from './blob-request-cancellation.js'
 import { appendDebugLine } from './debug-log.js'
+import { DEFAULT_STORED_PROTOCOL_MIGRATIONS, prepareStoredProtocolState } from './stored-protocol.js'
+export { DEFAULT_STORED_PROTOCOL_MIGRATIONS, prepareStoredProtocolState }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000
+
+function createLifecycleAbortController() {
+  const AbortControllerCtor = globalThis?.AbortController
+  if (typeof AbortControllerCtor === 'function') return new AbortControllerCtor()
+
+  let aborted = false
+  const listeners = new Map()
+  const signal = {
+    onabort: null,
+    get aborted() {
+      return aborted
+    },
+    addEventListener(type, listener, options = {}) {
+      if (type !== 'abort' || (!listener?.handleEvent && typeof listener !== 'function')) return
+      listeners.set(listener, options?.once === true)
+    },
+    removeEventListener(type, listener) {
+      if (type === 'abort') listeners.delete(listener)
+    },
+  }
+
+  return {
+    signal,
+    abort() {
+      if (aborted) return
+      aborted = true
+      const event = { type: 'abort', target: signal, currentTarget: signal }
+      const notify = (listener) => {
+        try {
+          if (typeof listener === 'function') listener.call(signal, event)
+          else listener.handleEvent(event)
+        } catch (error) {
+          console.warn('[BackendLifecycle] abort listener failed:', error?.message || error)
+        }
+      }
+      const onabort = signal.onabort
+      const pendingListeners = Array.from(listeners.keys())
+      listeners.clear()
+      if (typeof onabort === 'function') notify(onabort)
+      for (const listener of pendingListeners) notify(listener)
+    },
+  }
+}
 
 export function createBackendLifecycle({
   scheduleDeferred = typeof setImmediate === 'function' ? setImmediate : (fn) => setTimeout(fn, 0),
   cancelDeferred = typeof clearImmediate === 'function' ? clearImmediate : clearTimeout,
   shutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 } = {}) {
-  const controller = new AbortController()
+  const controller = createLifecycleAbortController()
   const ownership = new Set()
   let shutdownPromise = null
 
@@ -390,8 +434,6 @@ function createNetworkStartupTiming() {
 let globalSwarm = null;
 let globalBlobServer = null;
 let globalChannels = null;
-let globalPeerPoolDiscovery = null;
-let globalPeerPoolTopicHex = null;
 let globalSwarmDiagnostics = null;
 let globalNetworkStartupTiming = null;
 let globalKnownPeerCache = null;
@@ -1129,7 +1171,7 @@ async function migrateLegacyCorestoreLayout(storagePath) {
   await appendDebugLine(`[storage] embedded migration moved=${moved}`)
 }
 
-async function createCorestoreInstance(storagePath, options = {}) {
+export async function createCorestoreInstance(storagePath, options = {}) {
   if (isEmbeddedBareKitStoragePath()) {
     await appendDebugLine('[storage] embedded BareKit using plain Corestore(storagePath, options)')
   }
@@ -1137,7 +1179,7 @@ async function createCorestoreInstance(storagePath, options = {}) {
   return new Corestore(storagePath, options)
 }
 
-async function openDeterministicNamedCore(store, name) {
+export async function openDeterministicNamedCore(store, name) {
   if (!isEmbeddedBareKitStoragePath()) {
     return store.get({ name })
   }
@@ -1329,103 +1371,6 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
 
 
 
-function isValidCoreKeyHex(value) {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
-}
-
-/**
- * Retain discovery for a PublicBee and the video/thumbnail blob cores it advertises.
- * This restores the old relay-style cache behavior for any runtime: once we know a
- * publicBeeKey, cached content is announced as content cores without waiting for a
- * full channel HyperDB load.
- *
- * @param {import('./types.js').StorageContext} ctx
- * @param {string} publicBeeKeyHex
- * @param {{ label?: string, maxVideos?: number }} [options]
- * @returns {Promise<{publicBeeKey: string, videos: number, blobCores: number, thumbnailBlobCores: number, discoveryHandles: number, retained: number, errors: number, lastError: string | null}>}
- */
-export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, options = {}) {
-  const stats = {
-    publicBeeKey: publicBeeKeyHex,
-    videos: 0,
-    blobCores: 0,
-    thumbnailBlobCores: 0,
-    discoveryHandles: getSwarmDiscoveryHandles(ctx).size,
-    retained: 0,
-    errors: 0,
-    lastError: null,
-  }
-  const signal = ctx?.lifecycle?.signal
-  const loadPublicBeeImpl = typeof options.loadPublicBee === 'function'
-    ? options.loadPublicBee
-    : loadPublicBee
-  if (signal?.aborted) return stats
-
-  if (!isValidCoreKeyHex(publicBeeKeyHex)) {
-    stats.errors += 1
-    stats.lastError = 'invalid-publicBeeKey'
-    return stats
-  }
-
-  let publicBee = null
-  try {
-    publicBee = await loadPublicBeeImpl(ctx, publicBeeKeyHex)
-    if (signal?.aborted) return stats
-  } catch (err) {
-    stats.errors += 1
-    stats.lastError = err?.message || String(err)
-    return stats
-  }
-
-  let videos = []
-  try {
-    videos = await publicBee?.listVideos?.().catch(() => [])
-    if (signal?.aborted) return stats
-  } catch (err) {
-    stats.errors += 1
-    stats.lastError = err?.message || String(err)
-    videos = []
-  }
-
-  const maxVideos = Number.isFinite(options.maxVideos) && options.maxVideos > 0
-    ? Math.floor(options.maxVideos)
-    : 200
-  const coreKeys = new Map()
-  for (const video of (Array.isArray(videos) ? videos.slice(0, maxVideos) : [])) {
-    stats.videos += 1
-    if (isValidCoreKeyHex(video?.blobsCoreKey)) coreKeys.set(video.blobsCoreKey.toLowerCase(), 'blob')
-    if (isValidCoreKeyHex(video?.thumbnailBlobsCoreKey)) coreKeys.set(video.thumbnailBlobsCoreKey.toLowerCase(), 'thumbnail')
-  }
-
-  for (const [coreKeyHex, kind] of coreKeys) {
-    if (signal?.aborted) return stats
-    try {
-      const core = ctx.store?.get?.(b4a.from(coreKeyHex, 'hex'))
-      if (core) {
-        if (typeof ctx.ownResource === 'function') {
-          ctx.ownResource(`retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
-        } else {
-          ownContextResource(ctx, `retained ${kind} core ${coreKeyHex.slice(0, 16)}`, core, 'close')
-        }
-      }
-      await core?.ready?.()
-      if (signal?.aborted) return stats
-      if (core?.discoveryKey && retainSwarmDiscovery(ctx, core.discoveryKey, {
-        label: `${options.label || 'publicBee'}:${kind}:${coreKeyHex.slice(0, 16)}`
-      })) {
-        stats.retained += 1
-        if (kind === 'thumbnail') stats.thumbnailBlobCores += 1
-        else stats.blobCores += 1
-      }
-    } catch (err) {
-      stats.errors += 1
-      stats.lastError = err?.message || String(err)
-    }
-  }
-
-  stats.discoveryHandles = getSwarmDiscoveryHandles(ctx).size
-  return stats
-}
 
 /**
  * Initialize core storage components.
@@ -1460,8 +1405,21 @@ export async function initializeStorage(config) {
     corestoreAllowBackup = false,
     platform = 'desktop',
     network = {},
-    swarmOptions = {}
+    swarmOptions = {},
+    expectedProtocolVersion,
+    storedProtocolMigrations = DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   } = config;
+
+  // This sidecar is deliberately validated before Corestore, migrations,
+  // networking, or any backend data surface is opened. Unsupported state must
+  // fail closed without giving startup code a chance to mutate or expose it.
+  const storedProtocol = prepareStoredProtocolState({
+    storagePath,
+    expectedVersion: expectedProtocolVersion,
+    migrations: storedProtocolMigrations,
+    fs,
+    path,
+  })
 
   console.log('[Storage] Initializing storage at:', storagePath);
 
@@ -1752,6 +1710,14 @@ export async function initializeStorage(config) {
     await cleanupFailedMetadataStartup('metaDb.ready', error)
   }
 
+  if (storedProtocol) {
+    try {
+      await storedProtocol.migrate({ store, metaCore, metaDb, storagePath, platform })
+    } catch (error) {
+      await cleanupFailedMetadataStartup('stored protocol migration', error)
+    }
+  }
+
   // Sub-encoded metaDb keyspaces (download intents, channel kinds, playback
   // profiles) + one-time migration of any legacy flat-prefixed keys. Best-effort:
   // a migration failure must not block startup (it retries next launch).
@@ -1938,15 +1904,6 @@ export async function initializeStorage(config) {
         }
       }
 
-      // Legacy shared-swarm replication fallback. New permissionless paths use
-      // purpose-bound sessions and scoped topics before requesting data.
-      try {
-        if (conn.destroyed) return
-        const scopedReplicationStream = conn
-        store.replicate(scopedReplicationStream);
-      } catch (err) {
-        console.log('[Storage] scoped replication fallback failed (non-fatal):', err?.message);
-      }
 
     } catch (err) {
       console.log('[Storage] connection handler error (non-fatal):', err?.message)
@@ -1961,55 +1918,6 @@ export async function initializeStorage(config) {
 
   await restorePersistedDhtRoutingTable(swarm, metaDb, { reason: 'startup' })
 
-  // Join the PearTube network topic immediately. Do not wait for DHT bootstrap
-  // or listen() resolution; HyperDHT/Hyperswarm can use the announcement to wake
-  // routing state while startup continues.
-  const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(PROTOCOL_NAME, 'utf-8'));
-  globalPeerPoolTopicHex = b4a.toString(PEARTUBE_NETWORK_TOPIC, 'hex')
-  let peerPoolDiscoveryStarted = false
-
-  const joinPeerPoolDiscoveryImmediately = (reason = 'startup') => {
-    if (peerPoolDiscoveryStarted || swarm._peartubeOffline) return globalPeerPoolDiscovery
-
-    peerPoolDiscoveryStarted = true
-    try {
-      const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
-      lifecycle.ownResource('peer pool discovery', poolDiscovery, ['destroy', 'close'], 2000)
-      globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex, reason })
-      globalPeerPoolDiscovery = poolDiscovery;
-      swarm.peerPoolDiscovery = poolDiscovery
-      console.log('[Storage] Joined scoped peer pool topic immediately:', reason)
-      const peerPoolWarmup = schedulePeerPoolWarmupRefreshes({
-        platform,
-        swarm,
-        discovery: poolDiscovery,
-        startupTiming: globalNetworkStartupTiming
-      })
-      swarm._peartubePeerPoolWarmup = peerPoolWarmup
-      lifecycle.own('peer pool warmup timers', () => peerPoolWarmup.cancel(), 2000)
-      // Do not await flushed(); mobile DHT bootstrapping can lag behind the join.
-      poolDiscovery.flushed().then(() => {
-        console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
-        globalNetworkStartupTiming?.record('topic-flushed', { topic: 'peer-pool', connections: swarm.connections?.size || 0, bootstrapped: swarm.dht?.bootstrapped })
-        void appendDebugLine(
-          `[storage] peer-pool discovery flushed connections=${swarm.connections?.size || 0} bootstrapped=${swarm.dht?.bootstrapped}`
-        )
-      }).catch(() => {});
-      return poolDiscovery
-    } catch (e) {
-      console.log('[Storage] Failed to join peer pool topic:', e?.message);
-      globalPeerPoolDiscovery = null;
-      return null
-    }
-  }
-
-  if (swarm._peartubeOffline) {
-    console.log('[Storage] Skipping peer pool discovery; P2P networking is offline:', swarm._peartubeOfflineReason)
-    await appendDebugLine(`[storage] peer-pool discovery skipped offline reason=${swarm._peartubeOfflineReason}`)
-    globalPeerPoolDiscovery = null
-  } else {
-    joinPeerPoolDiscoveryImmediately('startup')
-  }
 
   // Warm reconnect: proactively re-dial peers we have actually connected to in
   // prior sessions (persisted by the known-peer cache — learned dynamically from
@@ -2090,7 +1998,6 @@ export async function initializeStorage(config) {
     if (globalSwarm === swarm) globalSwarm = null
     if (globalBlobServer === blobServer) globalBlobServer = null
     if (globalChannels === channels) globalChannels = null
-    if (globalPeerPoolDiscovery === swarm.peerPoolDiscovery) globalPeerPoolDiscovery = null
     if (globalMetaDb === metaDb) globalMetaDb = null
     if (globalKnownPeerCache === knownPeerCache) globalKnownPeerCache = null
     globalSwarmDiagnostics = null
@@ -2121,8 +2028,8 @@ export async function initializeStorage(config) {
     channels,
     wakeup,
     knownPeerCache,
-    peerPoolDiscovery: globalPeerPoolDiscovery,
     platform,
+    storedProtocol,
     lifecycle,
     ownResource(label, resource, methods, timeoutMs) {
       return ownContextResource(storageContext, label, resource, methods, timeoutMs)
@@ -2411,12 +2318,13 @@ function getPublicBeeInflight(ctx) {
 }
 
 /**
- * Load a public channel Hyperbee for viewing.
- * This is the simple, auto-replicating layer for public feed viewers.
- * No old channel-view complexity - just load the public HyperDB by key and it syncs via store.replicate().
+ * Load an already-local legacy public projection.
+ *
+ * This compatibility reader does not join discovery or replicate. Network
+ * catalog and asset access is exclusively authorized by the scoped runtime.
  *
  * @param {import('./types.js').StorageContext} ctx
- * @param {string} publicBeeKeyHex - The public index key
+ * @param {string} publicBeeKeyHex - The local public index key
  * @returns {Promise<PublicChannelBee>}
  */
 export async function loadPublicBee(ctx, publicBeeKeyHex) {
@@ -2465,13 +2373,6 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
         throw err
       }
 
-      if (ctx.swarm && bee.discoveryKey) {
-        retainSwarmDiscovery(ctx, bee.discoveryKey, {
-          label: `publicBee:${publicBeeKeyHex.slice(0, 16)}`
-        })
-        console.log('[Storage] loadPublicBee: joined swarm for:', publicBeeKeyHex.slice(0, 16))
-      }
-
       console.log('[Storage] loadPublicBee: ready:', publicBeeKeyHex.slice(0, 16), 'length:', bee.core?.length)
       return bee
     }
@@ -2479,7 +2380,7 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
 }
 
 /**
- * Create a new multi-writer channel and join it on the swarm.
+ * Create a new multi-writer channel.
  *
  * @param {import('./types.js').StorageContext} ctx
  * @param {Object} [options]
@@ -2646,10 +2547,10 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
     throw new Error('Backend is shutting down')
   }
 
-  // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
+  // Install the channel pairer's scoped Protomux handlers before discovery can accept peers.
   if (ctx.swarm) {
     try {
-      // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
+      // Await registration so an early connection cannot race ahead of the authorized channel handlers.
       await channel.setupPairing(ctx.swarm)
     } catch (err) {
       console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
@@ -3189,8 +3090,6 @@ export function getNetworkStats() {
         offline: Boolean(globalSwarm._peartubeOffline),
         offlineReason: globalSwarm._peartubeOfflineReason || null,
         listenResolved: Boolean(globalSwarm._peartubeListenResolved),
-        peerPoolJoined: Boolean(globalPeerPoolDiscovery),
-        peerPoolTopicHex: globalPeerPoolTopicHex,
         dht: {
           firewalled: globalSwarm.dht?.firewalled ?? null,
           bootstrapped: globalSwarm.dht?.bootstrapped ?? null,
@@ -3229,8 +3128,6 @@ export function getNetworkStatsReadable() {
         `Swarm offline: ${Boolean(globalSwarm._peartubeOffline)}`,
         `Swarm offline reason: ${globalSwarm._peartubeOfflineReason || 'none'}`,
         `Swarm listen resolved: ${Boolean(globalSwarm._peartubeListenResolved)}`,
-        `Peer pool joined: ${Boolean(globalPeerPoolDiscovery)}`,
-        `Peer pool topic: ${globalPeerPoolTopicHex || 'unknown'}`,
         `DHT firewalled: ${dht?.firewalled ?? 'unknown'}`,
         `DHT bootstrapped: ${dht?.bootstrapped ?? 'unknown'}`,
         `DHT online: ${dht?.online ?? 'unknown'}`

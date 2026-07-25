@@ -9,6 +9,12 @@
  */
 import { Electroview } from 'electrobun/view'
 import { Buffer } from 'buffer'
+import type {
+  PearTubeRPC,
+  PublisherBeginIntentParams,
+  PublisherPreparedRecord,
+} from '../shared/rpc-types'
+
 
 // ── Node.js polyfills for CEF ───────────────────────────────────────────
 // The Expo bundle includes P2P code that references Node builtins.
@@ -24,7 +30,7 @@ if (typeof (globalThis as any).global === 'undefined') {
 }
 
 // ── Electrobun RPC (minimal — just for lifecycle) ───────────────────────
-const rpc = Electroview.defineRPC({
+const rpc = Electroview.defineRPC<PearTubeRPC>({
   handlers: {
     requests: {},
     messages: {},
@@ -97,6 +103,68 @@ function getIpcPort(): Promise<number> {
   return ipcPortPromise
 }
 
+function createPublisherSignerProxy(requests: typeof rpc.proxy.request) {
+  return Object.freeze({
+    async beginUserIntent(request: Omit<PublisherBeginIntentParams, 'body'> & { body: Uint8Array }) {
+      const intent = await requests.publisherBeginUserIntent({
+        ...request,
+        body: Array.from(request.body),
+      })
+      return {
+        intentId: intent.intentId,
+        signerPublicKey: new Uint8Array(intent.signerPublicKey),
+      }
+    },
+
+    async signPreparedRecord(
+      intentId: string,
+      prepared: Omit<
+        PublisherPreparedRecord,
+        'unsignedBytes' | 'candidateRecordId' | 'signerPublicKey'
+      > & {
+        unsignedBytes: Uint8Array
+        candidateRecordId: Uint8Array
+        signerPublicKey: Uint8Array
+      },
+    ) {
+      const signed = await requests.publisherSignPreparedRecord({
+        intentId,
+        prepared: {
+          ...prepared,
+          unsignedBytes: Array.from(prepared.unsignedBytes),
+          candidateRecordId: Array.from(prepared.candidateRecordId),
+          signerPublicKey: Array.from(prepared.signerPublicKey),
+        },
+      })
+      return {
+        ...signed,
+        unsignedBytes: new Uint8Array(signed.unsignedBytes),
+        candidateRecordId: new Uint8Array(signed.candidateRecordId),
+        signer: new Uint8Array(signed.signer),
+        signerPublicKey: new Uint8Array(signed.signerPublicKey),
+        signature: new Uint8Array(signed.signature),
+        allowedSigners: signed.allowedSigners?.map((key) => new Uint8Array(key)) ?? signed.allowedSigners,
+      }
+    },
+
+    completeIntent(intentId: string) {
+      void requests.publisherCompleteIntent({ intentId }).catch(() => {})
+    },
+
+    cancelIntent(intentId: string) {
+      void requests.publisherCancelIntent({ intentId }).catch(() => {})
+    },
+  })
+}
+
+async function publisherCreateRoot() {
+  const created = await rpc.proxy.request.publisherCreateRoot({})
+  return {
+    publisherId: created.publisherId,
+    publicKey: new Uint8Array(created.publicKey),
+  }
+}
+
 // ── window.bridge ───────────────────────────────────────────────────────
 const bridge = {
   pkg() {
@@ -106,6 +174,8 @@ const bridge = {
   applyUpdate: async () => {},
   appRestart: async () => { window.location.reload() },
   onPearEvent(_name: string, _listener: Function) { return () => {} },
+  publisherCreateRoot,
+  publisherSigner: createPublisherSignerProxy(rpc.proxy.request),
 
   async startWorker(specifier: string): Promise<boolean> {
     if (ipcSocket?.readyState === WebSocket.OPEN) return true
@@ -206,5 +276,10 @@ const bridge = {
   },
 }
 
-;(window as any).bridge = bridge
+Object.defineProperty(window, 'bridge', {
+  value: Object.freeze(bridge),
+  enumerable: true,
+  writable: false,
+  configurable: false,
+})
 console.log('[bridge] Electrobun bridge ready')

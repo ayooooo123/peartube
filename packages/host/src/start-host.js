@@ -41,7 +41,6 @@ function validateStartOptions(options) {
     args = [],
     stream,
     createBackendImpl,
-    onFeedUpdate,
     onVideoStats,
     network,
     swarmOptions
@@ -71,9 +70,6 @@ function validateStartOptions(options) {
     throw new Error('startHost requires createBackendImpl to be a function when provided')
   }
 
-  if (onFeedUpdate !== undefined && typeof onFeedUpdate !== 'function') {
-    throw new Error('startHost requires onFeedUpdate to be a function when provided')
-  }
 
   if (onVideoStats !== undefined && typeof onVideoStats !== 'function') {
     throw new Error('startHost requires onVideoStats to be a function when provided')
@@ -90,6 +86,20 @@ function normalizeHostError(error, fallbackCode = HOST_ERROR_CODES.HOST_START_FA
 
   const message = error instanceof Error ? error.message : String(error)
   return createHostError(fallbackCode, message, { cause: error })
+}
+
+function hostErrorLifecycleEvent(error) {
+  const event = {
+    type: 'host.error',
+    code: error.code ?? HOST_ERROR_CODES.HOST_START_FAILED,
+    message: error.message,
+    retryable: Boolean(error.retryable)
+  }
+  if (event.code === HOST_ERROR_CODES.STORED_PROTOCOL_VERSION_UNSUPPORTED) {
+    event.storedVersion = Number.isSafeInteger(error.storedVersion) ? error.storedVersion : null
+    event.expectedVersion = Number.isSafeInteger(error.expectedVersion) ? error.expectedVersion : null
+  }
+  return event
 }
 
 function normalizeReadyPayload(payload = {}) {
@@ -111,7 +121,6 @@ export async function startHost(options = {}) {
     args = [],
     stream,
     createBackendImpl,
-    onFeedUpdate,
     onVideoStats,
     network,
     swarmOptions
@@ -139,6 +148,10 @@ export async function startHost(options = {}) {
       reject(error)
     }
   })
+  // A synchronous backend-start failure can reject this internal promise before
+  // startHost returns a session. Mark it observed while preserving rejection for
+  // callers that do receive and await the promise.
+  readyPromise.catch(noop)
 
   const createBackend = createBackendImpl ?? await loadCreateBackend()
   await appendDebugLine(`[startHost] createBackend loaded platform=${platform} storagePath=${storagePath}`)
@@ -154,7 +167,6 @@ export async function startHost(options = {}) {
       protocolVersion: PROTOCOL_VERSION,
       network,
       swarmOptions,
-      onFeedUpdate,
       onVideoStats,
       onReady(payload = {}) {
         const readyData = normalizeReadyPayload(payload)
@@ -168,12 +180,7 @@ export async function startHost(options = {}) {
       onError(error) {
         const normalized = normalizeHostError(error)
         failReady(normalized)
-        emitLifecycle({
-          type: 'host.error',
-          code: normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED,
-          message: normalized.message,
-          retryable: Boolean(normalized.retryable)
-        })
+        emitLifecycle(hostErrorLifecycleEvent(normalized))
         void appendDebugLine(
           `[startHost] onError code=${normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED} message=${normalized.message}`
         )
@@ -205,12 +212,7 @@ export async function startHost(options = {}) {
     await appendDebugLine(
       `[startHost] createBackend threw code=${normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED} message=${normalized.message}`
     )
-    emitLifecycle({
-      type: 'host.error',
-      code: normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED,
-      message: normalized.message,
-      retryable: Boolean(normalized.retryable)
-    })
+    emitLifecycle(hostErrorLifecycleEvent(normalized))
     throw normalized
   }
 }

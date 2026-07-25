@@ -1,11 +1,14 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
+import type { ArchiveOperatorStatus } from '@/lib/storage-operability.js'
+import ArchiveOperatorDiagnostics from './ArchiveOperatorDiagnostics'
 import type { SeedingStatus, StorageStats, SwarmStatus } from './types'
 
 interface DiagnosticsPanelProps {
   swarmStatus: SwarmStatus | null
   storageStats: StorageStats | null
   seedingStatus: SeedingStatus | null
+  operatorStatus: ArchiveOperatorStatus | null
   loading?: boolean
   onRefresh?: () => void
 }
@@ -14,6 +17,7 @@ export default function DiagnosticsPanel({
   swarmStatus,
   storageStats,
   seedingStatus,
+  operatorStatus,
 }: DiagnosticsPanelProps) {
   return (
     <View style={styles.card}>
@@ -25,6 +29,7 @@ export default function DiagnosticsPanel({
       <Text style={styles.text}>
         Seeding: {seedingStatus?.status?.enabled ? 'enabled' : 'disabled'}
       </Text>
+      <ArchiveOperatorDiagnostics operatorStatus={operatorStatus} />
     </View>
   )
 }

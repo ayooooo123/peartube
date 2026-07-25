@@ -1,7 +1,7 @@
 import b4a from 'b4a'
 
 import { encodeCanonical, hashCanonical, toHex } from '../publisher/canonical.js'
-import { createSignedEnvelope, verifySignedEnvelope } from '../records/signed-envelope.js'
+import { createApplicationEnvelope, verifyApplicationEnvelope } from '../records/application-envelope.js'
 import { describeScopedTopic } from '../network/topics.js'
 
 export const LIVE_EVENT_RECORD_TYPE = 'peartube.live.event.v1'
@@ -19,7 +19,7 @@ function digest(body, domain) { return b4a.toString(hashCanonical(domain, body),
 export function createLiveEventDescriptor(input = {}) {
   const seed = { publisherId: hex32(input.publisherId, 'publisherId'), deviceId: hex32(input.deviceId, 'deviceId'), nonce: boundedString(input.nonce, 'nonce', 128) }
   const body = { version: 1, ...seed, eventId: digest(seed, 'peartube.live.event-id.v1'), title: boundedString(input.title, 'title', 256, false), issuedAt: Number(input.issuedAt || 0) }
-  const envelope = createSignedEnvelope({ recordType: LIVE_EVENT_RECORD_TYPE, body: encodeCanonical(body), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
+  const envelope = createApplicationEnvelope({ recordType: LIVE_EVENT_RECORD_TYPE, body: encodeCanonical(body), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
   return { eventId: body.eventId, body, envelope }
 }
 
@@ -28,7 +28,7 @@ export async function verifyLiveEventDescriptor(envelope, options = {}) {
   try { body = JSON.parse(b4a.toString(envelope.body)) } catch { return false }
   if (options.publisherId && body.publisherId !== hex32(options.publisherId, 'publisherId')) return false
   if (body.eventId !== digest({ publisherId: body.publisherId, deviceId: body.deviceId, nonce: body.nonce }, 'peartube.live.event-id.v1')) return false
-  const ok = await verifySignedEnvelope(envelope, { recordType: LIVE_EVENT_RECORD_TYPE, allowedSigners: [b4a.from(body.publisherId, 'hex')], now: options.now })
+  const ok = await verifyApplicationEnvelope(envelope, { recordType: LIVE_EVENT_RECORD_TYPE, allowedSigners: [b4a.from(body.publisherId, 'hex')], now: options.now })
   return ok ? { body, envelope } : false
 }
 
@@ -49,7 +49,7 @@ export function createLiveEpochDescriptor(input = {}) {
   if (body.expiresAt <= body.startsAt) throw new Error('invalid live epoch window')
   if (body.terminalState && !['ended', 'aborted'].includes(body.terminalState)) throw new Error('invalid terminal state')
   const epochDigest = digest(body, 'peartube.live.epoch-digest.v1')
-  const envelope = createSignedEnvelope({ recordType: LIVE_EPOCH_RECORD_TYPE, body: encodeCanonical({ ...body, epochDigest }), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
+  const envelope = createApplicationEnvelope({ recordType: LIVE_EPOCH_RECORD_TYPE, body: encodeCanonical({ ...body, epochDigest }), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
   return { epochDigest, body: { ...body, epochDigest }, envelope }
 }
 
@@ -60,7 +60,7 @@ export async function verifyLiveEpochDescriptor(envelope, options = {}) {
   if (body.epochDigest !== digest({ ...body, epochDigest: undefined }, 'peartube.live.epoch-digest.v1')) return false
   if (Number.isFinite(options.now) && (options.now < body.startsAt || options.now > body.expiresAt)) return false
   const signer = options.deviceId ? [b4a.from(hex32(options.deviceId, 'deviceId'), 'hex')] : undefined
-  const ok = await verifySignedEnvelope(envelope, { recordType: LIVE_EPOCH_RECORD_TYPE, allowedSigners: signer, now: options.now })
+  const ok = await verifyApplicationEnvelope(envelope, { recordType: LIVE_EPOCH_RECORD_TYPE, allowedSigners: signer, now: options.now })
   return ok ? { body, envelope } : false
 }
 

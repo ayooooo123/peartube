@@ -120,7 +120,7 @@ test('startHost terminate is idempotent', async (t) => {
   t.is(destroyCalls, 1)
 })
 
-test('startHost forwards feed and video callbacks to createBackend', async (t) => {
+test('startHost forwards video callbacks without legacy feed startup options', async (t) => {
   const calls = []
 
   const session = await startHost({
@@ -129,19 +129,18 @@ test('startHost forwards feed and video callbacks to createBackend', async (t) =
     entrypoint: 'sidecar-entry',
     args: [],
     stream: createFakeStream(),
-    onFeedUpdate: () => calls.push('feed'),
     onVideoStats: (...args) => calls.push(['stats', ...args]),
-    createBackendImpl: async ({ onReady, onFeedUpdate, onVideoStats }) => {
-      onFeedUpdate?.()
-      onVideoStats?.('channel-key', 'video-id', { peerCount: 3 })
-      onReady({ blobServerPort: 7777, protocolVersion: PROTOCOL_VERSION })
+    createBackendImpl: async (options) => {
+      t.absent(Object.hasOwn(options, 'onFeedUpdate'))
+      options.onVideoStats?.('channel-key', 'video-id', { peerCount: 3 })
+      options.onReady({ blobServerPort: 7777, protocolVersion: PROTOCOL_VERSION })
       return { destroy: async () => {} }
     }
   })
 
   await session.waitUntilReady()
 
-  t.alike(calls, ['feed', ['stats', 'channel-key', 'video-id', { peerCount: 3 }]])
+  t.alike(calls, [['stats', 'channel-key', 'video-id', { peerCount: 3 }]])
 })
 
 test('startHost forwards explicit network options to createBackend', async (t) => {
@@ -168,4 +167,39 @@ test('startHost forwards explicit network options to createBackend', async (t) =
 
   t.is(received.network, network)
   t.is(received.swarmOptions, swarmOptions)
+})
+
+test('startHost surfaces unsupported stored protocol readiness details', async (t) => {
+  const lifecycleEvents = []
+  const error = Object.assign(new Error('STORED_PROTOCOL_VERSION_UNSUPPORTED'), {
+    code: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+    storedVersion: 5,
+    expectedVersion: PROTOCOL_VERSION,
+  })
+
+  try {
+    await startHost({
+      platform: 'mobile',
+      storagePath: '/tmp/peartube-host',
+      entrypoint: 'mobile-entry',
+      args: [],
+      stream: createFakeStream(),
+      onLifecycle: (event) => lifecycleEvents.push(event),
+      createBackendImpl: async () => {
+        throw error
+      },
+    })
+    t.fail('unsupported stored protocol must reject host startup')
+  } catch (received) {
+    t.is(received, error)
+  }
+
+  t.alike(lifecycleEvents, [{
+    type: 'host.error',
+    code: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+    message: 'STORED_PROTOCOL_VERSION_UNSUPPORTED',
+    retryable: false,
+    storedVersion: 5,
+    expectedVersion: PROTOCOL_VERSION,
+  }])
 })

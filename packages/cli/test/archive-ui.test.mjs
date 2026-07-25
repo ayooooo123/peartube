@@ -81,11 +81,11 @@ test('archive manager downloads, imports, publishes, and seeds videos through in
         calls.push(['import', input.filePath, input.title])
         return { videoId: 'video-1' }
       },
-      async publishChannel(input) {
+      async publishCatalog(input) {
         calls.push(['publish', input.channelKey])
-        return { success: true }
+        return { status: 'published' }
       },
-      async seedChannel(input) {
+      async retainAssets(input) {
         calls.push(['seed', input.channelKey, input.publicBeeKey])
       }
     }
@@ -133,8 +133,8 @@ test('archive manager carries explicit TMDB identity into preview classification
       async importVideo() {
         return { videoId: 'video-1', metadata: { blobId: '0:4:0:1', blobsCoreKey: 'aa'.repeat(32) } }
       },
-      async publishChannel() {},
-      async seedChannel() {}
+      async publishCatalog() {},
+      async retainAssets() {}
     }
   })
 
@@ -202,8 +202,8 @@ test('archive manager uses source video title and thumbnail without channel suff
           }
         }
       },
-      async publishChannel() {},
-      async seedChannel(input) { seeded.push(input) }
+      async publishCatalog() {},
+      async retainAssets(input) { seeded.push(input) }
     }
   })
 
@@ -617,8 +617,9 @@ test('archive publisher opens separate deterministic channels per source identit
   }
   const publisher = createArchivePublisher({
     identityManager: {
-      getActiveIdentity () { return { driveKey: 'relay-drive' } },
-      async getActiveChannel () { return { blobs: true, publicBeeKey: 'relay-bee' } }
+      getActiveIdentity () { return { publicKey: 'relay-publisher', driveKey: 'relay-drive' } },
+      async getActiveChannel () { return { blobs: true, publicBeeKey: 'relay-bee' } },
+      async signChannelRootDescriptorForOwnedChannel () { return { ok: true } }
     },
     uploadManager: {
       async uploadFromPath (_channel, _filePath, options) {
@@ -626,7 +627,7 @@ test('archive publisher opens separate deterministic channels per source identit
         return { success: true, videoId: `video-${uploadOptions.length}` }
       }
     },
-    api: { async submitToFeed () {} },
+    api: {},
     runtime: { ctx: {} },
     fs: {},
     createChannelFn

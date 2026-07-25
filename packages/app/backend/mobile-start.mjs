@@ -1,5 +1,6 @@
 /* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import { startHost } from '@peartube/host/start-host'
+import { HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host/contracts'
 
 function resolveMobileStoragePath(providedStoragePath) {
   if (providedStoragePath) return providedStoragePath
@@ -50,6 +51,19 @@ export async function startMobileBackend(options = {}) {
   } = options
 
   const storagePath = resolveMobileStoragePath(providedStoragePath)
+  const { launchOptions } = parseMobileLaunchArgsForTest(args)
+  if (
+    launchOptions?.protocolVersion !== undefined &&
+    launchOptions.protocolVersion !== PROTOCOL_VERSION
+  ) {
+    const error = new Error(HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH)
+    error.code = HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
+    error.storedVersion = PROTOCOL_VERSION
+    error.expectedVersion = Number.isSafeInteger(launchOptions.protocolVersion)
+      ? launchOptions.protocolVersion
+      : null
+    throw error
+  }
 
   return startHostImpl({
     platform: 'mobile',

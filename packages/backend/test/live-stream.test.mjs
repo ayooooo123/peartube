@@ -292,7 +292,7 @@ test('lazy live services are owned immediately and broadcast resources close on 
       return lifecycle.ownResource(label, resource, methods, timeoutMs)
     },
   }
-  const api = createLiveApi({ ctx, publicFeed: null })
+  const api = createLiveApi({ ctx })
   const started = await api.startLivestream()
   t.is(started.success, true)
   await api.prepareLivePlayback('invalid')
@@ -329,7 +329,7 @@ test('broadcast core closes when shutdown interrupts readiness', async (t) => {
       return lifecycle.ownResource(label, resource, methods, timeoutMs)
     },
   }
-  const api = createLiveApi({ ctx, publicFeed: null })
+  const api = createLiveApi({ ctx })
   const started = api.startLivestream()
   await new Promise((resolve) => setImmediate(resolve))
   await lifecycle.shutdown()

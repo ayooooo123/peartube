@@ -10,7 +10,7 @@ import {
   encodeClaimBody,
   verifyMediaClaim,
 } from '../src/media-graph/index.js'
-import { createSignedEnvelope, toHex } from '../src/records/index.js'
+import { createApplicationEnvelope, toHex } from '../src/records/application-envelope.js'
 
 const issuer = crypto.keyPair(Buffer.alloc(32, 1))
 const otherIssuer = crypto.keyPair(Buffer.alloc(32, 2))
@@ -135,7 +135,7 @@ test('retractions are scoped to exact prior claim ids and same issuer authority'
 
 test('claim verification rejects record type mismatch and candidate-id substitution', async (t) => {
   const claim = createMediaClaim({ claimType: 'EntityMetadataClaim', subjectRefs: [workRef()], payload: { title: 'Pilot' }, keyPair: issuer })
-  const wrongType = createSignedEnvelope({ recordType: 'peartube.other.v1', body: encodeClaimBody(claim.body), keyPair: issuer })
+  const wrongType = createApplicationEnvelope({ recordType: 'peartube.other.v1', body: encodeClaimBody(claim.body), keyPair: issuer })
   const substituted = { ...claim.envelope, recordId: b4a.alloc(32, 9) }
 
   t.absent(await verifyMediaClaim(wrongType, { allowedSigners: [issuer.publicKey] }))

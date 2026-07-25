@@ -23,7 +23,7 @@ function fakeService(overrides = {}) {
   return {
     calls,
     getTrustedClients() { return trustedClients },
-    getLinkDescriptor() { return { schema: 'peartube.relayLink', version: 1, relayMirrorKey: 'f'.repeat(64), blindPeerEnabled: true, trustedClients: trustedClients.length } },
+    getLinkDescriptor() { return { schema: 'peartube.relayLink', version: 2, seedPin: { enabled: true, authorizedClients: trustedClients.length } } },
     async authorizeClient(form) { calls.authorize.push(form); trustedClients.push({ key: form.key, label: form.label }); return { client: { key: form.key }, liveApplied: false } },
     async revokeClient(key) { calls.revoke.push(key); return { removed: true } },
     config: { classification: { tmdb: { baseUrl: 'https://api', language: 'en-US' } } },
@@ -204,7 +204,7 @@ test('GET / renders the creators and TMDB sections', async function (t) {
     t.ok(html.includes('Unseeded targets'))
     t.ok(html.includes('Contribute a creator'))
     t.ok(html.includes('Content classification (TMDB)'))
-    t.ok(html.includes('Linked creator devices'))
+    t.ok(html.includes('Authorized creator devices'))
   })
 })
 
@@ -214,7 +214,10 @@ test('GET /link.json returns the relay link descriptor', async function (t) {
     t.is(res.status, 200)
     const body = await res.json()
     t.is(body.schema, 'peartube.relayLink')
-    t.is(body.relayMirrorKey, 'f'.repeat(64))
+    t.is(body.version, 2)
+    t.is(body.seedPin.enabled, true)
+    t.is(body.seedPin.authorizedClients, 0)
+    t.absent(body.relayMirrorKey, 'permissionless relay descriptors expose policy, not a trusted mirror key')
   })
 })
 
@@ -289,7 +292,7 @@ test('TMDB network status distinguishes TV episodes from show-level matches', fu
 test('POST /discover/archive builds episode-aware TMDB source ids when no hidden source id is supplied', async function (t) {
   const downloads = []
   const service = fakeService({
-    async publishArchiveJobToFeed() {}
+    async publishArchiveJob() {}
   })
   await withConsole(service, async (base) => {
     const res = await fetch(`${base}/discover/archive`, {

@@ -1,7 +1,7 @@
 import b4a from 'b4a'
 
 import { encodeCanonical, toHex } from '../publisher/canonical.js'
-import { createSignedEnvelope, verifySignedEnvelope } from '../records/signed-envelope.js'
+import { createApplicationEnvelope, verifyApplicationEnvelope } from '../records/application-envelope.js'
 
 export const MODERATION_FEED_PAGE_RECORD_TYPE = 'peartube.moderation.feed-page.v1'
 export const MAX_MODERATION_RECORDS = 128
@@ -40,7 +40,7 @@ export function createModerationFeedPage(input = {}) {
     records: records.map(normalizeRecord),
     issuedAt: Number(input.issuedAt || 0),
   }
-  const envelope = createSignedEnvelope({ recordType: MODERATION_FEED_PAGE_RECORD_TYPE, body: encodeCanonical(body), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
+  const envelope = createApplicationEnvelope({ recordType: MODERATION_FEED_PAGE_RECORD_TYPE, body: encodeCanonical(body), keyPair: input.keyPair, issuedAt: input.issuedAt, expiresAt: input.expiresAt })
   envelope.recordIdHex = hex32(envelope.recordId, 'recordId')
   return { pageId: envelope.recordIdHex, body, envelope }
 }
@@ -49,7 +49,7 @@ export async function verifyModerationFeedPage(envelope, options = {}) {
   let body
   try { body = JSON.parse(b4a.toString(envelope.body)) } catch { return false }
   if (options.moderatorId && body.moderatorId !== hex32(options.moderatorId, 'moderatorId')) return false
-  const ok = await verifySignedEnvelope(envelope, { recordType: MODERATION_FEED_PAGE_RECORD_TYPE, now: options.now, allowedSigners: [b4a.from(body.moderatorId, 'hex')] })
+  const ok = await verifyApplicationEnvelope(envelope, { recordType: MODERATION_FEED_PAGE_RECORD_TYPE, now: options.now, allowedSigners: [b4a.from(body.moderatorId, 'hex')] })
   if (!ok) return false
   return { pageId: hex32(envelope.recordId, 'recordId'), body, envelope }
 }

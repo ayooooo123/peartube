@@ -79,7 +79,8 @@ export async function createBackend(opts = {}) {
       hrpc: null,
       createBackendContext,
       onStatsUpdate: onVideoStats,
-      ...lifecycleOptions
+      ...lifecycleOptions,
+      expectedProtocolVersion: hostProtocolVersion
     })
 
     backend = await core.init()

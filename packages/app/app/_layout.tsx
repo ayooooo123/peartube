@@ -24,6 +24,7 @@ import { useFonts } from 'expo-font'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
+import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -66,7 +67,6 @@ function friendlyStartupStatus(raw: string): string | null {
   if (s.includes('managers creating')) return 'Starting background services…'
   if (s.includes('seedingmanager')) return 'Initializing seeding…'
   if (s.includes('loadidentities')) return 'Loading your identity…'
-  if (s.includes('publicfeed')) return 'Connecting to P2P feed…'
   if (s.includes('backend ready')) return 'Almost there…'
   if (s.includes('lock retry')) return 'Waiting for storage lock…'
   return null
@@ -74,6 +74,8 @@ function friendlyStartupStatus(raw: string): string | null {
 
 // Platform RPC - conditionally imported
 let platformRPC: any = null
+
+
 
 const BACKEND_SOURCE_CACHE_KEY = '__PEARTUBE_BACKEND_SOURCE__'
 const DOWNLOADER_SOURCE_CACHE_KEY = '__PEARTUBE_DOWNLOADER_WORKER_SOURCE__'
@@ -533,6 +535,8 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       // code (the user keeps seeing the same "Connecting to P2P network"
       // behavior even after a fix shipped).
       const sources = readBundleSources()
+      const publisherKeyVault = await getNativePublisherKeyVault()
+
       await platformRPC.initPlatformRPC({
         backendVersionKey: getNativeBackendVersionKey(
           sources.backendSource,
@@ -543,6 +547,9 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         launchOptions: {
           __peartubeLaunchOptions: true,
         },
+        publisherSigner: await getNativePublisherSigner(),
+        migrateLegacyPublisherRoot: async (request: unknown) =>
+          publisherKeyVault.importLegacyRootMigration(request),
       })
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
 
@@ -612,7 +619,12 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         })
 
         // Initialize
-        await platformRPC.initPlatformRPC()
+        const desktopShell = window as Window & {
+          bridge?: { publisherSigner?: unknown }
+        }
+        await platformRPC.initPlatformRPC({
+          publisherSigner: desktopShell.bridge?.publisherSigner,
+        })
       } else {
         // Already initialized - restore from cache or load fresh
         console.log('[App] RPC already initialized, cached state:', cachedAppState ? 'yes' : 'no')

@@ -25,7 +25,6 @@ test('mobile watch action rows wrap instead of pushing More off screen when labe
     assert.match(source, /actions:\s*\{[\s\S]*justifyContent:\s*'space-between'/, `${name} action row should distribute wrapped buttons`) 
     assert.match(source, /actionButton:\s*\{[\s\S]*width:\s*'16\.66%'/, `${name} action buttons should have six-up percentage slots`) 
     assert.match(source, /actionButton:\s*\{[\s\S]*minWidth:\s*56/, `${name} action buttons should keep a tappable minimum`) 
-    assert.match(source, /actionLabel:\s*\{[\s\S]*numberOfLines/, `${name} action labels should be clamped through Text props or style marker`) 
   }
 
   assert.match(

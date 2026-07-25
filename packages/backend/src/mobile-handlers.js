@@ -68,19 +68,6 @@ function normalizeSeedingStatus(s) {
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, castTranscoder, player } = deps
 
-  const refreshPublishedChannelFeed = async (driveKey) => {
-    if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
-    try {
-      const status = await api.isChannelPublished(driveKey)
-      if (!status?.published) return
-      const result = await api.submitToFeed(driveKey)
-      if (result?.success === false) {
-        console.log('[Backend] uploadVideo feed gossip refresh skipped:', result.error || 'submitToFeed failed')
-      }
-    } catch (err) {
-      console.log('[Backend] uploadVideo feed gossip refresh failed (non-fatal):', err?.message)
-    }
-  }
 
   B.createIdentity = async (r) => {
     const result = await identityManager.createIdentity(r.name || 'New Channel', true)
@@ -113,6 +100,18 @@ export function attachMobileHandlers(B, deps) {
   B.getChannel = async (r) => ({ channel: await api.getChannel(r.publicKey || '') })
   B.getContentCatalog = async (r) => api.getContentCatalog(r)
   B.getContentItems = async (r) => api.getContentItems(r)
+  B.getMediaCatalog = async (r) => api.getMediaCatalog(r)
+  B.getMediaEntity = async (r) => api.getMediaEntity(r)
+  B.getMediaCollection = async (r) => api.getMediaCollection(r)
+  B.getMediaCollectionItems = async (r) => api.getMediaCollectionItems(r)
+  B.getMediaAgent = async (r) => api.getMediaAgent(r)
+  B.getAgentContributions = async (r) => api.getAgentContributions(r)
+  B.getPublicationSources = async (r) => api.getPublicationSources(r)
+  B.getClaimProvenance = async (r) => api.getClaimProvenance(r)
+  B.setSourcePreference = async (r) => api.setSourcePreference(r)
+  B.provisionPublisherCatalog = async (r) => api.provisionPublisherCatalog(r)
+  B.preparePublisherRootOperation = async (r) => api.preparePublisherRootOperation(r)
+  B.submitPublisherRootOperation = async (r) => api.submitPublisherRootOperation(r)
   B.updateChannel = async (r) => {
     const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }
     try { return await api.updateChannel(a.driveKey, { name: r.name, description: r.description, avatar: r.avatar }) } catch (err) { return { success: false, error: err?.message } }
@@ -158,6 +157,13 @@ export function attachMobileHandlers(B, deps) {
         thumbnailBlobId: v?.thumbnailBlobId ? String(v.thumbnailBlobId) : null,
         thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
         thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,
+        publicationId: v?.publicationId ? String(v.publicationId) : null,
+        immutablePublication: v?.immutablePublication?.publicationId ? {
+          publicationId: String(v.immutablePublication.publicationId),
+          manifestId: v.immutablePublication.manifestId ? String(v.immutablePublication.manifestId) : null,
+          renditionId: v.immutablePublication.renditionId ? String(v.immutablePublication.renditionId) : null,
+          publisherId: v.immutablePublication.publisherId ? String(v.immutablePublication.publisherId) : null,
+        } : null,
         publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : (r?.publicBeeKey ? String(r.publicBeeKey) : null),
       }
     }).filter(Boolean) }
@@ -237,8 +243,6 @@ export function attachMobileHandlers(B, deps) {
       peerCount: s.swarmConnections || 0,
       swarmConnections: s.swarmConnections || 0,
       swarmPeers: s.swarmPeers || 0,
-      feedConnections: s.feedConnections || 0,
-      feedEntries: s.feedEntries || 0,
       channelsLoaded: s.channelsLoaded || 0,
       swarmOffline: Boolean(s.swarmOffline),
       swarmOfflineReason: s.swarmOfflineReason ?? null,
@@ -247,12 +251,10 @@ export function attachMobileHandlers(B, deps) {
       networkJson: safeJson(s.network),
       startupTimingJson: safeJson(s.startupTiming),
       doctorJson: safeJson(s.doctor),
-      directPeerDialJson: safeJson(s.doctor?.feed?.directPeerDial),
       recommendedBoundary: s.recommendedBoundary ?? s.doctor?.recommendedBoundary ?? null,
       network: s.network ?? null,
       startupTiming: s.startupTiming ?? null,
       doctor: s.doctor ?? null,
-      directPeerDial: s.doctor?.feed?.directPeerDial ?? null,
     }
   }
 
@@ -262,10 +264,25 @@ export function attachMobileHandlers(B, deps) {
   B.unpinChannel = async (r) => api.unpinChannel(r.channelKey)
   B.getPinnedChannels = async () => ({ channels: (await api.getPinnedChannels()).channels || [] })
   B.getStorageStats = async () => api.getStorageStats()
+  B.getMigrationStatus = async (r = {}) => api.getMigrationStatus(r)
+  B.retryMigration = async (r = {}) => api.retryMigration(r)
+  B.exportMigrationReport = async (r = {}) => api.exportMigrationReport(r)
+  B.getPublisherDeviceStatus = async (r = {}) => api.getPublisherDeviceStatus(r)
+  B.exportPortableState = async (r = {}) => api.exportPortableState(r)
+  B.restorePortableState = async (r = {}) => api.restorePortableState(r)
+  B.previewStorageLimit = async (r = {}) => api.previewStorageLimit(r)
+  B.getArchiveOperatorStatus = async (r = {}) => api.getArchiveOperatorStatus(r)
+  B.getArchiveParticipation = async (r = {}) => api.getArchiveParticipation(r)
+  B.setArchiveParticipation = async (r = {}) => api.setArchiveParticipation(r)
+  B.requestArchivePublication = async (r = {}) => {
+    const request = { ...r }
+    if (request.retentionUntil === 0) delete request.retentionUntil
+    return api.requestArchivePublication(request)
+  }
   B.setStorageLimit = async (r) => api.setStorageLimit(r.maxGB)
   B.clearCache = async () => api.clearCache()
-  B.assessUploadOffload = async (r) => api.assessUploadOffload(r.channelKey, r.videoId)
-  B.offloadUpload = async (r) => api.offloadUpload(r.channelKey, r.videoId)
+  B.assessSourceOffload = async (r = {}) => api.assessSourceOffload(r)
+  B.confirmSourceOffload = async (r = {}) => api.confirmSourceOffload(r)
 
   B.getTranscodeSettings = async () => api.getTranscodeSettings()
   B.setTranscodeSettings = async (r) => api.setTranscodeSettings(r || {})
@@ -305,7 +322,7 @@ export function attachMobileHandlers(B, deps) {
   B.eventReady = () => {}; B.eventError = () => {}
   B.eventCastDeviceFound = () => {}; B.eventCastDeviceLost = () => {}
   B.eventCastPlaybackState = () => {}; B.eventCastTimeUpdate = () => {}
-  B.eventUploadProgress = () => {}; B.eventFeedUpdate = () => {}
+  B.eventUploadProgress = () => {}; B.eventMediaGraphUpdate = () => {}
   B.eventLog = () => {}
   B.eventVideoStats = (data) => {
     try { rpc.eventVideoStats?.(data) } catch {}
@@ -329,7 +346,6 @@ export function attachMobileHandlers(B, deps) {
     if (result?.videoId && !r.skipThumbnailGeneration) {
       try { const t = await generateAndStoreThumbnail(filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
     }
-    await refreshPublishedChannelFeed(active.driveKey)
     return { video: { id: result?.videoId || '', title: r.title, description: r.description || '', channelKey: active.driveKey } }
   }
 

@@ -88,26 +88,21 @@ function normalizeNetworkStatusPayload(payload = {}) {
   const network = payload?.network ?? parseOptionalJson(payload?.networkJson)
   const startupTiming = payload?.startupTiming ?? parseOptionalJson(payload?.startupTimingJson)
   const doctor = payload?.doctor ?? parseOptionalJson(payload?.doctorJson)
-  const directPeerDial = payload?.directPeerDial ?? parseOptionalJson(payload?.directPeerDialJson) ?? doctor?.feed?.directPeerDial ?? null
 
   return {
     connected: Boolean(payload?.connected ?? (swarmConnections > 0 || peerCount > 0)),
     peerCount,
     swarmConnections,
     swarmPeers: payload?.swarmPeers ?? 0,
-    feedConnections: payload?.feedConnections ?? 0,
-    feedEntries: payload?.feedEntries ?? 0,
     channelsLoaded: payload?.channelsLoaded ?? 0,
     swarmOffline: Boolean(payload?.swarmOffline),
     swarmOfflineReason: payload?.swarmOfflineReason ?? null,
     swarmListenResolved: Boolean(payload?.swarmListenResolved),
     peerPoolJoined: Boolean(payload?.peerPoolJoined),
-    publicFeedDiscoveryJoined: Boolean(payload?.publicFeedDiscoveryJoined),
     recommendedBoundary: payload?.recommendedBoundary ?? doctor?.recommendedBoundary ?? null,
     network,
     startupTiming,
     doctor,
-    directPeerDial
   }
 }
 
@@ -334,12 +329,13 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
       stream?.destroy?.()
     },
     system: {
+      ...appRpc.system,
       getStatus: createMethodCaller(rpc, ready, 'getStatus'),
       getSwarmStatus: createNetworkStatusCaller(rpc, ready, events),
       getBlobServerPort: createMethodCaller(rpc, ready, 'getBlobServerPort')
     },
     identity: appRpc.identity,
-    feed: appRpc.feed,
+    publisher: appRpc.publisher,
     channel: appRpc.channel,
     mediaGraph: appRpc.mediaGraph,
     video: appRpc.video,

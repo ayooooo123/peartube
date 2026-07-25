@@ -35,8 +35,6 @@ test('low-frequency UI consumers avoid the combined high-frequency player contex
 test('command-only screens use the action context instead of progress-carrying context', () => {
   for (const relativePath of [
     'app/search.tsx',
-    'app/(tabs)/search.tsx',
-    'app/(tabs)/index.tsx',
     'app/(tabs)/studio.tsx',
   ]) {
     const source = readAppFile(relativePath)

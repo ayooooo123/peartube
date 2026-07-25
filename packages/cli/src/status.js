@@ -55,39 +55,14 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {}, creators 
       evictableChannels: channels.length - summary.protectedChannels
     },
     runtime: {
-      peers: runtimeStats.peers || 0,
-      connections: runtimeStats.connections || 0,
-      feedPeers: runtimeStats.feedPeers || 0,
-      feedConnections: runtimeStats.feedConnections || 0,
-      feedChannelCandidates: runtimeStats.feedChannelCandidates ?? runtimeStats.feedPeers ?? 0,
-      candidateConnections: runtimeStats.candidateConnections ?? runtimeStats.feedChannelCandidates ?? runtimeStats.feedPeers ?? 0,
-      rememberedPeerCandidates: runtimeStats.rememberedPeerCandidates ?? runtimeStats.directPeerDial?.discoveredPeers ?? 0,
-      feedEntries: runtimeStats.feedEntries || 0,
-      dht: {
-        bootstrapped: runtimeStats.dht?.bootstrapped ?? null,
-        firewalled: runtimeStats.dht?.firewalled ?? null,
-        online: runtimeStats.dht?.online ?? null
-      },
-      publicFeedDiscoveryJoined: Boolean(runtimeStats.publicFeedDiscoveryJoined),
-      trustedClients: Number(trustedClientsCount) || 0,
-      blindPeer: runtimeStats.blindPeer || runtimeStats.seeding?.blindPeer || null,
-      peerPoolJoined: Boolean(runtimeStats.peerPoolJoined),
-      directPeerDial: runtimeStats.directPeerDial || null,
-      doctor: runtimeStats.doctor || runtimeStats.swarmDoctor || null,
-      hyperswarm: runtimeStats.hyperswarm || null,
-      swarmOffline: Boolean(runtimeStats.swarmOffline),
-      swarmOfflineReason: runtimeStats.swarmOfflineReason || null,
-      swarmListenResolved: Boolean(runtimeStats.swarmListenResolved),
-      seeding: {
-        channels: runtimeStats.seeding?.channels || 0,
-        videos: runtimeStats.seeding?.videos || 0,
-        publicBeeCores: runtimeStats.seeding?.publicBeeCores || 0,
-        blobCores: runtimeStats.seeding?.blobCores || 0,
-        discoveryHandles: runtimeStats.seeding?.discoveryHandles || 0,
-        blobAvailability: runtimeStats.seeding?.blobAvailability || null,
-        lastSeededAt: runtimeStats.seeding?.lastSeededAt || null,
-        lastError: runtimeStats.seeding?.lastError || null
-      }
+      network: runtimeStats.network || {},
+      publisher: runtimeStats.publisher || {},
+      bootstrap: runtimeStats.bootstrap || {},
+      assets: runtimeStats.assets || {},
+      seedRetention: runtimeStats.seedRetention || {},
+      archive: runtimeStats.archive || {},
+      storage: runtimeStats.storage || {},
+      authorizedClients: Number(trustedClientsCount) || 0
     },
     evictionCandidates: sortEvictionCandidates(channels).map((channel) => ({
       channelKey: channel.channelKey,
@@ -114,9 +89,13 @@ export function readRelayStatus(statusPath) {
 }
 
 export function formatRelayStatus(status) {
-  const firstDialError = status.runtime.directPeerDial?.peers
-    ?.find((peer) => peer?.lastError)
-    ?.lastError || null
+  const network = status.runtime.network || {}
+  const publisher = status.runtime.publisher || {}
+  const bootstrap = status.runtime.bootstrap || {}
+  const assets = status.runtime.assets || {}
+  const seedRetention = status.runtime.seedRetention || {}
+  const archive = status.runtime.archive || {}
+  const storage = status.runtime.storage || {}
   const lines = [
     `mode: ${status.mode}`,
     `policy: ${status.policy}`,
@@ -124,19 +103,15 @@ export function formatRelayStatus(status) {
     `channels: ${status.summary.totalChannels}`,
     `protected: ${status.summary.protectedChannels}`,
     `evictable: ${status.summary.evictableChannels}`,
-    `peers: ${status.runtime.peers}`,
-    `connections: ${status.runtime.connections}`,
-    `feedPeerCandidates: ${status.runtime.feedChannelCandidates ?? status.runtime.feedPeers}`,
-    `feedConnections: ${status.runtime.feedConnections}`,
-    `rememberedPeerCandidates: ${status.runtime.rememberedPeerCandidates ?? status.runtime.directPeerDial?.discoveredPeers ?? 0}`,
-    `feedEntries: ${status.runtime.feedEntries}`,
-    `dht: bootstrapped=${status.runtime.dht.bootstrapped} firewalled=${status.runtime.dht.firewalled} online=${status.runtime.dht.online}`,
-    `network: offline=${status.runtime.swarmOffline} reason=${status.runtime.swarmOfflineReason || 'none'} listenResolved=${status.runtime.swarmListenResolved} peerPoolJoined=${status.runtime.peerPoolJoined} publicFeedDiscoveryJoined=${status.runtime.publicFeedDiscoveryJoined}`,
-    `directPeerDial: discovered=${status.runtime.directPeerDial?.discoveredPeers || 0} pending=${status.runtime.directPeerDial?.pending || 0} queued=${status.runtime.directPeerDial?.queued || 0} skipped=${status.runtime.directPeerDial?.skipped || 0} failed=${status.runtime.directPeerDial?.failed || 0} connected=${status.runtime.directPeerDial?.connected || 0} lastReason=${status.runtime.directPeerDial?.lastReason || 'none'} lastError=${firstDialError || 'none'}`,
-    `doctor: boundary=${status.runtime.doctor?.recommendedBoundary || 'unknown'} discovered=${status.runtime.doctor?.discovery?.discoveredPeers ?? status.runtime.directPeerDial?.discoveredPeers ?? 0} sockets=${status.runtime.doctor?.socket?.swarmConnections ?? status.runtime.connections ?? 0} feedConnections=${status.runtime.doctor?.feed?.feedConnections ?? status.runtime.feedConnections ?? 0}`,
-    `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0} trustedClients=${status.runtime.trustedClients || 0}`,
-    `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`,
-    `blobAvailability: playable=${status.runtime.seeding.blobAvailability?.playable || 0} unavailable=${status.runtime.seeding.blobAvailability?.unavailable || 0} unknown=${status.runtime.seeding.blobAvailability?.unknown || 0}`,
+    `network: peers=${network.peers || 0} connections=${network.connections || 0} offline=${Boolean(network.offline)} reason=${network.offlineReason || 'none'} listenResolved=${Boolean(network.listenResolved)}`,
+    `dht: bootstrapped=${network.dht?.bootstrapped ?? null} firewalled=${network.dht?.firewalled ?? null} online=${network.dht?.online ?? null}`,
+    `publisher: catalogs=${publisher.catalogs || 0} followed=${publisher.followed || 0} lastError=${publisher.lastErrorCode || 'none'}`,
+    `bootstrap: joined=${Boolean(bootstrap.joined)} locators=${bootstrap.locators || 0} rejected=${bootstrap.rejected || 0} limit=${bootstrap.maxLocators || 0}`,
+    `assets: retainedRenditions=${assets.retainedRenditions || 0} activeSessions=${assets.activeSessions || 0} limit=${assets.maxSessions || 0}`,
+    `archive: active=${archive.activePledgeCount || 0} healthy=${archive.healthyPledgeCount || 0} failed=${archive.failedPledgeCount || 0}`,
+    `seedRetention: activeSeeds=${seedRetention.activeSeeds || 0} pinnedChannels=${seedRetention.pinnedChannels || 0} storageUsedBytes=${seedRetention.storageUsedBytes || 0}`,
+    `storageDiagnostics: categorizedBytes=${storage.totalCategorizedBytes || 0} protectedBytes=${storage.protectedBytes || 0} success=${Boolean(storage.success)}`,
+    `authorizedClients: ${status.runtime.authorizedClients || 0}`,
     `creators: total=${status.creators?.totalCreators || 0} archived=${status.creators?.videosArchived || 0} unseeded=${status.creators?.videosUnseeded || 0} movies=${status.creators?.classifiedMovies || 0} tv=${status.creators?.classifiedTv || 0}`
   ]
 

@@ -1,5 +1,7 @@
 import b4a from 'b4a'
 
+import { createWindowedIngestBudget, normalizeBudgetLimit } from '../bounded-ingest-budget.js'
+
 import { decodeClaimBody, verifyMediaClaim } from './claims.js'
 
 function hex(value) {
@@ -40,14 +42,39 @@ function normalizeScanLimit(limit = 100) {
 
 export function createMediaGraphStore(options = {}) {
   const trustedSigners = new Set((options.trustedSigners || []).map(hex))
+  const allowedSigners = Array.from(trustedSigners)
+  const authorizeSigner = typeof options.authorizeSigner === 'function' ? options.authorizeSigner : null
+  const maxClaims = normalizeBudgetLimit(options.maxClaims, 10_000)
+  const maxQuarantinedClaims = normalizeBudgetLimit(options.maxQuarantinedClaims, 256)
+  const maxClaimsPerPublisher = normalizeBudgetLimit(options.maxClaimsPerPublisher, maxClaims)
+  const maxClaimsPerAgent = normalizeBudgetLimit(options.maxClaimsPerAgent, Math.min(maxClaims, 1000))
+  const maxClaimsPerCollection = normalizeBudgetLimit(options.maxClaimsPerCollection, Math.min(maxClaims, 1000))
+  const maxClaimsPerSubject = normalizeBudgetLimit(options.maxClaimsPerSubject, 256)
+  const maxClaimsPerPublisherPerWindow = normalizeBudgetLimit(options.maxClaimsPerPublisherPerWindow, 1024)
+  const maxClaimsPerAgentPerWindow = normalizeBudgetLimit(options.maxClaimsPerAgentPerWindow, 256)
+  const maxClaimsPerCollectionPerWindow = normalizeBudgetLimit(options.maxClaimsPerCollectionPerWindow, 256)
+  const maxMetadataClaimsPerSubjectPerWindow = normalizeBudgetLimit(options.maxMetadataClaimsPerSubjectPerWindow, 16)
+  const maxRetractionsPerPublisherPerWindow = normalizeBudgetLimit(options.maxRetractionsPerPublisherPerWindow, 64)
+  const maxMetadataBytes = normalizeBudgetLimit(options.maxMetadataBytes, 8192)
+  const maxRetractionTargets = normalizeBudgetLimit(options.maxRetractionTargets, 64)
+  const maxCollectionSlots = normalizeBudgetLimit(options.maxCollectionSlots, 1000)
+  const acceptClaim = typeof options.acceptClaim === 'function' ? options.acceptClaim : () => true
+  const budget = createWindowedIngestBudget({
+    now: options.now,
+    windowMs: options.budgetWindowMs,
+    maxTrackedKeys: options.maxBudgetKeys,
+  })
   const claims = new Map()
   const quarantined = []
+  let oldestQuarantine = 0
   const bySubject = new Map()
   const byIssuer = new Map()
   const byPredicate = new Map()
   const byExternalRef = new Map()
   const byPublication = new Map()
   const byCollection = new Map()
+  const byAgent = new Map()
+  const sequenceByIssuer = new Map()
 
   function materialize(claimId) {
     return claims.get(claimId) || null
@@ -57,30 +84,175 @@ export function createMediaGraphStore(options = {}) {
     return ids.map(materialize).filter(Boolean)
   }
 
+  function quarantine(entry) {
+    if (quarantined.length < maxQuarantinedClaims) {
+      quarantined.push(entry)
+      return
+    }
+    quarantined[oldestQuarantine] = entry
+    oldestQuarantine = (oldestQuarantine + 1) % maxQuarantinedClaims
+  }
+
+  function quarantinedSnapshot() {
+    if (quarantined.length < maxQuarantinedClaims || oldestQuarantine === 0) return quarantined.slice()
+    return quarantined.slice(oldestQuarantine).concat(quarantined.slice(0, oldestQuarantine))
+  }
+
+  function agentId(body) {
+    return body.claimType === 'ContributionClaim' ? body.payload.agentRef?.entityId || null : null
+  }
+
+  function collectionId(body) {
+    if (body.claimType !== 'CollectionMembershipClaim' && body.claimType !== 'CollectionStructureClaim') return null
+    return body.payload.collectionRef?.entityId || null
+  }
+
+  function totalProjectionError(body, issuer) {
+    if (claims.size >= maxClaims) return 'GRAPH_CAPACITY_EXCEEDED'
+    if ((byIssuer.get(issuer)?.length || 0) >= maxClaimsPerPublisher) return 'PUBLISHER_PROJECTION_BUDGET_EXCEEDED'
+    for (const subject of body.subjectRefs) {
+      if ((bySubject.get(subject.entityId)?.length || 0) >= maxClaimsPerSubject) return 'SUBJECT_PROJECTION_BUDGET_EXCEEDED'
+    }
+    const agent = agentId(body)
+    if (agent && (byAgent.get(agent)?.length || 0) >= maxClaimsPerAgent) return 'AGENT_PROJECTION_BUDGET_EXCEEDED'
+    const collection = collectionId(body)
+    if (collection && (byCollection.get(collection)?.length || 0) >= maxClaimsPerCollection) {
+      return 'COLLECTION_PROJECTION_BUDGET_EXCEEDED'
+    }
+    return null
+  }
+
+  function hardLimitError(body, envelope) {
+    if (body.claimType === 'EntityMetadataClaim' && b4a.byteLength(envelope.body) > maxMetadataBytes) {
+      return 'METADATA_TOO_LARGE'
+    }
+    if (body.claimType === 'RetractionClaim' && body.payload.targetClaimIds.length > maxRetractionTargets) {
+      return 'RETRACTION_TARGET_LIMIT_EXCEEDED'
+    }
+    if (body.claimType === 'CollectionStructureClaim' && Number(body.payload.expectedSlots || 0) > maxCollectionSlots) {
+      return 'COLLECTION_SIZE_LIMIT_EXCEEDED'
+    }
+    return null
+  }
+
+  function reserveClaim(body, issuer) {
+    const requirements = []
+    if (body.claimType === 'EntityMetadataClaim') {
+      for (const subject of body.subjectRefs) {
+        requirements.push({
+          scope: 'metadata-subject',
+          key: subject.entityId,
+          limit: maxMetadataClaimsPerSubjectPerWindow,
+          errorCode: 'METADATA_WINDOW_BUDGET_EXCEEDED',
+        })
+      }
+    }
+    if (body.claimType === 'RetractionClaim') {
+      requirements.push({
+        scope: 'retraction-publisher',
+        key: issuer,
+        limit: maxRetractionsPerPublisherPerWindow,
+        errorCode: 'RETRACTION_WINDOW_BUDGET_EXCEEDED',
+      })
+    }
+    requirements.push({
+      scope: 'claim-publisher',
+      key: issuer,
+      limit: maxClaimsPerPublisherPerWindow,
+      errorCode: 'PUBLISHER_WINDOW_BUDGET_EXCEEDED',
+    })
+    const agent = agentId(body)
+    if (agent) {
+      requirements.push({
+        scope: 'claim-agent',
+        key: agent,
+        limit: maxClaimsPerAgentPerWindow,
+        errorCode: 'AGENT_WINDOW_BUDGET_EXCEEDED',
+      })
+    }
+    const collection = collectionId(body)
+    if (collection) {
+      requirements.push({
+        scope: 'claim-collection',
+        key: collection,
+        limit: maxClaimsPerCollectionPerWindow,
+        errorCode: 'COLLECTION_WINDOW_BUDGET_EXCEEDED',
+      })
+    }
+    return budget.reserve(requirements)
+  }
+
+  function issuerSequenceFork(issuer, sequence, claimId) {
+    if (!Number.isSafeInteger(sequence) || sequence <= 0) return false
+    const sequences = sequenceByIssuer.get(issuer)
+    const existing = sequences?.get(sequence)
+    return Boolean(existing && existing !== claimId)
+  }
+
+  function rememberIssuerSequence(issuer, sequence, claimId) {
+    if (!Number.isSafeInteger(sequence) || sequence <= 0) return
+    let sequences = sequenceByIssuer.get(issuer)
+    if (!sequences) {
+      sequences = new Map()
+      sequenceByIssuer.set(issuer, sequences)
+    }
+    sequences.set(sequence, claimId)
+  }
+
   return {
     trustedSigners,
 
     async ingestClaim(envelope) {
-      const claimId = hex(envelope.recordId)
+      let claimId
+      try {
+        claimId = hex(envelope.recordId)
+      } catch (error) {
+        quarantine({ status: 'invalid-envelope', error: error?.message || String(error) })
+        return { status: 'quarantined' }
+      }
       if (claims.has(claimId)) return { status: 'duplicate', claimId }
 
       let body = null
       try {
         body = decodeClaimBody(envelope.body)
       } catch (error) {
-        quarantined.push({ status: 'invalid-body', claimId, envelope, error: error?.message || String(error) })
+        quarantine({ status: 'invalid-body', claimId, envelope, error: error?.message || String(error) })
         return { status: 'quarantined' }
       }
 
-      const allowedSigners = Array.from(trustedSigners)
-      const targetClaims = Array.from(claims.values())
-      const ok = await verifyMediaClaim(envelope, { allowedSigners, targetClaims })
+      const targetClaims = body.claimType === 'RetractionClaim'
+        ? body.payload.targetClaimIds.map(targetClaimId => claims.get(targetClaimId)).filter(Boolean)
+        : undefined
+      const ok = await verifyMediaClaim(envelope, {
+        ...(authorizeSigner ? { authorizeSigner } : { allowedSigners }),
+        targetClaims,
+      })
       if (!ok) {
-        quarantined.push({ status: 'invalid-signature-or-policy', claimId, envelope, body })
+        quarantine({ status: 'invalid-signature-or-policy', claimId, envelope, body })
         return { status: 'quarantined' }
       }
 
       const issuer = signerHex(envelope)
+      if (issuerSequenceFork(issuer, body.issuerSequence, claimId)) {
+        return { status: 'rejected', errorCode: 'ISSUER_SEQUENCE_FORK', claimId }
+      }
+      const hardError = hardLimitError(body, envelope)
+      if (hardError) return { status: 'rejected', errorCode: hardError, claimId }
+      if (!await acceptClaim(body, { claimId, issuer })) {
+        return { status: 'rejected', errorCode: 'LOCAL_POLICY_REJECTED', claimId }
+      }
+      const projectionError = totalProjectionError(body, issuer)
+      if (projectionError) return { status: 'rejected', errorCode: projectionError, claimId }
+      const reservation = reserveClaim(body, issuer)
+      if (!reservation.accepted) {
+        return {
+          status: 'rejected',
+          errorCode: reservation.errorCode,
+          resetAt: reservation.resetAt,
+          claimId,
+        }
+      }
+
       const row = {
         claimId,
         envelope,
@@ -90,13 +262,16 @@ export function createMediaGraphStore(options = {}) {
         revoked: false,
       }
       claims.set(claimId, row)
+      rememberIssuerSequence(issuer, body.issuerSequence, claimId)
       appendIndex(byIssuer, issuer, claimId)
       appendIndex(byPredicate, body.claimType, claimId)
       for (const subject of row.subjects) appendIndex(bySubject, subject, claimId)
       indexPayload(row, { byExternalRef, byPublication, byCollection })
+      const agent = agentId(body)
+      if (agent) appendIndex(byAgent, agent, claimId)
 
       if (body.claimType === 'RetractionClaim') {
-        for (const targetClaimId of body.payload.targetClaimIds || []) {
+        for (const targetClaimId of body.payload.targetClaimIds) {
           const target = claims.get(targetClaimId)
           if (target && target.issuer === issuer) target.revoked = true
         }
@@ -148,7 +323,7 @@ export function createMediaGraphStore(options = {}) {
     },
 
     getQuarantinedClaims() {
-      return quarantined.slice()
+      return quarantinedSnapshot()
     },
   }
 }

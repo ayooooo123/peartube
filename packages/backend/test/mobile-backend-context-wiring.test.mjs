@@ -25,9 +25,11 @@ test('mobile backend context forwards platform and explicit network policy to st
     platform: 'mobile',
     network,
     swarmOptions,
+    expectedProtocolVersion: 4,
   }, Buffer.alloc(32, 1))
 
   assert.equal(storageConfig.platform, 'mobile')
   assert.equal(storageConfig.network, network)
   assert.equal(storageConfig.swarmOptions, swarmOptions)
+  assert.equal(storageConfig.expectedProtocolVersion, 4)
 })

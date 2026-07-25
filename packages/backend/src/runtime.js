@@ -93,8 +93,6 @@ export function buildSharedSystemHandlers(backend, options = {}) {
         peerCount,
         swarmConnections,
         swarmPeers: swarmStatus.swarmPeers ?? 0,
-        feedConnections: swarmStatus.feedConnections ?? 0,
-        feedEntries: swarmStatus.feedEntries ?? 0,
         channelsLoaded: swarmStatus.channelsLoaded ?? 0,
         swarmOffline: Boolean(swarmStatus.swarmOffline),
         swarmOfflineReason: swarmStatus.swarmOfflineReason ?? null,
@@ -103,12 +101,10 @@ export function buildSharedSystemHandlers(backend, options = {}) {
         networkJson: safeJson(swarmStatus.network),
         startupTimingJson: safeJson(swarmStatus.startupTiming),
         doctorJson: safeJson(swarmStatus.doctor),
-        directPeerDialJson: safeJson(swarmStatus.doctor?.feed?.directPeerDial),
         recommendedBoundary: swarmStatus.recommendedBoundary ?? swarmStatus.doctor?.recommendedBoundary ?? null,
         network: swarmStatus.network ?? null,
         startupTiming: swarmStatus.startupTiming ?? null,
         doctor: swarmStatus.doctor ?? null,
-        directPeerDial: swarmStatus.doctor?.feed?.directPeerDial ?? null,
       }
     }
   }

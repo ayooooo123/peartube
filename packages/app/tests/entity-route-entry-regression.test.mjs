@@ -166,11 +166,12 @@ test('native and web entity route entries resolve and server-render', async t =>
         }
         if (routeName === 'media') {
           assert.equal(typeof route.normalizeMediaEntityView, 'function', `${entry} must preserve normalizeMediaEntityView`)
-          assert.match(html, /authorized to publish/i)
-          assert.match(html, /Playable publications and renditions/i)
-          assert.match(html, /provenance/i)
-          assert.match(html, /conflict/i)
-          assert.match(html, /director/i)
+          // The media route is the consumer surface: it leads with the title,
+          // availability, and one action. Publication and provenance
+          // diagnostics stay behind the details disclosure.
+          assert.match(html, /Details and other sources/i)
+          assert.doesNotMatch(html, /Playable publications and renditions/i)
+          assert.doesNotMatch(html, /authorized to publish/i)
         }
       })
     }

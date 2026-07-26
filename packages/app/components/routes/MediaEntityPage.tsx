@@ -165,6 +165,7 @@ export default function MediaEntityPage({
       itemParam={itemParam}
       publisherDeviceStatus={securityStatus}
       publisherActionHandlers={publisherActionHandlers}
+      onPlay={() => { void play(null) }}
       onSelectSource={(source) => {
         onSelectSource?.(source)
         void play(source.publicationId || null)

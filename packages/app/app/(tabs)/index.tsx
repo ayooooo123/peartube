@@ -3,7 +3,7 @@ import { View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-import { MediaCatalogView } from '@/components/media/MediaCatalogView'
+import { ConsumerHomeView } from '@/components/media/ConsumerHomeView'
 import { encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components/media/MediaEntityDetailScreen'
 import type { MediaEntitySummary } from '@peartube/core'
 import { useMediaCatalog } from '@/hooks/useMediaCatalog'
@@ -39,14 +39,11 @@ export default function HomeScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <MediaCatalogView
-        title="Home"
-        subtitle="Resolved media from publishers you are authorized to discover"
+      <ConsumerHomeView
         state={catalog}
         diagnostic={catalog.diagnostic}
         onRefresh={() => { void catalog.refresh() }}
-        onLoadNext={() => { void catalog.loadNext() }}
-        onEntityPress={openEntity}
+        onOpenEntity={openEntity}
         contentBottomInset={Math.max(tabBar.height + 28, insets.bottom + 28)}
       />
     </View>

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
+import { describeAvailability } from '@/lib/media-availability'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { ArchiveStatus } from './ArchiveStatus'
 import { ConflictNotice } from './ConflictNotice'
@@ -182,6 +183,15 @@ export interface MediaEntityDetailScreenProps {
   publisherDeviceStatus?: PublisherDeviceStatusInput | null
   publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
   onSelectSource?: (source: { entityId: string; publicationId: string; renditionId: string }) => void
+  /** One Play/Resume action. The backend chooses the source. */
+  onPlay?: () => void
+  /** Fraction watched on this device, when there is something to resume. */
+  resumeFraction?: number | null
+  /**
+   * Open the details/Other Sources disclosure on first render. Consumers leave
+   * this closed; deep links into source diagnostics set it.
+   */
+  initialDetailsOpen?: boolean
   onBack?: () => void
 }
 
@@ -211,6 +221,9 @@ export function MediaEntityDetailScreen({
   publisherDeviceStatus,
   publisherActionHandlers,
   onSelectSource,
+  onPlay,
+  resumeFraction = null,
+  initialDetailsOpen = false,
   onBack,
 }: MediaEntityDetailScreenProps) {
   const params = useLocalSearchParams()
@@ -220,6 +233,8 @@ export function MediaEntityDetailScreen({
   const decodedItem = useMemo(() => decodeItem(itemQueryParam), [itemQueryParam])
   const baseItem = useMemo(() => decodedItem || fallbackItemForRoute(type, routeId), [decodedItem, routeId, type])
   const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null)
+  // Operational detail stays closed until a viewer deliberately opens it.
+  const [detailsOpen, setDetailsOpen] = useState(initialDetailsOpen)
 
   useEffect(() => {
     setSelectedSourceKey(null)
@@ -239,6 +254,13 @@ export function MediaEntityDetailScreen({
       ? item.durationSec
       : undefined
   const sourceCount = typeof item?.sourceCount === 'number' ? item.sourceCount : Array.isArray(item?.sources) ? item.sources.length : 0
+  const synopsis = pickString(item?.synopsis, item?.description, item?.overview)
+  // One availability answer for the whole screen, from the same assessment the
+  // card quoted; the hero shows it plainly and Other Sources explains it.
+  const availabilityView = describeAvailability(
+    item?.availability ?? asArray(item?.sources).find((source) => source?.selected)?.availability ?? null,
+  )
+  const playLabel = typeof resumeFraction === 'number' && resumeFraction > 0 ? 'Resume' : 'Play'
 
   return (
     <View style={styles.root}>
@@ -256,15 +278,51 @@ export function MediaEntityDetailScreen({
             <Text style={styles.kicker}>{pageTitleFor(type)}</Text>
             <Text style={styles.title}>{title}</Text>
             {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-            <View style={styles.chipRow}>
-              <Text style={styles.chip}>{sourceCount > 0 ? `${sourceCount} source${sourceCount === 1 ? '' : 's'}` : 'resolver id'}</Text>
-              {item?.localEntityId ? <Text style={styles.chip}>entity id</Text> : null}
-              {decodedItem ? null : <Text style={styles.warnChip}>payload pending</Text>}
-              {Array.isArray(item?.conflicts) && item.conflicts.length > 0 ? <Text style={styles.warnChip}>conflicts</Text> : null}
-            </View>
+            {synopsis ? <Text style={styles.synopsis} numberOfLines={4}>{synopsis}</Text> : null}
+            <Text
+              style={[styles.availability, !availabilityView.playable && styles.availabilityMuted]}
+              accessibilityLabel={`Availability: ${availabilityView.label}. ${availabilityView.detail}`}
+            >
+              {availabilityView.label}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${playLabel} ${title}`}
+              accessibilityState={{ disabled: !availabilityView.playable }}
+              disabled={!availabilityView.playable}
+              onPress={() => onPlay?.()}
+              style={({ pressed }) => [
+                styles.playButton,
+                !availabilityView.playable && styles.playButtonDisabled,
+                pressed && styles.playButtonPressed,
+              ]}
+            >
+              <Ionicons name="play" color={colors.bg} size={18} />
+              <Text style={styles.playLabel}>{playLabel}</Text>
+            </Pressable>
+            {availabilityView.playable ? null : (
+              <Text style={styles.availabilityDetail}>{availabilityView.detail}</Text>
+            )}
           </View>
         </View>
 
+        {/* Consumer surface ends here. Everything below is operational detail
+            a viewer opens deliberately: source diagnostics, archive mechanics,
+            provenance, and publisher device state. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={detailsOpen ? 'Hide details and other sources' : 'Show details and other sources'}
+          accessibilityState={{ expanded: detailsOpen }}
+          onPress={() => setDetailsOpen(open => !open)}
+          style={styles.detailsToggle}
+        >
+          <Text style={styles.detailsToggleLabel}>
+            {detailsOpen ? 'Hide details' : `Details and other sources${sourceCount > 1 ? ` (${sourceCount})` : ''}`}
+          </Text>
+          <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textMuted} size={16} />
+        </Pressable>
+
+        {!detailsOpen ? null : (
         <View style={styles.panels}>
           <ArchiveStatus item={item} />
           <ConflictNotice item={item} />
@@ -293,12 +351,26 @@ export function MediaEntityDetailScreen({
           {type === 'collection' ? <CollectionStructurePanel item={item} /> : null}
           {type !== 'collection' ? <CreatorContributionsPanel item={item} /> : null}
         </View>
+        )}
       </ScrollView>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
+  detailsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 44,
+    marginTop: 24,
+    paddingHorizontal: 4,
+  },
+  detailsToggleLabel: {
+    color: colors.textMuted,
+    fontFamily: fonts.headingMedium,
+    fontSize: 13,
+  },
   root: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -369,6 +441,50 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 14,
+  },
+  synopsis: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 10,
+  },
+  availability: {
+    color: colors.primary,
+    fontFamily: fonts.headingMedium,
+    fontSize: 13,
+    marginTop: 12,
+  },
+  availabilityMuted: {
+    color: colors.textMuted,
+  },
+  availabilityDetail: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 6,
+  },
+  playButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    paddingHorizontal: 22,
+    borderRadius: 999,
+    marginTop: 14,
+    backgroundColor: colors.primary,
+  },
+  playButtonDisabled: {
+    opacity: 0.45,
+  },
+  playButtonPressed: {
+    opacity: 0.8,
+  },
+  playLabel: {
+    color: colors.bg,
+    fontFamily: fonts.headingMedium,
+    fontSize: 15,
   },
   chip: {
     color: colors.primary,

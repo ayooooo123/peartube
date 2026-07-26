@@ -71,5 +71,6 @@ export default function CreatorPage({ id, mediaGraph, agent = null, contribution
         sources: Array.isArray(resolved.sources) ? resolved.sources : [],
       } as any)
     : undefined
-  return <MediaEntityDetailScreen type="creator" routeId={entityId} itemParam={itemParam} />
+  // A creator page is about attribution, so its detail panels lead.
+  return <MediaEntityDetailScreen type="creator" routeId={entityId} itemParam={itemParam} initialDetailsOpen />
 }

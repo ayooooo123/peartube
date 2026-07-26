@@ -9,15 +9,14 @@ const __dirname = path.dirname(__filename)
 const appRoot = path.resolve(__dirname, '..')
 const readApp = (relativePath) => fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 
-test('desktop Home uses the resolved media entity catalog', () => {
+test('desktop Home renders consumer rails from the resolved media entity catalog', () => {
   const source = readApp('app/(tabs)/index.web.tsx')
   for (const required of [
     'useMediaCatalog',
-    'MediaCatalogView',
+    'ConsumerHomeView',
     'state={catalog}',
     'diagnostic={catalog.diagnostic}',
     'catalog.refresh()',
-    'catalog.loadNext()',
     "item.entityKind === 'collection'",
     "item.entityKind === 'agent'",
     "'/collection/[id]'",
@@ -29,6 +28,7 @@ test('desktop Home uses the resolved media entity catalog', () => {
     assert.ok(source.includes(required), `desktop Home should contain ${required}`)
   }
   assert.doesNotMatch(source, /getContentCatalog|getRecommendations|setInterval|setTimeout/)
+  assert.doesNotMatch(source, /MediaCatalogView/, 'Home is a consumer surface, not the diagnostic catalog list')
 })
 
 test('desktop catalog cards expose unified source, archive, and trust signals', () => {

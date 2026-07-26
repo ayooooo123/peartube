@@ -108,9 +108,8 @@ test('mobile home preserves resolved entity type and payload in detail navigatio
 
   for (const required of [
     'useMediaCatalog',
-    'MediaCatalogView',
+    'ConsumerHomeView',
     'onRefresh={() => { void catalog.refresh() }}',
-    'onLoadNext={() => { void catalog.loadNext() }}',
     "item.entityKind === 'collection'",
     "item.entityKind === 'agent'",
     "'/collection/[id]'",

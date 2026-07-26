@@ -1070,10 +1070,6 @@ export function createScopedNetworkRuntime (options = {}) {
       if (scope.advertisedCatalogHead && scope.advertisedCatalogHead !== response.headDigest) {
         fail('catalog response does not match the signed advertised head', 'PUBLISHER_CATALOG_ADVERTISED_HEAD_MISMATCH')
       }
-      if (scope.advertisedAuthorizationStateDigest &&
-          scope.advertisedAuthorizationStateDigest !== response.authorizationStateDigest) {
-        fail('catalog response does not match the advertised authorization state', 'PUBLISHER_CATALOG_AUTHORIZATION_HINT_MISMATCH')
-      }
       const nextPages = tracked.catalogAcceptPages + 1
       const nextRecords = tracked.catalogAcceptRecords + response.entries.length
       const nextBytes = tracked.catalogAcceptBytes + frame.payload.byteLength
@@ -1238,10 +1234,6 @@ export function createScopedNetworkRuntime (options = {}) {
     if (scope.advertisedCatalogHead && localDigest !== scope.advertisedCatalogHead) {
       fail('terminal catalog page did not reconstruct the signed advertised head', 'PUBLISHER_CATALOG_ADVERTISED_HEAD_MISMATCH')
     }
-    if (scope.advertisedAuthorizationStateDigest &&
-        localAuthorizationDigest !== scope.advertisedAuthorizationStateDigest) {
-      fail('terminal catalog page reconstructed a different authorization state', 'PUBLISHER_CATALOG_AUTHORIZATION_MISMATCH')
-    }
     if (scope.advertisedLocatorSignerId) {
       const authorization = await catalog.getAuthorizationState()
       const writer = authorization?.writers?.find(candidate =>
@@ -1267,7 +1259,7 @@ export function createScopedNetworkRuntime (options = {}) {
       let cursor = scope.catalogResumeCursor ?? null
       if (cursor === null) {
         scope.catalogHeadDigest = scope.advertisedCatalogHead || null
-        scope.catalogAuthorizationStateDigest = scope.advertisedAuthorizationStateDigest || null
+        scope.catalogAuthorizationStateDigest = null
       }
       let previousPageDigest = null
       let pages = 0
@@ -2380,8 +2372,7 @@ export function createScopedNetworkRuntime (options = {}) {
       catalogResumeCursor: restored?.cursor || null,
       catalogPreviousPageDigest: null,
       catalogHeadDigest: restored?.headDigest || authoritativeLocator?.catalogHead || null,
-      catalogAuthorizationStateDigest: restored?.authorizationStateDigest ||
-        authoritativeLocator?.authorizationChainDigest || null,
+      catalogAuthorizationStateDigest: restored?.authorizationStateDigest || null,
       advertisedCatalogHead: authoritativeLocator?.catalogHead || null,
       advertisedAuthorizationStateDigest: authoritativeLocator?.authorizationChainDigest || null,
       advertisedLocatorSignerId: authoritativeLocator?.signerId || null,
@@ -2406,8 +2397,7 @@ export function createScopedNetworkRuntime (options = {}) {
       catalogResumeCursor: restored?.cursor || null,
       catalogPreviousPageDigest: null,
       catalogHeadDigest: restored?.headDigest || authoritativeLocator?.catalogHead || null,
-      catalogAuthorizationStateDigest: restored?.authorizationStateDigest ||
-        authoritativeLocator?.authorizationChainDigest || null,
+      catalogAuthorizationStateDigest: restored?.authorizationStateDigest || null,
       advertisedCatalogHead: authoritativeLocator?.catalogHead || null,
       advertisedAuthorizationStateDigest: authoritativeLocator?.authorizationChainDigest || null,
       advertisedLocatorSignerId: authoritativeLocator?.signerId || null,

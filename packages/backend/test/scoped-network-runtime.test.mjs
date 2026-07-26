@@ -983,6 +983,141 @@ test('an untrusted bootstrap locator can bind a publisher only after a scoped na
   pair.b.destroy()
 })
 
+test('locator authorization digests are hints while reconstructed announce authority is mandatory', async (t) => {
+  const root = crypto.keyPair(bytes(32, 159))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 160),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor }) => cursor === null
+    ? {
+        entries: [{
+          operationId: b4a.toString(genesis.recordId, 'hex'),
+          sourceWriterKey: root.publicKey,
+          frame: encodePublisherCatalogFrame(genesis),
+        }],
+        nextCursor: null,
+      }
+    : { entries: [], nextCursor: null }
+
+  const sourceSwarm = fakeSwarm()
+  const source = createScopedNetworkRuntime({
+    swarm: sourceSwarm,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    now: () => 20,
+  })
+  const consumerSwarms = [fakeSwarm(), fakeSwarm()]
+  const consumerRegistries = consumerSwarms.map(() => fakeRegistry(descriptor))
+  for (const registry of consumerRegistries) {
+    registry.binding.catalog.ingestAcceptedPage = async entries => ({
+      accepted: entries.length,
+      rejected: 0,
+    })
+  }
+  consumerRegistries[1].binding.catalog.getAuthorizationState = async () => ({
+    policyEpoch: 0,
+    policySequence: 0,
+    writers: [],
+  })
+  const consumerUpdates = [0, 0]
+  const consumers = consumerSwarms.map((swarm, index) => createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: consumerRegistries[index],
+    now: () => 20,
+    onCatalogUpdate: async () => { consumerUpdates[index]++ },
+  }))
+  await source.start()
+  await Promise.all(consumers.map(consumer => consumer.start()))
+  await source.publishLocalPublisherCatalog({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+  })
+
+  const head = await sourceRegistry.binding.catalog.getViewHead()
+  const actualAuthorizationDigest = b4a.toString(head.authorizationStateDigest, 'hex')
+  const commonLocator = {
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+    catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+    catalogHead: b4a.toString(head.digest, 'hex'),
+    catalogEpoch: descriptor.catalogEpoch,
+    rootSignerId: b4a.toString(root.publicKey, 'hex'),
+    issuedAt: 10,
+    expiresAt: 100,
+    keyPair: root,
+  }
+  const locators = [
+    createBootstrapLocator({
+      ...commonLocator,
+      authorizationChainDigest: b4a.toString(bytes(32, 161), 'hex'),
+    }),
+    createBootstrapLocator({
+      ...commonLocator,
+      authorizationChainDigest: actualAuthorizationDigest,
+    }),
+  ]
+  for (let index = 0; index < consumers.length; index++) {
+    const ingested = await consumers[index].inspectIncomingFrame({
+      purpose: 'bootstrap',
+      topic: deriveBootstrapTopic(),
+      peerId: `bootstrap-peer-${index}`,
+      frame: encodePeerFrame({
+        purpose: 'bootstrap',
+        type: 'locator',
+        requestId: index + 1,
+        payload: encodeApplicationEnvelope(locators[index].envelope),
+      }),
+    })
+    t.is(ingested.status, 'accepted')
+  }
+
+  const pairs = consumers.map((consumer, index) => {
+    const pair = connectionPair({ consumerPeerFill: 162 + index, sourcePeerFill: 164 })
+    sourceSwarm.connections.add(pair.a)
+    consumerSwarms[index].connections.add(pair.b)
+    sourceSwarm.emit('connection', pair.a, {
+      publicKey: pair.a.remotePublicKey,
+      topics: [],
+      client: false,
+    })
+    consumerSwarms[index].emit('connection', pair.b, {
+      publicKey: pair.b.remotePublicKey,
+      topics: [],
+      client: true,
+    })
+    return pair
+  })
+  await settle()
+  await Promise.all(consumers.map((consumer, index) => consumer.followBootstrapLocator({
+    publisherId: locators[index].body.publisherId,
+  })))
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (consumerUpdates[0] === 1 &&
+        consumers[1].getDiagnostics().recentErrors.some(error =>
+          error.code === 'PUBLISHER_CATALOG_LOCATOR_SIGNER_UNAUTHORIZED')) break
+    await settle()
+  }
+  t.alike(consumerUpdates, [1, 0],
+    'a stale authorization hint does not block verified catalog completion')
+  t.ok(consumers[1].getDiagnostics().recentErrors.some(error =>
+    error.code === 'PUBLISHER_CATALOG_LOCATOR_SIGNER_UNAUTHORIZED'),
+  'a matching hint cannot substitute for reconstructed announce authority')
+
+  await source.close()
+  await Promise.all(consumers.map(consumer => consumer.close()))
+  for (const pair of pairs) {
+    pair.a.destroy()
+    pair.b.destroy()
+  }
+})
+
 test('a local publisher automatically advertises a signed locator and consumers reject false completion', async (t) => {
   const root = crypto.keyPair(bytes(32, 156))
   const descriptor = createPublisherNamespaceDescriptor({

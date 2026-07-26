@@ -2,7 +2,7 @@ export type HostReadyData = {
   blobServerPort: number | null
   blobServerReady?: boolean
   blobServerError?: string | null
-  protocolVersion: 6
+  protocolVersion: 7
 }
 
 export type HostLifecycleEvent =
@@ -10,7 +10,7 @@ export type HostLifecycleEvent =
   | { type: 'host.error'; code: string; message: string; retryable: boolean; storedVersion?: number | null; expectedVersion?: number | null }
   | { type: 'transport.closed'; reason?: string }
 
-export const PROTOCOL_VERSION: 6
+export const PROTOCOL_VERSION: 7
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'
@@ -36,7 +36,7 @@ export function createHostError(
 
 export type ProtocolReadyData = {
   blobServerPort: number | null
-  protocolVersion: 6
+  protocolVersion: 7
 }
 
 export type ProtocolNetworkStatus = {
@@ -431,6 +431,8 @@ export type MediaAvailability = {
   independentPeerCount?: number | null
   /** Of those, the ones proving every required range. */
   completePeerCount?: number | null
+  /** Best round trip measured against a contributing peer; 0 means unmeasured. */
+  measuredLatencyMs?: number | null
   /** A local complete copy. Never counted as network availability. */
   offlinePlayable?: boolean | null
   /** A static retention pledge. Durability evidence only. */
@@ -449,7 +451,10 @@ export type MediaPublicationSource = {
   formatSupport?: number | null
   moderationPenalty?: number | null
   preferred?: boolean | null
+  /** Chosen by the one playback selector. */
   selected?: boolean | null
+  /** Passed every hard gate, so Play may fail over to it. */
+  eligible?: boolean | null
   /** Stable codes in deterministic order; at most 32 entries. */
   selectionReasonCodes?: string[] | null
   /** Stable codes in deterministic order; at most 32 entries. */
@@ -464,11 +469,14 @@ export type MediaPublicationSource = {
   claimConflictIds?: string[] | null
   /** Sorted and deduplicated; at most 64 entries. */
   provenanceClaimIds?: string[] | null
-  scoreMetadataConfidence?: number | null
-  scorePublisherTrust?: number | null
-  scoreAvailability?: number | null
+  /** Playback score components. Local playability facts only. */
+  scoreLocalCompleteness?: number | null
+  scoreStartupReachability?: number | null
+  scorePeerEvidence?: number | null
   scoreFormatSupport?: number | null
-  scoreModerationPenalty?: number | null
+  /** Startup-latency penalty, reported as a positive magnitude. */
+  scoreStartupLatency?: number | null
+  scoreUserOverride?: number | null
   archiveState?: string | null
   cacheState?: string | null
   availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null
@@ -605,6 +613,28 @@ export type PublicationSourcesResponse = {
   nextCursor?: string | null
 }
 
+export type MediaPlaybackAttempt = {
+  publicationId: string
+  /** `null` on the attempt that succeeded. */
+  errorCode?: string | null
+}
+
+/**
+ * Result of one Play action. The backend already selected the source and, if
+ * needed, failed over between equivalent sources; the client renders the
+ * outcome rather than choosing.
+ */
+export type PrepareMediaPlaybackResponse = {
+  success: boolean
+  errorCode?: string | null
+  error?: string | null
+  publicationId?: string | null
+  renditionId?: string | null
+  coreKey?: string | null
+  attempts?: MediaPlaybackAttempt[] | null
+  sources?: MediaPublicationSource[] | null
+}
+
 export type SystemProtocolNamespace = ProtocolNamespace & {
   getStatus(request?: Record<string, never>): Promise<any>
   getSwarmStatus(request?: Record<string, never>): Promise<ProtocolNetworkStatus>
@@ -657,6 +687,11 @@ export type MediaGraphProtocolNamespace = ProtocolNamespace & {
     publicationId: string
     preferred: boolean
   }): Promise<SetSourcePreferenceResponse>
+  prepareMediaPlayback(request: {
+    entityId: string
+    /** Optional override from Other Sources; honoured only while eligible. */
+    publicationId?: string
+  }): Promise<PrepareMediaPlaybackResponse>
 }
 
 export type VideoProtocolNamespace = ProtocolNamespace & {

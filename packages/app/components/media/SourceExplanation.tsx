@@ -6,6 +6,7 @@ export type PublicationSource = {
   sourceProvider?: string | null
   publisherId?: string | null
   selected?: boolean | null
+  eligible?: boolean | null
   selectionReasonCodes?: string[] | null
   rejectionReasonCodes?: string[] | null
   introductionPublisherIds?: string[] | null
@@ -34,25 +35,35 @@ export type SourceExplanationModel = {
   completeness: string
 }
 
+// Why the one automatic selection landed here. Play never asks the viewer to
+// choose; these lines only explain a decision that already happened.
 const SELECTED_REASONS: Readonly<Record<string, string>> = Object.freeze({
-  SELECTED_BY_LOCAL_PREFERENCE: 'Selected because it matches your local source preference.',
-  SELECTED_BY_HIGHEST_SCORE: 'Selected because it has the strongest local quality, trust, availability, and format score.',
-  SELECTED_BY_LOCAL_TIE_BREAK: 'Selected by a deterministic local tie-break between equally ranked sources.',
-  SELECTED_BY_LOCAL_ORDER: 'Selected by the stable source order on this device.',
+  SELECTED_BY_LOCAL_PREFERENCE: 'Playing this source because you picked it on this device.',
+  SELECTED_BY_HIGHEST_SCORE: 'Playing this source because it has the strongest local playability score right now.',
+  SELECTED_BY_LOCAL_TIE_BREAK: 'Playing this source after a repeatable local tie-break between equally ranked sources.',
+  SELECTED_BY_LOCAL_ORDER: 'Playing this source because it comes first in the stable source order on this device.',
 })
 
+// Two very different answers share this map. A hard gate means the source
+// cannot play on this device at all, so Play will never fail over to it. A
+// ranking reason means the source is perfectly playable and simply lost.
 const ALTERNATE_REASONS: Readonly<Record<string, string>> = Object.freeze({
-  BLOCKED_BY_LOCAL_POLICY: 'Blocked by your local policy for playback sources.',
-  UNAUTHORIZED_PUBLICATION: 'The publication is not backed by an authorized signed manifest.',
-  UNCONFIRMED_AVAILABILITY: 'No current playable copy has been confirmed.',
-  BLOCKED_BY_MODERATION: 'Blocked by moderation rules selected on this device.',
-  STALE_AVAILABILITY: 'Its availability information is out of date.',
-  INCOMPLETE_PUBLICATION: 'Its publication record is incomplete.',
-  NO_AVAILABLE_COPY: 'No available copy is currently known.',
-  DEPRIORITIZED_BY_LOCAL_PREFERENCE: 'A source matching your local preference was chosen instead.',
-  LOWER_LOCAL_SCORE: 'It has a lower local quality, trust, availability, or format score.',
-  LOCAL_SCORE_TIE_BREAK: 'An equally ranked source won the deterministic local tie-break.',
-  DEPRIORITIZED_BY_LOCAL_ORDER: 'Another source appears earlier in the stable local order.',
+  BLOCKED_BY_MODERATION: 'Cannot play here: the moderation rules you use on this device block this source.',
+  BLOCKED_BY_LOCAL_POLICY: 'Cannot play here: your local policy for playback sources blocks this source.',
+  UNAUTHORIZED_PUBLICATION: 'Cannot play here: this source is not backed by an authorized signed manifest.',
+  UNSUPPORTED_DRM: 'Cannot play here: this device cannot unlock the protection applied to this source.',
+  UNSUPPORTED_CODEC: 'Cannot play here: this device cannot decode the video or audio format of this source.',
+  UNSUPPORTED_CONTAINER: 'Cannot play here: this device cannot read the file container this source uses.',
+  STALE_MANIFEST: 'Cannot play here: the stored manifest for this source is stale and has to be refreshed first.',
+  INCOMPLETE_PUBLICATION: 'Cannot play here: this publication record is missing parts that playback needs.',
+  INCOMPLETE_COLLECTION_BINDING: 'Cannot play here: this source is not fully bound to the collection entry you opened.',
+  NO_AVAILABLE_COPY: 'Cannot play right now: no peer is sharing a copy of this source at the moment. That can change when peers return.',
+  STALE_AVAILABILITY: 'Cannot play right now: what this device knows about peers sharing this source is out of date. A fresh check may find peers again.',
+  UNCONFIRMED_AVAILABILITY: 'Cannot play right now: no peer has been checked for this source yet on this device.',
+  DEPRIORITIZED_BY_LOCAL_PREFERENCE: 'Playable, but the source you picked on this device was used instead.',
+  LOWER_LOCAL_SCORE: 'Playable, but another source scored higher for playback on this device.',
+  LOCAL_SCORE_TIE_BREAK: 'Playable, but an equally ranked source won the repeatable local tie-break.',
+  DEPRIORITIZED_BY_LOCAL_ORDER: 'Playable, but another source comes earlier in the stable local order.',
 })
 
 function boundedCount(value: unknown, maximum = 64): number {
@@ -63,14 +74,19 @@ function countMessage(count: number, singular: string, plural: string): string {
   return count === 1 ? `1 ${singular}.` : `${count} ${plural}.`
 }
 
+// A source the backend ruled out before ranking never becomes a failover
+// target, so the fallback copy has to say "cannot play" rather than "alternate"
+// even when no recognised code came back with it.
+function fallbackReason(source: PublicationSource, selected: boolean): string {
+  if (selected) return 'Selected using source rules stored on this device.'
+  if (source.eligible === false) return 'Cannot play here: this source was ruled out on this device before ranking.'
+  return 'Available as an alternate under source rules stored on this device.'
+}
+
 function explainReasons(source: PublicationSource, selected: boolean): string {
   const codes = selected ? source.selectionReasonCodes : source.rejectionReasonCodes
   const messages = selected ? SELECTED_REASONS : ALTERNATE_REASONS
-  if (!Array.isArray(codes) || codes.length === 0) {
-    return selected
-      ? 'Selected using source rules stored on this device.'
-      : 'Available as an alternate under source rules stored on this device.'
-  }
+  if (!Array.isArray(codes) || codes.length === 0) return fallbackReason(source, selected)
 
   const seen = new Set<string>()
   const explanations: string[] = []
@@ -85,9 +101,7 @@ function explainReasons(source: PublicationSource, selected: boolean): string {
     }
   }
   if (explanations.length > 0) return explanations.join(' ')
-  return selected
-    ? 'Selected using source rules stored on this device.'
-    : 'Available as an alternate under source rules stored on this device.'
+  return fallbackReason(source, selected)
 }
 
 function explainArchive(state: string | null | undefined): string {

@@ -82,8 +82,9 @@ test('publication sources, storage stats, previews, and archive status are struc
     'selected', 'selectionReasonCodes', 'rejectionReasonCodes', 'introductionPublisherIds',
     'introductionIndexIds', 'moderationFeedIds', 'claimConflictIds', 'provenanceClaimIds',
     'score', 'availabilityScore', 'formatSupport', 'moderationPenalty',
-    'scoreMetadataConfidence', 'scorePublisherTrust', 'scoreAvailability',
-    'scoreFormatSupport', 'scoreModerationPenalty', 'archiveState', 'cacheState',
+    'scoreLocalCompleteness', 'scoreStartupReachability', 'scorePeerEvidence',
+    'scoreFormatSupport', 'scoreStartupLatency', 'scoreUserOverride',
+    'eligible', 'archiveState', 'cacheState',
     'availabilityState', 'stale', 'incomplete'
   ]) t.ok(messageFields(schema, 'media-publication-source').has(field), `publication source has ${field}`)
 

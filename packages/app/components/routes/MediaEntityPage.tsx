@@ -2,7 +2,7 @@ import React from 'react'
 import { useLocalSearchParams } from 'expo-router'
 import { isPublicationSourceSelectable, type PublicationSource } from '../media/SourceSelector'
 import { MediaEntityDetailScreen, encodeMediaEntityRouteParam } from '../media/MediaEntityDetailScreen'
-import { loadMediaEntity } from './media-entity-loaders.js'
+import { loadMediaEntity, startMediaPlayback } from './media-entity-loaders.js'
 import { firstRouteParam, useRouteEntityLoader } from './useRouteEntityLoader'
 import type {
   PublisherCapabilityAction,
@@ -76,11 +76,15 @@ type Props = {
   mediaGraph?: {
     getMediaEntity?: (request: Record<string, unknown>) => Promise<any>
     getPublicationSources?: (request: Record<string, unknown>) => Promise<any>
+    prepareMediaPlayback?: (request: Record<string, unknown>) => Promise<any>
   } | null
   entity?: MediaEntityInput | null
   publisherDeviceStatus?: PublisherDeviceStatusInput | null
   publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
   onSelectSource?: (source: { entityId: string, publicationId: string, renditionId: string }) => void
+  /** Receives the source Play actually started, after any backend failover. */
+  onPlaybackPrepared?: (playback: { entityId: string, publicationId: string | null, renditionId: string | null }) => void
+  onPlaybackFailed?: (failure: { entityId: string, errorCode: string, message: string }) => void
 }
 
 export default function MediaEntityPage({
@@ -90,6 +94,8 @@ export default function MediaEntityPage({
   publisherDeviceStatus = null,
   publisherActionHandlers,
   onSelectSource,
+  onPlaybackPrepared,
+  onPlaybackFailed,
 }: Props) {
   const params = useLocalSearchParams<{ id?: string | string[] }>()
   const entityId = id || firstRouteParam(params.id)
@@ -126,6 +132,32 @@ export default function MediaEntityPage({
         publisherDeviceStatus: securityStatus,
       } as any)
     : undefined
+  // Choosing a source in Other Sources is a Play with an explicit override, not
+  // a local re-rank: it goes back through the backend selector, which still
+  // refuses the choice if it fails a hard gate and still fails over between
+  // equivalent sources.
+  const play = React.useCallback(async (publicationId: string | null) => {
+    if (!mediaGraph?.prepareMediaPlayback || !entityId) return
+    try {
+      const prepared = await startMediaPlayback({ rpc: mediaGraph, entityId, publicationId })
+      onPlaybackPrepared?.({
+        entityId,
+        publicationId: prepared.publicationId,
+        renditionId: prepared.renditionId,
+      })
+    } catch (error: unknown) {
+      const failure = error instanceof Error ? error : null
+      const code = failure && 'code' in failure && typeof failure.code === 'string'
+        ? failure.code
+        : 'PLAYBACK_PREPARATION_FAILED'
+      onPlaybackFailed?.({
+        entityId,
+        errorCode: code,
+        message: failure?.message || 'Playback could not start',
+      })
+    }
+  }, [mediaGraph, entityId, onPlaybackPrepared, onPlaybackFailed])
+
   return (
     <MediaEntityDetailScreen
       type="media"
@@ -133,7 +165,10 @@ export default function MediaEntityPage({
       itemParam={itemParam}
       publisherDeviceStatus={securityStatus}
       publisherActionHandlers={publisherActionHandlers}
-      onSelectSource={onSelectSource}
+      onSelectSource={(source) => {
+        onSelectSource?.(source)
+        void play(source.publicationId || null)
+      }}
     />
   )
 }

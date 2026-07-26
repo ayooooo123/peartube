@@ -35,6 +35,8 @@ import type {
   MediaCollectionItemsResponse,
   MediaEntityResponse,
   MediaPageRequest,
+  MediaPlaybackAttempt,
+  PrepareMediaPlaybackResponse,
   PublicationSourcesResponse,
   SetSourcePreferenceResponse,
 } from '@peartube/host'
@@ -74,6 +76,8 @@ export type {
   MediaCollectionItemsResponse,
   MediaEntityResponse,
   MediaPageRequest,
+  MediaPlaybackAttempt,
+  PrepareMediaPlaybackResponse,
   PublicationSourcesResponse,
   SetSourcePreferenceResponse,
 }
@@ -308,6 +312,10 @@ type MediaGraphMethods = {
     publicationId: string
     preferred: boolean
   }): Promise<SetSourcePreferenceResponse>
+  prepareMediaPlayback(request: {
+    entityId: string
+    publicationId?: string
+  }): Promise<PrepareMediaPlaybackResponse>
 }
 
 type MediaGraphProtocolClient = {
@@ -781,6 +789,18 @@ export function createMediaGraphRpc(ensureClient: () => MediaGraphProtocolClient
       await client.ready()
       const handler = client.mediaGraph.setSourcePreference
       if (!handler) throw new Error('Host protocol client does not expose mediaGraph.setSourcePreference')
+      return handler(request)
+    },
+
+    /**
+     * One Play action. The backend selects the source and fails over between
+     * equivalent sources; the app renders the outcome, it never picks.
+     */
+    async prepareMediaPlayback(request: { entityId: string; publicationId?: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.prepareMediaPlayback
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.prepareMediaPlayback')
       return handler(request)
     },
   }

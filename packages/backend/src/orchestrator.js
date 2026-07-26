@@ -499,6 +499,21 @@ export async function createBackendContext(config) {
   // read passively by the media graph API. An empty store honestly reports
   // "awaiting replication" rather than inventing reachability.
   ctx.availabilityEvidenceStore = createAvailabilityEvidenceStore()
+  // Opens the immutable rendition core a signed manifest names. Playback
+  // preparation authorizes the key against the manifest before reading, so this
+  // never widens what a selected source is allowed to touch. A core that cannot
+  // become ready is closed and reported as a failure, so preparation can fail
+  // over instead of handing the player a dead session.
+  ctx.openAssetCore = async coreKey => {
+    const core = ctx.store.get({ key: b4a.from(String(coreKey), 'hex') })
+    try {
+      await core.ready()
+    } catch (error) {
+      try { await core.close() } catch {}
+      throw error
+    }
+    return core
+  }
   lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
   // These managers are deliberately shared by the scoped transport and local
   // consumer projection. Signed page ingestion happens once; catalog reads only

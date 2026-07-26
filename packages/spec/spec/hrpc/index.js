@@ -279,24 +279,26 @@ const methods = new Map([
   [134, '@peartube/get-claim-provenance'],
   ['@peartube/set-source-preference', 135],
   [135, '@peartube/set-source-preference'],
-  ['@peartube/desktop-bootstrap', 136],
-  [136, '@peartube/desktop-bootstrap'],
-  ['@peartube/desktop-shutdown', 137],
-  [137, '@peartube/desktop-shutdown'],
-  ['@peartube/desktop-refresh-browse', 138],
-  [138, '@peartube/desktop-refresh-browse'],
-  ['@peartube/ffmpeg-decode-available', 139],
-  [139, '@peartube/ffmpeg-decode-available'],
-  ['@peartube/update-channel-avatar', 140],
-  [140, '@peartube/update-channel-avatar'],
-  ['@peartube/transcode-start', 141],
-  [141, '@peartube/transcode-start'],
-  ['@peartube/transcode-stop', 142],
-  [142, '@peartube/transcode-stop'],
-  ['@peartube/transcode-status', 143],
-  [143, '@peartube/transcode-status'],
-  ['@peartube/event-transcode-progress', 144],
-  [144, '@peartube/event-transcode-progress']
+  ['@peartube/prepare-media-playback', 136],
+  [136, '@peartube/prepare-media-playback'],
+  ['@peartube/desktop-bootstrap', 137],
+  [137, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 138],
+  [138, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 139],
+  [139, '@peartube/desktop-refresh-browse'],
+  ['@peartube/ffmpeg-decode-available', 140],
+  [140, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 141],
+  [141, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 142],
+  [142, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 143],
+  [143, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 144],
+  [144, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 145],
+  [145, '@peartube/event-transcode-progress']
 ])
 
 class HRPC {
@@ -440,6 +442,7 @@ class HRPC {
       ['@peartube/get-publication-sources', getEncoding('@peartube/get-publication-sources-request')],
       ['@peartube/get-claim-provenance', getEncoding('@peartube/get-claim-provenance-request')],
       ['@peartube/set-source-preference', getEncoding('@peartube/set-source-preference-request')],
+      ['@peartube/prepare-media-playback', getEncoding('@peartube/prepare-media-playback-request')],
       ['@peartube/desktop-bootstrap', getEncoding('@peartube/desktop-bootstrap-request')],
       ['@peartube/desktop-shutdown', getEncoding('@peartube/desktop-shutdown-request')],
       ['@peartube/desktop-refresh-browse', getEncoding('@peartube/desktop-refresh-browse-request')],
@@ -576,6 +579,7 @@ class HRPC {
       ['@peartube/get-publication-sources', getEncoding('@peartube/get-publication-sources-response')],
       ['@peartube/get-claim-provenance', getEncoding('@peartube/get-claim-provenance-response')],
       ['@peartube/set-source-preference', getEncoding('@peartube/set-source-preference-response')],
+      ['@peartube/prepare-media-playback', getEncoding('@peartube/prepare-media-playback-response')],
       ['@peartube/desktop-bootstrap', getEncoding('@peartube/desktop-bootstrap-response')],
       ['@peartube/desktop-shutdown', getEncoding('@peartube/desktop-shutdown-response')],
       ['@peartube/desktop-refresh-browse', getEncoding('@peartube/desktop-refresh-browse-response')],
@@ -1226,6 +1230,10 @@ class HRPC {
     return this._call('@peartube/set-source-preference', args)
   }
 
+  async prepareMediaPlayback(args) {
+    return this._call('@peartube/prepare-media-playback', args)
+  }
+
   async desktopBootstrap(args) {
     return this._call('@peartube/desktop-bootstrap', args)
   }
@@ -1804,6 +1812,10 @@ class HRPC {
 
   onSetSourcePreference(responseFn) {
     this._handlers['@peartube/set-source-preference'] = responseFn
+  }
+
+  onPrepareMediaPlayback(responseFn) {
+    this._handlers['@peartube/prepare-media-playback'] = responseFn
   }
 
   onDesktopBootstrap(responseFn) {

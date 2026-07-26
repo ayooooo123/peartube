@@ -1,7 +1,25 @@
 import { AVAILABILITY_STATES, assessAvailability, isPlayableAvailability } from '../assets/availability.js'
+import { createAssetSession } from '../assets/asset-session.js'
 import { resolveMediaEntity } from '../media-graph/resolver.js'
-import { selectPublicationSources, sourceAvailabilityScore } from '../media-graph/source-selector.js'
+import { selectPlaybackSource, sourceAvailabilityScore } from '../media-graph/source-selector.js'
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
+import { preparePlaybackSource } from '../playback/source-preparation.js'
+
+/** One user-facing message per preparation failure. */
+const PREPARATION_MESSAGES = Object.freeze({
+  NO_COMPATIBLE_SOURCE: 'No source on this device can play this title right now.',
+  AVAILABILITY_BOUNDARY: 'Unavailable - no peer currently serves the required ranges.',
+  PREPARATION_DEADLINE: 'Playback did not start in time. Try again.',
+  PREPARATION_CANCELLED: 'Playback preparation was cancelled.',
+  ATTEMPT_LIMIT: 'Every currently reachable source failed to start.',
+  PEER_TIMEOUT: 'The peer serving this title stopped responding.',
+  PEER_DISCONNECT: 'The peer serving this title disconnected.',
+  RANGE_MISMATCH: 'This source did not serve the ranges it advertised.',
+  SESSION_LIMIT: 'Too many playback sessions are open on this device.',
+  DRM_UNSUPPORTED: 'This device cannot play the protected version of this title.',
+  LICENSE_DENIED: 'The provider did not grant a playback license.',
+  LICENSE_EXPIRED: 'The playback license expired. Try again.',
+})
 
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 100
@@ -150,7 +168,7 @@ const LEGACY_AVAILABILITY_STATE = Object.freeze({
   [AVAILABILITY_STATES.awaitingReplication]: 'unknown',
 })
 
-function manifestSource(manifest, row, preferred, trust = {}, availability = null) {
+function manifestSource(manifest, row, preferred, trust = {}, availability = null, entityId = null) {
   const publisherId = manifest?.body?.publisherId || row.issuer
   const rendition = manifest?.body?.renditions?.find(candidate => (
     candidate && candidate.blocked !== true && candidate.superseded !== true &&
@@ -162,6 +180,20 @@ function manifestSource(manifest, row, preferred, trust = {}, availability = nul
     publisherId,
     manifestId: manifest?.body?.manifestId || null,
     renditionId: rendition?.renditionId || null,
+    // Failover identity. `entityId` anchors the work being played, the edition
+    // and collection position distinguish cuts and episodes, and `protected`
+    // separates DRM titles from public lookalikes. Missing anchors fail closed
+    // in `sourceEquivalenceKey`, which is why they are read, not defaulted.
+    entityId: entityId || row.body?.subjectRefs?.[0]?.entityId || null,
+    editionId: row.body.payload?.editionRef?.entityId || row.body.payload?.editionId || null,
+    collectionMemberId: row.body.payload?.memberRef?.entityId || null,
+    protected: rendition?.encryption != null,
+    container: rendition?.format || null,
+    codecs: rendition?.codecs || null,
+    drmSystem: rendition?.encryption?.drmSystem || null,
+    manifestStale: manifest?.body?.superseded === true,
+    // Measured against a contributing peer, never claimed by the publisher.
+    expectedStartupLatencyMs: availability?.measuredLatencyMs || 0,
     publicationAuthorized: Boolean(
       manifest &&
       rendition &&
@@ -199,11 +231,13 @@ function schemaUint(value) {
 function sourceDiagnosticsResponse(item) {
   return {
     ...item,
-    scoreMetadataConfidence: schemaUint(item.scoreMetadataConfidence),
-    scorePublisherTrust: schemaUint(item.scorePublisherTrust),
-    scoreAvailability: schemaUint(item.scoreAvailability),
+    scoreLocalCompleteness: schemaUint(item.scoreLocalCompleteness),
+    scoreStartupReachability: schemaUint(item.scoreStartupReachability),
+    scorePeerEvidence: schemaUint(item.scorePeerEvidence),
     scoreFormatSupport: schemaUint(item.scoreFormatSupport),
-    scoreModerationPenalty: schemaUint(-Number(item.scoreModerationPenalty || 0))
+    // Latency is a penalty in the score and a magnitude on the wire.
+    scoreStartupLatency: schemaUint(-Number(item.scoreStartupLatency || 0)),
+    scoreUserOverride: schemaUint(item.scoreUserOverride),
   }
 }
 
@@ -218,6 +252,7 @@ function availabilityResponse(availability) {
     reachableRangeCount: schemaUint(availability.reachableRangeCount),
     independentPeerCount: schemaUint(availability.independentPeerCount),
     completePeerCount: schemaUint(availability.completePeerCount),
+    measuredLatencyMs: schemaUint(availability.measuredLatencyMs),
     offlinePlayable: availability.offlinePlayable === true,
     archivePledged: availability.archivePledged === true,
     reasonCodes: availability.reasonCodes || [],
@@ -258,7 +293,47 @@ export function createMediaGraphApi(options = {}) {
   const trust = options.trust || options.ctx?.mediaGraphTrust || {}
   const consumerCatalogProjection = options.consumerCatalogProjection || options.ctx?.consumerCatalogProjection || null
   const availabilityEvidenceStore = options.availabilityEvidenceStore || options.ctx?.availabilityEvidenceStore || null
+  // What this device can actually decrypt and decode. An absent list leaves
+  // that dimension unconstrained rather than silently rejecting every source.
+  const deviceCapabilities = options.capabilities || options.ctx?.deviceCapabilities || {}
   const clock = typeof options.now === 'function' ? options.now : () => Date.now()
+
+  /**
+   * Open one authorized scoped asset session for a selected source. It proves
+   * the rendition core the manifest signed is the core we are about to read;
+   * a mismatch is a per-source failure, so preparation may try the next
+   * equivalent source instead of failing the whole Play action.
+   */
+  const openPlaybackSession = typeof options.openPlaybackSession === 'function'
+    ? options.openPlaybackSession
+    : async ({ source }) => {
+      const manifest = assetManifestStore?.getManifest?.(source.publicationId) || null
+      const openCore = options.openCore || options.ctx?.openAssetCore || null
+      if (!manifest || typeof openCore !== 'function') {
+        return { success: false, errorCode: 'NO_COMPATIBLE_SOURCE' }
+      }
+      const requirement = assetManifestStore?.getRenditionRequirement?.(source.publicationId, source.renditionId)
+      const session = createAssetSession({ manifest, openCore })
+      let authorized = false
+      try {
+        authorized = await session.authorizeCore({
+          renditionId: source.renditionId,
+          coreKey: requirement?.coreKey,
+        })
+      } catch {
+        session.close()
+        return { success: false, errorCode: 'PEER_TIMEOUT' }
+      }
+      if (!authorized) {
+        session.close()
+        return { success: false, errorCode: 'RANGE_MISMATCH' }
+      }
+      return {
+        success: true,
+        coreKey: requirement?.coreKey || null,
+        close: () => session.close(),
+      }
+    }
 
   /**
    * One assessment per rendition per operation. Cards, entity details, Other
@@ -324,13 +399,19 @@ export function createMediaGraphApi(options = {}) {
         await isPreferred(entityId, publicationId),
         trust,
         scope.assess(publicationId),
+        entityId,
       ))
     }
-    return selectPublicationSources(sources).sort((a, b) => {
-      if (a.preferred !== b.preferred) return a.preferred ? -1 : 1
-      if (b.score !== a.score) return b.score - a.score
-      return String(a.publicationId).localeCompare(String(b.publicationId))
+    // One decision, one order: the selector ranks what can actually play and
+    // pushes everything it rejected to the tail. Nothing downstream re-ranks.
+    const selection = selectPlaybackSource(sources, {
+      capabilities: deviceCapabilities,
+      now: scope.observedAt,
     })
+    return {
+      selection,
+      sources: selection.candidates.map(candidate => ({ ...candidate.source, score: candidate.score })),
+    }
   }
 
   function isPublicationVisible(publicationId) {
@@ -384,25 +465,25 @@ export function createMediaGraphApi(options = {}) {
     }
   }
 
-  function decorateSources(sources, scope) {
-    const diagnostics = new Map(projectSourceSelectionDiagnostics(sources, {
-      selectedPublicationId: sources[0]?.publicationId,
-      requireAuthorization: true,
-      now: scope.observedAt,
-    }).map(item => [item.publicationId, sourceDiagnosticsResponse(item)]))
-    return sources.map(source => ({
+  function decorateSources(built, selection = built.selection) {
+    const diagnostics = new Map(
+      projectSourceSelectionDiagnostics(built.sources, { selection })
+        .map(item => [item.publicationId, sourceDiagnosticsResponse(item)])
+    )
+    return built.sources.map(source => ({
       ...sourceResponse(source),
       ...(diagnostics.get(source.publicationId) || {}),
     }))
   }
 
   /**
-   * What Play would report right now: the availability of the source Play would
-   * choose, or a metadata-only assessment when the entity has no publication.
+   * What Play would report right now: the availability of the source the
+   * selector chose, or a metadata-only assessment when nothing can play.
    */
-  function entityAvailability(sources, scope) {
-    const best = sources.find(source => isPlayableAvailability(source.availability)) || sources[0]
-    return best?.availability || scope.assess('', null)
+  function entityAvailability(built, scope) {
+    return built.selection.selected?.availability ||
+      built.sources[0]?.availability ||
+      scope.assess('', null)
   }
 
   function resolveOrMissing(entityId, consumerVisible = false) {
@@ -425,7 +506,7 @@ export function createMediaGraphApi(options = {}) {
     const resolved = resolveOrMissing(entityId, !agent)
     if (!resolved) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
     const scope = createAvailabilityScope()
-    const sources = await buildSources(entityId, scope)
+    const built = await buildSources(entityId, scope)
     const entity = {
       entityId,
       entityKind: agent ? 'agent' : entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
@@ -435,8 +516,8 @@ export function createMediaGraphApi(options = {}) {
       displayName: resolved.metadata.displayName || resolved.metadata.title || null,
       claimCount: resolved.claims.length,
       conflictCount: resolved.conflicts.length,
-      availability: availabilityResponse(entityAvailability(sources, scope)),
-      sources: decorateSources(sources, scope),
+      availability: availabilityResponse(entityAvailability(built, scope)),
+      sources: decorateSources(built),
       renditions: [],
     }
     return {
@@ -471,7 +552,11 @@ export function createMediaGraphApi(options = {}) {
                 subtitle: item.creator || null,
                 claimCount: item.publications?.length || 0,
                 conflictCount: 0,
-                availability: availabilityResponse(entityAvailability(sources, scope)),
+                availability: availabilityResponse(
+                  sources.find(source => isPlayableAvailability(source.availability))?.availability ||
+                  sources[0]?.availability ||
+                  scope.assess('', null)
+                ),
                 sources: sources.map(source => ({
                   publicationId: source.publicationId,
                   publisherId: source.publisherId,
@@ -502,9 +587,9 @@ export function createMediaGraphApi(options = {}) {
       for (const entityId of [...entityIds].sort()) {
         const resolved = resolveOrMissing(entityId)
         if (!resolved) continue
-        const sources = await buildSources(entityId, scope)
+        const built = await buildSources(entityId, scope)
         const renditions = new Map()
-        for (const source of sources) {
+        for (const source of built.sources) {
           const manifest = assetManifestStore?.getManifest?.(source.publicationId)
           for (const rendition of manifest?.body?.renditions || []) {
             if (!rendition.blocked && !rendition.superseded) renditions.set(rendition.renditionId, renditionResponse(rendition))
@@ -518,8 +603,8 @@ export function createMediaGraphApi(options = {}) {
           subtitle: resolved.metadata.subtitle || null,
           claimCount: resolved.claims.length,
           conflictCount: resolved.conflicts.length,
-          availability: availabilityResponse(entityAvailability(sources, scope)),
-          sources: sources.map(sourceResponse),
+          availability: availabilityResponse(entityAvailability(built, scope)),
+          sources: built.sources.map(sourceResponse),
           renditions: [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId)),
         })
       }
@@ -604,11 +689,84 @@ export function createMediaGraphApi(options = {}) {
         }
       }
       const scope = createAvailabilityScope()
-      const sources = await buildSources(request.entityId, scope)
-      const decorated = decorateSources(sources, scope)
+      const decorated = decorateSources(await buildSources(request.entityId, scope))
       const result = pageRows(decorated, request, source => source.publicationId)
       if (result.error) return result.error
       return okPage(result.page, result.nextCursor)
+    },
+
+    /**
+     * One Play action. The backend selects a source, opens it, and fails over
+     * between equivalent sources inside one deadline; the client never picks.
+     */
+    async prepareMediaPlayback(request = {}) {
+      const missingStore = requireGraphStore()
+      if (missingStore) return { ...missingStore, attempts: [], sources: [] }
+      if (consumerCatalogProjection) {
+        await options.ctx?.mediaCatalogProjection?.update?.()
+        await consumerCatalogProjection.update?.()
+        if (!consumerCatalogProjection.isVisible?.(request.entityId)) {
+          return error(
+            'MEDIA_ENTITY_NOT_VISIBLE',
+            'Media entity is not visible under this device policy',
+            { attempts: [], sources: [] },
+          )
+        }
+      }
+      const scope = createAvailabilityScope()
+      const built = await buildSources(request.entityId, scope)
+      const prepared = await preparePlaybackSource({
+        sources: built.sources,
+        capabilities: deviceCapabilities,
+        selectedPublicationId: request.publicationId,
+        openSession: openPlaybackSession,
+        deadlineMs: options.preparationDeadlineMs,
+        maxAttempts: options.preparationMaxAttempts,
+        // Availability stays pinned to `scope.observedAt` for consistency, but
+        // the preparation deadline must advance with real time or every retry
+        // would silently get the full budget again.
+        now: clock,
+      })
+      // Other Sources must agree with what Play actually did. Re-select around
+      // the source that started, and fold each attempt's failure into the
+      // candidate it belongs to so an abandoned winner explains itself.
+      const attemptFailures = new Map(
+        prepared.attempts.filter(attempt => attempt.errorCode).map(attempt => [attempt.publicationId, attempt.errorCode])
+      )
+      const outcome = prepared.success
+        ? selectPlaybackSource(built.sources, {
+          capabilities: deviceCapabilities,
+          selectedPublicationId: prepared.publicationId,
+          now: scope.observedAt,
+        })
+        : { candidates: prepared.candidates.map(candidate => ({ ...candidate, selected: false, selectionReasonCodes: [] })) }
+      const sources = decorateSources(built, {
+        candidates: outcome.candidates.map(candidate => {
+          const failure = attemptFailures.get(candidate.publicationId)
+          if (!failure || candidate.selected) return candidate
+          return {
+            ...candidate,
+            rejectionReasonCodes: [...new Set([failure, ...candidate.rejectionReasonCodes])],
+          }
+        }),
+      })
+      if (!prepared.success) {
+        return {
+          success: false,
+          errorCode: prepared.errorCode,
+          error: PREPARATION_MESSAGES[prepared.errorCode] || 'Playback preparation failed',
+          attempts: prepared.attempts,
+          sources,
+        }
+      }
+      return {
+        success: true,
+        publicationId: prepared.publicationId,
+        renditionId: prepared.renditionId,
+        coreKey: prepared.session.coreKey || null,
+        attempts: prepared.attempts,
+        sources,
+      }
     },
 
     async getClaimProvenance(request = {}) {

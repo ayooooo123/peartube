@@ -231,6 +231,7 @@ export interface MediaAvailability {
   reachableRangeCount?: number | null;
   independentPeerCount?: number | null;
   completePeerCount?: number | null;
+  measuredLatencyMs?: number | null;
   offlinePlayable?: boolean | null;
   archivePledged?: boolean | null;
   reasonCodes?: string[] | null;
@@ -247,6 +248,7 @@ export interface MediaPublicationSource {
   moderationPenalty?: number | null;
   preferred?: boolean | null;
   selected?: boolean | null;
+  eligible?: boolean | null;
   selectionReasonCodes?: string[] | null;
   rejectionReasonCodes?: string[] | null;
   introductionPublisherIds?: string[] | null;
@@ -254,11 +256,12 @@ export interface MediaPublicationSource {
   moderationFeedIds?: string[] | null;
   claimConflictIds?: string[] | null;
   provenanceClaimIds?: string[] | null;
-  scoreMetadataConfidence?: number | null;
-  scorePublisherTrust?: number | null;
-  scoreAvailability?: number | null;
+  scoreLocalCompleteness?: number | null;
+  scoreStartupReachability?: number | null;
+  scorePeerEvidence?: number | null;
   scoreFormatSupport?: number | null;
-  scoreModerationPenalty?: number | null;
+  scoreStartupLatency?: number | null;
+  scoreUserOverride?: number | null;
   archiveState?: string | null;
   cacheState?: string | null;
   availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null;

@@ -1738,6 +1738,19 @@
     },
     {
       "id": 136,
+      "name": "@peartube/prepare-media-playback",
+      "request": {
+        "name": "@peartube/prepare-media-playback-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/prepare-media-playback-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 137,
       "name": "@peartube/desktop-bootstrap",
       "request": {
         "name": "@peartube/desktop-bootstrap-request",
@@ -1750,7 +1763,7 @@
       "version": 1
     },
     {
-      "id": 137,
+      "id": 138,
       "name": "@peartube/desktop-shutdown",
       "request": {
         "name": "@peartube/desktop-shutdown-request",
@@ -1763,7 +1776,7 @@
       "version": 1
     },
     {
-      "id": 138,
+      "id": 139,
       "name": "@peartube/desktop-refresh-browse",
       "request": {
         "name": "@peartube/desktop-refresh-browse-request",
@@ -1776,7 +1789,7 @@
       "version": 1
     },
     {
-      "id": 139,
+      "id": 140,
       "name": "@peartube/ffmpeg-decode-available",
       "request": {
         "name": "@peartube/ffmpeg-decode-available-request",
@@ -1789,7 +1802,7 @@
       "version": 1
     },
     {
-      "id": 140,
+      "id": 141,
       "name": "@peartube/update-channel-avatar",
       "request": {
         "name": "@peartube/update-channel-avatar-request",
@@ -1802,7 +1815,7 @@
       "version": 1
     },
     {
-      "id": 141,
+      "id": 142,
       "name": "@peartube/transcode-start",
       "request": {
         "name": "@peartube/transcode-start-request",
@@ -1815,7 +1828,7 @@
       "version": 1
     },
     {
-      "id": 142,
+      "id": 143,
       "name": "@peartube/transcode-stop",
       "request": {
         "name": "@peartube/transcode-stop-request",
@@ -1828,7 +1841,7 @@
       "version": 1
     },
     {
-      "id": 143,
+      "id": 144,
       "name": "@peartube/transcode-status",
       "request": {
         "name": "@peartube/transcode-status-request",
@@ -1841,7 +1854,7 @@
       "version": 1
     },
     {
-      "id": 144,
+      "id": 145,
       "name": "@peartube/event-transcode-progress",
       "request": {
         "name": "@peartube/event-transcode-progress",

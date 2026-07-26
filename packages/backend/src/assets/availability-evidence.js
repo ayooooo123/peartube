@@ -78,6 +78,8 @@ export function createAvailabilityEvidenceStore(options = {}) {
       advertisedAt: 0,
       challengeStatus: 'pending',
       verifiedAt: 0,
+      // Round trip measured by the possession challenge, not a peer's claim.
+      latencyMs: 0,
       provenRanges: null,
       archivist: false,
     }
@@ -147,6 +149,7 @@ export function createAvailabilityEvidenceStore(options = {}) {
       entry.observed = true
       if (status === 'passed') {
         peer.verifiedAt = Number(result.at ?? now()) || 0
+        peer.latencyMs = Math.max(0, Number(result.latencyMs) || 0)
         peer.provenRanges = result.provenRanges == null ? null : boundedRanges(result.provenRanges)
       }
       return true
@@ -190,6 +193,7 @@ export function createAvailabilityEvidenceStore(options = {}) {
           advertisedAt: peer.advertisedAt,
           challengeStatus: peer.challengeStatus,
           verifiedAt: peer.verifiedAt,
+          latencyMs: peer.latencyMs,
           archivist: peer.archivist,
           ...(peer.provenRanges === null ? {} : { provenRanges: peer.provenRanges }),
         })),

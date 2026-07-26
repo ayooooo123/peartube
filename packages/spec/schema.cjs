@@ -541,6 +541,7 @@ ns.register({
     { name: 'reachableRangeCount', type: 'uint', required: false },
     { name: 'independentPeerCount', type: 'uint', required: false },
     { name: 'completePeerCount', type: 'uint', required: false },
+    { name: 'measuredLatencyMs', type: 'uint', required: false },
     { name: 'offlinePlayable', type: 'bool', required: false },
     { name: 'archivePledged', type: 'bool', required: false },
     { name: 'reasonCodes', type: 'string', array: true, required: false },
@@ -560,6 +561,7 @@ ns.register({
     { name: 'moderationPenalty', type: 'uint', required: false },
     { name: 'preferred', type: 'bool', required: false },
     { name: 'selected', type: 'bool', required: false },
+    { name: 'eligible', type: 'bool', required: false },
     { name: 'selectionReasonCodes', type: 'string', array: true, required: false },
     { name: 'rejectionReasonCodes', type: 'string', array: true, required: false },
     { name: 'introductionPublisherIds', type: 'string', array: true, required: false },
@@ -567,11 +569,14 @@ ns.register({
     { name: 'moderationFeedIds', type: 'string', array: true, required: false },
     { name: 'claimConflictIds', type: 'string', array: true, required: false },
     { name: 'provenanceClaimIds', type: 'string', array: true, required: false },
-    { name: 'scoreMetadataConfidence', type: 'uint', required: false },
-    { name: 'scorePublisherTrust', type: 'uint', required: false },
-    { name: 'scoreAvailability', type: 'uint', required: false },
+    // Playback score components. Every one is a local playability fact; there
+    // is deliberately no publisher-popularity or paid-placement component.
+    { name: 'scoreLocalCompleteness', type: 'uint', required: false },
+    { name: 'scoreStartupReachability', type: 'uint', required: false },
+    { name: 'scorePeerEvidence', type: 'uint', required: false },
     { name: 'scoreFormatSupport', type: 'uint', required: false },
-    { name: 'scoreModerationPenalty', type: 'uint', required: false },
+    { name: 'scoreStartupLatency', type: 'uint', required: false },
+    { name: 'scoreUserOverride', type: 'uint', required: false },
     { name: 'archiveState', type: 'string', required: false },
     { name: 'cacheState', type: 'string', required: false },
     { name: 'availabilityState', type: 'string', required: false },
@@ -705,6 +710,41 @@ for (const name of [
     ]
   })
 }
+
+// One Play action. The backend selects a source, opens it, and fails over
+// between equivalent sources within one deadline; the client never picks.
+ns.register({
+  name: 'media-playback-attempt',
+  fields: [
+    { name: 'publicationId', type: 'string', required: true },
+    { name: 'errorCode', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-media-playback-request',
+  fields: [
+    { name: 'entityId', type: 'string', required: true },
+    // An explicit override from Other Sources. It is honoured only while that
+    // source still passes every hard gate.
+    { name: 'publicationId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-media-playback-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false },
+    { name: 'renditionId', type: 'string', required: false },
+    { name: 'coreKey', type: 'string', required: false },
+    // Ordered, bounded record of what Play tried and why each attempt ended.
+    { name: 'attempts', type: '@peartube/media-playback-attempt', array: true, required: false },
+    { name: 'sources', type: '@peartube/media-publication-source', array: true, required: false }
+  ]
+})
 
 ns.register({
   name: 'get-claim-provenance-request',
@@ -4123,7 +4163,8 @@ for (const name of [
   'get-agent-contributions',
   'get-publication-sources',
   'get-claim-provenance',
-  'set-source-preference'
+  'set-source-preference',
+  'prepare-media-playback'
 ]) {
   rpcNs.register({
     name,

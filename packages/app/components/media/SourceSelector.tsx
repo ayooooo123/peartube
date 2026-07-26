@@ -94,6 +94,27 @@ export function isPublicationSourceSelectable(source: PublicationSource | null |
   return isMediaSourcePlayable(source || {})
 }
 
+// The backend ships one authoritative selection and the picker only reports it.
+// Nothing here re-ranks: an explicit `selectedPublicationId` (or the cockpit's
+// resolved source) is the viewer's own override, and otherwise the backend's
+// `selected` verdict stands.
+function matchesSelection(
+  source: SourceRecord,
+  index: number,
+  cockpitSelection: SourceRecord | null,
+  requestedPublicationId: string | null,
+  cockpit: boolean,
+): boolean {
+  if (cockpit) {
+    return cockpitSelection !== null
+      ? sourceKey(source, index) === sourceKey(cockpitSelection, index)
+      : source.selected === true
+  }
+  return requestedPublicationId !== null
+    ? source.publicationId === requestedPublicationId
+    : source.selected === true
+}
+
 export function SourceSelector(props: GraphSourceSelectorProps): ReactElement
 export function SourceSelector(props: CockpitSourceSelectorProps): ReactElement
 export function SourceSelector(props: SourceSelectorProps): ReactElement {
@@ -108,10 +129,10 @@ export function SourceSelector(props: SourceSelectorProps): ReactElement {
       ? itemSources
       : [selectedSource, ...alternateSources].filter((source): source is SourceRecord => source !== null)
     : props.sources || []
+  const requestedPublicationId = cockpit ? null : props.selectedPublicationId ?? null
   const hasSelectedSource = sources.some((source, index) => (
-    isPublicationSourceSelectable(source) && (cockpit
-      ? selectedSource !== null && sourceKey(source, index) === sourceKey(selectedSource, index)
-      : source.publicationId === props.selectedPublicationId)
+    isPublicationSourceSelectable(source) &&
+    matchesSelection(source, index, selectedSource, requestedPublicationId, cockpit)
   ))
 
   return (
@@ -131,9 +152,12 @@ export function SourceSelector(props: SourceSelectorProps): ReactElement {
       <View style={styles.list}>
         {sources.slice(0, 8).map((source, index) => {
           const selectable = isPublicationSourceSelectable(source)
-          const selected = selectable && (cockpit
-            ? selectedSource !== null && sourceKey(source, index) === sourceKey(selectedSource, index)
-            : source.publicationId === props.selectedPublicationId)
+          const selected = selectable &&
+            matchesSelection(source, index, selectedSource, requestedPublicationId, cockpit)
+          // A source the backend ruled out before ranking stays on screen and
+          // stays unpressable, so the viewer can see why it lost instead of
+          // watching it vanish.
+          const hardGated = source.eligible === false
           const explanation = normalizeSourceExplanation(source, index, selected)
           const onPress = selected || !selectable || !props.onSelectSource
             ? undefined
@@ -179,7 +203,7 @@ export function SourceSelector(props: SourceSelectorProps): ReactElement {
                   <Text style={styles.rowTitle} numberOfLines={1}>Source {index + 1}</Text>
                 </View>
                 <Text style={[styles.status, !selectable && styles.statusUnavailable]}>
-                  {selected ? 'selected' : selectable ? sourceStatus(source) : 'unavailable'}
+                  {selected ? 'selected' : selectable ? sourceStatus(source) : hardGated ? 'cannot play' : 'unavailable'}
                 </Text>
               </View>
               <View style={styles.evidence}>
@@ -188,7 +212,13 @@ export function SourceSelector(props: SourceSelectorProps): ReactElement {
                 ))}
               </View>
               <Text style={[styles.action, !onPress && styles.actionDisabled]}>
-                {selected ? 'Currently selected' : selectable ? 'Use this source' : 'Source unavailable'}
+                {selected
+                  ? 'Currently selected'
+                  : selectable
+                    ? 'Use this source'
+                    : hardGated
+                      ? 'Cannot play on this device'
+                      : 'Source unavailable'}
               </Text>
             </Pressable>
           )

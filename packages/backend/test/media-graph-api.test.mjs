@@ -157,7 +157,8 @@ test('media graph API orders publication sources by score and local source prefe
   t.is(claimed.items[0].availabilityState, 'unknown')
   t.absent(claimed.items[0].selected, 'nothing is selected without hash-verified reachability')
 
-  availabilityEvidenceStore.set(low.publicationId, completePeerEvidence(['aa', 'bb']))
+  // Playability decides, so the weaker source is the one with less evidence.
+  availabilityEvidenceStore.set(low.publicationId, completePeerEvidence(['aa']))
   availabilityEvidenceStore.set(high.publicationId, completePeerEvidence(['cc', 'dd']))
 
   const scored = await api.getPublicationSources({ entityId: subject.entityId })
@@ -171,8 +172,10 @@ test('media graph API orders publication sources by score and local source prefe
   t.ok(Array.isArray(scored.items[0].moderationFeedIds))
   t.ok(Array.isArray(scored.items[0].claimConflictIds))
   t.ok(Array.isArray(scored.items[0].provenanceClaimIds))
-  t.is(typeof scored.items[0].scorePublisherTrust, 'number')
-  t.is(typeof scored.items[0].scoreAvailability, 'number')
+  t.is(typeof scored.items[0].scorePeerEvidence, 'number')
+  t.is(typeof scored.items[0].scoreStartupReachability, 'number')
+  t.is(scored.items[0].eligible, true)
+  t.alike(scored.items[1].rejectionReasonCodes, ['LOWER_LOCAL_SCORE'])
   t.is(scored.items[0].availabilityState, 'available')
   t.is(scored.items[0].availability.state, 'healthy')
   t.is(scored.items[0].availability.independentPeerCount, 2)
@@ -390,7 +393,7 @@ test('media graph API never auto-selects an unverified or unavailable playback s
   t.ok(entity.entity.sources[0].rejectionReasonCodes.includes('UNAUTHORIZED_PUBLICATION'))
 })
 
-test('media graph API translates signed diagnostic components to schema-safe uints', async t => {
+test('media graph API reports the latency penalty as a schema-safe uint magnitude', async t => {
   const api = createMediaGraphApi({
     mediaGraphStore: {
       getClaimsBySubject: () => [{
@@ -416,21 +419,41 @@ test('media graph API translates signed diagnostic components to schema-safe uin
           manifestId: 'manifest-1',
           renditions: [{ renditionId: 'rendition-1' }]
         }
+      }),
+      getRenditionRequirement: () => ({
+        publicationId: 'publication-1',
+        renditionId: 'rendition-1',
+        requiredRanges: [{ start: 0, end: 4 }]
       })
     },
+    availabilityEvidenceStore: {
+      getCachedEvidence: () => ({
+        peers: ['aa', 'bb'].map(transportKey => ({
+          transportKey,
+          connected: true,
+          advertisedRanges: [{ start: 0, end: 4 }],
+          advertisedAt: FIXED_NOW - 10_000,
+          challengeStatus: 'passed',
+          verifiedAt: FIXED_NOW - 1_000,
+          latencyMs: 900
+        }))
+      })
+    },
+    now: () => FIXED_NOW,
     sourcePreferenceStore: new Map()
   })
 
   const result = await api.getPublicationSources({ entityId: 'entity-1' })
   t.is(result.success, true)
-  t.is(result.items[0].scoreModerationPenalty, 40)
+  t.is(result.items[0].scoreStartupLatency, 900, 'a negative penalty crosses the wire as a positive magnitude')
   for (const field of [
-    'scoreMetadataConfidence',
-    'scorePublisherTrust',
-    'scoreAvailability',
+    'scoreLocalCompleteness',
+    'scoreStartupReachability',
+    'scorePeerEvidence',
     'scoreFormatSupport',
-    'scoreModerationPenalty'
-  ]) t.ok(Number.isSafeInteger(result.items[0][field]) && result.items[0][field] >= 0)
+    'scoreStartupLatency',
+    'scoreUserOverride'
+  ]) t.ok(Number.isSafeInteger(result.items[0][field]) && result.items[0][field] >= 0, `${field} is a safe uint`)
 })
 
 test('claim provenance lookup returns typed local claim summaries', async (t) => {

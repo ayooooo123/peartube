@@ -2994,11 +2994,12 @@ public struct MediaAvailability {
   public var reachableRangeCount: UInt?
   public var independentPeerCount: UInt?
   public var completePeerCount: UInt?
+  public var measuredLatencyMs: UInt?
   public var offlinePlayable: Bool
   public var archivePledged: Bool
   public var reasonCodes: [String]?
 
-  public init(state: String, renditionId: String? = nil, observedAt: UInt? = nil, expiresAt: UInt? = nil, requiredRangeCount: UInt? = nil, reachableRangeCount: UInt? = nil, independentPeerCount: UInt? = nil, completePeerCount: UInt? = nil, offlinePlayable: Bool = false, archivePledged: Bool = false, reasonCodes: [String]? = nil) {
+  public init(state: String, renditionId: String? = nil, observedAt: UInt? = nil, expiresAt: UInt? = nil, requiredRangeCount: UInt? = nil, reachableRangeCount: UInt? = nil, independentPeerCount: UInt? = nil, completePeerCount: UInt? = nil, measuredLatencyMs: UInt? = nil, offlinePlayable: Bool = false, archivePledged: Bool = false, reasonCodes: [String]? = nil) {
     self.state = state
     self.renditionId = renditionId
     self.observedAt = observedAt
@@ -3007,6 +3008,7 @@ public struct MediaAvailability {
     self.reachableRangeCount = reachableRangeCount
     self.independentPeerCount = independentPeerCount
     self.completePeerCount = completePeerCount
+    self.measuredLatencyMs = measuredLatencyMs
     self.offlinePlayable = offlinePlayable
     self.archivePledged = archivePledged
     self.reasonCodes = reasonCodes
@@ -3019,6 +3021,7 @@ public struct MediaAvailabilityCodec: Codec {
   let _completePeerCountCodec = Primitive.UInt()
   let _expiresAtCodec = Primitive.UInt()
   let _independentPeerCountCodec = Primitive.UInt()
+  let _measuredLatencyMsCodec = Primitive.UInt()
   let _observedAtCodec = Primitive.UInt()
   let _reachableRangeCountCodec = Primitive.UInt()
   let _reasonCodesArrayCodec = Primitive.Array(Primitive.UTF8())
@@ -3038,9 +3041,10 @@ public struct MediaAvailabilityCodec: Codec {
     if value.reachableRangeCount != nil { flags |= 16 }
     if value.independentPeerCount != nil { flags |= 32 }
     if value.completePeerCount != nil { flags |= 64 }
-    if value.offlinePlayable { flags |= 128 }
-    if value.archivePledged { flags |= 256 }
-    if value.reasonCodes != nil { flags |= 512 }
+    if value.measuredLatencyMs != nil { flags |= 128 }
+    if value.offlinePlayable { flags |= 256 }
+    if value.archivePledged { flags |= 512 }
+    if value.reasonCodes != nil { flags |= 1024 }
 
     _stateCodec.preencode(&state, value.state)
     Primitive.UInt().preencode(&state, flags)
@@ -3051,6 +3055,7 @@ public struct MediaAvailabilityCodec: Codec {
     if let v = value.reachableRangeCount { _reachableRangeCountCodec.preencode(&state, v) }
     if let v = value.independentPeerCount { _independentPeerCountCodec.preencode(&state, v) }
     if let v = value.completePeerCount { _completePeerCountCodec.preencode(&state, v) }
+    if let v = value.measuredLatencyMs { _measuredLatencyMsCodec.preencode(&state, v) }
     if let v = value.reasonCodes { _reasonCodesArrayCodec.preencode(&state, v) }
   }
 
@@ -3063,9 +3068,10 @@ public struct MediaAvailabilityCodec: Codec {
     if value.reachableRangeCount != nil { flags |= 16 }
     if value.independentPeerCount != nil { flags |= 32 }
     if value.completePeerCount != nil { flags |= 64 }
-    if value.offlinePlayable { flags |= 128 }
-    if value.archivePledged { flags |= 256 }
-    if value.reasonCodes != nil { flags |= 512 }
+    if value.measuredLatencyMs != nil { flags |= 128 }
+    if value.offlinePlayable { flags |= 256 }
+    if value.archivePledged { flags |= 512 }
+    if value.reasonCodes != nil { flags |= 1024 }
 
     try _stateCodec.encode(&state, value.state)
     try Primitive.UInt().encode(&state, flags)
@@ -3076,6 +3082,7 @@ public struct MediaAvailabilityCodec: Codec {
     if let v = value.reachableRangeCount { try _reachableRangeCountCodec.encode(&state, v) }
     if let v = value.independentPeerCount { try _independentPeerCountCodec.encode(&state, v) }
     if let v = value.completePeerCount { try _completePeerCountCodec.encode(&state, v) }
+    if let v = value.measuredLatencyMs { try _measuredLatencyMsCodec.encode(&state, v) }
     if let v = value.reasonCodes { try _reasonCodesArrayCodec.encode(&state, v) }
   }
 
@@ -3089,7 +3096,8 @@ public struct MediaAvailabilityCodec: Codec {
     let _r5: UInt? = (flags & 16) != 0 ? try _reachableRangeCountCodec.decode(&state) : nil
     let _r6: UInt? = (flags & 32) != 0 ? try _independentPeerCountCodec.decode(&state) : nil
     let _r7: UInt? = (flags & 64) != 0 ? try _completePeerCountCodec.decode(&state) : nil
-    let _r8: [String]? = (flags & 512) != 0 ? try _reasonCodesArrayCodec.decode(&state) : nil
+    let _r8: UInt? = (flags & 128) != 0 ? try _measuredLatencyMsCodec.decode(&state) : nil
+    let _r9: [String]? = (flags & 1024) != 0 ? try _reasonCodesArrayCodec.decode(&state) : nil
     return MediaAvailability(
       state: _r0,
       renditionId: _r1,
@@ -3099,9 +3107,10 @@ public struct MediaAvailabilityCodec: Codec {
       reachableRangeCount: _r5,
       independentPeerCount: _r6,
       completePeerCount: _r7,
-      offlinePlayable: (flags & 128) != 0,
-      archivePledged: (flags & 256) != 0,
-      reasonCodes: _r8
+      measuredLatencyMs: _r8,
+      offlinePlayable: (flags & 256) != 0,
+      archivePledged: (flags & 512) != 0,
+      reasonCodes: _r9
     )
   }
 }
@@ -3120,6 +3129,7 @@ public struct MediaPublicationSource {
   public var moderationPenalty: UInt?
   public var preferred: Bool
   public var selected: Bool
+  public var eligible: Bool
   public var selectionReasonCodes: [String]?
   public var rejectionReasonCodes: [String]?
   public var introductionPublisherIds: [String]?
@@ -3127,11 +3137,12 @@ public struct MediaPublicationSource {
   public var moderationFeedIds: [String]?
   public var claimConflictIds: [String]?
   public var provenanceClaimIds: [String]?
-  public var scoreMetadataConfidence: UInt?
-  public var scorePublisherTrust: UInt?
-  public var scoreAvailability: UInt?
+  public var scoreLocalCompleteness: UInt?
+  public var scoreStartupReachability: UInt?
+  public var scorePeerEvidence: UInt?
   public var scoreFormatSupport: UInt?
-  public var scoreModerationPenalty: UInt?
+  public var scoreStartupLatency: UInt?
+  public var scoreUserOverride: UInt?
   public var archiveState: String?
   public var cacheState: String?
   public var availabilityState: String?
@@ -3139,7 +3150,7 @@ public struct MediaPublicationSource {
   public var incomplete: Bool
   public var availability: MediaAvailability?
 
-  public init(publicationId: String, publisherId: String, manifestId: String? = nil, renditionId: String? = nil, score: UInt? = nil, availabilityScore: UInt? = nil, formatSupport: UInt? = nil, moderationPenalty: UInt? = nil, preferred: Bool = false, selected: Bool = false, selectionReasonCodes: [String]? = nil, rejectionReasonCodes: [String]? = nil, introductionPublisherIds: [String]? = nil, introductionIndexIds: [String]? = nil, moderationFeedIds: [String]? = nil, claimConflictIds: [String]? = nil, provenanceClaimIds: [String]? = nil, scoreMetadataConfidence: UInt? = nil, scorePublisherTrust: UInt? = nil, scoreAvailability: UInt? = nil, scoreFormatSupport: UInt? = nil, scoreModerationPenalty: UInt? = nil, archiveState: String? = nil, cacheState: String? = nil, availabilityState: String? = nil, stale: Bool = false, incomplete: Bool = false, availability: MediaAvailability? = nil) {
+  public init(publicationId: String, publisherId: String, manifestId: String? = nil, renditionId: String? = nil, score: UInt? = nil, availabilityScore: UInt? = nil, formatSupport: UInt? = nil, moderationPenalty: UInt? = nil, preferred: Bool = false, selected: Bool = false, eligible: Bool = false, selectionReasonCodes: [String]? = nil, rejectionReasonCodes: [String]? = nil, introductionPublisherIds: [String]? = nil, introductionIndexIds: [String]? = nil, moderationFeedIds: [String]? = nil, claimConflictIds: [String]? = nil, provenanceClaimIds: [String]? = nil, scoreLocalCompleteness: UInt? = nil, scoreStartupReachability: UInt? = nil, scorePeerEvidence: UInt? = nil, scoreFormatSupport: UInt? = nil, scoreStartupLatency: UInt? = nil, scoreUserOverride: UInt? = nil, archiveState: String? = nil, cacheState: String? = nil, availabilityState: String? = nil, stale: Bool = false, incomplete: Bool = false, availability: MediaAvailability? = nil) {
     self.publicationId = publicationId
     self.publisherId = publisherId
     self.manifestId = manifestId
@@ -3150,6 +3161,7 @@ public struct MediaPublicationSource {
     self.moderationPenalty = moderationPenalty
     self.preferred = preferred
     self.selected = selected
+    self.eligible = eligible
     self.selectionReasonCodes = selectionReasonCodes
     self.rejectionReasonCodes = rejectionReasonCodes
     self.introductionPublisherIds = introductionPublisherIds
@@ -3157,11 +3169,12 @@ public struct MediaPublicationSource {
     self.moderationFeedIds = moderationFeedIds
     self.claimConflictIds = claimConflictIds
     self.provenanceClaimIds = provenanceClaimIds
-    self.scoreMetadataConfidence = scoreMetadataConfidence
-    self.scorePublisherTrust = scorePublisherTrust
-    self.scoreAvailability = scoreAvailability
+    self.scoreLocalCompleteness = scoreLocalCompleteness
+    self.scoreStartupReachability = scoreStartupReachability
+    self.scorePeerEvidence = scorePeerEvidence
     self.scoreFormatSupport = scoreFormatSupport
-    self.scoreModerationPenalty = scoreModerationPenalty
+    self.scoreStartupLatency = scoreStartupLatency
+    self.scoreUserOverride = scoreUserOverride
     self.archiveState = archiveState
     self.cacheState = cacheState
     self.availabilityState = availabilityState
@@ -3191,12 +3204,13 @@ public struct MediaPublicationSourceCodec: Codec {
   let _publisherIdCodec = Primitive.UTF8()
   let _rejectionReasonCodesArrayCodec = Primitive.Array(Primitive.UTF8())
   let _renditionIdCodec = Primitive.UTF8()
-  let _scoreAvailabilityCodec = Primitive.UInt()
   let _scoreCodec = Primitive.UInt()
   let _scoreFormatSupportCodec = Primitive.UInt()
-  let _scoreMetadataConfidenceCodec = Primitive.UInt()
-  let _scoreModerationPenaltyCodec = Primitive.UInt()
-  let _scorePublisherTrustCodec = Primitive.UInt()
+  let _scoreLocalCompletenessCodec = Primitive.UInt()
+  let _scorePeerEvidenceCodec = Primitive.UInt()
+  let _scoreStartupLatencyCodec = Primitive.UInt()
+  let _scoreStartupReachabilityCodec = Primitive.UInt()
+  let _scoreUserOverrideCodec = Primitive.UInt()
   let _selectionReasonCodesArrayCodec = Primitive.Array(Primitive.UTF8())
 
   public init() {}
@@ -3212,24 +3226,26 @@ public struct MediaPublicationSourceCodec: Codec {
     if value.moderationPenalty != nil { flags |= 32 }
     if value.preferred { flags |= 64 }
     if value.selected { flags |= 128 }
-    if value.selectionReasonCodes != nil { flags |= 256 }
-    if value.rejectionReasonCodes != nil { flags |= 512 }
-    if value.introductionPublisherIds != nil { flags |= 1024 }
-    if value.introductionIndexIds != nil { flags |= 2048 }
-    if value.moderationFeedIds != nil { flags |= 4096 }
-    if value.claimConflictIds != nil { flags |= 8192 }
-    if value.provenanceClaimIds != nil { flags |= 16384 }
-    if value.scoreMetadataConfidence != nil { flags |= 32768 }
-    if value.scorePublisherTrust != nil { flags |= 65536 }
-    if value.scoreAvailability != nil { flags |= 131072 }
-    if value.scoreFormatSupport != nil { flags |= 262144 }
-    if value.scoreModerationPenalty != nil { flags |= 524288 }
-    if value.archiveState != nil { flags |= 1048576 }
-    if value.cacheState != nil { flags |= 2097152 }
-    if value.availabilityState != nil { flags |= 4194304 }
-    if value.stale { flags |= 8388608 }
-    if value.incomplete { flags |= 16777216 }
-    if value.availability != nil { flags |= 33554432 }
+    if value.eligible { flags |= 256 }
+    if value.selectionReasonCodes != nil { flags |= 512 }
+    if value.rejectionReasonCodes != nil { flags |= 1024 }
+    if value.introductionPublisherIds != nil { flags |= 2048 }
+    if value.introductionIndexIds != nil { flags |= 4096 }
+    if value.moderationFeedIds != nil { flags |= 8192 }
+    if value.claimConflictIds != nil { flags |= 16384 }
+    if value.provenanceClaimIds != nil { flags |= 32768 }
+    if value.scoreLocalCompleteness != nil { flags |= 65536 }
+    if value.scoreStartupReachability != nil { flags |= 131072 }
+    if value.scorePeerEvidence != nil { flags |= 262144 }
+    if value.scoreFormatSupport != nil { flags |= 524288 }
+    if value.scoreStartupLatency != nil { flags |= 1048576 }
+    if value.scoreUserOverride != nil { flags |= 2097152 }
+    if value.archiveState != nil { flags |= 4194304 }
+    if value.cacheState != nil { flags |= 8388608 }
+    if value.availabilityState != nil { flags |= 16777216 }
+    if value.stale { flags |= 33554432 }
+    if value.incomplete { flags |= 67108864 }
+    if value.availability != nil { flags |= 134217728 }
 
     _publicationIdCodec.preencode(&state, value.publicationId)
     _publisherIdCodec.preencode(&state, value.publisherId)
@@ -3247,11 +3263,12 @@ public struct MediaPublicationSourceCodec: Codec {
     if let v = value.moderationFeedIds { _moderationFeedIdsArrayCodec.preencode(&state, v) }
     if let v = value.claimConflictIds { _claimConflictIdsArrayCodec.preencode(&state, v) }
     if let v = value.provenanceClaimIds { _provenanceClaimIdsArrayCodec.preencode(&state, v) }
-    if let v = value.scoreMetadataConfidence { _scoreMetadataConfidenceCodec.preencode(&state, v) }
-    if let v = value.scorePublisherTrust { _scorePublisherTrustCodec.preencode(&state, v) }
-    if let v = value.scoreAvailability { _scoreAvailabilityCodec.preencode(&state, v) }
+    if let v = value.scoreLocalCompleteness { _scoreLocalCompletenessCodec.preencode(&state, v) }
+    if let v = value.scoreStartupReachability { _scoreStartupReachabilityCodec.preencode(&state, v) }
+    if let v = value.scorePeerEvidence { _scorePeerEvidenceCodec.preencode(&state, v) }
     if let v = value.scoreFormatSupport { _scoreFormatSupportCodec.preencode(&state, v) }
-    if let v = value.scoreModerationPenalty { _scoreModerationPenaltyCodec.preencode(&state, v) }
+    if let v = value.scoreStartupLatency { _scoreStartupLatencyCodec.preencode(&state, v) }
+    if let v = value.scoreUserOverride { _scoreUserOverrideCodec.preencode(&state, v) }
     if let v = value.archiveState { _archiveStateCodec.preencode(&state, v) }
     if let v = value.cacheState { _cacheStateCodec.preencode(&state, v) }
     if let v = value.availabilityState { _availabilityStateCodec.preencode(&state, v) }
@@ -3268,24 +3285,26 @@ public struct MediaPublicationSourceCodec: Codec {
     if value.moderationPenalty != nil { flags |= 32 }
     if value.preferred { flags |= 64 }
     if value.selected { flags |= 128 }
-    if value.selectionReasonCodes != nil { flags |= 256 }
-    if value.rejectionReasonCodes != nil { flags |= 512 }
-    if value.introductionPublisherIds != nil { flags |= 1024 }
-    if value.introductionIndexIds != nil { flags |= 2048 }
-    if value.moderationFeedIds != nil { flags |= 4096 }
-    if value.claimConflictIds != nil { flags |= 8192 }
-    if value.provenanceClaimIds != nil { flags |= 16384 }
-    if value.scoreMetadataConfidence != nil { flags |= 32768 }
-    if value.scorePublisherTrust != nil { flags |= 65536 }
-    if value.scoreAvailability != nil { flags |= 131072 }
-    if value.scoreFormatSupport != nil { flags |= 262144 }
-    if value.scoreModerationPenalty != nil { flags |= 524288 }
-    if value.archiveState != nil { flags |= 1048576 }
-    if value.cacheState != nil { flags |= 2097152 }
-    if value.availabilityState != nil { flags |= 4194304 }
-    if value.stale { flags |= 8388608 }
-    if value.incomplete { flags |= 16777216 }
-    if value.availability != nil { flags |= 33554432 }
+    if value.eligible { flags |= 256 }
+    if value.selectionReasonCodes != nil { flags |= 512 }
+    if value.rejectionReasonCodes != nil { flags |= 1024 }
+    if value.introductionPublisherIds != nil { flags |= 2048 }
+    if value.introductionIndexIds != nil { flags |= 4096 }
+    if value.moderationFeedIds != nil { flags |= 8192 }
+    if value.claimConflictIds != nil { flags |= 16384 }
+    if value.provenanceClaimIds != nil { flags |= 32768 }
+    if value.scoreLocalCompleteness != nil { flags |= 65536 }
+    if value.scoreStartupReachability != nil { flags |= 131072 }
+    if value.scorePeerEvidence != nil { flags |= 262144 }
+    if value.scoreFormatSupport != nil { flags |= 524288 }
+    if value.scoreStartupLatency != nil { flags |= 1048576 }
+    if value.scoreUserOverride != nil { flags |= 2097152 }
+    if value.archiveState != nil { flags |= 4194304 }
+    if value.cacheState != nil { flags |= 8388608 }
+    if value.availabilityState != nil { flags |= 16777216 }
+    if value.stale { flags |= 33554432 }
+    if value.incomplete { flags |= 67108864 }
+    if value.availability != nil { flags |= 134217728 }
 
     try _publicationIdCodec.encode(&state, value.publicationId)
     try _publisherIdCodec.encode(&state, value.publisherId)
@@ -3303,11 +3322,12 @@ public struct MediaPublicationSourceCodec: Codec {
     if let v = value.moderationFeedIds { try _moderationFeedIdsArrayCodec.encode(&state, v) }
     if let v = value.claimConflictIds { try _claimConflictIdsArrayCodec.encode(&state, v) }
     if let v = value.provenanceClaimIds { try _provenanceClaimIdsArrayCodec.encode(&state, v) }
-    if let v = value.scoreMetadataConfidence { try _scoreMetadataConfidenceCodec.encode(&state, v) }
-    if let v = value.scorePublisherTrust { try _scorePublisherTrustCodec.encode(&state, v) }
-    if let v = value.scoreAvailability { try _scoreAvailabilityCodec.encode(&state, v) }
+    if let v = value.scoreLocalCompleteness { try _scoreLocalCompletenessCodec.encode(&state, v) }
+    if let v = value.scoreStartupReachability { try _scoreStartupReachabilityCodec.encode(&state, v) }
+    if let v = value.scorePeerEvidence { try _scorePeerEvidenceCodec.encode(&state, v) }
     if let v = value.scoreFormatSupport { try _scoreFormatSupportCodec.encode(&state, v) }
-    if let v = value.scoreModerationPenalty { try _scoreModerationPenaltyCodec.encode(&state, v) }
+    if let v = value.scoreStartupLatency { try _scoreStartupLatencyCodec.encode(&state, v) }
+    if let v = value.scoreUserOverride { try _scoreUserOverrideCodec.encode(&state, v) }
     if let v = value.archiveState { try _archiveStateCodec.encode(&state, v) }
     if let v = value.cacheState { try _cacheStateCodec.encode(&state, v) }
     if let v = value.availabilityState { try _availabilityStateCodec.encode(&state, v) }
@@ -3324,22 +3344,23 @@ public struct MediaPublicationSourceCodec: Codec {
     let _r5: UInt? = (flags & 8) != 0 ? try _availabilityScoreCodec.decode(&state) : nil
     let _r6: UInt? = (flags & 16) != 0 ? try _formatSupportCodec.decode(&state) : nil
     let _r7: UInt? = (flags & 32) != 0 ? try _moderationPenaltyCodec.decode(&state) : nil
-    let _r8: [String]? = (flags & 256) != 0 ? try _selectionReasonCodesArrayCodec.decode(&state) : nil
-    let _r9: [String]? = (flags & 512) != 0 ? try _rejectionReasonCodesArrayCodec.decode(&state) : nil
-    let _r10: [String]? = (flags & 1024) != 0 ? try _introductionPublisherIdsArrayCodec.decode(&state) : nil
-    let _r11: [String]? = (flags & 2048) != 0 ? try _introductionIndexIdsArrayCodec.decode(&state) : nil
-    let _r12: [String]? = (flags & 4096) != 0 ? try _moderationFeedIdsArrayCodec.decode(&state) : nil
-    let _r13: [String]? = (flags & 8192) != 0 ? try _claimConflictIdsArrayCodec.decode(&state) : nil
-    let _r14: [String]? = (flags & 16384) != 0 ? try _provenanceClaimIdsArrayCodec.decode(&state) : nil
-    let _r15: UInt? = (flags & 32768) != 0 ? try _scoreMetadataConfidenceCodec.decode(&state) : nil
-    let _r16: UInt? = (flags & 65536) != 0 ? try _scorePublisherTrustCodec.decode(&state) : nil
-    let _r17: UInt? = (flags & 131072) != 0 ? try _scoreAvailabilityCodec.decode(&state) : nil
-    let _r18: UInt? = (flags & 262144) != 0 ? try _scoreFormatSupportCodec.decode(&state) : nil
-    let _r19: UInt? = (flags & 524288) != 0 ? try _scoreModerationPenaltyCodec.decode(&state) : nil
-    let _r20: String? = (flags & 1048576) != 0 ? try _archiveStateCodec.decode(&state) : nil
-    let _r21: String? = (flags & 2097152) != 0 ? try _cacheStateCodec.decode(&state) : nil
-    let _r22: String? = (flags & 4194304) != 0 ? try _availabilityStateCodec.decode(&state) : nil
-    let _r23: MediaAvailability? = (flags & 33554432) != 0 ? try _availabilityCodec.decode(&state) : nil
+    let _r8: [String]? = (flags & 512) != 0 ? try _selectionReasonCodesArrayCodec.decode(&state) : nil
+    let _r9: [String]? = (flags & 1024) != 0 ? try _rejectionReasonCodesArrayCodec.decode(&state) : nil
+    let _r10: [String]? = (flags & 2048) != 0 ? try _introductionPublisherIdsArrayCodec.decode(&state) : nil
+    let _r11: [String]? = (flags & 4096) != 0 ? try _introductionIndexIdsArrayCodec.decode(&state) : nil
+    let _r12: [String]? = (flags & 8192) != 0 ? try _moderationFeedIdsArrayCodec.decode(&state) : nil
+    let _r13: [String]? = (flags & 16384) != 0 ? try _claimConflictIdsArrayCodec.decode(&state) : nil
+    let _r14: [String]? = (flags & 32768) != 0 ? try _provenanceClaimIdsArrayCodec.decode(&state) : nil
+    let _r15: UInt? = (flags & 65536) != 0 ? try _scoreLocalCompletenessCodec.decode(&state) : nil
+    let _r16: UInt? = (flags & 131072) != 0 ? try _scoreStartupReachabilityCodec.decode(&state) : nil
+    let _r17: UInt? = (flags & 262144) != 0 ? try _scorePeerEvidenceCodec.decode(&state) : nil
+    let _r18: UInt? = (flags & 524288) != 0 ? try _scoreFormatSupportCodec.decode(&state) : nil
+    let _r19: UInt? = (flags & 1048576) != 0 ? try _scoreStartupLatencyCodec.decode(&state) : nil
+    let _r20: UInt? = (flags & 2097152) != 0 ? try _scoreUserOverrideCodec.decode(&state) : nil
+    let _r21: String? = (flags & 4194304) != 0 ? try _archiveStateCodec.decode(&state) : nil
+    let _r22: String? = (flags & 8388608) != 0 ? try _cacheStateCodec.decode(&state) : nil
+    let _r23: String? = (flags & 16777216) != 0 ? try _availabilityStateCodec.decode(&state) : nil
+    let _r24: MediaAvailability? = (flags & 134217728) != 0 ? try _availabilityCodec.decode(&state) : nil
     return MediaPublicationSource(
       publicationId: _r0,
       publisherId: _r1,
@@ -3351,6 +3372,7 @@ public struct MediaPublicationSourceCodec: Codec {
       moderationPenalty: _r7,
       preferred: (flags & 64) != 0,
       selected: (flags & 128) != 0,
+      eligible: (flags & 256) != 0,
       selectionReasonCodes: _r8,
       rejectionReasonCodes: _r9,
       introductionPublisherIds: _r10,
@@ -3358,17 +3380,18 @@ public struct MediaPublicationSourceCodec: Codec {
       moderationFeedIds: _r12,
       claimConflictIds: _r13,
       provenanceClaimIds: _r14,
-      scoreMetadataConfidence: _r15,
-      scorePublisherTrust: _r16,
-      scoreAvailability: _r17,
+      scoreLocalCompleteness: _r15,
+      scoreStartupReachability: _r16,
+      scorePeerEvidence: _r17,
       scoreFormatSupport: _r18,
-      scoreModerationPenalty: _r19,
-      archiveState: _r20,
-      cacheState: _r21,
-      availabilityState: _r22,
-      stale: (flags & 8388608) != 0,
-      incomplete: (flags & 16777216) != 0,
-      availability: _r23
+      scoreStartupLatency: _r19,
+      scoreUserOverride: _r20,
+      archiveState: _r21,
+      cacheState: _r22,
+      availabilityState: _r23,
+      stale: (flags & 33554432) != 0,
+      incomplete: (flags & 67108864) != 0,
+      availability: _r24
     )
   }
 }

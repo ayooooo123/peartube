@@ -176,10 +176,16 @@ function normalizePeers(value) {
       advertisedAt: 0,
       challengeStatus: 'passed',
       verifiedAt: 0,
+      latencyMs: 0,
       archivist: false,
     }
     normalized.connected = normalized.connected || peer?.connected === true
     normalized.archivist = normalized.archivist || peer?.archivist === true
+    // Duplicate sockets of one identity: keep the best measured round trip.
+    const latencyMs = nonNegativeInteger(peer?.latencyMs)
+    if (latencyMs > 0) {
+      normalized.latencyMs = normalized.latencyMs > 0 ? Math.min(normalized.latencyMs, latencyMs) : latencyMs
+    }
     normalized.advertisedRanges.push(...boundedRanges(peer?.advertisedRanges, 'advertisedRanges'))
     if (peer?.provenRanges != null) {
       normalized.provenScoped = true
@@ -266,6 +272,7 @@ export function assessAvailability(input = {}, options = {}) {
     reachableRangeCount: 0,
     independentPeerCount: 0,
     completePeerCount: 0,
+    measuredLatencyMs: 0,
     offlinePlayable,
     archivePledged,
   }
@@ -302,11 +309,15 @@ export function assessAvailability(input = {}, options = {}) {
     peer => coveredCount(peer.evidenceRanges, evidence.requiredRanges) === requiredRangeCount
   )
 
+  // The best round trip actually measured against a contributing peer. Zero
+  // means "not measured", never "instant".
+  const measured = contributors.map(peer => peer.latencyMs).filter(value => value > 0)
   const summary = {
     ...base,
     reachableRangeCount,
     independentPeerCount: contributors.length,
     completePeerCount: completePeers.length,
+    measuredLatencyMs: measured.length > 0 ? Math.min(...measured) : 0,
   }
   const localReasons = [
     ...(offlinePlayable ? ['LOCAL_COMPLETE_COPY'] : []),

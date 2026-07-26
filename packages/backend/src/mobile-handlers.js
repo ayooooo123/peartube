@@ -110,6 +110,7 @@ export function attachMobileHandlers(B, deps) {
   B.getPublicationSources = async (r) => api.getPublicationSources(r)
   B.getClaimProvenance = async (r) => api.getClaimProvenance(r)
   B.setSourcePreference = async (r) => api.setSourcePreference(r)
+  B.prepareMediaPlayback = async (r) => api.prepareMediaPlayback(r)
   B.provisionPublisherCatalog = async (r) => api.provisionPublisherCatalog(r)
   B.preparePublisherRootOperation = async (r) => api.preparePublisherRootOperation(r)
   B.submitPublisherRootOperation = async (r) => api.submitPublisherRootOperation(r)

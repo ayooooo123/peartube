@@ -223,6 +223,7 @@ const startupProbeIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const lastMirroredPlaybackActiveRef = useRef<boolean | null>(null)
 const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 const BACKEND_STARTUP_TIMEOUT_MS = 30000
+const FOREGROUND_RESUME_TIMEOUT_MS = 5000
 
   const startupLog = useCallback((...args: unknown[]) => {
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -791,36 +792,48 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       clearCastSuspendGraceTimer()
       suspendInFlightRef.current = false
       stopCastKeepalive()
-      console.log('[App] Resuming network from foreground')
-      const resumeResult = platformRPC.rpc?.resumeNetwork?.()
-      if (resumeResult && typeof (resumeResult as Promise<unknown>).catch === 'function') {
-        ;(resumeResult as Promise<unknown>).catch((err: any) => {
+
+      const resumeAndVerifyBackend = async () => {
+        console.log('[App] Resuming network from foreground')
+        let resumeTimeout: NodeJS.Timeout | null = null
+        try {
+          await Promise.race([
+            Promise.resolve(platformRPC.rpc?.resumeNetwork?.()),
+            new Promise<void>((resolve) => {
+              resumeTimeout = setTimeout(resolve, FOREGROUND_RESUME_TIMEOUT_MS)
+            }),
+          ])
+        } catch (err: any) {
           console.log('[App] resumeNetwork error:', err?.message)
-        })
+        } finally {
+          if (resumeTimeout) clearTimeout(resumeTimeout)
+        }
+
+        if (typeof platformRPC.rpc?.castStartDiscovery === 'function') {
+          platformRPC.rpc.castStartDiscovery({}).catch((err: any) => {
+            console.log('[App] castStartDiscovery error after foreground:', err?.message)
+          })
+        }
+
+        const startupState = platformRPC.getStartupState?.() || 'idle'
+        const shouldVerifyReadyBackend = Platform.OS === 'android'
+          && platformRPC.isInitialized()
+          && !nativeInitInFlightRef.current
+          && startupState === 'ready'
+        const shouldReinitialize = !platformRPC.isInitialized()
+          && !nativeInitInFlightRef.current
+          && startupState === 'idle'
+
+        if (shouldVerifyReadyBackend) {
+          console.log('[App] Verifying native backend after foreground...')
+          await initNativeBackend()
+        } else if (shouldReinitialize) {
+          console.log('[App] Backend not initialized, reinitializing...')
+          await initNativeBackend()
+        }
       }
 
-      if (typeof platformRPC.rpc?.castStartDiscovery === 'function') {
-        platformRPC.rpc.castStartDiscovery({}).catch((err: any) => {
-          console.log('[App] castStartDiscovery error after foreground:', err?.message)
-        })
-      }
-
-      const startupState = platformRPC.getStartupState?.() || 'idle'
-      const shouldVerifyReadyBackend = Platform.OS === 'android'
-        && platformRPC.isInitialized()
-        && !nativeInitInFlightRef.current
-        && startupState === 'ready'
-      const shouldReinitialize = !platformRPC.isInitialized()
-        && !nativeInitInFlightRef.current
-        && startupState === 'idle'
-
-      if (shouldVerifyReadyBackend) {
-        console.log('[App] Verifying native backend after foreground...')
-        initNativeBackend()
-      } else if (shouldReinitialize) {
-        console.log('[App] Backend not initialized, reinitializing...')
-        initNativeBackend()
-      }
+      void resumeAndVerifyBackend()
     }
   }, [
     clearCastSuspendGraceTimer,

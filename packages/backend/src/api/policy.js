@@ -243,9 +243,17 @@ export function createNetworkPolicyRuntime({
     },
     setEnvironment(next = {}) {
       return runTransition(async () => {
+        const shouldRefreshForegroundTransport =
+          hasOwn(next, 'background') &&
+          next.background !== true &&
+          !transportSuspended
         if (hasOwn(next, 'metered')) environment.metered = next.metered === true
         if (hasOwn(next, 'background')) environment.background = next.background === true
-        return applyNow(policy)
+        const effective = await applyNow(policy)
+        if (shouldRefreshForegroundTransport && effective.networkMode !== 'pause-network') {
+          await resumeTransport?.()
+        }
+        return effective
       })
     },
     getPolicy() {

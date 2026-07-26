@@ -198,6 +198,22 @@ test('policy API rejects fields with no production runtime consumer', async (t) 
   t.alike((await api.getNetworkPolicy()).policy, initialPolicy)
 })
 
+test('foreground policy refresh resumes transport even when no policy suspension ran', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  let resumeCalls = 0
+  const runtime = createNetworkPolicyRuntime({
+    initialPolicy,
+    resumeTransport: async () => {
+      resumeCalls++
+    },
+  })
+  await runtime.start()
+
+  await runtime.setEnvironment({ background: false })
+
+  t.is(resumeCalls, 1, 'foregrounding refreshes a transport paused by the mobile runtime')
+})
+
 test('mobile lifecycle events re-evaluate background policy instead of bypassing it', async (t) => {
   const transitions = []
   const api = createNetworkLifecycleApi({

@@ -49,7 +49,9 @@ class SuccessfulPreflightWorklet {
   constructor() {
     SuccessfulPreflightWorklet.instance = this
     this.IPC = new EventEmitter()
+    this.rawWrites = []
     this.IPC.write = (chunk) => {
+      this.rawWrites.push(chunk)
       const message = JSON.parse(String(chunk))
       this.writes.push(message)
       if (message.type === 'legacy-publisher-root-migration-ack' && message.ok === true) {
@@ -119,6 +121,7 @@ test('native legacy-root preflight bounds and converts local IPC, projects only 
   assert.deepEqual(summary, { status: 'complete', scanned: 1, migrated: 1, remaining: 0 })
   assert.equal(JSON.stringify(summary).includes('secret'), false)
   assert.equal(instance.terminated, true)
+  assert.ok(ArrayBuffer.isView(instance.rawWrites[0]), 'BareKit preflight writes require Uint8Array-compatible data')
   assert.deepEqual(instance.writes[0], {
     type: 'legacy-publisher-root-migration-ack',
     id: 1,
@@ -180,4 +183,53 @@ test('native legacy-root preflight rejects oversized or concurrent requests with
     errorCode: 'MIGRATION_TRANSPORT_UNAVAILABLE',
   })
   assert.ok(instance.writes.some((message) => message.id === 2 && message.ok === false))
+})
+
+test('native runner writes graceful shutdown frames as binary IPC data', async () => {
+  const { createNativeRunner } = await loadRunner()
+
+  class ShutdownWorklet {
+    static instance = null
+
+    constructor() {
+      ShutdownWorklet.instance = this
+      this.IPC = new EventEmitter()
+      this.writes = []
+      this.terminated = false
+      this.IPC.write = (chunk) => {
+        this.writes.push(chunk)
+        queueMicrotask(() => {
+          this.IPC.emit('data', Buffer.from(JSON.stringify({ type: 'shutdown-complete' })))
+        })
+      }
+    }
+
+    start() {}
+
+    terminate() {
+      this.terminated = true
+    }
+  }
+
+  const runner = createNativeRunner({
+    WorkletCtor: ShutdownWorklet,
+    backendSource: 'source',
+    createProtocolClientImpl: () => ({
+      events: new EventEmitter(),
+      ready: async () => ({ blobServerPort: 1234, protocolVersion: 1 }),
+    }),
+  })
+  const session = await runner.start({
+    platform: 'mobile',
+    storagePath: '/tmp/peartube',
+    entrypoint: 'mobile-entry',
+    protocolVersion: 1,
+  })
+
+  await session.terminate()
+
+  const instance = ShutdownWorklet.instance
+  assert.equal(instance.terminated, true)
+  assert.ok(ArrayBuffer.isView(instance.writes[0]), 'BareKit IPC writes require Uint8Array-compatible data')
+  assert.deepEqual(JSON.parse(instance.writes[0].toString()), { type: 'shutdown' })
 })

@@ -222,7 +222,7 @@ export async function runNativeLegacyPublisherRootPreflight(
           return
         }
         try {
-          ipc.write(encoded)
+          ipc.write(Buffer.from(encoded))
         } catch {
           finish(unavailableLegacyRootSummary())
         }
@@ -407,7 +407,7 @@ function sendShutdownSignalViaIpc(worklet: WorkletInstance, timeoutMs: number) {
     try {
       ipc.on?.('data', onData)
       ipc.on?.('close', onClose)
-      ipc.write(encodeJsonFrame({ type: 'shutdown' }))
+      ipc.write(Buffer.from(encodeJsonFrame({ type: 'shutdown' })))
     } catch {
       cleanup()
       resolve()

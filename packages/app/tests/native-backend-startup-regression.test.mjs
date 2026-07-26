@@ -116,13 +116,23 @@ test('native platform RPC probes the blob server before reusing an initialized b
   assert.equal(oldFastPath, -1, 'initPlatformRPC must not trust initialized flags without probing the blob server')
 })
 
-test('native root layout verifies the backend on Android foreground even when bridge state is ready', () => {
+test('native root layout bounds Android network resume before probing a ready backend', () => {
   const source = readAppFile('app/_layout.tsx')
   const foregroundBlock = source.match(/const handleAppStateChange = useCallback\(\(nextState: AppStateStatus\) => \{([\s\S]*?)\n\s*\}, \[/)?.[1] ?? ''
 
   assert.ok(foregroundBlock, 'foreground handler should exist')
+  assert.match(source, /const FOREGROUND_RESUME_TIMEOUT_MS = \d+/)
   assert.match(foregroundBlock, /startupState === 'ready'/)
-  assert.match(foregroundBlock, /console\.log\('\[App\] Verifying native backend after foreground\.\.\.'\)/)
+  assert.match(
+    foregroundBlock,
+    /await Promise\.race\(\[/,
+    'foreground health verification must wait for network resume without hanging forever',
+  )
+  assert.match(foregroundBlock, /platformRPC\.rpc\?\.resumeNetwork\?\.\(\)/)
+  assert.match(foregroundBlock, /FOREGROUND_RESUME_TIMEOUT_MS/)
+  const resumeIndex = foregroundBlock.indexOf('platformRPC.rpc?.resumeNetwork?.()')
+  const verifyIndex = foregroundBlock.indexOf("console.log('[App] Verifying native backend after foreground...')")
+  assert.ok(resumeIndex < verifyIndex, 'network resume wait must precede backend health verification')
   assert.match(foregroundBlock, /initNativeBackend\(\)/)
 })
 

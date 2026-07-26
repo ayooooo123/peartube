@@ -1,8 +1,8 @@
-# Permissionless Public Media CDN and Archive Implementation Plan
+# Permissionless Media CDN and Archive Implementation Plan
 
 > **For agentic workers:** REQUIRED: use `superpowers:subagent-driven-development` when subagents are available, otherwise use `superpowers:executing-plans`. Execute one task at a time. Each task uses tests first, focused verification, and an atomic commit.
 
-**Goal:** Replace PearTube's global consumer feed and channel-sized media replication with publisher-signed namespaces, immutable rendition swarms, a cross-publisher media entity graph, bounded permissionless discovery, voluntary archival evidence, client-selected moderation, and a unified native media library.
+**Goal:** Replace PearTube's global consumer feed and channel-sized media replication with publisher-signed namespaces, immutable rendition swarms, a cross-publisher media entity graph, bounded permissionless discovery, voluntary archival evidence, client-selected moderation, a unified native media library, and opaque-ciphertext distribution for provider-protected media.
 
 **Architecture:** Publishers append signed publications and claims to publisher-scoped feeds. Immutable asset manifests reference original and playback-optimized rendition cores. Clients join publisher topics for catalog state and asset topics only for media they play, cache, audit, or archive. Local resolvers combine publisher, curator, index, moderation, and optional AI claims into a provenance-preserving media graph. Archivists publish voluntary pledges and answer possession challenges. No PearTube-operated control plane is introduced.
 
@@ -10,7 +10,26 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-23-permissionless-media-cdn-design.md`
 
-**Scope decisions:** Public media only; native mobile and Electrobun desktop first; no centralized service; no browser transport; no payment system; optional local AI only.
+**Scope decisions:** Public and provider-protected media; native mobile and Electrobun desktop first; no PearTube-operated central catalog, media origin, or analytics service; no browser transport; no payment system; provider authentication and license services are external control planes and may never serve media bytes; optional local AI only.
+
+## Product Direction Amendment — 2026-07-24
+
+The protocol and storage program below is implemented. The next product phase is governed by `docs/superpowers/plans/2026-07-24-stremio-consumer-vertical-slice.md`, which supersedes the original upload-centric product projection without reopening the completed network cutover.
+
+Locked product decisions:
+
+- PearTube is primarily a consumer streaming application with one seamless global catalog. Publishing, archive operations, diagnostics, identity internals, moderation administration, and network policy live behind Developer Settings or in the CLI/relay.
+- Mobile navigation is Home, Search/Discover, and Library. Desktop/TV uses the same destinations in a compact Stremio-style sidebar.
+- Permissionless publication remains globally discoverable. Default community moderation filters normal views; advanced users may inspect and override local policy.
+- The first catalog experience is movies and episodic series, while the media graph remains universal.
+- Play selects the best currently playable source automatically and fails over among equivalent sources. An optional Other Sources view remains available.
+- Default participation is balanced: seed during playback and briefly afterward, then perform bounded background seeding subject to explicit metered, battery, thermal, storage, and upload ceilings.
+- No account is required. Watch progress, library, and recommendations are local by default; optional encrypted device pairing is user-initiated.
+- Public and provider-protected media coexist. Protected rendition swarms carry opaque ciphertext; provider authentication and short-lived license acquisition occur outside PearTube's media plane.
+- PearTube collects no playback, engagement, recommendation, or CDN-savings analytics. Providers may observe their own authentication/license service and origin systems, but PearTube does not aggregate or forward viewer telemetry.
+- Playback is strict P2P. There is no HTTP media-origin fallback and no required provider-operated seed. Catalog visibility and playback UI must therefore expose Awaiting replication, Limited availability, Healthy, and Unavailable honestly.
+- Relay nodes are permissionless volunteer discovery/archive nodes. They may gossip catalog records, cache opaque media bytes, satisfy archive pledges, and seed retained ranges; they gain no publication, moderation, entitlement, or catalog authority.
+
 
 ---
 
@@ -1561,7 +1580,7 @@ Add product-level chaos tests in addition to unit/protocol tests:
 
 Source-absence tests should cover the design goal, not only old symbol names:
 
-- [ ] Reject hardcoded relay keys, default trusted indexes, default moderation authorities, default upload endpoints, and remote bootstrap services capable of serving media bytes.
+- [ ] Reject hardcoded relay keys, mandatory/default trusted indexes, irreplaceable moderation authorities, default upload endpoints, and remote bootstrap services capable of serving media bytes. A bundled community moderation profile may be the replaceable local visibility default, but it cannot delete records, confer network authority, become the only readable policy, or be required for discovery/playback protocol validity.
 - [ ] Reject env-var-only production trust roots and hidden central service dependencies.
 - [ ] Verify bootstrap/discovery can introduce candidates but cannot become a media origin or trust authority.
 

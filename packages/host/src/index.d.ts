@@ -616,8 +616,34 @@ export type PublicationSourcesResponse = {
 export type MediaPlaybackAttempt = {
   publicationId: string
   /** `null` on the attempt that succeeded. */
-  errorCode?: string | null
+  errorCode?: PlaybackErrorCode | null
 }
+
+/**
+ * The complete playback failure vocabulary. Every viewer-visible playback
+ * failure is exactly one of these; there is no generic fallback code.
+ */
+export type PlaybackErrorCode =
+  | 'AVAILABILITY_BOUNDARY'
+  | 'NO_COMPATIBLE_SOURCE'
+  | 'PEER_TIMEOUT'
+  | 'PEER_DISCONNECT'
+  | 'RANGE_MISMATCH'
+  | 'SESSION_LIMIT'
+  | 'PREPARATION_DEADLINE'
+  | 'PREPARATION_CANCELLED'
+  | 'ATTEMPT_LIMIT'
+  | 'DRM_UNSUPPORTED'
+  | 'LICENSE_DENIED'
+  | 'LICENSE_EXPIRED'
+
+/**
+ * `automatic` - preparation may try another equivalent source itself.
+ * `manual` - only a new user action can change the outcome.
+ * `evidence` - nothing changes until new availability evidence, device
+ * capability, or entitlement arrives.
+ */
+export type PlaybackRetryPolicy = 'automatic' | 'manual' | 'evidence'
 
 /**
  * Result of one Play action. The backend already selected the source and, if
@@ -626,8 +652,9 @@ export type MediaPlaybackAttempt = {
  */
 export type PrepareMediaPlaybackResponse = {
   success: boolean
-  errorCode?: string | null
+  errorCode?: PlaybackErrorCode | null
   error?: string | null
+  retry?: PlaybackRetryPolicy | null
   publicationId?: string | null
   renditionId?: string | null
   coreKey?: string | null

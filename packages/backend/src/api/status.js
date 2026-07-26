@@ -53,6 +53,17 @@ export function createStatusApi({ ctx, recentPlaybackTimings = [] }) {
         playback: {
           lastPreparePlayback: recentPlaybackTimings[recentPlaybackTimings.length - 1] || null,
           recentPreparePlayback: recentPlaybackTimings.slice(-5),
+          // Strict P2P is a claim this device can be held to. Media bytes reach
+          // the player only through the loopback blob server, which exposes
+          // already-authorized Hypercore blocks and cannot fetch over HTTP;
+          // everything allowed to leave the device is control plane.
+          transport: {
+            mediaOrigin: 'peer-only',
+            mediaLoopbackHost: ctx.blobServerHost || '127.0.0.1',
+            mediaLoopbackPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
+            httpMediaFallback: false,
+            controlPlanePurposes: ['manifest', 'artwork', 'authentication', 'license', 'diagnostics'],
+          },
         },
         recommendedBoundary: null,
       }

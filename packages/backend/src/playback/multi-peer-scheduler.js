@@ -45,24 +45,43 @@ export function createMultiPeerScheduler(options = {}) {
   }
 
   return {
+    /**
+     * Serve one range from local Hypercore bytes or an authenticated peer.
+     * There is no third branch: no origin, no CDN, no HTTP fallback. When no
+     * peer can prove the range, that is the answer.
+     */
     async requestRange(input = {}) {
       const target = validateRange(input)
       if (local.hasRange?.(target)) return { status: 'ok', source: 'local', range: target, verified: true, originAttempted: false }
 
       const candidates = peers.map(peer => scorePeer(peer, target)).filter(Boolean).sort((a, b) => a.score - b.score || String(a.peer.id).localeCompare(String(b.peer.id)))
+      let mismatched = false
       for (const candidate of candidates) {
         const reservation = reserve(target)
-        if (!reservation) return { status: 'unavailable', errorCode: 'BUDGET_EXHAUSTED', range: target, originAttempted: false }
+        if (!reservation) {
+          return { status: 'unavailable', errorCode: 'SESSION_LIMIT', range: target, originAttempted: false }
+        }
         peerRequests++
         try {
-          const ok = typeof candidate.peer.verify === 'function' ? candidate.peer.verify(target) : true
-          if (!ok) continue
+          const ok = typeof candidate.peer.verify === 'function' ? await candidate.peer.verify(target) : true
+          if (!ok) {
+            // A peer that advertised the range and then failed verification is
+            // a range mismatch, not an absence of copies.
+            mismatched = true
+            continue
+          }
           return { status: 'ok', source: 'peer', peerId: candidate.peer.id, range: target, verified: true, originAttempted: false }
         } finally {
           release(reservation)
         }
       }
-      return { status: 'unavailable', errorCode: 'NO_VERIFIED_SOURCE', range: target, deadlineMs: input.deadlineMs || null, originAttempted: false }
+      return {
+        status: 'unavailable',
+        errorCode: mismatched ? 'RANGE_MISMATCH' : 'AVAILABILITY_BOUNDARY',
+        range: target,
+        deadlineMs: input.deadlineMs || null,
+        originAttempted: false,
+      }
     },
 
     reserveBackground(input = {}) {

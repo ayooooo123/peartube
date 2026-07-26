@@ -4626,6 +4626,212 @@ public struct GetPublicationSourcesResponseCodec: Codec {
 
 public let getPublicationSourcesResponse = GetPublicationSourcesResponseCodec()
 
+// @peartube/media-playback-attempt
+public struct MediaPlaybackAttempt {
+  public var publicationId: String
+  public var errorCode: String?
+
+  public init(publicationId: String, errorCode: String? = nil) {
+    self.publicationId = publicationId
+    self.errorCode = errorCode
+  }
+}
+
+public struct MediaPlaybackAttemptCodec: Codec {
+  public typealias Value = MediaPlaybackAttempt
+
+  let _errorCodeCodec = Primitive.UTF8()
+  let _publicationIdCodec = Primitive.UTF8()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: MediaPlaybackAttempt) {
+    _publicationIdCodec.preencode(&state, value.publicationId)
+    state.end += 1 // flags
+    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: MediaPlaybackAttempt) throws {
+    var flags: UInt = 0
+    if value.errorCode != nil { flags |= 1 }
+
+    try _publicationIdCodec.encode(&state, value.publicationId)
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> MediaPlaybackAttempt {
+    let _r0 = try _publicationIdCodec.decode(&state)
+    let flags = try Primitive.UInt().decode(&state)
+    let _r1: String? = (flags & 1) != 0 ? try _errorCodeCodec.decode(&state) : nil
+    return MediaPlaybackAttempt(
+      publicationId: _r0,
+      errorCode: _r1
+    )
+  }
+}
+
+public let mediaPlaybackAttempt = MediaPlaybackAttemptCodec()
+
+// @peartube/prepare-media-playback-request
+public struct PrepareMediaPlaybackRequest {
+  public var entityId: String
+  public var publicationId: String?
+
+  public init(entityId: String, publicationId: String? = nil) {
+    self.entityId = entityId
+    self.publicationId = publicationId
+  }
+}
+
+public struct PrepareMediaPlaybackRequestCodec: Codec {
+  public typealias Value = PrepareMediaPlaybackRequest
+
+  let _entityIdCodec = Primitive.UTF8()
+  let _publicationIdCodec = Primitive.UTF8()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: PrepareMediaPlaybackRequest) {
+    _entityIdCodec.preencode(&state, value.entityId)
+    state.end += 1 // flags
+    if let v = value.publicationId { _publicationIdCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: PrepareMediaPlaybackRequest) throws {
+    var flags: UInt = 0
+    if value.publicationId != nil { flags |= 1 }
+
+    try _entityIdCodec.encode(&state, value.entityId)
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.publicationId { try _publicationIdCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> PrepareMediaPlaybackRequest {
+    let _r0 = try _entityIdCodec.decode(&state)
+    let flags = try Primitive.UInt().decode(&state)
+    let _r1: String? = (flags & 1) != 0 ? try _publicationIdCodec.decode(&state) : nil
+    return PrepareMediaPlaybackRequest(
+      entityId: _r0,
+      publicationId: _r1
+    )
+  }
+}
+
+public let prepareMediaPlaybackRequest = PrepareMediaPlaybackRequestCodec()
+
+// @peartube/prepare-media-playback-response
+public struct PrepareMediaPlaybackResponse {
+  public var success: Bool
+  public var errorCode: String?
+  public var error: String?
+  public var retry: String?
+  public var publicationId: String?
+  public var renditionId: String?
+  public var coreKey: String?
+  public var attempts: [MediaPlaybackAttempt]?
+  public var sources: [MediaPublicationSource]?
+
+  public init(success: Bool = false, errorCode: String? = nil, error: String? = nil, retry: String? = nil, publicationId: String? = nil, renditionId: String? = nil, coreKey: String? = nil, attempts: [MediaPlaybackAttempt]? = nil, sources: [MediaPublicationSource]? = nil) {
+    self.success = success
+    self.errorCode = errorCode
+    self.error = error
+    self.retry = retry
+    self.publicationId = publicationId
+    self.renditionId = renditionId
+    self.coreKey = coreKey
+    self.attempts = attempts
+    self.sources = sources
+  }
+}
+
+public struct PrepareMediaPlaybackResponseCodec: Codec {
+  public typealias Value = PrepareMediaPlaybackResponse
+
+  let _attemptsArrayCodec = Primitive.Array(FrameCodec(MediaPlaybackAttemptCodec()))
+  let _coreKeyCodec = Primitive.UTF8()
+  let _errorCodeCodec = Primitive.UTF8()
+  let _errorCodec = Primitive.UTF8()
+  let _publicationIdCodec = Primitive.UTF8()
+  let _renditionIdCodec = Primitive.UTF8()
+  let _retryCodec = Primitive.UTF8()
+  let _sourcesArrayCodec = Primitive.Array(FrameCodec(MediaPublicationSourceCodec()))
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: PrepareMediaPlaybackResponse) {
+    // Compute flags for varint sizing
+    var flags: UInt = 0
+    if value.success { flags |= 1 }
+    if value.errorCode != nil { flags |= 2 }
+    if value.error != nil { flags |= 4 }
+    if value.retry != nil { flags |= 8 }
+    if value.publicationId != nil { flags |= 16 }
+    if value.renditionId != nil { flags |= 32 }
+    if value.coreKey != nil { flags |= 64 }
+    if value.attempts != nil { flags |= 128 }
+    if value.sources != nil { flags |= 256 }
+
+    Primitive.UInt().preencode(&state, flags)
+    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
+    if let v = value.error { _errorCodec.preencode(&state, v) }
+    if let v = value.retry { _retryCodec.preencode(&state, v) }
+    if let v = value.publicationId { _publicationIdCodec.preencode(&state, v) }
+    if let v = value.renditionId { _renditionIdCodec.preencode(&state, v) }
+    if let v = value.coreKey { _coreKeyCodec.preencode(&state, v) }
+    if let v = value.attempts { _attemptsArrayCodec.preencode(&state, v) }
+    if let v = value.sources { _sourcesArrayCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: PrepareMediaPlaybackResponse) throws {
+    var flags: UInt = 0
+    if value.success { flags |= 1 }
+    if value.errorCode != nil { flags |= 2 }
+    if value.error != nil { flags |= 4 }
+    if value.retry != nil { flags |= 8 }
+    if value.publicationId != nil { flags |= 16 }
+    if value.renditionId != nil { flags |= 32 }
+    if value.coreKey != nil { flags |= 64 }
+    if value.attempts != nil { flags |= 128 }
+    if value.sources != nil { flags |= 256 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
+    if let v = value.error { try _errorCodec.encode(&state, v) }
+    if let v = value.retry { try _retryCodec.encode(&state, v) }
+    if let v = value.publicationId { try _publicationIdCodec.encode(&state, v) }
+    if let v = value.renditionId { try _renditionIdCodec.encode(&state, v) }
+    if let v = value.coreKey { try _coreKeyCodec.encode(&state, v) }
+    if let v = value.attempts { try _attemptsArrayCodec.encode(&state, v) }
+    if let v = value.sources { try _sourcesArrayCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> PrepareMediaPlaybackResponse {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: String? = (flags & 2) != 0 ? try _errorCodeCodec.decode(&state) : nil
+    let _r1: String? = (flags & 4) != 0 ? try _errorCodec.decode(&state) : nil
+    let _r2: String? = (flags & 8) != 0 ? try _retryCodec.decode(&state) : nil
+    let _r3: String? = (flags & 16) != 0 ? try _publicationIdCodec.decode(&state) : nil
+    let _r4: String? = (flags & 32) != 0 ? try _renditionIdCodec.decode(&state) : nil
+    let _r5: String? = (flags & 64) != 0 ? try _coreKeyCodec.decode(&state) : nil
+    let _r6: [MediaPlaybackAttempt]? = (flags & 128) != 0 ? try _attemptsArrayCodec.decode(&state) : nil
+    let _r7: [MediaPublicationSource]? = (flags & 256) != 0 ? try _sourcesArrayCodec.decode(&state) : nil
+    return PrepareMediaPlaybackResponse(
+      success: (flags & 1) != 0,
+      errorCode: _r0,
+      error: _r1,
+      retry: _r2,
+      publicationId: _r3,
+      renditionId: _r4,
+      coreKey: _r5,
+      attempts: _r6,
+      sources: _r7
+    )
+  }
+}
+
+public let prepareMediaPlaybackResponse = PrepareMediaPlaybackResponseCodec()
+
 // @peartube/get-claim-provenance-request
 public struct GetClaimProvenanceRequest {
   public var claimId: String

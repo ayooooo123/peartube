@@ -2649,6 +2649,12 @@
           "version": 1
         },
         {
+          "name": "retry",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
           "name": "publicationId",
           "required": false,
           "type": "string",

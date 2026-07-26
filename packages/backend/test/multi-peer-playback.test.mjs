@@ -31,7 +31,7 @@ test('multi-peer scheduler returns structured unavailability before ad hoc origi
   const scheduler = createMultiPeerScheduler({ local: { hasRange: () => false }, peers: [] })
   const result = await scheduler.requestRange({ start: 10, end: 12, purpose: 'startup', deadlineMs: 1 })
   t.is(result.status, 'unavailable')
-  t.is(result.errorCode, 'NO_VERIFIED_SOURCE')
+  t.is(result.errorCode, 'AVAILABILITY_BOUNDARY', 'unavailability uses the bounded playback vocabulary')
   t.is(result.originAttempted, false)
 })
 

@@ -4,22 +4,7 @@ import { resolveMediaEntity } from '../media-graph/resolver.js'
 import { selectPlaybackSource, sourceAvailabilityScore } from '../media-graph/source-selector.js'
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 import { preparePlaybackSource } from '../playback/source-preparation.js'
-
-/** One user-facing message per preparation failure. */
-const PREPARATION_MESSAGES = Object.freeze({
-  NO_COMPATIBLE_SOURCE: 'No source on this device can play this title right now.',
-  AVAILABILITY_BOUNDARY: 'Unavailable - no peer currently serves the required ranges.',
-  PREPARATION_DEADLINE: 'Playback did not start in time. Try again.',
-  PREPARATION_CANCELLED: 'Playback preparation was cancelled.',
-  ATTEMPT_LIMIT: 'Every currently reachable source failed to start.',
-  PEER_TIMEOUT: 'The peer serving this title stopped responding.',
-  PEER_DISCONNECT: 'The peer serving this title disconnected.',
-  RANGE_MISMATCH: 'This source did not serve the ranges it advertised.',
-  SESSION_LIMIT: 'Too many playback sessions are open on this device.',
-  DRM_UNSUPPORTED: 'This device cannot play the protected version of this title.',
-  LICENSE_DENIED: 'The provider did not grant a playback license.',
-  LICENSE_EXPIRED: 'The playback license expired. Try again.',
-})
+import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '../playback/errors.js'
 
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 100
@@ -320,9 +305,13 @@ export function createMediaGraphApi(options = {}) {
           renditionId: source.renditionId,
           coreKey: requirement?.coreKey,
         })
-      } catch {
+      } catch (thrown) {
         session.close()
-        return { success: false, errorCode: 'PEER_TIMEOUT' }
+        // A scoped session reports its own bounded code (SESSION_LIMIT, and
+        // later DRM codes). Only an unrecognised failure degrades to a peer
+        // timeout, so a real reason is never flattened into the wrong policy.
+        const errorCode = isPlaybackErrorCode(thrown?.errorCode) ? thrown.errorCode : 'PEER_TIMEOUT'
+        return { success: false, errorCode }
       }
       if (!authorized) {
         session.close()
@@ -754,7 +743,8 @@ export function createMediaGraphApi(options = {}) {
         return {
           success: false,
           errorCode: prepared.errorCode,
-          error: PREPARATION_MESSAGES[prepared.errorCode] || 'Playback preparation failed',
+          error: playbackErrorMessage(prepared.errorCode),
+          retry: playbackErrorRetry(prepared.errorCode),
           attempts: prepared.attempts,
           sources,
         }

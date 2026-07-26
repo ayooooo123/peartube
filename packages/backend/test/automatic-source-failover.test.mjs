@@ -1,6 +1,7 @@
 import test from 'brittle'
 
 import { createMediaGraphApi } from '../src/api/media-graph.js'
+import { createPlaybackError } from '../src/playback/errors.js'
 import {
   areSourcesEquivalent,
   selectPlaybackSource,
@@ -388,9 +389,14 @@ test('Play reports one bounded message when every source fails', async (t) => {
 
   const result = await api.prepareMediaPlayback({ entityId: 'work:movie-1' })
   t.is(result.success, false)
-  t.is(result.errorCode, 'PEER_TIMEOUT')
+  t.is(result.errorCode, 'ATTEMPT_LIMIT', 'exhausting every equivalent source is its own outcome')
+  t.is(result.retry, 'manual', 'nothing automatic is left to try')
   t.ok(result.error.length > 0, 'every failure code carries one user-facing message')
-  t.is(result.attempts.length, 2)
+  t.alike(
+    result.attempts.map(attempt => attempt.errorCode),
+    ['PEER_TIMEOUT', 'PEER_TIMEOUT'],
+    'the per-source reasons stay visible'
+  )
 })
 
 test('Play refuses a rendition whose core key does not match the signed manifest', async (t) => {
@@ -399,4 +405,19 @@ test('Play refuses a rendition whose core key does not match the signed manifest
 
   t.is(result.success, true, 'the manifest-authorized key opens')
   t.is(result.coreKey, 'a'.repeat(64))
+})
+
+test('a session limit reaches Play as itself, not as a peer timeout', async (t) => {
+  const api = createMediaGraphApi(graphFixture({
+    openCore: async () => { throw createPlaybackError('SESSION_LIMIT') },
+  }))
+
+  const result = await api.prepareMediaPlayback({ entityId: 'work:movie-1' })
+  t.is(result.success, false)
+  t.alike(
+    result.attempts.map(attempt => attempt.errorCode),
+    ['SESSION_LIMIT', 'SESSION_LIMIT'],
+    'the scoped session reports its own bounded code'
+  )
+  t.is(result.retry, 'manual', 'every equivalent source was already tried')
 })

@@ -10,6 +10,7 @@ import BlobServer from 'hypercore-blob-server';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
+import { assertLoopbackPlaybackUrl } from './playback/transport-guard.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
@@ -2588,6 +2589,7 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
     host: ctx.blobServerHost || '127.0.0.1',
     port: ctx.blobServer?.port || ctx.blobServerPort
   });
+  assertLoopbackPlaybackUrl(url, 'instant blob playback url')
 
   // Kick off background sync (don't await)
   const blobsCore = ctx.store.get(keyBuffer)
@@ -2704,6 +2706,10 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
       host: ctx.blobServerHost || '127.0.0.1',
       port: ctx.blobServer?.port || ctx.blobServerPort
     });
+    // Strict P2P: the only URL a player may ever receive is the local blob
+    // server. A non-loopback link here would mean media bytes could come from
+    // an origin, so refuse to hand it out at all.
+    assertLoopbackPlaybackUrl(url, 'direct blob playback url')
 
     console.log('[Storage] Direct blob URL (hyperblobs):', redactCapabilityUrl(url));
     return { url };

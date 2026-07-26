@@ -737,6 +737,8 @@ ns.register({
     { name: 'success', type: 'bool', required: true },
     { name: 'errorCode', type: 'string', required: false },
     { name: 'error', type: 'string', required: false },
+    // automatic | manual | evidence. What, if anything, can change the answer.
+    { name: 'retry', type: 'string', required: false },
     { name: 'publicationId', type: 'string', required: false },
     { name: 'renditionId', type: 'string', required: false },
     { name: 'coreKey', type: 'string', required: false },

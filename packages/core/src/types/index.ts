@@ -213,6 +213,35 @@ export interface MediaRenditionDescriptor {
 }
 
 /**
+ * The complete playback failure vocabulary. Every viewer-visible playback
+ * failure is exactly one of these; there is no generic fallback code.
+ */
+export type PlaybackErrorCode =
+  | 'AVAILABILITY_BOUNDARY'
+  | 'NO_COMPATIBLE_SOURCE'
+  | 'PEER_TIMEOUT'
+  | 'PEER_DISCONNECT'
+  | 'RANGE_MISMATCH'
+  | 'SESSION_LIMIT'
+  | 'PREPARATION_DEADLINE'
+  | 'PREPARATION_CANCELLED'
+  | 'ATTEMPT_LIMIT'
+  | 'DRM_UNSUPPORTED'
+  | 'LICENSE_DENIED'
+  | 'LICENSE_EXPIRED';
+
+/**
+ * `automatic` - preparation may try another equivalent source itself.
+ * `manual` - only a new user action can change the outcome.
+ * `evidence` - nothing changes until new availability evidence, device
+ * capability, or entitlement arrives; retrying in a loop cannot help.
+ */
+export type PlaybackRetryPolicy = 'automatic' | 'manual' | 'evidence';
+
+/** How media bytes reached, or failed to reach, the player. */
+export type PlaybackTrafficClass = 'media-loopback' | 'control-plane' | 'forbidden-origin';
+
+/**
  * Local, point-in-time reachability assessment for one immutable rendition.
  * Never a durability or availability guarantee: it expires at `expiresAt`.
  */

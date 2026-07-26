@@ -36,6 +36,14 @@ test('bootstrap manager replaces per-publisher locators and suppresses replay', 
   t.is(manager.getLocator(first.body.publisherId).catalogHead, '2'.repeat(64))
 })
 
+test('a structurally valid unknown locator is retained only as an unverified proof candidate', async (t) => {
+  const manager = createBootstrapManager({ now: () => 15_000, trustedSigners: [] })
+  const result = await manager.ingestLocator('peer-a', locator().envelope)
+  t.is(result.status, 'accepted')
+  t.is(manager.getLocator('a'.repeat(64)).trusted, false)
+  t.is(manager.getLocator('a'.repeat(64)).catalogChainVerified, false)
+})
+
 test('bootstrap manager enforces per-peer quotas and never opens media/core replication', async (t) => {
   const opened = []
   const manager = createBootstrapManager({ now: () => 15_000, trustedSigners: [signer.publicKey], maxLocatorsPerPeer: 1, openCore: key => opened.push(key) })

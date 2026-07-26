@@ -356,6 +356,17 @@ export function createConsumerCatalogProjection(options = {}) {
   const maxCandidates = safeLimit(options.maxCandidates, 4096, 10_000, 'maxCandidates')
   let rejectedCandidates = []
   let introducedPublisherIds = []
+  let lastInputFingerprint = null
+  let lastRebuild = { accepted: 0, rejected: 0, rejectionCodes: {} }
+  let acceptedCandidates = new Map()
+  const downstream = {
+    artwork: options.onArtwork,
+    topic: options.onTopicJoin,
+    playback: options.onPlaybackPreparation,
+    cache: options.onCache,
+    seed: options.onSeed,
+    archive: options.onArchive,
+  }
 
   function availablePublishers() {
     if (!bootstrapManager || typeof bootstrapManager.listLocators !== 'function') return null
@@ -382,7 +393,10 @@ export function createConsumerCatalogProjection(options = {}) {
 
   return Object.freeze({
     rebuild() {
-      const records = indexFeedManager?.getRecords?.() || []
+      const records = [
+        ...(indexFeedManager?.getRecords?.() || []),
+        ...(typeof options.publisherRecords === 'function' ? options.publisherRecords() || [] : []),
+      ]
       const accepted = []
       const rejectionCodes = {}
       const publishers = availablePublishers()
@@ -390,7 +404,7 @@ export function createConsumerCatalogProjection(options = {}) {
       introducedPublisherIds = publishers ? Array.from(publishers).sort() : []
       for (const record of records) {
         const publisherId = String(record?.publisherId || '').toLowerCase()
-        if (publishers && !publishers.has(publisherId)) {
+        if (publishers && record?.directPublisher !== true && !publishers.has(publisherId)) {
           reject(record, 'PUBLISHER_NOT_INTRODUCED', rejectionCodes)
           continue
         }
@@ -415,12 +429,21 @@ export function createConsumerCatalogProjection(options = {}) {
         String(left.publicationId).localeCompare(String(right.publicationId)) ||
         String(left.sourceId || '').localeCompare(String(right.sourceId || ''))
       ))
+      const fingerprint = JSON.stringify({
+        accepted,
+        rejected: rejectedCandidates,
+        introducedPublisherIds,
+      })
+      if (fingerprint === lastInputFingerprint) return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
       const indexed = localIndex.replaceRecords(accepted)
-      return {
+      acceptedCandidates = new Map(accepted.map(record => [record.entityRef, record]))
+      lastInputFingerprint = fingerprint
+      lastRebuild = {
         accepted: indexed.accepted + indexed.duplicates,
         rejected: rejectedCandidates.length + indexed.rejected,
         rejectionCodes,
       }
+      return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
     },
     update() { return this.rebuild() },
     getCatalog(request = {}) {
@@ -446,6 +469,13 @@ export function createConsumerCatalogProjection(options = {}) {
     getIntroducedPublishers() { return introducedPublisherIds.slice() },
     getCuratorSubscriptions() {
       return Array.from(moderationPolicy?.curatorSubscriptions || []).map(String).sort()
+    },
+    async schedule(entityRef, operations = []) {
+      const record = acceptedCandidates.get(String(entityRef))
+      if (!record) return { scheduled: false, errorCode: 'CONSUMER_CANDIDATE_NOT_VISIBLE' }
+      const names = Array.from(new Set(operations)).filter(name => Object.hasOwn(downstream, name))
+      for (const name of names) await downstream[name]?.(record)
+      return { scheduled: true, operations: names }
     },
   })
 }

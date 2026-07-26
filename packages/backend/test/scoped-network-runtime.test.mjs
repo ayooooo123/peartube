@@ -11,6 +11,8 @@ import {
 import {
   createPublicationManifest,
 } from '../src/assets/index.js'
+import { createIndexFeedPage } from '../src/indexing/feed-contract.js'
+import { createModerationFeedPage } from '../src/moderation/feed-contract.js'
 import {
   createArchiveChallenge,
   createArchiveChallengeEnvelope,
@@ -22,7 +24,14 @@ import { createArchiveRequest } from '../src/archive/request.js'
 import {
   createPublisherNamespaceDescriptor,
   derivePublisherId,
+  encodePublisherNamespaceDescriptor,
+  PUBLISHER_RECORD_TYPES,
 } from '../src/publisher/index.js'
+import {
+  attachSignedEnvelopeSignature,
+  prepareSignedEnvelope,
+  signedRecordSignaturePreimage,
+} from '../src/records/index.js'
 import {
   createScopedNetworkRuntime,
   createScopedProtocolSession,
@@ -53,6 +62,21 @@ function connectionPair () {
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+function namespaceGenesis (descriptor, root) {
+  const prepared = prepareSignedEnvelope({
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    schemaMajor: 1,
+    schemaMinor: 0,
+    issuerIdentityKey: descriptor.publisherId,
+    signerKey: root.publicKey,
+    policyEpoch: 0,
+    issuerSequence: 0,
+    signedAt: 10,
+    canonicalBody: encodePublisherNamespaceDescriptor(descriptor),
+  }, { hash: crypto.hash })
+  return attachSignedEnvelopeSignature(prepared, crypto.sign(signedRecordSignaturePreimage(prepared), root.secretKey))
+}
 
 function fakeSwarm () {
   const swarm = new EventEmitter()
@@ -489,6 +513,99 @@ test('real Protomux sessions open on both sides without server topic metadata an
 
   await runtimeA.close()
   await runtimeB.close()
+  pair.a.destroy()
+  pair.b.destroy()
+})
+
+test('scoped index and moderation feeds transfer only signed bounded pages', async (t) => {
+  const curator = crypto.keyPair(bytes(32, 141))
+  const moderator = crypto.keyPair(bytes(32, 142))
+  const publisherId = b4a.toString(bytes(32, 143), 'hex')
+  const publicationId = b4a.toString(bytes(32, 144), 'hex')
+  const curatorId = b4a.toString(curator.publicKey, 'hex')
+  const moderatorId = b4a.toString(moderator.publicKey, 'hex')
+  const indexPage = createIndexFeedPage({
+    curatorId,
+    pageCursor: '0',
+    nextCursor: null,
+    keyPair: curator,
+    issuedAt: 10,
+    expiresAt: 100,
+    records: [{ kind: 'movie', entityRef: 'work:scoped', publicationId, publisherId, creator: 'curator', collectionId: 'catalog', playable: true }],
+  })
+  const moderationPage = createModerationFeedPage({
+    moderatorId,
+    pageCursor: '0',
+    nextCursor: null,
+    keyPair: moderator,
+    issuedAt: 10,
+    expiresAt: 100,
+    records: [{ action: 'block', targetType: 'publication', targetId: publicationId }],
+  })
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, now: () => 20 })
+  const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, now: () => 20 })
+  await source.start()
+  await consumer.start()
+  await source.provideIndexFeed({ curatorId, fetchPage: async cursor => cursor === '0' ? { envelope: indexPage.envelope } : null })
+  await source.provideModerationFeed({ moderatorId, fetchPage: async cursor => cursor === '0' ? { envelope: moderationPage.envelope } : null })
+  await consumer.followIndexFeed({ curatorId })
+  await consumer.followModerationFeed({ moderatorId })
+  const pair = connectionPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, topics: [], client: false })
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, topics: [], client: true })
+  for (let attempt = 0; attempt < 10 && (consumer.getIndexFeedRecords().length === 0 || consumer.getModerationFeedRecords().length === 0); attempt++) await settle()
+  t.is(consumer.getIndexFeedRecords().length, 1)
+  t.is(consumer.getModerationFeedRecords().length, 1)
+  t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'index').length, 1)
+  t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'moderation').length, 1)
+
+  await source.close()
+  await consumer.close()
+  pair.a.destroy()
+  pair.b.destroy()
+})
+
+test('an untrusted bootstrap locator can bind a publisher only after a scoped namespace proof', async (t) => {
+  const root = crypto.keyPair(bytes(32, 151))
+  const locatorSigner = crypto.keyPair(bytes(32, 152))
+  const descriptor = createPublisherNamespaceDescriptor({ genesisRootKey: root.publicKey, catalogBootstrapKey: bytes(32, 153) })
+  const locator = createBootstrapLocator({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+    catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+    catalogHead: b4a.toString(bytes(32, 154), 'hex'),
+    authorizationChainDigest: b4a.toString(bytes(32, 155), 'hex'),
+    issuedAt: 10,
+    expiresAt: 100,
+    keyPair: locatorSigner,
+  })
+  const proof = { genesis: namespaceGenesis(descriptor, root), transitions: [], descriptor }
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: fakeRegistry(descriptor), now: () => 20 })
+  const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: fakeRegistry(descriptor), now: () => 20 })
+  await source.start()
+  await consumer.start()
+  await source.providePublisherNamespaceProof({ locator: locator.body, proof })
+  const ingested = await consumer.inspectIncomingFrame({
+    purpose: 'bootstrap', topic: deriveBootstrapTopic(), peerId: 'bootstrap-peer',
+    frame: encodePeerFrame({ purpose: 'bootstrap', type: 'locator', requestId: 1, payload: (await import('../src/records/application-envelope.js')).encodeApplicationEnvelope(locator.envelope) }),
+  })
+  t.is(ingested.status, 'accepted')
+  const pair = connectionPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, topics: [], client: false })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, topics: [], client: true })
+  await settle()
+  const result = await consumer.followBootstrapLocator({ publisherId: locator.body.publisherId })
+  t.is(result.status, 'following')
+  t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'publisher').length, 1)
+  await source.close()
+  await consumer.close()
   pair.a.destroy()
   pair.b.destroy()
 })

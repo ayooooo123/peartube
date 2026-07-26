@@ -300,6 +300,7 @@ export function createMediaGraphApi(options = {}) {
     async getMediaCatalog(request = {}) {
       if (consumerCatalogProjection) {
         try {
+          await options.ctx?.mediaCatalogProjection?.update?.()
           await consumerCatalogProjection.update?.()
           const page = consumerCatalogProjection.getCatalog(request)
           if (!page?.success) return page

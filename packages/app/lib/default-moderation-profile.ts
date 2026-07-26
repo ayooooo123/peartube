@@ -60,6 +60,9 @@ export function createDefaultModerationProfileStore({
     if (!valid(stored)) return { profile: clone(bundled), customized: false }
     // A user decision is durable across app updates. Only Restore Defaults opts
     // into a newer bundled descriptor.
+    if (stored.customized !== true && stored.profile.version < bundled.version) {
+      return { profile: clone(bundled), customized: false }
+    }
     return { profile: clone(stored.profile), customized: stored.customized === true }
   }
 

@@ -15,6 +15,8 @@ import {
   deriveArchiveTopic,
   deriveAssetTopic,
   deriveBootstrapTopic,
+  deriveIndexTopic,
+  deriveModerationTopic,
   derivePublisherTopic,
   topicHex,
 } from './topics.js'
@@ -23,6 +25,9 @@ import {
 } from '../discovery/bootstrap-protocol.js'
 import { createBootstrapManager } from '../discovery/bootstrap-manager.js'
 import { createPublisherManager } from '../discovery/publisher-manager.js'
+import { INDEX_FEED_CAPABILITY } from '../indexing/feed-contract.js'
+import { createIndexFeedManager } from '../indexing/feed-manager.js'
+import { createModerationManager } from '../moderation/manager.js'
 import {
   decodeApplicationEnvelope,
   encodeApplicationEnvelope,
@@ -32,6 +37,7 @@ import {
   decodePublisherNamespaceDescriptor,
   verifyPublisherNamespaceDescriptor,
 } from '../publisher/namespace.js'
+import { verifyPublisherNamespaceProof } from '../publisher/namespace-proof.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
 
 
@@ -39,9 +45,10 @@ const FRAME_TYPES = PEER_FRAME_TYPE_NAMES
 export const ASSET_RENDITION_CAPABILITY = 'asset-rendition:v1'
 export const ARCHIVE_RANGE_CAPABILITY = 'archive-range:v1'
 export const ARCHIVE_DISCOVERY_CAPABILITY = 'archive-discovery:v1'
+export const MODERATION_FEED_CAPABILITY = 'moderation-feed:v1'
 export const SCOPED_NETWORK_PROTOCOL = 'peartube/scoped-network'
 
-const PURPOSE_CODES = Object.freeze({ bootstrap: 1, publisher: 2, asset: 3, archive: 5, 'archive-discovery': 6 })
+const PURPOSE_CODES = Object.freeze({ bootstrap: 1, publisher: 2, asset: 3, archive: 5, 'archive-discovery': 6, index: 7, moderation: 8 })
 const PURPOSE_NAMES = new Map(Object.entries(PURPOSE_CODES).map(([name, code]) => [code, name]))
 const MAX_HELLO_BYTES = 2048
 const MAX_CAPABILITIES = 16
@@ -247,6 +254,8 @@ function capabilityForPurpose (purpose) {
     case 'asset': return ASSET_RENDITION_CAPABILITY
     case 'archive': return ARCHIVE_RANGE_CAPABILITY
     case 'archive-discovery': return ARCHIVE_DISCOVERY_CAPABILITY
+    case 'index': return INDEX_FEED_CAPABILITY
+    case 'moderation': return MODERATION_FEED_CAPABILITY
     default: fail('unsupported purpose')
   }
 }
@@ -336,6 +345,11 @@ export function createScopedNetworkRuntime (options = {}) {
     supportedCapabilities: [BOOTSTRAP_LOCATOR_CAPABILITY],
     verifyCatalogChain: options.verifyCatalogChain,
   })
+  const indexFeedManager = options.indexFeedManager || createIndexFeedManager({ now: options.now })
+  const moderationManager = options.moderationManager || createModerationManager({ now: options.now })
+  const indexFeedProviders = new Map()
+  const moderationFeedProviders = new Map()
+  const publisherProofProviders = new Map()
   const publisherManager = options.publisherManager || createPublisherManager({
     supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
     ingestBatch: options.ingestPublisherBatch,
@@ -523,6 +537,160 @@ export function createScopedNetworkRuntime (options = {}) {
     if (sender.send(frame, tracked.channel) === false) return false
     counters.outboundFrames++
     return true
+  }
+
+  function encodeFeedRequest(cursor) {
+    const value = String(cursor || '0')
+    if (b4a.byteLength(value) > 256) fail('feed cursor is too large')
+    return c.encode(c.any, { cursor: value })
+  }
+
+  function decodeFeedRequest(payload) {
+    const value = c.decode(c.any, payload)
+    if (!value || typeof value.cursor !== 'string' || b4a.byteLength(value.cursor) > 256) fail('feed request is invalid')
+    return value.cursor
+  }
+
+  function encodeFeedResponse(cursor, envelope) {
+    const encoded = encodeApplicationEnvelope(envelope)
+    if (encoded.byteLength > MAX_PEER_FRAME_BYTES - 1024) fail('feed page exceeds frame bound')
+    return c.encode(c.any, { cursor, envelope: encoded })
+  }
+
+  function decodeFeedResponse(payload) {
+    const value = c.decode(c.any, payload)
+    if (!value || typeof value.cursor !== 'string' || b4a.byteLength(value.cursor) > 256 || !value.envelope) fail('feed response is invalid')
+    const envelope = decodeApplicationEnvelope(b4a.from(value.envelope))
+    return { cursor: value.cursor, envelope }
+  }
+
+  async function handleFeedFrame(scope, tracked, frame) {
+    const providers = scope.feedKind === 'index' ? indexFeedProviders : moderationFeedProviders
+    if (frame.type === 'feed-page-request') {
+      const cursor = decodeFeedRequest(frame.payload)
+      const fetchPage = providers.get(scope.feedId)
+      if (!fetchPage) return { status: 'rejected', reason: 'feed-not-provided' }
+      const page = await fetchPage(cursor)
+      if (!page?.envelope) return { status: 'rejected', reason: 'feed-page-unavailable' }
+      if (!sendScopedFrame(tracked, scope.purpose, 'feed-page-response', encodeFeedResponse(cursor, page.envelope))) return { status: 'rejected', reason: 'feed-response-send-failed' }
+      return { status: 'sent' }
+    }
+    if (frame.type === 'feed-page-response') {
+      const response = decodeFeedResponse(frame.payload)
+      const pending = scope.feedPending?.get(response.cursor)
+      if (!pending) return { status: 'rejected', reason: 'unexpected-feed-page' }
+      clearTimeout(pending.timer)
+      scope.feedPending.delete(response.cursor)
+      pending.resolve({ envelope: response.envelope })
+      return { status: 'accepted' }
+    }
+    return { status: 'rejected', reason: 'feed-frame-type-not-allowed' }
+  }
+
+  function requestFeedPage(scope, cursor) {
+    const key = String(cursor || '0')
+    if (scope.feedPending?.has(key)) return scope.feedPending.get(key).promise
+    const tracked = [...scope.sessions.values()].find(session => !session.closed && session.state === 'active')
+    if (!tracked) return Promise.reject(Object.assign(new Error('feed peer unavailable'), { code: 'FEED_PEER_UNAVAILABLE' }))
+    let resolve, reject
+    const promise = new Promise((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
+    const timer = setTimeout(() => {
+      scope.feedPending.delete(key)
+      reject(Object.assign(new Error('feed page timed out'), { code: 'FEED_PAGE_TIMEOUT' }))
+    }, 10_000)
+    timer.unref?.()
+    scope.feedPending.set(key, { promise, resolve, reject, timer })
+    if (!sendScopedFrame(tracked, scope.purpose, 'feed-page-request', encodeFeedRequest(key))) {
+      clearTimeout(timer)
+      scope.feedPending.delete(key)
+      reject(Object.assign(new Error('feed page request failed'), { code: 'FEED_REQUEST_FAILED' }))
+    }
+    return promise
+  }
+
+  function encodeNamespaceProof(proof) {
+    const payload = c.encode(c.any, proof)
+    if (payload.byteLength > MAX_PEER_FRAME_BYTES - 1024) fail('namespace proof exceeds frame bound')
+    return payload
+  }
+
+  function decodeNamespaceProof(payload) {
+    const proof = c.decode(c.any, payload)
+    if (!proof || typeof proof !== 'object' || !proof.genesis || !Array.isArray(proof.transitions)) {
+      fail('namespace proof response is invalid')
+    }
+    return proof
+  }
+
+  async function handlePublisherProofFrame(scope, tracked, frame) {
+    if (frame.type === 'namespace-proof-request') {
+      const proof = publisherProofProviders.get(scope.publisherId)
+      if (!proof) return { status: 'rejected', reason: 'namespace-proof-unavailable' }
+      if (!sendScopedFrame(tracked, 'publisher', 'namespace-proof-response', encodeNamespaceProof(proof))) {
+        return { status: 'rejected', reason: 'namespace-proof-send-failed' }
+      }
+      return { status: 'sent' }
+    }
+    if (frame.type === 'namespace-proof-response') {
+      const pending = scope.proofPending
+      if (!pending) return { status: 'rejected', reason: 'unexpected-namespace-proof' }
+      clearTimeout(pending.timer)
+      scope.proofPending = null
+      pending.resolve(decodeNamespaceProof(frame.payload))
+      return { status: 'accepted' }
+    }
+    return { status: 'rejected', reason: 'publisher-frame-type-not-allowed' }
+  }
+
+  async function awaitActiveScopedSession (scope, timeoutMs = 1_000) {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const active = [...scope.sessions.values()].find(session => !session.closed && session.state === 'active')
+      if (active) return active
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    return null
+  }
+
+  async function requestNamespaceProof(scope) {
+    if (scope.proofPending?.promise) return scope.proofPending.promise
+    const tracked = await awaitActiveScopedSession(scope)
+    if (!tracked) return Promise.reject(Object.assign(new Error('publisher proof peer unavailable'), { code: 'PUBLISHER_PROOF_PEER_UNAVAILABLE' }))
+    let resolve, reject
+    const promise = new Promise((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
+    const timer = setTimeout(() => {
+      if (scope.proofPending?.promise === promise) scope.proofPending = null
+      reject(Object.assign(new Error('publisher proof timed out'), { code: 'PUBLISHER_PROOF_TIMEOUT' }))
+    }, 10_000)
+    timer.unref?.()
+    scope.proofPending = { promise, resolve, reject, timer }
+    if (!sendScopedFrame(tracked, 'publisher', 'namespace-proof-request', b4a.alloc(0))) {
+      clearTimeout(timer)
+      scope.proofPending = null
+      reject(Object.assign(new Error('publisher proof request failed'), { code: 'PUBLISHER_PROOF_REQUEST_FAILED' }))
+    }
+    return promise
+  }
+
+  async function syncFollowedFeed (scope) {
+    if (!scope || scope.closed || !scope.modes.has('subscribed')) return { status: 'not-subscribed' }
+    try {
+      if (scope.feedKind === 'index') {
+        return await indexFeedManager.syncFeed({
+          curatorId: scope.feedId,
+          fetchPage: cursor => requestFeedPage(scope, cursor),
+        })
+      }
+      return await moderationManager.syncFeed({
+        moderatorId: scope.feedId,
+        fetchPage: cursor => requestFeedPage(scope, cursor),
+      })
+    } catch (error) {
+      // Discovery is intentionally opportunistic: retaining a local subscription
+      // must not make a policy transition fail merely because no peer currently
+      // serves its bounded signed pages.
+      return { status: 'deferred', errorCode: error?.code || 'FEED_SYNC_DEFERRED' }
+    }
   }
 
   function clearAssetTimer (tracked) {
@@ -1052,6 +1220,16 @@ export function createScopedNetworkRuntime (options = {}) {
     if (mode) scope.modes.delete(mode)
     if (scope.modes.size > 0) return false
     scope.closed = true
+    for (const pending of scope.feedPending?.values() || []) {
+      clearTimeout(pending.timer)
+      pending.reject(Object.assign(new Error('feed scope released'), { code: 'FEED_SCOPE_RELEASED' }))
+    }
+    scope.feedPending?.clear()
+    if (scope.proofPending) {
+      clearTimeout(scope.proofPending.timer)
+      scope.proofPending.reject(Object.assign(new Error('publisher proof scope released'), { code: 'PUBLISHER_PROOF_SCOPE_RELEASED' }))
+      scope.proofPending = null
+    }
     for (const transfer of scope.archiveChallengeProofTransfers?.values() || []) clearTimeout(transfer.timer)
     scope.archiveChallengeProofTransfers?.clear()
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
@@ -1114,12 +1292,18 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!scope || scope.closed) return { status: 'rejected', reason: 'scope-not-retained' }
     if (scope.purpose === 'bootstrap') return { status: 'authorized', action: 'metadata-only' }
     if (scope.purpose === 'publisher') {
+      if (scope.modes.has('candidate') && !scope.modes.has('followed') && !scope.modes.has('local')) {
+        return { status: 'authorized', action: 'namespace-proof', publisherId: scope.publisherId }
+      }
       if (!scope.binding?.catalog || (!scope.modes.has('followed') && !scope.modes.has('local'))) return { status: 'rejected', reason: 'publisher-not-followed' }
       if (connection) {
         attachCatalogReplication(scope, connection, tracked)
         counters.openedCatalogs++
       }
       return { status: 'authorized', action: 'catalog', publisherId: scope.publisherId }
+    }
+    if (scope.purpose === 'index' || scope.purpose === 'moderation') {
+      return { status: 'authorized', action: 'bounded-feed', feedId: scope.feedId }
     }
     if (scope.purpose === 'asset') {
       if (!scope.core || !scope.coreKey) return { status: 'rejected', reason: 'core-not-authorized' }
@@ -1183,12 +1367,17 @@ export function createScopedNetworkRuntime (options = {}) {
         if (result.status !== 'authorized') fail(result.reason)
         if (tracked) {
           tracked.state = 'active'
+          if (scope.purpose === 'index' || scope.purpose === 'moderation') {
+            void syncFollowedFeed(scope)
+          }
           if (scope.purpose === 'asset') startAssetPumpWhenOpen(scope, tracked)
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
         }
       },
       onFrame: frame => {
         if (scope.purpose === 'bootstrap') return handleBootstrapFrame(frame, { peerId: remoteKey })
+        if (scope.purpose === 'publisher') return handlePublisherProofFrame(scope, scope.sessions.get(remoteKey), frame)
+        if (scope.purpose === 'index' || scope.purpose === 'moderation') return handleFeedFrame(scope, scope.sessions.get(remoteKey), frame)
         if (scope.purpose === 'asset') return handleAssetFrame(scope, scope.sessions.get(remoteKey), frame)
         if (scope.purpose === 'archive') return handleArchiveFrame(scope, scope.sessions.get(remoteKey), frame)
         if (scope.purpose === 'archive-discovery') return handleArchiveFrame(scope, scope.sessions.get(remoteKey), frame)
@@ -1435,9 +1624,112 @@ export function createScopedNetworkRuntime (options = {}) {
     await publisherManager.followPublisher(id)
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'followed', publisherId: id, descriptor, binding })
+    scope.publisherId = id
+    scope.descriptor = descriptor
+    scope.binding = binding
     const result = { status: 'following', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     followedPublishers.set(id, { scope, result })
     return result
+  }
+
+  // Bootstrap metadata only identifies an untrusted candidate. A caller may
+  // supply the bounded namespace proof collected from that publisher topic;
+  // this is the sole route from candidate metadata to catalog binding.
+  async function followBootstrapLocator ({ publisherId, proof = null } = {}) {
+    const id = hex32(publisherId, 'publisherId')
+    const locator = bootstrapManager.getLocator?.(id)
+    if (!locator) fail('bootstrap locator is unavailable', 'BOOTSTRAP_LOCATOR_UNAVAILABLE')
+    const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: locator.catalogEpoch })
+    const { scope } = joinScope({
+      purpose: 'publisher', topic, scopeId: id, mode: 'candidate', publisherId: id,
+      candidateLocator: locator, proofPending: null,
+    })
+    let verified
+    try {
+      verified = verifyPublisherNamespaceProof({ locator, ...(proof || await requestNamespaceProof(scope)) })
+    } catch (error) {
+      await leaveScope(scope, 'candidate')
+      const rejected = new Error(error?.message || 'namespace proof rejected')
+      rejected.code = 'PUBLISHER_NAMESPACE_PROOF_REJECTED'
+      throw rejected
+    }
+    await leaveScope(scope, 'candidate')
+    return followPublisher({ publisherId: id, namespaceDescriptor: verified.descriptor })
+  }
+
+  async function providePublisherNamespaceProof ({ locator, proof } = {}) {
+    const id = hex32(locator?.publisherId, 'locator publisherId')
+    const verified = verifyPublisherNamespaceProof({ locator, ...(proof || {}) })
+    const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: locator.catalogEpoch })
+    // The proof response deliberately carries only signed operations. The
+    // descriptor is reconstructed from those operations, avoiding an
+    // unauthenticated duplicate descriptor representation on the wire.
+    publisherProofProviders.set(id, { genesis: proof?.genesis, transitions: proof?.transitions })
+    const { scope } = joinScope({
+      purpose: 'publisher', topic, scopeId: id, mode: 'candidate', publisherId: id,
+      candidateLocator: locator, proofPending: null,
+    })
+    return { status: 'provided', publisherId: id, catalogEpoch: verified.descriptor.catalogEpoch, topic: stableScopeDiagnostic(scope) }
+  }
+
+  async function provideIndexFeed ({ curatorId, fetchPage } = {}) {
+    const id = hex32(curatorId, 'curatorId')
+    if (typeof fetchPage !== 'function') fail('index feed provider requires fetchPage')
+    indexFeedProviders.set(id, fetchPage)
+    joinScope({ purpose: 'index', topic: deriveIndexTopic({ protocolMajor, curatorId: id }), scopeId: id, mode: 'provided', feedId: id, feedKind: 'index', feedPending: new Map() })
+    return { status: 'provided', curatorId: id }
+  }
+
+  async function subscribeIndexFeed ({ curatorId } = {}) {
+    const id = hex32(curatorId, 'curatorId')
+    indexFeedManager.subscribe(id)
+    const { scope } = joinScope({ purpose: 'index', topic: deriveIndexTopic({ protocolMajor, curatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'index', feedPending: new Map() })
+    return syncFollowedFeed(scope)
+  }
+
+  async function followIndexFeed ({ curatorId } = {}) {
+    const id = hex32(curatorId, 'curatorId')
+    indexFeedManager.subscribe(id)
+    const { scope } = joinScope({ purpose: 'index', topic: deriveIndexTopic({ protocolMajor, curatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'index', feedPending: new Map() })
+    return { status: 'following', curatorId: id, topic: stableScopeDiagnostic(scope) }
+  }
+
+  async function unfollowIndexFeed ({ curatorId } = {}) {
+    const id = hex32(curatorId, 'curatorId')
+    indexFeedManager.unsubscribe(id)
+    const scope = findScope('index', deriveIndexTopic({ protocolMajor, curatorId: id }))
+    const released = scope ? await leaveScope(scope, 'subscribed') : false
+    return { status: 'unfollowed', curatorId: id, released }
+  }
+
+  async function provideModerationFeed ({ moderatorId, fetchPage } = {}) {
+    const id = hex32(moderatorId, 'moderatorId')
+    if (typeof fetchPage !== 'function') fail('moderation feed provider requires fetchPage')
+    moderationFeedProviders.set(id, fetchPage)
+    joinScope({ purpose: 'moderation', topic: deriveModerationTopic({ protocolMajor, moderatorId: id }), scopeId: id, mode: 'provided', feedId: id, feedKind: 'moderation', feedPending: new Map() })
+    return { status: 'provided', moderatorId: id }
+  }
+
+  async function subscribeModerationFeed ({ moderatorId } = {}) {
+    const id = hex32(moderatorId, 'moderatorId')
+    moderationManager.subscribe(id)
+    const { scope } = joinScope({ purpose: 'moderation', topic: deriveModerationTopic({ protocolMajor, moderatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'moderation', feedPending: new Map() })
+    return syncFollowedFeed(scope)
+  }
+
+  async function followModerationFeed ({ moderatorId } = {}) {
+    const id = hex32(moderatorId, 'moderatorId')
+    moderationManager.subscribe(id)
+    const { scope } = joinScope({ purpose: 'moderation', topic: deriveModerationTopic({ protocolMajor, moderatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'moderation', feedPending: new Map() })
+    return { status: 'following', moderatorId: id, topic: stableScopeDiagnostic(scope) }
+  }
+
+  async function unfollowModerationFeed ({ moderatorId } = {}) {
+    const id = hex32(moderatorId, 'moderatorId')
+    moderationManager.unsubscribe(id)
+    const scope = findScope('moderation', deriveModerationTopic({ protocolMajor, moderatorId: id }))
+    const released = scope ? await leaveScope(scope, 'subscribed') : false
+    return { status: 'unfollowed', moderatorId: id, released }
   }
 
   async function unfollowPublisher ({ publisherId } = {}) {
@@ -1872,6 +2164,14 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
+  function getIndexFeedRecords () {
+    return indexFeedManager.getRecords()
+  }
+
+  function getModerationFeedRecords () {
+    return moderationManager.getRecords()
+  }
+
   function isPeerConnected (peerId) {
     if (typeof peerId !== 'string' || !/^[0-9a-f]{64}$/.test(peerId)) return false
     for (const [connection, info] of activeConnections) {
@@ -1911,6 +2211,16 @@ export function createScopedNetworkRuntime (options = {}) {
     start,
     applyNetworkPolicy,
     followPublisher,
+    followBootstrapLocator,
+    providePublisherNamespaceProof,
+    provideIndexFeed,
+    subscribeIndexFeed,
+    followIndexFeed,
+    unfollowIndexFeed,
+    provideModerationFeed,
+    subscribeModerationFeed,
+    followModerationFeed,
+    unfollowModerationFeed,
     unfollowPublisher,
     publishLocalPublisherCatalog,
     resolveLocalPublisherCatalog,
@@ -1929,6 +2239,8 @@ export function createScopedNetworkRuntime (options = {}) {
     verifyAuthorizedArchiveChallengeProof,
     publishBootstrapLocator,
     listBootstrapLocators,
+    getIndexFeedRecords,
+    getModerationFeedRecords,
     getDiagnostics,
     authorizeConnection,
     getLocalTransportPeerId,
@@ -1942,6 +2254,16 @@ export function createScopedNetworkApi (runtime) {
   if (!runtime) fail('scoped network runtime is required')
   return {
     followPublisher: request => runtime.followPublisher(request),
+    followBootstrapLocator: request => runtime.followBootstrapLocator(request),
+    providePublisherNamespaceProof: request => runtime.providePublisherNamespaceProof(request),
+    provideIndexFeed: request => runtime.provideIndexFeed(request),
+    subscribeIndexFeed: request => runtime.subscribeIndexFeed(request),
+    followIndexFeed: request => runtime.followIndexFeed(request),
+    unfollowIndexFeed: request => runtime.unfollowIndexFeed(request),
+    provideModerationFeed: request => runtime.provideModerationFeed(request),
+    subscribeModerationFeed: request => runtime.subscribeModerationFeed(request),
+    followModerationFeed: request => runtime.followModerationFeed(request),
+    unfollowModerationFeed: request => runtime.unfollowModerationFeed(request),
     unfollowPublisher: request => runtime.unfollowPublisher(request),
     publishLocalPublisherCatalog: request => runtime.publishLocalPublisherCatalog(request),
     resolveLocalPublisherCatalog: request => runtime.resolveLocalPublisherCatalog(request),
@@ -1960,6 +2282,8 @@ export function createScopedNetworkApi (runtime) {
     publishBootstrapLocator: request => runtime.publishBootstrapLocator(request),
     getLocalTransportPeerId: () => runtime.getLocalTransportPeerId(),
     listBootstrapLocators: () => runtime.listBootstrapLocators(),
+    getIndexFeedRecords: () => runtime.getIndexFeedRecords(),
+    getModerationFeedRecords: () => runtime.getModerationFeedRecords(),
     getScopedNetworkDiagnostics: () => runtime.getDiagnostics(),
   }
 }

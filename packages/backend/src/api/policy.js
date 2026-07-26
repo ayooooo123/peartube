@@ -22,8 +22,6 @@ const ENUMS = {
 const NETWORK_POLICY_KEY = 'network-policy:v1'
 const UNSUPPORTED_RUNTIME_VALUES = Object.freeze({
   followedPublishers: 'publisher descriptors are required before scoped discovery can follow a publisher',
-  followedIndexes: 'no scoped index-feed synchronizer is available',
-  trustedModerationFeeds: 'no moderation-feed transport is available',
   aiAnalysis: 'no bounded AI analysis worker is available',
   retentionMode: 'local-pin retention has no publication pinning consumer',
 })
@@ -137,9 +135,7 @@ function unsupportedPolicyError(field, detail) {
 }
 
 export function assertNetworkPolicyRuntimeSupported(policy) {
-  for (const field of ['followedPublishers', 'followedIndexes', 'trustedModerationFeeds']) {
-    if (policy[field].length > 0) throw unsupportedPolicyError(field, UNSUPPORTED_RUNTIME_VALUES[field])
-  }
+  if (policy.followedPublishers.length > 0) throw unsupportedPolicyError('followedPublishers', UNSUPPORTED_RUNTIME_VALUES.followedPublishers)
   if (policy.aiAnalysis !== 'disabled') {
     throw unsupportedPolicyError('aiAnalysis', UNSUPPORTED_RUNTIME_VALUES.aiAnalysis)
   }
@@ -182,6 +178,8 @@ export function createNetworkPolicyRuntime({
   let transportSuspended = false
   let started = false
   let transition = Promise.resolve()
+  let appliedIndexes = new Set()
+  let appliedModerationFeeds = new Set()
 
   const runTransition = operation => {
     const next = transition.then(operation, operation)
@@ -192,6 +190,14 @@ export function createNetworkPolicyRuntime({
   const normalizeSupported = candidate => {
     const normalized = normalizeNetworkPolicy(candidate, DEFAULT_NETWORK_POLICY)
     assertNetworkPolicyRuntimeSupported(normalized)
+    if (normalized.followedIndexes.length > 0 &&
+      (typeof scopedNetwork?.followIndexFeed !== 'function' || typeof scopedNetwork?.unfollowIndexFeed !== 'function')) {
+      throw unsupportedPolicyError('followedIndexes', 'bounded index-feed transport is unavailable on this runtime')
+    }
+    if (normalized.trustedModerationFeeds.length > 0 &&
+      (typeof scopedNetwork?.followModerationFeed !== 'function' || typeof scopedNetwork?.unfollowModerationFeed !== 'function')) {
+      throw unsupportedPolicyError('trustedModerationFeeds', 'bounded moderation-feed transport is unavailable on this runtime')
+    }
     if (normalized.retentionMode === 'archive-pledges' && !archiveNetwork?.setParticipation) {
       throw unsupportedPolicyError('retentionMode', 'archive participation is unavailable on this runtime')
     }
@@ -199,11 +205,31 @@ export function createNetworkPolicyRuntime({
   }
   policy = normalizeSupported(policy)
 
+  const reconcileFeedSubscriptions = async nextPolicy => {
+    const indexes = new Set(nextPolicy.followedIndexes)
+    const moderation = new Set(nextPolicy.trustedModerationFeeds)
+    for (const id of appliedIndexes) {
+      if (!indexes.has(id)) await scopedNetwork.unfollowIndexFeed({ curatorId: id })
+    }
+    for (const id of appliedModerationFeeds) {
+      if (!moderation.has(id)) await scopedNetwork.unfollowModerationFeed({ moderatorId: id })
+    }
+    for (const id of indexes) {
+      if (!appliedIndexes.has(id)) await scopedNetwork.followIndexFeed({ curatorId: id })
+    }
+    for (const id of moderation) {
+      if (!appliedModerationFeeds.has(id)) await scopedNetwork.followModerationFeed({ moderatorId: id })
+    }
+    appliedIndexes = indexes
+    appliedModerationFeeds = moderation
+  }
+
   const applyNow = async nextInput => {
     const nextPolicy = normalizeSupported(nextInput)
     const effective = resolveNetworkPolicyForEnvironment(nextPolicy, environment)
 
     await scopedNetwork?.applyNetworkPolicy?.(effective)
+    await reconcileFeedSubscriptions(nextPolicy)
     await seedingManager?.applyNetworkPolicy?.({
       diskCeilingBytes: nextPolicy.diskCeilingBytes,
       retentionMode: nextPolicy.retentionMode,

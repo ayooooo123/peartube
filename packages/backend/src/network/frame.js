@@ -17,6 +17,8 @@ const PURPOSE_CODES = new Map([
   ['live', 4],
   ['archive', 5],
   ['archive-discovery', 6],
+  ['index', 7],
+  ['moderation', 8],
 ])
 const PURPOSE_NAMES = new Map(Array.from(PURPOSE_CODES, ([name, code]) => [code, name]))
 
@@ -42,6 +44,13 @@ export const PEER_FRAME_TYPE_NAMES = Object.freeze(Object.fromEntries([
   'archive-block-proof',
   'archive-block-chunk',
   'archive-block-unavailable',
+  'namespace-proof-request',
+  'namespace-proof-response',
+  'catalog-page-request',
+  'catalog-page-response',
+  'feed-page-request',
+  'feed-page-response',
+  'feed-page-error',
 ].map(type => [peerFrameTypeCode(type), type])))
 const TYPE_NAMES = new Map()
 

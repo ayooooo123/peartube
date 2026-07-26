@@ -47,6 +47,20 @@ export function deriveAssetTopic(input = {}) {
   })
 }
 
+export function deriveIndexTopic(input = {}) {
+  return topic('index', {
+    protocolMajor: cleanMajor(input.protocolMajor),
+    curatorId: cleanString(input.curatorId, 'curatorId').toLowerCase(),
+  })
+}
+
+export function deriveModerationTopic(input = {}) {
+  return topic('moderation', {
+    protocolMajor: cleanMajor(input.protocolMajor),
+    moderatorId: cleanString(input.moderatorId, 'moderatorId').toLowerCase(),
+  })
+}
+
 export function deriveLiveTopic(input = {}) {
   return topic('live', {
     protocolMajor: cleanMajor(input.protocolMajor),
@@ -78,6 +92,10 @@ export function describeScopedTopic(role, input = {}) {
       return { role, protocolMajor: cleanMajor(input.protocolMajor), publisherId: cleanString(input.publisherId, 'publisherId').toLowerCase(), catalogEpoch: Number(input.catalogEpoch || 0), topicHex: topicHex(derivePublisherTopic(input)) }
     case 'asset':
       return { role, protocolMajor: cleanMajor(input.protocolMajor), renditionId: cleanString(input.renditionId, 'renditionId'), topicHex: topicHex(deriveAssetTopic(input)) }
+    case 'index':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), curatorId: cleanString(input.curatorId, 'curatorId').toLowerCase(), topicHex: topicHex(deriveIndexTopic(input)) }
+    case 'moderation':
+      return { role, protocolMajor: cleanMajor(input.protocolMajor), moderatorId: cleanString(input.moderatorId, 'moderatorId').toLowerCase(), topicHex: topicHex(deriveModerationTopic(input)) }
     case 'live':
       return { role, protocolMajor: cleanMajor(input.protocolMajor), eventId: cleanString(input.eventId, 'eventId'), epoch: Number(input.epoch || 0), topicHex: topicHex(deriveLiveTopic(input)) }
     case 'archive-discovery':

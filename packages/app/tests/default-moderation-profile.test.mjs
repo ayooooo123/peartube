@@ -51,3 +51,19 @@ test('custom profiles survive a bundled upgrade; disable, replace, inspect, and 
   await upgraded.replace({ ...v2, curatorSubscriptions: [] })
   assert.deepEqual((await upgraded.inspect()).profile.curatorSubscriptions, [])
 })
+
+test('an uncustomized stored bundle adopts a newer bundled version while a customized one does not', async () => {
+  const profile = await loadProfileModule()
+  const storage = memoryStorage()
+  const v1 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 1, curatorSubscriptions: ['curator-a'] }
+  const v2 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 2, curatorSubscriptions: ['curator-b'] }
+  const first = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v1 })
+  await first.restoreDefaults()
+
+  const upgraded = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v2 })
+  assert.deepEqual(await upgraded.inspect(), { profile: v2, customized: false })
+  await upgraded.replace({ ...v2, curatorSubscriptions: ['mine'] })
+  const v3 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 3, curatorSubscriptions: ['curator-c'] }
+  const customized = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v3 })
+  assert.deepEqual((await customized.inspect()).profile.curatorSubscriptions, ['mine'])
+})

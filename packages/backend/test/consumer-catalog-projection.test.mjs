@@ -73,6 +73,24 @@ test('consumer projection stays bounded and ignores index references to publishe
   t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:accepted'])
 })
 
+test('an authenticated direct publisher candidate is projected without an index introduction', (t) => {
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [] },
+    indexFeedManager: { getRecords: () => [] },
+    publisherRecords: () => [{
+      directPublisher: true,
+      kind: 'movie',
+      entityRef: 'work:direct',
+      publicationId: id('1'),
+      publisherId: id('a'),
+      title: 'Direct publisher movie',
+    }],
+  })
+  t.is(projection.rebuild().accepted, 1)
+  t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:direct'])
+})
+
 test('media graph API exposes the same one local consumer projection without a manual source parameter', async (t) => {
   const projection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex(),
@@ -86,4 +104,15 @@ test('media graph API exposes the same one local consumer projection without a m
   t.alike(page.items.map(item => item.entityId), ['work:api'])
   t.is(page.items[0].entityKind, 'movie')
   t.absent(Object.hasOwn(page, 'sourceId'))
+})
+
+test('repeated consumer reads do not re-ingest or consume local projection quotas', async (t) => {
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex({ maxRecordsPerPublisherPerWindow: 1 }),
+    bootstrapManager: { listLocators: () => [{ publisherId: id('a') }] },
+    indexFeedManager: { getRecords: () => [{ kind: 'movie', entityRef: 'work:stable', publicationId: id('1'), publisherId: id('a'), title: 'Stable' }] },
+  })
+  const api = createMediaGraphApi({ consumerCatalogProjection: projection })
+  t.alike((await api.getMediaCatalog()).items.map(item => item.entityId), ['work:stable'])
+  t.alike((await api.getMediaCatalog()).items.map(item => item.entityId), ['work:stable'])
 })

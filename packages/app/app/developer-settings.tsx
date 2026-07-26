@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -7,6 +7,8 @@ import { NativeSwitch } from '@/components/native-ui'
 import { GlassCard, SectionHeader } from '@/components/primitives'
 import { ArchiveParticipationControl } from '@/components/developer/ArchiveParticipationControl'
 import { colors } from '@/lib/colors'
+import { createDefaultModerationProfileStore, DEFAULT_MODERATION_PROFILE, type ModerationProfile } from '@/lib/default-moderation-profile'
+import { secureGet, secureSet } from '@/lib/secure-storage'
 import { useApp } from './_layout'
 
 const developerRoutes = [
@@ -26,6 +28,28 @@ function DeveloperSettingsContent() {
   const { enabled, isLoading } = developerMode
   const { rpc } = useApp()
   const [developerModeError, setDeveloperModeError] = useState<string | null>(null)
+  const [moderationProfile, setModerationProfile] = useState<ModerationProfile | null>(null)
+  const [moderationProfileError, setModerationProfileError] = useState<string | null>(null)
+  const moderationStore = useMemo(() => createDefaultModerationProfileStore({
+    storage: {
+      async get(key) {
+        const raw = await secureGet(key)
+        try { return raw ? JSON.parse(raw) : null } catch { return null }
+      },
+      async set(key, value) { await secureSet(key, JSON.stringify(value)) },
+    },
+  }), [])
+
+  const refreshModerationProfile = async () => {
+    try {
+      setModerationProfile((await moderationStore.inspect()).profile)
+      setModerationProfileError(null)
+    } catch {
+      setModerationProfileError('Unable to read the local moderation profile.')
+    }
+  }
+
+  useEffect(() => { void refreshModerationProfile() }, [])
 
   const handleDeveloperModeChange = async (enabled: boolean) => {
     setDeveloperModeError(null)
@@ -66,6 +90,23 @@ function DeveloperSettingsContent() {
 
         {enabled ? (
           <DeveloperModeGate>
+            <SectionHeader title="Default moderation profile" subtitle="Versioned, local-only subscriptions. Curator keys authenticate their own optional feeds; they do not authorize publishers or media." />
+            <GlassCard style={styles.card}>
+              <Text style={styles.rowTitle}>Community profile v{moderationProfile?.version ?? DEFAULT_MODERATION_PROFILE.version}</Text>
+              <Text style={styles.rowDetail}>{moderationProfile?.enabled === false ? 'Disabled: records remain local and can be revealed on this device.' : `${moderationProfile?.curatorSubscriptions.length ?? 0} optional curator subscriptions.`}</Text>
+              <View style={styles.profileActions}>
+                <Pressable onPress={() => { void moderationStore.disable().then(refreshModerationProfile).catch(() => setModerationProfileError('Unable to update the local moderation profile.')) }} style={styles.profileButton}>
+                  <Text style={styles.profileButtonText}>Disable</Text>
+                </Pressable>
+                <Pressable onPress={() => { void moderationStore.restoreDefaults().then(refreshModerationProfile).catch(() => setModerationProfileError('Unable to restore the local moderation profile.')) }} style={styles.profileButton}>
+                  <Text style={styles.profileButtonText}>Restore Defaults</Text>
+                </Pressable>
+                <Pressable onPress={() => { void moderationStore.replace({ ...(moderationProfile || DEFAULT_MODERATION_PROFILE), curatorSubscriptions: [] }).then(refreshModerationProfile).catch(() => setModerationProfileError('Unable to replace the local moderation profile.')) }} style={styles.profileButton}>
+                  <Text style={styles.profileButtonText}>Clear Curators</Text>
+                </Pressable>
+              </View>
+              {moderationProfileError ? <Text accessibilityRole="alert" style={styles.error}>{moderationProfileError}</Text> : null}
+            </GlassCard>
             <SectionHeader title="Archive participation" subtitle="Volunteer storage is an operator-controlled local network setting." />
             <GlassCard padded={false} style={styles.card}>
               <ArchiveParticipationControl rpc={rpc} />
@@ -114,5 +155,8 @@ const styles = StyleSheet.create({
   routeBorder: { borderTopWidth: 1, borderTopColor: colors.glassBorder },
   rowTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
   rowDetail: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  profileActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  profileButton: { borderWidth: 1, borderColor: colors.glassBorder, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  profileButtonText: { color: colors.text, fontSize: 12, fontWeight: '600' },
   disabledCopy: { color: colors.textMuted, fontSize: 13, lineHeight: 19, marginHorizontal: 20, marginTop: 8 },
 })

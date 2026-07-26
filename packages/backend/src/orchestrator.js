@@ -39,7 +39,10 @@ import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
-import { createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
+import { createConsumerCatalogProjection, createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
+import { createLocalMediaIndex } from './indexing/local-index.js'
+import { createIndexFeedManager } from './indexing/feed-manager.js'
+import { createModerationManager, evaluateModerationPolicy } from './moderation/index.js'
 import {
   createPublicationV1CheckpointRepository,
   createPublicationV1LegacyRepository,
@@ -460,6 +463,11 @@ export async function createBackendContext(config) {
   ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
   ctx.assetManifestStore = mediaCatalogProjection.assetManifestStore
   lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
+  // These managers are deliberately shared by the scoped transport and local
+  // consumer projection. Signed page ingestion happens once; catalog reads only
+  // project the resulting local state and never initiate transport work.
+  const consumerIndexFeedManager = createIndexFeedManager({ now: () => Date.now() })
+  const consumerModerationManager = createModerationManager({ now: () => Date.now() })
   scopedNetwork = createScopedNetworkRuntime({
     swarm: ctx.swarm,
     store: ctx.store,
@@ -477,10 +485,49 @@ export async function createBackendContext(config) {
       }
     },
     retainArchiveCore,
+    indexFeedManager: consumerIndexFeedManager,
+    moderationManager: consumerModerationManager,
     initialNetworkPolicy: initialRuntimeNetworkPolicy,
   })
   ctx.scopedNetwork = scopedNetwork
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
+  // Consumer projection is a local view over the authenticated publisher graph
+  // plus optional bounded index records. It owns neither a feed nor authority.
+  const consumerCatalogProjection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    indexFeedManager: consumerIndexFeedManager,
+    bootstrapManager: { listLocators: () => scopedNetwork.listBootstrapLocators() },
+    mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
+    moderationPolicy: {
+      enabled: true,
+      curatorSubscriptions: initialNetworkPolicy.trustedModerationFeeds,
+      evaluate: candidate => {
+        const records = consumerModerationManager.getRecords()
+        return evaluateModerationPolicy(candidate, {
+          feedBlocks: records.filter(record => record.action !== 'allow'),
+          feedAllows: records.filter(record => record.action === 'allow'),
+        })
+      },
+    },
+    publisherRecords: () => mediaCatalogProjection.mediaGraphStore.getClaims()
+      .filter(row => !row.revoked && row.body?.claimType === 'AvailabilityObservation' && row.body?.payload?.publicationId)
+      .flatMap(row => {
+        const manifest = mediaCatalogProjection.assetManifestStore.getManifest(row.body.payload.publicationId)
+        if (!manifest?.body?.publisherId) return []
+        return (row.body.subjectRefs || []).map(subject => ({
+          directPublisher: true,
+          kind: subject.entityKind === 'series' ? 'series' : 'movie',
+          entityRef: subject.entityId,
+          publicationId: manifest.publicationId,
+          publisherId: manifest.body.publisherId,
+          title: manifest.body.title || null,
+          playable: true,
+        }))
+      }),
+  })
+  ctx.consumerIndexFeedManager = consumerIndexFeedManager
+  ctx.consumerModerationManager = consumerModerationManager
+  ctx.consumerCatalogProjection = consumerCatalogProjection
   const configuredOperabilityServices = config.operability?.services
     ? await Promise.resolve(config.operability.services)
     : config.operability?.servicesPromise

@@ -198,6 +198,29 @@ test('policy API rejects fields with no production runtime consumer', async (t) 
   t.alike((await api.getNetworkPolicy()).policy, initialPolicy)
 })
 
+test('policy reconciles bounded index and moderation subscriptions through the scoped runtime', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const calls = []
+  const scopedNetwork = {
+    async applyNetworkPolicy() {},
+    async followIndexFeed({ curatorId }) { calls.push(['follow-index', curatorId]) },
+    async unfollowIndexFeed({ curatorId }) { calls.push(['unfollow-index', curatorId]) },
+    async followModerationFeed({ moderatorId }) { calls.push(['follow-moderation', moderatorId]) },
+    async unfollowModerationFeed({ moderatorId }) { calls.push(['unfollow-moderation', moderatorId]) },
+  }
+  const runtime = createNetworkPolicyRuntime({ initialPolicy, scopedNetwork })
+  const index = '1'.repeat(64)
+  const moderator = '2'.repeat(64)
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, followedIndexes: [index], trustedModerationFeeds: [moderator] })
+  t.alike(calls, [['follow-index', index], ['follow-moderation', moderator]])
+  await runtime.apply(initialPolicy)
+  t.alike(calls, [
+    ['follow-index', index], ['follow-moderation', moderator],
+    ['unfollow-index', index], ['unfollow-moderation', moderator],
+  ])
+})
+
 test('foreground policy refresh resumes transport even when no policy suspension ran', async (t) => {
   const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
   let resumeCalls = 0

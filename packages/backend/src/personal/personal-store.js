@@ -60,6 +60,18 @@ function stripUndefined(obj) {
   return out
 }
 
+export function personalSettingDigest(value) {
+  return b4a.toString(crypto.hash(b4a.from(JSON.stringify(value))), 'hex')
+}
+
+function personalSettingRevision(entry, digest) {
+  if (typeof entry?.value?.revision === 'string' && /^[0-9a-f]{32}$/.test(entry.value.revision)) {
+    return entry.value.revision
+  }
+  if (Number.isSafeInteger(entry?.seq) && entry.seq >= 0) return `legacy-seq:${entry.seq}`
+  return `legacy-time:${Number(entry?.value?.updatedAt || 0)}:${digest}`
+}
+
 export class PersonalStore extends ReadyResource {
   /**
    * @param {import('corestore')} store - Corestore (will be namespaced internally)
@@ -215,12 +227,30 @@ export class PersonalStore extends ReadyResource {
         }
         break
       }
-      case 'set-setting':
-        await view.put(`${COLLECTIONS.SETTING}/${op.key}`, { key: op.key, value: op.value, updatedAt: op.updatedAt || Date.now() })
+      case 'set-setting': {
+        const setting = {
+          key: op.key,
+          value: op.value,
+          updatedAt: op.updatedAt || Date.now(),
+        }
+        if (typeof op.revision === 'string' && /^[0-9a-f]{32}$/.test(op.revision)) {
+          setting.revision = op.revision
+        }
+        await view.put(`${COLLECTIONS.SETTING}/${op.key}`, setting)
         break
+      }
       case 'delete-setting':
         await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
         break
+      case 'delete-setting-if-version-and-digest': {
+        const entry = await view.get(`${COLLECTIONS.SETTING}/${op.key}`)
+        const digest = entry?.value ? personalSettingDigest(entry.value.value) : null
+        const revision = entry?.value ? personalSettingRevision(entry, digest) : null
+        if (digest === op.expectedDigest && revision === op.expectedRevision) {
+          await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
+        }
+        break
+      }
       default:
         break
     }
@@ -401,17 +431,53 @@ export class PersonalStore extends ReadyResource {
   // --- settings -------------------------------------------------------------
 
   async setSetting(key, value) {
-    await this._append({ type: 'set-setting', key, value, updatedAt: Date.now() })
+    await this._append({
+      type: 'set-setting',
+      key,
+      value,
+      updatedAt: Date.now(),
+      revision: randomId(),
+    })
   }
 
   async deleteSetting(key) {
     await this._append({ type: 'delete-setting', key })
   }
 
+  async deleteSettingIfVersionAndDigest(key, expectedRevision, expectedDigest) {
+    if (
+      typeof expectedRevision !== 'string' ||
+      expectedRevision.length < 1 ||
+      expectedRevision.length > 128
+    ) {
+      throw new Error('expected setting revision is invalid')
+    }
+    if (typeof expectedDigest !== 'string' || !/^[0-9a-f]{64}$/.test(expectedDigest)) {
+      throw new Error('expected setting digest is invalid')
+    }
+    await this._append({
+      type: 'delete-setting-if-version-and-digest',
+      key,
+      expectedRevision,
+      expectedDigest,
+    })
+  }
+
   async getSetting(key) {
+    return (await this.getSettingRecord(key))?.value
+  }
+
+  async getSettingRecord(key) {
     await this.update()
     const entry = await this.view.get(`${COLLECTIONS.SETTING}/${key}`)
-    return entry?.value?.value
+    if (!entry?.value) return null
+    const digest = personalSettingDigest(entry.value.value)
+    return {
+      value: entry.value.value,
+      updatedAt: Number(entry.value.updatedAt || 0),
+      revision: personalSettingRevision(entry, digest),
+      digest,
+    }
   }
 
   async getSettings() {

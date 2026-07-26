@@ -19,6 +19,7 @@ import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { redactCapabilityUrl } from './capability-url.js'
 import { encodeIndexKey } from './index-encoder.js'
+import { readStoredIdentityRecords } from './identity-state.js'
 import { SeedingAuthorizationError, fullDownloadFitsQuota } from './seeding.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
 import { peerHasFullRange } from './upload-offload.js'
@@ -789,8 +790,7 @@ export function createApi({
 
     // Fallback: if this channel key exists in identities as a channelKey, treat as multi-writer.
     try {
-      const stored = await ctx.metaDb.get('identities')
-      const identities = stored?.value || []
+      const identities = await readStoredIdentityRecords(ctx.metaDb)
       if (identities.some((i) => i?.channelKey === channelKey || i?.driveKey === channelKey)) {
         // Backfill marker so future checks are fast
         try { await ctx.metaSubspaces.channelKinds.put(channelKey, { kind: 'autobase', backfilledAt: Date.now() }) } catch { /* best effort */ }
@@ -3582,10 +3582,7 @@ export function createApi({
 
       let value = null
       try {
-        const storedIdentities = typeof ctx.metaDb?.get === 'function'
-          ? await ctx.metaDb.get('identities').catch(() => null)
-          : null
-        const identities = storedIdentities?.value || []
+        const identities = await readStoredIdentityRecords(ctx.metaDb).catch(() => [])
         const ownedIdentity = identities.find((identity) =>
           identity?.channelKey === driveKey || identity?.driveKey === driveKey)
         const loadOptions = ownedIdentity?.deferPublicProjection === true

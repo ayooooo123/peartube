@@ -2,6 +2,7 @@ import Hyperbee from 'hyperbee'
 
 import { createIdentityManager } from './identity.js'
 import { readIdentityKeyFile } from './identity-key-file.js'
+import { readStoredIdentityRecords } from './identity-state.js'
 import {
   createCorestoreInstance,
   openDeterministicNamedCore,
@@ -76,8 +77,7 @@ export async function migrateLegacyPublisherRootsInMetaDb ({
   }
 
   try {
-    const beforeRecord = await metaDb.get('identities')
-    const before = Array.isArray(beforeRecord?.value) ? beforeRecord.value : []
+    const before = await readStoredIdentityRecords(metaDb)
     const scanned = boundedCount(before.length)
     const legacyBefore = countLegacyRoots(before)
 
@@ -91,8 +91,7 @@ export async function migrateLegacyPublisherRootsInMetaDb ({
     })
     await manager.loadIdentities()
 
-    const afterRecord = await metaDb.get('identities')
-    const after = Array.isArray(afterRecord?.value) ? afterRecord.value : []
+    const after = await readStoredIdentityRecords(metaDb)
     const remaining = countLegacyRoots(after)
     const migrated = boundedCount(Math.max(0, legacyBefore - remaining))
 

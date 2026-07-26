@@ -442,10 +442,12 @@ export function createConsumerCatalogProjection(options = {}) {
   const indexFeedManager = options.indexFeedManager || null
   const mediaGraphStore = options.mediaGraphStore || null
   const moderationPolicy = options.moderationPolicy || null
+  const now = typeof options.now === 'function' ? options.now : () => Date.now()
   const maxCandidates = safeLimit(options.maxCandidates, 4096, 10_000, 'maxCandidates')
   let rejectedCandidates = []
   let introducedPublisherIds = []
   let lastInputFingerprint = null
+  let lastNextRetryAt = null
   let lastRebuild = { accepted: 0, rejected: 0, rejectionCodes: {} }
   let acceptedCandidates = new Map()
   let visiblePublicationIds = new Set()
@@ -538,7 +540,17 @@ export function createConsumerCatalogProjection(options = {}) {
         rejected: rejectedCandidates,
         introducedPublisherIds,
       })
-      if (fingerprint === lastInputFingerprint) return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
+      const currentTime = Number(now())
+      if (
+        fingerprint === lastInputFingerprint &&
+        (
+          lastNextRetryAt == null ||
+          !Number.isFinite(currentTime) ||
+          currentTime < lastNextRetryAt
+        )
+      ) {
+        return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
+      }
       const indexed = localIndex.replaceRecords(accepted)
       const admitted = Array.isArray(indexed.admittedRecords)
         ? indexed.admittedRecords
@@ -546,10 +558,15 @@ export function createConsumerCatalogProjection(options = {}) {
       acceptedCandidates = new Map(admitted.map(record => [record.entityRef, record]))
       visiblePublicationIds = new Set(admitted.map(record => String(record.publicationId)))
       lastInputFingerprint = fingerprint
+      const retryTimes = (indexed.results || [])
+        .map(result => Number(result?.resetAt))
+        .filter(resetAt => Number.isSafeInteger(resetAt) && resetAt >= 0)
+      lastNextRetryAt = retryTimes.length > 0 ? Math.min(...retryTimes) : null
       lastRebuild = {
         accepted: indexed.accepted + indexed.duplicates,
         rejected: rejectedCandidates.length + indexed.rejected,
         rejectionCodes,
+        ...(lastNextRetryAt == null ? {} : { nextRetryAt: lastNextRetryAt }),
       }
       return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
     },

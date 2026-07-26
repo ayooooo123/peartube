@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import Corestore from 'corestore'
+import crypto from 'hypercore-crypto'
 
 import { createIdentityManager } from '../src/identity.js'
 import {
@@ -108,14 +109,12 @@ async function createRuntime({ directory, metaDb, rejectedFeed = null }) {
 function installAtomicActivation(runtime) {
   return installSeedPinIdentityMutationHooks({
     identityManager: runtime.identityManager,
-    onMutation: async mutation => {
-      if (mutation.method === 'setActiveIdentity') {
-        await runtime.personalManager.setActive(runtime.identityManager.getActivePublicKey())
-        runtime.authPublicKey = runtime.identityManager.getActivePublicKey()
-      }
+    onMutation: async () => {
+      await runtime.personalManager.setActive(runtime.identityManager.getActivePublicKey())
+      runtime.authPublicKey = runtime.identityManager.getActivePublicKey()
     },
     onRollback: async rollback => {
-      if (rollback.mutation.method === 'setActiveIdentity') {
+      if (rollback.previousPublicKey) {
         await runtime.personalManager.setActive(rollback.previousPublicKey)
         runtime.authPublicKey = rollback.previousPublicKey
       }
@@ -187,6 +186,251 @@ test('identity activation without its PersonalStore secret fails closed through 
     await runtime?.personalManager.close().catch(() => {})
     await runtime?.store.close().catch(() => {})
     fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('failed paired identity activation restores the exact durable identity list', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-paired-identity-rollback-'))
+  const metaDb = createMetaDb()
+  let runtime
+  let removeHooks
+  try {
+    runtime = await createRuntime({ directory, metaDb })
+    await runtime.personalManager.provisionSecret({ publicKey: identityA.publicKey, secret: secretA })
+    const before = runtime.identityManager.getIdentities()
+    removeHooks = installAtomicActivation(runtime)
+
+    await t.exception(
+      runtime.identityManager.addPairedChannelIdentity('f1'.repeat(32), 'Ghost B'),
+      /PersonalStore secret.*unavailable/i,
+    )
+    t.is(runtime.identityManager.getActivePublicKey(), identityA.publicKey)
+    t.alike(runtime.identityManager.getIdentities(), before, 'failed activation removes the paired ghost')
+
+    const restarted = createIdentityManager({ ctx: { metaDb } })
+    await restarted.loadIdentities()
+    t.is(restarted.getActivePublicKey(), identityA.publicKey)
+    t.alike(restarted.getIdentities(), before, 'restart contains no ghost paired identity')
+  } finally {
+    removeHooks?.()
+    await runtime?.personalManager.close().catch(() => {})
+    await runtime?.store.close().catch(() => {})
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('failed first paired identity activation restores durable anonymous identity state', async t => {
+  const metaDb = createMetaDb()
+  await metaDb.put('identities', [])
+  await metaDb.put('activeIdentity', null)
+  const identityManager = createIdentityManager({ ctx: { metaDb, store: null } })
+  await identityManager.loadIdentities()
+  const removeHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async () => { throw new Error('activation rejected') },
+  })
+  try {
+    await t.exception(
+      identityManager.addPairedChannelIdentity('f2'.repeat(32), 'Ghost first identity'),
+      /activation rejected/,
+    )
+    t.is(identityManager.getActivePublicKey(), null, 'onboarding rolls active identity back to null')
+    t.alike(identityManager.getIdentities(), [], 'onboarding removes the newly added identity')
+
+    const restarted = createIdentityManager({ ctx: { metaDb } })
+    await restarted.loadIdentities()
+    t.is(restarted.getActivePublicKey(), null)
+    t.alike(restarted.getIdentities(), [], 'restart remains anonymous with no ghost identity')
+  } finally {
+    removeHooks()
+  }
+})
+
+test('failed first identity creation restores durable anonymous identity state', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-created-identity-rollback-'))
+  const metaDb = createMetaDb()
+  await metaDb.put('identities', [])
+  await metaDb.put('activeIdentity', null)
+  let runtime
+  let removeHooks
+  try {
+    runtime = await createRuntime({ directory, metaDb })
+    runtime.ctx.swarm = {
+      keyPair: crypto.keyPair(),
+      connections: new Set(),
+      dht: {
+        on() {},
+        off() {},
+        removeListener() {},
+        lookup() {
+          let resolveNext = null
+          return {
+            closestNodes: [],
+            destroy() { resolveNext?.({ done: true }) },
+            [Symbol.asyncIterator]() { return this },
+            next() {
+              return new Promise(resolve => { resolveNext = resolve })
+            },
+          }
+        },
+      },
+      join() {
+        return { async flushed() {}, destroy() {}, close() {} }
+      },
+      on() {},
+      off() {},
+      removeListener() {},
+    }
+    removeHooks = installAtomicActivation(runtime)
+
+    await t.exception(
+      runtime.identityManager.createIdentity('Ghost first identity', false, {
+        deferPublicProjection: true,
+      }),
+      /PersonalStore secret.*unavailable/i,
+    )
+    t.is(runtime.identityManager.getActivePublicKey(), null, 'creation rolls active identity back to null')
+    t.alike(runtime.identityManager.getIdentities(), [], 'creation removes the newly created identity')
+
+    const restarted = createIdentityManager({ ctx: { metaDb } })
+    await restarted.loadIdentities()
+    t.is(restarted.getActivePublicKey(), null)
+    t.alike(restarted.getIdentities(), [], 'restart remains anonymous with no created ghost')
+  } finally {
+    removeHooks?.()
+    await runtime?.personalManager.close().catch(() => {})
+    await runtime?.store.close().catch(() => {})
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('personal-key persistence cannot overwrite a concurrent identity activation', async t => {
+  const values = new Map([
+    ['identities', [identityA, identityB]],
+    ['activeIdentity', identityA.publicKey],
+  ])
+  let blockStateWrite = false
+  let signalStateWrite = null
+  let waitForRelease = null
+  const metaDb = {
+    async get(key) {
+      return values.has(key) ? { value: values.get(key) } : null
+    },
+    async put(key, value) {
+      if (key === 'identity-state:v1' && blockStateWrite) {
+        blockStateWrite = false
+        signalStateWrite()
+        await waitForRelease
+      }
+      values.set(key, value)
+    },
+  }
+  const identityManager = createIdentityManager({ ctx: { metaDb } })
+  await identityManager.loadIdentities()
+  const writeStarted = new Promise(resolve => { signalStateWrite = resolve })
+  let releaseStateWrite
+  waitForRelease = new Promise(resolve => { releaseStateWrite = resolve })
+  blockStateWrite = true
+
+  const activation = identityManager.setActiveIdentity(identityB.publicKey)
+  await writeStarted
+  const personalKey = '63'.repeat(32)
+  const keyPersistence = identityManager.setPersonalKey(identityA.publicKey, personalKey)
+  releaseStateWrite()
+  await Promise.all([activation, keyPersistence])
+
+  const snapshot = identityManager.createStateSnapshot()
+  t.is(snapshot.activeIdentity, identityB.publicKey, 'queued personal-key write preserves activation')
+  t.is(
+    snapshot.identities.find(identity => identity.publicKey === identityA.publicKey)?.personalKey,
+    personalKey,
+    'queued personal-key write merges into the latest identity list',
+  )
+})
+
+test('failed activation compensation preserves a concurrent personal-key update', async t => {
+  const identityManager = createIdentityManager({ ctx: { metaDb: createMetaDb() } })
+  await identityManager.loadIdentities()
+  let signalActivation
+  const activationStarted = new Promise(resolve => { signalActivation = resolve })
+  let releaseActivation
+  const activationGate = new Promise(resolve => { releaseActivation = resolve })
+  const removeHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async () => {
+      signalActivation()
+      await activationGate
+      throw new Error('activation rejected')
+    },
+  })
+  try {
+    const activation = identityManager.setActiveIdentity(identityB.publicKey)
+    await activationStarted
+    const personalKey = '64'.repeat(32)
+    await identityManager.setPersonalKey(identityA.publicKey, personalKey)
+    releaseActivation()
+    await t.exception(activation, /activation rejected/)
+
+    const snapshot = identityManager.createStateSnapshot()
+    t.is(snapshot.activeIdentity, identityA.publicKey, 'compensation restores the active pointer')
+    t.is(
+      snapshot.identities.find(identity => identity.publicKey === identityA.publicKey)?.personalKey,
+      personalKey,
+      'compensation does not erase a later successful personal-key mutation',
+    )
+  } finally {
+    removeHooks()
+  }
+})
+
+test('failed activation snapshot includes an earlier in-flight personal-key update', async t => {
+  const values = new Map([
+    ['identities', [identityA, identityB]],
+    ['activeIdentity', identityA.publicKey],
+  ])
+  let blockStateWrite = false
+  let signalStateWrite
+  let releaseStateWrite
+  const writeStarted = new Promise(resolve => { signalStateWrite = resolve })
+  const waitForRelease = new Promise(resolve => { releaseStateWrite = resolve })
+  const metaDb = {
+    async get(key) {
+      return values.has(key) ? { value: values.get(key) } : null
+    },
+    async put(key, value) {
+      if (key === 'identity-state:v1' && blockStateWrite) {
+        blockStateWrite = false
+        signalStateWrite()
+        await waitForRelease
+      }
+      values.set(key, value)
+    },
+  }
+  const identityManager = createIdentityManager({ ctx: { metaDb } })
+  await identityManager.loadIdentities()
+  const removeHooks = installSeedPinIdentityMutationHooks({
+    identityManager,
+    onMutation: async () => { throw new Error('activation rejected') },
+  })
+  try {
+    blockStateWrite = true
+    const personalKey = '65'.repeat(32)
+    const keyPersistence = identityManager.setPersonalKey(identityA.publicKey, personalKey)
+    await writeStarted
+    const activation = identityManager.setActiveIdentity(identityB.publicKey)
+    releaseStateWrite()
+    await keyPersistence
+    await t.exception(activation, /activation rejected/)
+
+    const snapshot = identityManager.createStateSnapshot()
+    t.is(snapshot.activeIdentity, identityA.publicKey)
+    t.is(
+      snapshot.identities.find(identity => identity.publicKey === identityA.publicKey)?.personalKey,
+      personalKey,
+      'queued snapshot does not erase a predecessor key mutation',
+    )
+  } finally {
+    removeHooks()
   }
 })
 

@@ -23,6 +23,7 @@
 import b4a from 'b4a'
 
 import { PersonalStore } from './personal-store.js'
+import { migrateDeviceLocalProfile } from './profile-migration.js'
 import { logger } from '../logger.js'
 import { CONSUMER_MODERATION_PROFILE_SETTING_KEY } from '../moderation/profile.js'
 
@@ -107,9 +108,12 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     const localState = await anonymous.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
     if (localState === undefined) return null
     const targetState = await target.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (targetState === undefined) {
-      await target.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, localState)
-    }
+    await migrateDeviceLocalProfile({
+      source: anonymous,
+      target,
+      sourceId: DEVICE_LOCAL_PERSONAL_ID,
+      targetId: target.keyHex || 'identity-personal-store',
+    })
     return { anonymous, localState, targetState }
   }
 
@@ -152,9 +156,6 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
           previousStore: previous.store,
         })
         profileReconciled = true
-      }
-      if (migration) {
-        await migration.anonymous.deleteSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
       }
       activePublicKey = publicKey
       return { store, profileReconciled }

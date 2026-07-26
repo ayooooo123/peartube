@@ -140,12 +140,16 @@ test('consumer visibility and downstream scheduling commit only after bounded lo
 test('a rejected metadata update schedules only the exact retained local-index row', async t => {
   const publisherId = id('a')
   const publicationId = id('1')
+  let now = 10
   let metadataVersion = 1
   const scheduled = []
   const projection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex({
+      now: () => now,
+      budgetWindowMs: 100,
       maxRecordsPerPublisherPerWindow: 1,
     }),
+    now: () => now,
     publisherRecords: () => [{
       directPublisher: true,
       kind: 'movie',
@@ -169,11 +173,19 @@ test('a rejected metadata update schedules only the exact retained local-index r
     rejectionCodes: {},
   })
   metadataVersion = 2
+  now = 20
   t.alike(projection.rebuild(), {
     accepted: 0,
     rejected: 1,
     rejectionCodes: {},
+    nextRetryAt: 110,
   }, 'the metadata v2 row is rejected after v1 consumed the publisher window')
+  t.alike(projection.rebuild(), {
+    accepted: 0,
+    rejected: 1,
+    rejectionCodes: {},
+    nextRetryAt: 110,
+  }, 'unchanged input remains idempotent before the admission window resets')
   t.is(projection.getCatalog().items[0].title, 'Retained v1', 'the catalog retains admitted metadata v1')
 
   t.alike(await projection.schedule('work:retained', ['playback']), {
@@ -186,6 +198,17 @@ test('a rejected metadata update schedules only the exact retained local-index r
   t.is(scheduled[0].catalogBlockHint, 1, 'the retained row version reaches downstream work')
   t.is(scheduled[0].rootTransitionProofDigest, id('c'), 'the retained authenticated digest reaches downstream work')
   t.is(scheduled[0].model, 'catalog-metadata/v1', 'the retained payload is exact')
+
+  now = 110
+  t.alike(projection.rebuild(), {
+    accepted: 1,
+    rejected: 0,
+    rejectionCodes: {},
+  }, 'unchanged metadata v2 is retried when its admission outcome expires')
+  t.is(projection.getCatalog().items[0].title, 'Retained v2')
+  scheduled.length = 0
+  await projection.schedule('work:retained', ['playback'])
+  t.is(scheduled[0].rootTransitionProofDigest, id('d'), 'the newly admitted v2 row reaches downstream work')
 })
 
 test('an authenticated direct publisher candidate is projected without an index introduction', (t) => {

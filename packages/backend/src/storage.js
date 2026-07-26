@@ -26,6 +26,7 @@ import {
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { redactCapabilityUrl } from './capability-url.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
+import { readStoredIdentityRecords } from './identity-state.js'
 import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
@@ -2082,8 +2083,8 @@ function createPublicProjectionStateWriter(ctx, channelKeyHex) {
 async function resolveChannelLoadOptions(ctx, channelKeyHex, options) {
   if (typeof ctx.metaDb?.get !== 'function') return options
   try {
-    const stored = await ctx.metaDb.get('identities')
-    const identity = (stored?.value || []).find((candidate) =>
+    const identities = await readStoredIdentityRecords(ctx.metaDb)
+    const identity = identities.find((candidate) =>
       identityChannelKey(candidate) === channelKeyHex)
     const deferPublicProjection =
       options?.deferPublicProjection === true ||

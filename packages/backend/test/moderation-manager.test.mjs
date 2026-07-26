@@ -1,8 +1,13 @@
 import test from 'brittle'
 import crypto from 'hypercore-crypto'
 
-import { createModerationFeedPage } from '../src/moderation/feed-contract.js'
+import {
+  createModerationFeedPage,
+  MODERATION_FEED_PAGE_RECORD_TYPE,
+} from '../src/moderation/feed-contract.js'
 import { createModerationManager } from '../src/moderation/manager.js'
+import { encodeCanonical } from '../src/publisher/canonical.js'
+import { createApplicationEnvelope } from '../src/records/application-envelope.js'
 
 const mod = crypto.keyPair(Buffer.alloc(32, 1))
 const moderatorId = Buffer.from(mod.publicKey).toString('hex')
@@ -187,4 +192,33 @@ test('moderation rejected and duplicate records count toward the per-sync proces
   t.is(duplicateResult.errorCode, 'SYNC_RECORD_BUDGET_EXCEEDED')
   t.is(duplicateResult.ingested, 1)
   t.is(duplicateResult.duplicates, 1, 'third duplicate is not processed')
+})
+
+test('moderation quarantines a signed page with an invalid record schema', async (t) => {
+  const valid = moderationPage('0', [{
+    action: 'hide',
+    targetType: 'work',
+    targetId: 'work:invalid-schema',
+  }])
+  const invalidBody = {
+    ...valid.body,
+    records: valid.body.records.map(record => ({ ...record, unexpected: true })),
+  }
+  const envelope = createApplicationEnvelope({
+    recordType: MODERATION_FEED_PAGE_RECORD_TYPE,
+    body: encodeCanonical(invalidBody),
+    keyPair: mod,
+    issuedAt: invalidBody.issuedAt,
+    expiresAt: 1000,
+  })
+  const manager = createModerationManager({ now: () => 10 })
+  await manager.subscribe(moderatorId)
+
+  const result = await manager.syncFeed({
+    moderatorId,
+    fetchPage: async () => ({ envelope }),
+  })
+
+  t.is(result.status, 'quarantined')
+  t.is(result.errorCode, 'INVALID_PAGE')
 })

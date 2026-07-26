@@ -7,6 +7,7 @@
 
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
+import { IDENTITY_STATE_KEY } from './identity-state.js'
 import { createChannel, deriveDeterministicChannelSeed, loadChannel } from './storage.js'
 import { logger } from './logger.js'
 import {
@@ -186,19 +187,121 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
 
   /** @type {Promise<void>|null} */
   let loadPromise = null
+  let identityStateMutations = Promise.resolve()
+
+  function stateSnapshot(nextIdentities = identities, nextActiveIdentity = activeIdentity) {
+    return {
+      version: 1,
+      activeIdentity: nextActiveIdentity || null,
+      identities: nextIdentities.map(identity => ({ ...identity })),
+    }
+  }
+
+  async function mirrorLegacyState(snapshot) {
+    try {
+      await ctx.metaDb.put('identities', snapshot.identities)
+      await ctx.metaDb.put('activeIdentity', snapshot.activeIdentity)
+    } catch (error) {
+      log.warn(' Legacy identity metadata mirror failed:', error?.message)
+    }
+  }
+
+  async function commitIdentityState(nextIdentities, nextActiveIdentity) {
+    if (
+      nextActiveIdentity != null &&
+      !nextIdentities.some(identity => identity?.publicKey === nextActiveIdentity)
+    ) {
+      throw new Error('Active identity is absent from identity state')
+    }
+    const snapshot = stateSnapshot(nextIdentities, nextActiveIdentity)
+    await ctx.metaDb.put(IDENTITY_STATE_KEY, snapshot)
+    identities = snapshot.identities
+    activeIdentity = snapshot.activeIdentity
+    await mirrorLegacyState(snapshot)
+    return stateSnapshot()
+  }
+
+  function updateIdentityState(updater) {
+    const operation = identityStateMutations.then(async () => {
+      const next = await updater(stateSnapshot())
+      if (!next || !Array.isArray(next.identities)) {
+        throw new Error('Identity state mutation is invalid')
+      }
+      return commitIdentityState(next.identities, next.activeIdentity)
+    })
+    identityStateMutations = operation.catch(() => {})
+    return operation
+  }
+
+  function queuedIdentityStateSnapshot() {
+    const operation = identityStateMutations.then(() => stateSnapshot())
+    identityStateMutations = operation.then(() => {}, () => {})
+    return operation
+  }
+
+  function sameIdentityField(left, right) {
+    if (left === right) return true
+    try { return JSON.stringify(left) === JSON.stringify(right) } catch { return false }
+  }
+
+  function compensatedIdentityState(previous, postMutation, current) {
+    const postByKey = new Map(postMutation.identities.map(identity => [identity.publicKey, identity]))
+    const currentByKey = new Map(current.identities.map(identity => [identity.publicKey, identity]))
+    return {
+      version: 1,
+      activeIdentity: previous.activeIdentity,
+      identities: previous.identities.map(previousIdentity => {
+        const postIdentity = postByKey.get(previousIdentity.publicKey)
+        const currentIdentity = currentByKey.get(previousIdentity.publicKey)
+        if (!postIdentity || !currentIdentity) return previousIdentity
+        const restored = { ...previousIdentity }
+        for (const field of new Set([
+          ...Object.keys(postIdentity),
+          ...Object.keys(currentIdentity),
+        ])) {
+          if (!sameIdentityField(postIdentity[field], currentIdentity[field])) {
+            restored[field] = currentIdentity[field]
+          }
+        }
+        // PersonalStore provisioning is an independent durable operation, not
+        // part of activation/list compensation. Preserve it regardless of
+        // whether it completed before or after the wrapped identity mutation.
+        if (Object.prototype.hasOwnProperty.call(currentIdentity, 'personalKey')) {
+          restored.personalKey = currentIdentity.personalKey
+        }
+        return restored
+      }),
+    }
+  }
 
   async function performIdentityLoad () {
     let stored
     let storedActive
+    let storedState
     try {
+      storedState = await ctx.metaDb.get(IDENTITY_STATE_KEY)
       stored = await ctx.metaDb.get('identities')
       storedActive = await ctx.metaDb.get('activeIdentity')
     } catch {
       throw new Error('Identity metadata unavailable')
     }
 
-    const loaded = Array.isArray(stored?.value) ? stored.value : []
-    if (storedActive?.value) activeIdentity = storedActive.value
+    const authoritative = (
+      storedState?.value?.version === 1 &&
+      Array.isArray(storedState.value.identities) &&
+      (
+        storedState.value.activeIdentity == null ||
+        storedState.value.identities.some(identity =>
+          identity?.publicKey === storedState.value.activeIdentity
+        )
+      )
+    ) ? storedState.value : null
+    const loaded = authoritative
+      ? authoritative.identities
+      : (Array.isArray(stored?.value) ? stored.value : [])
+    activeIdentity = authoritative
+      ? authoritative.activeIdentity
+      : (storedActive?.value || null)
     log.info(` Loaded ${loaded.length} identities`)
 
     const normalized = loaded
@@ -239,6 +342,7 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
       // durable per-identity completion marker.
       await ctx.metaDb.put('identities', candidate)
       identities = candidate
+      await ctx.metaDb.put(IDENTITY_STATE_KEY, stateSnapshot(candidate, activeIdentity))
     } catch {
       // A migration source remains the authoritative state until the atomic
       // metadata write succeeds. Keep it in memory so later saves cannot
@@ -272,7 +376,43 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
      * @returns {Promise<void>}
      */
     async saveIdentities() {
-      await ctx.metaDb.put('identities', identities);
+      await updateIdentityState(current => current)
+    },
+
+    /** Capture the complete local identity transaction state for compensation. */
+    createStateSnapshot() {
+      return stateSnapshot()
+    },
+
+    /** Capture state after every identity mutation already queued ahead of this call. */
+    createQueuedStateSnapshot() {
+      return queuedIdentityStateSnapshot()
+    },
+
+    /** Atomically restore list + active pointer from a prior transaction. */
+    async restoreState(snapshot, { postMutationState = null } = {}) {
+      if (
+        !snapshot ||
+        snapshot.version !== 1 ||
+        !Array.isArray(snapshot.identities) ||
+        snapshot.identities.length > 256
+      ) {
+        throw new Error('Identity state snapshot is invalid')
+      }
+      if (
+        postMutationState != null &&
+        (
+          postMutationState.version !== 1 ||
+          !Array.isArray(postMutationState.identities)
+        )
+      ) {
+        throw new Error('Post-mutation identity state snapshot is invalid')
+      }
+      return updateIdentityState(current =>
+        postMutationState
+          ? compensatedIdentityState(snapshot, postMutationState, current)
+          : snapshot
+      )
     },
 
     /**
@@ -418,20 +558,20 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         signedDescriptor
       };
 
-      identities.push(identity);
-      log.info(' Identity appended to in-memory list')
-      await this.saveIdentities();
-      log.info(' Identities persisted')
-      // Channel is cached in ctx.channels by createChannel()
-
       // Set as active if first identity
-      if (identities.length === 1) {
-        activeIdentity = publicKey;
-        log.info(' Setting active identity')
-        await ctx.metaDb.put('activeIdentity', publicKey);
-        log.info(' Active identity persisted')
-        identity.isActive = true;
-      }
+      await updateIdentityState(current => {
+        const isFirstIdentity = current.identities.length === 0
+        if (isFirstIdentity) log.info(' Setting active identity')
+        return {
+          identities: [
+            ...current.identities,
+            { ...identity, isActive: isFirstIdentity },
+          ],
+          activeIdentity: isFirstIdentity ? publicKey : current.activeIdentity,
+        }
+      })
+      log.info(' Identity state persisted')
+      // Channel is cached in ctx.channels by createChannel()
 
       log.info(' Created:', publicKey.slice(0, 16));
       log.info(' Channel key:', channelKeyHex.slice(0, 16));
@@ -485,11 +625,13 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
       }
 
       // Mark all others inactive
-      identities = (identities || []).map(i => ({ ...i, isActive: false }))
-      identities.push(identity)
-      activeIdentity = publicKey
-      await ctx.metaDb.put('activeIdentity', publicKey)
-      await this.saveIdentities()
+      await updateIdentityState(current => ({
+        identities: [
+          ...current.identities.map(i => ({ ...i, isActive: false })),
+          identity,
+        ],
+        activeIdentity: publicKey,
+      }))
 
       return identity
     },
@@ -547,8 +689,15 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         isActive: false
       };
 
-      identities.push(identity);
-      await this.saveIdentities();
+      await updateIdentityState(current => {
+        if (current.identities.some(candidate => candidate.publicKey === publicKey)) {
+          return current
+        }
+        return {
+          identities: [...current.identities, identity],
+          activeIdentity: current.activeIdentity,
+        }
+      })
 
       return {
         success: true,
@@ -572,12 +721,20 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         throw new Error('Generated attestation proof failed verification')
       }
 
-      identities = identities.map(identity =>
-        identity.publicKey === activeIdentity
-          ? { ...identity, attestationProof: b4a.toString(proof, 'hex') }
-          : identity
-      )
-      await this.saveIdentities()
+      const proofIdentity = activeIdentity
+      await updateIdentityState(current => {
+        if (current.activeIdentity !== proofIdentity) {
+          throw new Error('Active identity changed during device bootstrap')
+        }
+        return {
+          identities: current.identities.map(identity =>
+            identity.publicKey === proofIdentity
+              ? { ...identity, attestationProof: b4a.toString(proof, 'hex') }
+              : identity
+          ),
+          activeIdentity: current.activeIdentity,
+        }
+      })
 
       return {
         proof,
@@ -707,21 +864,18 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
      * @returns {Promise<void>}
      */
     async setActiveIdentity(publicKey) {
-      const identity = identities.find(i => i.publicKey === publicKey);
-      if (!identity) {
-        throw new Error('Identity not found');
-      }
-
-      activeIdentity = publicKey;
-      await ctx.metaDb.put('activeIdentity', publicKey);
-
-      // Update isActive flags
-      identities = identities.map(i => ({
-        ...i,
-        isActive: i.publicKey === publicKey
-      }));
-
-      await this.saveIdentities();
+      await updateIdentityState(current => {
+        if (!current.identities.some(identity => identity.publicKey === publicKey)) {
+          throw new Error('Identity not found')
+        }
+        return {
+          identities: current.identities.map(identity => ({
+            ...identity,
+            isActive: identity.publicKey === publicKey,
+          })),
+          activeIdentity: publicKey,
+        }
+      })
       log.info(' Active identity set to:', publicKey.slice(0, 16));
     },
 
@@ -733,15 +887,21 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
      * @returns {Promise<void>}
      */
     async setPersonalKey(publicKey, personalKey) {
-      let changed = false
-      identities = identities.map((i) => {
-        if (i.publicKey === publicKey && i.personalKey !== personalKey) {
-          changed = true
-          return { ...i, personalKey }
+      await updateIdentityState(current => {
+        if (!current.identities.some(identity =>
+          identity.publicKey === publicKey && identity.personalKey !== personalKey
+        )) {
+          return current
         }
-        return i
+        return {
+          identities: current.identities.map(identity =>
+            identity.publicKey === publicKey
+              ? { ...identity, personalKey }
+              : identity
+          ),
+          activeIdentity: current.activeIdentity,
+        }
       })
-      if (changed) await this.saveIdentities()
     },
 
     /**
@@ -794,12 +954,14 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
           deferPublicProjection: full?.deferPublicProjection === true,
         })
 
-        identities = identities.map(i =>
-          i.publicKey === full.publicKey
-            ? { ...i, channelWriterKeyName: null }
-            : i
-        )
-        await this.saveIdentities()
+        await updateIdentityState(current => ({
+          identities: current.identities.map(identity =>
+            identity.publicKey === full.publicKey
+              ? { ...identity, channelWriterKeyName: null }
+              : identity
+          ),
+          activeIdentity: current.activeIdentity,
+        }))
 
         return fallback
       }
@@ -825,7 +987,7 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         return summary
       }
 
-      let identitiesChanged = false
+      const descriptorUpdates = new Map()
       for (const identity of identities) {
         const channelKey = identity?.channelKey || identity?.driveKey
         if (!channelKey) continue
@@ -917,9 +1079,10 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
             await channel.publicBee.setMetadata({ name: descriptor.profile?.name })
           }
 
-          identity.signedDescriptor = signed
-          identity.channelId = descriptor.channelId
-          identitiesChanged = true
+          descriptorUpdates.set(identity.publicKey, {
+            signedDescriptor: signed,
+            channelId: descriptor.channelId,
+          })
           summary.signed++
           log.info(' Descriptor backfill: signed channel root for', channelKey.slice(0, 16))
         } catch (err) {
@@ -928,8 +1091,16 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         }
       }
 
-      if (identitiesChanged) {
-        try { await this.saveIdentities() } catch (err) {
+      if (descriptorUpdates.size > 0) {
+        try {
+          await updateIdentityState(current => ({
+            identities: current.identities.map(identity => {
+              const update = descriptorUpdates.get(identity.publicKey)
+              return update ? { ...identity, ...update } : identity
+            }),
+            activeIdentity: current.activeIdentity,
+          }))
+        } catch (err) {
           log.warn(' Descriptor backfill: persisting identities failed:', err?.message)
         }
       }

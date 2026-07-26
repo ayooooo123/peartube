@@ -416,21 +416,34 @@ export function installSeedPinIdentityMutationHooks ({
     if (typeof original !== 'function') continue
     const wrapped = async (...args) => {
       return enqueueMutation(async () => {
-        const previousPublicKey = identityManager.getActivePublicKey?.() || null
+        const previousState = typeof identityManager.createQueuedStateSnapshot === 'function'
+          ? await identityManager.createQueuedStateSnapshot()
+          : (identityManager.createStateSnapshot?.() || null)
+        const previousPublicKey = previousState?.activeIdentity ??
+          identityManager.getActivePublicKey?.() ??
+          null
+        let postMutationState = null
+        let mutationCompleted = false
         try {
           const result = await original.apply(identityManager, args)
+          postMutationState = identityManager.createStateSnapshot?.() || null
+          mutationCompleted = true
           await onMutation(mutation)
           return result
         } catch (error) {
           const currentPublicKey = identityManager.getActivePublicKey?.() || null
-          if (
-            previousPublicKey &&
-            currentPublicKey !== previousPublicKey &&
-            typeof restoreActiveIdentity === 'function'
-          ) {
+          if (mutationCompleted) {
             const rollbackErrors = []
             try {
-              await restoreActiveIdentity.call(identityManager, previousPublicKey)
+              if (previousState && typeof identityManager.restoreState === 'function') {
+                await identityManager.restoreState(previousState, { postMutationState })
+              } else if (
+                previousPublicKey &&
+                currentPublicKey !== previousPublicKey &&
+                typeof restoreActiveIdentity === 'function'
+              ) {
+                await restoreActiveIdentity.call(identityManager, previousPublicKey)
+              }
             } catch (rollbackError) {
               rollbackErrors.push(rollbackError)
             }

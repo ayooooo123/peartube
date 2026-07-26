@@ -19,6 +19,7 @@ export function createModerationManager(options = {}) {
   const maxRecordsPerAgentPerWindow = normalizeBudgetLimit(options.maxRecordsPerAgentPerWindow, 512)
   const maxRecordsPerCollectionPerWindow = normalizeBudgetLimit(options.maxRecordsPerCollectionPerWindow, 512)
   const acceptRecord = typeof options.acceptRecord === 'function' ? options.acceptRecord : () => true
+  const onRecordsChanged = typeof options.onRecordsChanged === 'function' ? options.onRecordsChanged : async () => {}
   const stateRepository = options.stateRepository || null
   const budget = createWindowedIngestBudget({
     now,
@@ -108,17 +109,25 @@ export function createModerationManager(options = {}) {
       subscribed.add(String(moderatorId))
       return ready.then(persistState)
     },
-    unsubscribe(moderatorId) {
+    async unsubscribe(moderatorId) {
+      await ready
       const id = String(moderatorId)
       subscribed.delete(id)
       checkpoints.delete(id)
       for (const key of pageStates.keys()) {
         if (key.startsWith(`${id}\0`)) pageStates.delete(key)
       }
+      let removed = 0
       for (const key of records.keys()) {
-        if (key.startsWith(`${id}\0`)) records.delete(key)
+        if (key.startsWith(`${id}\0`)) {
+          records.delete(key)
+          removed++
+        }
       }
-      return ready.then(persistState)
+      await persistState()
+      if (removed > 0) {
+        await onRecordsChanged({ reason: 'records-removed', moderatorId: id, accepted: 0, removed })
+      }
     },
     getCheckpoint(moderatorId) {
       return checkpoints.get(String(moderatorId)) || null
@@ -137,7 +146,15 @@ export function createModerationManager(options = {}) {
       let duplicates = 0
       let processed = 0
       let firstRejectionCode = null
-      while (true) {
+      let changed = 0
+      async function persistAndNotify() {
+        await persistState()
+        if (changed === 0) return
+        const accepted = changed
+        await onRecordsChanged({ reason: 'records-accepted', moderatorId, accepted, removed: 0 })
+        changed = 0
+      }
+      for (;;) {
       const page = await fetchPage(cursor)
       let verified
       try {
@@ -165,7 +182,7 @@ export function createModerationManager(options = {}) {
         cursor = state.nextCursor
         checkpoints.set(moderatorId, { cursor, updatedAt: now() })
         if (cursor == null) {
-          await persistState()
+          await persistAndNotify()
           return { status: 'complete', nextCursor: null, ingested, rejected, duplicates }
         }
         continue
@@ -174,14 +191,14 @@ export function createModerationManager(options = {}) {
       for (let index = state.nextIndex; index < verified.body.records.length; index++) {
         if (processed >= maxRecordsPerSync) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
-          await persistState()
+          await persistAndNotify()
           return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected, duplicates }
         }
         const record = verified.body.records[index]
         const reservation = reserveRecord(moderatorId, record)
         if (!reservation.accepted) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
-          await persistState()
+          await persistAndNotify()
           return {
             status: 'partial',
             errorCode: reservation.errorCode,
@@ -209,6 +226,7 @@ export function createModerationManager(options = {}) {
         if (!previous && records.size >= maxRecords) records.delete(records.keys().next().value)
         records.set(key, next)
         ingested++
+        changed++
       }
 
       state.complete = true
@@ -216,7 +234,7 @@ export function createModerationManager(options = {}) {
       checkpoints.set(moderatorId, { cursor: state.nextCursor, updatedAt: now() })
       cursor = state.nextCursor
       if (cursor != null) continue
-      await persistState()
+      await persistAndNotify()
       if (ingested === 0 && rejected > 0) {
         return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: state.nextCursor, ingested, rejected, duplicates }
       }

@@ -52,6 +52,7 @@ import {
   createConsumerModerationPolicy,
   createConsumerModerationProfileController,
   createConsumerModerationProfileTransaction,
+  createConsumerWorkRevalidator,
   createModerationManager,
 } from './moderation/index.js'
 import {
@@ -515,8 +516,10 @@ export async function createBackendContext(config) {
       },
     },
   })
+  let onConsumerModerationRecordsChanged = async () => {}
   const consumerModerationManager = createModerationManager({
     now: () => Date.now(),
+    onRecordsChanged: event => onConsumerModerationRecordsChanged(event),
     stateRepository: {
       async load() {
         return (await ctx.metaDb.get('consumer-moderation-feed-state:v1'))?.value || null
@@ -659,6 +662,13 @@ export async function createBackendContext(config) {
         }),
       })
     : null
+  const revalidateConsumerWork = createConsumerWorkRevalidator({
+    mediaCatalogProjection,
+    getConsumerCatalogProjection: () => consumerCatalogProjection,
+    scopedNetwork,
+    getArchiveNetwork: () => permissionlessArchiveNetwork,
+  })
+  onConsumerModerationRecordsChanged = revalidateConsumerWork
   await permissionlessArchiveNetwork?.ready
   ctx.archiveStore = archiveStore
   ctx.archivePolicy = archivePolicy
@@ -869,14 +879,6 @@ export async function createBackendContext(config) {
   if (publicationV1Startup.ready) await networkPolicyRuntime.start()
   ctx.networkPolicyRuntime = networkPolicyRuntime
   ctx.networkPolicyStore = networkPolicyStore
-  const revalidateConsumerWork = async () => {
-    await mediaCatalogProjection.rebuild()
-    consumerCatalogProjection.rebuild()
-    await scopedNetwork.revalidateRetainedRenditions()
-    await permissionlessArchiveNetwork?.revalidateConsumerRequests?.(
-      request => consumerCatalogProjection.isPublicationVisible(request.body.publicationId)
-    )
-  }
   ctx.onNetworkPolicyChange = async policy => {
     if (!publicationV1Startup.ready) {
       pendingNetworkPolicy = policy

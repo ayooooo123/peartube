@@ -21,6 +21,10 @@ import * as haptics from '@/lib/haptics'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import type { Video } from '@peartube/core'
 import { DeveloperModeGate } from '@/lib/developer-mode'
+import {
+  type StudioEpisodeMediaInput,
+  uploadStudioVideo,
+} from '@/lib/studio-upload-controller'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -105,6 +109,13 @@ function StudioScreen() {
   const [title, setTitle] = useState('')
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null)
   const [selectedCategory, setSelectedCategory] = useState('Other')
+  const [episodeMetadataEnabled, setEpisodeMetadataEnabled] = useState(false)
+  const [seriesId, setSeriesId] = useState('')
+  const [seriesTitle, setSeriesTitle] = useState('')
+  const [tmdbSeriesId, setTmdbSeriesId] = useState('')
+  const [seasonNumber, setSeasonNumber] = useState('')
+  const [episodeNumber, setEpisodeNumber] = useState('')
+  const [expectedEpisodeCount, setExpectedEpisodeCount] = useState('')
   const categoryOptions = ['Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
   const [filePath, setFilePath] = useState<string | null>(null) // Pear: actual file path
   const [fileSize, setFileSize] = useState<number>(0)
@@ -436,6 +447,15 @@ function StudioScreen() {
     }
 
     const driveKey = identity.driveKey
+    const media: StudioEpisodeMediaInput = {
+      enabled: episodeMetadataEnabled,
+      seriesId,
+      seriesTitle,
+      tmdbId: tmdbSeriesId,
+      seasonNumber,
+      episodeNumber,
+      expectedEpisodeCount,
+    }
 
     setUploading(true)
     setUploadProgress(0)
@@ -448,12 +468,20 @@ function StudioScreen() {
         // Skip FFmpeg thumbnail generation if user selected a custom thumbnail
         const skipThumbnail = !!thumbnailFilePath
         console.log('[Studio] Uploading via Pear:', filePath, 'category:', selectedCategory, 'skipThumbnail:', skipThumbnail)
-        const video = await uploadVideo(filePath, title.trim(), '', mimeType, selectedCategory, (progress, speed, eta, transcoding) => {
-          setUploadProgress(progress)
-          if (speed !== undefined) setUploadSpeed(speed)
-          if (eta !== undefined) setUploadEta(eta)
-          setIsTranscoding(!!transcoding)
-        }, skipThumbnail)
+        const video = await uploadStudioVideo(uploadVideo, {
+          filePath,
+          title: title.trim(),
+          mimeType,
+          category: selectedCategory,
+          onProgress: (progress, speed, eta, transcoding) => {
+            setUploadProgress(progress)
+            if (speed !== undefined) setUploadSpeed(speed)
+            if (eta !== undefined) setUploadEta(eta)
+            setIsTranscoding(!!transcoding)
+          },
+          skipThumbnailGeneration: skipThumbnail,
+          media,
+        })
         videoId = video?.id
 
         // If we have a thumbnail selected, upload it
@@ -479,20 +507,20 @@ function StudioScreen() {
           ? true
           : (thumbnailGenerating || !!thumbnailFilePath)
 
-        const video = await uploadVideo(
-          selectedVideo,
-          title.trim(),
-          '',
+        const video = await uploadStudioVideo(uploadVideo, {
+          filePath: selectedVideo,
+          title: title.trim(),
           mimeType,
-          selectedCategory,
-          (progress, speed, eta, transcoding) => {
+          category: selectedCategory,
+          onProgress: (progress, speed, eta, transcoding) => {
             setUploadProgress(progress)
             if (speed !== undefined) setUploadSpeed(speed)
             if (eta !== undefined) setUploadEta(eta)
             setIsTranscoding(!!transcoding)
           },
-          skipThumbnail
-        )
+          skipThumbnailGeneration: skipThumbnail,
+          media,
+        })
 
         videoId = video?.id
         console.log('[Studio] Upload complete, videoId:', videoId, 'skippedThumbnail:', skipThumbnail)
@@ -521,6 +549,13 @@ function StudioScreen() {
       setThumbnailFilePath(null)
       setVideoDuration(null)
       setSelectedCategory('Other')
+      setEpisodeMetadataEnabled(false)
+      setSeriesId('')
+      setSeriesTitle('')
+      setTmdbSeriesId('')
+      setSeasonNumber('')
+      setEpisodeNumber('')
+      setExpectedEpisodeCount('')
       setThumbnailError(null)
       void cleanupTempVideo()
       haptics.success()
@@ -643,6 +678,87 @@ function StudioScreen() {
                     />
                   ))}
                 </View>
+              </View>
+
+              <View className="gap-3">
+                <Text className="text-caption text-pear-text-muted">Collection metadata (optional)</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  <Chip
+                    label="Standalone"
+                    selected={!episodeMetadataEnabled}
+                    onPress={() => setEpisodeMetadataEnabled(false)}
+                  />
+                  <Chip
+                    label="Series episode"
+                    selected={episodeMetadataEnabled}
+                    onPress={() => setEpisodeMetadataEnabled(true)}
+                  />
+                </View>
+                {episodeMetadataEnabled ? (
+                  <View className="gap-3">
+                    <TextInput
+                      accessibilityLabel="Series ID"
+                      placeholder="Series ID (lowercase, stable)"
+                      value={seriesId}
+                      onChangeText={setSeriesId}
+                      maxLength={128}
+                      autoCapitalize="none"
+                      placeholderTextColor={colors.textMuted}
+                      className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+                    />
+                    <TextInput
+                      accessibilityLabel="Series title"
+                      placeholder="Series title"
+                      value={seriesTitle}
+                      onChangeText={setSeriesTitle}
+                      maxLength={512}
+                      placeholderTextColor={colors.textMuted}
+                      className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+                    />
+                    <TextInput
+                      accessibilityLabel="TMDB series ID"
+                      placeholder="TMDB series ID"
+                      value={tmdbSeriesId}
+                      onChangeText={setTmdbSeriesId}
+                      maxLength={20}
+                      keyboardType="number-pad"
+                      placeholderTextColor={colors.textMuted}
+                      className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+                    />
+                    <View className="flex-row gap-2">
+                      <TextInput
+                        accessibilityLabel="Season number"
+                        placeholder="Season"
+                        value={seasonNumber}
+                        onChangeText={setSeasonNumber}
+                        maxLength={6}
+                        keyboardType="number-pad"
+                        placeholderTextColor={colors.textMuted}
+                        className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+                      />
+                      <TextInput
+                        accessibilityLabel="Episode number"
+                        placeholder="Episode"
+                        value={episodeNumber}
+                        onChangeText={setEpisodeNumber}
+                        maxLength={6}
+                        keyboardType="number-pad"
+                        placeholderTextColor={colors.textMuted}
+                        className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+                      />
+                      <TextInput
+                        accessibilityLabel="Expected episode count"
+                        placeholder="Expected"
+                        value={expectedEpisodeCount}
+                        onChangeText={setExpectedEpisodeCount}
+                        maxLength={6}
+                        keyboardType="number-pad"
+                        placeholderTextColor={colors.textMuted}
+                        className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+                      />
+                    </View>
+                  </View>
+                ) : null}
               </View>
 
               {/* Upload button or progress bar */}

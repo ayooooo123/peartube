@@ -10,9 +10,19 @@ import {
 } from '../src/discovery/bootstrap-protocol.js'
 import {
   createPublicationManifest,
+  createRenditionDescriptor,
 } from '../src/assets/index.js'
+import { createPermissionlessArchiveNetwork } from '../src/archive/permissionless-network.js'
 import { createIndexFeedPage } from '../src/indexing/feed-contract.js'
+import { createLocalMediaIndex } from '../src/indexing/local-index.js'
+import { createConsumerCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import { createModerationFeedPage } from '../src/moderation/feed-contract.js'
+import { createModerationManager } from '../src/moderation/manager.js'
+import {
+  createConsumerModerationPolicy,
+  createConsumerModerationProfileController,
+} from '../src/moderation/profile.js'
+import { createConsumerWorkRevalidator } from '../src/moderation/revalidation.js'
 import {
   createArchiveChallenge,
   createArchiveChallengeEnvelope,
@@ -760,10 +770,46 @@ test('real Protomux sessions open on both sides without server topic metadata an
 test('scoped index and moderation feeds transfer only signed bounded pages', async (t) => {
   const curator = crypto.keyPair(bytes(32, 141))
   const moderator = crypto.keyPair(bytes(32, 142))
-  const publisherId = b4a.toString(bytes(32, 143), 'hex')
-  const publicationId = b4a.toString(bytes(32, 144), 'hex')
+  const publisher = crypto.keyPair(bytes(32, 143))
+  const publisherId = b4a.toString(publisher.publicKey, 'hex')
   const curatorId = b4a.toString(curator.publicKey, 'hex')
   const moderatorId = b4a.toString(moderator.publicKey, 'hex')
+  const coreKey = bytes(32, 144)
+  const rendition = createRenditionDescriptor({
+    purpose: 'original',
+    format: 'video/mp4',
+    core: {
+      key: coreKey,
+      length: 4,
+      treeHash: bytes(32, 145),
+      byteLength: 4096,
+    },
+  })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Moderated feature',
+    renditions: [rendition],
+    provenance: [{
+      type: 'upload',
+      renditionId: rendition.renditionId,
+      coreKey: b4a.toString(coreKey, 'hex'),
+      start: 0,
+      end: 4,
+    }],
+    keyPair: publisher,
+    signedAt: 10,
+  })
+  const publicationId = manifest.publicationId
+  const candidate = {
+    directPublisher: true,
+    kind: 'movie',
+    entityRef: 'work:scoped',
+    publicationId,
+    publisherId,
+    title: 'Moderated feature',
+    playable: true,
+  }
   const indexPage = createIndexFeedPage({
     curatorId,
     pageCursor: '0',
@@ -785,9 +831,79 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
   const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, now: () => 20 })
-  const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, now: () => 20 })
+  const moderationChanges = []
+  const profileController = createConsumerModerationProfileController({
+    bundledProfile: {
+      version: 1,
+      enabled: true,
+      curatorSubscriptions: [moderatorId],
+    },
+  })
+  await profileController.ready
+  let runModerationRevalidation = async () => {}
+  const consumerModerationManager = createModerationManager({
+    now: () => 20,
+    onRecordsChanged: async event => {
+      moderationChanges.push(event)
+      await runModerationRevalidation()
+    },
+  })
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    publisherRecords: () => [candidate],
+    moderationPolicy: createConsumerModerationPolicy({
+      profileController,
+      moderationManager: consumerModerationManager,
+    }),
+  })
+  const consumer = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: {
+      get({ key }) {
+        return {
+          key,
+          ready: async () => {},
+          download: () => ({ destroy() {} }),
+          close: async () => {},
+        }
+      },
+    },
+    now: () => 20,
+    moderationManager: consumerModerationManager,
+    authorizePublication: async ({ manifest: proposed }) => proposed === manifest,
+    authorizeConsumerWork: async ({ publicationId: proposed }) => projection.isPublicationVisible(proposed),
+  })
+  const archiveNetwork = createPermissionlessArchiveNetwork({
+    keyPair: crypto.keyPair(bytes(32, 146)),
+    now: () => 20,
+    scopedNetwork: consumer,
+  })
+  runModerationRevalidation = createConsumerWorkRevalidator({
+    getConsumerCatalogProjection: () => projection,
+    scopedNetwork: consumer,
+    getArchiveNetwork: () => archiveNetwork,
+  })
   await source.start()
   await consumer.start()
+  projection.rebuild()
+  t.is(projection.isPublicationVisible(publicationId), true)
+  t.is((await consumer.retainAuthorizedRendition({
+    manifest,
+    renditionId: rendition.renditionId,
+    start: 0,
+    end: 4,
+    entityRef: candidate.entityRef,
+    publicationId,
+  })).status, 'retained')
+  await archiveNetwork.requestArchive({
+    publicationId,
+    renditionId: rendition.renditionId,
+    ranges: [{ coreKey, start: 0, end: 4 }],
+    requestedBytes: 4096,
+    retentionUntil: 200,
+    expiresAt: 100,
+  })
+  t.is(archiveNetwork.getStatus().knownRequests, 1)
   await source.provideIndexFeed({ curatorId, fetchPage: async cursor => cursor === '0' ? { envelope: indexPage.envelope } : null })
   await source.provideModerationFeed({ moderatorId, fetchPage: async cursor => cursor === '0' ? { envelope: moderationPage.envelope } : null })
   await consumer.followIndexFeed({ curatorId })
@@ -797,12 +913,29 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   swarmB.connections.add(pair.b)
   swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, topics: [], client: false })
   swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, topics: [], client: true })
-  for (let attempt = 0; attempt < 10 && (consumer.getIndexFeedRecords().length === 0 || consumer.getModerationFeedRecords().length === 0); attempt++) await settle()
+  for (let attempt = 0; attempt < 20 && (
+    consumer.getIndexFeedRecords().length === 0 ||
+    consumer.getModerationFeedRecords().length === 0 ||
+    projection.isPublicationVisible(publicationId) ||
+    archiveNetwork.getStatus().knownRequests > 0
+  ); attempt++) await settle()
   t.is(consumer.getIndexFeedRecords().length, 1)
   t.is(consumer.getModerationFeedRecords().length, 1)
+  t.is(moderationChanges.length, 1, 'accepted remote moderation decisions notify the consumer immediately')
+  t.is(projection.isPublicationVisible(publicationId), false, 'the remote block immediately hides the publisher item')
+  t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'asset').length, 0,
+    'the active asset is cancelled and its topic is left')
+  t.is(archiveNetwork.getStatus().knownRequests, 0, 'the active archive request is cancelled')
   t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'index').length, 1)
   t.is(consumer.getDiagnostics().topics.filter(topic => topic.purpose === 'moderation').length, 1)
 
+  await consumer.unfollowModerationFeed({ moderatorId })
+  t.is(projection.isPublicationVisible(publicationId), true,
+    'removing the local moderation subscription permits retained publisher truth')
+  t.is(candidate.publicationId, publicationId, 'local moderation never mutates publisher network truth')
+  t.is(moderationChanges.length, 2, 'record removal also rebuilds the consumer projection immediately')
+
+  await archiveNetwork.close()
   await source.close()
   await consumer.close()
   pair.a.destroy()

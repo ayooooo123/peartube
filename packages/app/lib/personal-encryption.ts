@@ -36,10 +36,22 @@ function generateSecretHex(): string {
   return Array.from(random, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
-export async function ensurePersonalEncryption(rpc: any, publicKey?: string | null): Promise<void> {
-  if (!rpc) return
+export type EnsurePersonalEncryptionOptions = {
+  force?: boolean
+  required?: boolean
+}
+
+export async function ensurePersonalEncryption(
+  rpc: any,
+  publicKey?: string | null,
+  options: EnsurePersonalEncryptionOptions = {},
+): Promise<void> {
+  if (!rpc) {
+    if (options.required) throw new Error('personal-encryption-rpc-unavailable')
+    return
+  }
   const owner = publicKey || DEVICE_LOCAL_PERSONAL_KEY
-  if (provisioned.has(owner)) return
+  if (provisioned.has(owner) && !options.force) return
   const k = keychainKey(owner)
 
   try {
@@ -56,7 +68,10 @@ export async function ensurePersonalEncryption(rpc: any, publicKey?: string | nu
         ...stored,
         ...(publicKey ? {} : { deviceLocal: true }),
       })
-      if (result?.success) provisioned.add(owner)
+      if (!result?.success) {
+        throw new Error(result?.error || 'personal-encryption-provision-failed')
+      }
+      provisioned.add(owner)
       return
     }
 
@@ -72,12 +87,11 @@ export async function ensurePersonalEncryption(rpc: any, publicKey?: string | nu
         await secureSet(k, JSON.stringify({ secret, bootstrapKey: res.bootstrapKey }))
       }
       provisioned.add(owner)
-    } else if (res && res.error) {
-      console.warn('[PersonalEncryption] provisioning returned error:', res.error)
+    } else {
+      throw new Error(res?.error || 'personal-encryption-provision-failed')
     }
   } catch (err: any) {
-    // Non-fatal: personal features still work unencrypted; encryption can be
-    // provisioned on a later launch once the keychain is reachable.
     console.warn('[PersonalEncryption] provisioning skipped:', err?.message || err)
+    if (options.required) throw err
   }
 }

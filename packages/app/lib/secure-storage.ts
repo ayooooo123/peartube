@@ -3,9 +3,9 @@
  *
  * - iOS:      Keychain Services (via expo-secure-store)
  * - Android:  Keystore-backed encrypted store (via expo-secure-store)
- * - Web/desktop fallback: a file in the app's document directory. This is a
- *   weaker fallback used only where a hardware keychain is unavailable; it
- *   keeps the secret out of regular app state but is not hardware-protected.
+ * - Electrobun desktop: the privileged Bun process stores records in the
+ *   operating-system keyring. The renderer never writes a plaintext file.
+ * - Web fallback: a file in the app's document directory when available.
  *
  * Used to hold the personal-store at-rest encryption secret.
  */
@@ -23,6 +23,25 @@ async function loadSecureStore(): Promise<any> {
     SecureStore = null
   }
   return SecureStore
+}
+
+type DesktopPersonalSecretBridge = {
+  personalSecureGet(key: string): Promise<string | null>
+  personalSecureSet(key: string, value: string): Promise<void>
+  personalSecureDelete(key: string): Promise<void>
+}
+
+function desktopBridge(): DesktopPersonalSecretBridge | null {
+  const bridge = (globalThis as any)?.window?.bridge
+  if (
+    bridge &&
+    typeof bridge.personalSecureGet === 'function' &&
+    typeof bridge.personalSecureSet === 'function' &&
+    typeof bridge.personalSecureDelete === 'function'
+  ) {
+    return bridge
+  }
+  return null
 }
 
 // --- file fallback (document directory) -----------------------------------
@@ -59,7 +78,9 @@ async function fallbackGet(key: string): Promise<string | null> {
 async function fallbackSet(key: string, value: string): Promise<void> {
   const fs = await loadFileSystem()
   const uri = fs && fallbackUri(fs, key)
-  if (!uri || typeof fs.writeAsStringAsync !== 'function') return
+  if (!uri || typeof fs.writeAsStringAsync !== 'function') {
+    throw new Error('secure-storage-unavailable')
+  }
   await fs.writeAsStringAsync(uri, value, { encoding: 'utf8' })
 }
 
@@ -77,6 +98,8 @@ async function fallbackDelete(key: string): Promise<void> {
 // --- public API ------------------------------------------------------------
 
 export async function secureGet(key: string): Promise<string | null> {
+  const desktop = desktopBridge()
+  if (desktop) return desktop.personalSecureGet(key)
   const store = await loadSecureStore()
   if (store?.getItemAsync) {
     try {
@@ -90,6 +113,11 @@ export async function secureGet(key: string): Promise<string | null> {
 }
 
 export async function secureSet(key: string, value: string): Promise<void> {
+  const desktop = desktopBridge()
+  if (desktop) {
+    await desktop.personalSecureSet(key, value)
+    return
+  }
   const store = await loadSecureStore()
   if (store?.setItemAsync) {
     try {
@@ -103,6 +131,11 @@ export async function secureSet(key: string, value: string): Promise<void> {
 }
 
 export async function secureDelete(key: string): Promise<void> {
+  const desktop = desktopBridge()
+  if (desktop) {
+    await desktop.personalSecureDelete(key)
+    return
+  }
   const store = await loadSecureStore()
   if (store?.deleteItemAsync) {
     try {

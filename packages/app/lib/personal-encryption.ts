@@ -9,8 +9,8 @@
  *
  * Flow per identity:
  *   1. If the keychain already holds the secret -> provision it to the backend.
- *   2. Else (first device for this identity) -> have the backend generate one,
- *      then persist the returned secret to the keychain.
+ *   2. Else (first device for this identity) -> generate it in the platform,
+ *      durably persist it, and only then provision the backend.
  *
  * Paired-device imports must provision an explicit secret received through the
  * pairing flow. Do not export the active backend secret over shared app RPC.
@@ -25,6 +25,16 @@ function keychainKey(publicKey: string): string {
 }
 
 const provisioned = new Set<string>()
+
+function generateSecretHex(): string {
+  const random = new Uint8Array(32)
+  const crypto = globalThis.crypto
+  if (!crypto || typeof crypto.getRandomValues !== 'function') {
+    throw new Error('secure-random-unavailable')
+  }
+  crypto.getRandomValues(random)
+  return Array.from(random, byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 export async function ensurePersonalEncryption(rpc: any, publicKey?: string | null): Promise<void> {
   if (!rpc) return
@@ -42,22 +52,25 @@ export async function ensurePersonalEncryption(rpc: any, publicKey?: string | nu
       } catch {
         stored = { secret: existing }
       }
-      await rpc.provisionPersonalEncryption({
+      const result = await rpc.provisionPersonalEncryption({
         ...stored,
         ...(publicKey ? {} : { deviceLocal: true }),
       })
-      provisioned.add(owner)
+      if (result?.success) provisioned.add(owner)
       return
     }
 
-    // 2. First device for this identity: backend generates, we persist it.
-    const res = await rpc.provisionPersonalEncryption(
-      publicKey ? {} : { deviceLocal: true },
-    )
-    if (res?.success && res?.secret) {
-      await secureSet(k, publicKey
-        ? res.secret
-        : JSON.stringify({ secret: res.secret, bootstrapKey: res.bootstrapKey }))
+    // 2. First device: generate and persist before the backend ever sees it.
+    const secret = generateSecretHex()
+    await secureSet(k, publicKey ? secret : JSON.stringify({ secret }))
+    const res = await rpc.provisionPersonalEncryption({
+      secret,
+      ...(publicKey ? {} : { deviceLocal: true }),
+    })
+    if (res?.success) {
+      if (!publicKey && res.bootstrapKey) {
+        await secureSet(k, JSON.stringify({ secret, bootstrapKey: res.bootstrapKey }))
+      }
       provisioned.add(owner)
     } else if (res && res.error) {
       console.warn('[PersonalEncryption] provisioning returned error:', res.error)

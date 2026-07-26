@@ -4417,11 +4417,11 @@
       "name": "provision-personal-encryption-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 0,
+      "flagsPosition": 1,
       "fields": [
         {
           "name": "secret",
-          "required": false,
+          "required": true,
           "type": "string",
           "version": 1
         },
@@ -4449,12 +4449,6 @@
           "name": "success",
           "required": false,
           "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "secret",
-          "required": false,
-          "type": "string",
           "version": 1
         },
         {

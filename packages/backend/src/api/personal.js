@@ -96,22 +96,19 @@ export function createPersonalApi({ ctx }) {
     /**
      * Provision the at-rest encryption secret (from the device's native
      * keychain) for the active identity's personal store, opening it encrypted.
-     * The platform reads-or-generates the secret in the keychain and passes it
-     * here; when omitted, the backend generates one and returns it so the
-     * platform can persist it to the keychain. Must be called before the store
-     * first opens to take effect.
+     * The platform generates and persists the secret in the device keychain
+     * before passing it here. The backend never generates or returns it.
      */
     async provisionPersonalEncryption(req = {}) {
       if (!ctx.personalManager) return { success: false, error: 'personal store unavailable' };
       const result = await ctx.personalManager.provisionSecret({
-        secret: req.secret || undefined,
+        secret: req.secret,
         bootstrapKey: req.bootstrapKey || undefined,
         deviceLocal: req.deviceLocal === true,
       });
       if (result?.success) await ctx.reloadConsumerModerationProfile?.();
       return {
         success: !!result.success,
-        secret: result.secret,
         bootstrapKey: result.bootstrapKey,
         encrypted: !!result.encrypted,
         error: result.error,

@@ -8310,10 +8310,14 @@ public let getPersonalSettingsResponse = GetPersonalSettingsResponseCodec()
 
 // @peartube/provision-personal-encryption-request
 public struct ProvisionPersonalEncryptionRequest {
-  public var secret: String?
+  public var secret: String
+  public var bootstrapKey: String?
+  public var deviceLocal: Bool
 
-  public init(secret: String? = nil) {
+  public init(secret: String = "", bootstrapKey: String? = nil, deviceLocal: Bool = false) {
     self.secret = secret
+    self.bootstrapKey = bootstrapKey
+    self.deviceLocal = deviceLocal
   }
 }
 
@@ -8321,27 +8325,34 @@ public struct ProvisionPersonalEncryptionRequestCodec: Codec {
   public typealias Value = ProvisionPersonalEncryptionRequest
 
   let _secretCodec = Primitive.UTF8()
+  let _bootstrapKeyCodec = Primitive.UTF8()
 
   public init() {}
 
   public func preencode(_ state: inout State, _ value: ProvisionPersonalEncryptionRequest) {
+    _secretCodec.preencode(&state, value.secret)
     state.end += 1 // flags
-    if let v = value.secret { _secretCodec.preencode(&state, v) }
+    if let v = value.bootstrapKey { _bootstrapKeyCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: ProvisionPersonalEncryptionRequest) throws {
     var flags: UInt = 0
-    if value.secret != nil { flags |= 1 }
+    if value.bootstrapKey != nil { flags |= 1 }
+    if value.deviceLocal { flags |= 2 }
 
+    try _secretCodec.encode(&state, value.secret)
     try Primitive.UInt().encode(&state, flags)
-    if let v = value.secret { try _secretCodec.encode(&state, v) }
+    if let v = value.bootstrapKey { try _bootstrapKeyCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> ProvisionPersonalEncryptionRequest {
+    let _r0 = try _secretCodec.decode(&state)
     let flags = try Primitive.UInt().decode(&state)
-    let _r0: String? = (flags & 1) != 0 ? try _secretCodec.decode(&state) : nil
+    let _r1: String? = (flags & 1) != 0 ? try _bootstrapKeyCodec.decode(&state) : nil
     return ProvisionPersonalEncryptionRequest(
-      secret: _r0
+      secret: _r0,
+      bootstrapKey: _r1,
+      deviceLocal: (flags & 2) != 0
     )
   }
 }
@@ -8351,13 +8362,13 @@ public let provisionPersonalEncryptionRequest = ProvisionPersonalEncryptionReque
 // @peartube/provision-personal-encryption-response
 public struct ProvisionPersonalEncryptionResponse {
   public var success: Bool
-  public var secret: String?
+  public var bootstrapKey: String?
   public var encrypted: Bool
   public var error: String?
 
-  public init(success: Bool = false, secret: String? = nil, encrypted: Bool = false, error: String? = nil) {
+  public init(success: Bool = false, bootstrapKey: String? = nil, encrypted: Bool = false, error: String? = nil) {
     self.success = success
-    self.secret = secret
+    self.bootstrapKey = bootstrapKey
     self.encrypted = encrypted
     self.error = error
   }
@@ -8367,35 +8378,35 @@ public struct ProvisionPersonalEncryptionResponseCodec: Codec {
   public typealias Value = ProvisionPersonalEncryptionResponse
 
   let _errorCodec = Primitive.UTF8()
-  let _secretCodec = Primitive.UTF8()
+  let _bootstrapKeyCodec = Primitive.UTF8()
 
   public init() {}
 
   public func preencode(_ state: inout State, _ value: ProvisionPersonalEncryptionResponse) {
     state.end += 1 // flags
-    if let v = value.secret { _secretCodec.preencode(&state, v) }
+    if let v = value.bootstrapKey { _bootstrapKeyCodec.preencode(&state, v) }
     if let v = value.error { _errorCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: ProvisionPersonalEncryptionResponse) throws {
     var flags: UInt = 0
     if value.success { flags |= 1 }
-    if value.secret != nil { flags |= 2 }
+    if value.bootstrapKey != nil { flags |= 2 }
     if value.encrypted { flags |= 4 }
     if value.error != nil { flags |= 8 }
 
     try Primitive.UInt().encode(&state, flags)
-    if let v = value.secret { try _secretCodec.encode(&state, v) }
+    if let v = value.bootstrapKey { try _bootstrapKeyCodec.encode(&state, v) }
     if let v = value.error { try _errorCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> ProvisionPersonalEncryptionResponse {
     let flags = try Primitive.UInt().decode(&state)
-    let _r0: String? = (flags & 2) != 0 ? try _secretCodec.decode(&state) : nil
+    let _r0: String? = (flags & 2) != 0 ? try _bootstrapKeyCodec.decode(&state) : nil
     let _r1: String? = (flags & 8) != 0 ? try _errorCodec.decode(&state) : nil
     return ProvisionPersonalEncryptionResponse(
       success: (flags & 1) != 0,
-      secret: _r0,
+      bootstrapKey: _r0,
       encrypted: (flags & 4) != 0,
       error: _r1
     )

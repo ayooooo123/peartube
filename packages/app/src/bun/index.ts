@@ -15,6 +15,7 @@ import { existsSync } from 'fs'
 import { execSync } from 'child_process'
 import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
+import { createBunPersonalSecretVault } from './personal-secret-vault'
 import { createPublisherShellService } from '../../lib/publisher-shell-service'
 import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
 
@@ -85,6 +86,7 @@ function getStoragePath(): string {
 const appCodeDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const storagePath = getStoragePath()
 const publisherKeyVault = createBunPublisherKeyVault()
+const personalSecretVault = createBunPersonalSecretVault()
 const privilegedPublisherSignerBridge = createPublisherSignerBridge({
   runtime: 'desktop-main',
   vault: publisherKeyVault,
@@ -363,6 +365,17 @@ const appRPC = BrowserView.defineRPC<PearTubeRPC>({
       },
       publisherEnsureLocalCatalog: async (request) =>
         publisherShellService.publisherEnsureLocalCatalog(request),
+      personalSecureGet: async ({ account }) => ({
+        value: await personalSecretVault.get(account),
+      }),
+      personalSecureSet: async ({ account, value }) => {
+        await personalSecretVault.set(account, value)
+        return { success: true }
+      },
+      personalSecureDelete: async ({ account }) => {
+        await personalSecretVault.delete(account)
+        return { success: true }
+      },
     },
     messages: {
       workerWrite: () => {

@@ -23,7 +23,6 @@
 import b4a from 'b4a'
 
 import { PersonalStore } from './personal-store.js'
-import { generateSecret } from './personal-crypto.js'
 import { logger } from '../logger.js'
 import { CONSUMER_MODERATION_PROFILE_SETTING_KEY } from '../moderation/profile.js'
 
@@ -143,24 +142,26 @@ export function createPersonalManager({ ctx, identityManager }) {
     /**
      * Provision the at-rest encryption secret (from the device keychain) for an
      * identity. Must be called before the store is first opened to take effect.
-     * Returns the secret hex so a freshly generated one can be persisted by the
-     * caller into the keychain.
-     *
      * @param {Object} opts
      * @param {string} [opts.publicKey] - identity (defaults to active)
-     * @param {string} [opts.secret] - 32-byte secret hex; generated if omitted
+     * @param {string} opts.secret - platform-generated 32-byte secret hex
      */
     async provisionSecret({ publicKey, secret, deviceLocal = false, bootstrapKey } = {}) {
       const pk = deviceLocal
         ? DEVICE_LOCAL_PERSONAL_ID
         : (publicKey || identityManager?.getActivePublicKey?.() || DEVICE_LOCAL_PERSONAL_ID)
       const isDeviceLocal = pk === DEVICE_LOCAL_PERSONAL_ID
+      if (
+        !(b4a.isBuffer(secret) && secret.byteLength === 32) &&
+        !(typeof secret === 'string' && /^[0-9a-f]{64}$/.test(secret))
+      ) {
+        return { success: false, error: 'personal-secret-required' }
+      }
 
       const existingStore = stores.get(pk)
       if (existingStore && existingStore.encrypted) {
         return {
           success: true,
-          secret: existingStore.secretHex,
           bootstrapKey: existingStore.keyHex,
           encrypted: true,
           alreadyOpen: true,
@@ -172,7 +173,7 @@ export function createPersonalManager({ ctx, identityManager }) {
         return { success: false, error: 'store-already-unencrypted' }
       }
 
-      const buf = secret ? (b4a.isBuffer(secret) ? secret : b4a.from(secret, 'hex')) : generateSecret()
+      const buf = b4a.isBuffer(secret) ? b4a.from(secret) : b4a.from(secret, 'hex')
       secrets.set(pk, buf)
 
       let store = null
@@ -199,7 +200,6 @@ export function createPersonalManager({ ctx, identityManager }) {
       }
       return {
         success: true,
-        secret: b4a.toString(buf, 'hex'),
         bootstrapKey: store?.keyHex || bootstrapKey,
         encrypted: Boolean(store?.encrypted),
       }
@@ -209,16 +209,6 @@ export function createPersonalManager({ ctx, identityManager }) {
     hasSecret(publicKey) {
       const pk = publicKey || activePublicKey
       return Boolean(pk && secrets.has(pk))
-    },
-
-    /**
-     * The active store's secret hex — used by a freshly *paired* device to read
-     * the secret it received over the pairing handshake and persist it to its
-     * own keychain. Returns null when unknown or unencrypted.
-     */
-    getActiveSecretHex() {
-      const store = activePublicKey ? stores.get(activePublicKey) : null
-      return store?.secretHex || (activePublicKey && secrets.has(activePublicKey) ? b4a.toString(secrets.get(activePublicKey), 'hex') : null)
     },
 
     /** Open the active store unencrypted (fallback for platforms without a keychain). */

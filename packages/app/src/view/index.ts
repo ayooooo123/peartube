@@ -221,6 +221,16 @@ const bridge = {
   async ensureLocalPublisher() {
     return rpc.proxy.request.publisherEnsureLocalCatalog({ action: 'ensure-local-publisher' })
   },
+  async personalSecureGet(account: string): Promise<string | null> {
+    const response = await rpc.proxy.request.personalSecureGet({ account })
+    return response.value
+  },
+  async personalSecureSet(account: string, value: string): Promise<void> {
+    await rpc.proxy.request.personalSecureSet({ account, value })
+  },
+  async personalSecureDelete(account: string): Promise<void> {
+    await rpc.proxy.request.personalSecureDelete({ account })
+  },
 
   async startWorker(specifier: string): Promise<boolean> {
     if (ipcSocket?.readyState === WebSocket.OPEN) return true

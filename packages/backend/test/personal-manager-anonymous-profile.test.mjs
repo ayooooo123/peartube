@@ -187,3 +187,36 @@ test('profile settings RPC is not gated on unrelated personal-store pairing read
   t.is(operations.length, 1)
   t.is(operations[0].operation, 'restore-defaults')
 })
+
+test('personal encryption provisioning requires a platform secret and never returns it', async t => {
+  const suppliedSecret = '91'.repeat(32)
+  const calls = []
+  const ctx = {
+    personalManager: {
+      async provisionSecret(request) {
+        calls.push(request)
+        if (!request.secret) return { success: false, error: 'personal-secret-required' }
+        return {
+          success: true,
+          secret: suppliedSecret,
+          bootstrapKey: '92'.repeat(32),
+          encrypted: true,
+        }
+      },
+    },
+  }
+  const api = createPersonalApi({ ctx })
+
+  const missing = await api.provisionPersonalEncryption({ deviceLocal: true })
+  t.absent(missing.success)
+  t.is(missing.error, 'personal-secret-required')
+
+  const result = await api.provisionPersonalEncryption({
+    deviceLocal: true,
+    secret: suppliedSecret,
+  })
+  t.ok(result.success)
+  t.absent(result.secret, 'backend response cannot export the encryption secret')
+  t.is(result.bootstrapKey, '92'.repeat(32))
+  t.is(calls[1].secret, suppliedSecret)
+})

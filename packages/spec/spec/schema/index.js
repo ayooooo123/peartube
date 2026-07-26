@@ -4345,26 +4345,27 @@ const encoding134 = {
 // @peartube/provision-personal-encryption-request
 const encoding135 = {
   preencode(state, m) {
-    state.end++ // max flag is 4 so always one byte
+    c.string.preencode(state, m.secret)
+    state.end++ // max flag is 2 so always one byte
 
-    if (m.secret) c.string.preencode(state, m.secret)
     if (m.bootstrapKey) c.string.preencode(state, m.bootstrapKey)
   },
   encode(state, m) {
-    const flags = (m.secret ? 1 : 0) | (m.bootstrapKey ? 2 : 0) | (m.deviceLocal ? 4 : 0)
+    const flags = (m.bootstrapKey ? 1 : 0) | (m.deviceLocal ? 2 : 0)
 
+    c.string.encode(state, m.secret)
     c.uint.encode(state, flags)
 
-    if (m.secret) c.string.encode(state, m.secret)
     if (m.bootstrapKey) c.string.encode(state, m.bootstrapKey)
   },
   decode(state) {
+    const r0 = c.string.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      secret: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      bootstrapKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      deviceLocal: (flags & 4) !== 0
+      secret: r0,
+      bootstrapKey: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      deviceLocal: (flags & 2) !== 0
     }
   }
 }
@@ -4372,23 +4373,17 @@ const encoding135 = {
 // @peartube/provision-personal-encryption-response
 const encoding136 = {
   preencode(state, m) {
-    state.end++ // max flag is 16 so always one byte
+    state.end++ // max flag is 8 so always one byte
 
-    if (m.secret) c.string.preencode(state, m.secret)
     if (m.bootstrapKey) c.string.preencode(state, m.bootstrapKey)
     if (m.error) c.string.preencode(state, m.error)
   },
   encode(state, m) {
     const flags =
-      (m.success ? 1 : 0) |
-      (m.secret ? 2 : 0) |
-      (m.bootstrapKey ? 4 : 0) |
-      (m.encrypted ? 8 : 0) |
-      (m.error ? 16 : 0)
+      (m.success ? 1 : 0) | (m.bootstrapKey ? 2 : 0) | (m.encrypted ? 4 : 0) | (m.error ? 8 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.secret) c.string.encode(state, m.secret)
     if (m.bootstrapKey) c.string.encode(state, m.bootstrapKey)
     if (m.error) c.string.encode(state, m.error)
   },
@@ -4397,10 +4392,9 @@ const encoding136 = {
 
     return {
       success: (flags & 1) !== 0,
-      secret: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      bootstrapKey: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      encrypted: (flags & 8) !== 0,
-      error: (flags & 16) !== 0 ? c.string.decode(state) : null
+      bootstrapKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      encrypted: (flags & 4) !== 0,
+      error: (flags & 8) !== 0 ? c.string.decode(state) : null
     }
   }
 }

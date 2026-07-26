@@ -928,10 +928,10 @@ export function createPersonalRpc(ensureRPC: () => any) {
 
     // At-rest encryption provisioning (keychain-backed)
     async provisionPersonalEncryption(req: {
-      secret?: string
+      secret: string
       bootstrapKey?: string
       deviceLocal?: boolean
-    } = {}) {
+    }) {
       return ensureRPC().provisionPersonalEncryption(req);
     }
   };

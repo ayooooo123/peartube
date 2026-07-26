@@ -13,6 +13,7 @@ export function createIndexFeedManager(options = {}) {
   const maxRecordsPerCollectionPerWindow = normalizeBudgetLimit(options.maxRecordsPerCollectionPerWindow, 512)
   const acceptRecord = typeof options.acceptRecord === 'function' ? options.acceptRecord : () => true
   const onAcceptedRecord = typeof options.onAcceptedRecord === 'function' ? options.onAcceptedRecord : () => true
+  const stateRepository = options.stateRepository || null
   const supportedCapabilities = options.supportedCapabilities
   const budget = createWindowedIngestBudget({
     now,
@@ -22,8 +23,34 @@ export function createIndexFeedManager(options = {}) {
   const subscribed = new Set()
   const checkpoints = new Map()
   const pageStates = new Map()
-  const records = []
+  let records = []
   let oldestRecord = 0
+
+  async function persistState() {
+    await stateRepository?.save?.({
+      version: 1,
+      subscribed: [...subscribed].sort(),
+      checkpoints: [...checkpoints.entries()],
+      pageStates: [...pageStates.entries()],
+      records: snapshotRecords(),
+    })
+  }
+
+  async function restoreState() {
+    const state = await stateRepository?.load?.()
+    if (!state || state.version !== 1) return
+    if (!Array.isArray(state.subscribed) || state.subscribed.length > 256 ||
+        !Array.isArray(state.checkpoints) || state.checkpoints.length > 256 ||
+        !Array.isArray(state.pageStates) || state.pageStates.length > maxPageStates ||
+        !Array.isArray(state.records) || state.records.length > maxStoredRecords) return
+    for (const id of state.subscribed) subscribed.add(String(id))
+    for (const [id, checkpoint] of state.checkpoints) checkpoints.set(String(id), checkpoint)
+    for (const [key, value] of state.pageStates) pageStates.set(String(key), value)
+    records = state.records.map(record => ({ ...record }))
+    oldestRecord = 0
+  }
+
+  const ready = stateRepository?.load ? restoreState() : Promise.resolve()
 
   function appendRecord(record) {
     if (records.length < maxStoredRecords) {
@@ -78,8 +105,10 @@ export function createIndexFeedManager(options = {}) {
   }
 
   return {
+    ready,
     subscribe(curatorId) {
       subscribed.add(String(curatorId))
+      return ready.then(persistState)
     },
     unsubscribe(curatorId) {
       const id = String(curatorId)
@@ -88,6 +117,9 @@ export function createIndexFeedManager(options = {}) {
       for (const key of pageStates.keys()) {
         if (key.startsWith(`${id}\0`)) pageStates.delete(key)
       }
+      records = snapshotRecords().filter(record => String(record.indexId) !== id)
+      oldestRecord = 0
+      return ready.then(persistState)
     },
     getCheckpoint(curatorId) {
       return checkpoints.get(String(curatorId)) || null
@@ -98,10 +130,12 @@ export function createIndexFeedManager(options = {}) {
       // removes every curator effect from the local projection.
       return snapshotRecords().filter(record => subscribed.has(String(record.indexId)))
     },
-    async syncFeed({ curatorId, startCursor = '0', fetchPage } = {}) {
+    async syncFeed({ curatorId, startCursor = null, fetchPage } = {}) {
+      await ready
       curatorId = String(curatorId || '')
       if (!subscribed.has(curatorId)) return { status: 'not-subscribed' }
-      let cursor = startCursor
+      let cursor = startCursor ?? checkpoints.get(curatorId)?.cursor ?? '0'
+      if (cursor == null) return { status: 'complete', nextCursor: null, ingested: 0 }
       let ingested = 0
       let rejected = 0
       let processed = 0
@@ -131,24 +165,26 @@ export function createIndexFeedManager(options = {}) {
         }
         const state = rememberPage(pageKey, verified.pageId)
         if (state.complete) {
-          return {
-            status: 'rejected',
-            errorCode: 'DUPLICATE_PAGE',
-            nextCursor: state.nextCursor,
-            ingested,
-            rejected,
+          cursor = state.nextCursor
+          checkpoints.set(curatorId, { cursor, updatedAt: now() })
+          if (cursor == null) {
+            await persistState()
+            return { status: 'complete', nextCursor: null, ingested, rejected }
           }
+          continue
         }
 
         for (let index = state.nextIndex; index < verified.body.records.length; index++) {
           if (processed >= maxRecordsPerSync) {
             checkpoints.set(curatorId, { cursor, updatedAt: now() })
+            await persistState()
             return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected }
           }
           const record = verified.body.records[index]
           const reservation = reserveRecord(curatorId, record)
           if (!reservation.accepted) {
             checkpoints.set(curatorId, { cursor, updatedAt: now() })
+            await persistState()
             return {
               status: 'partial',
               errorCode: reservation.errorCode,
@@ -180,6 +216,7 @@ export function createIndexFeedManager(options = {}) {
         cursor = verified.body.nextCursor
         checkpoints.set(curatorId, { cursor, updatedAt: now() })
         if (cursor == null) {
+          await persistState()
           if (ingested === 0 && rejected > 0) {
             return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: null, ingested, rejected }
           }
@@ -187,6 +224,7 @@ export function createIndexFeedManager(options = {}) {
           return { status: 'complete', nextCursor: null, ingested }
         }
         if (processed >= maxRecordsPerSync) {
+          await persistState()
           return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected }
         }
       }

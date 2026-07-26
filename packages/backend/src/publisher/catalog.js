@@ -268,6 +268,18 @@ export class PublisherCatalog extends ReadyResource {
     return listPublisherAcceptedPage(this.view, options)
   }
 
+  async openVerifiedPageView () {
+    await this.ready()
+    if (!this.verifiedPageView) {
+      const publisherHex = b4a.toString(this.options.publisherId, 'hex')
+      this.verifiedPageView = openPublisherCatalogView({
+        get: () => this.store.get({ name: `verified-page-view-${publisherHex}` })
+      })
+      await this.verifiedPageView.ready()
+    }
+    return this.verifiedPageView
+  }
+
   async ingestAcceptedPage (entries) {
     await this.ready()
     if (!Array.isArray(entries) || entries.length < 1 || entries.length > 128) {
@@ -291,13 +303,7 @@ export class PublisherCatalog extends ReadyResource {
       prior = operationId
       return { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } }
     })
-    if (!this.verifiedPageView) {
-      const publisherHex = b4a.toString(this.options.publisherId, 'hex')
-      this.verifiedPageView = openPublisherCatalogView({
-        get: () => this.store.get({ name: `verified-page-view-${publisherHex}` })
-      })
-      await this.verifiedPageView.ready()
-    }
+    await this.openVerifiedPageView()
     const rebuilt = await applyPublisherCatalogNodes(nodes, this.verifiedPageView, {
       key: this.base.key,
       async addWriter () {},

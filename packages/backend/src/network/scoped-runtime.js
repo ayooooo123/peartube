@@ -23,6 +23,7 @@ import {
 } from './topics.js'
 import {
   BOOTSTRAP_LOCATOR_CAPABILITY,
+  createBootstrapLocator,
 } from '../discovery/bootstrap-protocol.js'
 import { createBootstrapManager } from '../discovery/bootstrap-manager.js'
 import { createPublisherManager } from '../discovery/publisher-manager.js'
@@ -66,6 +67,7 @@ const MAX_CATALOG_SESSION_RECORDS = 4096
 const MAX_CATALOG_SESSION_BYTES = 4 * 1024 * 1024
 const MAX_CATALOG_HEAD_DISTANCE = 4096
 const MAX_CATALOG_VERIFICATION_WORK = 8192
+const DEFAULT_CATALOG_BUDGET_WINDOW_MS = 60_000
 const CATALOG_PAGE_TIMEOUT_MS = 10_000
 const ASSET_CHUNK_BYTES = 48 * 1024
 const ASSET_TRANSFER_TIMEOUT_MS = 10_000
@@ -276,7 +278,7 @@ function protocolForPurpose (purpose, major) {
 }
 
 
-function normalizeNamespace (value, protocolMajor, { verifiedTransitionChain = false } = {}) {
+function normalizeNamespace (value, protocolMajor, { verifiedNamespaceProof = null } = {}) {
   const descriptor = b4a.isBuffer(value) || value instanceof Uint8Array
     ? decodePublisherNamespaceDescriptor(b4a.from(value), { protocolMajor, supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY] })
     : value
@@ -285,7 +287,7 @@ function normalizeNamespace (value, protocolMajor, { verifiedTransitionChain = f
     supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
     genesisRootKey: descriptor?.catalogEpoch === 0 ? descriptor.publisherRootKey : undefined,
   })
-  if (descriptor.catalogEpoch !== 0 && !verifiedTransitionChain) fail('rotated namespace requires a verified committed transition')
+  if (descriptor.catalogEpoch !== 0 && !verifiedNamespaceProof) fail('rotated namespace requires a verified committed transition')
   return descriptor
 }
 
@@ -324,6 +326,22 @@ export function createScopedNetworkRuntime (options = {}) {
   if (protocolMajor !== PROTOCOL_MAJOR) fail('unsupported protocol major')
   const networkId = String(options.networkId || 'peartube-main')
   const bootstrapEnabled = options.bootstrapEnabled !== false
+  const now = typeof options.now === 'function' ? options.now : () => Date.now()
+  const bootstrapLocatorKeyPair = options.bootstrapLocatorKeyPair ||
+    (swarm?.keyPair?.publicKey && swarm?.keyPair?.secretKey ? swarm.keyPair : null)
+  const bootstrapLocatorTtlMs = Number(options.bootstrapLocatorTtlMs ?? 5 * 60_000)
+  const bootstrapLocatorRefreshMs = Number(options.bootstrapLocatorRefreshMs ?? Math.floor(bootstrapLocatorTtlMs / 2))
+  const scheduleBootstrapLocatorRefresh = typeof options.setBootstrapLocatorTimer === 'function'
+    ? options.setBootstrapLocatorTimer
+    : setTimeout
+  const cancelBootstrapLocatorRefresh = typeof options.clearBootstrapLocatorTimer === 'function'
+    ? options.clearBootstrapLocatorTimer
+    : clearTimeout
+  if (!Number.isSafeInteger(bootstrapLocatorTtlMs) || bootstrapLocatorTtlMs < 1 ||
+      !Number.isSafeInteger(bootstrapLocatorRefreshMs) || bootstrapLocatorRefreshMs < 1 ||
+      bootstrapLocatorRefreshMs >= bootstrapLocatorTtlMs) {
+    fail('bootstrap locator refresh bounds are invalid')
+  }
   const admission = options.admission?.reserve ? options.admission : createNetworkAdmission(options.admission)
   const bootstrapManager = options.bootstrapManager || createBootstrapManager({
     now: options.now,
@@ -344,10 +362,25 @@ export function createScopedNetworkRuntime (options = {}) {
     supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
     ingestBatch: options.ingestPublisherBatch,
   })
+  const publisherSyncStateRepository = options.publisherSyncStateRepository || null
+  const catalogAdmissionLimits = Object.freeze({
+    pages: Math.min(MAX_CATALOG_SESSION_PAGES, Number(options.catalogAdmissionLimits?.pages ?? MAX_CATALOG_SESSION_PAGES)),
+    records: Math.min(MAX_CATALOG_SESSION_RECORDS, Number(options.catalogAdmissionLimits?.records ?? MAX_CATALOG_SESSION_RECORDS)),
+    bytes: Math.min(MAX_CATALOG_SESSION_BYTES, Number(options.catalogAdmissionLimits?.bytes ?? MAX_CATALOG_SESSION_BYTES)),
+    work: Math.min(MAX_CATALOG_VERIFICATION_WORK, Number(options.catalogAdmissionLimits?.work ?? MAX_CATALOG_VERIFICATION_WORK)),
+    headDistance: Math.min(MAX_CATALOG_HEAD_DISTANCE, Number(options.catalogAdmissionLimits?.headDistance ?? MAX_CATALOG_HEAD_DISTANCE)),
+  })
+  const catalogBudgetWindowMs = Number(options.catalogAdmissionLimits?.windowMs ?? DEFAULT_CATALOG_BUDGET_WINDOW_MS)
+  if (Object.values(catalogAdmissionLimits).some(limit => !Number.isSafeInteger(limit) || limit < 1) ||
+      !Number.isSafeInteger(catalogBudgetWindowMs) || catalogBudgetWindowMs < 1) {
+    fail('catalog admission limits are invalid')
+  }
+  const verifiedLocatorAuthority = Symbol('verified bootstrap locator')
   const muxFactory = options.muxFactory || (connection => Protomux.from(connection))
   const scopes = new Map()
   const followedPublishers = new Map()
   const localPublishers = new Map()
+  const localBootstrapLocators = new Map()
   const renditions = new Map()
   const archives = new Map()
   const activeConnections = new Map()
@@ -378,6 +411,83 @@ export function createScopedNetworkRuntime (options = {}) {
     : true
   let uploadedBytes = 0
   let networkPolicyEpoch = 0
+
+  function freshCatalogBudget(current = Number(now())) {
+    return { windowStartedAt: current, pages: 0, records: 0, bytes: 0, work: 0, peers: {} }
+  }
+
+  function restoreCatalogBudget(value) {
+    const current = Number(now())
+    if (!value || !Number.isSafeInteger(value.windowStartedAt) ||
+        current < value.windowStartedAt || current - value.windowStartedAt >= catalogBudgetWindowMs) {
+      return freshCatalogBudget(current)
+    }
+    const budget = freshCatalogBudget(value.windowStartedAt)
+    for (const field of ['pages', 'records', 'bytes', 'work']) {
+      const amount = Number(value[field])
+      budget[field] = Number.isSafeInteger(amount) && amount >= 0 ? amount : 0
+    }
+    if (value.peers && typeof value.peers === 'object' && !Array.isArray(value.peers)) {
+      for (const [peerId, peer] of Object.entries(value.peers).slice(0, 128)) {
+        if (!/^[0-9a-f]{64}$/.test(peerId) || !peer || typeof peer !== 'object') continue
+        budget.peers[peerId] = {}
+        for (const field of ['pages', 'records', 'bytes', 'work']) {
+          const amount = Number(peer[field])
+          budget.peers[peerId][field] = Number.isSafeInteger(amount) && amount >= 0 ? amount : 0
+        }
+      }
+    }
+    return budget
+  }
+
+  function addCatalogBudget(value, peerId, additions) {
+    const budget = restoreCatalogBudget(value)
+    const peer = { pages: 0, records: 0, bytes: 0, work: 0, ...(budget.peers[peerId] || {}) }
+    for (const field of ['pages', 'records', 'bytes', 'work']) {
+      budget[field] += additions[field]
+      peer[field] += additions[field]
+      if (budget[field] > catalogAdmissionLimits[field] || peer[field] > catalogAdmissionLimits[field]) {
+        fail('catalog consumer cumulative window budget exceeded', 'PUBLISHER_CATALOG_WINDOW_BUDGET_EXCEEDED')
+      }
+    }
+    budget.peers[peerId] = peer
+    return budget
+  }
+
+  let catalogGlobalBudget = freshCatalogBudget()
+  const catalogGlobalBudgetReady = (async () => {
+    catalogGlobalBudget = restoreCatalogBudget(
+      await publisherSyncStateRepository?.loadGlobal?.()
+    )
+  })()
+
+  async function reserveCatalogBudget(scope, peerId, additions) {
+    await catalogGlobalBudgetReady
+    const publisherBudget = addCatalogBudget(scope.catalogBudget, peerId, additions)
+    const globalBudget = addCatalogBudget(catalogGlobalBudget, peerId, additions)
+    // Charge verification/admission work before catalog reduction. Invalid but
+    // costly pages must not provide a free retry path.
+    scope.catalogBudget = publisherBudget
+    catalogGlobalBudget = globalBudget
+    await Promise.all([
+      persistPublisherSyncState(scope),
+      publisherSyncStateRepository?.saveGlobal?.(catalogGlobalBudget),
+    ])
+  }
+
+  async function persistPublisherSyncState(scope) {
+    if (!publisherSyncStateRepository?.save) return
+    await publisherSyncStateRepository.save(scope.publisherId, {
+      version: 1,
+      publisherId: scope.publisherId,
+      catalogEpoch: scope.descriptor.catalogEpoch,
+      cursor: scope.catalogResumeCursor,
+      headDigest: scope.catalogHeadDigest,
+      authorizationStateDigest: scope.catalogAuthorizationStateDigest,
+      complete: scope.catalogComplete === true,
+      budget: scope.catalogBudget,
+    })
+  }
 
   function reservePolicyUpload (bytes) {
     const amount = Number(bytes)
@@ -527,6 +637,73 @@ export function createScopedNetworkRuntime (options = {}) {
     if (sender.send(frame, tracked.channel) === false) return false
     counters.outboundFrames++
     return true
+  }
+
+  function sendBootstrapLocatorToSession(tracked, locator) {
+    return sendScopedFrame(
+      tracked,
+      'bootstrap',
+      'locator',
+      encodeApplicationEnvelope(locator.envelope),
+    )
+  }
+
+  async function refreshLocalBootstrapLocator(publisherId) {
+    const local = localPublishers.get(publisherId)
+    if (!local || !bootstrapLocatorKeyPair) return { status: 'unavailable' }
+    const catalog = local.scope?.binding?.catalog
+    if (typeof catalog?.getViewHead !== 'function' ||
+        typeof catalog?.getAuthorizationState !== 'function') {
+      return { status: 'unavailable' }
+    }
+    const issuedAt = Number(now())
+    if (!Number.isSafeInteger(issuedAt) || issuedAt < 0 ||
+        issuedAt > Number.MAX_SAFE_INTEGER - bootstrapLocatorTtlMs) {
+      fail('bootstrap locator clock is invalid')
+    }
+    const signerId = b4a.toString(bootstrapLocatorKeyPair.publicKey, 'hex')
+    const localWriterId = catalog.localWriterKey
+      ? b4a.toString(b4a.from(catalog.localWriterKey), 'hex')
+      : null
+    const [head, authorization] = await Promise.all([
+      catalog.getViewHead(),
+      catalog.getAuthorizationState(),
+    ])
+    const writer = authorization?.writers?.find(candidate =>
+      candidate?.key === localWriterId &&
+      candidate?.signerKey === signerId
+    )
+    if (!writer || writer.revocation || writer.expiresAt < issuedAt ||
+        !writer.capabilities?.includes('announce')) {
+      fail('local locator signer is not an admitted announce writer', 'BOOTSTRAP_LOCATOR_SIGNER_UNAUTHORIZED')
+    }
+    const descriptor = local.scope.descriptor
+    const locator = createBootstrapLocator({
+      publisherId,
+      catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+      catalogHead: hex32(head?.digest, 'catalogHead'),
+      catalogEpoch: descriptor.catalogEpoch,
+      authorizationChainDigest: hex32(head?.authorizationStateDigest, 'authorizationChainDigest'),
+      rootSignerId: b4a.toString(descriptor.publisherRootKey, 'hex'),
+      issuedAt,
+      expiresAt: issuedAt + bootstrapLocatorTtlMs,
+      keyPair: bootstrapLocatorKeyPair,
+    })
+    const previous = localBootstrapLocators.get(publisherId)
+    if (previous?.timer) cancelBootstrapLocatorRefresh(previous.timer)
+    const record = { locator, timer: null }
+    localBootstrapLocators.set(publisherId, record)
+    if (networkEnabled) await publishBootstrapLocator({ locator })
+    if (status === 'active') {
+      record.timer = scheduleBootstrapLocatorRefresh(() => {
+        void refreshLocalBootstrapLocator(publisherId).catch(error => {
+          const scope = localPublishers.get(publisherId)?.scope
+          if (scope) recordProtocolError(scope, 'local', error)
+        })
+      }, bootstrapLocatorRefreshMs)
+      record.timer.unref?.()
+    }
+    return { status: 'refreshed', locator }
   }
 
   function encodeFeedRequest(cursor) {
@@ -754,6 +931,13 @@ export function createScopedNetworkRuntime (options = {}) {
     try {
       const response = normalizeCatalogResponse(frame.payload, pending.request)
       if (scope.catalogHeadDigest && scope.catalogHeadDigest !== response.headDigest) fail('catalog head equivocation detected')
+      if (scope.advertisedCatalogHead && scope.advertisedCatalogHead !== response.headDigest) {
+        fail('catalog response does not match the signed advertised head', 'PUBLISHER_CATALOG_ADVERTISED_HEAD_MISMATCH')
+      }
+      if (scope.advertisedAuthorizationStateDigest &&
+          scope.advertisedAuthorizationStateDigest !== response.authorizationStateDigest) {
+        fail('catalog response does not match the advertised authorization state', 'PUBLISHER_CATALOG_AUTHORIZATION_HINT_MISMATCH')
+      }
       const nextPages = tracked.catalogAcceptPages + 1
       const nextRecords = tracked.catalogAcceptRecords + response.entries.length
       const nextBytes = tracked.catalogAcceptBytes + frame.payload.byteLength
@@ -762,6 +946,21 @@ export function createScopedNetworkRuntime (options = {}) {
           nextBytes > MAX_CATALOG_SESSION_BYTES || nextWork > MAX_CATALOG_VERIFICATION_WORK ||
           response.headLength - tracked.catalogAcceptInitialHeadLength > MAX_CATALOG_HEAD_DISTANCE) {
         fail('catalog consumer cumulative session budget exceeded')
+      }
+      const additions = {
+        pages: 1,
+        records: response.entries.length,
+        bytes: frame.payload.byteLength,
+        work: response.entries.length * 2,
+      }
+      scope.catalogComplete = false
+      await reserveCatalogBudget(scope, tracked.peerId, additions)
+      let ingestResult = { accepted: 0, rejected: 0 }
+      if (response.entries.length > 0) {
+        ingestResult = await scope.binding.catalog.ingestAcceptedPage(response.entries)
+        if (ingestResult?.accepted !== response.entries.length || Number(ingestResult?.rejected || 0) !== 0) {
+          fail('catalog page contained an inadmissible operation', 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED')
+        }
       }
       tracked.catalogAcceptPages = nextPages
       tracked.catalogAcceptRecords = nextRecords
@@ -772,9 +971,11 @@ export function createScopedNetworkRuntime (options = {}) {
       scope.catalogVerifiedBytes += frame.payload.byteLength
       scope.catalogVerificationWork += response.entries.length * 2
       scope.catalogHeadDigest ||= response.headDigest
-      await scope.binding.catalog.ingestAcceptedPage(response.entries)
+      scope.catalogAuthorizationStateDigest ||= response.authorizationStateDigest
       scope.catalogCursor = response.nextCursor
+      scope.catalogResumeCursor = response.entries.at(-1)?.operationId || scope.catalogResumeCursor
       scope.catalogPreviousPageDigest = response.pageDigest
+      await persistPublisherSyncState(scope)
       clearTimeout(pending.timer)
       scope.catalogPagePending = null
       pending.resolve(response)
@@ -882,13 +1083,55 @@ export function createScopedNetworkRuntime (options = {}) {
     return promise
   }
 
+  async function verifyCatalogCompletion(scope) {
+    const catalog = scope.binding?.catalog
+    if (typeof catalog?.getViewHead !== 'function') {
+      fail('verified catalog head is unavailable', 'PUBLISHER_CATALOG_HEAD_UNAVAILABLE')
+    }
+    const head = await catalog.getViewHead()
+    const localDigest = hex32(head?.digest, 'local catalog head digest')
+    const localAuthorizationDigest = hex32(
+      head?.authorizationStateDigest,
+      'local authorization state digest',
+    )
+    if (localDigest !== scope.catalogHeadDigest ||
+        localAuthorizationDigest !== scope.catalogAuthorizationStateDigest) {
+      fail('terminal catalog page did not reconstruct its claimed head', 'PUBLISHER_CATALOG_TRUNCATED')
+    }
+    if (scope.advertisedCatalogHead && localDigest !== scope.advertisedCatalogHead) {
+      fail('terminal catalog page did not reconstruct the signed advertised head', 'PUBLISHER_CATALOG_ADVERTISED_HEAD_MISMATCH')
+    }
+    if (scope.advertisedAuthorizationStateDigest &&
+        localAuthorizationDigest !== scope.advertisedAuthorizationStateDigest) {
+      fail('terminal catalog page reconstructed a different authorization state', 'PUBLISHER_CATALOG_AUTHORIZATION_MISMATCH')
+    }
+    if (scope.advertisedLocatorSignerId) {
+      const authorization = await catalog.getAuthorizationState()
+      const writer = authorization?.writers?.find(candidate =>
+        candidate?.signerKey === scope.advertisedLocatorSignerId
+      )
+      if (!writer || writer.revocation ||
+          writer.firstAcceptedSequence > writer.lastAcceptedSequence ||
+          writer.expiresAt < scope.advertisedLocatorIssuedAt ||
+          !writer.capabilities?.includes('announce')) {
+        fail('signed locator is not authorized by the reconstructed catalog', 'PUBLISHER_CATALOG_LOCATOR_SIGNER_UNAUTHORIZED')
+      }
+    }
+    scope.catalogComplete = true
+    await persistPublisherSyncState(scope)
+    return head
+  }
+
   async function syncPublisherCatalog(scope) {
     if (!scope || scope.closed || !scope.modes.has('followed')) return { status: 'not-followed' }
     if (scope.catalogSyncing) return scope.catalogSyncing
     scope.catalogSyncing = (async () => {
       await ensurePublisherNamespaceProof(scope)
-      let cursor = scope.catalogCursor ?? null
-      if (cursor === null) scope.catalogHeadDigest = null
+      let cursor = scope.catalogResumeCursor ?? null
+      if (cursor === null) {
+        scope.catalogHeadDigest = scope.advertisedCatalogHead || null
+        scope.catalogAuthorizationStateDigest = scope.advertisedAuthorizationStateDigest || null
+      }
       let previousPageDigest = null
       let pages = 0
       do {
@@ -896,7 +1139,7 @@ export function createScopedNetworkRuntime (options = {}) {
           version: 1,
           cursor,
           previousPageDigest,
-          expectedHeadDigest: cursor === null ? null : scope.catalogHeadDigest,
+          expectedHeadDigest: scope.advertisedCatalogHead || (cursor === null ? null : scope.catalogHeadDigest),
           catalogEpoch: scope.descriptor.catalogEpoch,
           limit: MAX_CATALOG_PAGE_RECORDS,
         })
@@ -904,8 +1147,9 @@ export function createScopedNetworkRuntime (options = {}) {
         cursor = response.nextCursor
         previousPageDigest = response.pageDigest
       } while (cursor !== null)
+      await verifyCatalogCompletion(scope)
       await onCatalogUpdate?.({ publisherId: scope.publisherId })
-      return { status: 'synced', pages, records: scope.catalogVerifiedRecords, cursor: scope.catalogCursor }
+      return { status: 'synced', pages, records: scope.catalogVerifiedRecords, cursor: scope.catalogResumeCursor }
     })().finally(() => { scope.catalogSyncing = null })
     return scope.catalogSyncing
   }
@@ -1583,6 +1827,11 @@ export function createScopedNetworkRuntime (options = {}) {
         if (result.status !== 'authorized') fail(result.reason)
         if (tracked) {
           tracked.state = 'active'
+          if (scope.purpose === 'bootstrap') {
+            for (const { locator } of localBootstrapLocators.values()) {
+              sendBootstrapLocatorToSession(tracked, locator)
+            }
+          }
           if (scope.purpose === 'index' || scope.purpose === 'moderation') {
             void syncFollowedFeed(scope)
           }
@@ -1848,17 +2097,49 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'active' }
   }
 
-  async function followPublisher ({ publisherId, namespaceDescriptor, verifiedTransitionChain = false } = {}) {
+  async function followPublisher ({
+    publisherId,
+    namespaceDescriptor,
+    verifiedNamespaceProof = null,
+    verifiedBootstrapLocator = null,
+    locatorAuthority = null,
+  } = {}) {
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')
-    const descriptor = normalizeNamespace(namespaceDescriptor, protocolMajor, { verifiedTransitionChain })
+    const descriptor = normalizeNamespace(namespaceDescriptor, protocolMajor, { verifiedNamespaceProof })
     if (b4a.toString(descriptor.publisherId, 'hex') !== id) fail('namespace publisherId mismatch')
     const existing = followedPublishers.get(id)
-    if (existing) return { ...existing.result, status: 'already-following' }
+    const authoritativeLocator = locatorAuthority === verifiedLocatorAuthority
+      ? verifiedBootstrapLocator
+      : null
+    if (existing) {
+      if (descriptor.catalogEpoch > existing.scope.descriptor.catalogEpoch) {
+        await unfollowPublisher({ publisherId: id })
+      } else {
+        if (authoritativeLocator &&
+            Number(authoritativeLocator.issuedAt) >= Number(existing.scope.advertisedLocatorIssuedAt || 0)) {
+          existing.scope.advertisedCatalogHead = authoritativeLocator.catalogHead
+          existing.scope.advertisedAuthorizationStateDigest = authoritativeLocator.authorizationChainDigest
+          existing.scope.advertisedLocatorSignerId = authoritativeLocator.signerId
+          existing.scope.advertisedLocatorIssuedAt = authoritativeLocator.issuedAt
+          existing.scope.catalogComplete = false
+          void syncPublisherCatalog(existing.scope).catch(error => {
+            recordProtocolError(existing.scope, 'bootstrap-refresh', error)
+          })
+        }
+        return { ...existing.result, status: 'already-following' }
+      }
+    }
     if (!catalogRegistry?.bindNamespace) fail('catalog registry cannot bind verified namespaces')
-    const binding = await catalogRegistry.bindNamespace(descriptor)
+    const binding = await catalogRegistry.bindNamespace(descriptor, { verifiedNamespaceProof })
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('catalog binding mismatch')
     await publisherManager.followPublisher(id)
+    await binding.catalog?.openVerifiedPageView?.()
+    const saved = await publisherSyncStateRepository?.load?.(id)
+    const restored = saved?.version === 1 && saved.publisherId === id &&
+      saved.catalogEpoch === descriptor.catalogEpoch
+      ? saved
+      : null
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({
       purpose: 'publisher',
@@ -1872,8 +2153,18 @@ export function createScopedNetworkRuntime (options = {}) {
       catalogPagePending: null,
       catalogSyncing: null,
       catalogCursor: null,
+      catalogResumeCursor: restored?.cursor || null,
       catalogPreviousPageDigest: null,
-      catalogHeadDigest: null,
+      catalogHeadDigest: restored?.headDigest || authoritativeLocator?.catalogHead || null,
+      catalogAuthorizationStateDigest: restored?.authorizationStateDigest ||
+        authoritativeLocator?.authorizationChainDigest || null,
+      advertisedCatalogHead: authoritativeLocator?.catalogHead || null,
+      advertisedAuthorizationStateDigest: authoritativeLocator?.authorizationChainDigest || null,
+      advertisedLocatorSignerId: authoritativeLocator?.signerId || null,
+      advertisedLocatorIssuedAt: authoritativeLocator?.issuedAt || null,
+      catalogComplete: restored?.complete === true &&
+        (!authoritativeLocator || restored?.headDigest === authoritativeLocator.catalogHead),
+      catalogBudget: restoreCatalogBudget(restored?.budget),
       catalogInitialHeadLength: 0,
       catalogVerifiedPages: 0,
       catalogVerifiedRecords: 0,
@@ -1883,8 +2174,36 @@ export function createScopedNetworkRuntime (options = {}) {
     scope.publisherId = id
     scope.descriptor = descriptor
     scope.binding = binding
+    Object.assign(scope, {
+      namespaceProofVerified: null,
+      catalogPagePending: null,
+      catalogSyncing: null,
+      catalogCursor: null,
+      catalogResumeCursor: restored?.cursor || null,
+      catalogPreviousPageDigest: null,
+      catalogHeadDigest: restored?.headDigest || authoritativeLocator?.catalogHead || null,
+      catalogAuthorizationStateDigest: restored?.authorizationStateDigest ||
+        authoritativeLocator?.authorizationChainDigest || null,
+      advertisedCatalogHead: authoritativeLocator?.catalogHead || null,
+      advertisedAuthorizationStateDigest: authoritativeLocator?.authorizationChainDigest || null,
+      advertisedLocatorSignerId: authoritativeLocator?.signerId || null,
+      advertisedLocatorIssuedAt: authoritativeLocator?.issuedAt || null,
+      catalogComplete: restored?.complete === true &&
+        (!authoritativeLocator || restored?.headDigest === authoritativeLocator.catalogHead),
+      catalogBudget: restoreCatalogBudget(restored?.budget),
+      catalogInitialHeadLength: 0,
+      catalogVerifiedPages: 0,
+      catalogVerifiedRecords: 0,
+      catalogVerifiedBytes: 0,
+      catalogVerificationWork: 0,
+    })
     const result = { status: 'following', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     followedPublishers.set(id, { scope, result })
+    if ([...scope.sessions.values()].some(session => !session.closed && session.state === 'active')) {
+      void syncPublisherCatalog(scope).catch(error => {
+        recordProtocolError(scope, 'bootstrap-promotion', error)
+      })
+    }
     return result
   }
 
@@ -1901,16 +2220,25 @@ export function createScopedNetworkRuntime (options = {}) {
       candidateLocator: locator, proofPending: null,
     })
     let verified
+    let namespaceProof
     try {
-      verified = verifyPublisherNamespaceProof({ locator, ...(proof || await requestNamespaceProof(scope)) })
+      namespaceProof = proof || await requestNamespaceProof(scope)
+      verified = verifyPublisherNamespaceProof({ locator, ...namespaceProof })
     } catch (error) {
       await leaveScope(scope, 'candidate')
       const rejected = new Error(error?.message || 'namespace proof rejected')
       rejected.code = 'PUBLISHER_NAMESPACE_PROOF_REJECTED'
       throw rejected
     }
+    const result = await followPublisher({
+      publisherId: id,
+      namespaceDescriptor: verified.descriptor,
+      verifiedNamespaceProof: verified.descriptor.catalogEpoch > 0 ? namespaceProof : null,
+      verifiedBootstrapLocator: locator,
+      locatorAuthority: verifiedLocatorAuthority,
+    })
     await leaveScope(scope, 'candidate')
-    return followPublisher({ publisherId: id, namespaceDescriptor: verified.descriptor, verifiedTransitionChain: verified.descriptor.catalogEpoch > 0 })
+    return result
   }
 
   async function providePublisherNamespaceProof ({ locator, proof } = {}) {
@@ -1971,21 +2299,24 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function subscribeIndexFeed ({ curatorId } = {}) {
     const id = hex32(curatorId, 'curatorId')
-    indexFeedManager.subscribe(id)
+    await indexFeedManager.ready
+    await indexFeedManager.subscribe(id)
     const { scope } = joinScope({ purpose: 'index', topic: deriveIndexTopic({ protocolMajor, curatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'index', feedPending: new Map() })
     return syncFollowedFeed(scope)
   }
 
   async function followIndexFeed ({ curatorId } = {}) {
     const id = hex32(curatorId, 'curatorId')
-    indexFeedManager.subscribe(id)
+    await indexFeedManager.ready
+    await indexFeedManager.subscribe(id)
     const { scope } = joinScope({ purpose: 'index', topic: deriveIndexTopic({ protocolMajor, curatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'index', feedPending: new Map() })
     return { status: 'following', curatorId: id, topic: stableScopeDiagnostic(scope) }
   }
 
   async function unfollowIndexFeed ({ curatorId } = {}) {
     const id = hex32(curatorId, 'curatorId')
-    indexFeedManager.unsubscribe(id)
+    await indexFeedManager.ready
+    await indexFeedManager.unsubscribe(id)
     const scope = findScope('index', deriveIndexTopic({ protocolMajor, curatorId: id }))
     const released = scope ? await leaveScope(scope, 'subscribed') : false
     return { status: 'unfollowed', curatorId: id, released }
@@ -2001,21 +2332,24 @@ export function createScopedNetworkRuntime (options = {}) {
 
   async function subscribeModerationFeed ({ moderatorId } = {}) {
     const id = hex32(moderatorId, 'moderatorId')
-    moderationManager.subscribe(id)
+    await moderationManager.ready
+    await moderationManager.subscribe(id)
     const { scope } = joinScope({ purpose: 'moderation', topic: deriveModerationTopic({ protocolMajor, moderatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'moderation', feedPending: new Map() })
     return syncFollowedFeed(scope)
   }
 
   async function followModerationFeed ({ moderatorId } = {}) {
     const id = hex32(moderatorId, 'moderatorId')
-    moderationManager.subscribe(id)
+    await moderationManager.ready
+    await moderationManager.subscribe(id)
     const { scope } = joinScope({ purpose: 'moderation', topic: deriveModerationTopic({ protocolMajor, moderatorId: id }), scopeId: id, mode: 'subscribed', feedId: id, feedKind: 'moderation', feedPending: new Map() })
     return { status: 'following', moderatorId: id, topic: stableScopeDiagnostic(scope) }
   }
 
   async function unfollowModerationFeed ({ moderatorId } = {}) {
     const id = hex32(moderatorId, 'moderatorId')
-    moderationManager.unsubscribe(id)
+    await moderationManager.ready
+    await moderationManager.unsubscribe(id)
     const scope = findScope('moderation', deriveModerationTopic({ protocolMajor, moderatorId: id }))
     const released = scope ? await leaveScope(scope, 'subscribed') : false
     return { status: 'unfollowed', moderatorId: id, released }
@@ -2028,6 +2362,7 @@ export function createScopedNetworkRuntime (options = {}) {
     await publisherManager.unfollowPublisher(id)
     const released = followed ? await leaveScope(followed.scope, 'followed') : false
     if (followed && !localPublishers.has(id)) await catalogRegistry?.release?.(b4a.from(id, 'hex'))
+    await publisherSyncStateRepository?.clear?.(id)
     return { status: 'unfollowed', publisherId: id, released }
   }
 
@@ -2061,6 +2396,7 @@ export function createScopedNetworkRuntime (options = {}) {
     }
     const result = { status: 'published', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     localPublishers.set(id, { scope, result })
+    if (bootstrapLocatorKeyPair) await refreshLocalBootstrapLocator(id)
     return result
   }
 
@@ -2125,6 +2461,8 @@ export function createScopedNetworkRuntime (options = {}) {
         download,
         range,
         manifest,
+        entityRef,
+        publicationId: publicationId || manifest?.publicationId || null,
         manifestId: manifest.body.manifestId,
         assetNextIndex: range.start,
         assetPending: new Set(),
@@ -2151,13 +2489,19 @@ export function createScopedNetworkRuntime (options = {}) {
     let released = 0
     for (const [renditionId, retained] of [...renditions]) {
       const range = retained.scope.range || { start: 0, end: null }
-      const authorized = await authorizePublication({
+      const publicationAuthorized = await authorizePublication({
         manifest: retained.manifest,
         renditionId,
         start: range.start,
         end: range.end
       }).catch(() => false)
-      if (authorized) continue
+      const consumerVisible = publicationAuthorized && await authorizeConsumerWork({
+        operation: 'asset-revalidate',
+        entityRef: retained.scope.entityRef,
+        publicationId: retained.scope.publicationId || retained.manifest?.publicationId || null,
+        renditionId,
+      }).catch(() => false)
+      if (consumerVisible) continue
       await releaseAuthorizedRendition({ renditionId })
       released++
     }
@@ -2503,6 +2847,10 @@ export function createScopedNetworkRuntime (options = {}) {
       listening = false
     }
     followedPublishers.clear()
+    for (const value of localBootstrapLocators.values()) {
+      if (value.timer) cancelBootstrapLocatorRefresh(value.timer)
+    }
+    localBootstrapLocators.clear()
     localPublishers.clear()
     renditions.clear()
     archives.clear()

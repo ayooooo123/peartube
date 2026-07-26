@@ -1,11 +1,25 @@
+import b4a from 'b4a'
+
+function identity(value) {
+  if (b4a.isBuffer(value) || value instanceof Uint8Array) return b4a.toString(b4a.from(value), 'hex')
+  const text = String(value ?? '')
+  return /^[0-9a-f]{64}$/i.test(text) ? text.toLowerCase() : text
+}
+
+function matches(id, values) {
+  return values.some(value => value != null && identity(value) === id)
+}
+
 function targets(entity = {}, record = {}) {
-  const id = String(record.targetId)
+  const id = identity(record.targetId)
+  const entityRef = entity.entityRef
   switch (record.targetType) {
-    case 'publisher': return entity.publisherId === id
-    case 'publication': return entity.publicationId === id
-    case 'work': return entity.workId === id || entity.entityId === id
-    case 'creator': return (entity.creatorIds || []).includes(id)
-    case 'rendition': return entity.renditionId === id
+    case 'publisher': return matches(id, [entity.publisherId, entity.publisherRootKey, entityRef])
+    case 'publication': return matches(id, [entity.publicationId, entityRef])
+    case 'work': return matches(id, [entity.workId, entity.entityId, entityRef])
+    case 'creator': return matches(id, [...(entity.creatorIds || []), entity.creatorId, entityRef])
+    case 'rendition': return matches(id, [entity.renditionId, entityRef])
+    case 'collection': return matches(id, [entity.collectionId, entityRef])
     default: return false
   }
 }

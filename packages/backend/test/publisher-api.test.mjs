@@ -15,12 +15,17 @@ import {
   decodePublisherNamespaceDescriptor,
   derivePublisherId,
   encodePublisherNamespaceDescriptor,
-  encodePublisherOperationBody
+  encodePublisherOperationBody,
+  verifyPublisherNamespaceProof,
 } from '../src/publisher/index.js'
 import {
+  attachMultiSignedEnvelopeSignatures,
+  attachSignedEnvelopeSignature,
   decodeUnsignedMultiSignedEnvelope,
   decodeUnsignedSignedEnvelope,
   multiSignedRecordSignaturePreimage,
+  prepareMultiSignedEnvelope,
+  prepareSignedEnvelope,
   signedRecordSignaturePreimage
 } from '@peartube/backend/records'
 import { SHARED_HANDLER_NAMES } from '../src/hrpc-handlers.js'
@@ -30,6 +35,51 @@ const NOW = 1_700_000_000_000
 const bytes = (length, seed = 0) => b4a.from(Array.from({ length }, (_, index) => (seed + index) & 255))
 const hex = value => b4a.toString(value, 'hex')
 const intentId = seed => seed.toString(16).padStart(32, '0')
+
+function signedNamespaceGenesis(descriptor, root) {
+  const prepared = prepareSignedEnvelope({
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    schemaMajor: 1,
+    schemaMinor: 0,
+    issuerIdentityKey: descriptor.publisherId,
+    signerKey: root.publicKey,
+    policyEpoch: 0,
+    issuerSequence: 0,
+    signedAt: NOW,
+    canonicalBody: encodePublisherNamespaceDescriptor(descriptor),
+  }, { hash: crypto.hash })
+  return attachSignedEnvelopeSignature(
+    prepared,
+    crypto.sign(signedRecordSignaturePreimage(prepared), root.secretKey)
+  )
+}
+
+function signedNamespaceTransition(descriptor, root, nextRoot, newCatalogEpoch) {
+  const prepared = prepareMultiSignedEnvelope({
+    recordType: PUBLISHER_RECORD_TYPES.ROOT_TRANSITION,
+    schemaMajor: 1,
+    schemaMinor: 0,
+    issuerIdentityKey: descriptor.publisherId,
+    policyEpoch: 0,
+    issuerSequence: 1,
+    signedAt: NOW + 1,
+    canonicalBody: encodePublisherOperationBody(PUBLISHER_RECORD_TYPES.ROOT_TRANSITION, {
+      mode: 'rotation',
+      previousRootKey: root.publicKey,
+      newRootKey: nextRoot.publicKey,
+      newCatalogEpoch,
+      recoveryKeys: descriptor.recoveryKeys,
+      recoveryThreshold: descriptor.recoveryThreshold,
+      profileRef: descriptor.profileRef,
+    }),
+  }, { hash: crypto.hash })
+  const preimage = multiSignedRecordSignaturePreimage(prepared)
+  const signatures = [root, nextRoot].map(signer => ({
+    signerKey: signer.publicKey,
+    signature: crypto.sign(preimage, signer.secretKey),
+  })).sort((left, right) => b4a.compare(left.signerKey, right.signerKey))
+  return attachMultiSignedEnvelopeSignatures(prepared, signatures)
+}
 
 function createCatalogRegistry({ catalogKey = bytes(32, 100), appendError = null, rootTransitionState = null } = {}) {
   const appended = []
@@ -566,6 +616,62 @@ test('catalog registry binds only the catalog key named by a verified namespace 
     const secondDescriptor = createPublisherNamespaceDescriptor({ genesisRootKey: secondRoot.publicKey, catalogBootstrapKey: secondCatalogKey })
     const secondBinding = await registry.bindNamespace(secondDescriptor)
     t.alike(secondBinding.catalogBootstrapKey, secondCatalogKey, 'eviction frees bounded registry capacity')
+  } finally {
+    await registry.close()
+    await store.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('catalog registry accepts authenticated monotonic root rotation and rejects skipped or stale epochs', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-publisher-rotation-binding-'))
+  const store = new Corestore(directory)
+  await store.ready()
+  const metadataCore = store.get({ name: 'publisher-rotation-binding-metadata' })
+  await metadataCore.ready()
+  const metaDb = new Hyperbee(metadataCore, { keyEncoding: 'utf-8', valueEncoding: 'json' })
+  await metaDb.ready()
+  const root = crypto.keyPair(bytes(32, 130))
+  const nextRoot = crypto.keyPair(bytes(32, 131))
+  const catalogBootstrapKey = bytes(32, 132)
+  const genesisDescriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey,
+  })
+  const genesis = signedNamespaceGenesis(genesisDescriptor, root)
+  const transition = signedNamespaceTransition(genesisDescriptor, root, nextRoot, 1)
+  const locator = {
+    publisherId: hex(genesisDescriptor.publisherId),
+    catalogBootstrapKey: hex(catalogBootstrapKey),
+    catalogEpoch: 1,
+  }
+  const verified = verifyPublisherNamespaceProof({
+    locator,
+    genesis,
+    transitions: [transition],
+  })
+  const registry = publisherApiModule.createPublisherCatalogRegistry({ store, metaDb }, {
+    catalogFactory (_store, catalogOptions) {
+      return {
+        key: b4a.from(catalogOptions.key),
+        async ready () {},
+        async close () {},
+      }
+    },
+  })
+  try {
+    await registry.bindNamespace(genesisDescriptor)
+    const rotated = await registry.bindNamespace(verified.descriptor, {
+      verifiedNamespaceProof: { genesis, transitions: [transition] },
+    })
+    t.is(rotated.namespaceDescriptor.catalogEpoch, 1)
+    t.alike(rotated.genesisRootKey, root.publicKey, 'stable publisher identity remains bound to the genesis root')
+
+    const skippedTransition = signedNamespaceTransition(genesisDescriptor, root, nextRoot, 2)
+    await t.exception(registry.bindNamespace(verified.descriptor, {
+      verifiedNamespaceProof: { genesis, transitions: [skippedTransition] },
+    }), /transition|epoch/i)
+    await t.exception(registry.bindNamespace(genesisDescriptor), /stale|epoch/i)
   } finally {
     await registry.close()
     await store.close()

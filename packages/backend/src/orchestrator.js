@@ -42,7 +42,12 @@ import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
 import { createConsumerCatalogProjection, createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
 import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
-import { createModerationManager, evaluateModerationPolicy } from './moderation/index.js'
+import {
+  CONSUMER_MODERATION_PROFILE_SETTING_KEY,
+  createConsumerModerationPolicy,
+  createConsumerModerationProfileController,
+  createModerationManager,
+} from './moderation/index.js'
 import {
   createPublicationV1CheckpointRepository,
   createPublicationV1LegacyRepository,
@@ -418,6 +423,26 @@ export async function createBackendContext(config) {
     store: networkPolicyStore,
     defaults: networkPolicy,
   })
+  const consumerModerationProfile = createConsumerModerationProfileController({
+    repository: {
+      async load() {
+        return ctx.personal?.getSetting
+          ? ctx.personal.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+          : null
+      },
+      async save(state) {
+        if (ctx.personal?.writable) {
+          await ctx.personal.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, state)
+        }
+      },
+    },
+  })
+  await consumerModerationProfile.ready
+  ctx.consumerModerationProfile = consumerModerationProfile
+  initialNetworkPolicy = {
+    ...initialNetworkPolicy,
+    trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
+  }
   assertNetworkPolicyRuntimeSupported(initialNetworkPolicy)
   const initialNetworkEnvironment = {
     metered: network.metered === true,
@@ -466,8 +491,28 @@ export async function createBackendContext(config) {
   // These managers are deliberately shared by the scoped transport and local
   // consumer projection. Signed page ingestion happens once; catalog reads only
   // project the resulting local state and never initiate transport work.
-  const consumerIndexFeedManager = createIndexFeedManager({ now: () => Date.now() })
-  const consumerModerationManager = createModerationManager({ now: () => Date.now() })
+  const consumerIndexFeedManager = createIndexFeedManager({
+    now: () => Date.now(),
+    stateRepository: {
+      async load() {
+        return (await ctx.metaDb.get('consumer-index-feed-state:v1'))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put('consumer-index-feed-state:v1', state)
+      },
+    },
+  })
+  const consumerModerationManager = createModerationManager({
+    now: () => Date.now(),
+    stateRepository: {
+      async load() {
+        return (await ctx.metaDb.get('consumer-moderation-feed-state:v1'))?.value || null
+      },
+      async save(state) {
+        await ctx.metaDb.put('consumer-moderation-feed-state:v1', state)
+      },
+    },
+  })
   let consumerCatalogProjection = null
   scopedNetwork = createScopedNetworkRuntime({
     swarm: ctx.swarm,
@@ -496,6 +541,24 @@ export async function createBackendContext(config) {
     retainArchiveCore,
     indexFeedManager: consumerIndexFeedManager,
     moderationManager: consumerModerationManager,
+    bootstrapLocatorKeyPair: deviceKeyPair,
+    publisherSyncStateRepository: {
+      async load(publisherId) {
+        return (await ctx.metaDb.get(`consumer-publisher-sync-state:v1:${publisherId}`))?.value || null
+      },
+      async save(publisherId, state) {
+        await ctx.metaDb.put(`consumer-publisher-sync-state:v1:${publisherId}`, state)
+      },
+      async clear(publisherId) {
+        await ctx.metaDb.del(`consumer-publisher-sync-state:v1:${publisherId}`)
+      },
+      async loadGlobal() {
+        return (await ctx.metaDb.get('consumer-publisher-sync-budget-global:v1'))?.value || null
+      },
+      async saveGlobal(state) {
+        await ctx.metaDb.put('consumer-publisher-sync-budget-global:v1', state)
+      },
+    },
     initialNetworkPolicy: initialRuntimeNetworkPolicy,
   })
   ctx.scopedNetwork = scopedNetwork
@@ -507,17 +570,10 @@ export async function createBackendContext(config) {
     indexFeedManager: consumerIndexFeedManager,
     bootstrapManager: { listLocators: () => scopedNetwork.listBootstrapLocators() },
     mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
-    moderationPolicy: {
-      enabled: true,
-      curatorSubscriptions: initialNetworkPolicy.trustedModerationFeeds,
-      evaluate: candidate => {
-        const records = consumerModerationManager.getRecords()
-        return evaluateModerationPolicy(candidate, {
-          feedBlocks: records.filter(record => record.action !== 'allow'),
-          feedAllows: records.filter(record => record.action === 'allow'),
-        })
-      },
-    },
+    moderationPolicy: createConsumerModerationPolicy({
+      profileController: consumerModerationProfile,
+      moderationManager: consumerModerationManager,
+    }),
     publisherRecords: () => mediaCatalogProjection.mediaGraphStore.getClaims()
       .filter(row => !row.revoked && row.body?.claimType === 'AvailabilityObservation' && row.body?.payload?.publicationId)
       .flatMap(row => {
@@ -791,14 +847,10 @@ export async function createBackendContext(config) {
   // PersonalStore is the durable, encrypted device/paired-device authority for
   // the local moderation profile. Network policy mirrors only its effective
   // feed set so transport has no independent profile state to drift from.
-  const storedModerationProfile = await ctx.personal?.getSetting?.('consumer-moderation-profile:v1').catch(() => null)
-  if (storedModerationProfile && Array.isArray(storedModerationProfile.curatorSubscriptions)) {
-    initialNetworkPolicy = {
-      ...initialNetworkPolicy,
-      trustedModerationFeeds: storedModerationProfile.enabled === false
-        ? []
-        : storedModerationProfile.curatorSubscriptions.map(String),
-    }
+  if (ctx.personal) await consumerModerationProfile.reload()
+  initialNetworkPolicy = {
+    ...initialNetworkPolicy,
+    trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
   }
   initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(initialNetworkPolicy, initialNetworkEnvironment)
 
@@ -814,19 +866,30 @@ export async function createBackendContext(config) {
   if (publicationV1Startup.ready) await networkPolicyRuntime.start()
   ctx.networkPolicyRuntime = networkPolicyRuntime
   ctx.networkPolicyStore = networkPolicyStore
+  let applyingConsumerModerationProfile = false
+  const revalidateConsumerWork = async () => {
+    await mediaCatalogProjection.rebuild()
+    consumerCatalogProjection.rebuild()
+    await scopedNetwork.revalidateRetainedRenditions()
+    await permissionlessArchiveNetwork?.revalidateConsumerRequests?.(
+      request => consumerCatalogProjection.isPublicationVisible(request.body.publicationId)
+    )
+  }
   ctx.onNetworkPolicyChange = async policy => {
     pendingNetworkPolicy = policy
-    await ctx.personal?.setSetting?.('consumer-moderation-profile:v1', {
-      version: 1,
-      enabled: policy.trustedModerationFeeds.length > 0,
-      curatorSubscriptions: policy.trustedModerationFeeds.slice(),
-      scope: 'local-device',
-      protocolAuthority: false,
-    })
+    if (!applyingConsumerModerationProfile) {
+      const current = consumerModerationProfile.getProfile()
+      await consumerModerationProfile.replace({
+        ...current,
+        curatorSubscriptions: policy.trustedModerationFeeds.slice(),
+      })
+    }
     if (!publicationV1Startup.ready) {
       return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
     }
-    return networkPolicyRuntime.apply(policy)
+    const effective = await networkPolicyRuntime.apply(policy)
+    await revalidateConsumerWork()
+    return effective
   }
   const policyApi = createPolicyApi({
     store: networkPolicyStore,
@@ -834,6 +897,36 @@ export async function createBackendContext(config) {
     onPolicyChange: ctx.onNetworkPolicyChange,
     validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
   })
+  const applyProfileState = async state => {
+    applyingConsumerModerationProfile = true
+    try {
+      const response = await policyApi.setNetworkPolicy({
+        trustedModerationFeedsJson: JSON.stringify(
+          state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
+        ),
+      })
+      if (response.success === false) throw new Error(response.errorCode || 'consumer moderation profile rejected')
+      await revalidateConsumerWork()
+      return state
+    } finally {
+      applyingConsumerModerationProfile = false
+    }
+  }
+  ctx.setConsumerModerationProfile = async input => {
+    let state
+    if (input?.operation === 'restore-defaults') {
+      state = await consumerModerationProfile.restoreDefaults()
+    } else if (input?.profile?.enabled === false) {
+      state = await consumerModerationProfile.disable()
+    } else {
+      state = await consumerModerationProfile.replace(input?.profile)
+    }
+    return applyProfileState(state)
+  }
+  ctx.reloadConsumerModerationProfile = async () => {
+    const state = await consumerModerationProfile.reload()
+    return applyProfileState(state)
+  }
 
   // Phase 6: Create the universal API over the single scoped P2P runtime.
   const api = createApi({

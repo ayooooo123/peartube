@@ -18,6 +18,7 @@ export function createModerationManager(options = {}) {
   const maxRecordsPerAgentPerWindow = normalizeBudgetLimit(options.maxRecordsPerAgentPerWindow, 512)
   const maxRecordsPerCollectionPerWindow = normalizeBudgetLimit(options.maxRecordsPerCollectionPerWindow, 512)
   const acceptRecord = typeof options.acceptRecord === 'function' ? options.acceptRecord : () => true
+  const stateRepository = options.stateRepository || null
   const budget = createWindowedIngestBudget({
     now,
     windowMs: options.budgetWindowMs,
@@ -27,6 +28,31 @@ export function createModerationManager(options = {}) {
   const checkpoints = new Map()
   const pageStates = new Map()
   const records = new Map()
+
+  async function persistState() {
+    await stateRepository?.save?.({
+      version: 1,
+      subscribed: [...subscribed].sort(),
+      checkpoints: [...checkpoints.entries()],
+      pageStates: [...pageStates.entries()],
+      records: [...records.entries()],
+    })
+  }
+
+  async function restoreState() {
+    const state = await stateRepository?.load?.()
+    if (!state || state.version !== 1) return
+    if (!Array.isArray(state.subscribed) || state.subscribed.length > 256 ||
+        !Array.isArray(state.checkpoints) || state.checkpoints.length > 256 ||
+        !Array.isArray(state.pageStates) || state.pageStates.length > maxPageStates ||
+        !Array.isArray(state.records) || state.records.length > maxRecords) return
+    for (const id of state.subscribed) subscribed.add(String(id))
+    for (const [id, checkpoint] of state.checkpoints) checkpoints.set(String(id), checkpoint)
+    for (const [key, value] of state.pageStates) pageStates.set(String(key), value)
+    for (const [key, value] of state.records) records.set(String(key), { ...value })
+  }
+
+  const ready = stateRepository?.load ? restoreState() : Promise.resolve()
 
   function rememberPage(key, pageId) {
     let state = pageStates.get(key)
@@ -66,8 +92,10 @@ export function createModerationManager(options = {}) {
   }
 
   return {
+    ready,
     subscribe(moderatorId) {
       subscribed.add(String(moderatorId))
+      return ready.then(persistState)
     },
     unsubscribe(moderatorId) {
       const id = String(moderatorId)
@@ -79,6 +107,7 @@ export function createModerationManager(options = {}) {
       for (const key of records.keys()) {
         if (key.startsWith(`${id}\0`)) records.delete(key)
       }
+      return ready.then(persistState)
     },
     getCheckpoint(moderatorId) {
       return checkpoints.get(String(moderatorId)) || null
@@ -86,10 +115,12 @@ export function createModerationManager(options = {}) {
     getRecords() {
       return Array.from(records.values())
     },
-    async syncFeed({ moderatorId, startCursor = '0', fetchPage } = {}) {
+    async syncFeed({ moderatorId, startCursor = null, fetchPage } = {}) {
+      await ready
       moderatorId = String(moderatorId || '')
       if (!subscribed.has(moderatorId)) return { status: 'not-subscribed' }
-      let cursor = startCursor
+      let cursor = startCursor ?? checkpoints.get(moderatorId)?.cursor ?? '0'
+      if (cursor == null) return { status: 'complete', nextCursor: null, ingested: 0 }
       let ingested = 0
       let rejected = 0
       let duplicates = 0
@@ -107,18 +138,26 @@ export function createModerationManager(options = {}) {
       }
       const state = rememberPage(pageKey, verified.pageId)
       if (state.complete) {
-        return { status: 'rejected', errorCode: 'DUPLICATE_PAGE', nextCursor: state.nextCursor }
+        cursor = state.nextCursor
+        checkpoints.set(moderatorId, { cursor, updatedAt: now() })
+        if (cursor == null) {
+          await persistState()
+          return { status: 'complete', nextCursor: null, ingested, rejected, duplicates }
+        }
+        continue
       }
 
       for (let index = state.nextIndex; index < verified.body.records.length; index++) {
         if (ingested >= maxRecordsPerSync) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
+          await persistState()
           return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected, duplicates }
         }
         const record = verified.body.records[index]
         const reservation = reserveRecord(moderatorId, record)
         if (!reservation.accepted) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
+          await persistState()
           return {
             status: 'partial',
             errorCode: reservation.errorCode,
@@ -152,6 +191,7 @@ export function createModerationManager(options = {}) {
       checkpoints.set(moderatorId, { cursor: state.nextCursor, updatedAt: now() })
       cursor = state.nextCursor
       if (cursor != null) continue
+      await persistState()
       if (ingested === 0 && rejected > 0) {
         return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: state.nextCursor, ingested, rejected, duplicates }
       }

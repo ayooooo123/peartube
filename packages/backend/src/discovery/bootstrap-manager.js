@@ -19,6 +19,12 @@ export function createBootstrapManager(options = {}) {
   const locatorsByPublisher = new Map()
   const seen = new Map()
 
+  function pruneExpired(current = Number(now())) {
+    for (const [publisherId, locator] of locatorsByPublisher) {
+      if (locator.expiresAt < current) locatorsByPublisher.delete(publisherId)
+    }
+  }
+
   function pruneSeen(current) {
     for (const [key, seenAt] of seen) {
       if (current < seenAt || current - seenAt >= budgetWindowMs) seen.delete(key)
@@ -36,6 +42,7 @@ export function createBootstrapManager(options = {}) {
   return {
     async ingestLocator(peerId, envelope) {
       const currentTime = Number(now())
+      pruneExpired(currentTime)
       const peerReservation = budget.reserve([{
         scope: 'bootstrap-peer',
         key: String(peerId),
@@ -98,6 +105,7 @@ export function createBootstrapManager(options = {}) {
       if (!current || body.issuedAt > current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch >= current.catalogEpoch)) {
         const locator = {
           ...body,
+          signerId: verified.signerId,
           trusted: verified.trusted,
           catalogChainVerified: verified.catalogChainVerified,
         }
@@ -109,12 +117,15 @@ export function createBootstrapManager(options = {}) {
       return { status: 'accepted', publisherId: body.publisherId }
     },
     getLocator(publisherId) {
+      pruneExpired()
       return locatorsByPublisher.get(String(publisherId).toLowerCase()) || null
     },
     listLocators() {
+      pruneExpired()
       return Array.from(locatorsByPublisher.values()).sort((a, b) => a.publisherId.localeCompare(b.publisherId))
     },
     getIntroducedPublisherIds() {
+      pruneExpired()
       return Array.from(locatorsByPublisher.keys()).sort()
     },
   }

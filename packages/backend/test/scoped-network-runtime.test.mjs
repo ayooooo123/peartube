@@ -50,15 +50,15 @@ function bytes (size, fill) {
   return b4a.alloc(size, fill)
 }
 
-function connectionPair () {
+function connectionPair ({ sourcePeerFill = 202, consumerPeerFill = 201 } = {}) {
   const aToB = new PassThrough()
   const bToA = new PassThrough()
   const a = Duplex.from({ readable: bToA, writable: aToB })
   const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
   b.userData = null
-  a.remotePublicKey = bytes(32, 201)
-  b.remotePublicKey = bytes(32, 202)
+  a.remotePublicKey = bytes(32, consumerPeerFill)
+  b.remotePublicKey = bytes(32, sourcePeerFill)
   return { a, b }
 }
 
@@ -117,6 +117,22 @@ function fakeRegistry (descriptor) {
         length: 0,
         digest: bytes(32, 210),
         authorizationStateDigest: bytes(32, 211),
+      }
+    },
+    async getAuthorizationState () {
+      return {
+        policyEpoch: 0,
+        policySequence: 0,
+        writers: [{
+          key: b4a.toString(descriptor.publisherRootKey, 'hex'),
+          signerKey: b4a.toString(descriptor.publisherRootKey, 'hex'),
+          capabilities: ['announce', 'publish'],
+          firstAcceptedSequence: 0,
+          lastAcceptedSequence: 0,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          admissionPolicyEpoch: 0,
+          revocation: null,
+        }],
       }
     },
     async ingestAcceptedPage () { return { accepted: 0 } },
@@ -333,7 +349,10 @@ test('publisher scope transfers exact-provenance accepted pages only after names
     nextCursor: null,
   })
   const genesisId = b4a.toString(genesis.recordId, 'hex')
-  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor }) => cursor === null
+  const requestedCursors = []
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor }) => {
+    requestedCursors.push(cursor)
+    return cursor === null
     ? {
         entries: [{
           operationId: genesisId,
@@ -343,6 +362,7 @@ test('publisher scope transfers exact-provenance accepted pages only after names
         nextCursor: genesisId,
       }
     : { entries: [], nextCursor: null }
+  }
   let headCalls = 0
   sourceRegistry.binding.catalog.getViewHead = async () => {
     headCalls++
@@ -368,17 +388,33 @@ test('publisher scope transfers exact-provenance accepted pages only after names
   const consumerRegistry = fakeRegistry(descriptor)
   consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => {
     received.push(...entries)
-    return { accepted: entries.length }
+    return { accepted: entries.length, rejected: 0 }
   }
+  consumerRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: received.length,
+    digest: bytes(32, 215),
+    authorizationStateDigest: bytes(32, 216),
+  })
   const swarmA = fakeSwarm()
   const swarmB = fakeSwarm()
   const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
   let catalogUpdates = 0
+  const publisherStates = new Map()
+  let globalPublisherBudget = null
+  const publisherSyncStateRepository = {
+    async load(id) { return publisherStates.get(id) || null },
+    async save(id, state) { publisherStates.set(id, structuredClone(state)) },
+    async loadGlobal() { return structuredClone(globalPublisherBudget) },
+    async saveGlobal(state) { globalPublisherBudget = structuredClone(state) },
+  }
   const consumer = createScopedNetworkRuntime({
     swarm: swarmB,
     store: {},
     catalogRegistry: consumerRegistry,
     onCatalogUpdate: async () => { catalogUpdates++ },
+    publisherSyncStateRepository,
+    catalogAdmissionLimits: { pages: 3 },
   })
   await source.start()
   await consumer.start()
@@ -406,13 +442,66 @@ test('publisher scope transfers exact-provenance accepted pages only after names
   swarmB.emit('connection', retryPair.b, { publicKey: retryPair.b.remotePublicKey, client: true })
   for (let attempt = 0; attempt < 30 && catalogUpdates === 0; attempt++) await settle()
   t.is(catalogUpdates, 1, 'a new authenticated session repeats proof and resumes the stable cursor')
+  t.is(publisherStates.get(b4a.toString(descriptor.publisherId, 'hex')).cursor, genesisId,
+    'the last accepted operation cursor is durable even after a terminal page')
+  t.is(globalPublisherBudget.pages, 2, 'global admission work is durable alongside the publisher checkpoint')
 
-  await source.close()
   await consumer.close()
-  pair.a.destroy()
-  pair.b.destroy()
   retryPair.a.destroy()
   retryPair.b.destroy()
+
+  const restartSwarm = fakeSwarm()
+  let restartUpdates = 0
+  const restarted = createScopedNetworkRuntime({
+    swarm: restartSwarm,
+    store: {},
+    catalogRegistry: consumerRegistry,
+    onCatalogUpdate: async () => { restartUpdates++ },
+    publisherSyncStateRepository,
+    catalogAdmissionLimits: { pages: 3 },
+  })
+  await restarted.start()
+  await restarted.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+  const restartPair = connectionPair({ consumerPeerFill: 203 })
+  swarmA.connections.add(restartPair.a)
+  restartSwarm.connections.add(restartPair.b)
+  swarmA.emit('connection', restartPair.a, { publicKey: restartPair.a.remotePublicKey, client: false })
+  restartSwarm.emit('connection', restartPair.b, { publicKey: restartPair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 30 && restartUpdates === 0; attempt++) await settle()
+  t.is(restartUpdates, 1, 'restart reopens the durable verified view and completes from its saved cursor')
+  t.is(requestedCursors.at(-1), genesisId, 'restart does not replay the first page')
+
+  await restarted.close()
+  restartPair.a.destroy()
+  restartPair.b.destroy()
+
+  const exhaustedSwarm = fakeSwarm()
+  let exhaustedUpdates = 0
+  const exhausted = createScopedNetworkRuntime({
+    swarm: exhaustedSwarm,
+    store: {},
+    catalogRegistry: consumerRegistry,
+    onCatalogUpdate: async () => { exhaustedUpdates++ },
+    publisherSyncStateRepository,
+    catalogAdmissionLimits: { pages: 3 },
+  })
+  await exhausted.start()
+  await exhausted.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+  const exhaustedPair = connectionPair({ consumerPeerFill: 204 })
+  swarmA.connections.add(exhaustedPair.a)
+  exhaustedSwarm.connections.add(exhaustedPair.b)
+  swarmA.emit('connection', exhaustedPair.a, { publicKey: exhaustedPair.a.remotePublicKey, client: false })
+  exhaustedSwarm.emit('connection', exhaustedPair.b, { publicKey: exhaustedPair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 20 && exhausted.getDiagnostics().recentErrors.length === 0; attempt++) await settle()
+  t.is(exhaustedUpdates, 0, 'restart cannot reset and bypass the durable admission window')
+  t.ok(exhausted.getDiagnostics().recentErrors.some(error => error.code === 'PUBLISHER_CATALOG_WINDOW_BUDGET_EXCEEDED'))
+
+  await source.close()
+  await exhausted.close()
+  pair.a.destroy()
+  pair.b.destroy()
+  exhaustedPair.a.destroy()
+  exhaustedPair.b.destroy()
 })
 
 test('local publisher scope is not announced before an accepted publication or claim exists', async t => {
@@ -728,6 +817,141 @@ test('an untrusted bootstrap locator can bind a publisher only after a scoped na
   await consumer.close()
   pair.a.destroy()
   pair.b.destroy()
+})
+
+test('a local publisher automatically advertises a signed locator and consumers reject false completion', async (t) => {
+  const root = crypto.keyPair(bytes(32, 156))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 157),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.localWriterKey = root.publicKey
+  sourceRegistry.binding.catalog.localSignerKey = root.publicKey
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor }) => cursor === null
+    ? {
+        entries: [{
+          operationId: b4a.toString(genesis.recordId, 'hex'),
+          sourceWriterKey: root.publicKey,
+          frame: encodePublisherCatalogFrame(genesis),
+        }],
+        nextCursor: null,
+      }
+    : { entries: [], nextCursor: null }
+  sourceRegistry.binding.catalog.getAuthorizationState = async () => ({
+    policyEpoch: 0,
+    policySequence: 0,
+    writers: [{
+      key: b4a.toString(root.publicKey, 'hex'),
+      signerKey: b4a.toString(root.publicKey, 'hex'),
+      capabilities: ['announce', 'publish'],
+      firstAcceptedSequence: 0,
+      lastAcceptedSequence: 0,
+      expiresAt: 1_000,
+      admissionPolicyEpoch: 0,
+      revocation: null,
+    }],
+  })
+
+  const sourceSwarm = fakeSwarm()
+  sourceSwarm.keyPair = root
+  const consumerSwarms = [fakeSwarm(), fakeSwarm(), fakeSwarm()]
+  const consumerRegistries = consumerSwarms.map(() => fakeRegistry(descriptor))
+  consumerRegistries[0].binding.catalog.ingestAcceptedPage = async entries => ({
+    accepted: entries.length,
+    rejected: 0,
+  })
+  consumerRegistries[1].binding.catalog.ingestAcceptedPage = consumerRegistries[0].binding.catalog.ingestAcceptedPage
+  consumerRegistries[1].binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: 0,
+    digest: bytes(32, 158),
+    authorizationStateDigest: bytes(32, 211),
+  })
+  consumerRegistries[2].binding.catalog.ingestAcceptedPage = async () => ({
+    accepted: 0,
+    rejected: 1,
+  })
+  const consumerUpdates = [0, 0, 0]
+  let sourceTime = 20
+  let refreshCallback = null
+  let cancelledRefreshes = 0
+  const source = createScopedNetworkRuntime({
+    swarm: sourceSwarm,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    now: () => sourceTime,
+    setBootstrapLocatorTimer(callback) {
+      refreshCallback = callback
+      return { unref () {} }
+    },
+    clearBootstrapLocatorTimer() {
+      cancelledRefreshes++
+    },
+  })
+  const consumers = consumerSwarms.map((swarm, index) => createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: consumerRegistries[index],
+    now: () => sourceTime,
+    onCatalogUpdate: async () => { consumerUpdates[index]++ },
+  }))
+  await source.start()
+  await Promise.all(consumers.map(consumer => consumer.start()))
+  await source.publishLocalPublisherCatalog({ publisherId: b4a.toString(descriptor.publisherId, 'hex') })
+
+  const pairs = consumers.map((consumer, index) => {
+    const pair = connectionPair({ consumerPeerFill: 171 + index, sourcePeerFill: 173 })
+    sourceSwarm.connections.add(pair.a)
+    consumerSwarms[index].connections.add(pair.b)
+    sourceSwarm.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, topics: [], client: false })
+    consumerSwarms[index].emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, topics: [], client: true })
+    return pair
+  })
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (consumers.every(consumer =>
+      consumer.listBootstrapLocators().length === 1 &&
+      consumer.getDiagnostics().topics.some(topic => topic.purpose === 'publisher' && topic.modes.includes('followed'))
+    )) break
+    await settle()
+  }
+  for (const consumer of consumers) {
+    t.is(consumer.listBootstrapLocators().length, 1, 'every consumer learns the locator without an explicit locator call')
+    t.ok(consumer.getDiagnostics().topics.some(topic => topic.purpose === 'publisher' && topic.modes.includes('followed')),
+      'every consumer automatically promotes the candidate after publisher proof')
+  }
+  for (let attempt = 0; attempt < 20 && consumers.some(consumer => consumer.getDiagnostics().recentErrors.length === 0); attempt++) {
+    if (consumerUpdates[0] === 1 &&
+        consumers[1].getDiagnostics().recentErrors.length > 0 &&
+        consumers[2].getDiagnostics().recentErrors.length > 0) break
+    await settle()
+  }
+  t.alike(consumerUpdates, [1, 0, 0], 'only the consumer that reconstructs every accepted operation reports completion')
+  t.ok(consumers[1].getDiagnostics().recentErrors.some(error => error.code === 'PUBLISHER_CATALOG_TRUNCATED'),
+    'an omitted/truncated catalog cannot use a terminal page as proof of completion')
+  t.ok(consumers[2].getDiagnostics().recentErrors.some(error => error.code === 'PUBLISHER_CATALOG_PAGE_INGEST_REJECTED'),
+    'any locally rejected or invalid operation prevents completion')
+  sourceTime = 30
+  refreshCallback()
+  for (let attempt = 0; attempt < 20 && consumers.some(consumer => consumer.listBootstrapLocators()[0]?.issuedAt !== 30); attempt++) {
+    await settle()
+  }
+  t.ok(consumers.every(consumer => consumer.listBootstrapLocators()[0]?.issuedAt === 30),
+    'the bounded refresh timer republishes a newer signed locator to every live bootstrap peer')
+
+  await source.close()
+  t.ok(cancelledRefreshes > 0, 'closing the publisher removes its refresh schedule')
+  await Promise.all(consumers.map(consumer => consumer.close()))
+  for (const pair of pairs) {
+    pair.a.destroy()
+    pair.b.destroy()
+  }
 })
 
 test('archive pledges retain multiple exact ranges without exposing a Hypercore responder', async (t) => {

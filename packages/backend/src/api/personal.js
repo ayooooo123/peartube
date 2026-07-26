@@ -1,3 +1,5 @@
+import { CONSUMER_MODERATION_PROFILE_SETTING_KEY } from '../moderation/profile.js'
+
 // Personal-sync API group (playlists / history / settings), extracted from
 // api.js. These are registered through the shared HRPC handler table, which
 // calls them as `api.method(request)` with `this` unbound — so they take the
@@ -76,12 +78,18 @@ export function createPersonalApi({ ctx }) {
       if (typeof value === 'string') {
         try { value = JSON.parse(value); } catch { /* keep raw string */ }
       }
+      if (req.key === CONSUMER_MODERATION_PROFILE_SETTING_KEY && ctx.setConsumerModerationProfile) {
+        await ctx.setConsumerModerationProfile(value)
+        return { success: true };
+      }
       await ctx.personal.setSetting(req.key, value);
       return { success: true };
     },
     async getPersonalSettings() {
-      if (!ctx.personal) return { settings: [] };
-      const settings = await ctx.personal.getSettings();
+      const settings = ctx.personal ? await ctx.personal.getSettings() : {};
+      if (ctx.consumerModerationProfile) {
+        settings[CONSUMER_MODERATION_PROFILE_SETTING_KEY] = await ctx.consumerModerationProfile.inspect();
+      }
       return { settings: Object.entries(settings).map(([key, value]) => ({ key, value: JSON.stringify(value) })) };
     },
 
@@ -96,6 +104,7 @@ export function createPersonalApi({ ctx }) {
     async provisionPersonalEncryption(req = {}) {
       if (!ctx.personalManager) return { success: false, error: 'personal store unavailable' };
       const result = await ctx.personalManager.provisionSecret({ secret: req.secret || undefined });
+      if (result?.success) await ctx.reloadConsumerModerationProfile?.();
       return { success: !!result.success, secret: result.secret, encrypted: !!result.encrypted, error: result.error };
     },
   }

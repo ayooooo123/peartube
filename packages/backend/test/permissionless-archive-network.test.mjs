@@ -173,6 +173,50 @@ test('opted-in strangers randomly accept verified requests without API keys or t
   t.is('trustedRelayKeys' in volunteerNetwork.getStatus(), false)
 })
 
+test('consumer policy changes cancel hidden archive requests and release their retained pledge scopes', async (t) => {
+  const scoped = scopedRecorder()
+  const network = createPermissionlessArchiveNetwork({
+    keyPair: requester,
+    now: () => 1_000,
+    scopedNetwork: scoped,
+    publishRequest: async () => {},
+  })
+  const published = await network.requestArchive({
+    publicationId,
+    renditionId,
+    ranges,
+    requestedBytes: 4096,
+    retentionUntil: 20_000,
+    expiresAt: 2_000,
+  })
+  const pledge = createArchivePledge({
+    archivistId: volunteer.publicKey,
+    publicationId,
+    renditionId,
+    ranges,
+    retentionUntil: 20_000,
+    uploadCeilingBytes: 4096,
+    issuedAt: 1_000,
+    nonce: published.requestId,
+    keyPair: volunteer,
+  })
+  t.is((await network.ingestPledge(pledge.envelope)).status, 'accepted')
+  t.alike(network.getStatus(), {
+    ...network.getStatus(),
+    knownRequests: 1,
+    receivedPledges: 1,
+  })
+
+  const result = await network.revalidateConsumerRequests(
+    request => request.body.publicationId !== publicationId
+  )
+  t.alike(result, { cancelledRequests: 1, releasedPledges: 1 })
+  t.is(network.getStatus().knownRequests, 0)
+  t.is(network.getStatus().receivedPledges, 0)
+  t.alike(scoped.released, [{ archiveId: pledge.pledgeId }])
+  await network.close()
+})
+
 test('participation defaults off, enforces local capacity, and releases custody immediately on opt-out', async (t) => {
   const scoped = scopedRecorder()
   const network = createPermissionlessArchiveNetwork({

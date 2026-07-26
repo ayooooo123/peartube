@@ -8,9 +8,49 @@ import { createArchiveRequest } from '../src/archive/request.js'
 import { createMediaGraphApi } from '../src/api/media-graph.js'
 import { createConsumerCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import { createLocalMediaIndex } from '../src/indexing/local-index.js'
+import { evaluateModerationPolicy } from '../src/moderation/index.js'
 import { createScopedNetworkRuntime } from '../src/network/scoped-runtime.js'
 
 const id = (character) => character.repeat(64)
+
+test('production moderation records match consumer entityRef identities before downstream work', async (t) => {
+  const work = []
+  const blocked = {
+    directPublisher: true,
+    kind: 'movie',
+    entityRef: id('e'),
+    publicationId: id('1'),
+    publisherId: id('a'),
+    title: 'Blocked by entity reference',
+  }
+  const policy = {
+    enabled: true,
+    evaluate: candidate => evaluateModerationPolicy(candidate, {
+      feedBlocks: [{
+        targetType: 'work',
+        targetId: id('e'),
+        action: 'hide',
+      }],
+    }),
+  }
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [{ publisherId: id('a') }] },
+    publisherRecords: () => [blocked],
+    moderationPolicy: policy,
+    onArtwork: candidate => work.push(['artwork', candidate.entityRef]),
+    onTopicJoin: candidate => work.push(['topic', candidate.entityRef]),
+    onPlaybackPreparation: candidate => work.push(['playback', candidate.entityRef]),
+    onCache: candidate => work.push(['cache', candidate.entityRef]),
+    onSeed: candidate => work.push(['seed', candidate.entityRef]),
+    onArchive: candidate => work.push(['archive', candidate.entityRef]),
+  })
+
+  t.is(policy.evaluate(blocked).action, 'hidden', 'the production evaluator recognizes entityRef as a work identity')
+  t.is(projection.rebuild().accepted, 0)
+  t.alike(projection.getCatalog().items, [])
+  t.alike(work, [], 'blocked production candidates schedule no downstream work')
+})
 
 test('default moderation blocks a candidate before artwork, topic, playback, cache, seed, or archive work', async (t) => {
   const work = []
@@ -109,19 +149,22 @@ test('real media graph and retained asset seams reject hidden consumer work befo
   const renditionId = manifest.body.renditions[0].renditionId
   let coreOpens = 0
   let downloads = 0
+  let cancelledDownloads = 0
+  let closedCores = 0
+  const hiddenEntityRefs = new Set(['work:hidden'])
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({
     swarm,
     authorizePublication: async () => true,
-    authorizeConsumerWork: async ({ entityRef }) => entityRef !== 'work:hidden',
+    authorizeConsumerWork: async ({ entityRef }) => !hiddenEntityRefs.has(entityRef),
     store: {
       get ({ key }) {
         coreOpens++
         return {
           key,
           async ready () {},
-          download () { downloads++; return { destroy () {} } },
-          async close () {},
+          download () { downloads++; return { destroy () { cancelledDownloads++ } } },
+          async close () { closedCores++ },
         }
       },
     },
@@ -145,6 +188,18 @@ test('real media graph and retained asset seams reject hidden consumer work befo
   t.is(coreOpens, 1)
   t.is(downloads, 1)
   t.is(swarm.joins.length, 2, 'locally permitted media follows the normal retained asset path')
+
+  hiddenEntityRefs.add('work:visible')
+  t.alike(await runtime.revalidateRetainedRenditions(), { released: 1 })
+  t.is(cancelledDownloads, 1, 'a newly blocked title cancels its active download')
+  t.is(closedCores, 1, 'a newly blocked title closes its media core')
+  hiddenEntityRefs.delete('work:visible')
+  const visibleAgain = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId,
+    entityRef: 'work:visible',
+  })
+  t.is(visibleAgain.status, 'retained', 'disabling the local block permits the unchanged network publication again')
 
   const archiveRequest = createArchiveRequest({
     requesterId: publisher.publicKey,

@@ -5,20 +5,13 @@ import path from 'node:path'
 import ts from '../node_modules/typescript/lib/typescript.js'
 
 const source = fs.readFileSync(path.resolve(import.meta.dirname, '../lib/default-moderation-profile.ts'), 'utf8')
+const developerSettingsSource = fs.readFileSync(path.resolve(import.meta.dirname, '../app/developer-settings.tsx'), 'utf8')
 
 async function loadProfileModule() {
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}#${Math.random()}`)
-}
-
-function memoryStorage() {
-  const values = new Map()
-  return {
-    async get(key) { return values.get(key) ?? null },
-    async set(key, value) { values.set(key, value) },
-  }
 }
 
 test('bundled moderation profile is a versioned local descriptor with replaceable curator subscriptions', async () => {
@@ -32,38 +25,16 @@ test('bundled moderation profile is a versioned local descriptor with replaceabl
   assert.equal(profile.DEFAULT_MODERATION_PROFILE.protocolAuthority, false)
 })
 
-test('custom profiles survive a bundled upgrade; disable, replace, inspect, and restore are explicit local operations', async () => {
+test('the app exports no second moderation-profile persistence facade', async () => {
   const profile = await loadProfileModule()
-  const storage = memoryStorage()
-  const v1 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 1, curatorSubscriptions: ['curator-a'] }
-  const v2 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 2, curatorSubscriptions: ['curator-b'] }
-  const store = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v1 })
-
-  assert.deepEqual(await store.inspect(), { profile: v1, customized: false })
-  await store.replace({ ...v1, curatorSubscriptions: ['my-curator'] })
-  assert.deepEqual(await store.inspect(), { profile: { ...v1, curatorSubscriptions: ['my-curator'] }, customized: true })
-  const upgraded = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v2 })
-  assert.deepEqual((await upgraded.inspect()).profile.curatorSubscriptions, ['my-curator'])
-  await upgraded.disable()
-  assert.equal((await upgraded.inspect()).profile.enabled, false)
-  await upgraded.restoreDefaults()
-  assert.deepEqual(await upgraded.inspect(), { profile: v2, customized: false })
-  await upgraded.replace({ ...v2, curatorSubscriptions: [] })
-  assert.deepEqual((await upgraded.inspect()).profile.curatorSubscriptions, [])
+  assert.equal(typeof profile.createDefaultModerationProfileStore, 'undefined')
+  assert.equal(typeof profile.DEFAULT_MODERATION_PROFILE_STORAGE_KEY, 'undefined')
 })
 
-test('an uncustomized stored bundle adopts a newer bundled version while a customized one does not', async () => {
-  const profile = await loadProfileModule()
-  const storage = memoryStorage()
-  const v1 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 1, curatorSubscriptions: ['curator-a'] }
-  const v2 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 2, curatorSubscriptions: ['curator-b'] }
-  const first = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v1 })
-  await first.restoreDefaults()
-
-  const upgraded = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v2 })
-  assert.deepEqual(await upgraded.inspect(), { profile: v2, customized: false })
-  await upgraded.replace({ ...v2, curatorSubscriptions: ['mine'] })
-  const v3 = { ...profile.DEFAULT_MODERATION_PROFILE, version: 3, curatorSubscriptions: ['curator-c'] }
-  const customized = profile.createDefaultModerationProfileStore({ storage, bundledProfile: v3 })
-  assert.deepEqual((await customized.inspect()).profile.curatorSubscriptions, ['mine'])
+test('Developer Settings reads and mutates the backend PersonalStore profile through existing RPC state', () => {
+  assert.match(developerSettingsSource, /getPersonalSettings/)
+  assert.match(developerSettingsSource, /setPersonalSetting/)
+  assert.match(developerSettingsSource, /CONSUMER_MODERATION_PROFILE_SETTING_KEY/)
+  assert.doesNotMatch(developerSettingsSource, /secureGet|secureSet/)
+  assert.doesNotMatch(developerSettingsSource, /createDefaultModerationProfileStore/)
 })

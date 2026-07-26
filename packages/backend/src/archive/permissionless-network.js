@@ -591,6 +591,43 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       return { status: 'published', requestId: request.requestId, request }
     },
 
+    async revalidateConsumerRequests(authorize) {
+      await ready
+      if (typeof authorize !== 'function') throw new TypeError('consumer archive authorization callback is required')
+      let cancelledRequests = 0
+      let releasedPledges = 0
+      const hiddenRequestIds = new Set()
+      for (const [requestId, request] of [...localRequests]) {
+        let allowed = false
+        try {
+          allowed = await authorize(request)
+        } catch {
+          allowed = false
+        }
+        if (allowed) continue
+        hiddenRequestIds.add(requestId)
+        localRequests.delete(requestId)
+        cancelLocalRequestTimer(requestId)
+        cancelledRequests++
+      }
+      for (const [pledgeId, record] of [...receivedPledges]) {
+        const requestId = record.pledge.body.nonce
+        let allowed = !hiddenRequestIds.has(requestId)
+        if (allowed) {
+          const request = localRequests.get(requestId) || { body: record.pledge.body }
+          try {
+            allowed = await authorize(request)
+          } catch {
+            allowed = false
+          }
+        }
+        if (allowed) continue
+        await expireReceivedPledge(pledgeId, record)
+        releasedPledges++
+      }
+      return { cancelledRequests, releasedPledges }
+    },
+
     async ingestRequest(envelope) {
       await ready
       const request = await verifyArchiveRequest(envelope, { now: now() })

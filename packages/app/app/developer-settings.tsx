@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -7,8 +7,7 @@ import { NativeSwitch } from '@/components/native-ui'
 import { GlassCard, SectionHeader } from '@/components/primitives'
 import { ArchiveParticipationControl } from '@/components/developer/ArchiveParticipationControl'
 import { colors } from '@/lib/colors'
-import { createDefaultModerationProfileStore, DEFAULT_MODERATION_PROFILE, type ModerationProfile } from '@/lib/default-moderation-profile'
-import { secureGet, secureSet } from '@/lib/secure-storage'
+import { CONSUMER_MODERATION_PROFILE_SETTING_KEY, DEFAULT_MODERATION_PROFILE, type ModerationProfile } from '@/lib/default-moderation-profile'
 import { useApp } from './_layout'
 
 const developerRoutes = [
@@ -30,32 +29,25 @@ function DeveloperSettingsContent() {
   const [developerModeError, setDeveloperModeError] = useState<string | null>(null)
   const [moderationProfile, setModerationProfile] = useState<ModerationProfile | null>(null)
   const [moderationProfileError, setModerationProfileError] = useState<string | null>(null)
-  const moderationStore = useMemo(() => createDefaultModerationProfileStore({
-    storage: {
-      async get(key) {
-        const raw = await secureGet(key)
-        try { return raw ? JSON.parse(raw) : null } catch { return null }
-      },
-      async set(key, value) { await secureSet(key, JSON.stringify(value)) },
-    },
-  }), [])
 
   const refreshModerationProfile = async () => {
     try {
-      setModerationProfile((await moderationStore.inspect()).profile)
+      const result = await (rpc as any)?.getPersonalSettings?.({})
+      const setting = result?.settings?.find((entry: { key?: string }) => entry.key === CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+      if (!setting?.value) throw new Error('backend moderation profile unavailable')
+      const parsed = JSON.parse(setting.value)
+      setModerationProfile(parsed.profile || parsed)
       setModerationProfileError(null)
     } catch {
       setModerationProfileError('Unable to read the local moderation profile.')
     }
   }
 
-  // The secure profile is the durable local preference; the backend receives
-  // only its effective signed-feed set so live projection and transport stop
-  // immediately when a user disables or replaces it.
-  const applyModerationProfile = async (operation: () => Promise<{ profile: ModerationProfile }>) => {
-    const next = await operation()
-    const feeds = next.profile.enabled ? next.profile.curatorSubscriptions : []
-    const response = await (rpc as any)?.setNetworkPolicy?.({ trustedModerationFeedsJson: JSON.stringify(feeds) })
+  const applyModerationProfile = async (value: unknown) => {
+    const response = await (rpc as any)?.setPersonalSetting?.({
+      key: CONSUMER_MODERATION_PROFILE_SETTING_KEY,
+      value: JSON.stringify(value),
+    })
     if (response && response.success === false) throw new Error(response.errorCode || 'policy update rejected')
     await refreshModerationProfile()
   }
@@ -106,13 +98,13 @@ function DeveloperSettingsContent() {
               <Text style={styles.rowTitle}>Community profile v{moderationProfile?.version ?? DEFAULT_MODERATION_PROFILE.version}</Text>
               <Text style={styles.rowDetail}>{moderationProfile?.enabled === false ? 'Disabled: records remain local and can be revealed on this device.' : `${moderationProfile?.curatorSubscriptions.length ?? 0} optional curator subscriptions.`}</Text>
               <View style={styles.profileActions}>
-                <Pressable onPress={() => { void applyModerationProfile(() => moderationStore.disable()).catch(() => setModerationProfileError('Unable to update the local moderation profile.')) }} style={styles.profileButton}>
+                <Pressable onPress={() => { void applyModerationProfile({ profile: { ...(moderationProfile || DEFAULT_MODERATION_PROFILE), enabled: false, curatorSubscriptions: [] } }).catch(() => setModerationProfileError('Unable to update the local moderation profile.')) }} style={styles.profileButton}>
                   <Text style={styles.profileButtonText}>Disable</Text>
                 </Pressable>
-                <Pressable onPress={() => { void applyModerationProfile(() => moderationStore.restoreDefaults()).catch(() => setModerationProfileError('Unable to restore the local moderation profile.')) }} style={styles.profileButton}>
+                <Pressable onPress={() => { void applyModerationProfile({ operation: 'restore-defaults' }).catch(() => setModerationProfileError('Unable to restore the local moderation profile.')) }} style={styles.profileButton}>
                   <Text style={styles.profileButtonText}>Restore Defaults</Text>
                 </Pressable>
-                <Pressable onPress={() => { void applyModerationProfile(() => moderationStore.replace({ ...(moderationProfile || DEFAULT_MODERATION_PROFILE), curatorSubscriptions: [] })).catch(() => setModerationProfileError('Unable to replace the local moderation profile.')) }} style={styles.profileButton}>
+                <Pressable onPress={() => { void applyModerationProfile({ profile: { ...(moderationProfile || DEFAULT_MODERATION_PROFILE), enabled: true, curatorSubscriptions: [] } }).catch(() => setModerationProfileError('Unable to replace the local moderation profile.')) }} style={styles.profileButton}>
                   <Text style={styles.profileButtonText}>Clear Curators</Text>
                 </Pressable>
               </View>

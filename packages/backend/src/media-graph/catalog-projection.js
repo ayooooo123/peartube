@@ -535,8 +535,19 @@ export function createConsumerCatalogProjection(options = {}) {
       })
       if (fingerprint === lastInputFingerprint) return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
       const indexed = localIndex.replaceRecords(accepted)
-      acceptedCandidates = new Map(accepted.map(record => [record.entityRef, record]))
-      visiblePublicationIds = new Set(accepted.map(record => String(record.publicationId)))
+      const admittedKeys = new Set()
+      for (const entity of localIndex.search('')) {
+        for (const publication of entity.publications || []) {
+          admittedKeys.add(
+            `${entity.entityRef}\0${String(publication.publisherId || '').toLowerCase()}\0${String(publication.publicationId)}`,
+          )
+        }
+      }
+      const admitted = accepted.filter(record => admittedKeys.has(
+        `${record.entityRef}\0${String(record.publisherId || '').toLowerCase()}\0${String(record.publicationId)}`,
+      ))
+      acceptedCandidates = new Map(admitted.map(record => [record.entityRef, record]))
+      visiblePublicationIds = new Set(admitted.map(record => String(record.publicationId)))
       lastInputFingerprint = fingerprint
       lastRebuild = {
         accepted: indexed.accepted + indexed.duplicates,

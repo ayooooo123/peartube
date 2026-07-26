@@ -83,6 +83,60 @@ test('consumer projection stays bounded and ignores index references to publishe
   t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:accepted'])
 })
 
+test('consumer visibility and downstream scheduling commit only after bounded local-index admission', async (t) => {
+  const publisherId = id('a')
+  const acceptedPublicationId = id('1')
+  const rejectedPublicationId = id('2')
+  const scheduled = []
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex({
+      maxRecordsPerPublisher: 1,
+      maxRecordsPerPublisherPerWindow: 1,
+    }),
+    publisherRecords: () => [
+      {
+        directPublisher: true,
+        kind: 'movie',
+        entityRef: 'work:accepted',
+        publicationId: acceptedPublicationId,
+        publisherId,
+        title: 'Accepted',
+      },
+      {
+        directPublisher: true,
+        kind: 'movie',
+        entityRef: 'work:quota-rejected',
+        publicationId: rejectedPublicationId,
+        publisherId,
+        title: 'Quota rejected',
+      },
+    ],
+    onPlaybackPreparation: record => { scheduled.push(record.entityRef) },
+  })
+
+  const first = projection.rebuild()
+  t.is(first.accepted, 1)
+  t.is(first.rejected, 1)
+  t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:accepted'])
+  t.ok(projection.isVisible('work:accepted'))
+  t.ok(projection.isPublicationVisible(acceptedPublicationId))
+  t.absent(projection.isVisible('work:quota-rejected'))
+  t.absent(projection.isPublicationVisible(rejectedPublicationId))
+  t.alike(
+    await projection.schedule('work:quota-rejected', ['playback']),
+    { scheduled: false, errorCode: 'CONSUMER_CANDIDATE_NOT_VISIBLE' },
+  )
+  t.alike(await projection.schedule('work:accepted', ['playback']), {
+    scheduled: true,
+    operations: ['playback'],
+  })
+  t.alike(scheduled, ['work:accepted'])
+
+  t.alike(projection.rebuild(), first, 'an identical rebuild remains idempotent')
+  t.absent(projection.isVisible('work:quota-rejected'))
+  t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:accepted'])
+})
+
 test('an authenticated direct publisher candidate is projected without an index introduction', (t) => {
   const projection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex(),

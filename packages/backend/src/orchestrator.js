@@ -714,6 +714,10 @@ export async function createBackendContext(config) {
       await refreshActivePersonalStore()
       await ctx.seedPinRegistration?.refreshClientAuth?.()
     },
+    onRollback: async ({ previousPublicKey }) => {
+      await personalManager.setActive(previousPublicKey)
+      await ctx.seedPinRegistration?.refreshClientAuth?.()
+    },
   })
   lifecycle.own('identity mutation hooks', removeIdentityMutationHooks, 2000)
 

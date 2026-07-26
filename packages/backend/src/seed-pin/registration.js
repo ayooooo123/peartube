@@ -404,6 +404,7 @@ export function installSeedPinIdentityMutationHooks ({
   if (typeof onMutation !== 'function') throw new TypeError('onMutation must be a function')
   if (typeof onRollback !== 'function') throw new TypeError('onRollback must be a function')
   const installed = []
+  const restoreActiveIdentity = identityManager.setActiveIdentity
   let identityMutations = Promise.resolve()
   const enqueueMutation = operation => {
     const next = identityMutations.then(operation, operation)
@@ -423,13 +424,13 @@ export function installSeedPinIdentityMutationHooks ({
         } catch (error) {
           const currentPublicKey = identityManager.getActivePublicKey?.() || null
           if (
-            mutation.method === 'setActiveIdentity' &&
             previousPublicKey &&
-            currentPublicKey !== previousPublicKey
+            currentPublicKey !== previousPublicKey &&
+            typeof restoreActiveIdentity === 'function'
           ) {
             const rollbackErrors = []
             try {
-              await original.call(identityManager, previousPublicKey)
+              await restoreActiveIdentity.call(identityManager, previousPublicKey)
             } catch (rollbackError) {
               rollbackErrors.push(rollbackError)
             }
@@ -437,7 +438,7 @@ export function installSeedPinIdentityMutationHooks ({
               await onRollback({
                 mutation,
                 previousPublicKey,
-                failedPublicKey: args[0],
+                failedPublicKey: currentPublicKey || args[0],
                 error,
               })
             } catch (rollbackError) {

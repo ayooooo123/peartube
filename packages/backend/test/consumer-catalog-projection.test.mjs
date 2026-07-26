@@ -137,6 +137,57 @@ test('consumer visibility and downstream scheduling commit only after bounded lo
   t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:accepted'])
 })
 
+test('a rejected metadata update schedules only the exact retained local-index row', async t => {
+  const publisherId = id('a')
+  const publicationId = id('1')
+  let metadataVersion = 1
+  const scheduled = []
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex({
+      maxRecordsPerPublisherPerWindow: 1,
+    }),
+    publisherRecords: () => [{
+      directPublisher: true,
+      kind: 'movie',
+      entityRef: 'work:retained',
+      publicationId,
+      publisherId,
+      title: `Retained v${metadataVersion}`,
+      artwork: `artwork:v${metadataVersion}`,
+      catalogBlockHint: metadataVersion,
+      rootTransitionProofDigest: metadataVersion === 1 ? id('c') : id('d'),
+      model: `catalog-metadata/v${metadataVersion}`,
+      indexId: `catalog-index/v${metadataVersion}`,
+      playable: true,
+    }],
+    onPlaybackPreparation: record => { scheduled.push(record) },
+  })
+
+  t.alike(projection.rebuild(), {
+    accepted: 1,
+    rejected: 0,
+    rejectionCodes: {},
+  })
+  metadataVersion = 2
+  t.alike(projection.rebuild(), {
+    accepted: 0,
+    rejected: 1,
+    rejectionCodes: {},
+  }, 'the metadata v2 row is rejected after v1 consumed the publisher window')
+  t.is(projection.getCatalog().items[0].title, 'Retained v1', 'the catalog retains admitted metadata v1')
+
+  t.alike(await projection.schedule('work:retained', ['playback']), {
+    scheduled: true,
+    operations: ['playback'],
+  })
+  t.is(scheduled.length, 1)
+  t.is(scheduled[0].title, 'Retained v1', 'downstream work receives retained metadata v1')
+  t.is(scheduled[0].artwork, 'artwork:v1', 'no field from rejected metadata v2 reaches downstream work')
+  t.is(scheduled[0].catalogBlockHint, 1, 'the retained row version reaches downstream work')
+  t.is(scheduled[0].rootTransitionProofDigest, id('c'), 'the retained authenticated digest reaches downstream work')
+  t.is(scheduled[0].model, 'catalog-metadata/v1', 'the retained payload is exact')
+})
+
 test('an authenticated direct publisher candidate is projected without an index introduction', (t) => {
   const projection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex(),

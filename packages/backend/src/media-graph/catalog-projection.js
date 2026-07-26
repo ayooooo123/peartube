@@ -430,8 +430,13 @@ export function projectAuthenticatedPublisherMediaRecords({
  */
 export function createConsumerCatalogProjection(options = {}) {
   const localIndex = options.localIndex
-  if (!localIndex || typeof localIndex.replaceRecords !== 'function' || typeof localIndex.search !== 'function') {
-    throw new TypeError('localIndex with replaceRecords and search is required')
+  if (
+    !localIndex ||
+    typeof localIndex.replaceRecords !== 'function' ||
+    typeof localIndex.search !== 'function' ||
+    typeof localIndex.records !== 'function'
+  ) {
+    throw new TypeError('localIndex with replaceRecords, search, and records is required')
   }
   const bootstrapManager = options.bootstrapManager || null
   const indexFeedManager = options.indexFeedManager || null
@@ -535,17 +540,9 @@ export function createConsumerCatalogProjection(options = {}) {
       })
       if (fingerprint === lastInputFingerprint) return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
       const indexed = localIndex.replaceRecords(accepted)
-      const admittedKeys = new Set()
-      for (const entity of localIndex.search('')) {
-        for (const publication of entity.publications || []) {
-          admittedKeys.add(
-            `${entity.entityRef}\0${String(publication.publisherId || '').toLowerCase()}\0${String(publication.publicationId)}`,
-          )
-        }
-      }
-      const admitted = accepted.filter(record => admittedKeys.has(
-        `${record.entityRef}\0${String(record.publisherId || '').toLowerCase()}\0${String(record.publicationId)}`,
-      ))
+      const admitted = Array.isArray(indexed.admittedRecords)
+        ? indexed.admittedRecords
+        : (typeof localIndex.records === 'function' ? localIndex.records() : [])
       acceptedCandidates = new Map(admitted.map(record => [record.entityRef, record]))
       visiblePublicationIds = new Set(admitted.map(record => String(record.publicationId)))
       lastInputFingerprint = fingerprint

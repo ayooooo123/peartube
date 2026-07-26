@@ -43,8 +43,12 @@ export function createLocalMediaIndex(options = {}) {
     }
   }
 
-  function logicalKey(record, dimensions) {
-    return `${dimensions.index}\0${record.publisherId || ''}\0${record.publicationId}`
+  function logicalKey(record) {
+    // A publication remains the same candidate when its discovery/index
+    // provenance changes. Keeping provenance out of the identity key makes an
+    // update replaceable in place and, crucially, retains the previous row
+    // when admission of the proposed replacement fails.
+    return `${record.publisherId || ''}\0${record.publicationId}`
   }
 
   function adjustCounts(record, delta) {
@@ -82,16 +86,10 @@ export function createLocalMediaIndex(options = {}) {
   }
 
   function metadataFingerprint(record) {
-    return JSON.stringify([
-      record.entityRef,
-      record.title || null,
-      record.creator || null,
-      record.collectionId || null,
-      record.expectedEpisodeCount || 0,
-      record.seriesEpisode || null,
-      Array.isArray(record.tags) ? record.tags : [],
-      record.playable === true,
-    ])
+    // normalizeRecord fixes property order and bounds every value. Fingerprint
+    // the complete stored payload so version/digest/provenance updates cannot
+    // be mistaken for duplicates merely because their display title matches.
+    return JSON.stringify(record)
   }
 
   function metadataByteLength(record) {
@@ -305,7 +303,7 @@ export function createLocalMediaIndex(options = {}) {
         }
         const record = normalizeRecord(input)
         const dimensions = dimensionKeys(record)
-        const key = logicalKey(record, dimensions)
+        const key = logicalKey(record)
         const previous = records.get(key) || null
         const fingerprint = metadataFingerprint(record)
         if (previous && metadataFingerprint(previous) === fingerprint) {
@@ -374,7 +372,7 @@ export function createLocalMediaIndex(options = {}) {
       for (const input of nextRecords || []) {
         if (!validRecordInput(input)) continue
         const record = normalizeRecord(input)
-        desired.set(logicalKey(record, dimensionKeys(record)), record)
+        desired.set(logicalKey(record), record)
       }
       for (const [key, previous] of records) {
         if (desired.has(key)) continue
@@ -392,7 +390,14 @@ export function createLocalMediaIndex(options = {}) {
         changed.push(record)
       }
       const result = this.ingestRecords(changed)
-      return { ...result, duplicates: result.duplicates + duplicates }
+      // The caller must commit visibility and downstream work from these
+      // authoritative stored rows, not from the proposed inputs. In
+      // particular, a rejected update leaves its previous row admitted.
+      return {
+        ...result,
+        duplicates: result.duplicates + duplicates,
+        admittedRecords: this.records(),
+      }
     },
     search(query = '') {
       const q = String(query).toLowerCase()
@@ -407,7 +412,8 @@ export function createLocalMediaIndex(options = {}) {
       return Array.from(byEntity.values()).map(project)
     },
     records() {
-      return Array.from(records.values())
+      // Never expose mutable references to authoritative index state.
+      return Array.from(records.values(), normalizeRecord)
     },
   }
 }

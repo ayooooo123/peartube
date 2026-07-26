@@ -141,7 +141,8 @@ test('anonymous desktop profile uses one encrypted PersonalStore across restart 
 
     const identity = { publicKey: 'cc'.repeat(32), personalKey: null }
     identityManager.activate(identity)
-    await manager.setActive(identity.publicKey)
+    await manager.setActive(identity.publicKey, { allowDeviceLocal: true })
+    t.is(manager.getActivePublicKey(), 'device-local', 'device-local authority remains explicit')
     t.ok(ctx.personal, 'anonymous authority remains active until identity encryption is provisioned')
     await manager.provisionSecret({ secret: identitySecret })
     await controller.reload()

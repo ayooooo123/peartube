@@ -703,19 +703,46 @@ export async function createBackendContext(config) {
   // platforms by wrapping the identity-manager mutators in one place (every
   // platform changes identities through these). Store activation is committed
   // only after the consumer profile and transport subscriptions reconcile.
-  const refreshActivePersonalStore = async (publicKey) => {
+  const refreshActivePersonalStore = async (publicKey, { allowDeviceLocal = false } = {}) => {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
-    await personalManager.setActive(pk)
+    const store = await personalManager.setActive(pk, { allowDeviceLocal })
+    const explicitDeviceLocal = (
+      allowDeviceLocal &&
+      personalManager.getActivePublicKey() === 'device-local' &&
+      personalManager.getAnonymous() === store &&
+      ctx.personal === store
+    )
+    if (explicitDeviceLocal) return store
+    if (
+      !store ||
+      personalManager.getActivePublicKey() !== pk ||
+      personalManager.getActive() !== store ||
+      ctx.personal !== store
+    ) {
+      const error = new Error(`Active PersonalStore does not match identity ${pk}`)
+      error.code = 'PERSONAL_STORE_IDENTITY_MISMATCH'
+      throw error
+    }
+    return store
   }
   const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({
     identityManager,
-    onMutation: async () => {
-      await refreshActivePersonalStore()
+    onMutation: async mutation => {
+      const allowDeviceLocal = (
+        personalManager.getActivePublicKey() === 'device-local' &&
+        (
+          mutation.method === 'createIdentity' ||
+          mutation.method === 'addPairedChannelIdentity'
+        )
+      )
+      await refreshActivePersonalStore(null, { allowDeviceLocal })
       await ctx.seedPinRegistration?.refreshClientAuth?.()
     },
     onRollback: async ({ previousPublicKey }) => {
-      await personalManager.setActive(previousPublicKey)
+      await refreshActivePersonalStore(previousPublicKey, {
+        allowDeviceLocal: personalManager.getActivePublicKey() === 'device-local',
+      })
       await ctx.seedPinRegistration?.refreshClientAuth?.()
     },
   })

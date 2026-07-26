@@ -33,6 +33,12 @@ function personalNamespace(publicKey) {
   return `peartube-personal:${publicKey}`
 }
 
+function unavailablePersonalStoreSecret(publicKey) {
+  const error = new Error(`PersonalStore secret is unavailable for identity ${publicKey}`)
+  error.code = 'PERSONAL_STORE_SECRET_UNAVAILABLE'
+  return error
+}
+
 export function createPersonalManager({ ctx, identityManager, onActiveStoreChanged = null }) {
   /** @type {Map<string, PersonalStore>} */
   const stores = new Map()
@@ -299,17 +305,34 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
         null
     },
 
+    /** Identity or explicit device-local authority owning the active store. */
+    getActivePublicKey() {
+      return activePublicKey
+    },
+
     /** Device-local encrypted store used before an identity/pairing is active. */
     getAnonymous() {
       return stores.get(DEVICE_LOCAL_PERSONAL_ID) || null
     },
 
     /** Switch the active personal store when the active identity changes. */
-    async setActive(publicKey) {
+    async setActive(publicKey, { allowDeviceLocal = false } = {}) {
       return enqueueActiveChange(async () => {
         const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === publicKey)
         if (!identity) return null
         const store = await openForIdentity(identity)
+        if (!store) {
+          const deviceLocal = stores.get(DEVICE_LOCAL_PERSONAL_ID) || null
+          if (
+            allowDeviceLocal &&
+            deviceLocal &&
+            activePublicKey === DEVICE_LOCAL_PERSONAL_ID &&
+            ctx.personal === deviceLocal
+          ) {
+            return deviceLocal
+          }
+          throw unavailablePersonalStoreSecret(publicKey)
+        }
         await activateStore(publicKey, store, { migrateAnonymous: true })
         return store
       })

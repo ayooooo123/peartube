@@ -127,3 +127,53 @@ test('index subscriptions and multi-page checkpoints survive restart and duplica
   t.is(restarted.getCheckpoint(curatorId), null)
   t.alike(restarted.getRecords(), [], 'unsubscribe clears accepted records and checkpoints')
 })
+
+test('index feed cumulative global and publisher budgets survive restart and expire honestly', async (t) => {
+  const repository = stateRepository()
+  let clock = 10
+  const options = {
+    now: () => clock,
+    stateRepository: repository,
+    budgetWindowMs: 5,
+    maxRecordsGlobalPerWindow: 1,
+    maxRecordsPerIndexPerWindow: 8,
+    maxRecordsPerPublisherPerWindow: 1,
+  }
+  const first = createIndexFeedManager(options)
+  await first.ready
+  await first.subscribe(curatorId)
+  t.is((await first.syncFeed({
+    curatorId,
+    startCursor: '0',
+    fetchPage: async () => page('0', null, { publicationId: 'e'.repeat(64) }),
+  })).status, 'complete')
+
+  const restarted = createIndexFeedManager(options)
+  await restarted.ready
+  const sameWindow = await restarted.syncFeed({
+    curatorId,
+    startCursor: '1',
+    fetchPage: async () => page('1', null, {
+      entityRef: 'work:budget-two',
+      publicationId: 'f'.repeat(64),
+    }),
+  })
+  t.is(sameWindow.status, 'partial')
+  t.ok(
+    sameWindow.errorCode === 'GLOBAL_WINDOW_BUDGET_EXCEEDED' ||
+    sameWindow.errorCode === 'PUBLISHER_WINDOW_BUDGET_EXCEEDED',
+    'restart cannot reset a cumulative admission window',
+  )
+
+  clock = 16
+  const expired = createIndexFeedManager(options)
+  await expired.ready
+  t.is((await expired.syncFeed({
+    curatorId,
+    startCursor: '1',
+    fetchPage: async () => page('1', null, {
+      entityRef: 'work:budget-two',
+      publicationId: 'f'.repeat(64),
+    }),
+  })).status, 'complete', 'an expired window recovers after restart')
+})

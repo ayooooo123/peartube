@@ -76,3 +76,115 @@ test('moderation subscriptions, records, and next cursor survive restart and uns
   t.is(restarted.getCheckpoint(moderatorId), null)
   t.alike(restarted.getRecords(), [])
 })
+
+function moderationPage(cursor, records) {
+  return createModerationFeedPage({
+    moderatorId,
+    pageCursor: cursor,
+    nextCursor: null,
+    records,
+    keyPair: mod,
+    expiresAt: 1000,
+  })
+}
+
+test('moderation cumulative global and publisher budgets survive restart and expire honestly', async (t) => {
+  const repository = stateRepository()
+  let clock = 10
+  const options = {
+    now: () => clock,
+    stateRepository: repository,
+    budgetWindowMs: 5,
+    maxRecordsGlobalPerWindow: 1,
+    maxRecordsPerModeratorPerWindow: 8,
+    maxRecordsPerPublisherPerWindow: 1,
+  }
+  const first = createModerationManager(options)
+  await first.ready
+  await first.subscribe(moderatorId)
+  t.is((await first.syncFeed({
+    moderatorId,
+    startCursor: '0',
+    fetchPage: async () => moderationPage('0', [{
+      action: 'hide',
+      targetType: 'publisher',
+      targetId: 'a'.repeat(64),
+    }]),
+  })).status, 'complete')
+
+  const restarted = createModerationManager(options)
+  await restarted.ready
+  const sameWindow = await restarted.syncFeed({
+    moderatorId,
+    startCursor: '1',
+    fetchPage: async () => moderationPage('1', [{
+      action: 'hide',
+      targetType: 'publisher',
+      targetId: 'a'.repeat(64),
+    }]),
+  })
+  t.is(sameWindow.status, 'partial')
+  t.ok(
+    sameWindow.errorCode === 'GLOBAL_WINDOW_BUDGET_EXCEEDED' ||
+    sameWindow.errorCode === 'PUBLISHER_WINDOW_BUDGET_EXCEEDED',
+    'restart cannot reset a cumulative moderation window',
+  )
+
+  clock = 16
+  const expired = createModerationManager(options)
+  await expired.ready
+  t.is((await expired.syncFeed({
+    moderatorId,
+    startCursor: '1',
+    fetchPage: async () => moderationPage('1', [{
+      action: 'hide',
+      targetType: 'publisher',
+      targetId: 'a'.repeat(64),
+    }]),
+  })).status, 'rejected', 'expired window admits verification work; duplicate projection remains rejected')
+  t.is(expired.getCheckpoint(moderatorId).cursor, null)
+})
+
+test('moderation rejected and duplicate records count toward the per-sync processing cap', async (t) => {
+  let rejectedChecks = 0
+  const rejected = createModerationManager({
+    now: () => 10,
+    maxRecordsPerSync: 2,
+    acceptRecord() {
+      rejectedChecks++
+      return false
+    },
+  })
+  await rejected.subscribe(moderatorId)
+  const rejectedResult = await rejected.syncFeed({
+    moderatorId,
+    fetchPage: async () => moderationPage('0', [0, 1, 2].map(index => ({
+      action: 'hide',
+      targetType: 'work',
+      targetId: `work:rejected-${index}`,
+    }))),
+  })
+  t.is(rejectedResult.status, 'partial')
+  t.is(rejectedResult.errorCode, 'SYNC_RECORD_BUDGET_EXCEEDED')
+  t.is(rejectedChecks, 2, 'third rejected record is not processed')
+
+  const duplicate = createModerationManager({ now: () => 10, maxRecordsPerSync: 2 })
+  await duplicate.subscribe(moderatorId)
+  const duplicateRecord = {
+    action: 'hide',
+    targetType: 'work',
+    targetId: 'work:duplicate',
+  }
+  const duplicateResult = await duplicate.syncFeed({
+    moderatorId,
+    fetchPage: async () => moderationPage('0', [
+      duplicateRecord,
+      duplicateRecord,
+      duplicateRecord,
+    ]),
+  })
+  t.is(duplicateResult.status, 'partial')
+  t.is(duplicateResult.errorCode, 'SYNC_RECORD_BUDGET_EXCEEDED')
+  t.is(duplicateResult.ingested, 1)
+  t.is(duplicateResult.duplicates, 1, 'third duplicate is not processed')
+})

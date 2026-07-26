@@ -15,6 +15,7 @@ export function createModerationManager(options = {}) {
   const maxPageStates = normalizeBudgetLimit(options.maxPageStates, 2048)
   const maxRecordsPerModeratorPerWindow = normalizeBudgetLimit(options.maxRecordsPerModeratorPerWindow, 1024)
   const maxRecordsPerPublisherPerWindow = normalizeBudgetLimit(options.maxRecordsPerPublisherPerWindow, 512)
+  const maxRecordsGlobalPerWindow = normalizeBudgetLimit(options.maxRecordsGlobalPerWindow, 4096)
   const maxRecordsPerAgentPerWindow = normalizeBudgetLimit(options.maxRecordsPerAgentPerWindow, 512)
   const maxRecordsPerCollectionPerWindow = normalizeBudgetLimit(options.maxRecordsPerCollectionPerWindow, 512)
   const acceptRecord = typeof options.acceptRecord === 'function' ? options.acceptRecord : () => true
@@ -36,6 +37,7 @@ export function createModerationManager(options = {}) {
       checkpoints: [...checkpoints.entries()],
       pageStates: [...pageStates.entries()],
       records: [...records.entries()],
+      budget: budget.snapshot(),
     })
   }
 
@@ -45,7 +47,8 @@ export function createModerationManager(options = {}) {
     if (!Array.isArray(state.subscribed) || state.subscribed.length > 256 ||
         !Array.isArray(state.checkpoints) || state.checkpoints.length > 256 ||
         !Array.isArray(state.pageStates) || state.pageStates.length > maxPageStates ||
-        !Array.isArray(state.records) || state.records.length > maxRecords) return
+        !Array.isArray(state.records) || state.records.length > maxRecords ||
+        !budget.restore(state.budget)) return
     for (const id of state.subscribed) subscribed.add(String(id))
     for (const [id, checkpoint] of state.checkpoints) checkpoints.set(String(id), checkpoint)
     for (const [key, value] of state.pageStates) pageStates.set(String(key), value)
@@ -64,12 +67,20 @@ export function createModerationManager(options = {}) {
   }
 
   function reserveRecord(moderatorId, record) {
-    const requirements = [{
-      scope: 'moderation-index',
-      key: moderatorId,
-      limit: maxRecordsPerModeratorPerWindow,
-      errorCode: 'MODERATION_INDEX_WINDOW_BUDGET_EXCEEDED',
-    }]
+    const requirements = [
+      {
+        scope: 'global',
+        key: 'all',
+        limit: maxRecordsGlobalPerWindow,
+        errorCode: 'GLOBAL_WINDOW_BUDGET_EXCEEDED',
+      },
+      {
+        scope: 'moderation-index',
+        key: moderatorId,
+        limit: maxRecordsPerModeratorPerWindow,
+        errorCode: 'MODERATION_INDEX_WINDOW_BUDGET_EXCEEDED',
+      },
+    ]
     const targetBudgets = {
       publisher: [maxRecordsPerPublisherPerWindow, 'PUBLISHER_WINDOW_BUDGET_EXCEEDED'],
       agent: [maxRecordsPerAgentPerWindow, 'AGENT_WINDOW_BUDGET_EXCEEDED'],
@@ -124,6 +135,7 @@ export function createModerationManager(options = {}) {
       let ingested = 0
       let rejected = 0
       let duplicates = 0
+      let processed = 0
       let firstRejectionCode = null
       while (true) {
       const page = await fetchPage(cursor)
@@ -160,7 +172,7 @@ export function createModerationManager(options = {}) {
       }
 
       for (let index = state.nextIndex; index < verified.body.records.length; index++) {
-        if (ingested >= maxRecordsPerSync) {
+        if (processed >= maxRecordsPerSync) {
           checkpoints.set(moderatorId, { cursor, updatedAt: now() })
           await persistState()
           return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected, duplicates }
@@ -181,6 +193,7 @@ export function createModerationManager(options = {}) {
           }
         }
         state.nextIndex = index + 1
+        processed++
         if (!await acceptRecord(record, { moderatorId, pageId: verified.pageId })) {
           rejected++
           firstRejectionCode ||= 'LOCAL_POLICY_REJECTED'

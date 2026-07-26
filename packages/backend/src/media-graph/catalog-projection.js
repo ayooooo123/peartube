@@ -339,6 +339,90 @@ function getProfileEnabled(profile) {
   return typeof profile.enabled === 'function' ? profile.enabled() !== false : profile.enabled !== false
 }
 
+function claimCollectionId(row) {
+  return row?.body?.payload?.collectionRef?.entityId || null
+}
+
+function claimMemberId(row) {
+  return row?.body?.payload?.memberRef?.entityId || null
+}
+
+/**
+ * Project only authenticated publisher catalog state into consumer records.
+ * Collections remain graph entities; "series" is strictly a local presentation.
+ */
+export function projectAuthenticatedPublisherMediaRecords({
+  mediaGraphStore,
+  assetManifestStore,
+} = {}) {
+  if (!mediaGraphStore?.getClaims || !assetManifestStore?.getManifest) return []
+  const claims = mediaGraphStore.getClaims().filter(row => !row.revoked)
+  const memberships = claims.filter(row =>
+    row.body?.claimType === 'CollectionMembershipClaim' &&
+    row.body?.payload?.memberRole === 'episode' &&
+    claimCollectionId(row) &&
+    claimMemberId(row)
+  )
+  const structures = claims.filter(row => row.body?.claimType === 'CollectionStructureClaim')
+  const records = []
+  for (const availability of claims) {
+    if (availability.body?.claimType !== 'AvailabilityObservation') continue
+    const publicationId = availability.body?.payload?.publicationId
+    const manifest = assetManifestStore.getManifest(publicationId)
+    if (!manifest?.body?.publisherId) continue
+    for (const subject of availability.body.subjectRefs || []) {
+      const memberOf = memberships.filter(row => claimMemberId(row) === subject.entityId)
+      const work = resolveConsumerMediaEntity(mediaGraphStore, subject.entityId, { entityKind: 'work' })
+      if (memberOf.length === 0) {
+        records.push({
+          directPublisher: true,
+          kind: 'movie',
+          entityRef: subject.entityId,
+          publicationId: manifest.publicationId,
+          publisherId: manifest.body.publisherId,
+          title: work.metadata.title || manifest.body.title || null,
+          playable: true,
+        })
+        continue
+      }
+      for (const membership of memberOf) {
+        const collectionId = claimCollectionId(membership)
+        const collection = resolveConsumerMediaEntity(mediaGraphStore, collectionId, { entityKind: 'collection' })
+        const expectedEpisodeCount = structures
+          .filter(row => claimCollectionId(row) === collectionId)
+          .reduce((maximum, row) => Math.max(maximum, Number(row.body.payload.expectedSlots || 0)), 0)
+        records.push({
+          directPublisher: true,
+          kind: 'series',
+          entityRef: collectionId,
+          collectionId,
+          publicationId: manifest.publicationId,
+          publisherId: manifest.body.publisherId,
+          title: collection.metadata.title || work.metadata.title || manifest.body.title || null,
+          playable: true,
+          expectedEpisodeCount,
+          seriesEpisode: {
+            entityRef: subject.entityId,
+            title: work.metadata.title || manifest.body.title || null,
+            seasonNumber: Number(membership.body.payload.position?.season || 0),
+            episodeNumber: Number(membership.body.payload.position?.episode || 0),
+            publicationId: manifest.publicationId,
+            publisherId: manifest.body.publisherId,
+          },
+        })
+      }
+    }
+  }
+  return records.sort((left, right) => (
+    consumerKindRank(left.kind) - consumerKindRank(right.kind) ||
+    String(left.entityRef).localeCompare(String(right.entityRef)) ||
+    Number(left.seriesEpisode?.seasonNumber || 0) - Number(right.seriesEpisode?.seasonNumber || 0) ||
+    Number(left.seriesEpisode?.episodeNumber || 0) - Number(right.seriesEpisode?.episodeNumber || 0) ||
+    String(left.publisherId).localeCompare(String(right.publisherId)) ||
+    String(left.publicationId).localeCompare(String(right.publicationId))
+  ))
+}
+
 /**
  * A local view over the existing bounded index. It owns no feed and performs no
  * network or asset work: sources feed it only after their normal authentication

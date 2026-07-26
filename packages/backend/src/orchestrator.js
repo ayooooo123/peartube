@@ -39,7 +39,11 @@ import { createPersonalManager } from './personal/personal-manager.js';
 import { createUploadManager } from './upload.js';
 import { createPublisherCatalogRegistry } from './api/publisher.js'
 import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
-import { createConsumerCatalogProjection, createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
+import {
+  createConsumerCatalogProjection,
+  createPublisherCatalogProjection,
+  projectAuthenticatedPublisherMediaRecords,
+} from './media-graph/catalog-projection.js'
 import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
 import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
@@ -585,21 +589,10 @@ export async function createBackendContext(config) {
       profileController: consumerModerationProfile,
       moderationManager: consumerModerationManager,
     }),
-    publisherRecords: () => mediaCatalogProjection.mediaGraphStore.getClaims()
-      .filter(row => !row.revoked && row.body?.claimType === 'AvailabilityObservation' && row.body?.payload?.publicationId)
-      .flatMap(row => {
-        const manifest = mediaCatalogProjection.assetManifestStore.getManifest(row.body.payload.publicationId)
-        if (!manifest?.body?.publisherId) return []
-        return (row.body.subjectRefs || []).map(subject => ({
-          directPublisher: true,
-          kind: subject.entityKind === 'series' ? 'series' : 'movie',
-          entityRef: subject.entityId,
-          publicationId: manifest.publicationId,
-          publisherId: manifest.body.publisherId,
-          title: manifest.body.title || null,
-          playable: true,
-        }))
-      }),
+    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({
+      mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
+      assetManifestStore: mediaCatalogProjection.assetManifestStore,
+    }),
   })
   ctx.consumerIndexFeedManager = consumerIndexFeedManager
   ctx.consumerModerationManager = consumerModerationManager

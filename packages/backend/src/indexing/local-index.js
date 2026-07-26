@@ -87,6 +87,8 @@ export function createLocalMediaIndex(options = {}) {
       record.title || null,
       record.creator || null,
       record.collectionId || null,
+      record.expectedEpisodeCount || 0,
+      record.seriesEpisode || null,
       Array.isArray(record.tags) ? record.tags : [],
       record.playable === true,
     ])
@@ -97,6 +99,8 @@ export function createLocalMediaIndex(options = {}) {
       record.title || null,
       record.creator || null,
       record.collectionId || null,
+      record.expectedEpisodeCount || 0,
+      record.seriesEpisode || null,
       Array.isArray(record.tags) ? record.tags : [],
       record.artwork || null,
     ]))
@@ -152,6 +156,17 @@ export function createLocalMediaIndex(options = {}) {
       title: record.title || null,
       creator: record.creator || null,
       collectionId: record.collectionId || null,
+      expectedEpisodeCount: Number.isSafeInteger(record.expectedEpisodeCount) ? record.expectedEpisodeCount : 0,
+      seriesEpisode: record.seriesEpisode
+        ? {
+            entityRef: record.seriesEpisode.entityRef,
+            title: record.seriesEpisode.title || null,
+            seasonNumber: record.seriesEpisode.seasonNumber,
+            episodeNumber: record.seriesEpisode.episodeNumber,
+            publicationId: record.seriesEpisode.publicationId,
+            publisherId: record.seriesEpisode.publisherId || null,
+          }
+        : null,
       tags: Array.isArray(record.tags) ? record.tags.slice(0, maxTagsPerEntity) : [],
       ranking: Number.isFinite(record.ranking) ? record.ranking : null,
       model: typeof record.model === 'string' ? record.model : null,
@@ -190,6 +205,19 @@ export function createLocalMediaIndex(options = {}) {
       if (!boundedString(tag, 128, true)) return false
     }
     if (record.ranking != null && !Number.isFinite(record.ranking)) return false
+    if (record.expectedEpisodeCount != null &&
+        (!Number.isSafeInteger(record.expectedEpisodeCount) ||
+          record.expectedEpisodeCount < 0 ||
+          record.expectedEpisodeCount > 100000)) return false
+    if (record.seriesEpisode != null) {
+      const episode = record.seriesEpisode
+      if (!boundedString(episode.entityRef, 512, true) ||
+          !boundedString(episode.title, 512) ||
+          !boundedString(episode.publicationId, 512, true) ||
+          !boundedString(episode.publisherId, 128) ||
+          !Number.isSafeInteger(episode.seasonNumber) || episode.seasonNumber < 0 ||
+          !Number.isSafeInteger(episode.episodeNumber) || episode.episodeNumber < 0) return false
+    }
     return true
   }
 
@@ -198,7 +226,14 @@ export function createLocalMediaIndex(options = {}) {
     const publications = new Map()
     const provenance = new Set()
     const tags = new Set()
+    const episodes = new Map()
+    let expectedEpisodes = 0
     for (const record of recordGroup) {
+      expectedEpisodes = Math.max(expectedEpisodes, record.expectedEpisodeCount || 0)
+      if (record.seriesEpisode) {
+        const episodeKey = record.seriesEpisode.entityRef
+        if (!episodes.has(episodeKey)) episodes.set(episodeKey, record.seriesEpisode)
+      }
       if (record.sourceId && provenance.size < maxProvenancePerEntity) provenance.add(record.sourceId)
       for (const tag of record.tags || []) {
         if (tags.size >= maxTagsPerEntity) break
@@ -215,6 +250,19 @@ export function createLocalMediaIndex(options = {}) {
       }
     }
     const projectedPublications = Array.from(publications.values())
+    const orderedEpisodes = [...episodes.values()].sort((left, right) => (
+      left.seasonNumber - right.seasonNumber ||
+      left.episodeNumber - right.episodeNumber ||
+      left.entityRef.localeCompare(right.entityRef) ||
+      String(left.publisherId || '').localeCompare(String(right.publisherId || '')) ||
+      left.publicationId.localeCompare(right.publicationId)
+    ))
+    const seasons = new Map()
+    for (const episode of orderedEpisodes) {
+      const season = seasons.get(episode.seasonNumber) || []
+      season.push(episode)
+      seasons.set(episode.seasonNumber, season)
+    }
     return {
       entityRef: first.entityRef,
       entityKind: first.kind || 'unknown',
@@ -225,6 +273,18 @@ export function createLocalMediaIndex(options = {}) {
       publications: projectedPublications,
       provenance: Array.from(provenance).sort(),
       playable: projectedPublications.some(publication => publication.playable),
+      series: first.kind === 'series'
+        ? {
+            expectedEpisodes,
+            availableEpisodes: orderedEpisodes.length,
+            complete: expectedEpisodes > 0 && orderedEpisodes.length >= expectedEpisodes,
+            seasons: [...seasons].map(([seasonNumber, seasonEpisodes]) => ({
+              seasonNumber,
+              availableEpisodes: seasonEpisodes.length,
+              episodes: seasonEpisodes,
+            })),
+          }
+        : null,
     }
   }
 

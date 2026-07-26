@@ -15,7 +15,7 @@ function hex(value) {
 }
 
 function workRef(id = 'episode-1') {
-  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: id })
+  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: `${id}___________`.slice(0, 11) })
 }
 
 function collectionRef(id = 'season-1') {

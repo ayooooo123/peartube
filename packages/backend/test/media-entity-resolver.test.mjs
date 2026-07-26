@@ -13,7 +13,7 @@ const publisherA = crypto.keyPair(Buffer.alloc(32, 2))
 const publisherB = crypto.keyPair(Buffer.alloc(32, 3))
 
 function workRef(id) {
-  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: id })
+  return createEntityReference({ entityKind: 'work', namespace: 'youtube-video', normalizedIdentifier: `${id}___________`.slice(0, 11) })
 }
 
 function nativeWork(id, issuer = publisherA.publicKey) {

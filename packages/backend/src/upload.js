@@ -167,6 +167,9 @@ function normalizeVideoMetadata(options, videoId) {
   const contentFingerprint = options.contentFingerprint;
   const importIdentityKey = options.importIdentityKey;
   const importClaimantId = options.importClaimantId;
+  const seriesId = options.seriesId;
+  const seriesTitle = options.seriesTitle;
+  const expectedEpisodeCount = options.expectedEpisodeCount;
 
   const metadata = normalizeContentDetails({
     id: videoId,
@@ -202,6 +205,24 @@ function normalizeVideoMetadata(options, videoId) {
   if (thumbnailBlobId !== undefined) metadata.thumbnailBlobId = thumbnailBlobId;
   if (thumbnailBlobsCoreKey !== undefined) metadata.thumbnailBlobsCoreKey = thumbnailBlobsCoreKey;
   if (thumbnailMimeType !== undefined) metadata.thumbnailMimeType = thumbnailMimeType;
+  if (seriesId !== undefined) {
+    if (typeof seriesId !== 'string' || seriesId.length < 1 || b4a.byteLength(seriesId) > 512) {
+      throw new Error('seriesId must be a bounded non-empty string');
+    }
+    metadata.seriesId = seriesId;
+  }
+  if (seriesTitle !== undefined) {
+    if (typeof seriesTitle !== 'string' || seriesTitle.length < 1 || b4a.byteLength(seriesTitle) > 512) {
+      throw new Error('seriesTitle must be a bounded non-empty string');
+    }
+    metadata.seriesTitle = seriesTitle;
+  }
+  if (expectedEpisodeCount !== undefined) {
+    if (!Number.isSafeInteger(expectedEpisodeCount) || expectedEpisodeCount < 0 || expectedEpisodeCount > 100000) {
+      throw new Error('expectedEpisodeCount must be between 0 and 100000');
+    }
+    metadata.expectedEpisodeCount = expectedEpisodeCount;
+  }
   return metadata;
 }
 
@@ -376,6 +397,20 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
     issuerRootKey: publisherId,
     issuerLocalId: metadata.id
   });
+  const episodic = metadata.contentKind === 'episode' &&
+    Number.isSafeInteger(metadata.seasonNumber) &&
+    Number.isSafeInteger(metadata.episodeNumber);
+  const collectionRef = episodic
+    ? createEntityReference({
+        entityKind: 'collection',
+        namespace: 'issuer-native',
+        issuerRootKey: publisherId,
+        issuerLocalId: metadata.seriesId ||
+          (metadata.mediaProvider && metadata.mediaId
+            ? `series:${metadata.mediaProvider}:${metadata.mediaId}`
+            : `series:${metadata.id}`)
+      })
+    : null;
   const claims = [
     createMediaClaim({
       claimType: 'EntityMetadataClaim',
@@ -383,7 +418,15 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       payload: {
         title: metadata.title || metadata.id,
         description: metadata.description || null,
-        publicationId: manifest.publicationId
+        publicationId: manifest.publicationId,
+        presentationKind: episodic ? 'episode' : 'movie',
+        ...(episodic
+          ? {
+              collectionRef,
+              seasonNumber: metadata.seasonNumber,
+              episodeNumber: metadata.episodeNumber
+            }
+          : {})
       },
       confidence: 1000,
       issuerSequence: firstSequence + 1,
@@ -391,6 +434,53 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       keyPair: deviceKeyPair,
       signedAt: currentTime
     }),
+    ...(episodic ? [
+      createMediaClaim({
+        claimType: 'EntityMetadataClaim',
+        subjectRefs: [collectionRef],
+        payload: {
+          title: metadata.seriesTitle || metadata.title || metadata.seriesId,
+          presentationKind: 'series'
+        },
+        confidence: 1000,
+        issuerSequence: firstSequence + 2,
+        policyEpoch: writer.admissionPolicyEpoch,
+        keyPair: deviceKeyPair,
+        signedAt: currentTime
+      }),
+      createMediaClaim({
+        claimType: 'CollectionStructureClaim',
+        subjectRefs: [collectionRef],
+        payload: {
+          collectionRef,
+          collectionRole: 'series',
+          expectedSlots: metadata.expectedEpisodeCount || 0
+        },
+        confidence: 1000,
+        issuerSequence: firstSequence + 3,
+        policyEpoch: writer.admissionPolicyEpoch,
+        keyPair: deviceKeyPair,
+        signedAt: currentTime
+      }),
+      createMediaClaim({
+        claimType: 'CollectionMembershipClaim',
+        subjectRefs: [collectionRef, subjectRef],
+        payload: {
+          collectionRef,
+          memberRef: subjectRef,
+          memberRole: 'episode',
+          position: {
+            season: metadata.seasonNumber,
+            episode: metadata.episodeNumber
+          }
+        },
+        confidence: 1000,
+        issuerSequence: firstSequence + 4,
+        policyEpoch: writer.admissionPolicyEpoch,
+        keyPair: deviceKeyPair,
+        signedAt: currentTime
+      })
+    ] : []),
     createMediaClaim({
       claimType: 'AvailabilityObservation',
       subjectRefs: [subjectRef],
@@ -400,7 +490,7 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         availabilityStatus: 'available'
       },
       confidence: 1000,
-      issuerSequence: firstSequence + 2,
+      issuerSequence: firstSequence + (episodic ? 5 : 2),
       policyEpoch: writer.admissionPolicyEpoch,
       keyPair: deviceKeyPair,
       signedAt: currentTime
@@ -438,6 +528,8 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
     renditionId: rendition.renditionId,
     publisherId: manifest.body.publisherId,
     sequence: firstSequence,
+    entityRef: subjectRef.entityId,
+    collectionRef: collectionRef?.entityId || null,
     claimIds: claims.map(claim => claim.claimId),
     manifest
   };

@@ -163,7 +163,7 @@ git commit -m "feat(app): separate consumer and developer surfaces"
 5. Run:
 
 ```bash
-npm exec --prefix packages/backend -- brittle test/consumer-catalog-projection.test.mjs test/default-moderation-before-work.test.mjs test/default-moderation-non-authority.test.mjs test/moderation-enforcement.test.mjs test/media-entity-resolver.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/consumer-catalog-projection.test.mjs packages/backend/test/default-moderation-before-work.test.mjs packages/backend/test/default-moderation-non-authority.test.mjs packages/backend/test/moderation-enforcement.test.mjs packages/backend/test/media-entity-resolver.test.mjs
 node --test packages/app/tests/one-catalog-regression.test.mjs packages/app/tests/default-moderation-profile.test.mjs packages/app/tests/content-catalog.test.mjs
 ```
 
@@ -216,7 +216,7 @@ Each response carries `state`, `observedAt`, `expiresAt`, `requiredRangeCount`, 
 
 ```bash
 npm run schema:full
-npm exec --prefix packages/backend -- brittle test/consumer-availability.test.mjs test/archive-confidence.test.mjs test/media-graph-api.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/consumer-availability.test.mjs packages/backend/test/archive-confidence.test.mjs packages/backend/test/media-graph-api.test.mjs
 npm test --prefix packages/spec
 npm test --prefix packages/host
 npm test --prefix packages/platform
@@ -262,7 +262,7 @@ git commit -m "feat(playback): expose honest expiring availability"
 5. Run:
 
 ```bash
-npm exec --prefix packages/backend -- brittle test/automatic-source-failover.test.mjs test/media-source-selector.test.mjs test/multi-peer-playback.test.mjs test/playback-service.test.mjs test/playback-api.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/automatic-source-failover.test.mjs packages/backend/test/media-source-selector.test.mjs packages/backend/test/multi-peer-playback.test.mjs packages/backend/test/playback-service.test.mjs packages/backend/test/playback-api.test.mjs
 node --test packages/app/tests/automatic-play-regression.test.mjs packages/app/tests/video-player-overlay-source-regression.test.mjs packages/app/tests/media-source-selection.test.mjs
 ```
 
@@ -302,7 +302,7 @@ git commit -m "feat(playback): select and fail over P2P sources"
 5. Run:
 
 ```bash
-npm exec --prefix packages/backend -- brittle test/strict-p2p-playback.test.mjs test/asset-session.test.mjs test/playback-service.test.mjs test/playback-api.test.mjs test/multi-peer-playback.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/strict-p2p-playback.test.mjs packages/backend/test/asset-session.test.mjs packages/backend/test/playback-service.test.mjs packages/backend/test/playback-api.test.mjs packages/backend/test/multi-peer-playback.test.mjs
 node --test packages/app/tests/strict-p2p-player-regression.test.mjs packages/app/tests/video-player-streaming-seek-regression.test.mjs packages/app/tests/mse-player-seek-regression.test.mjs
 ```
 
@@ -396,7 +396,7 @@ git commit -m "feat(app): deliver the consumer media library"
 ```bash
 npm run schema:full
 node --test packages/app/tests/local-recommendations.test.mjs packages/app/tests/no-viewer-analytics-regression.test.mjs packages/app/tests/personal-pairing-separation.test.mjs
-npm exec --prefix packages/backend -- brittle test/private-watch-state-pairing.test.mjs test/personal-store.test.mjs test/personal-store-encryption.test.mjs test/personal-hrpc-wiring.test.mjs test/identity-recovery.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/private-watch-state-pairing.test.mjs packages/backend/test/personal-store.test.mjs packages/backend/test/personal-store-encryption.test.mjs packages/backend/test/personal-hrpc-wiring.test.mjs packages/backend/test/identity-recovery.test.mjs
 npm test --prefix packages/spec
 npm test --prefix packages/host
 npm test --prefix packages/platform
@@ -436,7 +436,7 @@ git commit -m "feat(privacy): keep viewer state local by default"
 5. Run:
 
 ```bash
-npm exec --prefix packages/backend -- brittle test/balanced-participation-policy.test.mjs test/network-policy-runtime.test.mjs test/playback-resource-policy.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/balanced-participation-policy.test.mjs packages/backend/test/network-policy-runtime.test.mjs packages/backend/test/playback-resource-policy.test.mjs
 node --test packages/app/tests/consumer-participation-copy-regression.test.mjs packages/app/tests/network-policy-controls-regression.test.mjs
 ```
 
@@ -479,7 +479,7 @@ git commit -m "feat(network): make balanced contribution the default"
 
 ```bash
 npm run schema:full
-npm exec --prefix packages/backend -- brittle test/protected-rendition-contract.test.mjs test/protected-publication-validation.test.mjs test/protected-media-key-isolation.test.mjs test/asset-manifest.test.mjs test/media-source-selector.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/protected-rendition-contract.test.mjs packages/backend/test/protected-publication-validation.test.mjs packages/backend/test/protected-media-key-isolation.test.mjs packages/backend/test/asset-manifest.test.mjs packages/backend/test/media-source-selector.test.mjs
 npm test --prefix packages/spec
 npm test --prefix packages/host
 npm test --prefix packages/platform
@@ -563,7 +563,7 @@ Reference: Expo's official `expo-video` DRM contract documents `VideoSource.drm`
 5. Run:
 
 ```bash
-npm exec --prefix packages/backend -- brittle test/protected-ciphertext-archive.test.mjs test/archive-integration.test.mjs
+npm exec --prefix packages/backend -- brittle packages/backend/test/protected-ciphertext-archive.test.mjs packages/backend/test/archive-integration.test.mjs
 npm exec --prefix packages/cli -- brittle test/protected-ciphertext-relay.test.mjs
 npm test --prefix packages/cli
 ```

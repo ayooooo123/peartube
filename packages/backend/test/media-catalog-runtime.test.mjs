@@ -4,8 +4,13 @@ import crypto from 'hypercore-crypto'
 
 import { createMediaGraphApi } from '../src/api/media-graph.js'
 import { createPublicationManifest, createRenditionDescriptor, encodePublicationManifest } from '../src/assets/index.js'
-import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
+import {
+  createConsumerCatalogProjection,
+  createPublisherCatalogProjection,
+  projectAuthenticatedPublisherMediaRecords,
+} from '../src/media-graph/catalog-projection.js'
 import { createEntityReference, createMediaClaim, encodeMediaClaimEnvelope } from '../src/media-graph/index.js'
+import { createLocalMediaIndex } from '../src/indexing/local-index.js'
 import { PUBLISHER_RECORD_TYPES, derivePublisherId } from '../src/publisher/index.js'
 import { createUploadManager } from '../src/upload.js'
 
@@ -238,11 +243,12 @@ test('catalog projection reruns when an update arrives during an in-flight rebui
   await projection.close()
 })
 
-test('upload confirms publication and canonical claims before joining its publisher scope', async t => {
+test('episode upload publishes canonical collection claims and projects an ordered incomplete series', async t => {
   const root = keyPair(20)
   const device = keyPair(21)
   const publisherId = derivePublisherId(root.publicKey)
   const appended = []
+  let lastAcceptedSequence = 0
   const catalog = {
     writable: true,
     localSignerKey: device.publicKey,
@@ -254,7 +260,7 @@ test('upload confirms publication and canonical claims before joining its publis
           signerKey: hex(device.publicKey),
           capabilities: ['claim', 'publish'],
           firstAcceptedSequence: 1,
-          lastAcceptedSequence: 0,
+          lastAcceptedSequence,
           expiresAt: 10_000,
           admissionPolicyEpoch: 0,
           revocation: null,
@@ -262,9 +268,10 @@ test('upload confirms publication and canonical claims before joining its publis
       }
     },
     async createLocalOperation({ recordType, policyEpoch, sequence, signedAt, body }) {
-      return operation(recordType, publisherId, device, body, sequence)
+      return { ...operation(recordType, publisherId, device, body, sequence), signedAt }
     },
     async appendBatchAndConfirm(values) {
+      lastAcceptedSequence = values.at(-1).issuerSequence
       appended.push(...values)
       return values.map((value, index) => ({
         operationId: b4a.from(value.recordId || b4a.alloc(32, index + 1)),
@@ -296,16 +303,77 @@ test('upload confirms publication and canonical claims before joining its publis
     async addVideo(metadata) { this.metadata = metadata },
   }
 
-  const result = await manager.uploadFromBuffer(channel, b4a.from('not-an-mp4'), { title: 'Uploaded', mimeType: 'video/webm' })
+  const result = await manager.uploadFromBuffer(channel, b4a.from('not-an-mp4'), {
+    title: 'Pilot',
+    mimeType: 'video/webm',
+    contentKind: 'episode',
+    mediaProvider: 'tmdb',
+    mediaId: 'show-42',
+    seasonNumber: 2,
+    episodeNumber: 1,
+    seriesId: 'show-42',
+    seriesTitle: 'Authenticated Show',
+    expectedEpisodeCount: 4,
+  })
   t.is(result.success, true)
   t.alike(appended.map(value => value.recordType), [
     PUBLISHER_RECORD_TYPES.PUBLICATION,
     PUBLISHER_RECORD_TYPES.CLAIM,
     PUBLISHER_RECORD_TYPES.CLAIM,
+    PUBLISHER_RECORD_TYPES.CLAIM,
+    PUBLISHER_RECORD_TYPES.CLAIM,
+    PUBLISHER_RECORD_TYPES.CLAIM,
   ])
   t.ok(result.metadata.immutablePublication?.manifest)
-  t.is(rebuilt, 1)
-  t.is(joined.length, 1)
+  t.is((await manager.uploadFromBuffer(channel, b4a.from('second'), {
+    title: 'Second',
+    mimeType: 'video/webm',
+    contentKind: 'episode',
+    mediaProvider: 'tmdb',
+    mediaId: 'show-42',
+    seasonNumber: 1,
+    episodeNumber: 2,
+    seriesId: 'show-42',
+    seriesTitle: 'Authenticated Show',
+    expectedEpisodeCount: 4,
+  })).success, true)
+  t.is((await manager.uploadFromBuffer(channel, b4a.from('movie'), {
+    title: 'Authenticated Movie',
+    mimeType: 'video/webm',
+  })).success, true)
+  const projectedCatalog = fakeCatalog({
+    publisherId,
+    signer: device,
+    publications: appended.filter(value => value.recordType === PUBLISHER_RECORD_TYPES.PUBLICATION),
+    claims: appended.filter(value => value.recordType === PUBLISHER_RECORD_TYPES.CLAIM),
+  })
+  const publisherProjection = createPublisherCatalogProjection({
+    catalogRegistry: { async listBindings() { return [{ publisherId, catalog: projectedCatalog }] } },
+    now: () => 300,
+  })
+  await publisherProjection.rebuild()
+  const consumerProjection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({
+      mediaGraphStore: publisherProjection.mediaGraphStore,
+      assetManifestStore: publisherProjection.assetManifestStore,
+    }),
+  })
+  consumerProjection.rebuild()
+  const catalogItems = consumerProjection.getCatalog().items
+  t.alike(catalogItems.map(item => item.entityKind), ['movie', 'series'])
+  const series = catalogItems[1]
+  t.is(series.entityKind, 'series')
+  t.is(series.title, 'Authenticated Show')
+  t.alike(series.series.seasons.map(season => [
+    season.seasonNumber,
+    season.episodes.map(episode => episode.episodeNumber),
+  ]), [[1, [2]], [2, [1]]])
+  t.is(series.series.expectedEpisodes, 4)
+  t.is(series.series.availableEpisodes, 2)
+  t.is(series.series.complete, false)
+  t.is(rebuilt, 3)
+  t.is(joined.length, 3)
   t.ok(b4a.equals(joined[0].publisherId, publisherId))
 })
 

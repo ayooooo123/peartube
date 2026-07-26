@@ -393,21 +393,31 @@ export function createConsumerCatalogProjection(options = {}) {
 
   return Object.freeze({
     rebuild() {
-      const records = [
-        ...(indexFeedManager?.getRecords?.() || []),
-        ...(typeof options.publisherRecords === 'function' ? options.publisherRecords() || [] : []),
-      ]
+      const indexCandidates = indexFeedManager?.getRecords?.() || []
+      // Catalog claims are the only display authority. Curator records are
+      // bounded discovery/deduplication hints and are never returned as titles,
+      // kinds, creators, or playable state.
+      const publisherRecords = (typeof options.publisherRecords === 'function' ? options.publisherRecords() || [] : [])
+        .filter(record => record?.directPublisher === true)
+      const authenticated = new Map()
+      for (const record of publisherRecords) {
+        authenticated.set(`${String(record.publisherId).toLowerCase()}\0${String(record.publicationId)}`, record)
+      }
+      const records = [...publisherRecords]
+      for (const hint of indexCandidates) {
+        const authoritative = authenticated.get(`${String(hint?.publisherId).toLowerCase()}\0${String(hint?.publicationId)}`)
+        if (authoritative) records.push(authoritative)
+      }
       const accepted = []
+      const acceptedKeys = new Set()
+      const consideredKeys = new Set()
       const rejectionCodes = {}
       const publishers = availablePublishers()
       rejectedCandidates = []
       introducedPublisherIds = publishers ? Array.from(publishers).sort() : []
       for (const record of records) {
         const publisherId = String(record?.publisherId || '').toLowerCase()
-        if (publishers && record?.directPublisher !== true && !publishers.has(publisherId)) {
-          reject(record, 'PUBLISHER_NOT_INTRODUCED', rejectionCodes)
-          continue
-        }
+        if (record?.directPublisher !== true) { reject(record, 'PUBLISHER_RECORD_UNAUTHENTICATED', rejectionCodes); continue }
         const enabled = getProfileEnabled(moderationPolicy)
         const decision = enabled && typeof moderationPolicy?.evaluate === 'function'
           ? moderationPolicy.evaluate(record)
@@ -417,11 +427,15 @@ export function createConsumerCatalogProjection(options = {}) {
           reject(record, decision.reason || code, rejectionCodes, code)
           continue
         }
+        const candidateKey = `${publisherId}\0${String(record.publicationId)}`
+        if (acceptedKeys.has(candidateKey) || consideredKeys.has(candidateKey)) continue
+        consideredKeys.add(candidateKey)
         if (accepted.length >= maxCandidates) {
           reject(record, 'CONSUMER_CANDIDATE_BUDGET_EXCEEDED', rejectionCodes)
           continue
         }
         accepted.push(resolvedRecord(record))
+        acceptedKeys.add(candidateKey)
       }
       accepted.sort((left, right) => (
         String(left.entityRef).localeCompare(String(right.entityRef)) ||
@@ -466,6 +480,7 @@ export function createConsumerCatalogProjection(options = {}) {
       }
     },
     getRejectedCandidates() { return rejectedCandidates.slice() },
+    isVisible(entityRef) { return acceptedCandidates.has(String(entityRef)) },
     getIntroducedPublishers() { return introducedPublisherIds.slice() },
     getCuratorSubscriptions() {
       return Array.from(moderationPolicy?.curatorSubscriptions || []).map(String).sort()

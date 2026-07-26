@@ -273,6 +273,13 @@ export function createMediaGraphApi(options = {}) {
   async function entityResult(entityId, request = {}, agent = false) {
     const missingStore = requireGraphStore()
     if (missingStore) return missingStore
+    if (!agent && consumerCatalogProjection) {
+      await options.ctx?.mediaCatalogProjection?.update?.()
+      await consumerCatalogProjection.update?.()
+      if (!consumerCatalogProjection.isVisible?.(entityId)) {
+        return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy')
+      }
+    }
     const resolved = resolveOrMissing(entityId)
     if (!resolved) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
     const sources = await buildSources(entityId)

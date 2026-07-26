@@ -307,9 +307,32 @@ export function createLocalMediaIndex(options = {}) {
       return { status, errorCode: firstErrorCode, accepted, duplicates, rejected, results }
     },
     replaceRecords(nextRecords = []) {
-      records.clear()
-      for (const map of Object.values(counts)) map.clear()
-      return this.ingestRecords(nextRecords)
+      // Reconcile rather than clear/re-ingest. A catalog refresh often changes
+      // one candidate; unchanged records must not burn a new sliding-window
+      // reservation simply because another publisher changed.
+      const desired = new Map()
+      for (const input of nextRecords || []) {
+        if (!validRecordInput(input)) continue
+        const record = normalizeRecord(input)
+        desired.set(logicalKey(record, dimensionKeys(record)), record)
+      }
+      for (const [key, previous] of records) {
+        if (desired.has(key)) continue
+        records.delete(key)
+        adjustCounts(previous, -1)
+      }
+      const changed = []
+      let duplicates = 0
+      for (const [key, record] of desired) {
+        const previous = records.get(key)
+        if (previous && metadataFingerprint(previous) === metadataFingerprint(record)) {
+          duplicates++
+          continue
+        }
+        changed.push(record)
+      }
+      const result = this.ingestRecords(changed)
+      return { ...result, duplicates: result.duplicates + duplicates }
     },
     search(query = '') {
       const q = String(query).toLowerCase()

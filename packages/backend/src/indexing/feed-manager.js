@@ -93,7 +93,10 @@ export function createIndexFeedManager(options = {}) {
       return checkpoints.get(String(curatorId)) || null
     },
     getRecords() {
-      return snapshotRecords()
+      // Accepted page data is owned by its curator subscription. Retained
+      // bytes may remain in the bounded ring, but an unfollow immediately
+      // removes every curator effect from the local projection.
+      return snapshotRecords().filter(record => subscribed.has(String(record.indexId)))
     },
     async syncFeed({ curatorId, startCursor = '0', fetchPage } = {}) {
       curatorId = String(curatorId || '')

@@ -291,7 +291,7 @@ function catalogReplicationCores (binding) {
   return cores
 }
 
-function normalizeNamespace (value, protocolMajor) {
+function normalizeNamespace (value, protocolMajor, { verifiedTransitionChain = false } = {}) {
   const descriptor = b4a.isBuffer(value) || value instanceof Uint8Array
     ? decodePublisherNamespaceDescriptor(b4a.from(value), { protocolMajor, supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY] })
     : value
@@ -300,7 +300,7 @@ function normalizeNamespace (value, protocolMajor) {
     supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
     genesisRootKey: descriptor?.catalogEpoch === 0 ? descriptor.publisherRootKey : undefined,
   })
-  if (descriptor.catalogEpoch !== 0) fail('rotated namespace requires a verified committed transition')
+  if (descriptor.catalogEpoch !== 0 && !verifiedTransitionChain) fail('rotated namespace requires a verified committed transition')
   return descriptor
 }
 
@@ -350,6 +350,7 @@ export function createScopedNetworkRuntime (options = {}) {
   const indexFeedProviders = new Map()
   const moderationFeedProviders = new Map()
   const publisherProofProviders = new Map()
+  const bootstrapFollowAttempts = new Map()
   const publisherManager = options.publisherManager || createPublisherManager({
     supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
     ingestBatch: options.ingestPublisherBatch,
@@ -1330,6 +1331,16 @@ export function createScopedNetworkRuntime (options = {}) {
     if (frame.type !== 'locator') return { status: 'rejected', reason: 'bootstrap-metadata-only' }
     const envelope = decodeApplicationEnvelope(frame.payload)
     const result = await bootstrapManager.ingestLocator(context.peerId, envelope)
+    if (result.status === 'accepted' && result.publisherId && isPeerConnected(context.peerId)) {
+      const previous = bootstrapFollowAttempts.get(result.publisherId) || 0
+      if (previous < 4) {
+        bootstrapFollowAttempts.set(result.publisherId, previous + 1)
+        // Candidate promotion is bounded and best-effort. The locator itself is
+        // never authority; followBootstrapLocator still requires the scoped
+        // publisher-root proof before it can bind a catalog.
+        void followBootstrapLocator({ publisherId: result.publisherId }).catch(() => {})
+      }
+    }
     counters.acceptedFrames++
     return result
   }
@@ -1611,10 +1622,10 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'active' }
   }
 
-  async function followPublisher ({ publisherId, namespaceDescriptor } = {}) {
+  async function followPublisher ({ publisherId, namespaceDescriptor, verifiedTransitionChain = false } = {}) {
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')
-    const descriptor = normalizeNamespace(namespaceDescriptor, protocolMajor)
+    const descriptor = normalizeNamespace(namespaceDescriptor, protocolMajor, { verifiedTransitionChain })
     if (b4a.toString(descriptor.publisherId, 'hex') !== id) fail('namespace publisherId mismatch')
     const existing = followedPublishers.get(id)
     if (existing) return { ...existing.result, status: 'already-following' }
@@ -1654,7 +1665,7 @@ export function createScopedNetworkRuntime (options = {}) {
       throw rejected
     }
     await leaveScope(scope, 'candidate')
-    return followPublisher({ publisherId: id, namespaceDescriptor: verified.descriptor })
+    return followPublisher({ publisherId: id, namespaceDescriptor: verified.descriptor, verifiedTransitionChain: verified.descriptor.catalogEpoch > 0 })
   }
 
   async function providePublisherNamespaceProof ({ locator, proof } = {}) {

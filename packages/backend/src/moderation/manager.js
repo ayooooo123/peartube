@@ -76,6 +76,9 @@ export function createModerationManager(options = {}) {
       for (const key of pageStates.keys()) {
         if (key.startsWith(`${id}\0`)) pageStates.delete(key)
       }
+      for (const key of records.keys()) {
+        if (key.startsWith(`${id}\0`)) records.delete(key)
+      }
     },
     getCheckpoint(moderatorId) {
       return checkpoints.get(String(moderatorId)) || null
@@ -86,12 +89,18 @@ export function createModerationManager(options = {}) {
     async syncFeed({ moderatorId, startCursor = '0', fetchPage } = {}) {
       moderatorId = String(moderatorId || '')
       if (!subscribed.has(moderatorId)) return { status: 'not-subscribed' }
-      const page = await fetchPage(startCursor)
+      let cursor = startCursor
+      let ingested = 0
+      let rejected = 0
+      let duplicates = 0
+      let firstRejectionCode = null
+      while (true) {
+      const page = await fetchPage(cursor)
       const verified = await verifyModerationFeedPage(page?.envelope, { moderatorId, now: now() })
       if (!verified) return { status: 'quarantined', errorCode: 'INVALID_PAGE' }
-      if (verified.body.pageCursor !== startCursor) return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
+      if (verified.body.pageCursor !== cursor) return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
 
-      const pageKey = `${moderatorId}\0${startCursor}`
+      const pageKey = `${moderatorId}\0${cursor}`
       const existing = pageStates.get(pageKey)
       if (existing?.pageId !== undefined && existing.pageId !== verified.pageId) {
         return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
@@ -101,23 +110,19 @@ export function createModerationManager(options = {}) {
         return { status: 'rejected', errorCode: 'DUPLICATE_PAGE', nextCursor: state.nextCursor }
       }
 
-      let ingested = 0
-      let rejected = 0
-      let duplicates = 0
-      let firstRejectionCode = null
       for (let index = state.nextIndex; index < verified.body.records.length; index++) {
         if (ingested >= maxRecordsPerSync) {
-          checkpoints.set(moderatorId, { cursor: startCursor, updatedAt: now() })
-          return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: startCursor, ingested, rejected, duplicates }
+          checkpoints.set(moderatorId, { cursor, updatedAt: now() })
+          return { status: 'partial', errorCode: 'SYNC_RECORD_BUDGET_EXCEEDED', nextCursor: cursor, ingested, rejected, duplicates }
         }
         const record = verified.body.records[index]
         const reservation = reserveRecord(moderatorId, record)
         if (!reservation.accepted) {
-          checkpoints.set(moderatorId, { cursor: startCursor, updatedAt: now() })
+          checkpoints.set(moderatorId, { cursor, updatedAt: now() })
           return {
             status: 'partial',
             errorCode: reservation.errorCode,
-            nextCursor: startCursor,
+            nextCursor: cursor,
             resetAt: reservation.resetAt,
             ingested,
             rejected,
@@ -145,6 +150,8 @@ export function createModerationManager(options = {}) {
       state.complete = true
       state.nextCursor = verified.body.nextCursor
       checkpoints.set(moderatorId, { cursor: state.nextCursor, updatedAt: now() })
+      cursor = state.nextCursor
+      if (cursor != null) continue
       if (ingested === 0 && rejected > 0) {
         return { status: 'rejected', errorCode: firstRejectionCode, nextCursor: state.nextCursor, ingested, rejected, duplicates }
       }
@@ -161,6 +168,7 @@ export function createModerationManager(options = {}) {
         ingested,
         rejected,
         duplicates,
+      }
       }
     },
   }

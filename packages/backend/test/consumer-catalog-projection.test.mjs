@@ -7,6 +7,12 @@ import { createMediaGraphApi } from '../src/api/media-graph.js'
 const id = (character) => character.repeat(64)
 
 test('one consumer projection deduplicates bounded publisher and index introductions, with movies and series first', (t) => {
+  const authenticated = [
+    { directPublisher: true, kind: 'movie', entityRef: 'work:alpha', publicationId: id('1'), publisherId: id('a'), title: 'Authenticated Alpha' },
+    { directPublisher: true, kind: 'movie', entityRef: 'work:alpha', publicationId: id('2'), publisherId: id('b'), title: 'Authenticated alternate' },
+    { directPublisher: true, kind: 'series', entityRef: 'work:beta', publicationId: id('3'), publisherId: id('a'), title: 'Authenticated Beta', collectionId: 'series:beta' },
+    { directPublisher: true, kind: 'creator-video', entityRef: 'work:later', publicationId: id('4'), publisherId: id('a'), title: 'Authenticated later' },
+  ]
   const index = createLocalMediaIndex()
   const projection = createConsumerCatalogProjection({
     localIndex: index,
@@ -21,6 +27,7 @@ test('one consumer projection deduplicates bounded publisher and index introduct
         { kind: 'creator-video', entityRef: 'work:later', publicationId: id('4'), publisherId: id('a'), title: 'Later' },
       ],
     },
+    publisherRecords: () => authenticated,
   })
 
   const rebuilt = projection.rebuild()
@@ -44,7 +51,7 @@ test('one consumer projection deduplicates bounded publisher and index introduct
       { kind: 'series', entityRef: 'work:beta', publicationId: id('3'), publisherId: id('a'), title: 'Beta', collectionId: 'series:beta' },
       { kind: 'movie', entityRef: 'work:alpha', publicationId: id('2'), publisherId: id('b'), title: 'Alpha alternate' },
       { kind: 'movie', entityRef: 'work:alpha', publicationId: id('1'), publisherId: id('a'), title: 'Alpha' },
-    ] },
+    ] }, publisherRecords: () => authenticated,
   })
   reverse.rebuild()
   t.alike(reverse.getCatalog().items, projection.getCatalog().items, 'cursor ordering and conflicting metadata are deterministic')
@@ -63,12 +70,15 @@ test('consumer projection stays bounded and ignores index references to publishe
         { kind: 'movie', entityRef: 'work:over-budget', publicationId: id('3'), publisherId: id('a'), title: 'Over budget' },
       ],
     },
+    publisherRecords: () => [
+      { directPublisher: true, kind: 'movie', entityRef: 'work:accepted', publicationId: id('1'), publisherId: id('a'), title: 'Authenticated' },
+      { directPublisher: true, kind: 'movie', entityRef: 'work:over-budget', publicationId: id('3'), publisherId: id('a'), title: 'Authenticated over budget' },
+    ],
   })
 
   const result = projection.rebuild()
   t.is(result.accepted, 1)
-  t.is(result.rejected, 2)
-  t.is(result.rejectionCodes.PUBLISHER_NOT_INTRODUCED, 1)
+  t.is(result.rejected, 1)
   t.is(result.rejectionCodes.CONSUMER_CANDIDATE_BUDGET_EXCEEDED, 1)
   t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:accepted'])
 })
@@ -96,6 +106,7 @@ test('media graph API exposes the same one local consumer projection without a m
     localIndex: createLocalMediaIndex(),
     bootstrapManager: { listLocators: () => [{ publisherId: id('a') }] },
     indexFeedManager: { getRecords: () => [{ kind: 'movie', entityRef: 'work:api', publicationId: id('1'), publisherId: id('a'), title: 'API movie' }] },
+    publisherRecords: () => [{ directPublisher: true, kind: 'movie', entityRef: 'work:api', publicationId: id('1'), publisherId: id('a'), title: 'Authenticated API movie' }],
   })
   const api = createMediaGraphApi({ consumerCatalogProjection: projection })
 
@@ -111,8 +122,26 @@ test('repeated consumer reads do not re-ingest or consume local projection quota
     localIndex: createLocalMediaIndex({ maxRecordsPerPublisherPerWindow: 1 }),
     bootstrapManager: { listLocators: () => [{ publisherId: id('a') }] },
     indexFeedManager: { getRecords: () => [{ kind: 'movie', entityRef: 'work:stable', publicationId: id('1'), publisherId: id('a'), title: 'Stable' }] },
+    publisherRecords: () => [{ directPublisher: true, kind: 'movie', entityRef: 'work:stable', publicationId: id('1'), publisherId: id('a'), title: 'Authenticated stable' }],
   })
   const api = createMediaGraphApi({ consumerCatalogProjection: projection })
   t.alike((await api.getMediaCatalog()).items.map(item => item.entityId), ['work:stable'])
   t.alike((await api.getMediaCatalog()).items.map(item => item.entityId), ['work:stable'])
+})
+
+test('a changed candidate does not re-consume the unchanged publisher window budget', (t) => {
+  let records = [
+    { directPublisher: true, kind: 'movie', entityRef: 'work:a', publicationId: id('1'), publisherId: id('a'), title: 'A' },
+    { directPublisher: true, kind: 'movie', entityRef: 'work:b', publicationId: id('2'), publisherId: id('b'), title: 'B' },
+  ]
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex({ maxRecordsPerPublisherPerWindow: 1 }),
+    publisherRecords: () => records,
+  })
+  t.is(projection.rebuild().accepted, 2)
+  records = [...records, { directPublisher: true, kind: 'movie', entityRef: 'work:c', publicationId: id('3'), publisherId: id('b'), title: 'C' }]
+  projection.rebuild()
+  // The new b record is rejected by the remaining publisher window budget;
+  // unchanged a/b records remain visible and were not charged again.
+  t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:a', 'work:b'])
 })

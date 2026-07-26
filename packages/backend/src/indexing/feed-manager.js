@@ -14,6 +14,7 @@ export function createIndexFeedManager(options = {}) {
   const maxRecordsPerCollectionPerWindow = normalizeBudgetLimit(options.maxRecordsPerCollectionPerWindow, 512)
   const acceptRecord = typeof options.acceptRecord === 'function' ? options.acceptRecord : () => true
   const onAcceptedRecord = typeof options.onAcceptedRecord === 'function' ? options.onAcceptedRecord : () => true
+  const onRecordsRemoved = typeof options.onRecordsRemoved === 'function' ? options.onRecordsRemoved : () => {}
   const stateRepository = options.stateRepository || null
   const supportedCapabilities = options.supportedCapabilities
   const budget = createWindowedIngestBudget({
@@ -69,6 +70,21 @@ export function createIndexFeedManager(options = {}) {
     return records.slice(oldestRecord).concat(records.slice(0, oldestRecord))
   }
 
+  async function removeCuratorRecords(curatorId) {
+    const id = String(curatorId)
+    const removed = snapshotRecords().filter(record => String(record.indexId) === id)
+    if (removed.length === 0) return
+    records = snapshotRecords().filter(record => String(record.indexId) !== id)
+    oldestRecord = 0
+    await onRecordsRemoved(removed, { curatorId: id })
+  }
+
+  async function quarantineCurator(curatorId, errorCode) {
+    await removeCuratorRecords(curatorId)
+    await persistState()
+    return { status: 'quarantined', errorCode }
+  }
+
   function rememberPage(key, pageId) {
     let state = pageStates.get(key)
     if (state) return state
@@ -119,16 +135,16 @@ export function createIndexFeedManager(options = {}) {
       subscribed.add(String(curatorId))
       return ready.then(persistState)
     },
-    unsubscribe(curatorId) {
+    async unsubscribe(curatorId) {
+      await ready
       const id = String(curatorId)
       subscribed.delete(id)
       checkpoints.delete(id)
       for (const key of pageStates.keys()) {
         if (key.startsWith(`${id}\0`)) pageStates.delete(key)
       }
-      records = snapshotRecords().filter(record => String(record.indexId) !== id)
-      oldestRecord = 0
-      return ready.then(persistState)
+      await removeCuratorRecords(id)
+      await persistState()
     },
     getCheckpoint(curatorId) {
       return checkpoints.get(String(curatorId)) || null
@@ -160,17 +176,17 @@ export function createIndexFeedManager(options = {}) {
           })
         } catch (error) {
           if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
-            return { status: 'quarantined', errorCode: error.code }
+            return quarantineCurator(curatorId, error.code)
           }
           throw error
         }
-        if (!verified) return { status: 'quarantined', errorCode: 'INVALID_PAGE' }
-        if (verified.body.pageCursor !== cursor) return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
+        if (!verified) return quarantineCurator(curatorId, 'INVALID_PAGE')
+        if (verified.body.pageCursor !== cursor) return quarantineCurator(curatorId, 'STALE_OR_FORKED_CURSOR')
 
         const pageKey = `${curatorId}\0${cursor}`
         const existing = pageStates.get(pageKey)
         if (existing?.pageId !== undefined && existing.pageId !== verified.pageId) {
-          return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
+          return quarantineCurator(curatorId, 'STALE_OR_FORKED_CURSOR')
         }
         const state = rememberPage(pageKey, verified.pageId)
         if (state.complete) {

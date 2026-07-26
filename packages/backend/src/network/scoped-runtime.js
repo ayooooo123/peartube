@@ -523,6 +523,9 @@ export function createScopedNetworkRuntime (options = {}) {
   const muxFactory = options.muxFactory || (connection => Protomux.from(connection))
   const scopes = new Map()
   const followedPublishers = new Map()
+  const publisherFollowReasons = new Map()
+  const publisherFollowWork = new Map()
+  const reasonFollowedPublishers = new Set()
   const localPublishers = new Map()
   const localBootstrapLocators = new Map()
   const publisherRotationDrainTimers = new Set()
@@ -1915,14 +1918,13 @@ export function createScopedNetworkRuntime (options = {}) {
     const envelope = decodeApplicationEnvelope(frame.payload)
     const result = await bootstrapManager.ingestLocator(context.peerId, envelope)
     if (result.status === 'accepted' && result.publisherId && isPeerConnected(context.peerId)) {
-      const previous = bootstrapFollowAttempts.get(result.publisherId) || 0
-      if (previous < 4) {
-        bootstrapFollowAttempts.set(result.publisherId, previous + 1)
-        // Candidate promotion is bounded and best-effort. The locator itself is
-        // never authority; followBootstrapLocator still requires the scoped
-        // publisher-root proof before it can bind a catalog.
-        void followBootstrapLocator({ publisherId: result.publisherId }).catch(() => {})
-      }
+      // Candidate promotion is bounded and best-effort. The locator itself is
+      // never authority; followBootstrapLocator still requires the scoped
+      // publisher-root proof before it can bind a catalog.
+      void addPublisherFollowReason({
+        publisherId: result.publisherId,
+        reason: 'bootstrap:auto',
+      }).catch(() => {})
     }
     counters.acceptedFrames++
     return result
@@ -2228,7 +2230,69 @@ export function createScopedNetworkRuntime (options = {}) {
     if (status === 'active') return { status: 'active' }
     status = 'active'
     if (networkEnabled) await activateNetwork()
+    for (const publisherId of publisherFollowReasons.keys()) scheduleReasonedPublisherFollow(publisherId)
     return { status: 'active' }
+  }
+
+  function normalizeFollowReason(reason) {
+    const value = String(reason || '')
+    if (value.length < 1 || value.length > 256 || !/^[a-z0-9][a-z0-9:_-]*$/.test(value)) {
+      fail('invalid publisher follow reason')
+    }
+    return value
+  }
+
+  function scheduleReasonedPublisherFollow(publisherId) {
+    if (status !== 'active' || followedPublishers.has(publisherId) || publisherFollowWork.has(publisherId)) return
+    if (!publisherFollowReasons.get(publisherId)?.size || !bootstrapManager.getLocator?.(publisherId)) return
+    const attempts = bootstrapFollowAttempts.get(publisherId) || 0
+    if (attempts >= 4) return
+    bootstrapFollowAttempts.set(publisherId, attempts + 1)
+    const work = followBootstrapLocator({ publisherId })
+      .then(async result => {
+        if (!publisherFollowReasons.get(publisherId)?.size) {
+          await unfollowPublisher({ publisherId })
+          return null
+        }
+        reasonFollowedPublishers.add(publisherId)
+        return result
+      })
+      .finally(() => publisherFollowWork.delete(publisherId))
+    publisherFollowWork.set(publisherId, work)
+    void work.catch(() => {})
+  }
+
+  async function addPublisherFollowReason({ publisherId, reason } = {}) {
+    const id = hex32(publisherId, 'publisherId')
+    const normalizedReason = normalizeFollowReason(reason)
+    let reasons = publisherFollowReasons.get(id)
+    if (!reasons) {
+      if (publisherFollowReasons.size >= 4096) fail('publisher follow reason limit exceeded')
+      reasons = new Set()
+      publisherFollowReasons.set(id, reasons)
+    }
+    if (reasons.size >= 64 && !reasons.has(normalizedReason)) fail('publisher follow reason limit exceeded')
+    reasons.add(normalizedReason)
+    scheduleReasonedPublisherFollow(id)
+    return { status: 'scheduled', publisherId: id, reasons: [...reasons].sort() }
+  }
+
+  async function removePublisherFollowReason({ publisherId, reason } = {}) {
+    const id = hex32(publisherId, 'publisherId')
+    const normalizedReason = normalizeFollowReason(reason)
+    const reasons = publisherFollowReasons.get(id)
+    reasons?.delete(normalizedReason)
+    if (reasons?.size === 0) publisherFollowReasons.delete(id)
+    if (!publisherFollowReasons.has(id) && reasonFollowedPublishers.has(id) && !publisherFollowWork.has(id)) {
+      reasonFollowedPublishers.delete(id)
+      await unfollowPublisher({ publisherId: id })
+    }
+    return { status: 'removed', publisherId: id, reasons: [...(publisherFollowReasons.get(id) || [])].sort() }
+  }
+
+  function getPublisherFollowReasons({ publisherId } = {}) {
+    const id = hex32(publisherId, 'publisherId')
+    return [...(publisherFollowReasons.get(id) || [])].sort()
   }
 
   async function followPublisher ({
@@ -2501,6 +2565,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const id = hex32(publisherId, 'publisherId')
     const followed = followedPublishers.get(id)
     followedPublishers.delete(id)
+    reasonFollowedPublishers.delete(id)
     await publisherManager.unfollowPublisher(id)
     const released = followed ? await leaveScope(followed.scope, 'followed') : false
     if (followed && !localPublishers.has(id)) await catalogRegistry?.release?.(b4a.from(id, 'hex'))
@@ -3046,6 +3111,9 @@ export function createScopedNetworkRuntime (options = {}) {
       listening = false
     }
     followedPublishers.clear()
+    publisherFollowReasons.clear()
+    publisherFollowWork.clear()
+    reasonFollowedPublishers.clear()
     for (const value of localBootstrapLocators.values()) {
       if (value.timer) cancelBootstrapLocatorRefresh(value.timer)
     }
@@ -3069,6 +3137,9 @@ export function createScopedNetworkRuntime (options = {}) {
     applyNetworkPolicy,
     followPublisher,
     followBootstrapLocator,
+    addPublisherFollowReason,
+    removePublisherFollowReason,
+    getPublisherFollowReasons,
     providePublisherNamespaceProof,
     provideLocalPublisherNamespaceProof,
     provideIndexFeed,
@@ -3114,6 +3185,9 @@ export function createScopedNetworkApi (runtime) {
   return {
     followPublisher: request => runtime.followPublisher(request),
     followBootstrapLocator: request => runtime.followBootstrapLocator(request),
+    addPublisherFollowReason: request => runtime.addPublisherFollowReason(request),
+    removePublisherFollowReason: request => runtime.removePublisherFollowReason(request),
+    getPublisherFollowReasons: request => runtime.getPublisherFollowReasons(request),
     providePublisherNamespaceProof: request => runtime.providePublisherNamespaceProof(request),
     provideLocalPublisherNamespaceProof: request => runtime.provideLocalPublisherNamespaceProof(request),
     provideIndexFeed: request => runtime.provideIndexFeed(request),

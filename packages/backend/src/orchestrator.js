@@ -42,6 +42,7 @@ import { createScopedNetworkRuntime } from './network/scoped-runtime.js'
 import { createConsumerCatalogProjection, createPublisherCatalogProjection } from './media-graph/catalog-projection.js'
 import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
+import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
 import {
   CONSUMER_MODERATION_PROFILE_SETTING_KEY,
   createConsumerModerationPolicy,
@@ -492,8 +493,15 @@ export async function createBackendContext(config) {
   // These managers are deliberately shared by the scoped transport and local
   // consumer projection. Signed page ingestion happens once; catalog reads only
   // project the resulting local state and never initiate transport work.
-  const consumerIndexFeedManager = createIndexFeedManager({
+  let consumerIndexFeedManager = null
+  const indexPublisherFollowReconciler = createIndexPublisherFollowReconciler({
+    getScopedNetwork: () => scopedNetwork,
+    getRecords: () => consumerIndexFeedManager?.getRecords?.() || [],
+  })
+  consumerIndexFeedManager = createIndexFeedManager({
     now: () => Date.now(),
+    onAcceptedRecord: indexPublisherFollowReconciler.onAcceptedRecord,
+    onRecordsRemoved: indexPublisherFollowReconciler.onRecordsRemoved,
     stateRepository: {
       async load() {
         return (await ctx.metaDb.get('consumer-index-feed-state:v1'))?.value || null
@@ -563,6 +571,8 @@ export async function createBackendContext(config) {
     initialNetworkPolicy: initialRuntimeNetworkPolicy,
   })
   ctx.scopedNetwork = scopedNetwork
+  await consumerIndexFeedManager.ready
+  await indexPublisherFollowReconciler.reconcile()
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
   // Consumer projection is a local view over the authenticated publisher graph
   // plus optional bounded index records. It owns neither a feed nor authority.

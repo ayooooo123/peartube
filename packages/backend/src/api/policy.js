@@ -26,10 +26,15 @@ const UNSUPPORTED_RUNTIME_VALUES = Object.freeze({
   retentionMode: 'local-pin retention has no publication pinning consumer',
 })
 
-function boundedList(value, name) {
+function boundedTransportIdList(value, name) {
   if (value == null) return []
   if (!Array.isArray(value) || value.length > 256) throw new Error(`${name} must be bounded list`)
-  return value.map(item => String(item)).filter(Boolean)
+  return Array.from(new Set(value.map(item => {
+    if (typeof item !== 'string' || !/^[0-9a-f]{64}$/.test(item)) {
+      throw new Error(`${name} entries must be canonical 32-byte public-key hex`)
+    }
+    return item
+  }))).sort()
 }
 
 function boundedBytes(value, name) {
@@ -48,7 +53,7 @@ function decodeBoundedList(value, name) {
   } catch {
     throw new Error(`${name} must be valid JSON`)
   }
-  return boundedList(parsed, name)
+  return boundedTransportIdList(parsed, name)
 }
 
 function decodeNetworkPolicyPatch(input = {}) {
@@ -101,7 +106,7 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
   if (input.diskCeilingBytes !== undefined) policy.diskCeilingBytes = boundedBytes(input.diskCeilingBytes, 'diskCeilingBytes')
   if (input.uploadCeilingBytes !== undefined) policy.uploadCeilingBytes = boundedBytes(input.uploadCeilingBytes, 'uploadCeilingBytes')
   for (const key of ['followedPublishers', 'followedIndexes', 'trustedModerationFeeds']) {
-    if (input[key] !== undefined) policy[key] = boundedList(input[key], key)
+    if (input[key] !== undefined) policy[key] = boundedTransportIdList(input[key], key)
   }
   return policy
 }
@@ -208,17 +213,37 @@ export function createNetworkPolicyRuntime({
   const reconcileFeedSubscriptions = async nextPolicy => {
     const indexes = new Set(nextPolicy.followedIndexes)
     const moderation = new Set(nextPolicy.trustedModerationFeeds)
-    for (const id of appliedIndexes) {
-      if (!indexes.has(id)) await scopedNetwork.unfollowIndexFeed({ curatorId: id })
-    }
-    for (const id of appliedModerationFeeds) {
-      if (!moderation.has(id)) await scopedNetwork.unfollowModerationFeed({ moderatorId: id })
-    }
-    for (const id of indexes) {
-      if (!appliedIndexes.has(id)) await scopedNetwork.followIndexFeed({ curatorId: id })
-    }
-    for (const id of moderation) {
-      if (!appliedModerationFeeds.has(id)) await scopedNetwork.followModerationFeed({ moderatorId: id })
+    const workingIndexes = new Set(appliedIndexes)
+    const workingModeration = new Set(appliedModerationFeeds)
+    try {
+      for (const id of appliedIndexes) {
+        if (!indexes.has(id)) {
+          await scopedNetwork.unfollowIndexFeed({ curatorId: id })
+          workingIndexes.delete(id)
+        }
+      }
+      for (const id of appliedModerationFeeds) {
+        if (!moderation.has(id)) {
+          await scopedNetwork.unfollowModerationFeed({ moderatorId: id })
+          workingModeration.delete(id)
+        }
+      }
+      for (const id of indexes) {
+        if (!appliedIndexes.has(id)) {
+          await scopedNetwork.followIndexFeed({ curatorId: id })
+          workingIndexes.add(id)
+        }
+      }
+      for (const id of moderation) {
+        if (!appliedModerationFeeds.has(id)) {
+          await scopedNetwork.followModerationFeed({ moderatorId: id })
+          workingModeration.add(id)
+        }
+      }
+    } catch (error) {
+      appliedIndexes = workingIndexes
+      appliedModerationFeeds = workingModeration
+      throw error
     }
     appliedIndexes = indexes
     appliedModerationFeeds = moderation
@@ -255,6 +280,16 @@ export function createNetworkPolicyRuntime({
     return effective
   }
 
+  const applyTransactional = async nextInput => {
+    const previous = policy
+    try {
+      return await applyNow(nextInput)
+    } catch (error) {
+      await applyNow(previous).catch(() => {})
+      throw error
+    }
+  }
+
   return {
     assertSupported(candidate) {
       return normalizeSupported(candidate)
@@ -262,10 +297,10 @@ export function createNetworkPolicyRuntime({
     start(candidate = policy) {
       if (started) return transition.then(() => resolveNetworkPolicyForEnvironment(policy, environment))
       started = true
-      return runTransition(() => applyNow(candidate))
+      return runTransition(() => applyTransactional(candidate))
     },
     apply(candidate) {
-      return runTransition(() => applyNow(candidate))
+      return runTransition(() => applyTransactional(candidate))
     },
     setEnvironment(next = {}) {
       return runTransition(async () => {

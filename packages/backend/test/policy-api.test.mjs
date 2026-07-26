@@ -63,3 +63,16 @@ test('wire-decoded unrelated network policy patches preserve both ceilings inclu
   t.is(zeroResult.policy.diskCeilingBytes, 0)
   t.is(zeroResult.policy.uploadCeilingBytes, 5678)
 })
+
+test('network policy rejects noncanonical transport IDs before writing', async (t) => {
+  const store = new Map()
+  const api = createPolicyApi({ store })
+  const before = await api.getNetworkPolicy()
+
+  for (const field of ['followedPublishers', 'followedIndexes', 'trustedModerationFeeds']) {
+    const result = await api.setNetworkPolicy({ [field]: ['not-a-public-key'] })
+    t.absent(result.success)
+    t.is(result.errorCode, 'INVALID_POLICY')
+    t.alike((await api.getNetworkPolicy()).policy, before.policy)
+  }
+})

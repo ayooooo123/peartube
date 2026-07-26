@@ -46,6 +46,7 @@ import {
   CONSUMER_MODERATION_PROFILE_SETTING_KEY,
   createConsumerModerationPolicy,
   createConsumerModerationProfileController,
+  createConsumerModerationProfileTransaction,
   createModerationManager,
 } from './moderation/index.js'
 import {
@@ -865,7 +866,6 @@ export async function createBackendContext(config) {
   if (publicationV1Startup.ready) await networkPolicyRuntime.start()
   ctx.networkPolicyRuntime = networkPolicyRuntime
   ctx.networkPolicyStore = networkPolicyStore
-  let applyingConsumerModerationProfile = false
   const revalidateConsumerWork = async () => {
     await mediaCatalogProjection.rebuild()
     consumerCatalogProjection.rebuild()
@@ -875,18 +875,12 @@ export async function createBackendContext(config) {
     )
   }
   ctx.onNetworkPolicyChange = async policy => {
-    pendingNetworkPolicy = policy
-    if (!applyingConsumerModerationProfile) {
-      const current = consumerModerationProfile.getProfile()
-      await consumerModerationProfile.replace({
-        ...current,
-        curatorSubscriptions: policy.trustedModerationFeeds.slice(),
-      })
-    }
     if (!publicationV1Startup.ready) {
+      pendingNetworkPolicy = policy
       return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
     }
     const effective = await networkPolicyRuntime.apply(policy)
+    pendingNetworkPolicy = policy
     await revalidateConsumerWork()
     return effective
   }
@@ -897,35 +891,20 @@ export async function createBackendContext(config) {
     validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
   })
   const applyProfileState = async state => {
-    applyingConsumerModerationProfile = true
-    try {
-      const response = await policyApi.setNetworkPolicy({
-        trustedModerationFeedsJson: JSON.stringify(
-          state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
-        ),
-      })
-      if (response.success === false) throw new Error(response.errorCode || 'consumer moderation profile rejected')
-      await revalidateConsumerWork()
-      return state
-    } finally {
-      applyingConsumerModerationProfile = false
-    }
+    const response = await policyApi.setNetworkPolicy({
+      trustedModerationFeedsJson: JSON.stringify(
+        state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
+      ),
+    })
+    if (response.success === false) throw new Error(response.errorCode || 'consumer moderation profile rejected')
+    return state
   }
-  ctx.setConsumerModerationProfile = async input => {
-    let state
-    if (input?.operation === 'restore-defaults') {
-      state = await consumerModerationProfile.restoreDefaults()
-    } else if (input?.profile?.enabled === false) {
-      state = await consumerModerationProfile.disable()
-    } else {
-      state = await consumerModerationProfile.replace(input?.profile)
-    }
-    return applyProfileState(state)
-  }
-  ctx.reloadConsumerModerationProfile = async () => {
-    const state = await consumerModerationProfile.reload()
-    return applyProfileState(state)
-  }
+  const moderationProfileTransaction = createConsumerModerationProfileTransaction({
+    profileController: consumerModerationProfile,
+    applyState: applyProfileState,
+  })
+  ctx.setConsumerModerationProfile = input => moderationProfileTransaction.apply(input)
+  ctx.reloadConsumerModerationProfile = () => moderationProfileTransaction.reload()
 
   // Phase 6: Create the universal API over the single scoped P2P runtime.
   const api = createApi({

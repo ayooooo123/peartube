@@ -185,9 +185,9 @@ test('policy API rejects fields with no production runtime consumer', async (t) 
   })
 
   for (const patch of [
-    { followedPublishers: ['publisher-a'] },
-    { followedIndexes: ['index-a'] },
-    { trustedModerationFeeds: ['moderator-a'] },
+    { followedPublishers: ['a'.repeat(64)] },
+    { followedIndexes: ['b'.repeat(64)] },
+    { trustedModerationFeeds: ['c'.repeat(64)] },
     { aiAnalysis: 'local-only' },
     { retentionMode: 'local-pin' },
   ]) {
@@ -219,6 +219,43 @@ test('policy reconciles bounded index and moderation subscriptions through the s
     ['follow-index', index], ['follow-moderation', moderator],
     ['unfollow-index', index], ['unfollow-moderation', moderator],
   ])
+})
+
+test('failed feed reconciliation restores the prior transport subscriptions transactionally', async (t) => {
+  const initialPolicy = await loadNetworkPolicy({ store: asyncPolicyStore() })
+  const first = '3'.repeat(64)
+  const failing = '4'.repeat(64)
+  const calls = []
+  const followed = new Set()
+  const scopedNetwork = {
+    async applyNetworkPolicy() {},
+    async followIndexFeed({ curatorId }) {
+      calls.push(['follow', curatorId])
+      if (curatorId === failing) throw new Error('follow failed')
+      followed.add(curatorId)
+    },
+    async unfollowIndexFeed({ curatorId }) {
+      calls.push(['unfollow', curatorId])
+      followed.delete(curatorId)
+    },
+    async followModerationFeed() {},
+    async unfollowModerationFeed() {},
+  }
+  const runtime = createNetworkPolicyRuntime({ initialPolicy, scopedNetwork })
+  await runtime.start()
+  await runtime.apply({ ...initialPolicy, followedIndexes: [first] })
+
+  await t.exception(
+    runtime.apply({ ...initialPolicy, followedIndexes: [failing] }),
+    /follow failed/,
+  )
+  t.alike([...followed], [first])
+  t.alike(runtime.getPolicy().followedIndexes, [first])
+  t.alike(calls.slice(-3), [
+    ['unfollow', first],
+    ['follow', failing],
+    ['follow', first],
+  ], 'rollback reconciles from observed partial state')
 })
 
 test('foreground policy refresh resumes transport even when no policy suspension ran', async (t) => {

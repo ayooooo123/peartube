@@ -21,9 +21,12 @@ function cloneProfile(value, fallback = DEFAULT_CONSUMER_MODERATION_PROFILE) {
   if (!Array.isArray(input.curatorSubscriptions) || input.curatorSubscriptions.length > 256) {
     throw new Error('moderation profile curator subscriptions are invalid')
   }
-  const curatorSubscriptions = Array.from(new Set(
-    input.curatorSubscriptions.map(value => String(value).toLowerCase()).filter(Boolean)
-  )).sort()
+  const curatorSubscriptions = Array.from(new Set(input.curatorSubscriptions.map(value => {
+    if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
+      throw new Error('moderation profile curator subscription must be canonical 32-byte public-key hex')
+    }
+    return value
+  }))).sort()
   return {
     version,
     enabled: input.enabled !== false,
@@ -62,9 +65,34 @@ export function createConsumerModerationProfileController(options = {}) {
   let state = { profile: cloneProfile(bundledProfile), customized: false }
 
   async function save(next) {
-    state = cloneState(next)
-    await repository.save?.(cloneState(state))
+    const candidate = cloneState(next)
+    await repository.save?.(cloneState(candidate))
+    state = candidate
     return cloneState(state)
+  }
+
+  async function previewMutation(input) {
+    await ready
+    if (input?.operation === 'restore-defaults') {
+      return { profile: cloneProfile(bundledProfile), customized: false }
+    }
+    if (input?.profile?.enabled === false) {
+      return {
+        profile: {
+          ...cloneProfile(input.profile || state.profile),
+          enabled: false,
+          curatorSubscriptions: [],
+        },
+        customized: true,
+      }
+    }
+    return { profile: cloneProfile(input?.profile), customized: true }
+  }
+
+  async function previewReload() {
+    await ready
+    const stored = normalizeStoredState(await repository.load?.(), bundledProfile)
+    return cloneState(stored || { profile: cloneProfile(bundledProfile), customized: false })
   }
 
   async function initialize() {
@@ -87,8 +115,7 @@ export function createConsumerModerationProfileController(options = {}) {
       return cloneState(state)
     },
     async reload() {
-      const stored = normalizeStoredState(await repository.load?.(), bundledProfile)
-      return save(stored || { profile: cloneProfile(bundledProfile), customized: false })
+      return save(await previewReload())
     },
     async replace(profile) {
       await ready
@@ -105,6 +132,12 @@ export function createConsumerModerationProfileController(options = {}) {
       await ready
       return save({ profile: cloneProfile(bundledProfile), customized: false })
     },
+    previewMutation,
+    previewReload,
+    async commit(next) {
+      await ready
+      return save(next)
+    },
     getProfile() {
       return cloneProfile(state.profile)
     },
@@ -116,6 +149,46 @@ export function createConsumerModerationProfileController(options = {}) {
         state.profile.curatorSubscriptions.includes(String(curatorId).toLowerCase())
     },
   }
+}
+
+export function createConsumerModerationProfileTransaction({
+  profileController,
+  applyState,
+} = {}) {
+  if (
+    !profileController ||
+    typeof profileController.inspect !== 'function' ||
+    typeof profileController.previewMutation !== 'function' ||
+    typeof profileController.commit !== 'function' ||
+    typeof applyState !== 'function'
+  ) {
+    throw new TypeError('moderation profile transaction dependencies are required')
+  }
+
+  async function applyCandidate(candidate) {
+    const previous = await profileController.inspect()
+    try {
+      await applyState(candidate)
+    } catch (error) {
+      await applyState(previous).catch(() => {})
+      throw error
+    }
+    try {
+      return await profileController.commit(candidate)
+    } catch (error) {
+      await applyState(previous).catch(() => {})
+      throw error
+    }
+  }
+
+  return Object.freeze({
+    async apply(input) {
+      return applyCandidate(await profileController.previewMutation(input))
+    },
+    async reload() {
+      return applyCandidate(await profileController.previewReload())
+    },
+  })
 }
 
 export function createConsumerModerationPolicy({

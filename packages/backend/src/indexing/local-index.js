@@ -158,6 +158,7 @@ export function createLocalMediaIndex(options = {}) {
       sourceId: record.sourceId || null,
       indexId: record.indexId || null,
       agentId: record.agentId || null,
+      artwork: record.artwork || null,
       playable: record.playable === true,
     }
   }
@@ -179,6 +180,7 @@ export function createLocalMediaIndex(options = {}) {
       [record.sourceId, 1024],
       [record.indexId, 512],
       [record.agentId, 512],
+      [record.artwork, 2048],
       [record.model, 512],
     ]) {
       if (!boundedString(value, max)) return false
@@ -215,6 +217,7 @@ export function createLocalMediaIndex(options = {}) {
     const projectedPublications = Array.from(publications.values())
     return {
       entityRef: first.entityRef,
+      entityKind: first.kind || 'unknown',
       title: first.title || projectedPublications.find(publication => publication.title)?.title || null,
       creator: first.creator || null,
       collectionId: first.collectionId || null,
@@ -302,6 +305,11 @@ export function createLocalMediaIndex(options = {}) {
       else if (accepted > 0) status = 'accepted'
       else if (duplicates > 0 && rejected === 0) status = 'duplicate'
       return { status, errorCode: firstErrorCode, accepted, duplicates, rejected, results }
+    },
+    replaceRecords(nextRecords = []) {
+      records.clear()
+      for (const map of Object.values(counts)) map.clear()
+      return this.ingestRecords(nextRecords)
     },
     search(query = '') {
       const q = String(query).toLowerCase()

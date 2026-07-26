@@ -10,6 +10,7 @@ import {
 import { decodeApplicationEnvelope, encodeApplicationEnvelope } from '../records/application-envelope.js'
 import { PUBLISHER_LIMITS, PUBLISHER_RECORD_TYPES, toHex } from '../publisher/canonical.js'
 import { decodeClaimBody } from './claims.js'
+import { resolveConsumerMediaEntity } from './resolver.js'
 import { createMediaGraphStore } from './store.js'
 
 const PAGE_LIMIT = PUBLISHER_LIMITS.maxApplyBatch
@@ -308,6 +309,143 @@ export function createPublisherCatalogProjection(options = {}) {
     async close() {
       closed = true
       if (rebuilding) await rebuilding.catch(() => {})
+    },
+  })
+}
+
+const CONSUMER_DEFAULT_LIMIT = 20
+const CONSUMER_MAX_LIMIT = 50
+const CONSUMER_MAX_REJECTIONS = 256
+
+function consumerLimit(value) {
+  if (value == null) return CONSUMER_DEFAULT_LIMIT
+  const limit = Number(value)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > CONSUMER_MAX_LIMIT) throw new Error('consumer catalog limit must be between 1 and 50')
+  return limit
+}
+
+function isVisibleDecision(decision) {
+  return !decision || decision.action === 'visible' || decision.action === 'allow'
+}
+
+function consumerKindRank(kind) {
+  if (kind === 'movie') return 0
+  if (kind === 'series') return 1
+  return 2
+}
+
+function getProfileEnabled(profile) {
+  if (!profile) return true
+  return typeof profile.enabled === 'function' ? profile.enabled() !== false : profile.enabled !== false
+}
+
+/**
+ * A local view over the existing bounded index. It owns no feed and performs no
+ * network or asset work: sources feed it only after their normal authentication
+ * and ingestion checks have completed.
+ */
+export function createConsumerCatalogProjection(options = {}) {
+  const localIndex = options.localIndex
+  if (!localIndex || typeof localIndex.replaceRecords !== 'function' || typeof localIndex.search !== 'function') {
+    throw new TypeError('localIndex with replaceRecords and search is required')
+  }
+  const bootstrapManager = options.bootstrapManager || null
+  const indexFeedManager = options.indexFeedManager || null
+  const mediaGraphStore = options.mediaGraphStore || null
+  const moderationPolicy = options.moderationPolicy || null
+  const maxCandidates = safeLimit(options.maxCandidates, 4096, 10_000, 'maxCandidates')
+  let rejectedCandidates = []
+  let introducedPublisherIds = []
+
+  function availablePublishers() {
+    if (!bootstrapManager || typeof bootstrapManager.listLocators !== 'function') return null
+    return new Set(bootstrapManager.listLocators().map(locator => String(locator?.publisherId || '').toLowerCase()).filter(Boolean))
+  }
+
+  function reject(record, reason, rejectionCodes, rejectionCode = reason) {
+    if (rejectedCandidates.length < CONSUMER_MAX_REJECTIONS) {
+      rejectedCandidates.push({ entityRef: record.entityRef, reason })
+    }
+    rejectionCodes[rejectionCode] = (rejectionCodes[rejectionCode] || 0) + 1
+  }
+
+  function resolvedRecord(record) {
+    if (!mediaGraphStore || typeof mediaGraphStore.getClaimsBySubject !== 'function') return record
+    if (mediaGraphStore.getClaimsBySubject(record.entityRef).length === 0) return record
+    const resolved = resolveConsumerMediaEntity(mediaGraphStore, record.entityRef, { entityKind: record.kind })
+    return {
+      ...record,
+      title: resolved.metadata.title || record.title,
+      entityKind: resolved.entityKind,
+    }
+  }
+
+  return Object.freeze({
+    rebuild() {
+      const records = indexFeedManager?.getRecords?.() || []
+      const accepted = []
+      const rejectionCodes = {}
+      const publishers = availablePublishers()
+      rejectedCandidates = []
+      introducedPublisherIds = publishers ? Array.from(publishers).sort() : []
+      for (const record of records) {
+        const publisherId = String(record?.publisherId || '').toLowerCase()
+        if (publishers && !publishers.has(publisherId)) {
+          reject(record, 'PUBLISHER_NOT_INTRODUCED', rejectionCodes)
+          continue
+        }
+        const enabled = getProfileEnabled(moderationPolicy)
+        const decision = enabled && typeof moderationPolicy?.evaluate === 'function'
+          ? moderationPolicy.evaluate(record)
+          : { action: 'visible', reason: enabled ? 'default' : 'disabled' }
+        if (!isVisibleDecision(decision)) {
+          const code = `LOCAL_MODERATION_${String(decision.action || 'BLOCKED').toUpperCase()}`
+          reject(record, decision.reason || code, rejectionCodes, code)
+          continue
+        }
+        if (accepted.length >= maxCandidates) {
+          reject(record, 'CONSUMER_CANDIDATE_BUDGET_EXCEEDED', rejectionCodes)
+          continue
+        }
+        accepted.push(resolvedRecord(record))
+      }
+      accepted.sort((left, right) => (
+        String(left.entityRef).localeCompare(String(right.entityRef)) ||
+        String(left.publisherId).localeCompare(String(right.publisherId)) ||
+        String(left.publicationId).localeCompare(String(right.publicationId)) ||
+        String(left.sourceId || '').localeCompare(String(right.sourceId || ''))
+      ))
+      const indexed = localIndex.replaceRecords(accepted)
+      return {
+        accepted: indexed.accepted + indexed.duplicates,
+        rejected: rejectedCandidates.length + indexed.rejected,
+        rejectionCodes,
+      }
+    },
+    update() { return this.rebuild() },
+    getCatalog(request = {}) {
+      const limit = consumerLimit(request.limit)
+      const rows = localIndex.search('').slice().sort((left, right) => {
+        const kind = consumerKindRank(left.entityKind) - consumerKindRank(right.entityKind)
+        return kind || left.entityRef.localeCompare(right.entityRef)
+      })
+      let offset = 0
+      if (request.cursor != null) {
+        const index = rows.findIndex(row => row.entityRef === request.cursor)
+        if (index < 0) return { success: false, errorCode: 'INVALID_CURSOR', items: [], nextCursor: null }
+        offset = index + 1
+      }
+      const items = rows.slice(offset, offset + limit)
+      return {
+        success: true,
+        items,
+        nextCursor: offset + limit < rows.length ? items.at(-1).entityRef : null,
+      }
+    },
+    getRejectedCandidates() { return rejectedCandidates.slice() },
+    getIntroducedPublishers() { return introducedPublisherIds.slice() },
+    getCuratorSubscriptions() {
+      return Array.from(moderationPolicy?.curatorSubscriptions || []).map(String).sort()
     },
   })
 }

@@ -10,6 +10,7 @@ export function createBootstrapManager(options = {}) {
   const maxPublishers = normalizeBudgetLimit(options.maxPublishers, 4096)
   const maxSeenLocators = normalizeBudgetLimit(options.maxSeenLocators, 4096)
   const acceptLocator = typeof options.acceptLocator === 'function' ? options.acceptLocator : () => true
+  const onAcceptedLocator = typeof options.onAcceptedLocator === 'function' ? options.onAcceptedLocator : () => true
   const budget = createWindowedIngestBudget({
     now,
     windowMs: budgetWindowMs,
@@ -95,11 +96,15 @@ export function createBootstrapManager(options = {}) {
         return { status: 'rejected', errorCode: 'PUBLISHER_PROJECTION_BUDGET_EXCEEDED' }
       }
       if (!current || body.issuedAt > current.issuedAt || (body.issuedAt === current.issuedAt && body.catalogEpoch >= current.catalogEpoch)) {
-        locatorsByPublisher.set(body.publisherId, {
+        const locator = {
           ...body,
           trusted: verified.trusted,
           catalogChainVerified: verified.catalogChainVerified,
-        })
+        }
+        if (!await onAcceptedLocator(locator, { peerId: String(peerId) })) {
+          return { status: 'rejected', errorCode: 'LOCAL_PROJECTION_REJECTED' }
+        }
+        locatorsByPublisher.set(body.publisherId, locator)
       }
       return { status: 'accepted', publisherId: body.publisherId }
     },
@@ -108,6 +113,9 @@ export function createBootstrapManager(options = {}) {
     },
     listLocators() {
       return Array.from(locatorsByPublisher.values()).sort((a, b) => a.publisherId.localeCompare(b.publisherId))
+    },
+    getIntroducedPublisherIds() {
+      return Array.from(locatorsByPublisher.keys()).sort()
     },
   }
 }

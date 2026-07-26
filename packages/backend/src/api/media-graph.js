@@ -224,6 +224,7 @@ export function createMediaGraphApi(options = {}) {
   const assetManifestStore = options.assetManifestStore || options.ctx?.assetManifestStore || null
   const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences || options.ctx?.metaDb?.sub?.('media-source-preferences'))
   const trust = options.trust || options.ctx?.mediaGraphTrust || {}
+  const consumerCatalogProjection = options.consumerCatalogProjection || options.ctx?.consumerCatalogProjection || null
 
   function requireGraphStore() {
     if (!mediaGraphStore) return error('MEDIA_GRAPH_NOT_READY', 'Media graph projection storage is not wired yet')
@@ -297,6 +298,29 @@ export function createMediaGraphApi(options = {}) {
 
   return {
     async getMediaCatalog(request = {}) {
+      if (consumerCatalogProjection) {
+        try {
+          await consumerCatalogProjection.update?.()
+          const page = consumerCatalogProjection.getCatalog(request)
+          if (!page?.success) return page
+          return {
+            success: true,
+            items: page.items.map(item => ({
+              entityId: item.entityRef,
+              entityKind: item.entityKind || 'unknown',
+              title: item.title || null,
+              subtitle: item.creator || null,
+              claimCount: item.publications?.length || 0,
+              conflictCount: 0,
+              sources: (item.publications || []).map(publication => ({ publicationId: publication.publicationId, publisherId: publication.publisherId })),
+              renditions: [],
+            })),
+            nextCursor: page.nextCursor,
+          }
+        } catch {
+          return error('CONSUMER_CATALOG_UPDATE_FAILED', 'Consumer catalog projection update failed', { items: [], nextCursor: null })
+        }
+      }
       const missingStore = requireGraphStore()
       if (missingStore) return { ...missingStore, items: [], nextCursor: null }
       try {

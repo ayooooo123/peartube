@@ -12,6 +12,7 @@ export function createIndexFeedManager(options = {}) {
   const maxRecordsPerAgentPerWindow = normalizeBudgetLimit(options.maxRecordsPerAgentPerWindow, 512)
   const maxRecordsPerCollectionPerWindow = normalizeBudgetLimit(options.maxRecordsPerCollectionPerWindow, 512)
   const acceptRecord = typeof options.acceptRecord === 'function' ? options.acceptRecord : () => true
+  const onAcceptedRecord = typeof options.onAcceptedRecord === 'function' ? options.onAcceptedRecord : () => true
   const supportedCapabilities = options.supportedCapabilities
   const budget = createWindowedIngestBudget({
     now,
@@ -161,7 +162,13 @@ export function createIndexFeedManager(options = {}) {
             if (!firstRejectionCode) firstRejectionCode = 'LOCAL_POLICY_REJECTED'
             continue
           }
-          appendRecord({ ...record, indexId: curatorId, sourceId: `${curatorId}:${verified.pageId}` })
+          const acceptedRecord = { ...record, indexId: curatorId, sourceId: `${curatorId}:${verified.pageId}` }
+          if (!await onAcceptedRecord(acceptedRecord, { curatorId, pageId: verified.pageId })) {
+            rejected++
+            if (!firstRejectionCode) firstRejectionCode = 'LOCAL_PROJECTION_REJECTED'
+            continue
+          }
+          appendRecord(acceptedRecord)
           ingested++
         }
 

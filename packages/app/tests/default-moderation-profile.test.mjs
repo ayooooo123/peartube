@@ -6,6 +6,7 @@ import ts from '../node_modules/typescript/lib/typescript.js'
 
 const source = fs.readFileSync(path.resolve(import.meta.dirname, '../lib/default-moderation-profile.ts'), 'utf8')
 const developerSettingsSource = fs.readFileSync(path.resolve(import.meta.dirname, '../app/developer-settings.tsx'), 'utf8')
+const profileActionsSource = fs.readFileSync(path.resolve(import.meta.dirname, '../lib/moderation-profile.ts'), 'utf8')
 const personalEncryptionSource = fs.readFileSync(path.resolve(import.meta.dirname, '../lib/personal-encryption.ts'), 'utf8')
 const layoutSource = fs.readFileSync(path.resolve(import.meta.dirname, '../app/_layout.tsx'), 'utf8')
 
@@ -34,11 +35,16 @@ test('the app exports no second moderation-profile persistence facade', async ()
 })
 
 test('Developer Settings reads and mutates the backend PersonalStore profile through existing RPC state', () => {
-  assert.match(developerSettingsSource, /getPersonalSettings/)
-  assert.match(developerSettingsSource, /setPersonalSetting/)
-  assert.match(developerSettingsSource, /CONSUMER_MODERATION_PROFILE_SETTING_KEY/)
-  assert.doesNotMatch(developerSettingsSource, /secureGet|secureSet/)
-  assert.doesNotMatch(developerSettingsSource, /createDefaultModerationProfileStore/)
+  const implementation = `${developerSettingsSource}\n${profileActionsSource}`
+  assert.match(implementation, /getPersonalSettings/)
+  assert.match(implementation, /setPersonalSetting/)
+  assert.match(implementation, /CONSUMER_MODERATION_PROFILE_SETTING_KEY/)
+  assert.match(developerSettingsSource, /customized/)
+  assert.match(developerSettingsSource, /curatorSubscriptions[\s\S]*\.map/)
+  assert.match(developerSettingsSource, /ModerationFeedEditor/)
+  assert.doesNotMatch(implementation, /secureGet|secureSet/)
+  assert.doesNotMatch(implementation, /createDefaultModerationProfileStore/)
+  assert.doesNotMatch(implementation, /setNetworkPolicy/)
 })
 
 test('desktop startup provisions a device-local encrypted PersonalStore before identity or pairing', () => {

@@ -332,15 +332,25 @@ export function createPolicyApi({
   initialPolicy,
   onPolicyChange = null,
   validatePolicy = null,
+  getProfileModerationFeeds = null,
 } = {}) {
+  const readProfileModerationFeeds = typeof getProfileModerationFeeds === 'function'
+    ? () => boundedTransportIdList(getProfileModerationFeeds(), 'profile moderation feeds')
+    : null
+  const withProfileModerationFeeds = policy => readProfileModerationFeeds
+    ? normalizeNetworkPolicy({
+        ...policy,
+        trustedModerationFeeds: readProfileModerationFeeds(),
+      }, DEFAULT_NETWORK_POLICY)
+    : policy
   let current = initialPolicy === undefined
     ? null
-    : normalizeNetworkPolicy(initialPolicy, DEFAULT_NETWORK_POLICY)
+    : withProfileModerationFeeds(normalizeNetworkPolicy(initialPolicy, DEFAULT_NETWORK_POLICY))
   const ready = current
     ? Promise.resolve(current)
     : loadNetworkPolicy({ store }).then(policy => {
-        current = policy
-        return policy
+        current = withProfileModerationFeeds(policy)
+        return current
       })
   let writes = Promise.resolve()
 
@@ -350,37 +360,81 @@ export function createPolicyApi({
     return next
   }
 
+  const sameIds = (left, right) =>
+    left.length === right.length && left.every((value, index) => value === right[index])
+
+  const profileLinkedFieldError = () => {
+    const error = new Error('trustedModerationFeeds is managed by the active consumer moderation profile')
+    error.code = 'PROFILE_LINKED_POLICY_FIELD'
+    error.field = 'trustedModerationFeeds'
+    return error
+  }
+
+  const applyPolicy = async policy => {
+    const previous = current
+    await validatePolicy?.(policy)
+    await writePolicyStore(store, policy)
+    try {
+      await onPolicyChange?.(policy)
+    } catch (error) {
+      await writePolicyStore(store, previous)
+      await onPolicyChange?.(previous).catch(() => {})
+      throw error
+    }
+    current = policy
+    return { success: true, policy }
+  }
+
+  const rejection = err => ({
+    success: false,
+    errorCode: err?.code || 'INVALID_POLICY',
+    unsupportedField: err?.field,
+    error: err?.message || String(err),
+  })
+
   return {
     ready,
     async getNetworkPolicy() {
       await ready
-      const policy = current
+      const policy = withProfileModerationFeeds(current)
       return { success: true, policy, ...networkPolicyWireFields(policy) }
     },
     async setNetworkPolicy(input = {}) {
       await ready
       return enqueueWrite(async () => {
-        const previous = current
         try {
-          const policy = normalizeNetworkPolicy(decodeNetworkPolicyPatch(input), previous)
-          await validatePolicy?.(policy)
-          await writePolicyStore(store, policy)
-          try {
-            await onPolicyChange?.(policy)
-          } catch (error) {
-            await writePolicyStore(store, previous)
-            await onPolicyChange?.(previous).catch(() => {})
-            throw error
+          const patch = decodeNetworkPolicyPatch(input)
+          const base = withProfileModerationFeeds(current)
+          if (readProfileModerationFeeds && patch.trustedModerationFeeds !== undefined) {
+            const requested = boundedTransportIdList(
+              patch.trustedModerationFeeds,
+              'trustedModerationFeeds',
+            )
+            if (!sameIds(requested, readProfileModerationFeeds())) {
+              throw profileLinkedFieldError()
+            }
           }
-          current = policy
-          return { success: true, policy }
+          const policy = withProfileModerationFeeds(normalizeNetworkPolicy(patch, base))
+          return await applyPolicy(policy)
         } catch (err) {
-          return {
-            success: false,
-            errorCode: err?.code || 'INVALID_POLICY',
-            unsupportedField: err?.field,
-            error: err?.message || String(err),
-          }
+          return rejection(err)
+        }
+      })
+    },
+    async setProfileModerationFeeds(feeds) {
+      await ready
+      return enqueueWrite(async () => {
+        try {
+          const trustedModerationFeeds = boundedTransportIdList(
+            feeds,
+            'profile moderation feeds',
+          )
+          return await applyPolicy(normalizeNetworkPolicy({
+            ...current,
+            trustedModerationFeeds,
+          }, DEFAULT_NETWORK_POLICY))
+        } catch (err) {
+          return rejection(err)
         }
       })
     },

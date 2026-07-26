@@ -46,6 +46,10 @@ function authorized (request) {
   }
 }
 
+async function consumerVisible () {
+  return true
+}
+
 test('default archive request transport preserves publication authorization context', async (t) => {
   const published = []
   const scoped = {
@@ -124,6 +128,7 @@ test('opted-in strangers randomly accept verified requests without API keys or t
     capacityBytes: 8192,
     acceptanceProbability: 0.5,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: volunteerScoped,
     publishPledge: async envelope => {
       deliveredPledges.push(envelope)
@@ -138,6 +143,7 @@ test('opted-in strangers randomly accept verified requests without API keys or t
     capacityBytes: 8192,
     acceptanceProbability: 0.5,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: standbyScoped,
   })
   requestNetwork = createPermissionlessArchiveNetwork({
@@ -217,6 +223,85 @@ test('consumer policy changes cancel hidden archive requests and release their r
   await network.close()
 })
 
+test('archivists require local consumer visibility and revalidate their own retained pledges', async (t) => {
+  const scoped = scopedRecorder()
+  let visible = false
+  const network = createPermissionlessArchiveNetwork({
+    keyPair: volunteer,
+    now: () => 1_000,
+    random: () => 0,
+    enabled: true,
+    capacityBytes: 8192,
+    acceptanceProbability: 1,
+    authorizeRequest: authorized,
+    authorizeConsumerVisibility: async request =>
+      visible && request.body.publicationId === publicationId,
+    scopedNetwork: scoped,
+  })
+  const hiddenRequest = createArchiveRequest({
+    requesterId: requester.publicKey,
+    publicationId,
+    renditionId,
+    ranges,
+    requestedBytes: 4096,
+    retentionUntil: 20_000,
+    expiresAt: 2_000,
+    issuedAt: 1_000,
+    nonce: 'hidden-request',
+    keyPair: requester,
+  })
+
+  t.alike(await network.ingestRequest(hiddenRequest.envelope), {
+    status: 'rejected',
+    reason: 'consumer-not-visible',
+  }, 'manifest authority cannot bypass the archivist consumer profile')
+  t.is(scoped.retained.length, 0)
+
+  visible = true
+  const visibleRequest = createArchiveRequest({
+    requesterId: requester.publicKey,
+    publicationId,
+    renditionId,
+    ranges,
+    requestedBytes: 4096,
+    retentionUntil: 20_000,
+    expiresAt: 2_000,
+    issuedAt: 1_000,
+    nonce: 'visible-request',
+    keyPair: requester,
+  })
+  t.is((await network.ingestRequest(visibleRequest.envelope)).status, 'accepted',
+    'a future signed request may be accepted after local policy permits it')
+  t.is(network.getStatus().reservedBytes, 4096)
+
+  visible = false
+  t.alike(await network.revalidateConsumerRequests(request =>
+    visible && request.body.publicationId === publicationId
+  ), {
+    cancelledRequests: 0,
+    releasedPledges: 1,
+  }, 'profile hide cancels the archivist pledge as well as requester-owned work')
+  t.is(network.getStatus().reservedBytes, 0)
+  t.is(scoped.released.length, 1, 'retention and serving scope is released immediately')
+
+  visible = true
+  const permittedAgain = createArchiveRequest({
+    requesterId: requester.publicKey,
+    publicationId,
+    renditionId,
+    ranges,
+    requestedBytes: 4096,
+    retentionUntil: 20_000,
+    expiresAt: 2_000,
+    issuedAt: 1_000,
+    nonce: 'permitted-again',
+    keyPair: requester,
+  })
+  t.is((await network.ingestRequest(permittedAgain.envelope)).status, 'accepted',
+    'removing the local hide permits future requests without mutating network truth')
+  await network.close()
+})
+
 test('participation defaults off, enforces local capacity, and releases custody immediately on opt-out', async (t) => {
   const scoped = scopedRecorder()
   const network = createPermissionlessArchiveNetwork({
@@ -226,6 +311,7 @@ test('participation defaults off, enforces local capacity, and releases custody 
     capacityBytes: 1024,
     acceptanceProbability: 1,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: scoped,
   })
   const request = createArchiveRequest({
@@ -368,6 +454,7 @@ test('random possession challenges bind transport identity, score proofs, and ex
     challengeIntervalMs: 1_000,
     challengeTimeoutMs: 20,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: volunteerScoped,
     publishPledge: envelope => requesterNetwork.ingestPledge(envelope, { peerId: volunteerPeerId }),
     publishChallengeProof: packet => {
@@ -452,6 +539,7 @@ test('permissionless acceptance reserves before retain and releases reservation 
     capacityBytes: 1024,
     acceptanceProbability: 1,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: scoped,
     archivePolicy: policy,
     setTimeout(fn, delay) {
@@ -515,6 +603,7 @@ test('archive participation restores retained pledges and expiry timers after re
     capacityBytes: 1024,
     acceptanceProbability: 1,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: firstScoped,
     archivePolicy: createArchivePolicy({ capacityBytes: 1024, now: () => currentTime, repository }),
     ...timerOptions,
@@ -541,6 +630,7 @@ test('archive participation restores retained pledges and expiry timers after re
     enabled: true,
     capacityBytes: 1024,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: restartedScoped,
     archivePolicy: createArchivePolicy({ capacityBytes: 1024, now: () => currentTime, repository }),
     ...timerOptions,
@@ -710,6 +800,7 @@ test('one transport peer cannot run unbounded possession proofs concurrently', a
     acceptanceProbability: 1,
     maxActiveChallengesPerPeer: 1,
     authorizeRequest: authorized,
+    authorizeConsumerVisibility: consumerVisible,
     scopedNetwork: scoped,
     publishChallengeProof: async () => ({ status: 'published' }),
   })

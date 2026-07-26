@@ -9,6 +9,11 @@ import {
 } from '../src/moderation/profile.js'
 import { createPersonalApi } from '../src/api/personal.js'
 import { createPolicyApi } from '../src/api/policy.js'
+import { createLocalMediaIndex } from '../src/indexing/local-index.js'
+import { createConsumerCatalogProjection } from '../src/media-graph/catalog-projection.js'
+import { createModerationFeedPage } from '../src/moderation/feed-contract.js'
+import { createModerationManager } from '../src/moderation/manager.js'
+import crypto from 'hypercore-crypto'
 
 const FEEDS = Object.freeze({
   current: '01'.repeat(32),
@@ -202,6 +207,31 @@ test('unrelated network policy updates preserve uncustomized bundle adoption', a
   })
 })
 
+test('network policy exposes moderation transport as profile-linked and cannot diverge it', async (t) => {
+  let profileFeeds = [FEEDS.default]
+  const applied = []
+  const policyApi = createPolicyApi({
+    store: new Map(),
+    getProfileModerationFeeds: () => profileFeeds,
+    onPolicyChange: async policy => { applied.push(policy.trustedModerationFeeds) },
+  })
+  await policyApi.ready
+
+  const rejected = await policyApi.setNetworkPolicy({
+    trustedModerationFeedsJson: JSON.stringify([FEEDS.mine]),
+  })
+  t.is(rejected.success, false)
+  t.is(rejected.errorCode, 'PROFILE_LINKED_POLICY_FIELD')
+  t.alike(JSON.parse((await policyApi.getNetworkPolicy()).trustedModerationFeedsJson), [FEEDS.default])
+
+  profileFeeds = [FEEDS.mine]
+  t.ok((await policyApi.setProfileModerationFeeds(profileFeeds)).success)
+  t.alike(JSON.parse((await policyApi.getNetworkPolicy()).trustedModerationFeedsJson), [FEEDS.mine])
+  t.ok((await policyApi.setNetworkPolicy({ backgroundMode: 'allow' })).success)
+  t.alike(applied.at(-1), [FEEDS.mine],
+    'ordinary transport changes preserve the backend-authoritative profile feed set')
+})
+
 test('profile transport transactions validate before storage and roll back failed reconciliation', async (t) => {
   const repository = memoryRepository()
   const controller = createConsumerModerationProfileController({
@@ -229,4 +259,120 @@ test('profile transport transactions validate before storage and roll back faile
     profile: bundle(1, ['not-a-feed-id']),
   }), /curator subscription/i)
   t.alike(repository.snapshot(), before, 'invalid IDs are rejected before persistence or transport')
+})
+
+test('profile replacement reconciles signed feed projection and survives restart without network-policy divergence', async (t) => {
+  const repository = memoryRepository()
+  const bundledProfile = bundle(9, [FEEDS.default])
+  const controller = createConsumerModerationProfileController({ repository, bundledProfile })
+  await controller.ready
+  t.alike(await controller.inspect(), {
+    profile: bundledProfile,
+    customized: false,
+  }, 'Developer Settings can inspect the complete active default state')
+
+  const customSigner = crypto.keyPair(Buffer.alloc(32, 42))
+  const customFeedId = Buffer.from(customSigner.publicKey).toString('hex')
+  const publicationId = 'ab'.repeat(32)
+  const customPage = createModerationFeedPage({
+    moderatorId: customFeedId,
+    pageCursor: '0',
+    nextCursor: null,
+    records: [{
+      action: 'hide',
+      targetType: 'publication',
+      targetId: publicationId,
+      label: 'custom-profile-fixture',
+    }],
+    keyPair: customSigner,
+    issuedAt: 10,
+    expiresAt: 100,
+  })
+  const manager = createModerationManager({ now: () => 20 })
+  const candidate = {
+    directPublisher: true,
+    kind: 'movie',
+    entityRef: 'work:custom-profile-fixture',
+    publicationId,
+    publisherId: FEEDS.a,
+    title: 'Custom profile fixture',
+  }
+  const policy = createConsumerModerationPolicy({
+    profileController: controller,
+    moderationManager: manager,
+  })
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    publisherRecords: () => [candidate],
+    moderationPolicy: policy,
+  })
+  projection.rebuild()
+  t.is(projection.isPublicationVisible(publicationId), true)
+
+  let activeTransportFeeds = new Set()
+  async function applyState(state) {
+    const next = new Set(state.profile.enabled === false ? [] : state.profile.curatorSubscriptions)
+    for (const id of activeTransportFeeds) {
+      if (!next.has(id)) await manager.unsubscribe(id)
+    }
+    for (const id of next) {
+      if (!activeTransportFeeds.has(id)) await manager.subscribe(id)
+    }
+    activeTransportFeeds = next
+    if (next.has(customFeedId) && manager.getCheckpoint(customFeedId)?.cursor !== null) {
+      await manager.syncFeed({
+        moderatorId: customFeedId,
+        fetchPage: async () => customPage,
+      })
+    }
+  }
+  const transaction = createConsumerModerationProfileTransaction({
+    profileController: controller,
+    applyState,
+    afterCommit: async () => projection.rebuild(),
+  })
+  await transaction.apply({
+    profile: {
+      ...bundledProfile,
+      curatorSubscriptions: [customFeedId],
+    },
+  })
+  t.is(projection.isPublicationVisible(publicationId), false,
+    'a decision signed by the custom subscription affects the local projection')
+  t.alike([...activeTransportFeeds], [customFeedId],
+    'profile replacement reconciles the transport feed set directly')
+
+  const restartedController = createConsumerModerationProfileController({ repository, bundledProfile })
+  t.alike(await restartedController.ready, {
+    profile: { ...bundledProfile, curatorSubscriptions: [customFeedId] },
+    customized: true,
+  }, 'the customized active profile persists across backend restart')
+  const restartedProjection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    publisherRecords: () => [candidate],
+    moderationPolicy: createConsumerModerationPolicy({
+      profileController: restartedController,
+      moderationManager: manager,
+    }),
+  })
+  restartedProjection.rebuild()
+  t.is(restartedProjection.isPublicationVisible(publicationId), false)
+  const restartedTransaction = createConsumerModerationProfileTransaction({
+    profileController: restartedController,
+    applyState,
+    afterCommit: async () => restartedProjection.rebuild(),
+  })
+
+  await restartedTransaction.apply({
+    profile: { ...bundledProfile, curatorSubscriptions: [] },
+  })
+  t.is(restartedProjection.isPublicationVisible(publicationId), true,
+    'removing every curator removes retained custom feed effects')
+  t.alike([...activeTransportFeeds], [])
+  await restartedTransaction.apply({ operation: 'restore-defaults' })
+  t.alike(await restartedController.inspect(), {
+    profile: bundledProfile,
+    customized: false,
+  }, 'Restore Defaults explicitly selects the current bundled profile')
+  t.alike([...activeTransportFeeds], [FEEDS.default])
 })

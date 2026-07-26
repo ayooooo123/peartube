@@ -942,6 +942,223 @@ test('scoped index and moderation feeds transfer only signed bounded pages', asy
   pair.b.destroy()
 })
 
+test('signed remote moderation cancels an archivist pledge and permits only future requests after removal', async (t) => {
+  const moderator = crypto.keyPair(bytes(32, 147))
+  const archivistKeyPair = crypto.keyPair(bytes(32, 148))
+  const requesterKeyPair = crypto.keyPair(bytes(32, 149))
+  const moderatorId = b4a.toString(moderator.publicKey, 'hex')
+  const publicationId = b4a.toString(bytes(32, 150), 'hex')
+  const renditionId = b4a.toString(bytes(32, 151), 'hex')
+  const coreKey = bytes(32, 152)
+  const candidate = {
+    directPublisher: true,
+    kind: 'movie',
+    entityRef: 'work:archivist-profile',
+    publicationId,
+    publisherId: b4a.toString(bytes(32, 153), 'hex'),
+    title: 'Archivist profile fixture',
+  }
+  const moderationPage = createModerationFeedPage({
+    moderatorId,
+    pageCursor: '0',
+    nextCursor: null,
+    keyPair: moderator,
+    issuedAt: 10,
+    expiresAt: 100,
+    records: [{
+      action: 'hide',
+      targetType: 'publication',
+      targetId: publicationId,
+      label: 'signed-archivist-fixture',
+    }],
+  })
+  const profileController = createConsumerModerationProfileController({
+    bundledProfile: {
+      version: 1,
+      enabled: true,
+      curatorSubscriptions: [moderatorId],
+    },
+  })
+  await profileController.ready
+  let revalidateArchivistWork = async () => {}
+  const moderationManager = createModerationManager({
+    now: () => 20,
+    onRecordsChanged: () => revalidateArchivistWork(),
+  })
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    publisherRecords: () => [candidate],
+    moderationPolicy: createConsumerModerationPolicy({
+      profileController,
+      moderationManager,
+    }),
+  })
+  projection.rebuild()
+
+  const sourceSwarm = fakeSwarm()
+  const archivistSwarm = fakeSwarm()
+  const requesterSwarm = fakeSwarm()
+  let closedArchivistCores = 0
+  const sourceRuntime = createScopedNetworkRuntime({
+    swarm: sourceSwarm,
+    store: {},
+    now: () => 20,
+  })
+  const archivistRuntime = createScopedNetworkRuntime({
+    swarm: archivistSwarm,
+    store: {
+      get ({ key }) {
+        return {
+          key,
+          async ready () {},
+          download () { return { destroy () {} } },
+          async close () { closedArchivistCores++ },
+        }
+      },
+    },
+    moderationManager,
+    now: () => 20,
+  })
+  const requesterRuntime = createScopedNetworkRuntime({
+    swarm: requesterSwarm,
+    store: {},
+    now: () => 20,
+  })
+  await Promise.all([
+    sourceRuntime.start(),
+    archivistRuntime.start(),
+    requesterRuntime.start(),
+  ])
+  const archivistNetwork = createPermissionlessArchiveNetwork({
+    keyPair: archivistKeyPair,
+    scopedNetwork: archivistRuntime,
+    enabled: true,
+    capacityBytes: 8192,
+    acceptanceProbability: 1,
+    random: () => 0,
+    now: () => 20,
+    authorizeRequest: async request => ({
+      accepted: true,
+      requestedBytes: request.body.requestedBytes,
+      ranges: request.body.ranges,
+    }),
+    authorizeConsumerVisibility: async request =>
+      projection.isPublicationVisible(request.body.publicationId),
+  })
+  const requesterNetwork = createPermissionlessArchiveNetwork({
+    keyPair: requesterKeyPair,
+    scopedNetwork: requesterRuntime,
+    enabled: true,
+    capacityBytes: 0,
+    now: () => 20,
+  })
+  revalidateArchivistWork = createConsumerWorkRevalidator({
+    getConsumerCatalogProjection: () => projection,
+    scopedNetwork: archivistRuntime,
+    getArchiveNetwork: () => archivistNetwork,
+  })
+  await Promise.all([archivistNetwork.ready, requesterNetwork.ready])
+
+  const archivePair = connectionPair({ sourcePeerFill: 154, consumerPeerFill: 155 })
+  archivistSwarm.connections.add(archivePair.a)
+  requesterSwarm.connections.add(archivePair.b)
+  archivistSwarm.emit('connection', archivePair.a, {
+    publicKey: archivePair.a.remotePublicKey,
+    topics: [],
+    client: false,
+  })
+  requesterSwarm.emit('connection', archivePair.b, {
+    publicKey: archivePair.b.remotePublicKey,
+    topics: [],
+    client: true,
+  })
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (archivistRuntime.getDiagnostics().sessions.some(session =>
+      session.purpose === 'archive-discovery' && session.state === 'active') &&
+        requesterRuntime.getDiagnostics().sessions.some(session =>
+          session.purpose === 'archive-discovery' && session.state === 'active')) break
+    await settle()
+  }
+  await requesterNetwork.requestArchive({
+    publicationId,
+    renditionId,
+    ranges: [{ coreKey, start: 0, end: 4 }],
+    requestedBytes: 4096,
+    retentionUntil: 200,
+    expiresAt: 100,
+    nonce: 'archive-before-hide',
+  })
+  for (let attempt = 0; attempt < 20 && archivistNetwork.getStatus().acceptedRequests !== 1; attempt++) {
+    await settle()
+  }
+  t.is(archivistNetwork.getStatus().acceptedRequests, 1,
+    'the visible publication receives a signed voluntary archivist pledge')
+  t.is(archivistRuntime.getDiagnostics().topics.filter(topic => topic.purpose === 'archive').length, 1)
+
+  await sourceRuntime.provideModerationFeed({
+    moderatorId,
+    fetchPage: async cursor => cursor === '0' ? moderationPage : null,
+  })
+  const moderationPair = connectionPair({ sourcePeerFill: 156, consumerPeerFill: 157 })
+  sourceSwarm.connections.add(moderationPair.a)
+  archivistSwarm.connections.add(moderationPair.b)
+  sourceSwarm.emit('connection', moderationPair.a, {
+    publicKey: moderationPair.a.remotePublicKey,
+    topics: [],
+    client: false,
+  })
+  archivistSwarm.emit('connection', moderationPair.b, {
+    publicKey: moderationPair.b.remotePublicKey,
+    topics: [],
+    client: true,
+  })
+  await settle()
+  await archivistRuntime.subscribeModerationFeed({ moderatorId })
+  for (let attempt = 0; attempt < 20 && (
+    projection.isPublicationVisible(publicationId) ||
+    archivistNetwork.getStatus().acceptedRequests > 0
+  ); attempt++) await settle()
+  t.is(projection.isPublicationVisible(publicationId), false,
+    'the archivist applies the authenticated remote decision only to its local projection')
+  t.is(archivistNetwork.getStatus().acceptedRequests, 0,
+    'the remote hide immediately cancels the existing local archivist pledge')
+  t.is(archivistNetwork.getStatus().reservedBytes, 0)
+  t.is(archivistRuntime.getDiagnostics().topics.filter(topic => topic.purpose === 'archive').length, 0,
+    'the hidden archive scope stops retention and serving immediately')
+  t.ok(closedArchivistCores > 0, 'release closes the retained archive core')
+  t.is(candidate.publicationId, publicationId, 'local moderation does not alter network truth')
+
+  await archivistRuntime.unfollowModerationFeed({ moderatorId })
+  for (let attempt = 0; attempt < 20 && !projection.isPublicationVisible(publicationId); attempt++) await settle()
+  t.is(projection.isPublicationVisible(publicationId), true,
+    'removing the local decision permits a future request')
+  await requesterNetwork.requestArchive({
+    publicationId,
+    renditionId,
+    ranges: [{ coreKey, start: 0, end: 4 }],
+    requestedBytes: 4096,
+    retentionUntil: 200,
+    expiresAt: 100,
+    nonce: 'archive-after-removal',
+  })
+  for (let attempt = 0; attempt < 20 && archivistNetwork.getStatus().acceptedRequests !== 1; attempt++) {
+    await settle()
+  }
+  t.is(archivistNetwork.getStatus().acceptedRequests, 1,
+    'a new signed request may be accepted after local policy permits it')
+
+  await Promise.all([archivistNetwork.close(), requesterNetwork.close()])
+  await Promise.all([
+    sourceRuntime.close(),
+    archivistRuntime.close(),
+    requesterRuntime.close(),
+  ])
+  archivePair.a.destroy()
+  archivePair.b.destroy()
+  moderationPair.a.destroy()
+  moderationPair.b.destroy()
+})
+
 test('an untrusted bootstrap locator can bind a publisher only after a scoped namespace proof', async (t) => {
   const root = crypto.keyPair(bytes(32, 151))
   const locatorSigner = crypto.keyPair(bytes(32, 152))

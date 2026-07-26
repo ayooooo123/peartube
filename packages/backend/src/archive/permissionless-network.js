@@ -132,6 +132,9 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now
   const random = typeof options.random === 'function' ? options.random : Math.random
   const authorizeRequest = typeof options.authorizeRequest === 'function' ? options.authorizeRequest : async () => false
+  const authorizeConsumerVisibility = typeof options.authorizeConsumerVisibility === 'function'
+    ? options.authorizeConsumerVisibility
+    : async () => false
   const archiveStore = options.archiveStore || null
   const diagnostics = options.diagnostics || null
   const archivePolicy = options.archivePolicy || null
@@ -426,6 +429,22 @@ export function createPermissionlessArchiveNetwork(options = {}) {
       }
       const requestId = pledge.body.nonce
       const record = { request: null, pledge, bytes: reservation.reservedBytes }
+      let visible = false
+      try {
+        visible = await authorizeConsumerVisibility({ body: pledge.body }) === true
+      } catch {
+        visible = false
+      }
+      if (!visible) {
+        await archivePolicy.release({ pledgeId: pledge.pledgeId }).catch(() => {})
+        await scopedNetwork.releaseAuthorizedArchive({ archiveId: pledge.pledgeId }).catch(() => {})
+        archiveStore?.putObservation?.({
+          pledgeId: pledge.pledgeId,
+          status: 'pledge-expired',
+          observedAt: now(),
+        })
+        continue
+      }
       try {
         for (const range of pledge.body.ranges) {
           await scopedNetwork.retainAuthorizedArchive({ pledge, ...range })
@@ -625,6 +644,18 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         await expireReceivedPledge(pledgeId, record)
         releasedPledges++
       }
+      for (const [requestId, record] of [...localArchivistPledges]) {
+        const request = record.request || { body: record.pledge.body }
+        let allowed = false
+        try {
+          allowed = await authorize(request)
+        } catch {
+          allowed = false
+        }
+        if (allowed) continue
+        await expireLocalPledge(requestId, record)
+        releasedPledges++
+      }
       return { cancelledRequests, releasedPledges }
     },
 
@@ -654,6 +685,16 @@ export function createPermissionlessArchiveNetwork(options = {}) {
           !sameRanges(authorization.ranges, request.body.ranges)) {
         authorizationRejections++
         return { status: 'rejected', reason: 'manifest-not-authorized' }
+      }
+      let visible = false
+      try {
+        visible = await authorizeConsumerVisibility(request) === true
+      } catch {
+        visible = false
+      }
+      if (!visible) {
+        authorizationRejections++
+        return { status: 'rejected', reason: 'consumer-not-visible' }
       }
 
       const sample = Number(random())

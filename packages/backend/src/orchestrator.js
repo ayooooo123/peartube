@@ -660,6 +660,11 @@ export async function createBackendContext(config) {
           manifestStore: mediaCatalogProjection.assetManifestStore,
           authorizeRendition: input => mediaCatalogProjection.authorizeRendition(input),
         }),
+        authorizeConsumerVisibility: async request => {
+          await mediaCatalogProjection.rebuild()
+          consumerCatalogProjection.rebuild()
+          return consumerCatalogProjection.isPublicationVisible(request.body.publicationId)
+        },
       })
     : null
   const revalidateConsumerWork = createConsumerWorkRevalidator({
@@ -894,19 +899,20 @@ export async function createBackendContext(config) {
     initialPolicy: initialNetworkPolicy,
     onPolicyChange: ctx.onNetworkPolicyChange,
     validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
+    getProfileModerationFeeds: () =>
+      consumerModerationProfile.getEffectiveCuratorSubscriptions(),
   })
   const applyProfileState = async state => {
-    const response = await policyApi.setNetworkPolicy({
-      trustedModerationFeedsJson: JSON.stringify(
-        state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
-      ),
-    })
+    const response = await policyApi.setProfileModerationFeeds(
+      state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
+    )
     if (response.success === false) throw new Error(response.errorCode || 'consumer moderation profile rejected')
     return state
   }
   const moderationProfileTransaction = createConsumerModerationProfileTransaction({
     profileController: consumerModerationProfile,
     applyState: applyProfileState,
+    afterCommit: revalidateConsumerWork,
   })
   ctx.setConsumerModerationProfile = input => moderationProfileTransaction.apply(input)
   ctx.reloadConsumerModerationProfile = () => moderationProfileTransaction.reload()

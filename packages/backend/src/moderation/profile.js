@@ -154,13 +154,15 @@ export function createConsumerModerationProfileController(options = {}) {
 export function createConsumerModerationProfileTransaction({
   profileController,
   applyState,
+  afterCommit = async () => {},
 } = {}) {
   if (
     !profileController ||
     typeof profileController.inspect !== 'function' ||
     typeof profileController.previewMutation !== 'function' ||
     typeof profileController.commit !== 'function' ||
-    typeof applyState !== 'function'
+    typeof applyState !== 'function' ||
+    typeof afterCommit !== 'function'
   ) {
     throw new TypeError('moderation profile transaction dependencies are required')
   }
@@ -174,9 +176,13 @@ export function createConsumerModerationProfileTransaction({
       throw error
     }
     try {
-      return await profileController.commit(candidate)
+      const committed = await profileController.commit(candidate)
+      await afterCommit(committed)
+      return committed
     } catch (error) {
+      await profileController.commit(previous).catch(() => {})
       await applyState(previous).catch(() => {})
+      await afterCommit(previous).catch(() => {})
       throw error
     }
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -6,8 +6,12 @@ import { DeveloperModeGate, useDeveloperMode } from '@/lib/developer-mode'
 import { NativeSwitch } from '@/components/native-ui'
 import { GlassCard, SectionHeader } from '@/components/primitives'
 import { ArchiveParticipationControl } from '@/components/developer/ArchiveParticipationControl'
+import { ModerationFeedEditor } from '@/components/library/ModerationFeedEditor'
 import { colors } from '@/lib/colors'
-import { CONSUMER_MODERATION_PROFILE_SETTING_KEY, DEFAULT_MODERATION_PROFILE, type ModerationProfile } from '@/lib/default-moderation-profile'
+import {
+  createModerationProfileActions,
+  type ModerationProfileState,
+} from '@/lib/moderation-profile'
 import { useApp } from './_layout'
 
 const developerRoutes = [
@@ -27,29 +31,20 @@ function DeveloperSettingsContent() {
   const { enabled, isLoading } = developerMode
   const { rpc } = useApp()
   const [developerModeError, setDeveloperModeError] = useState<string | null>(null)
-  const [moderationProfile, setModerationProfile] = useState<ModerationProfile | null>(null)
+  const moderationProfileActions = useMemo(
+    () => createModerationProfileActions(rpc as any),
+    [rpc],
+  )
+  const [moderationProfile, setModerationProfile] = useState<ModerationProfileState | null>(null)
   const [moderationProfileError, setModerationProfileError] = useState<string | null>(null)
 
   const refreshModerationProfile = async () => {
     try {
-      const result = await (rpc as any)?.getPersonalSettings?.({})
-      const setting = result?.settings?.find((entry: { key?: string }) => entry.key === CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-      if (!setting?.value) throw new Error('backend moderation profile unavailable')
-      const parsed = JSON.parse(setting.value)
-      setModerationProfile(parsed.profile || parsed)
+      setModerationProfile(await moderationProfileActions.load())
       setModerationProfileError(null)
     } catch {
       setModerationProfileError('Unable to read the local moderation profile.')
     }
-  }
-
-  const applyModerationProfile = async (value: unknown) => {
-    const response = await (rpc as any)?.setPersonalSetting?.({
-      key: CONSUMER_MODERATION_PROFILE_SETTING_KEY,
-      value: JSON.stringify(value),
-    })
-    if (response && response.success === false) throw new Error(response.errorCode || 'policy update rejected')
-    await refreshModerationProfile()
   }
 
   useEffect(() => { void refreshModerationProfile() }, [])
@@ -95,21 +90,50 @@ function DeveloperSettingsContent() {
           <DeveloperModeGate>
             <SectionHeader title="Default moderation profile" subtitle="Versioned, local-only subscriptions. Curator keys authenticate their own optional feeds; they do not authorize publishers or media." />
             <GlassCard style={styles.card}>
-              <Text style={styles.rowTitle}>Community profile v{moderationProfile?.version ?? DEFAULT_MODERATION_PROFILE.version}</Text>
-              <Text style={styles.rowDetail}>{moderationProfile?.enabled === false ? 'Disabled: records remain local and can be revealed on this device.' : `${moderationProfile?.curatorSubscriptions.length ?? 0} optional curator subscriptions.`}</Text>
+              <Text style={styles.rowTitle}>Active moderation profile</Text>
+              <Text style={styles.rowDetail}>Version: {moderationProfile?.profile.version ?? 'unavailable'}</Text>
+              <Text style={styles.rowDetail}>Enabled: {moderationProfile ? (moderationProfile.profile.enabled ? 'yes' : 'no') : 'unavailable'}</Text>
+              <Text style={styles.rowDetail}>Customized: {moderationProfile ? (moderationProfile.customized ? 'yes' : 'no') : 'unavailable'}</Text>
+              <Text style={styles.profileLabel}>Subscription signer IDs</Text>
+              {moderationProfile?.profile.curatorSubscriptions.length === 0 ? (
+                <Text style={styles.rowDetail}>None configured on this device.</Text>
+              ) : null}
+              {(moderationProfile?.profile.curatorSubscriptions ?? []).map((signerId) => (
+                <Text
+                  key={signerId}
+                  selectable
+                  numberOfLines={2}
+                  accessibilityLabel={`Moderation subscription signer ${signerId}`}
+                  style={styles.signerId}
+                >
+                  {signerId}
+                </Text>
+              ))}
               <View style={styles.profileActions}>
-                <Pressable onPress={() => { void applyModerationProfile({ profile: { ...(moderationProfile || DEFAULT_MODERATION_PROFILE), enabled: false, curatorSubscriptions: [] } }).catch(() => setModerationProfileError('Unable to update the local moderation profile.')) }} style={styles.profileButton}>
+                <Pressable disabled={!moderationProfile} onPress={() => { if (moderationProfile) void moderationProfileActions.disable(moderationProfile).then(setModerationProfile).catch(() => setModerationProfileError('Unable to update the local moderation profile.')) }} style={styles.profileButton}>
                   <Text style={styles.profileButtonText}>Disable</Text>
                 </Pressable>
-                <Pressable onPress={() => { void applyModerationProfile({ operation: 'restore-defaults' }).catch(() => setModerationProfileError('Unable to restore the local moderation profile.')) }} style={styles.profileButton}>
+                <Pressable onPress={() => { void moderationProfileActions.restoreDefaults().then(setModerationProfile).catch(() => setModerationProfileError('Unable to restore the local moderation profile.')) }} style={styles.profileButton}>
                   <Text style={styles.profileButtonText}>Restore Defaults</Text>
                 </Pressable>
-                <Pressable onPress={() => { void applyModerationProfile({ profile: { ...(moderationProfile || DEFAULT_MODERATION_PROFILE), enabled: true, curatorSubscriptions: [] } }).catch(() => setModerationProfileError('Unable to replace the local moderation profile.')) }} style={styles.profileButton}>
+                <Pressable disabled={!moderationProfile} onPress={() => { if (moderationProfile) void moderationProfileActions.replace(moderationProfile, []).then(setModerationProfile).catch(() => setModerationProfileError('Unable to replace the local moderation profile.')) }} style={styles.profileButton}>
                   <Text style={styles.profileButtonText}>Clear Curators</Text>
                 </Pressable>
               </View>
               {moderationProfileError ? <Text accessibilityRole="alert" style={styles.error}>{moderationProfileError}</Text> : null}
             </GlassCard>
+            {moderationProfile ? (
+              <View style={styles.profileEditor}>
+                <ModerationFeedEditor
+                  subscriptions={moderationProfile.profile.curatorSubscriptions}
+                  onReplace={(subscriptions) => {
+                    void moderationProfileActions.replace(moderationProfile, subscriptions)
+                      .then(setModerationProfile)
+                      .catch(() => setModerationProfileError('Unable to replace the local moderation profile.'))
+                  }}
+                />
+              </View>
+            ) : null}
             <SectionHeader title="Archive participation" subtitle="Volunteer storage is an operator-controlled local network setting." />
             <GlassCard padded={false} style={styles.card}>
               <ArchiveParticipationControl rpc={rpc} />
@@ -158,6 +182,9 @@ const styles = StyleSheet.create({
   routeBorder: { borderTopWidth: 1, borderTopColor: colors.glassBorder },
   rowTitle: { color: colors.text, fontSize: 14, fontWeight: '600' },
   rowDetail: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  profileLabel: { color: colors.text, fontSize: 12, fontWeight: '600', marginTop: 12 },
+  signerId: { color: colors.textMuted, fontFamily: 'monospace', fontSize: 11, lineHeight: 16, marginTop: 4 },
+  profileEditor: { marginHorizontal: 16 },
   profileActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
   profileButton: { borderWidth: 1, borderColor: colors.glassBorder, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   profileButtonText: { color: colors.text, fontSize: 12, fontWeight: '600' },

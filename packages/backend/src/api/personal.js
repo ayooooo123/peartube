@@ -106,7 +106,9 @@ export function createPersonalApi({ ctx }) {
         bootstrapKey: req.bootstrapKey || undefined,
         deviceLocal: req.deviceLocal === true,
       });
-      if (result?.success) await ctx.reloadConsumerModerationProfile?.();
+      if (result?.success && result.profileReconciled !== true) {
+        await ctx.reloadConsumerModerationProfile?.();
+      }
       return {
         success: !!result.success,
         bootstrapKey: result.bootstrapKey,

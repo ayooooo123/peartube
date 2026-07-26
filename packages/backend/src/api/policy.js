@@ -333,7 +333,19 @@ export function createPolicyApi({
   onPolicyChange = null,
   validatePolicy = null,
   getProfileModerationFeeds = null,
+  transactionQueue: providedTransactionQueue = null,
 } = {}) {
+  let localWrites = Promise.resolve()
+  const transactionQueue = providedTransactionQueue || Object.freeze({
+    run(operation) {
+      const next = localWrites.then(operation, operation)
+      localWrites = next.catch(() => {})
+      return next
+    },
+  })
+  if (typeof transactionQueue?.run !== 'function') {
+    throw new TypeError('policy transaction queue must expose run(operation)')
+  }
   const readProfileModerationFeeds = typeof getProfileModerationFeeds === 'function'
     ? () => boundedTransportIdList(getProfileModerationFeeds(), 'profile moderation feeds')
     : null
@@ -352,14 +364,6 @@ export function createPolicyApi({
         current = withProfileModerationFeeds(policy)
         return current
       })
-  let writes = Promise.resolve()
-
-  const enqueueWrite = operation => {
-    const next = writes.then(operation, operation)
-    writes = next.catch(() => {})
-    return next
-  }
-
   const sameIds = (left, right) =>
     left.length === right.length && left.every((value, index) => value === right[index])
 
@@ -401,7 +405,7 @@ export function createPolicyApi({
     },
     async setNetworkPolicy(input = {}) {
       await ready
-      return enqueueWrite(async () => {
+      return transactionQueue.run(async () => {
         try {
           const patch = decodeNetworkPolicyPatch(input)
           const base = withProfileModerationFeeds(current)
@@ -421,9 +425,9 @@ export function createPolicyApi({
         }
       })
     },
-    async setProfileModerationFeeds(feeds) {
+    async setProfileModerationFeeds(feeds, context = {}) {
       await ready
-      return enqueueWrite(async () => {
+      const operation = async () => {
         try {
           const trustedModerationFeeds = boundedTransportIdList(
             feeds,
@@ -436,7 +440,10 @@ export function createPolicyApi({
         } catch (err) {
           return rejection(err)
         }
-      })
+      }
+      return context.transactionQueue === transactionQueue
+        ? operation()
+        : transactionQueue.run(operation)
     },
   }
 }

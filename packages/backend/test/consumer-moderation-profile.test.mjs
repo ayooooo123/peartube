@@ -44,6 +44,23 @@ function bundle(version, feeds) {
   }
 }
 
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return { promise, resolve }
+}
+
+function serializedTransactionQueue() {
+  let writes = Promise.resolve()
+  return Object.freeze({
+    run(operation) {
+      const next = writes.then(operation, operation)
+      writes = next.catch(() => {})
+      return next
+    },
+  })
+}
+
 test('fresh backend initializes and persists the current bundled moderation profile', async (t) => {
   const repository = memoryRepository()
   const bundledProfile = bundle(4, [FEEDS.current])
@@ -230,6 +247,80 @@ test('network policy exposes moderation transport as profile-linked and cannot d
   t.ok((await policyApi.setNetworkPolicy({ backgroundMode: 'allow' })).success)
   t.alike(applied.at(-1), [FEEDS.mine],
     'ordinary transport changes preserve the backend-authoritative profile feed set')
+})
+
+test('profile and generic policy writes share one transaction queue under both interleavings', async (t) => {
+  async function runScenario(profileFirst) {
+    const transactionQueue = serializedTransactionQueue()
+    const controller = createConsumerModerationProfileController({
+      repository: memoryRepository(),
+      bundledProfile: bundle(1, [FEEDS.default]),
+    })
+    await controller.ready
+    const entered = deferred()
+    const release = deferred()
+    const applied = []
+    let transportFeeds = [FEEDS.default]
+    let shouldBlock = true
+    const policyApi = createPolicyApi({
+      store: new Map(),
+      initialPolicy: { trustedModerationFeeds: [FEEDS.default] },
+      getProfileModerationFeeds: () => controller.getEffectiveCuratorSubscriptions(),
+      transactionQueue,
+      onPolicyChange: async policy => {
+        applied.push(policy.trustedModerationFeeds.slice())
+        transportFeeds = policy.trustedModerationFeeds.slice()
+        if (shouldBlock) {
+          shouldBlock = false
+          entered.resolve()
+          await release.promise
+        }
+      },
+    })
+    const transaction = createConsumerModerationProfileTransaction({
+      profileController: controller,
+      transactionQueue,
+      applyState: async (state, transactionContext) => {
+        const response = await policyApi.setProfileModerationFeeds(
+          state.profile.enabled === false ? [] : state.profile.curatorSubscriptions,
+          transactionContext,
+        )
+        if (!response.success) throw new Error(response.errorCode)
+      },
+    })
+    const replace = () => transaction.apply({
+      profile: bundle(1, [FEEDS.mine]),
+    })
+    const generic = () => policyApi.setNetworkPolicy({ backgroundMode: 'allow' })
+
+    const first = profileFirst ? replace() : generic()
+    await entered.promise
+    const second = profileFirst ? generic() : replace()
+    release.resolve()
+    await Promise.all([first, second])
+
+    const state = await controller.inspect()
+    const reported = await policyApi.getNetworkPolicy()
+    return {
+      applied,
+      controllerFeeds: state.profile.curatorSubscriptions,
+      reportedFeeds: reported.policy.trustedModerationFeeds,
+      transportFeeds,
+    }
+  }
+
+  const profileThenGeneric = await runScenario(true)
+  t.alike(profileThenGeneric.applied, [[FEEDS.mine], [FEEDS.mine]],
+    'a queued generic write reads the profile only after the prior profile commit')
+  t.alike(profileThenGeneric.controllerFeeds, [FEEDS.mine])
+  t.alike(profileThenGeneric.reportedFeeds, [FEEDS.mine])
+  t.alike(profileThenGeneric.transportFeeds, [FEEDS.mine])
+
+  const genericThenProfile = await runScenario(false)
+  t.alike(genericThenProfile.applied, [[FEEDS.default], [FEEDS.mine]])
+  t.alike(genericThenProfile.controllerFeeds, [FEEDS.mine])
+  t.alike(genericThenProfile.reportedFeeds, [FEEDS.mine])
+  t.alike(genericThenProfile.transportFeeds, [FEEDS.mine])
 })
 
 test('profile transport transactions validate before storage and roll back failed reconciliation', async (t) => {

@@ -242,6 +242,12 @@ export function createMediaGraphApi(options = {}) {
     const sources = []
     for (const row of rows) {
       const publicationId = row.body.payload.publicationId
+      if (
+        typeof consumerCatalogProjection?.isPublicationVisible === 'function' &&
+        consumerCatalogProjection.isPublicationVisible(publicationId) !== true
+      ) {
+        continue
+      }
       const manifest = assetManifestStore?.getManifest?.(publicationId) || null
       sources.push(manifestSource(manifest, row, await isPreferred(entityId, publicationId), trust))
     }
@@ -419,6 +425,17 @@ export function createMediaGraphApi(options = {}) {
     async getPublicationSources(request = {}) {
       const missingStore = requireGraphStore()
       if (missingStore) return { ...missingStore, items: [], nextCursor: null }
+      if (consumerCatalogProjection) {
+        await options.ctx?.mediaCatalogProjection?.update?.()
+        await consumerCatalogProjection.update?.()
+        if (!consumerCatalogProjection.isVisible?.(request.entityId)) {
+          return error(
+            'MEDIA_ENTITY_NOT_VISIBLE',
+            'Media entity is not visible under this device policy',
+            { items: [], nextCursor: null },
+          )
+        }
+      }
       const sources = await buildSources(request.entityId)
       const decorated = decorateSources(sources)
       const result = pageRows(decorated, request, source => source.publicationId)

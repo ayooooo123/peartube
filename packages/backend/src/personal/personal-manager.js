@@ -33,13 +33,24 @@ function personalNamespace(publicKey) {
   return `peartube-personal:${publicKey}`
 }
 
-export function createPersonalManager({ ctx, identityManager }) {
+export function createPersonalManager({ ctx, identityManager, onActiveStoreChanged = null }) {
   /** @type {Map<string, PersonalStore>} */
   const stores = new Map()
   /** @type {Map<string, Buffer>} */
   const secrets = new Map()
   let activePublicKey = null
   let anonymousBootstrapKey = null
+  let activeChanges = Promise.resolve()
+
+  if (onActiveStoreChanged !== null && typeof onActiveStoreChanged !== 'function') {
+    throw new TypeError('onActiveStoreChanged must be a function')
+  }
+
+  function enqueueActiveChange(operation) {
+    const next = activeChanges.then(operation, operation)
+    activeChanges = next.catch(() => {})
+    return next
+  }
 
   async function openForIdentity(identity, { allowUnencrypted = false } = {}) {
     if (!identity?.publicKey) return null
@@ -84,16 +95,81 @@ export function createPersonalManager({ ctx, identityManager }) {
     return store
   }
 
-  async function migrateAnonymousProfile(target) {
+  async function prepareAnonymousProfileMigration(target) {
     const anonymous = stores.get(DEVICE_LOCAL_PERSONAL_ID)
-    if (!anonymous || anonymous === target || !target?.writable) return
+    if (!anonymous || anonymous === target || !target?.writable) return null
     const localState = await anonymous.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (localState === undefined) return
+    if (localState === undefined) return null
     const targetState = await target.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
     if (targetState === undefined) {
       await target.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, localState)
     }
-    await anonymous.deleteSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+    return { anonymous, localState, targetState }
+  }
+
+  async function restoreProfileSetting(store, value) {
+    if (!store?.writable) return
+    if (value === undefined) {
+      await store.deleteSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+    } else {
+      await store.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, value)
+    }
+  }
+
+  async function activateStore(publicKey, store, { migrateAnonymous = false } = {}) {
+    if (!store) return { store: null, profileReconciled: false }
+    if (ctx.personal === store && activePublicKey === publicKey) {
+      return { store, profileReconciled: false }
+    }
+
+    const previous = {
+      publicKey: activePublicKey,
+      store: ctx.personal || null,
+    }
+    const targetProfile = store.writable
+      ? await store.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+      : undefined
+    let migration = null
+    let profileReconciled = false
+
+    try {
+      if (migrateAnonymous) migration = await prepareAnonymousProfileMigration(store)
+      // The profile repository resolves through ctx.personal, so expose the
+      // candidate store only for the duration of the reconciliation. The
+      // externally observable active key is committed after every side effect.
+      ctx.personal = store
+      if (onActiveStoreChanged) {
+        await onActiveStoreChanged({
+          publicKey,
+          previousPublicKey: previous.publicKey,
+          store,
+          previousStore: previous.store,
+        })
+        profileReconciled = true
+      }
+      if (migration) {
+        await migration.anonymous.deleteSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+      }
+      activePublicKey = publicKey
+      return { store, profileReconciled }
+    } catch (error) {
+      await restoreProfileSetting(store, targetProfile).catch(() => {})
+      if (migration) {
+        await restoreProfileSetting(migration.anonymous, migration.localState).catch(() => {})
+      }
+      activePublicKey = previous.publicKey
+      ctx.personal = previous.store
+      if (onActiveStoreChanged && previous.store) {
+        await onActiveStoreChanged({
+          publicKey: previous.publicKey,
+          previousPublicKey: publicKey,
+          store: previous.store,
+          previousStore: store,
+          rollback: true,
+        }).catch(() => {})
+      }
+      throw error
+    }
   }
 
   /**
@@ -127,16 +203,18 @@ export function createPersonalManager({ ctx, identityManager }) {
      * provisions a keychain secret (so the store can be created encrypted).
      */
     async init() {
-      const active = activeIdentityRecord()
-      activePublicKey = active?.publicKey || null
-      if (!active) {
-        log.info(' No active identity; personal store deferred')
-        return
-      }
-      // If a secret was already provisioned this process, open now.
-      if (secrets.has(active.publicKey)) {
-        ctx.personal = await openForIdentity(active)
-      }
+      return enqueueActiveChange(async () => {
+        const active = activeIdentityRecord()
+        if (!active) {
+          log.info(' No active identity; personal store deferred')
+          return
+        }
+        // If a secret was already provisioned this process, open now.
+        if (secrets.has(active.publicKey)) {
+          const store = await openForIdentity(active)
+          await activateStore(active.publicKey, store, { migrateAnonymous: true })
+        }
+      })
     },
 
     /**
@@ -158,51 +236,43 @@ export function createPersonalManager({ ctx, identityManager }) {
         return { success: false, error: 'personal-secret-required' }
       }
 
-      const existingStore = stores.get(pk)
-      if (existingStore && existingStore.encrypted) {
+      return enqueueActiveChange(async () => {
+        const existingStore = stores.get(pk)
+        if (existingStore && !existingStore.encrypted) {
+          // Cannot retro-encrypt an already-created unencrypted store.
+          log.warn(' Personal store already open unencrypted for', pk.slice(0, 16), '- secret applies to new stores only')
+          return { success: false, error: 'store-already-unencrypted' }
+        }
+
+        const buf = b4a.isBuffer(secret) ? b4a.from(secret) : b4a.from(secret, 'hex')
+        secrets.set(pk, buf)
+
+        let store = existingStore || null
+        let activation = { profileReconciled: false }
+        if (isDeviceLocal) {
+          anonymousBootstrapKey = bootstrapKey || anonymousBootstrapKey
+          const identity = {
+            publicKey: DEVICE_LOCAL_PERSONAL_ID,
+            personalKey: anonymousBootstrapKey,
+          }
+          store = store || await openForIdentity(identity)
+          anonymousBootstrapKey = store?.keyHex || anonymousBootstrapKey
+          if (store && (!ctx.personal || activePublicKey === DEVICE_LOCAL_PERSONAL_ID)) {
+            activation = await activateStore(DEVICE_LOCAL_PERSONAL_ID, store)
+          }
+        } else if (pk === (identityManager?.getActivePublicKey?.() || activePublicKey)) {
+          const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === pk) || activeIdentityRecord()
+          store = store || await openForIdentity(identity)
+          activation = await activateStore(pk, store, { migrateAnonymous: true })
+        }
         return {
           success: true,
-          bootstrapKey: existingStore.keyHex,
-          encrypted: true,
-          alreadyOpen: true,
+          bootstrapKey: store?.keyHex || bootstrapKey,
+          encrypted: Boolean(store?.encrypted),
+          alreadyOpen: Boolean(existingStore),
+          profileReconciled: activation.profileReconciled === true,
         }
-      }
-      if (existingStore && !existingStore.encrypted) {
-        // Cannot retro-encrypt an already-created unencrypted store.
-        log.warn(' Personal store already open unencrypted for', pk.slice(0, 16), '- secret applies to new stores only')
-        return { success: false, error: 'store-already-unencrypted' }
-      }
-
-      const buf = b4a.isBuffer(secret) ? b4a.from(secret) : b4a.from(secret, 'hex')
-      secrets.set(pk, buf)
-
-      let store = null
-      if (isDeviceLocal) {
-        anonymousBootstrapKey = bootstrapKey || anonymousBootstrapKey
-        const identity = {
-          publicKey: DEVICE_LOCAL_PERSONAL_ID,
-          personalKey: anonymousBootstrapKey,
-        }
-        store = await openForIdentity(identity)
-        anonymousBootstrapKey = store?.keyHex || anonymousBootstrapKey
-        if (store && (!ctx.personal || activePublicKey === DEVICE_LOCAL_PERSONAL_ID)) {
-          activePublicKey = DEVICE_LOCAL_PERSONAL_ID
-          ctx.personal = store
-        }
-      } else if (pk === (identityManager?.getActivePublicKey?.() || activePublicKey)) {
-        const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === pk) || activeIdentityRecord()
-        store = await openForIdentity(identity)
-        if (store) {
-          await migrateAnonymousProfile(store)
-          activePublicKey = pk
-          ctx.personal = store
-        }
-      }
-      return {
-        success: true,
-        bootstrapKey: store?.keyHex || bootstrapKey,
-        encrypted: Boolean(store?.encrypted),
-      }
+      })
     },
 
     /** Whether an encryption secret is known for an identity this process. */
@@ -213,11 +283,13 @@ export function createPersonalManager({ ctx, identityManager }) {
 
     /** Open the active store unencrypted (fallback for platforms without a keychain). */
     async ensureActiveUnencrypted() {
-      const active = activeIdentityRecord()
-      if (!active) return null
-      const store = await openForIdentity(active, { allowUnencrypted: true })
-      if (store) { activePublicKey = active.publicKey; ctx.personal = store }
-      return store
+      return enqueueActiveChange(async () => {
+        const active = activeIdentityRecord()
+        if (!active) return null
+        const store = await openForIdentity(active, { allowUnencrypted: true })
+        await activateStore(active.publicKey, store, { migrateAnonymous: true })
+        return store
+      })
     },
 
     /** Get the active personal store if open. */
@@ -234,15 +306,13 @@ export function createPersonalManager({ ctx, identityManager }) {
 
     /** Switch the active personal store when the active identity changes. */
     async setActive(publicKey) {
-      const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === publicKey)
-      if (!identity) return null
-      activePublicKey = publicKey
-      const store = await openForIdentity(identity)
-      if (store) {
-        await migrateAnonymousProfile(store)
-        ctx.personal = store
-      }
-      return store
+      return enqueueActiveChange(async () => {
+        const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === publicKey)
+        if (!identity) return null
+        const store = await openForIdentity(identity)
+        await activateStore(publicKey, store, { migrateAnonymous: true })
+        return store
+      })
     },
 
     openForIdentity,

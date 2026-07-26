@@ -1,5 +1,121 @@
 const DEFAULT_PAGE_SIZE = 20
 const MAX_PAGE_SIZE = 50
+const MAX_SEARCH_SCAN_PAGES = 16
+const SEARCH_CURSOR_PREFIX = 'consumer-search:v1:'
+
+const normalizeSearchText = (value) => String(value || '')
+  .toLowerCase()
+  .replace(/[._\-[\]()]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const searchMatches = (item, query) => {
+  const words = normalizeSearchText(query).split(' ').filter(Boolean)
+  if (words.length === 0) return false
+  const searchable = normalizeSearchText([
+    item?.title,
+    item?.subtitle,
+    item?.entityKind,
+    item?.entityId,
+  ].filter(Boolean).join(' '))
+  return words.every(word => searchable.includes(word))
+}
+
+const encodeSearchCursor = ({ catalogCursor, offset }) =>
+  `${SEARCH_CURSOR_PREFIX}${encodeURIComponent(JSON.stringify({
+    catalogCursor: catalogCursor || null,
+    offset,
+  }))}`
+
+const decodeSearchCursor = (cursor) => {
+  if (cursor == null || cursor === '') return { catalogCursor: undefined, offset: 0 }
+  if (typeof cursor !== 'string' || cursor.length > 2048 || !cursor.startsWith(SEARCH_CURSOR_PREFIX)) {
+    throw new Error('Invalid consumer search cursor')
+  }
+  const value = JSON.parse(decodeURIComponent(cursor.slice(SEARCH_CURSOR_PREFIX.length)))
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    (value.catalogCursor !== null && typeof value.catalogCursor !== 'string') ||
+    !Number.isSafeInteger(value.offset) ||
+    value.offset < 0 ||
+    value.offset > MAX_PAGE_SIZE
+  ) {
+    throw new Error('Invalid consumer search cursor')
+  }
+  return {
+    catalogCursor: value.catalogCursor || undefined,
+    offset: value.offset,
+  }
+}
+
+export async function searchMediaCatalog({
+  getMediaCatalog,
+  query,
+  cursor,
+  limit = DEFAULT_PAGE_SIZE,
+}) {
+  if (typeof getMediaCatalog !== 'function') {
+    throw new TypeError('getMediaCatalog must be a function')
+  }
+  const boundedQuery = typeof query === 'string' ? query.trim().slice(0, 256) : ''
+  const pageLimit = Math.max(1, Math.min(MAX_PAGE_SIZE, Math.trunc(limit) || DEFAULT_PAGE_SIZE))
+  if (!boundedQuery) return { success: true, items: [], nextCursor: null }
+
+  let state
+  try {
+    state = decodeSearchCursor(cursor)
+  } catch {
+    return {
+      success: false,
+      errorCode: 'INVALID_CURSOR',
+      error: 'Invalid consumer search cursor',
+      items: [],
+      nextCursor: null,
+    }
+  }
+
+  const items = []
+  let catalogCursor = state.catalogCursor
+  let offset = state.offset
+  for (let page = 0; page < MAX_SEARCH_SCAN_PAGES; page++) {
+    const pageStartCursor = catalogCursor
+    const result = await getMediaCatalog({ cursor: catalogCursor, limit: MAX_PAGE_SIZE })
+    if (!result?.success) {
+      return {
+        ...result,
+        items: [],
+        nextCursor: null,
+      }
+    }
+    const matches = (Array.isArray(result.items) ? result.items : [])
+      .filter(item => searchMatches(item, boundedQuery))
+    const remaining = matches.slice(offset)
+    const available = pageLimit - items.length
+    items.push(...remaining.slice(0, available))
+    const consumed = offset + Math.min(remaining.length, available)
+    if (items.length >= pageLimit) {
+      const nextCursor = consumed < matches.length
+        ? encodeSearchCursor({ catalogCursor: pageStartCursor, offset: consumed })
+        : result.nextCursor
+          ? encodeSearchCursor({ catalogCursor: result.nextCursor, offset: 0 })
+          : null
+      return { success: true, items, nextCursor }
+    }
+    offset = 0
+    catalogCursor = typeof result.nextCursor === 'string' && result.nextCursor
+      ? result.nextCursor
+      : null
+    if (!catalogCursor) return { success: true, items, nextCursor: null }
+  }
+  return {
+    success: true,
+    items,
+    nextCursor: catalogCursor
+      ? encodeSearchCursor({ catalogCursor, offset: 0 })
+      : null,
+  }
+}
 
 const initialState = () => ({
   catalogScope: 'consumer',

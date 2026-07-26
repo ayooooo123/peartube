@@ -8,6 +8,7 @@ import Corestore from 'corestore'
 import { createPersonalManager } from '../src/personal/personal-manager.js'
 import {
   CONSUMER_MODERATION_PROFILE_SETTING_KEY,
+  createConsumerModerationProfileTransaction,
   createConsumerModerationProfileController,
   DEFAULT_CONSUMER_MODERATION_PROFILE,
 } from '../src/moderation/profile.js'
@@ -186,6 +187,123 @@ test('profile settings RPC is not gated on unrelated personal-store pairing read
 
   t.is(operations.length, 1)
   t.is(operations[0].operation, 'restore-defaults')
+})
+
+test('active encrypted PersonalStore reconciles exact A/B profiles across switches, rollback, and restart', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-active-profile-switch-'))
+  const secretA = '31'.repeat(32)
+  const secretB = '32'.repeat(32)
+  const feedA = 'a1'.repeat(32)
+  const feedB = 'b2'.repeat(32)
+  const identityA = { publicKey: '41'.repeat(32), personalKey: null }
+  const identityB = { publicKey: '42'.repeat(32), personalKey: null }
+
+  let store = new Corestore(directory)
+  await store.ready()
+  let manager
+  try {
+    const identityManager = createIdentityManager()
+    identityManager.activate(identityA)
+    const ctx = { store, metaDb: null, swarm: null, personal: null }
+    let reloadActiveProfile = async () => {}
+    manager = createPersonalManager({
+      ctx,
+      identityManager,
+      onActiveStoreChanged: () => reloadActiveProfile(),
+    })
+    const controller = createConsumerModerationProfileController({ repository: profileRepository(ctx) })
+    await controller.ready
+    let appliedFeeds = []
+    let rejectedFeed = null
+    const transaction = createConsumerModerationProfileTransaction({
+      profileController: controller,
+      applyState: async state => {
+        const nextFeeds = state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
+        if (nextFeeds.includes(rejectedFeed)) throw new Error('transport subscription rejected')
+        appliedFeeds = nextFeeds.slice()
+      },
+    })
+    reloadActiveProfile = () => transaction.reload()
+
+    await manager.init()
+    await manager.provisionSecret({ publicKey: identityA.publicKey, secret: secretA })
+    await transaction.apply({
+      profile: { ...DEFAULT_CONSUMER_MODERATION_PROFILE, curatorSubscriptions: [feedA] },
+    })
+    t.alike(appliedFeeds, [feedA], 'identity A owns its transport subscription')
+
+    identityManager.activate(identityB)
+    await manager.provisionSecret({ publicKey: identityB.publicKey, secret: secretB })
+    await transaction.apply({
+      profile: { ...DEFAULT_CONSUMER_MODERATION_PROFILE, curatorSubscriptions: [feedB] },
+    })
+    t.alike(appliedFeeds, [feedB], 'identity B owns a different transport subscription')
+
+    identityManager.activate(identityA)
+    await manager.setActive(identityA.publicKey)
+    t.alike(controller.getEffectiveCuratorSubscriptions(), [feedA], 'switching to A reloads only A profile')
+    t.alike(appliedFeeds, [feedA], 'transport reconciles to A')
+
+    identityManager.activate(identityB)
+    await manager.setActive(identityB.publicKey)
+    t.alike(controller.getEffectiveCuratorSubscriptions(), [feedB], 'switching to B reloads only B profile')
+    t.alike(appliedFeeds, [feedB], 'transport reconciles to B without stale A subscriptions')
+
+    rejectedFeed = feedA
+    identityManager.activate(identityA)
+    await t.exception(
+      manager.setActive(identityA.publicKey),
+      /transport subscription rejected/,
+      'failed reconciliation rejects the active-store switch',
+    )
+    t.is(ctx.personal, manager.getActive(), 'failed switch restores the previous PersonalStore')
+    t.alike(controller.getEffectiveCuratorSubscriptions(), [feedB], 'failed switch restores B controller state')
+    t.alike(appliedFeeds, [feedB], 'failed switch restores B transport state')
+    rejectedFeed = null
+
+    await manager.close()
+    await store.close()
+    manager = null
+
+    store = new Corestore(directory)
+    await store.ready()
+    const restartedIdentityManager = createIdentityManager()
+    restartedIdentityManager.activate({ ...identityB })
+    const restartedCtx = { store, metaDb: null, swarm: null, personal: null }
+    let reloadRestartedProfile = async () => {}
+    manager = createPersonalManager({
+      ctx: restartedCtx,
+      identityManager: restartedIdentityManager,
+      onActiveStoreChanged: () => reloadRestartedProfile(),
+    })
+    const restartedController = createConsumerModerationProfileController({
+      repository: profileRepository(restartedCtx),
+    })
+    await restartedController.ready
+    let restartedFeeds = []
+    const restartedTransaction = createConsumerModerationProfileTransaction({
+      profileController: restartedController,
+      applyState: async state => {
+        restartedFeeds = state.profile.enabled === false
+          ? []
+          : state.profile.curatorSubscriptions.slice()
+      },
+    })
+    reloadRestartedProfile = () => restartedTransaction.reload()
+
+    await manager.init()
+    await manager.provisionSecret({ publicKey: identityB.publicKey, secret: secretB })
+    t.alike(
+      restartedController.getEffectiveCuratorSubscriptions(),
+      [feedB],
+      'restart loads the exact persisted B profile',
+    )
+    t.alike(restartedFeeds, [feedB], 'restart subscribes only to B with no stale A transport state')
+  } finally {
+    await manager?.close().catch(() => {})
+    await store?.close().catch(() => {})
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('personal encryption provisioning requires a platform secret and never returns it', async t => {

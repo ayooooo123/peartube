@@ -689,14 +689,20 @@ export async function createBackendContext(config) {
   lifecycle.ownResource('video statistics', videoStats)
   const identityManager = createIdentityManager({ ctx });
   lifecycle.ownResource('identity manager', identityManager)
-  const personalManager = createPersonalManager({ ctx, identityManager });
+  const personalManager = createPersonalManager({
+    ctx,
+    identityManager,
+    onActiveStoreChanged: async () => {
+      await ctx.reloadConsumerModerationProfile?.()
+    },
+  });
   lifecycle.ownResource('personal manager', personalManager, 'close', 2000)
   ctx.personalManager = personalManager;
 
   // Keep the active personal store in sync with the active identity across all
   // platforms by wrapping the identity-manager mutators in one place (every
-  // platform changes identities through these). Best-effort: a personal-store
-  // failure must not break identity switching/creation.
+  // platform changes identities through these). Store activation is committed
+  // only after the consumer profile and transport subscriptions reconcile.
   const refreshActivePersonalStore = async (publicKey) => {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
@@ -894,6 +900,14 @@ export async function createBackendContext(config) {
     await revalidateConsumerWork()
     return effective
   }
+  let consumerPolicyWrites = Promise.resolve()
+  const consumerPolicyTransactionQueue = Object.freeze({
+    run(operation) {
+      const next = consumerPolicyWrites.then(operation, operation)
+      consumerPolicyWrites = next.catch(() => {})
+      return next
+    },
+  })
   const policyApi = createPolicyApi({
     store: networkPolicyStore,
     initialPolicy: initialNetworkPolicy,
@@ -901,10 +915,12 @@ export async function createBackendContext(config) {
     validatePolicy: policy => networkPolicyRuntime.assertSupported(policy),
     getProfileModerationFeeds: () =>
       consumerModerationProfile.getEffectiveCuratorSubscriptions(),
+    transactionQueue: consumerPolicyTransactionQueue,
   })
-  const applyProfileState = async state => {
+  const applyProfileState = async (state, transactionContext) => {
     const response = await policyApi.setProfileModerationFeeds(
-      state.profile.enabled === false ? [] : state.profile.curatorSubscriptions
+      state.profile.enabled === false ? [] : state.profile.curatorSubscriptions,
+      transactionContext,
     )
     if (response.success === false) throw new Error(response.errorCode || 'consumer moderation profile rejected')
     return state
@@ -913,6 +929,7 @@ export async function createBackendContext(config) {
     profileController: consumerModerationProfile,
     applyState: applyProfileState,
     afterCommit: revalidateConsumerWork,
+    transactionQueue: consumerPolicyTransactionQueue,
   })
   ctx.setConsumerModerationProfile = input => moderationProfileTransaction.apply(input)
   ctx.reloadConsumerModerationProfile = () => moderationProfileTransaction.reload()

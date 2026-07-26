@@ -143,6 +143,67 @@ test('media graph API orders publication sources by score and local source prefe
   t.is(preferred.items[0].preferred, true)
 })
 
+test('media graph detail and source APIs exclude locally hidden publications without mutating graph truth', async (t) => {
+  const { mediaGraphStore, assetManifestStore, sourcePreferenceStore } = await fixture()
+  const subject = workRef('mixed')
+  const visible = createPublicationManifest({
+    publisherId: publisherA.publicKey,
+    sequence: 1,
+    title: 'Visible source',
+    renditions: [rendition(1)],
+    keyPair: publisherA,
+  })
+  const hidden = createPublicationManifest({
+    publisherId: publisherB.publicKey,
+    sequence: 1,
+    title: 'Hidden source',
+    renditions: [rendition(3)],
+    keyPair: publisherB,
+  })
+  await assetManifestStore.ingestManifest(visible)
+  await assetManifestStore.ingestManifest(hidden)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [subject],
+    payload: { publicationId: visible.publicationId, availabilityStatus: 'available' },
+    keyPair: publisherA,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [subject],
+    payload: { publicationId: hidden.publicationId, availabilityStatus: 'available' },
+    keyPair: publisherB,
+  })
+
+  const visiblePublications = new Set([visible.publicationId])
+  const projection = {
+    async update() {},
+    isVisible: () => visiblePublications.size > 0,
+    isPublicationVisible: publicationId => visiblePublications.has(publicationId),
+  }
+  const api = createMediaGraphApi({
+    mediaGraphStore,
+    assetManifestStore,
+    sourcePreferenceStore,
+    consumerCatalogProjection: projection,
+  })
+
+  const detail = await api.getMediaEntity({ entityId: subject.entityId })
+  t.is(detail.success, true)
+  t.alike(detail.entity.sources.map(source => source.publicationId), [visible.publicationId])
+  const sources = await api.getPublicationSources({ entityId: subject.entityId })
+  t.alike(sources.items.map(source => source.publicationId), [visible.publicationId])
+  t.ok(assetManifestStore.getManifest(hidden.publicationId),
+    'local policy filtering leaves authenticated network truth unchanged')
+  t.is(mediaGraphStore.getClaimsBySubject(subject.entityId).length, 2)
+
+  visiblePublications.clear()
+  t.is((await api.getMediaEntity({ entityId: subject.entityId })).errorCode, 'MEDIA_ENTITY_NOT_VISIBLE')
+  t.is((await api.getPublicationSources({ entityId: subject.entityId })).errorCode, 'MEDIA_ENTITY_NOT_VISIBLE')
+  t.is(mediaGraphStore.getClaimsBySubject(subject.entityId).length, 2,
+    'all-hidden detail state remains an honest local-policy miss without deleting graph records')
+})
+
 test('media graph API never auto-selects an unverified or unavailable playback source', async (t) => {
   const { api, mediaGraphStore } = await fixture()
   const subject = workRef('untrusted-only')

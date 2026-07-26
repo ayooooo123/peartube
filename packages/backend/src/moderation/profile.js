@@ -155,6 +155,7 @@ export function createConsumerModerationProfileTransaction({
   profileController,
   applyState,
   afterCommit = async () => {},
+  transactionQueue: providedTransactionQueue = null,
 } = {}) {
   if (
     !profileController ||
@@ -166,13 +167,24 @@ export function createConsumerModerationProfileTransaction({
   ) {
     throw new TypeError('moderation profile transaction dependencies are required')
   }
+  let localWrites = Promise.resolve()
+  const transactionQueue = providedTransactionQueue || Object.freeze({
+    run(operation) {
+      const next = localWrites.then(operation, operation)
+      localWrites = next.catch(() => {})
+      return next
+    },
+  })
+  if (typeof transactionQueue?.run !== 'function') {
+    throw new TypeError('moderation profile transaction queue must expose run(operation)')
+  }
 
   async function applyCandidate(candidate) {
     const previous = await profileController.inspect()
     try {
-      await applyState(candidate)
+      await applyState(candidate, { transactionQueue })
     } catch (error) {
-      await applyState(previous).catch(() => {})
+      await applyState(previous, { transactionQueue }).catch(() => {})
       throw error
     }
     try {
@@ -181,7 +193,7 @@ export function createConsumerModerationProfileTransaction({
       return committed
     } catch (error) {
       await profileController.commit(previous).catch(() => {})
-      await applyState(previous).catch(() => {})
+      await applyState(previous, { transactionQueue }).catch(() => {})
       await afterCommit(previous).catch(() => {})
       throw error
     }
@@ -189,10 +201,14 @@ export function createConsumerModerationProfileTransaction({
 
   return Object.freeze({
     async apply(input) {
-      return applyCandidate(await profileController.previewMutation(input))
+      return transactionQueue.run(async () =>
+        applyCandidate(await profileController.previewMutation(input))
+      )
     },
     async reload() {
-      return applyCandidate(await profileController.previewReload())
+      return transactionQueue.run(async () =>
+        applyCandidate(await profileController.previewReload())
+      )
     },
   })
 }

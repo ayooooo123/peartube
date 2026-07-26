@@ -1,36 +1,19 @@
-/**
- * Search Results Page - Global semantic search across all channels
- */
-import { useCallback, useState, useEffect, useRef } from 'react'
-import { View, Text, ActivityIndicator, ScrollView, useWindowDimensions, Platform, Pressable, TextInput } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter, useLocalSearchParams } from 'expo-router'
+import { useCallback, useMemo, useState } from 'react'
+import { Platform, Pressable, Text, TextInput, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { useApp, colors } from './_layout'
-import { VideoCard, VideoData } from '../components/video'
-import type { VideoData as CoreVideoData } from '@peartube/core'
-import { CastHeaderButton } from '@/components/cast'
-import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
+import { useLocalSearchParams, useRouter } from 'expo-router'
+import type { MediaEntitySummary } from '@peartube/core'
+
+import { MediaCatalogView } from '@/components/media/MediaCatalogView'
+import {
+  encodeMediaEntityRouteParam,
+  getMediaEntityRouteId,
+} from '@/components/media/MediaEntityDetailScreen'
+import { useMediaCatalog } from '@/hooks/useMediaCatalog'
+import { colors } from '@/lib/colors'
+import { searchMediaCatalog } from '@/lib/media-catalog-controller.mjs'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
-import { getDesktopVideoGridColumns } from '@/lib/video-layout'
-
-// Detect Pear desktop vs mobile (must match index.web.tsx detection)
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
-
-function computeTextRelevance(query: string, title: string): number {
-  const normalize = (s: string) => s.toLowerCase().replace(/[._\-[\]()]/g, ' ').replace(/\s+/g, ' ').trim()
-  const q = normalize(query)
-  const t = normalize(title)
-
-  if (t === q) return 3
-  if (t.includes(q)) return 2
-
-  const qWords = q.split(' ').filter(w => w.length > 1)
-  if (qWords.length === 0) return 0
-  const matchCount = qWords.filter(w => t.includes(w)).length
-  return matchCount / qWords.length
-}
+import { useApp } from './_layout'
 
 function MobileSearchBar({
   initialQuery,
@@ -39,12 +22,12 @@ function MobileSearchBar({
 }: {
   initialQuery: string
   searching: boolean
-  onSubmit: (query: string) => void
+  onSubmit(query: string): void
 }) {
   const [queryInput, setQueryInput] = useState(initialQuery)
-
   const handleSubmit = useCallback(() => {
-    onSubmit(queryInput)
+    const nextQuery = queryInput.trim()
+    if (nextQuery) onSubmit(nextQuery)
   }, [onSubmit, queryInput])
 
   return (
@@ -52,7 +35,8 @@ function MobileSearchBar({
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
-      marginBottom: 16
+      paddingHorizontal: 16,
+      paddingVertical: 12,
     }}>
       <View style={{
         flex: 1,
@@ -69,7 +53,7 @@ function MobileSearchBar({
         <TextInput
           value={queryInput}
           onChangeText={setQueryInput}
-          placeholder="Search videos..."
+          placeholder="Search the media catalog"
           placeholderTextColor={colors.textMuted}
           style={{ flex: 1, color: colors.text, marginLeft: 8 }}
           autoCapitalize="none"
@@ -78,6 +62,8 @@ function MobileSearchBar({
         />
       </View>
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Search media catalog"
         onPress={handleSubmit}
         disabled={!queryInput.trim() || searching}
         style={{
@@ -88,285 +74,66 @@ function MobileSearchBar({
           opacity: (!queryInput.trim() || searching) ? 0.5 : 1,
         }}
       >
-        <Text style={{ color: '#fff', fontWeight: '600' }}>{searching ? '…' : 'Search'}</Text>
+        <Text style={{ color: colors.onPrimary, fontWeight: '700' }}>
+          {searching ? 'Searching…' : 'Search'}
+        </Text>
       </Pressable>
     </View>
   )
 }
 
 export default function SearchScreen() {
-  const insets = useSafeAreaInsets()
   const router = useRouter()
   const params = useLocalSearchParams<{ q?: string }>()
-  const query = typeof params.q === 'string' ? params.q : ''
+  const { isDesktop, insets } = usePlatform()
+  const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
+  const query = typeof params.q === 'string' ? params.q.trim() : ''
 
-  const { ready, rpc, platformEvents, blobServerPort } = useApp()
-  const { loadAndPlayVideo, closeVideo } = useVideoPlayerActions()
-  const { isDesktop } = usePlatform()
-  const { width: screenWidth } = useWindowDimensions()
-
-  const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
-
-  // State
-  const [searching, setSearching] = useState(false)
-  const [results, setResults] = useState<VideoData[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [searched, setSearched] = useState(false)
-  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
-  const thumbnailCacheRef = useRef(thumbnailCache)
-  thumbnailCacheRef.current = thumbnailCache
-  const inflightThumbnailFetches = useRef<Set<string>>(new Set())
-
-  // On Pear desktop, clear any active watch hash so background playback stops.
-  useEffect(() => {
-    if (!isPear || typeof window === 'undefined') return
-    closeVideo()
-    if (window.location.hash.startsWith('#/watch')) {
-      window.location.hash = ''
+  const searchRpc = useMemo(() => {
+    if (!rpc || typeof rpc.getMediaCatalog !== 'function' || !query) return null
+    return {
+      getMediaCatalog: (request: { cursor?: string; limit?: number }) => searchMediaCatalog({
+        getMediaCatalog: (catalogRequest) => rpc.getMediaCatalog(catalogRequest),
+        query,
+        cursor: request.cursor,
+        limit: request.limit,
+      }),
     }
-  }, [closeVideo])
+  }, [query, rpc])
 
-  const submitSearch = useCallback((rawQuery: string) => {
-    const nextQuery = rawQuery.trim()
-    if (!nextQuery) return
+  const catalog = useMediaCatalog({
+    ready: ready && Boolean(query),
+    rpc: searchRpc,
+    events: platformEvents,
+    diagnostics: { backendError, startupStatus },
+  })
+
+  const submitSearch = useCallback((nextQuery: string) => {
     router.replace({ pathname: '/search', params: { q: nextQuery } })
   }, [router])
 
-  // Search when query changes
-  useEffect(() => {
-    if (!query || !ready || !rpc) return
-
-    const doSearch = async () => {
-      setSearching(true)
-      setError(null)
-      setSearched(true)
-
-      try {
-        console.log('[Search] rpc.globalSearchVideos:', typeof rpc.globalSearchVideos)
-        if (typeof rpc.globalSearchVideos !== 'function') {
-          throw new Error('globalSearchVideos method not available on rpc')
-        }
-        console.log('[Search] Calling globalSearchVideos...')
-        const res = await rpc.globalSearchVideos({ query, topK: 50 })
-        console.log('[Search] Results:', res?.results?.length || 0)
-
-        // Convert search results to VideoData format
-        // Note: metadata can be JSON string from RPC or already parsed object
-        const videos: VideoData[] = (res.results || []).map((r: any, idx: number) => {
-          console.log('[Search] Processing result', idx)
-          console.log('[Search] r.channelKey:', r.channelKey)
-          try {
-            // Handle metadata as either string (RPC serialized) or object
-            const metadata = typeof r.metadata === 'string'
-              ? JSON.parse(r.metadata)
-              : (r.metadata || {})
-
-            const score = typeof r.score === 'string' ? parseFloat(r.score) : (r.score || undefined)
-
-            // Try multiple possible key names for channelKey
-            const channelKey = metadata.channelKey || metadata.driveKey || r.channelKey || r.driveKey
-            console.log('[Search] Extracted channelKey:', channelKey)
-
-            const video = {
-              id: r.id || metadata.videoId,
-              title: metadata.title || 'Untitled',
-              description: metadata.description || '',
-              duration: metadata.duration,
-              thumbnail: metadata.thumbnail,
-              category: metadata.category,
-              creatorName: metadata.creatorName || undefined,
-              createdAt: metadata.createdAt,
-              size: metadata.size,
-              driveKey: channelKey,
-              channelKey: channelKey,
-              channel: metadata.creatorName || metadata.channelName ? { name: metadata.creatorName || metadata.channelName } : undefined,
-              publicBeeKey: metadata.publicBeeKey || r.publicBeeKey,
-              path: metadata.path || undefined,
-              mimeType: metadata.mimeType || undefined,
-              blobId: metadata.blobId || undefined,
-              blobsCoreKey: metadata.blobsCoreKey || undefined,
-              thumbnailBlobId: metadata.thumbnailBlobId || undefined,
-              thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || undefined,
-              thumbnailMimeType: metadata.thumbnailMimeType || undefined,
-              availability: metadata.availability || undefined,
-              score,
-            }
-            console.log('[Search] Parsed video:', video.title, 'channelKey:', video.channelKey)
-            return video
-          } catch (parseErr) {
-            console.error('[Search] Failed to parse result:', parseErr)
-            return null
-          }
-        }).filter(Boolean) as VideoData[]
-
-        videos.sort((a, b) => {
-          const relA = computeTextRelevance(query, a.title || '')
-          const relB = computeTextRelevance(query, b.title || '')
-          if (relA !== relB) return relB - relA
-          return (b.score ?? 0) - (a.score ?? 0)
-        })
-
-        console.log('[Search] Final video count:', videos.length)
-        setResults(videos)
-
-        // Fetch thumbnails for search results
-        for (const v of videos) {
-          const ck = v.channelKey || v.driveKey
-          if (!ck || !v.id) continue
-          const cacheKey = `${ck}:${v.id}`
-          if (thumbnailCacheRef.current[cacheKey]) continue
-          if (inflightThumbnailFetches.current.has(cacheKey)) continue
-          inflightThumbnailFetches.current.add(cacheKey)
-
-          void fetchThumbnailUrlWithRetry({
-            rpc,
-            channelKey: ck,
-            videoId: v.id,
-            expectedPort: blobServerPort,
-            blobRefs: {
-              thumbnailBlobId: (v as any).thumbnailBlobId || null,
-              thumbnailBlobsCoreKey: (v as any).thumbnailBlobsCoreKey || null,
-              thumbnailMimeType: (v as any).thumbnailMimeType || null,
-            },
-          }).then((url) => {
-            if (!url) return
-            setThumbnailCache(prev => {
-              if (prev[cacheKey] === url) return prev
-              return { ...prev, [cacheKey]: url }
-            })
-          }).catch(() => {}).finally(() => {
-            inflightThumbnailFetches.current.delete(cacheKey)
-          })
-        }
-      } catch (e: any) {
-        console.error('[Search] Error:', e)
-        setError(e?.message || 'Search failed')
-        setResults([])
-      } finally {
-        setSearching(false)
-      }
-    }
-
-    doSearch()
-  }, [query, ready, rpc, blobServerPort])
-
-  // Handle video click - match the homepage behavior per platform.
-  const handleVideoPress = useCallback(async (video: VideoData) => {
-    console.log('[Search] Opening video:', video.id)
-    // Ensure channelKey is set (search results may have it in driveKey)
-    const channelKey = video.channelKey || video.driveKey
-    console.log('[Search] Using channelKey:', channelKey)
-    if (!channelKey) {
-      console.error('[Search] Cannot play video - missing channelKey for:', video.id)
-      return
-    }
-
-    // Pear desktop: use the same hash watch route as the homepage.
-    if (isPear && typeof window !== 'undefined') {
-      console.log('[Search] isPear detected, using hash routing')
-
-      // First, close any existing video and wait for state to propagate
-      closeVideo()
-
-      const setWatchHash = () => {
-        console.log('[Search] Setting hash to watch:', channelKey, video.id)
-        try {
-          const pendingWatch = { ...video, channelKey }
-          ;(window as any).__peartubePendingWatchVideo = pendingWatch
-          window.dispatchEvent(new CustomEvent('peartube:watch-video', { detail: { video: pendingWatch } }))
-        } catch (err) {
-          console.debug('[Search] Failed to stage pending watch video:', err)
-        }
-        window.location.hash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
-      }
-
-      const ensureHome = () => {
-        const path = window.location.pathname.replace(/\/+$/, '') || '/'
-        if (path !== '/') {
-          router.replace('/')
-        }
-      }
-
-      if (typeof (router as any).canGoBack === 'function' && (router as any).canGoBack()) {
-        router.back()
-        setTimeout(() => {
-          ensureHome()
-          setTimeout(setWatchHash, 50)
-        }, 0)
-      } else {
-        ensureHome()
-        setTimeout(setWatchHash, 50)
-      }
-      return
-    }
-
-    // Web static export: mirror homepage navigation to the video HTML page.
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      const base = window.location.href.split('#')[0].replace(/index\.html$/, '')
-      const videoData = encodeURIComponent(JSON.stringify({ ...video, channelKey }))
-      window.location.href = `${base}video/${video.id}.html?videoData=${videoData}`
-      return
-    }
-
-    if (!rpc) {
-      console.error('[Search] Cannot play video - rpc not ready')
-      return
-    }
-
-    try {
-      const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
-        ? video.path
-        : video.id
-      const videoAny = video as VideoData & { blobId?: string | null; blobsCoreKey?: string | null }
-      console.log('[Search] Using videoRef:', videoRef)
-      const result = await rpc.preparePlayback({
-        channelKey,
-        videoId: videoRef,
-        publicBeeKey: video.publicBeeKey || undefined,
-        blobId: videoAny.blobId || undefined,
-        blobsCoreKey: videoAny.blobsCoreKey || undefined,
-        mimeType: video.mimeType || undefined,
-      })
-
-      if (result?.url) {
-        const coreVideo: CoreVideoData = {
-          id: video.id,
-          title: video.title,
-          channelKey,
-          description: video.description || '',
-          path: video.path || video.id,
-          size: video.size || 0,
-          uploadedAt: video.uploadedAt || video.createdAt || Date.now(),
-          thumbnail: video.thumbnail ?? undefined,
-          duration: video.duration,
-          category: video.category,
-          mimeType: video.mimeType,
-          creatorName: video.creatorName || undefined,
-          channel: video.channel ? { name: video.channel.name } : undefined,
-          thumbnailUrl: video.thumbnailUrl,
-          driveKey: video.driveKey,
-          publicBeeKey: video.publicBeeKey,
-          blobId: videoAny.blobId || null,
-          blobsCoreKey: videoAny.blobsCoreKey || null,
-        }
-        loadAndPlayVideo(coreVideo, result.url)
-      } else {
-        console.error('[Search] Playback preparation returned no URL')
-      }
-    } catch (err) {
-      console.error('[Search] Failed to play video:', err)
-    }
-  }, [rpc, loadAndPlayVideo, closeVideo, router])
-
-  // Back button handler
-  const handleBack = useCallback(() => {
-    router.back()
+  const openEntity = useCallback((_entityId: string, item: MediaEntitySummary) => {
+    const pathname = item.entityKind === 'collection'
+      ? '/collection/[id]'
+      : item.entityKind === 'agent'
+        ? '/creator/[id]'
+        : '/media/[id]'
+    router.push({
+      pathname,
+      params: {
+        id: encodeURIComponent(getMediaEntityRouteId(item as any)),
+        item: encodeMediaEntityRouteParam(item as any),
+      },
+    })
   }, [router])
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: isDesktop ? 0 : insets.top }}>
-      {/* Header */}
-      {!isDesktop && (
+    <View style={{
+      flex: 1,
+      backgroundColor: colors.bg,
+      paddingTop: isDesktop ? 0 : insets.top,
+    }}>
+      {!isDesktop ? (
         <View style={{
           flexDirection: 'row',
           alignItems: 'center',
@@ -375,125 +142,44 @@ export default function SearchScreen() {
           borderBottomWidth: 1,
           borderBottomColor: colors.border,
         }}>
-          <Pressable onPress={handleBack} style={{ marginRight: 16 }}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => router.back()}>
             <Feather name="arrow-left" size={24} color={colors.text} />
           </Pressable>
-          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '600', flex: 1 }} numberOfLines={1}>
-            Search: {query}
-          </Text>
-          <CastHeaderButton size={18} />
-        </View>
-      )}
-
-      {/* Desktop shows query in content area */}
-      {isDesktop && (
-        <View style={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 8 }}>
-          <Text style={{ color: colors.text, fontSize: 24, fontWeight: '600' }}>
-            Search results for &quot;{query}&quot;
+          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '600', marginLeft: 16 }}>
+            Search
           </Text>
         </View>
+      ) : null}
+
+      {!isDesktop ? (
+        <MobileSearchBar
+          key={query}
+          initialQuery={query}
+          searching={catalog.status === 'loading' || catalog.refreshing}
+          onSubmit={submitSearch}
+        />
+      ) : null}
+
+      {query ? (
+        <MediaCatalogView
+          title={`Search results for “${query}”`}
+          subtitle="Results from the locally projected, moderated media catalog"
+          state={catalog}
+          diagnostic={catalog.diagnostic}
+          onRefresh={() => { void catalog.refresh() }}
+          onLoadNext={() => { void catalog.loadNext() }}
+          onEntityPress={openEntity}
+          contentBottomInset={Math.max(insets.bottom + 24, 24)}
+        />
+      ) : (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+          <Feather name="search" size={42} color={colors.textMuted} />
+          <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>Search your media catalog</Text>
+          <Text style={{ color: colors.textMuted, textAlign: 'center' }}>
+            Search only includes entities currently visible under your local moderation profile.
+          </Text>
+        </View>
       )}
-
-      {/* Content */}
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          padding: isDesktop ? 24 : 16,
-          paddingTop: isDesktop ? 16 : 16,
-        }}
-      >
-        {/* Search input - hidden on desktop since DesktopHeader has search bar */}
-        {!isDesktop && (
-          <MobileSearchBar
-            key={query}
-            initialQuery={query}
-            searching={searching}
-            onSubmit={submitSearch}
-          />
-        )}
-
-        {/* Loading state */}
-        {searching && (
-          <View style={{ alignItems: 'center', paddingVertical: 48 }}>
-            <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={{ color: colors.textSecondary, marginTop: 16 }}>
-              Searching across all channels...
-            </Text>
-          </View>
-        )}
-
-        {/* Error state */}
-        {error && !searching && (
-          <View style={{ alignItems: 'center', paddingVertical: 48 }}>
-            <Feather name="alert-circle" size={48} color={colors.error} />
-            <Text style={{ color: colors.error, marginTop: 16, textAlign: 'center' }}>
-              {error}
-            </Text>
-          </View>
-        )}
-
-        {/* Empty state */}
-        {!searching && searched && results.length === 0 && !error && (
-          <View style={{ alignItems: 'center', paddingVertical: 48 }}>
-            <Feather name="search" size={48} color={colors.textSecondary} />
-            <Text style={{ color: colors.textSecondary, marginTop: 16, textAlign: 'center' }}>
-              No results found for &quot;{query}&quot;
-            </Text>
-            <Text style={{ color: colors.textSecondary, marginTop: 8, textAlign: 'center', fontSize: 13 }}>
-              Try a different search term or wait for more channels to be indexed
-            </Text>
-          </View>
-        )}
-
-        {/* Results grid */}
-        {!searching && results.length > 0 && (
-          <>
-            <Text style={{ color: colors.textSecondary, marginBottom: 16, fontSize: 14 }}>
-              Found {results.length} result{results.length !== 1 ? 's' : ''}
-            </Text>
-
-            <View style={isDesktop ? {
-              flexDirection: 'row',
-              flexWrap: 'wrap',
-              marginHorizontal: -8,
-            } : {}}>
-              {results.map((video, index) => {
-                const ck = video.channelKey || video.driveKey
-                const thumbUrl = (ck ? thumbnailCache[`${ck}:${video.id}`] : null) || video.thumbnailUrl || video.thumbnail || undefined
-                const videoWithThumb = thumbUrl ? { ...video, thumbnailUrl: thumbUrl } : video
-                return (
-                <View
-                  key={`${video.driveKey || video.channelKey}-${video.id}-${index}`}
-                  style={isDesktop ? {
-                    width: `${100 / gridColumns}%`,
-                    paddingHorizontal: 8,
-                    marginBottom: 24,
-                  } : {
-                    marginBottom: 16,
-                  }}
-                >
-                  <VideoCard
-                    video={videoWithThumb}
-                    onPress={() => handleVideoPress(video)}
-                    showChannelInfo={true}
-                  />
-                  {/* Show relevance score for debugging */}
-                  {video.score !== undefined && (
-                    <Text style={{
-                      color: colors.textSecondary,
-                      fontSize: 11,
-                      marginTop: 4,
-                      opacity: 0.6,
-                    }}>
-                      Relevance: {(video.score * 100).toFixed(1)}%
-                    </Text>
-                  )}
-                </View>
-              )})}
-            </View>
-          </>
-        )}
-      </ScrollView>
     </View>
   )
 }

@@ -17,10 +17,10 @@ test('desktop Home renders the shared paged media catalog', () => {
   assert.doesNotMatch(desktopHomeSource, /getContentCatalog|setInterval|setTimeout/)
 })
 
-test('desktop Search preserves direct blob refs from search metadata', () => {
-  assert.match(searchSource, /blobId:\s*metadata\.blobId \|\| undefined/)
-  assert.match(searchSource, /blobsCoreKey:\s*metadata\.blobsCoreKey \|\| undefined/)
-  assert.match(searchSource, /thumbnailBlobId:\s*metadata\.thumbnailBlobId \|\| undefined/)
-  assert.match(searchSource, /__peartubePendingWatchVideo = pendingWatch/)
-  assert.match(searchSource, /peartube:watch-video/)
+test('desktop Search renders the same moderated catalog and entity routes as Home', () => {
+  assert.match(searchSource, /searchMediaCatalog/)
+  assert.match(searchSource, /useMediaCatalog/)
+  assert.match(searchSource, /MediaCatalogView/)
+  assert.match(searchSource, /'\/collection\/\[id\]'[\s\S]*'\/creator\/\[id\]'[\s\S]*'\/media\/\[id\]'/)
+  assert.doesNotMatch(searchSource, /globalSearchVideos|preparePlayback|__peartubePendingWatchVideo/)
 })

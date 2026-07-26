@@ -64,7 +64,7 @@ export async function loadMediaEntity({ rpc, entityId }) {
 
   return {
     ...entity,
-    sources: sources.length > 0 ? sources : (Array.isArray(entity.sources) ? entity.sources : []),
+    sources,
     provenance: Array.isArray(response.claims) ? response.claims : [],
     conflicts: Array.isArray(response.conflicts) ? response.conflicts : [],
   }

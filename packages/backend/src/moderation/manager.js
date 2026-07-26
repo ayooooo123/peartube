@@ -127,7 +127,19 @@ export function createModerationManager(options = {}) {
       let firstRejectionCode = null
       while (true) {
       const page = await fetchPage(cursor)
-      const verified = await verifyModerationFeedPage(page?.envelope, { moderatorId, now: now() })
+      let verified
+      try {
+        verified = await verifyModerationFeedPage(page?.envelope, {
+          moderatorId,
+          now: now(),
+          supportedCapabilities: options.supportedCapabilities,
+        })
+      } catch (error) {
+        if (typeof error?.code === 'string' && error.code.startsWith('PROTOCOL_')) {
+          return { status: 'quarantined', errorCode: error.code }
+        }
+        throw error
+      }
       if (!verified) return { status: 'quarantined', errorCode: 'INVALID_PAGE' }
       if (verified.body.pageCursor !== cursor) return { status: 'quarantined', errorCode: 'STALE_OR_FORKED_CURSOR' }
 

@@ -337,9 +337,18 @@ export function createScopedNetworkRuntime (options = {}) {
   const cancelBootstrapLocatorRefresh = typeof options.clearBootstrapLocatorTimer === 'function'
     ? options.clearBootstrapLocatorTimer
     : clearTimeout
+  const schedulePublisherRotationDrain = typeof options.setPublisherRotationDrainTimer === 'function'
+    ? options.setPublisherRotationDrainTimer
+    : setTimeout
+  const cancelPublisherRotationDrain = typeof options.clearPublisherRotationDrainTimer === 'function'
+    ? options.clearPublisherRotationDrainTimer
+    : clearTimeout
+  const publisherRotationDrainMs = Number(options.publisherRotationDrainMs ?? 500)
   if (!Number.isSafeInteger(bootstrapLocatorTtlMs) || bootstrapLocatorTtlMs < 1 ||
       !Number.isSafeInteger(bootstrapLocatorRefreshMs) || bootstrapLocatorRefreshMs < 1 ||
-      bootstrapLocatorRefreshMs >= bootstrapLocatorTtlMs) {
+      bootstrapLocatorRefreshMs >= bootstrapLocatorTtlMs ||
+      !Number.isSafeInteger(publisherRotationDrainMs) || publisherRotationDrainMs < 1 ||
+      publisherRotationDrainMs > 5_000) {
     fail('bootstrap locator refresh bounds are invalid')
   }
   const admission = options.admission?.reserve ? options.admission : createNetworkAdmission(options.admission)
@@ -381,6 +390,7 @@ export function createScopedNetworkRuntime (options = {}) {
   const followedPublishers = new Map()
   const localPublishers = new Map()
   const localBootstrapLocators = new Map()
+  const publisherRotationDrainTimers = new Set()
   const renditions = new Map()
   const archives = new Map()
   const activeConnections = new Map()
@@ -989,6 +999,7 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   async function handlePublisherProofFrame(scope, tracked, frame) {
+    if (scope.retired) return { status: 'rejected', reason: 'publisher-epoch-retired' }
     if (frame.type === 'namespace-proof-request') {
       const proof = publisherProofProviders.get(scope.publisherId)
       if (!proof) return { status: 'rejected', reason: 'namespace-proof-unavailable' }
@@ -2109,12 +2120,17 @@ export function createScopedNetworkRuntime (options = {}) {
     const descriptor = normalizeNamespace(namespaceDescriptor, protocolMajor, { verifiedNamespaceProof })
     if (b4a.toString(descriptor.publisherId, 'hex') !== id) fail('namespace publisherId mismatch')
     const existing = followedPublishers.get(id)
+    let previousFollow = null
     const authoritativeLocator = locatorAuthority === verifiedLocatorAuthority
       ? verifiedBootstrapLocator
       : null
     if (existing) {
       if (descriptor.catalogEpoch > existing.scope.descriptor.catalogEpoch) {
-        await unfollowPublisher({ publisherId: id })
+        // Promote the already-authenticated candidate for the new epoch before
+        // closing the prior epoch channel. Closing first can tear down the
+        // shared transport while the peer is still proving the replacement.
+        previousFollow = existing
+        followedPublishers.delete(id)
       } else {
         if (authoritativeLocator &&
             Number(authoritativeLocator.issuedAt) >= Number(existing.scope.advertisedLocatorIssuedAt || 0)) {
@@ -2199,6 +2215,9 @@ export function createScopedNetworkRuntime (options = {}) {
     })
     const result = { status: 'following', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     followedPublishers.set(id, { scope, result })
+    if (previousFollow) {
+      await leaveScope(previousFollow.scope, 'followed')
+    }
     if ([...scope.sessions.values()].some(session => !session.closed && session.state === 'active')) {
       void syncPublisherCatalog(scope).catch(error => {
         recordProtocolError(scope, 'bootstrap-promotion', error)
@@ -2285,7 +2304,7 @@ export function createScopedNetworkRuntime (options = {}) {
     publisherProofProviders.set(id, { genesis, transitions })
     publisherPageProviders.set(id, { catalog, catalogEpoch: descriptor.catalogEpoch })
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
-    const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'candidate', publisherId: id, proofPending: null })
+    const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'local', publisherId: id, proofPending: null })
     return { status: 'provided', publisherId: id, topic: stableScopeDiagnostic(scope) }
   }
 
@@ -2370,7 +2389,7 @@ export function createScopedNetworkRuntime (options = {}) {
     if (status !== 'active') fail('runtime is not active')
     const id = hex32(publisherId, 'publisherId')
     const existing = localPublishers.get(id)
-    if (existing) return { ...existing.result, status: 'already-published' }
+    if (existing) return rebindLocalPublisherCatalog({ publisherId: id })
     if (!catalogRegistry?.resolve) fail('catalog registry is unavailable')
     const binding = await catalogRegistry.resolve(b4a.from(id, 'hex'))
     await binding.catalog?.ready?.()
@@ -2383,9 +2402,12 @@ export function createScopedNetworkRuntime (options = {}) {
       fail('local catalog has no accepted publication or claim')
     }
     const descriptorEntry = await binding.catalog?.view?.get?.('state/descriptor')
-    const descriptor = normalizeNamespace(binding.namespaceDescriptor || descriptorEntry?.value, protocolMajor)
+    const descriptor = normalizeNamespace(descriptorEntry?.value || binding.namespaceDescriptor, protocolMajor, {
+      verifiedNamespaceProof: descriptorEntry?.value ? true : null,
+    })
     if (b4a.toString(descriptor.publisherId, 'hex') !== id) fail('local catalog namespace mismatch')
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('local catalog binding mismatch')
+    binding.namespaceDescriptor = descriptor
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'local', publisherId: id, descriptor, binding })
     scope.publisherId = id
@@ -2394,10 +2416,64 @@ export function createScopedNetworkRuntime (options = {}) {
     if (typeof binding.catalog?.listAcceptedPage === 'function') {
       await provideLocalPublisherNamespaceProof({ publisherId: id, descriptor, catalog: binding.catalog })
     }
-    const result = { status: 'published', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
+    const result = {
+      status: 'published',
+      publisherId: id,
+      catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'),
+      catalogEpoch: descriptor.catalogEpoch,
+      topic: stableScopeDiagnostic(scope),
+    }
     localPublishers.set(id, { scope, result })
     if (bootstrapLocatorKeyPair) await refreshLocalBootstrapLocator(id)
     return result
+  }
+
+  async function rebindLocalPublisherCatalog ({ publisherId } = {}) {
+    if (status !== 'active') fail('runtime is not active')
+    const id = hex32(publisherId, 'publisherId')
+    const existing = localPublishers.get(id)
+    if (!existing) return publishLocalPublisherCatalog({ publisherId: id })
+    const binding = await catalogRegistry.resolve(b4a.from(id, 'hex'))
+    await binding.catalog?.ready?.()
+    const descriptorEntry = await binding.catalog?.view?.get?.('state/descriptor')
+    const descriptor = normalizeNamespace(descriptorEntry?.value || binding.namespaceDescriptor, protocolMajor, {
+      verifiedNamespaceProof: descriptorEntry?.value ? true : null,
+    })
+    const previous = existing.scope.descriptor
+    const changed = descriptor.catalogEpoch !== previous.catalogEpoch ||
+      !b4a.equals(descriptor.publisherRootKey, previous.publisherRootKey) ||
+      !b4a.equals(descriptor.catalogBootstrapKey, previous.catalogBootstrapKey)
+    if (!changed) {
+      binding.namespaceDescriptor = descriptor
+      existing.scope.descriptor = descriptor
+      existing.scope.binding = binding
+      await provideLocalPublisherNamespaceProof({ publisherId: id, descriptor, catalog: binding.catalog })
+      if (bootstrapLocatorKeyPair) await refreshLocalBootstrapLocator(id)
+      existing.result = {
+        ...existing.result,
+        catalogEpoch: descriptor.catalogEpoch,
+        topic: stableScopeDiagnostic(existing.scope),
+      }
+      return { ...existing.result, status: 'refreshed' }
+    }
+
+    const locator = localBootstrapLocators.get(id)
+    if (locator?.timer) cancelBootstrapLocatorRefresh(locator.timer)
+    localBootstrapLocators.delete(id)
+    publisherProofProviders.delete(id)
+    publisherPageProviders.delete(id)
+    localPublishers.delete(id)
+    existing.scope.retired = true
+    existing.scope.modes.add('rotation-drain')
+    const result = await publishLocalPublisherCatalog({ publisherId: id })
+    await leaveScope(existing.scope, 'local')
+    const timer = schedulePublisherRotationDrain(() => {
+      publisherRotationDrainTimers.delete(timer)
+      void leaveScope(existing.scope, 'rotation-drain')
+    }, publisherRotationDrainMs)
+    timer.unref?.()
+    publisherRotationDrainTimers.add(timer)
+    return { ...result, status: 'rebound' }
   }
 
   async function resolveLocalPublisherCatalog ({ publisherId } = {}) {
@@ -2850,6 +2926,8 @@ export function createScopedNetworkRuntime (options = {}) {
     for (const value of localBootstrapLocators.values()) {
       if (value.timer) cancelBootstrapLocatorRefresh(value.timer)
     }
+    for (const timer of publisherRotationDrainTimers) cancelPublisherRotationDrain(timer)
+    publisherRotationDrainTimers.clear()
     localBootstrapLocators.clear()
     localPublishers.clear()
     renditions.clear()
@@ -2880,6 +2958,7 @@ export function createScopedNetworkRuntime (options = {}) {
     unfollowModerationFeed,
     unfollowPublisher,
     publishLocalPublisherCatalog,
+    rebindLocalPublisherCatalog,
     resolveLocalPublisherCatalog,
     retainAuthorizedRendition,
     releaseAuthorizedRendition,
@@ -2924,6 +3003,7 @@ export function createScopedNetworkApi (runtime) {
     unfollowModerationFeed: request => runtime.unfollowModerationFeed(request),
     unfollowPublisher: request => runtime.unfollowPublisher(request),
     publishLocalPublisherCatalog: request => runtime.publishLocalPublisherCatalog(request),
+    rebindLocalPublisherCatalog: request => runtime.rebindLocalPublisherCatalog(request),
     resolveLocalPublisherCatalog: request => runtime.resolveLocalPublisherCatalog(request),
     retainAuthorizedRendition: request => runtime.retainAuthorizedRendition(request),
     releaseAuthorizedRendition: request => runtime.releaseAuthorizedRendition(request),

@@ -72,7 +72,6 @@ export function createPersonalApi({ ctx }) {
     },
 
     async setPersonalSetting(req = {}) {
-      if (!ctx.personal?.writable) throw new Error('No writable personal store');
       // Values arrive JSON-encoded over HRPC so a setting can hold any JSON type.
       let value = req.value;
       if (typeof value === 'string') {
@@ -82,6 +81,7 @@ export function createPersonalApi({ ctx }) {
         await ctx.setConsumerModerationProfile(value)
         return { success: true };
       }
+      if (!ctx.personal?.writable) throw new Error('No writable personal store');
       await ctx.personal.setSetting(req.key, value);
       return { success: true };
     },
@@ -103,9 +103,19 @@ export function createPersonalApi({ ctx }) {
      */
     async provisionPersonalEncryption(req = {}) {
       if (!ctx.personalManager) return { success: false, error: 'personal store unavailable' };
-      const result = await ctx.personalManager.provisionSecret({ secret: req.secret || undefined });
+      const result = await ctx.personalManager.provisionSecret({
+        secret: req.secret || undefined,
+        bootstrapKey: req.bootstrapKey || undefined,
+        deviceLocal: req.deviceLocal === true,
+      });
       if (result?.success) await ctx.reloadConsumerModerationProfile?.();
-      return { success: !!result.success, secret: result.secret, encrypted: !!result.encrypted, error: result.error };
+      return {
+        success: !!result.success,
+        secret: result.secret,
+        bootstrapKey: result.bootstrapKey,
+        encrypted: !!result.encrypted,
+        error: result.error,
+      };
     },
   }
 }

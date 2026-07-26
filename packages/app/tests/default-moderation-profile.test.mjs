@@ -6,6 +6,8 @@ import ts from '../node_modules/typescript/lib/typescript.js'
 
 const source = fs.readFileSync(path.resolve(import.meta.dirname, '../lib/default-moderation-profile.ts'), 'utf8')
 const developerSettingsSource = fs.readFileSync(path.resolve(import.meta.dirname, '../app/developer-settings.tsx'), 'utf8')
+const personalEncryptionSource = fs.readFileSync(path.resolve(import.meta.dirname, '../lib/personal-encryption.ts'), 'utf8')
+const layoutSource = fs.readFileSync(path.resolve(import.meta.dirname, '../app/_layout.tsx'), 'utf8')
 
 async function loadProfileModule() {
   const compiled = ts.transpileModule(source, {
@@ -37,4 +39,10 @@ test('Developer Settings reads and mutates the backend PersonalStore profile thr
   assert.match(developerSettingsSource, /CONSUMER_MODERATION_PROFILE_SETTING_KEY/)
   assert.doesNotMatch(developerSettingsSource, /secureGet|secureSet/)
   assert.doesNotMatch(developerSettingsSource, /createDefaultModerationProfileStore/)
+})
+
+test('desktop startup provisions a device-local encrypted PersonalStore before identity or pairing', () => {
+  assert.match(personalEncryptionSource, /deviceLocal:\s*true/)
+  assert.match(personalEncryptionSource, /bootstrapKey/)
+  assert.match(layoutSource, /await ensurePersonalEncryption\(platformRPC\.rpc\)/)
 })

@@ -25,8 +25,10 @@ import b4a from 'b4a'
 import { PersonalStore } from './personal-store.js'
 import { generateSecret } from './personal-crypto.js'
 import { logger } from '../logger.js'
+import { CONSUMER_MODERATION_PROFILE_SETTING_KEY } from '../moderation/profile.js'
 
 const log = logger('PersonalManager')
+const DEVICE_LOCAL_PERSONAL_ID = 'device-local'
 
 function personalNamespace(publicKey) {
   return `peartube-personal:${publicKey}`
@@ -38,6 +40,7 @@ export function createPersonalManager({ ctx, identityManager }) {
   /** @type {Map<string, Buffer>} */
   const secrets = new Map()
   let activePublicKey = null
+  let anonymousBootstrapKey = null
 
   async function openForIdentity(identity, { allowUnencrypted = false } = {}) {
     if (!identity?.publicKey) return null
@@ -59,7 +62,12 @@ export function createPersonalManager({ ctx, identityManager }) {
     await store.ready()
     stores.set(pk, store)
 
-    if (store.keyHex && identity.personalKey !== store.keyHex && typeof identityManager?.setPersonalKey === 'function') {
+    if (
+      pk !== DEVICE_LOCAL_PERSONAL_ID &&
+      store.keyHex &&
+      identity.personalKey !== store.keyHex &&
+      typeof identityManager?.setPersonalKey === 'function'
+    ) {
       try { await identityManager.setPersonalKey(pk, store.keyHex) } catch (err) {
         log.warn(' Failed to persist personal key:', err?.message)
       }
@@ -75,6 +83,18 @@ export function createPersonalManager({ ctx, identityManager }) {
 
     log.info(' Opened personal store for', pk.slice(0, 16), 'encrypted=', store.encrypted, 'writable=', store.writable)
     return store
+  }
+
+  async function migrateAnonymousProfile(target) {
+    const anonymous = stores.get(DEVICE_LOCAL_PERSONAL_ID)
+    if (!anonymous || anonymous === target || !target?.writable) return
+    const localState = await anonymous.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+    if (localState === undefined) return
+    const targetState = await target.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
+    if (targetState === undefined) {
+      await target.setSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY, localState)
+    }
+    await anonymous.deleteSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
   }
 
   /**
@@ -130,13 +150,21 @@ export function createPersonalManager({ ctx, identityManager }) {
      * @param {string} [opts.publicKey] - identity (defaults to active)
      * @param {string} [opts.secret] - 32-byte secret hex; generated if omitted
      */
-    async provisionSecret({ publicKey, secret } = {}) {
-      const pk = publicKey || identityManager?.getActivePublicKey?.()
-      if (!pk) throw new Error('No identity to provision a personal secret for')
+    async provisionSecret({ publicKey, secret, deviceLocal = false, bootstrapKey } = {}) {
+      const pk = deviceLocal
+        ? DEVICE_LOCAL_PERSONAL_ID
+        : (publicKey || identityManager?.getActivePublicKey?.() || DEVICE_LOCAL_PERSONAL_ID)
+      const isDeviceLocal = pk === DEVICE_LOCAL_PERSONAL_ID
 
       const existingStore = stores.get(pk)
       if (existingStore && existingStore.encrypted) {
-        return { success: true, secret: existingStore.secretHex, alreadyOpen: true }
+        return {
+          success: true,
+          secret: existingStore.secretHex,
+          bootstrapKey: existingStore.keyHex,
+          encrypted: true,
+          alreadyOpen: true,
+        }
       }
       if (existingStore && !existingStore.encrypted) {
         // Cannot retro-encrypt an already-created unencrypted store.
@@ -148,12 +176,33 @@ export function createPersonalManager({ ctx, identityManager }) {
       secrets.set(pk, buf)
 
       let store = null
-      if (pk === (identityManager?.getActivePublicKey?.() || activePublicKey)) {
+      if (isDeviceLocal) {
+        anonymousBootstrapKey = bootstrapKey || anonymousBootstrapKey
+        const identity = {
+          publicKey: DEVICE_LOCAL_PERSONAL_ID,
+          personalKey: anonymousBootstrapKey,
+        }
+        store = await openForIdentity(identity)
+        anonymousBootstrapKey = store?.keyHex || anonymousBootstrapKey
+        if (store && (!ctx.personal || activePublicKey === DEVICE_LOCAL_PERSONAL_ID)) {
+          activePublicKey = DEVICE_LOCAL_PERSONAL_ID
+          ctx.personal = store
+        }
+      } else if (pk === (identityManager?.getActivePublicKey?.() || activePublicKey)) {
         const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === pk) || activeIdentityRecord()
         store = await openForIdentity(identity)
-        if (store) { activePublicKey = pk; ctx.personal = store }
+        if (store) {
+          await migrateAnonymousProfile(store)
+          activePublicKey = pk
+          ctx.personal = store
+        }
       }
-      return { success: true, secret: b4a.toString(buf, 'hex'), encrypted: Boolean(store?.encrypted) }
+      return {
+        success: true,
+        secret: b4a.toString(buf, 'hex'),
+        bootstrapKey: store?.keyHex || bootstrapKey,
+        encrypted: Boolean(store?.encrypted),
+      }
     },
 
     /** Whether an encryption secret is known for an identity this process. */
@@ -183,7 +232,14 @@ export function createPersonalManager({ ctx, identityManager }) {
 
     /** Get the active personal store if open. */
     getActive() {
-      return activePublicKey ? stores.get(activePublicKey) || null : null
+      return (activePublicKey ? stores.get(activePublicKey) : null) ||
+        stores.get(DEVICE_LOCAL_PERSONAL_ID) ||
+        null
+    },
+
+    /** Device-local encrypted store used before an identity/pairing is active. */
+    getAnonymous() {
+      return stores.get(DEVICE_LOCAL_PERSONAL_ID) || null
     },
 
     /** Switch the active personal store when the active identity changes. */
@@ -192,7 +248,10 @@ export function createPersonalManager({ ctx, identityManager }) {
       if (!identity) return null
       activePublicKey = publicKey
       const store = await openForIdentity(identity)
-      ctx.personal = store
+      if (store) {
+        await migrateAnonymousProfile(store)
+        ctx.personal = store
+      }
       return store
     },
 

@@ -636,6 +636,7 @@ async function getRootAuthorization(binding, recordType, body) {
 
 export function createPublisherApi(options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => Date.now()
+  const ctx = options.ctx || null
   const maxIntents = options.maxIntents ?? DEFAULT_MAX_INTENTS
   if (!Number.isSafeInteger(maxIntents) || maxIntents < 1 || maxIntents > MAX_INTENTS_LIMIT) {
     throw new TypeError('publisher API maxIntents is out of bounds')
@@ -1086,6 +1087,13 @@ export function createPublisherApi(options = {}) {
           fail('PUBLISHER_CATALOG_APPEND_FAILED')
         }
         await registry.deletePendingTransition(intent.publisherIdBytes, candidateRecordId)
+        try {
+          await ctx?.scopedNetwork?.rebindLocalPublisherCatalog?.({
+            publisherId: intent.publisherId,
+          })
+        } catch (error) {
+          console.warn('[PublisherApi] Accepted root transition network rebind failed:', error?.message || error)
+        }
         return {
           intentId: intent.intentId,
           success: true,

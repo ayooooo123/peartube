@@ -681,7 +681,6 @@ export async function createBackendContext(config) {
   const refreshActivePersonalStore = async (publicKey) => {
     const pk = publicKey || identityManager.getActivePublicKey?.()
     if (!pk) return
-    ctx.personal = null
     await personalManager.setActive(pk)
   }
   const removeIdentityMutationHooks = installSeedPinIdentityMutationHooks({

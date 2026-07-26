@@ -18,6 +18,8 @@
 
 import { secureGet, secureSet } from './secure-storage'
 
+const DEVICE_LOCAL_PERSONAL_KEY = 'device-local'
+
 function keychainKey(publicKey: string): string {
   return `peartube.personal.enc.${publicKey}`
 }
@@ -25,24 +27,38 @@ function keychainKey(publicKey: string): string {
 const provisioned = new Set<string>()
 
 export async function ensurePersonalEncryption(rpc: any, publicKey?: string | null): Promise<void> {
-  if (!rpc || !publicKey) return
-  if (provisioned.has(publicKey)) return
-  const k = keychainKey(publicKey)
+  if (!rpc) return
+  const owner = publicKey || DEVICE_LOCAL_PERSONAL_KEY
+  if (provisioned.has(owner)) return
+  const k = keychainKey(owner)
 
   try {
     // 1. Keychain already has the secret for this identity.
     const existing = await secureGet(k)
     if (existing) {
-      await rpc.provisionPersonalEncryption({ secret: existing })
-      provisioned.add(publicKey)
+      let stored: { secret?: string; bootstrapKey?: string }
+      try {
+        stored = JSON.parse(existing)
+      } catch {
+        stored = { secret: existing }
+      }
+      await rpc.provisionPersonalEncryption({
+        ...stored,
+        ...(publicKey ? {} : { deviceLocal: true }),
+      })
+      provisioned.add(owner)
       return
     }
 
     // 2. First device for this identity: backend generates, we persist it.
-    const res = await rpc.provisionPersonalEncryption({})
+    const res = await rpc.provisionPersonalEncryption(
+      publicKey ? {} : { deviceLocal: true },
+    )
     if (res?.success && res?.secret) {
-      await secureSet(k, res.secret)
-      provisioned.add(publicKey)
+      await secureSet(k, publicKey
+        ? res.secret
+        : JSON.stringify({ secret: res.secret, bootstrapKey: res.bootstrapKey }))
+      provisioned.add(owner)
     } else if (res && res.error) {
       console.warn('[PersonalEncryption] provisioning returned error:', res.error)
     }

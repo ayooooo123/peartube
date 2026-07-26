@@ -552,6 +552,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
         migrateLegacyPublisherRoot: async (request: unknown) =>
           publisherKeyVault.importLegacyRootMigration(request),
       })
+      await ensurePersonalEncryption(platformRPC.rpc)
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
 
       if (!backendReadyRef.current) {
@@ -621,6 +622,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
 
         await platformRPC.initPlatformRPC()
       }
+      await ensurePersonalEncryption(platformRPC.rpc)
 
       // Upload UI cannot become ready until the privileged Bun shell has
       // provisioned, initialized, and admitted the one local publisher catalog.

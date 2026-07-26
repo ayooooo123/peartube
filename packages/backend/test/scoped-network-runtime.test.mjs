@@ -23,16 +23,21 @@ import { createArchivePledge } from '../src/archive/pledge.js'
 import { createArchiveRequest } from '../src/archive/request.js'
 import {
   createPublisherNamespaceDescriptor,
+  encodePublisherOperationBody,
   encodePublisherCatalogFrame,
   derivePublisherId,
   encodePublisherNamespaceDescriptor,
   PUBLISHER_RECORD_TYPES,
 } from '../src/publisher/index.js'
 import {
+  attachMultiSignedEnvelopeSignatures,
   attachSignedEnvelopeSignature,
+  multiSignedRecordSignaturePreimage,
+  prepareMultiSignedEnvelope,
   prepareSignedEnvelope,
   signedRecordSignaturePreimage,
 } from '../src/records/index.js'
+import { encodeApplicationEnvelope } from '../src/records/application-envelope.js'
 import {
   createScopedNetworkRuntime,
   createScopedProtocolSession,
@@ -77,6 +82,32 @@ function namespaceGenesis (descriptor, root) {
     canonicalBody: encodePublisherNamespaceDescriptor(descriptor),
   }, { hash: crypto.hash })
   return attachSignedEnvelopeSignature(prepared, crypto.sign(signedRecordSignaturePreimage(prepared), root.secretKey))
+}
+
+function namespaceTransition (descriptor, root, nextRoot, newCatalogEpoch) {
+  const prepared = prepareMultiSignedEnvelope({
+    recordType: PUBLISHER_RECORD_TYPES.ROOT_TRANSITION,
+    schemaMajor: 1,
+    schemaMinor: 0,
+    issuerIdentityKey: descriptor.publisherId,
+    policyEpoch: 0,
+    issuerSequence: newCatalogEpoch,
+    signedAt: 30,
+    canonicalBody: encodePublisherOperationBody(PUBLISHER_RECORD_TYPES.ROOT_TRANSITION, {
+      mode: 'rotation',
+      previousRootKey: root.publicKey,
+      newRootKey: nextRoot.publicKey,
+      newCatalogEpoch,
+      recoveryKeys: descriptor.recoveryKeys,
+      recoveryThreshold: descriptor.recoveryThreshold,
+      profileRef: descriptor.profileRef,
+    }),
+  }, { hash: crypto.hash })
+  const preimage = multiSignedRecordSignaturePreimage(prepared)
+  return attachMultiSignedEnvelopeSignatures(prepared, [root, nextRoot].map(signer => ({
+    signerKey: signer.publicKey,
+    signature: crypto.sign(preimage, signer.secretKey),
+  })).sort((left, right) => b4a.compare(left.signerKey, right.signerKey)))
 }
 
 function fakeSwarm () {
@@ -952,6 +983,216 @@ test('a local publisher automatically advertises a signed locator and consumers 
     pair.a.destroy()
     pair.b.destroy()
   }
+})
+
+test('live publisher root rotation rebinds advertisements, proof, pages, and existing consumers', async t => {
+  const root = crypto.keyPair(bytes(32, 181))
+  const nextRoot = crypto.keyPair(bytes(32, 182))
+  const locatorSigner = crypto.keyPair(bytes(32, 183))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 184),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const transition = namespaceTransition(descriptor, root, nextRoot, 1)
+  const skippedRoot = crypto.keyPair(bytes(32, 180))
+  const skippedTransition = namespaceTransition(descriptor, root, skippedRoot, 2)
+  const rotatedDescriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    publisherRootKey: nextRoot.publicKey,
+    catalogBootstrapKey: descriptor.catalogBootstrapKey,
+    catalogEpoch: 1,
+    previousRootKey: root.publicKey,
+    rootTransitionProof: transition.transitionId,
+  })
+  let sourceTime = 20
+  let currentDescriptor = descriptor
+  let acceptedOperations = [genesis]
+  const sourceRegistry = fakeRegistry(descriptor)
+  const sourceCatalog = sourceRegistry.binding.catalog
+  sourceCatalog.localWriterKey = locatorSigner.publicKey
+  sourceCatalog.localSignerKey = locatorSigner.publicKey
+  sourceCatalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  sourceCatalog.listAcceptedPage = async ({ cursor }) => cursor === null
+    ? {
+        entries: acceptedOperations.map(operation => ({
+          operationId: b4a.toString(operation.recordId || operation.transitionId, 'hex'),
+          sourceWriterKey: locatorSigner.publicKey,
+          frame: encodePublisherCatalogFrame(operation),
+        })),
+        nextCursor: null,
+      }
+    : { entries: [], nextCursor: null }
+  sourceCatalog.view = {
+    async get(key) {
+      return key === 'state/descriptor'
+        ? { value: encodePublisherNamespaceDescriptor(currentDescriptor) }
+        : null
+    },
+  }
+  sourceCatalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: acceptedOperations.length,
+    digest: currentDescriptor.catalogEpoch === 0 ? bytes(32, 185) : bytes(32, 186),
+    authorizationStateDigest: bytes(32, 187),
+  })
+  sourceCatalog.getAuthorizationState = async () => ({
+    policyEpoch: 0,
+    policySequence: 0,
+    writers: [{
+      key: b4a.toString(locatorSigner.publicKey, 'hex'),
+      signerKey: b4a.toString(locatorSigner.publicKey, 'hex'),
+      capabilities: ['announce', 'publish'],
+      firstAcceptedSequence: 0,
+      lastAcceptedSequence: acceptedOperations.length - 1,
+      expiresAt: 1_000,
+      admissionPolicyEpoch: 0,
+      revocation: null,
+    }],
+  })
+
+  const sourceSwarm = fakeSwarm()
+  sourceSwarm.keyPair = locatorSigner
+  const consumerSwarms = [fakeSwarm(), fakeSwarm(), fakeSwarm()]
+  const consumerRegistries = consumerSwarms.map(() => {
+    const registry = fakeRegistry(descriptor)
+    registry.binding.catalog.ingestAcceptedPage = async entries => ({
+      accepted: entries.length,
+      rejected: 0,
+    })
+    registry.binding.catalog.getViewHead = sourceCatalog.getViewHead
+    registry.binding.catalog.getAuthorizationState = sourceCatalog.getAuthorizationState
+    return registry
+  })
+  const source = createScopedNetworkRuntime({
+    swarm: sourceSwarm,
+    store: {},
+    catalogRegistry: sourceRegistry,
+    now: () => sourceTime,
+  })
+  const consumers = consumerSwarms.map((swarm, index) => createScopedNetworkRuntime({
+    swarm,
+    store: {},
+    catalogRegistry: consumerRegistries[index],
+    now: () => sourceTime,
+  }))
+  await source.start()
+  await Promise.all(consumers.map(consumer => consumer.start()))
+  await source.publishLocalPublisherCatalog({ publisherId: b4a.toString(descriptor.publisherId, 'hex') })
+  const pairs = consumers.slice(0, 2).map((consumer, index) => {
+    const pair = connectionPair({ consumerPeerFill: 188 + index, sourcePeerFill: 190 })
+    sourceSwarm.connections.add(pair.a)
+    consumerSwarms[index].connections.add(pair.b)
+    sourceSwarm.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
+    consumerSwarms[index].emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
+    return pair
+  })
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (consumers.every(consumer =>
+      consumer.listBootstrapLocators()[0]?.catalogEpoch === 0 &&
+      consumer.getDiagnostics().topics.some(topic => topic.purpose === 'publisher' && topic.modes.includes('followed'))
+    )) break
+    await settle()
+  }
+  t.ok(consumers.slice(0, 2).every(consumer => consumer.listBootstrapLocators()[0]?.catalogEpoch === 0))
+
+  sourceTime = 40
+  currentDescriptor = rotatedDescriptor
+  acceptedOperations = [genesis, transition]
+  const rebound = await source.rebindLocalPublisherCatalog({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+  })
+  t.is(rebound.status, 'rebound')
+  const latePair = connectionPair({ consumerPeerFill: 191, sourcePeerFill: 190 })
+  pairs.push(latePair)
+  sourceSwarm.connections.add(latePair.a)
+  consumerSwarms[2].connections.add(latePair.b)
+  sourceSwarm.emit('connection', latePair.a, { publicKey: latePair.a.remotePublicKey, client: false })
+  consumerSwarms[2].emit('connection', latePair.b, { publicKey: latePair.b.remotePublicKey, client: true })
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (consumers.every(consumer =>
+      consumer.listBootstrapLocators()[0]?.catalogEpoch === 1 &&
+      consumer.getDiagnostics().topics.filter(topic =>
+        topic.purpose === 'publisher' && topic.modes.includes('followed')
+      ).length === 1
+    )) break
+    await settle()
+  }
+  const currentTopicHex = b4a.toString(derivePublisherTopic({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+    catalogEpoch: 1,
+  }), 'hex')
+  for (const consumer of consumers) {
+    t.is(consumer.listBootstrapLocators()[0]?.catalogEpoch, 1, 'live peer accepts only the current bounded advertisement')
+    const followed = consumer.getDiagnostics().topics.filter(topic =>
+      topic.purpose === 'publisher' && topic.modes.includes('followed')
+    )
+    t.is(followed.length, 1, 'old publisher scope is replaced rather than retained')
+    t.is(followed[0]?.topicHex, currentTopicHex, 'followed channel is bound to the authenticated rotated epoch')
+  }
+
+  const staleLocator = createBootstrapLocator({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+    catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+    catalogHead: b4a.toString(bytes(32, 185), 'hex'),
+    catalogEpoch: 0,
+    authorizationChainDigest: b4a.toString(bytes(32, 187), 'hex'),
+    rootSignerId: b4a.toString(root.publicKey, 'hex'),
+    issuedAt: 20,
+    expiresAt: 300_020,
+    keyPair: locatorSigner,
+  })
+  for (const [index, consumer] of consumers.slice(0, 2).entries()) {
+    const staleResult = await consumer.inspectIncomingFrame({
+      purpose: 'bootstrap',
+      topic: deriveBootstrapTopic(),
+      peerId: `stale-rotation-peer-${index}`,
+      frame: encodePeerFrame({
+        purpose: 'bootstrap',
+        type: 'locator',
+        requestId: 900 + index,
+        payload: encodeApplicationEnvelope(staleLocator.envelope),
+      }),
+    })
+    t.is(staleResult.errorCode, 'STALE_LOCATOR', 'existing consumer rejects the retired epoch')
+    t.is(consumer.listBootstrapLocators()[0]?.catalogEpoch, 1, 'existing consumer retains the current epoch')
+  }
+
+  const skippedDescriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    publisherRootKey: skippedRoot.publicKey,
+    catalogBootstrapKey: descriptor.catalogBootstrapKey,
+    catalogEpoch: 2,
+    previousRootKey: root.publicKey,
+    rootTransitionProof: skippedTransition.transitionId,
+  })
+  for (const consumer of consumers.slice(0, 2)) {
+    await t.exception(consumer.providePublisherNamespaceProof({
+      locator: {
+        publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+        catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+        catalogEpoch: 2,
+      },
+      proof: {
+        genesis,
+        transitions: [skippedTransition],
+        descriptor: skippedDescriptor,
+      },
+    }), /epoch|transition|sequence|skip/i, 'existing consumer rejects a skipped epoch proof')
+  }
+
+  const republished = await source.publishLocalPublisherCatalog({
+    publisherId: b4a.toString(descriptor.publisherId, 'hex'),
+  })
+  t.is(republished.catalogEpoch, 1, 'repeat publish cannot return the stale pre-rotation result')
+
+  await source.close()
+  await Promise.all(consumers.map(consumer => consumer.close()))
+  for (const pair of pairs) pair.a.destroy()
 })
 
 test('archive pledges retain multiple exact ranges without exposing a Hypercore responder', async (t) => {

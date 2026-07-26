@@ -1356,7 +1356,11 @@ ns.register({
   name: 'provision-personal-encryption-request',
   fields: [
     // 32-byte secret (hex) from the device keychain; omit to have one generated.
-    { name: 'secret', type: 'string', required: false }
+    { name: 'secret', type: 'string', required: false },
+    // Device-local bootstrap key retained beside the encryption secret.
+    { name: 'bootstrapKey', type: 'string', required: false },
+    // Explicit anonymous/device-local provisioning, independent of identity pairing.
+    { name: 'deviceLocal', type: 'bool', required: false }
   ]
 })
 
@@ -1365,6 +1369,7 @@ ns.register({
   fields: [
     { name: 'success', type: 'bool', required: true },
     { name: 'secret', type: 'string', required: false },
+    { name: 'bootstrapKey', type: 'string', required: false },
     { name: 'encrypted', type: 'bool', required: false },
     { name: 'error', type: 'string', required: false }
   ]

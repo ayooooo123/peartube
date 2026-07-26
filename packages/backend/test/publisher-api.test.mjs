@@ -473,9 +473,20 @@ test('real context registry durably applies a provisioned namespace genesis befo
     }
   })
   try {
+    const reboundPublishers = []
     const root = crypto.keyPair(bytes(32, 70))
     const publisherId = derivePublisherId(root.publicKey)
-    const api = publisherApiModule.createPublisherApi({ catalogRegistry: registry, now: () => NOW })
+    const api = publisherApiModule.createPublisherApi({
+      catalogRegistry: registry,
+      now: () => NOW,
+      ctx: {
+        scopedNetwork: {
+          async rebindLocalPublisherCatalog(request) {
+            reboundPublishers.push(request.publisherId)
+          },
+        },
+      },
+    })
     const provisioned = await api.provisionPublisherCatalog({
       publisherId: hex(publisherId),
       genesisRootKey: root.publicKey
@@ -569,6 +580,7 @@ test('real context registry durably applies a provisioned namespace genesis befo
     t.is(secondRotation.result.complete, true)
     const transitionReceipt = await binding.catalog.getOperationReceipt(secondRotation.transition.candidateRecordId)
     t.is(transitionReceipt.accepted, true)
+    t.alike(reboundPublishers, [hex(publisherId)], 'accepted transition notifies the live scoped transport exactly once')
   } finally {
     await registry.close()
     await store.close()

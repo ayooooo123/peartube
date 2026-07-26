@@ -4424,6 +4424,18 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "bootstrapKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceLocal",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -4441,6 +4453,12 @@
         },
         {
           "name": "secret",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "bootstrapKey",
           "required": false,
           "type": "string",
           "version": 1

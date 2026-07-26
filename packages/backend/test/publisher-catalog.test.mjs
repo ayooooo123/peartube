@@ -126,6 +126,48 @@ test('typed catalog operation bodies reject unknown fields, unknown variants, no
   t.is(opened, 0, 'invalid bounds are rejected before namespacing or opening storage')
 })
 
+test('accepted page ingest rebuilds an isolated catalog view with exact source provenance', async (t) => {
+  const dir = tempDir('peartube-publisher-page-ingest-')
+  const store = new Corestore(dir)
+  await store.ready()
+  const root = crypto.keyPair(bytes(32, 252))
+  const publisherId = derivePublisherId(root.publicKey)
+  const catalog = new PublisherCatalog(store, { publisherId })
+  await catalog.ready()
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: catalog.key,
+  })
+  const genesis = signed({
+    descriptor,
+    signer: root,
+    recordType: PUBLISHER_RECORD_TYPES.NAMESPACE,
+    policyEpoch: 0,
+    sequence: 0,
+    body: descriptor,
+  })
+  const frame = encodePublisherCatalogFrame(genesis)
+
+  const result = await catalog.ingestAcceptedPage([{
+    operationId: b4a.toString(genesis.recordId, 'hex'),
+    sourceWriterKey: catalog.localWriterKey,
+    frame,
+  }])
+  const authorization = await catalog.getAuthorizationState()
+
+  t.is(result.accepted, 1)
+  t.is(authorization.policyEpoch, 0)
+  const storedDescriptor = decodePublisherNamespaceDescriptor((await catalog.view.get('state/descriptor')).value)
+  t.ok(equal(storedDescriptor.publisherId, publisherId))
+  const page = await catalog.listAcceptedPage({ limit: 1 })
+  t.ok(equal(page.entries[0].sourceWriterKey, catalog.localWriterKey))
+  t.ok(equal(page.entries[0].frame, frame))
+
+  await catalog.close()
+  await store.close()
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('two real device writers converge on canonical conflict winners, signed heads, and restart state', async (t) => {
   const dirA = tempDir('peartube-publisher-a-')
   const dirB = tempDir('peartube-publisher-b-')

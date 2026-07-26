@@ -359,6 +359,7 @@ export function createConsumerCatalogProjection(options = {}) {
   let lastInputFingerprint = null
   let lastRebuild = { accepted: 0, rejected: 0, rejectionCodes: {} }
   let acceptedCandidates = new Map()
+  let visiblePublicationIds = new Set()
   const downstream = {
     artwork: options.onArtwork,
     topic: options.onTopicJoin,
@@ -418,6 +419,9 @@ export function createConsumerCatalogProjection(options = {}) {
       for (const record of records) {
         const publisherId = String(record?.publisherId || '').toLowerCase()
         if (record?.directPublisher !== true) { reject(record, 'PUBLISHER_RECORD_UNAUTHENTICATED', rejectionCodes); continue }
+        const candidateKey = `${publisherId}\0${String(record.publicationId)}`
+        if (acceptedKeys.has(candidateKey) || consideredKeys.has(candidateKey)) continue
+        consideredKeys.add(candidateKey)
         const enabled = getProfileEnabled(moderationPolicy)
         const decision = enabled && typeof moderationPolicy?.evaluate === 'function'
           ? moderationPolicy.evaluate(record)
@@ -427,9 +431,6 @@ export function createConsumerCatalogProjection(options = {}) {
           reject(record, decision.reason || code, rejectionCodes, code)
           continue
         }
-        const candidateKey = `${publisherId}\0${String(record.publicationId)}`
-        if (acceptedKeys.has(candidateKey) || consideredKeys.has(candidateKey)) continue
-        consideredKeys.add(candidateKey)
         if (accepted.length >= maxCandidates) {
           reject(record, 'CONSUMER_CANDIDATE_BUDGET_EXCEEDED', rejectionCodes)
           continue
@@ -451,6 +452,7 @@ export function createConsumerCatalogProjection(options = {}) {
       if (fingerprint === lastInputFingerprint) return { ...lastRebuild, rejectionCodes: { ...lastRebuild.rejectionCodes } }
       const indexed = localIndex.replaceRecords(accepted)
       acceptedCandidates = new Map(accepted.map(record => [record.entityRef, record]))
+      visiblePublicationIds = new Set(accepted.map(record => String(record.publicationId)))
       lastInputFingerprint = fingerprint
       lastRebuild = {
         accepted: indexed.accepted + indexed.duplicates,
@@ -481,6 +483,12 @@ export function createConsumerCatalogProjection(options = {}) {
     },
     getRejectedCandidates() { return rejectedCandidates.slice() },
     isVisible(entityRef) { return acceptedCandidates.has(String(entityRef)) },
+    isPublicationVisible(publicationId) {
+      const value = b4a.isBuffer(publicationId) || publicationId instanceof Uint8Array
+        ? b4a.toString(b4a.from(publicationId), 'hex')
+        : String(publicationId)
+      return visiblePublicationIds.has(value)
+    },
     getIntroducedPublishers() { return introducedPublisherIds.slice() },
     getCuratorSubscriptions() {
       return Array.from(moderationPolicy?.curatorSubscriptions || []).map(String).sort()

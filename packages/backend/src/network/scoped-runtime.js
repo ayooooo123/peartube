@@ -1,6 +1,7 @@
 import b4a from 'b4a'
 import c from 'compact-encoding'
 import Protomux from 'protomux'
+import crypto from 'hypercore-crypto'
 
 import { createNetworkAdmission } from './admission.js'
 import {
@@ -35,10 +36,12 @@ import {
 import {
   PUBLISHER_CATALOG_CAPABILITY,
   decodePublisherNamespaceDescriptor,
+  encodePublisherNamespaceDescriptor,
   verifyPublisherNamespaceDescriptor,
 } from '../publisher/namespace.js'
 import { verifyPublisherNamespaceProof } from '../publisher/namespace-proof.js'
 import { decodePublisherCatalogFrame } from '../publisher/catalog-view.js'
+import { decodePublisherOperationBody } from '../publisher/canonical.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
 
 
@@ -57,6 +60,13 @@ const MAX_CAPABILITY_BYTES = 128
 const MAX_ASSET_BLOCK_BYTES = 256 * 1024
 const MAX_ASSET_PROOF_BYTES = 32 * 1024
 const MAX_ARCHIVE_CHALLENGE_PROOF_BYTES = 320 * 1024
+const MAX_CATALOG_PAGE_RECORDS = 64
+const MAX_CATALOG_SESSION_PAGES = 128
+const MAX_CATALOG_SESSION_RECORDS = 4096
+const MAX_CATALOG_SESSION_BYTES = 4 * 1024 * 1024
+const MAX_CATALOG_HEAD_DISTANCE = 4096
+const MAX_CATALOG_VERIFICATION_WORK = 8192
+const CATALOG_PAGE_TIMEOUT_MS = 10_000
 const ASSET_CHUNK_BYTES = 48 * 1024
 const ASSET_TRANSFER_TIMEOUT_MS = 10_000
 const ARCHIVE_CHALLENGE_PROOF_CHUNK_BYTES = 48 * 1024
@@ -266,32 +276,6 @@ function protocolForPurpose (purpose, major) {
 }
 
 
-function catalogReplicationCores (binding) {
-  const catalog = binding?.catalog
-  const base = catalog?.base
-  if (!base) fail('publisher catalog does not expose a bounded replication set')
-  const expectedBootstrapKey = exactBuffer(binding.catalogBootstrapKey, 32, 'catalogBootstrapKey')
-  if (!base.key || !b4a.equals(base.key, expectedBootstrapKey)) fail('catalog bootstrap binding mismatch')
-  const candidates = [
-    base._primaryBootstrap,
-    base.local,
-    base.core,
-    base.view?.core,
-    catalog.view?.core,
-  ]
-  for (const writer of base.activeWriters || []) candidates.push(writer?.core)
-  for (const writer of base._bootstrapWriters || []) candidates.push(writer?.core)
-  const cores = new Map()
-  for (const core of candidates) {
-    if (!core?.key || typeof core.replicate !== 'function') continue
-    const key = hex32(core.key, 'catalog core key')
-    cores.set(key, core)
-  }
-  if (!cores.has(b4a.toString(expectedBootstrapKey, 'hex'))) fail('catalog bootstrap core is not open')
-  if (cores.size > 256) fail('catalog replication set exceeds bounded limit')
-  return cores
-}
-
 function normalizeNamespace (value, protocolMajor, { verifiedTransitionChain = false } = {}) {
   const descriptor = b4a.isBuffer(value) || value instanceof Uint8Array
     ? decodePublisherNamespaceDescriptor(b4a.from(value), { protocolMajor, supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY] })
@@ -330,6 +314,9 @@ export function createScopedNetworkRuntime (options = {}) {
   const authorizePublication = typeof options.authorizePublication === 'function'
     ? options.authorizePublication
     : async () => false
+  const authorizeConsumerWork = typeof options.authorizeConsumerWork === 'function'
+    ? options.authorizeConsumerWork
+    : async () => true
   const onCatalogUpdate = typeof options.onCatalogUpdate === 'function'
     ? options.onCatalogUpdate
     : null
@@ -351,6 +338,7 @@ export function createScopedNetworkRuntime (options = {}) {
   const indexFeedProviders = new Map()
   const moderationFeedProviders = new Map()
   const publisherProofProviders = new Map()
+  const publisherPageProviders = new Map()
   const bootstrapFollowAttempts = new Map()
   const publisherManager = options.publisherManager || createPublisherManager({
     supportedCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
@@ -618,10 +606,185 @@ export function createScopedNetworkRuntime (options = {}) {
 
   function decodeNamespaceProof(payload) {
     const proof = c.decode(c.any, payload)
+    if (!b4a.equals(c.encode(c.any, proof), payload)) fail('namespace proof response is noncanonical')
     if (!proof || typeof proof !== 'object' || !proof.genesis || !Array.isArray(proof.transitions)) {
       fail('namespace proof response is invalid')
     }
     return proof
+  }
+
+  function canonicalCatalogPayload(value, name) {
+    const payload = c.encode(c.any, value)
+    if (payload.byteLength > MAX_PEER_FRAME_BYTES - 1024) fail(`${name} exceeds frame bound`)
+    return payload
+  }
+
+  function decodeCanonicalCatalogPayload(payload, name) {
+    if (!b4a.isBuffer(payload) || payload.byteLength > MAX_PEER_FRAME_BYTES - 1024) fail(`${name} exceeds frame bound`)
+    const value = c.decode(c.any, payload)
+    if (!value || typeof value !== 'object' || !b4a.equals(c.encode(c.any, value), payload)) fail(`${name} is noncanonical`)
+    return value
+  }
+
+  function pageDigest(value) {
+    return crypto.hash(canonicalCatalogPayload(value, 'catalog page'))
+  }
+
+  function normalizeCatalogCursor(value, name = 'catalog cursor') {
+    if (value === null) return null
+    const text = String(value || '').toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(text)) fail(`${name} is invalid`)
+    return text
+  }
+
+  function normalizeCatalogRequest(payload) {
+    const value = decodeCanonicalCatalogPayload(payload, 'catalog page request')
+    if (value.version !== 1) fail('catalog page request version is unsupported')
+    const cursor = normalizeCatalogCursor(value.cursor)
+    const previousPageDigest = value.previousPageDigest == null
+      ? null
+      : hex32(value.previousPageDigest, 'previousPageDigest')
+    const expectedHeadDigest = value.expectedHeadDigest == null
+      ? null
+      : hex32(value.expectedHeadDigest, 'expectedHeadDigest')
+    const catalogEpoch = Number(value.catalogEpoch)
+    const limit = Number(value.limit)
+    if (!Number.isSafeInteger(catalogEpoch) || catalogEpoch < 0 ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > MAX_CATALOG_PAGE_RECORDS) {
+      fail('catalog page request bounds are invalid')
+    }
+    return { version: 1, cursor, previousPageDigest, expectedHeadDigest, catalogEpoch, limit }
+  }
+
+  function normalizeCatalogResponse(payload, request) {
+    const value = decodeCanonicalCatalogPayload(payload, 'catalog page response')
+    if (value.version !== 1 || value.catalogEpoch !== request.catalogEpoch ||
+        normalizeCatalogCursor(value.requestedCursor, 'requestedCursor') !== request.cursor ||
+        (value.previousPageDigest == null ? null : hex32(value.previousPageDigest, 'previousPageDigest')) !== request.previousPageDigest ||
+        (value.expectedHeadDigest == null ? null : hex32(value.expectedHeadDigest, 'expectedHeadDigest')) !== request.expectedHeadDigest) {
+      fail('catalog page response does not match its request')
+    }
+    const nextCursor = normalizeCatalogCursor(value.nextCursor)
+    const headDigest = hex32(value.headDigest, 'headDigest')
+    const authorizationStateDigest = hex32(value.authorizationStateDigest, 'authorizationStateDigest')
+    const pageDigestHex = hex32(value.pageDigest, 'pageDigest')
+    const headLength = Number(value.headLength)
+    if (!Number.isSafeInteger(headLength) || headLength < 0 || headLength > MAX_CATALOG_HEAD_DISTANCE) fail('catalog head distance exceeds bounded limit')
+    if (!Array.isArray(value.entries) || value.entries.length > request.limit) fail('catalog page record bound exceeded')
+    let prior = request.cursor
+    const entries = value.entries.map(entry => {
+      const operationId = normalizeCatalogCursor(entry?.operationId, 'operationId')
+      const sourceWriterKey = exactBuffer(entry?.sourceWriterKey, 32, 'sourceWriterKey')
+      const frame = b4a.from(entry?.frame || [])
+      const operation = decodePublisherCatalogFrame(frame)
+      const derivedId = b4a.toString(operation.recordId || operation.transitionId, 'hex')
+      if (derivedId !== operationId || (prior !== null && operationId <= prior)) fail('catalog page ordering or provenance is invalid')
+      prior = operationId
+      return { operationId, sourceWriterKey, frame }
+    })
+    if (entries.length === 0 && nextCursor !== null) fail('empty catalog page cannot advance')
+    if (nextCursor !== null && nextCursor !== entries.at(-1)?.operationId) fail('catalog page cursor linkage is invalid')
+    const unsigned = {
+      version: 1,
+      requestedCursor: request.cursor,
+      nextCursor,
+      previousPageDigest: request.previousPageDigest,
+      expectedHeadDigest: request.expectedHeadDigest,
+      catalogEpoch: request.catalogEpoch,
+      headLength,
+      headDigest,
+      authorizationStateDigest,
+      entries,
+    }
+    if (b4a.toString(pageDigest(unsigned), 'hex') !== pageDigestHex) fail('catalog page digest mismatch')
+    return { ...unsigned, pageDigest: pageDigestHex }
+  }
+
+  async function serveCatalogPage(scope, tracked, frame) {
+    if (!tracked?.namespaceProofServed) fail('namespace proof is mandatory before catalog pages')
+    const provider = publisherPageProviders.get(scope.publisherId)
+    if (!provider) fail('catalog page provider is unavailable')
+    const request = normalizeCatalogRequest(frame.payload)
+    if (request.catalogEpoch !== provider.catalogEpoch) fail('catalog page epoch mismatch')
+    if (tracked.catalogServePages > 0 && request.previousPageDigest !== tracked.catalogServeDigest) fail('catalog page linkage mismatch')
+    if (tracked.catalogServePages === 0 && request.previousPageDigest !== null) fail('first catalog page in a session must reset linkage')
+    const head = await provider.catalog.getViewHead()
+    const headDigest = hex32(head?.digest, 'headDigest')
+    if (request.expectedHeadDigest !== null && request.expectedHeadDigest !== headDigest) fail('catalog head changed before cursor resume')
+    const page = await provider.catalog.listAcceptedPage({ cursor: request.cursor, limit: request.limit })
+    if (!page || !Array.isArray(page.entries) || page.entries.length > request.limit) fail('catalog provider returned an invalid page')
+    const entries = page.entries.map(entry => ({
+      operationId: normalizeCatalogCursor(entry?.operationId, 'operationId'),
+      sourceWriterKey: exactBuffer(entry?.sourceWriterKey, 32, 'sourceWriterKey'),
+      frame: b4a.from(entry?.frame || []),
+    }))
+    const nextCursor = normalizeCatalogCursor(page.nextCursor)
+    const unsigned = {
+      version: 1,
+      requestedCursor: request.cursor,
+      nextCursor,
+      previousPageDigest: request.previousPageDigest,
+      expectedHeadDigest: request.expectedHeadDigest,
+      catalogEpoch: provider.catalogEpoch,
+      headLength: Number(head?.length),
+      headDigest,
+      authorizationStateDigest: hex32(head?.authorizationStateDigest, 'authorizationStateDigest'),
+      entries,
+    }
+    const response = { ...unsigned, pageDigest: b4a.toString(pageDigest(unsigned), 'hex') }
+    const payload = canonicalCatalogPayload(response, 'catalog page response')
+    const nextPages = tracked.catalogServePages + 1
+    const nextRecords = tracked.catalogServeRecords + entries.length
+    const nextBytes = tracked.catalogServeBytes + payload.byteLength
+    if (nextPages > MAX_CATALOG_SESSION_PAGES || nextRecords > MAX_CATALOG_SESSION_RECORDS ||
+        nextBytes > MAX_CATALOG_SESSION_BYTES || nextRecords * 2 > MAX_CATALOG_VERIFICATION_WORK) {
+      fail('catalog provider cumulative session budget exceeded')
+    }
+    if (!sendScopedFrame(tracked, 'publisher', 'catalog-page-response', payload)) fail('catalog page response send failed')
+    tracked.catalogServePages = nextPages
+    tracked.catalogServeRecords = nextRecords
+    tracked.catalogServeBytes = nextBytes
+    tracked.catalogServeDigest = response.pageDigest
+    return { status: 'sent', records: entries.length, nextCursor }
+  }
+
+  async function acceptCatalogPage(scope, tracked, frame) {
+    const pending = scope.catalogPagePending
+    if (!pending) fail('unexpected catalog page response')
+    try {
+      const response = normalizeCatalogResponse(frame.payload, pending.request)
+      if (scope.catalogHeadDigest && scope.catalogHeadDigest !== response.headDigest) fail('catalog head equivocation detected')
+      const nextPages = tracked.catalogAcceptPages + 1
+      const nextRecords = tracked.catalogAcceptRecords + response.entries.length
+      const nextBytes = tracked.catalogAcceptBytes + frame.payload.byteLength
+      const nextWork = tracked.catalogAcceptVerificationWork + response.entries.length * 2
+      if (nextPages > MAX_CATALOG_SESSION_PAGES || nextRecords > MAX_CATALOG_SESSION_RECORDS ||
+          nextBytes > MAX_CATALOG_SESSION_BYTES || nextWork > MAX_CATALOG_VERIFICATION_WORK ||
+          response.headLength - tracked.catalogAcceptInitialHeadLength > MAX_CATALOG_HEAD_DISTANCE) {
+        fail('catalog consumer cumulative session budget exceeded')
+      }
+      tracked.catalogAcceptPages = nextPages
+      tracked.catalogAcceptRecords = nextRecords
+      tracked.catalogAcceptBytes = nextBytes
+      tracked.catalogAcceptVerificationWork = nextWork
+      scope.catalogVerifiedPages++
+      scope.catalogVerifiedRecords += response.entries.length
+      scope.catalogVerifiedBytes += frame.payload.byteLength
+      scope.catalogVerificationWork += response.entries.length * 2
+      scope.catalogHeadDigest ||= response.headDigest
+      await scope.binding.catalog.ingestAcceptedPage(response.entries)
+      scope.catalogCursor = response.nextCursor
+      scope.catalogPreviousPageDigest = response.pageDigest
+      clearTimeout(pending.timer)
+      scope.catalogPagePending = null
+      pending.resolve(response)
+      return { status: 'accepted', records: response.entries.length }
+    } catch (error) {
+      clearTimeout(pending.timer)
+      scope.catalogPagePending = null
+      pending.reject(error)
+      throw error
+    }
   }
 
   async function handlePublisherProofFrame(scope, tracked, frame) {
@@ -631,6 +794,7 @@ export function createScopedNetworkRuntime (options = {}) {
       if (!sendScopedFrame(tracked, 'publisher', 'namespace-proof-response', encodeNamespaceProof(proof))) {
         return { status: 'rejected', reason: 'namespace-proof-send-failed' }
       }
+      tracked.namespaceProofServed = true
       return { status: 'sent' }
     }
     if (frame.type === 'namespace-proof-response') {
@@ -641,6 +805,8 @@ export function createScopedNetworkRuntime (options = {}) {
       pending.resolve(decodeNamespaceProof(frame.payload))
       return { status: 'accepted' }
     }
+    if (frame.type === 'catalog-page-request') return serveCatalogPage(scope, tracked, frame)
+    if (frame.type === 'catalog-page-response') return acceptCatalogPage(scope, tracked, frame)
     return { status: 'rejected', reason: 'publisher-frame-type-not-allowed' }
   }
 
@@ -672,6 +838,76 @@ export function createScopedNetworkRuntime (options = {}) {
       reject(Object.assign(new Error('publisher proof request failed'), { code: 'PUBLISHER_PROOF_REQUEST_FAILED' }))
     }
     return promise
+  }
+
+  async function ensurePublisherNamespaceProof(scope) {
+    const active = await awaitActiveScopedSession(scope)
+    if (!active) fail('publisher proof peer unavailable', 'PUBLISHER_PROOF_PEER_UNAVAILABLE')
+    if (scope.namespaceProofVerified && active.namespaceProofReceived) return scope.namespaceProofVerified
+    const proof = await requestNamespaceProof(scope)
+    const descriptor = scope.descriptor
+    const verified = verifyPublisherNamespaceProof({
+      locator: {
+        publisherId: scope.publisherId,
+        catalogBootstrapKey: b4a.toString(descriptor.catalogBootstrapKey, 'hex'),
+        catalogEpoch: descriptor.catalogEpoch,
+      },
+      ...proof,
+    })
+    if (!b4a.equals(encodePublisherNamespaceDescriptor(verified.descriptor), encodePublisherNamespaceDescriptor(descriptor))) {
+      fail('namespace proof does not match followed descriptor')
+    }
+    scope.namespaceProofVerified = verified
+    active.namespaceProofReceived = true
+    return verified
+  }
+
+  async function requestCatalogPage(scope, request) {
+    if (scope.catalogPagePending) return scope.catalogPagePending.promise
+    const tracked = await awaitActiveScopedSession(scope)
+    if (!tracked) fail('publisher catalog peer unavailable', 'PUBLISHER_CATALOG_PEER_UNAVAILABLE')
+    let resolve, reject
+    const promise = new Promise((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
+    const timer = setTimeout(() => {
+      if (scope.catalogPagePending?.promise === promise) scope.catalogPagePending = null
+      reject(Object.assign(new Error('publisher catalog page timed out'), { code: 'PUBLISHER_CATALOG_PAGE_TIMEOUT' }))
+    }, CATALOG_PAGE_TIMEOUT_MS)
+    timer.unref?.()
+    scope.catalogPagePending = { promise, resolve, reject, timer, request }
+    if (!sendScopedFrame(tracked, 'publisher', 'catalog-page-request', canonicalCatalogPayload(request, 'catalog page request'))) {
+      clearTimeout(timer)
+      scope.catalogPagePending = null
+      reject(Object.assign(new Error('publisher catalog page request failed'), { code: 'PUBLISHER_CATALOG_PAGE_REQUEST_FAILED' }))
+    }
+    return promise
+  }
+
+  async function syncPublisherCatalog(scope) {
+    if (!scope || scope.closed || !scope.modes.has('followed')) return { status: 'not-followed' }
+    if (scope.catalogSyncing) return scope.catalogSyncing
+    scope.catalogSyncing = (async () => {
+      await ensurePublisherNamespaceProof(scope)
+      let cursor = scope.catalogCursor ?? null
+      if (cursor === null) scope.catalogHeadDigest = null
+      let previousPageDigest = null
+      let pages = 0
+      do {
+        const response = await requestCatalogPage(scope, {
+          version: 1,
+          cursor,
+          previousPageDigest,
+          expectedHeadDigest: cursor === null ? null : scope.catalogHeadDigest,
+          catalogEpoch: scope.descriptor.catalogEpoch,
+          limit: MAX_CATALOG_PAGE_RECORDS,
+        })
+        pages++
+        cursor = response.nextCursor
+        previousPageDigest = response.pageDigest
+      } while (cursor !== null)
+      await onCatalogUpdate?.({ publisherId: scope.publisherId })
+      return { status: 'synced', pages, records: scope.catalogVerifiedRecords, cursor: scope.catalogCursor }
+    })().finally(() => { scope.catalogSyncing = null })
+    return scope.catalogSyncing
   }
 
   async function syncFollowedFeed (scope) {
@@ -1232,6 +1468,11 @@ export function createScopedNetworkRuntime (options = {}) {
       scope.proofPending.reject(Object.assign(new Error('publisher proof scope released'), { code: 'PUBLISHER_PROOF_SCOPE_RELEASED' }))
       scope.proofPending = null
     }
+    if (scope.catalogPagePending) {
+      clearTimeout(scope.catalogPagePending.timer)
+      scope.catalogPagePending.reject(Object.assign(new Error('publisher catalog scope released'), { code: 'PUBLISHER_CATALOG_SCOPE_RELEASED' }))
+      scope.catalogPagePending = null
+    }
     for (const transfer of scope.archiveChallengeProofTransfers?.values() || []) clearTimeout(transfer.timer)
     scope.archiveChallengeProofTransfers?.clear()
     for (const peerId of [...scope.sessions.keys()]) closeSession(scope, peerId, 'scope-released')
@@ -1255,40 +1496,6 @@ export function createScopedNetworkRuntime (options = {}) {
     return true
   }
 
-  function attachCatalogReplication (scope, connection, tracked = null) {
-    const mux = muxFactory(connection)
-    const replicated = tracked?.replicatedCoreKeys || new Set()
-    const sync = () => {
-      for (const [key, core] of catalogReplicationCores(scope.binding)) {
-        if (replicated.has(key)) continue
-        core.replicate(mux, { live: true })
-        replicated.add(key)
-      }
-    }
-    sync()
-    if (tracked) {
-      tracked.replicatedCoreKeys = replicated
-      const base = scope.binding.catalog.base
-      const onupdate = () => {
-        try {
-          sync()
-          if (onCatalogUpdate) {
-            Promise.resolve(onCatalogUpdate({ publisherId: scope.publisherId })).catch(() => {
-              closeSession(scope, tracked.peerId, 'catalog-projection-update-failed')
-            })
-          }
-        } catch {
-          closeSession(scope, tracked.peerId, 'catalog-authorization-changed')
-        }
-      }
-      base.on?.('update', onupdate)
-      tracked.cleanupFns.push(() => {
-        base.off?.('update', onupdate)
-        base.removeListener?.('update', onupdate)
-      })
-    }
-  }
-
   function authorizeScopeConnection (scope, { peerId, connection, requestedCoreKey, tracked } = {}) {
     if (!networkEnabled) return { status: 'rejected', reason: 'network-policy-disabled' }
     if (!scope || scope.closed) return { status: 'rejected', reason: 'scope-not-retained' }
@@ -1298,11 +1505,8 @@ export function createScopedNetworkRuntime (options = {}) {
         return { status: 'authorized', action: 'namespace-proof', publisherId: scope.publisherId }
       }
       if (!scope.binding?.catalog || (!scope.modes.has('followed') && !scope.modes.has('local'))) return { status: 'rejected', reason: 'publisher-not-followed' }
-      if (connection) {
-        attachCatalogReplication(scope, connection, tracked)
-        counters.openedCatalogs++
-      }
-      return { status: 'authorized', action: 'catalog', publisherId: scope.publisherId }
+      if (connection) counters.openedCatalogs++
+      return { status: 'authorized', action: 'catalog-pages', publisherId: scope.publisherId }
     }
     if (scope.purpose === 'index' || scope.purpose === 'moderation') {
       return { status: 'authorized', action: 'bounded-feed', feedId: scope.feedId }
@@ -1382,6 +1586,11 @@ export function createScopedNetworkRuntime (options = {}) {
           if (scope.purpose === 'index' || scope.purpose === 'moderation') {
             void syncFollowedFeed(scope)
           }
+          if (scope.purpose === 'publisher' && scope.modes.has('followed') && !scope.modes.has('local')) {
+            void syncPublisherCatalog(scope).catch(error => {
+              recordProtocolError(scope, remoteKey, error)
+            })
+          }
           if (scope.purpose === 'asset') startAssetPumpWhenOpen(scope, tracked)
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
         }
@@ -1411,6 +1620,12 @@ export function createScopedNetworkRuntime (options = {}) {
             try { cleanup() } catch {}
           }
           scope.sessions.delete(remoteKey)
+          if (scope.catalogPagePending) {
+            clearTimeout(scope.catalogPagePending.timer)
+            scope.catalogPagePending.reject(Object.assign(new Error('publisher catalog peer disconnected'), { code: 'PUBLISHER_CATALOG_PEER_DISCONNECTED' }))
+            scope.catalogPagePending = null
+          }
+          scope.catalogPreviousPageDigest = null
           counters.closedSessions++
           if (scope.purpose === 'archive') void pumpArchiveSessions(scope)
         }
@@ -1450,7 +1665,6 @@ export function createScopedNetworkRuntime (options = {}) {
       state: protocolSession.state === 'active' ? 'active' : 'handshaking',
       closed: false,
       cleanupFns: [],
-      replicatedCoreKeys: new Set(),
       assetRequestIndex: null,
       assetTransfer: null,
       assetTimer: null,
@@ -1462,6 +1676,17 @@ export function createScopedNetworkRuntime (options = {}) {
       archiveServing: false,
       archiveLastServed: new Map(),
       archiveServedBytes: 0,
+      namespaceProofServed: false,
+      namespaceProofReceived: false,
+      catalogServePages: 0,
+      catalogServeRecords: 0,
+      catalogServeBytes: 0,
+      catalogServeDigest: null,
+      catalogAcceptPages: 0,
+      catalogAcceptRecords: 0,
+      catalogAcceptBytes: 0,
+      catalogAcceptVerificationWork: 0,
+      catalogAcceptInitialHeadLength: 0,
     }
     scope.sessions.set(remoteKey, tracked)
     if (tracked.state === 'active' && scope.purpose === 'asset') startAssetPumpWhenOpen(scope, tracked)
@@ -1635,7 +1860,26 @@ export function createScopedNetworkRuntime (options = {}) {
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('catalog binding mismatch')
     await publisherManager.followPublisher(id)
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
-    const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'followed', publisherId: id, descriptor, binding })
+    const { scope } = joinScope({
+      purpose: 'publisher',
+      topic,
+      scopeId: id,
+      mode: 'followed',
+      publisherId: id,
+      descriptor,
+      binding,
+      namespaceProofVerified: null,
+      catalogPagePending: null,
+      catalogSyncing: null,
+      catalogCursor: null,
+      catalogPreviousPageDigest: null,
+      catalogHeadDigest: null,
+      catalogInitialHeadLength: 0,
+      catalogVerifiedPages: 0,
+      catalogVerifiedRecords: 0,
+      catalogVerifiedBytes: 0,
+      catalogVerificationWork: 0,
+    })
     scope.publisherId = id
     scope.descriptor = descriptor
     scope.binding = binding
@@ -1688,15 +1932,30 @@ export function createScopedNetworkRuntime (options = {}) {
     const id = hex32(publisherId, 'publisherId')
     let genesis = null
     const transitions = []
-    const view = catalog?.view
-    if (!view?.createReadStream) fail('local catalog view is unavailable for namespace proof')
-    for await (const entry of view.createReadStream({ gte: 'accepted/', lt: 'accepted/\xff' })) {
-      const operation = decodePublisherCatalogFrame(entry.value)
-      if (operation.recordType === 'publisher.namespace' && !operation.transitionId) genesis ||= operation
-      else if (operation.recordType === 'publisher.root-transition') transitions.push(operation)
-    }
+    if (typeof catalog?.listAcceptedPage !== 'function') fail('local catalog accepted pages are unavailable for namespace proof')
+    let cursor = null
+    let scanned = 0
+    do {
+      const page = await catalog.listAcceptedPage({ cursor, limit: MAX_CATALOG_PAGE_RECORDS })
+      if (!page || !Array.isArray(page.entries) || page.entries.length > MAX_CATALOG_PAGE_RECORDS) fail('local catalog namespace proof page is invalid')
+      for (const entry of page.entries) {
+        const operation = decodePublisherCatalogFrame(entry.frame)
+        scanned++
+        if (scanned > MAX_CATALOG_SESSION_RECORDS) fail('local catalog namespace proof scan exceeds bounded limit')
+        if (operation.recordType === 'publisher.namespace' && !operation.transitionId) genesis ||= operation
+        else if (operation.recordType === 'publisher.root-transition') transitions.push(operation)
+      }
+      cursor = page.nextCursor ?? null
+    } while (cursor !== null)
     if (!genesis) fail('local catalog has no namespace genesis proof')
+    transitions.sort((left, right) => {
+      const leftEpoch = decodePublisherOperationBody(left.recordType, left.canonicalBody).newCatalogEpoch
+      const rightEpoch = decodePublisherOperationBody(right.recordType, right.canonicalBody).newCatalogEpoch
+      return leftEpoch - rightEpoch || left.issuerSequence - right.issuerSequence ||
+        b4a.compare(left.transitionId, right.transitionId)
+    })
     publisherProofProviders.set(id, { genesis, transitions })
+    publisherPageProviders.set(id, { catalog, catalogEpoch: descriptor.catalogEpoch })
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'candidate', publisherId: id, proofPending: null })
     return { status: 'provided', publisherId: id, topic: stableScopeDiagnostic(scope) }
@@ -1797,7 +2056,7 @@ export function createScopedNetworkRuntime (options = {}) {
     scope.publisherId = id
     scope.descriptor = descriptor
     scope.binding = binding
-    if (binding.catalog?.view?.createReadStream) {
+    if (typeof binding.catalog?.listAcceptedPage === 'function') {
       await provideLocalPublisherNamespaceProof({ publisherId: id, descriptor, catalog: binding.catalog })
     }
     const result = { status: 'published', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
@@ -1825,8 +2084,15 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
-  async function retainAuthorizedRendition ({ manifest, renditionId, start = 0, end = null } = {}) {
+  async function retainAuthorizedRendition ({ manifest, renditionId, start = 0, end = null, entityRef = null, publicationId = null } = {}) {
     if (status !== 'active') fail('runtime is not active')
+    const consumerVisible = await authorizeConsumerWork({
+      operation: 'asset-retain',
+      entityRef,
+      publicationId: publicationId || manifest?.publicationId || null,
+      renditionId,
+    })
+    if (!consumerVisible) fail('consumer media is not visible under local policy', 'CONSUMER_MEDIA_NOT_VISIBLE')
     const id = String(renditionId || '')
     const rendition = (manifest?.body?.renditions || []).find(candidate => candidate.renditionId === id)
     if (!rendition || rendition.blocked || rendition.superseded) fail('rendition is not manifest-authorized')
@@ -1951,7 +2217,13 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'published', delivered }
   }
 
-  async function publishArchiveRequest ({ request, envelope } = {}) {
+  async function publishArchiveRequest ({ request, envelope, entityRef = null, publicationId = null } = {}) {
+    const consumerVisible = await authorizeConsumerWork({
+      operation: 'archive-request',
+      entityRef,
+      publicationId: publicationId || request?.body?.publicationId || null,
+    })
+    if (!consumerVisible) fail('consumer media is not visible under local policy', 'CONSUMER_MEDIA_NOT_VISIBLE')
     return publishArchiveEnvelope('archive-request', envelope || request?.envelope || request)
   }
 

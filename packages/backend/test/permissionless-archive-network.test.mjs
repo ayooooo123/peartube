@@ -46,6 +46,36 @@ function authorized (request) {
   }
 }
 
+test('default archive request transport preserves publication authorization context', async (t) => {
+  const published = []
+  const scoped = {
+    ...scopedRecorder(),
+    async publishArchiveRequest (input) {
+      published.push(input)
+      return { status: 'published' }
+    },
+  }
+  const network = createPermissionlessArchiveNetwork({
+    keyPair: requester,
+    now: () => 1_000,
+    scopedNetwork: scoped,
+  })
+
+  await network.requestArchive({
+    publicationId,
+    renditionId,
+    ranges,
+    requestedBytes: 4096,
+    retentionUntil: 20_000,
+    expiresAt: 2_000,
+  })
+
+  t.is(published.length, 1)
+  t.is(published[0].publicationId, publicationId)
+  t.ok(published[0].envelope, 'the signed request is published with the catalog identity')
+  await network.close()
+})
+
 test('archive requests are signed, bounded, and bind exact public rendition ranges', async (t) => {
   const request = createArchiveRequest({
     requesterId: requester.publicKey,

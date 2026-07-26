@@ -140,7 +140,10 @@ export function createPermissionlessArchiveNetwork(options = {}) {
   const scopedNetwork = options.scopedNetwork
   const publishRequest = typeof options.publishRequest === 'function'
     ? options.publishRequest
-    : async envelope => scopedNetwork.publishArchiveRequest?.({ envelope })
+    : async (envelope, body) => scopedNetwork.publishArchiveRequest?.({
+        envelope,
+        publicationId: body?.publicationId || null,
+      })
   const publishPledge = typeof options.publishPledge === 'function'
     ? options.publishPledge
     : async envelope => scopedNetwork.publishArchivePledge?.({ envelope })
@@ -584,7 +587,7 @@ export function createPermissionlessArchiveNetwork(options = {}) {
         keyPair,
       })
       rememberLocalRequest(request)
-      await publishRequest(request.envelope)
+      await publishRequest(request.envelope, request.body)
       return { status: 'published', requestId: request.requestId, request }
     },
 

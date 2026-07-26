@@ -23,6 +23,7 @@ import { createArchivePledge } from '../src/archive/pledge.js'
 import { createArchiveRequest } from '../src/archive/request.js'
 import {
   createPublisherNamespaceDescriptor,
+  encodePublisherCatalogFrame,
   derivePublisherId,
   encodePublisherNamespaceDescriptor,
   PUBLISHER_RECORD_TYPES,
@@ -109,6 +110,16 @@ function fakeRegistry (descriptor) {
     async ready () {},
     async close () {},
     async listProjections () { return { items: [], nextCursor: null } },
+    async listAcceptedPage () { return { entries: [], nextCursor: null } },
+    async getViewHead () {
+      return {
+        viewKey: descriptor.catalogBootstrapKey,
+        length: 0,
+        digest: bytes(32, 210),
+        authorizationStateDigest: bytes(32, 211),
+      }
+    },
+    async ingestAcceptedPage () { return { accepted: 0 } },
   }
   const core = {
     key: descriptor.catalogBootstrapKey,
@@ -146,10 +157,21 @@ test('startup republishes only persisted writable catalogs with accepted project
     catalogBootstrapKey: bytes(32, 20),
   })
   const registry = fakeRegistry(descriptor)
+  const genesis = namespaceGenesis(descriptor, root)
   registry.binding.catalog.listProjections = async kind => ({
     items: kind === 'publication' ? [{ accepted: true }] : [],
     nextCursor: null,
   })
+  registry.binding.catalog.listAcceptedPage = async ({ cursor }) => cursor === null
+    ? [{
+        entries: [{
+          operationId: b4a.toString(genesis.recordId, 'hex'),
+          sourceWriterKey: bytes(32, 21),
+          frame: encodePublisherCatalogFrame(genesis),
+        }],
+        nextCursor: null,
+      }][0]
+    : { entries: [], nextCursor: null }
   registry.getWritableBindings = async () => [registry.binding]
   const swarm = fakeSwarm()
   const runtime = createScopedNetworkRuntime({ swarm, store: {}, catalogRegistry: registry })
@@ -267,7 +289,7 @@ test('bootstrap frames can never authorize or open a core', async (t) => {
   await runtime.close()
 })
 
-test('only a followed publisher with a verified namespace can open its catalog', async (t) => {
+test('only a followed publisher with a verified namespace can request bounded catalog pages', async (t) => {
   const root = crypto.keyPair(bytes(32, 11))
   const descriptor = createPublisherNamespaceDescriptor({
     genesisRootKey: root.publicKey,
@@ -288,11 +310,109 @@ test('only a followed publisher with a verified namespace can open its catalog',
   const connection = { id: 'catalog-connection' }
   const authorized = runtime.authorizeConnection({ purpose: 'publisher', topic, peerId: 'after-follow', connection })
   t.is(authorized.status, 'authorized')
-  t.is(registry.binding.catalog.replicated.length, 1)
+  t.is(authorized.action, 'catalog-pages')
+  t.is(registry.binding.catalog.replicated.length, 0, 'publisher authorization never exposes generic Hypercore replication')
 
   await runtime.unfollowPublisher({ publisherId })
   t.is(runtime.authorizeConnection({ purpose: 'publisher', topic, peerId: 'after-unfollow' }).status, 'rejected')
   await runtime.close()
+})
+
+test('publisher scope transfers exact-provenance accepted pages only after namespace proof', async (t) => {
+  const root = crypto.keyPair(bytes(32, 212))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 213),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const genesisFrame = encodePublisherCatalogFrame(genesis)
+  const sourceWriterKey = bytes(32, 214)
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+  const genesisId = b4a.toString(genesis.recordId, 'hex')
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor }) => cursor === null
+    ? {
+        entries: [{
+          operationId: genesisId,
+          sourceWriterKey,
+          frame: genesisFrame,
+        }],
+        nextCursor: genesisId,
+      }
+    : { entries: [], nextCursor: null }
+  let headCalls = 0
+  sourceRegistry.binding.catalog.getViewHead = async () => {
+    headCalls++
+    return {
+      viewKey: descriptor.catalogBootstrapKey,
+      length: 1,
+      digest: headCalls === 2 ? bytes(32, 217) : bytes(32, 215),
+      authorizationStateDigest: bytes(32, 216),
+    }
+  }
+  sourceRegistry.binding.catalog.view = {
+    async get (key) {
+      return key === 'state/descriptor'
+        ? { value: encodePublisherNamespaceDescriptor(descriptor) }
+        : null
+    },
+    async * createReadStream () {
+      yield { key: `accepted/${b4a.toString(genesis.recordId, 'hex')}`, value: genesisFrame }
+    },
+  }
+
+  const received = []
+  const consumerRegistry = fakeRegistry(descriptor)
+  consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => {
+    received.push(...entries)
+    return { accepted: entries.length }
+  }
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
+  let catalogUpdates = 0
+  const consumer = createScopedNetworkRuntime({
+    swarm: swarmB,
+    store: {},
+    catalogRegistry: consumerRegistry,
+    onCatalogUpdate: async () => { catalogUpdates++ },
+  })
+  await source.start()
+  await consumer.start()
+  await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+
+  const pair = connectionPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 30 && received.length === 0; attempt++) await settle()
+
+  t.is(received.length, 1)
+  t.is(catalogUpdates, 0, 'a changed head rejects cursor resume before projection refresh')
+  t.ok(b4a.equals(received[0].sourceWriterKey, sourceWriterKey), 'source writer provenance survives transport exactly')
+  t.ok(b4a.equals(received[0].frame, genesisFrame), 'canonical publisher frame survives transport exactly')
+  t.is(sourceRegistry.binding.catalog.replicated.length, 0)
+  t.is(consumerRegistry.binding.catalog.replicated.length, 0)
+
+  const retryPair = connectionPair()
+  swarmA.connections.add(retryPair.a)
+  swarmB.connections.add(retryPair.b)
+  swarmA.emit('connection', retryPair.a, { publicKey: retryPair.a.remotePublicKey, client: false })
+  swarmB.emit('connection', retryPair.b, { publicKey: retryPair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 30 && catalogUpdates === 0; attempt++) await settle()
+  t.is(catalogUpdates, 1, 'a new authenticated session repeats proof and resumes the stable cursor')
+
+  await source.close()
+  await consumer.close()
+  pair.a.destroy()
+  pair.b.destroy()
+  retryPair.a.destroy()
+  retryPair.b.destroy()
 })
 
 test('local publisher scope is not announced before an accepted publication or claim exists', async t => {
@@ -509,7 +629,7 @@ test('real Protomux sessions open on both sides without server topic metadata an
   t.ok(runtimeB.getDiagnostics().sessions.some(session => session.purpose === 'publisher' && session.state === 'active'))
   registryA.binding.catalog.base.emit('update')
   await settle()
-  t.is(catalogUpdates, 1, 'replicated catalog updates trigger projection refresh exactly once per session')
+  t.is(catalogUpdates, 0, 'raw Autobase update events are not wired to consumer transport')
 
   await runtimeA.close()
   await runtimeB.close()

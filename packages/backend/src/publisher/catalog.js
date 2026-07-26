@@ -97,6 +97,7 @@ export class PublisherCatalog extends ReadyResource {
     this.store = typeof store.namespace === 'function' ? store.namespace(normalized.namespace) : store
     this.ownsScopedStore = this.store !== store
     this.base = null
+    this.verifiedPageView = null
     this.publisherPinned = false
     this.ready().catch(() => {})
   }
@@ -156,7 +157,7 @@ export class PublisherCatalog extends ReadyResource {
   }
 
   get view () {
-    return this.publisherPinned ? this.base?.view || null : null
+    return this.publisherPinned ? this.verifiedPageView || this.base?.view || null : null
   }
 
   async update () {
@@ -267,6 +268,56 @@ export class PublisherCatalog extends ReadyResource {
     return listPublisherAcceptedPage(this.view, options)
   }
 
+  async ingestAcceptedPage (entries) {
+    await this.ready()
+    if (!Array.isArray(entries) || entries.length < 1 || entries.length > 128) {
+      invalid('accepted page batch is out of bounds')
+    }
+    let prior = null
+    const nodes = entries.map(entry => {
+      if (!entry || typeof entry.operationId !== 'string' || !/^[0-9a-f]{64}$/.test(entry.operationId)) {
+        invalid('accepted page operationId is invalid')
+      }
+      assertBytes(entry.sourceWriterKey, 32, 'accepted page sourceWriterKey')
+      if (!isBytes(entry.frame)) invalid('accepted page frame must be bytes')
+      const frame = b4a.from(entry.frame)
+      if (frame.byteLength < 1 || frame.byteLength > PUBLISHER_LIMITS.maxOperationBytes) invalid('accepted page frame is out of bounds')
+      const operation = decodePublisherCatalogFrame(frame)
+      if (!b4a.equals(encodePublisherCatalogFrame(operation), frame)) invalid('accepted page frame is noncanonical')
+      const operationId = b4a.toString(operation.recordId || operation.transitionId, 'hex')
+      if (operationId !== entry.operationId || (prior !== null && operationId <= prior)) {
+        invalid('accepted page operation ordering or identity is invalid')
+      }
+      prior = operationId
+      return { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } }
+    })
+    if (!this.verifiedPageView) {
+      const publisherHex = b4a.toString(this.options.publisherId, 'hex')
+      this.verifiedPageView = openPublisherCatalogView({
+        get: () => this.store.get({ name: `verified-page-view-${publisherHex}` })
+      })
+      await this.verifiedPageView.ready()
+    }
+    const rebuilt = await applyPublisherCatalogNodes(nodes, this.verifiedPageView, {
+      key: this.base.key,
+      async addWriter () {},
+      removeable () { return false },
+      async removeWriter () {},
+    }, {
+      keyProvider: this.options.keyProvider,
+      publisherId: this.options.publisherId,
+      journalLimit: this.options.journalLimit,
+    })
+    return {
+      accepted: entries.filter(entry => rebuilt.accepted.some(candidate =>
+        b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
+      )).length,
+      rejected: entries.filter(entry => rebuilt.rejected.some(candidate =>
+        b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
+      )).length,
+    }
+  }
+
   async getOperationReceipt (operationId) {
     await this.update()
     return getPublisherOperationReceipt(this.view, operationId)
@@ -312,8 +363,11 @@ export class PublisherCatalog extends ReadyResource {
       try { await resource?.close?.() } catch { /* close every owned layer */ }
     }
     const base = this.base
+    const verifiedPageView = this.verifiedPageView
     this.publisherPinned = false
     this.base = null
+    this.verifiedPageView = null
+    await close(verifiedPageView)
     await close(base)
     if (this.ownsScopedStore) await close(this.store)
     if (this.ownsStore) await close(this.rootStore)

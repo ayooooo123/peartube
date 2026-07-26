@@ -468,6 +468,7 @@ export async function createBackendContext(config) {
   // project the resulting local state and never initiate transport work.
   const consumerIndexFeedManager = createIndexFeedManager({ now: () => Date.now() })
   const consumerModerationManager = createModerationManager({ now: () => Date.now() })
+  let consumerCatalogProjection = null
   scopedNetwork = createScopedNetworkRuntime({
     swarm: ctx.swarm,
     store: ctx.store,
@@ -477,6 +478,14 @@ export async function createBackendContext(config) {
     trustedBootstrapSigners: network.trustedBootstrapSigners,
     trustedBootstrapRootIds: network.trustedBootstrapRootIds,
     authorizePublication: request => mediaCatalogProjection.authorizeRendition(request),
+    authorizeConsumerWork: async ({ entityRef, publicationId }) => {
+      if (!consumerCatalogProjection) return false
+      await mediaCatalogProjection.rebuild()
+      consumerCatalogProjection.rebuild()
+      if (entityRef != null) return consumerCatalogProjection.isVisible(entityRef)
+      if (publicationId != null) return consumerCatalogProjection.isPublicationVisible(publicationId)
+      return false
+    },
     onCatalogUpdate: async () => {
       try {
         await mediaCatalogProjection.rebuild()
@@ -493,7 +502,7 @@ export async function createBackendContext(config) {
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
   // Consumer projection is a local view over the authenticated publisher graph
   // plus optional bounded index records. It owns neither a feed nor authority.
-  const consumerCatalogProjection = createConsumerCatalogProjection({
+  consumerCatalogProjection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex(),
     indexFeedManager: consumerIndexFeedManager,
     bootstrapManager: { listLocators: () => scopedNetwork.listBootstrapLocators() },

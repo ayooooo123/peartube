@@ -7,7 +7,7 @@ import { createBootstrapLocator } from '../src/discovery/bootstrap-protocol.js'
 import crypto from 'hypercore-crypto'
 
 const id = (character) => character.repeat(64)
-const candidate = { kind: 'movie', entityRef: 'work:publisher-record', publicationId: id('1'), publisherId: id('a'), title: 'Publisher record' }
+const candidate = { directPublisher: true, kind: 'movie', entityRef: 'work:publisher-record', publicationId: id('1'), publisherId: id('a'), title: 'Publisher record' }
 
 test('removing a bundled curator changes only the local projection and never publisher validity or playback authority', (t) => {
   const index = createLocalMediaIndex()
@@ -17,6 +17,7 @@ test('removing a bundled curator changes only the local projection and never pub
     localIndex: index,
     bootstrapManager: { listLocators: () => [{ publisherId: id('a') }] },
     indexFeedManager: { getRecords: () => [candidate] },
+    publisherRecords: () => [candidate],
     moderationPolicy: {
       enabled: () => enabled,
       curatorSubscriptions: [id('c')],
@@ -53,6 +54,9 @@ test('a curated moderation key cannot authenticate bootstrap or publisher author
   const bootstrap = createBootstrapManager({ now: () => 20, trustedSigners: [] })
 
   const result = await bootstrap.ingestLocator('peer', locator.envelope)
-  t.is(result.status, 'quarantined')
-  t.absent(bootstrap.getLocator(id('a')))
+  t.is(result.status, 'accepted', 'any valid locator signer may introduce an untrusted candidate')
+  const retained = bootstrap.getLocator(id('a'))
+  t.ok(retained)
+  t.is(retained.trusted, false, 'the curated key is not promoted to bootstrap authority')
+  t.is(retained.catalogChainVerified, false, 'the curated key cannot authenticate publisher authorization')
 })

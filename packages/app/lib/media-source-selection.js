@@ -1,3 +1,5 @@
+import { effectiveAvailabilityState, isAvailabilityPlayable } from './media-availability.js'
+
 const HARD_REJECTION_REASONS = Object.freeze({
   UNAUTHORIZED_PUBLICATION: true,
   UNCONFIRMED_AVAILABILITY: true,
@@ -8,10 +10,21 @@ const HARD_REJECTION_REASONS = Object.freeze({
   NO_AVAILABLE_COPY: true,
 })
 
+function assessedAvailability(source) {
+  const availability = source?.availability
+  return availability !== null && typeof availability === 'object' && !Array.isArray(availability)
+    ? availability
+    : null
+}
+
 export function isMediaSourcePlayable(source = {}) {
+  const assessed = assessedAvailability(source)
+  const reachable = assessed
+    ? isAvailabilityPlayable(assessed)
+    : source.availabilityState === 'available'
   return typeof source.publicationId === 'string' && source.publicationId.length > 0 &&
     typeof source.renditionId === 'string' && source.renditionId.length > 0 &&
-    source.availabilityState === 'available' &&
+    reachable &&
     source.stale !== true &&
     source.incomplete !== true &&
     Array.isArray(source.rejectionReasonCodes) &&
@@ -99,8 +112,24 @@ function sourceModerationPenalty(source) {
   return 0
 }
 
+// The assessed availability object is authoritative when present. The legacy
+// status strings below only describe sources that predate the four-state
+// contract (local files, cached blobs, publisher-claimed status).
+function legacyAvailabilityStatus(source) {
+  const legacy = typeof source?.availability === 'string' ? source.availability : null
+  return source?.availabilityStatus || legacy || source?.retentionStatus || null
+}
+
 function availabilityScore(source) {
-  const status = source?.availabilityStatus || source?.availability || source?.retentionStatus || source?.archiveStatus
+  const assessed = nonArrayObject(source?.availability) ? source.availability : null
+  if (assessed) {
+    if (assessed.offlinePlayable === true) return 260
+    const state = effectiveAvailabilityState(assessed)
+    if (state === 'healthy') return 140
+    if (state === 'limited') return 90
+    return -160
+  }
+  const status = legacyAvailabilityStatus(source) || source?.archiveStatus
   if (truthy(source?.localComplete) || truthy(source?.isLocal) || status === 'local' || status === 'complete-local') return 260
   if (truthy(source?.cached) || truthy(source?.retained) || status === 'cached' || status === 'retained') return 220
   if (truthy(source?.archived) || status === 'archived' || status === 'pledged') return 170
@@ -166,7 +195,8 @@ export function normalizeMediaSource(source = {}, entity = {}) {
     path: firstNonEmptyString([source.path, source.filePath, source.video?.path], null),
     publicBeeKey: firstNonEmptyString([source.publicBeeKey, source.video?.publicBeeKey], null),
     playbackKey,
-    availabilityStatus: source.availabilityStatus || source.availability || source.retentionStatus || null,
+    availability: nonArrayObject(source.availability) ? source.availability : null,
+    availabilityStatus: legacyAvailabilityStatus(source),
     availabilityState: source.availabilityState || null,
     archiveStatus: source.archiveStatus || source.retentionStatus || null,
     localComplete: !!source.localComplete,
@@ -220,7 +250,9 @@ function isMediaSourceAllowed(source, policy) {
   if (source.formatSupported === false || source.playbackSupported === false) return false
   if (source.rejectionReasonCodes.some(code => HARD_REJECTION_REASONS[code] === true)) return false
   if (sourceModerationPenalty(source) <= -1000) return false
-  if (source.availabilityState && source.availabilityState !== 'available') return false
+  const assessed = assessedAvailability(source)
+  if (assessed && !isAvailabilityPlayable(assessed)) return false
+  if (!assessed && source.availabilityState && source.availabilityState !== 'available') return false
   if (raw.available === false && !source.availabilityStatus) return false
   if (
     policy.allowUnavailable !== true &&

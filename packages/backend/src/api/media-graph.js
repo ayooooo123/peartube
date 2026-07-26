@@ -1,5 +1,6 @@
+import { AVAILABILITY_STATES, assessAvailability, isPlayableAvailability } from '../assets/availability.js'
 import { resolveMediaEntity } from '../media-graph/resolver.js'
-import { selectPublicationSources } from '../media-graph/source-selector.js'
+import { selectPublicationSources, sourceAvailabilityScore } from '../media-graph/source-selector.js'
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 
 const DEFAULT_PAGE_LIMIT = 50
@@ -139,7 +140,17 @@ function normalizePreferenceStore(store) {
   return store
 }
 
-function manifestSource(manifest, row, preferred, trust = {}) {
+// `availabilityState`/`stale` remain the selection-diagnostics vocabulary and
+// are derived from the assessment, never from the publisher's claimed status.
+// Task 4 collapses that legacy gate onto the four-state contract directly.
+const LEGACY_AVAILABILITY_STATE = Object.freeze({
+  [AVAILABILITY_STATES.healthy]: 'available',
+  [AVAILABILITY_STATES.limited]: 'available',
+  [AVAILABILITY_STATES.unavailable]: 'unavailable',
+  [AVAILABILITY_STATES.awaitingReplication]: 'unknown',
+})
+
+function manifestSource(manifest, row, preferred, trust = {}, availability = null) {
   const publisherId = manifest?.body?.publisherId || row.issuer
   const rendition = manifest?.body?.renditions?.find(candidate => (
     candidate && candidate.blocked !== true && candidate.superseded !== true &&
@@ -159,10 +170,12 @@ function manifestSource(manifest, row, preferred, trust = {}) {
     ),
     metadataConfidence: row.body.confidence || 0,
     publisherTrust: trust[publisherId] || 0,
-    availabilityScore: row.body.payload?.availabilityStatus === 'available' ? 100 : 0,
+    availabilityScore: sourceAvailabilityScore({ availability }),
     formatSupport: 100,
     moderationPenalty: row.body.payload?.moderationPenalty || 0,
-    availabilityState: row.body.payload?.availabilityStatus || 'unknown',
+    availability,
+    availabilityState: LEGACY_AVAILABILITY_STATE[availability?.state] || 'unknown',
+    availabilityExpiresAt: availability?.expiresAt ?? 0,
     archiveState: row.body.payload?.archiveState,
     cacheState: row.body.payload?.cacheState,
     introductionPublisherIds: row.body.payload?.introductionPublisherIds || [row.issuer],
@@ -170,7 +183,8 @@ function manifestSource(manifest, row, preferred, trust = {}) {
     moderationFeedIds: row.body.payload?.moderationFeedIds || [],
     claimConflictIds: row.body.payload?.claimConflictIds || [],
     provenanceClaimIds: row.body.payload?.provenanceClaimIds || [row.claimId],
-    stale: row.body.payload?.stale === true,
+    stale: availability?.state === AVAILABILITY_STATES.unavailable &&
+      (availability?.reasonCodes || []).includes('EVIDENCE_EXPIRED'),
     incomplete: row.body.payload?.incomplete === true,
     preferred,
   }
@@ -193,6 +207,23 @@ function sourceDiagnosticsResponse(item) {
   }
 }
 
+function availabilityResponse(availability) {
+  if (!availability) return null
+  return {
+    state: availability.state,
+    renditionId: availability.renditionId || null,
+    observedAt: schemaUint(availability.observedAt),
+    expiresAt: schemaUint(availability.expiresAt),
+    requiredRangeCount: schemaUint(availability.requiredRangeCount),
+    reachableRangeCount: schemaUint(availability.reachableRangeCount),
+    independentPeerCount: schemaUint(availability.independentPeerCount),
+    completePeerCount: schemaUint(availability.completePeerCount),
+    offlinePlayable: availability.offlinePlayable === true,
+    archivePledged: availability.archivePledged === true,
+    reasonCodes: availability.reasonCodes || [],
+  }
+}
+
 function sourceResponse(source) {
   return {
     publicationId: source.publicationId,
@@ -204,6 +235,7 @@ function sourceResponse(source) {
     formatSupport: schemaUint(source.formatSupport),
     moderationPenalty: schemaUint(source.moderationPenalty),
     preferred: source.preferred === true,
+    availability: availabilityResponse(source.availability),
   }
 }
 
@@ -225,6 +257,43 @@ export function createMediaGraphApi(options = {}) {
   const sourcePreferenceStore = normalizePreferenceStore(options.sourcePreferenceStore || options.ctx?.sourcePreferenceStore || options.ctx?.metaSubspaces?.mediaSourcePreferences || options.ctx?.metaDb?.sub?.('media-source-preferences'))
   const trust = options.trust || options.ctx?.mediaGraphTrust || {}
   const consumerCatalogProjection = options.consumerCatalogProjection || options.ctx?.consumerCatalogProjection || null
+  const availabilityEvidenceStore = options.availabilityEvidenceStore || options.ctx?.availabilityEvidenceStore || null
+  const clock = typeof options.now === 'function' ? options.now : () => Date.now()
+
+  /**
+   * One assessment per rendition per operation. Cards, entity details, Other
+   * Sources, and playback preparation must quote the same instance and the same
+   * `observedAt`, so a viewer never sees two different availability answers for
+   * one title in one response.
+   *
+   * Reading is passive: it consumes evidence the asset layer already collected
+   * under its own lazy budget and never opens an asset swarm to render a page.
+   */
+  function createAvailabilityScope() {
+    const observedAt = clock()
+    const cache = new Map()
+    return {
+      observedAt,
+      assess(publicationId, renditionId = null) {
+        const key = `${publicationId}\n${renditionId || ''}`
+        const cached = cache.get(key)
+        if (cached) return cached
+        const requirement = assetManifestStore?.getRenditionRequirement?.(publicationId, renditionId) || null
+        const evidence = availabilityEvidenceStore?.getCachedEvidence?.(
+          publicationId,
+          requirement?.renditionId || renditionId || null,
+        ) || {}
+        const assessment = assessAvailability({
+          ...evidence,
+          publicationId,
+          renditionId: requirement?.renditionId || renditionId || null,
+          requiredRanges: requirement?.requiredRanges || [],
+        }, { now: observedAt })
+        cache.set(key, assessment)
+        return assessment
+      },
+    }
+  }
 
   function requireGraphStore() {
     if (!mediaGraphStore) return error('MEDIA_GRAPH_NOT_READY', 'Media graph projection storage is not wired yet')
@@ -236,7 +305,7 @@ export function createMediaGraphApi(options = {}) {
     return row?.value?.preferred === true || row?.preferred === true
   }
 
-  async function buildSources(entityId) {
+  async function buildSources(entityId, scope) {
     const rows = mediaGraphStore.getClaimsBySubject(entityId)
       .filter(row => !row.revoked && row.body.claimType === 'AvailabilityObservation' && row.body.payload?.publicationId)
     const sources = []
@@ -249,7 +318,13 @@ export function createMediaGraphApi(options = {}) {
         continue
       }
       const manifest = assetManifestStore?.getManifest?.(publicationId) || null
-      sources.push(manifestSource(manifest, row, await isPreferred(entityId, publicationId), trust))
+      sources.push(manifestSource(
+        manifest,
+        row,
+        await isPreferred(entityId, publicationId),
+        trust,
+        scope.assess(publicationId),
+      ))
     }
     return selectPublicationSources(sources).sort((a, b) => {
       if (a.preferred !== b.preferred) return a.preferred ? -1 : 1
@@ -309,16 +384,25 @@ export function createMediaGraphApi(options = {}) {
     }
   }
 
-  function decorateSources(sources) {
+  function decorateSources(sources, scope) {
     const diagnostics = new Map(projectSourceSelectionDiagnostics(sources, {
       selectedPublicationId: sources[0]?.publicationId,
       requireAuthorization: true,
-      now: options.now?.() ?? Date.now(),
+      now: scope.observedAt,
     }).map(item => [item.publicationId, sourceDiagnosticsResponse(item)]))
     return sources.map(source => ({
       ...sourceResponse(source),
       ...(diagnostics.get(source.publicationId) || {}),
     }))
+  }
+
+  /**
+   * What Play would report right now: the availability of the source Play would
+   * choose, or a metadata-only assessment when the entity has no publication.
+   */
+  function entityAvailability(sources, scope) {
+    const best = sources.find(source => isPlayableAvailability(source.availability)) || sources[0]
+    return best?.availability || scope.assess('', null)
   }
 
   function resolveOrMissing(entityId, consumerVisible = false) {
@@ -340,7 +424,8 @@ export function createMediaGraphApi(options = {}) {
     }
     const resolved = resolveOrMissing(entityId, !agent)
     if (!resolved) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
-    const sources = await buildSources(entityId)
+    const scope = createAvailabilityScope()
+    const sources = await buildSources(entityId, scope)
     const entity = {
       entityId,
       entityKind: agent ? 'agent' : entityKindFromRow(resolved.claims[0]) || entityKindFromId(entityId),
@@ -350,7 +435,8 @@ export function createMediaGraphApi(options = {}) {
       displayName: resolved.metadata.displayName || resolved.metadata.title || null,
       claimCount: resolved.claims.length,
       conflictCount: resolved.conflicts.length,
-      sources: decorateSources(sources),
+      availability: availabilityResponse(entityAvailability(sources, scope)),
+      sources: decorateSources(sources, scope),
       renditions: [],
     }
     return {
@@ -363,6 +449,7 @@ export function createMediaGraphApi(options = {}) {
 
   return {
     async getMediaCatalog(request = {}) {
+      const scope = createAvailabilityScope()
       if (consumerCatalogProjection) {
         try {
           await options.ctx?.mediaCatalogProjection?.update?.()
@@ -371,16 +458,28 @@ export function createMediaGraphApi(options = {}) {
           if (!page?.success) return page
           return {
             success: true,
-            items: page.items.map(item => ({
-              entityId: item.entityRef,
-              entityKind: item.entityKind || 'unknown',
-              title: item.title || null,
-              subtitle: item.creator || null,
-              claimCount: item.publications?.length || 0,
-              conflictCount: 0,
-              sources: (item.publications || []).map(publication => ({ publicationId: publication.publicationId, publisherId: publication.publisherId })),
-              renditions: [],
-            })),
+            items: page.items.map(item => {
+              const sources = (item.publications || []).map(publication => ({
+                publicationId: publication.publicationId,
+                publisherId: publication.publisherId,
+                availability: scope.assess(publication.publicationId),
+              }))
+              return {
+                entityId: item.entityRef,
+                entityKind: item.entityKind || 'unknown',
+                title: item.title || null,
+                subtitle: item.creator || null,
+                claimCount: item.publications?.length || 0,
+                conflictCount: 0,
+                availability: availabilityResponse(entityAvailability(sources, scope)),
+                sources: sources.map(source => ({
+                  publicationId: source.publicationId,
+                  publisherId: source.publisherId,
+                  availability: availabilityResponse(source.availability),
+                })),
+                renditions: [],
+              }
+            }),
             nextCursor: page.nextCursor,
           }
         } catch {
@@ -403,7 +502,7 @@ export function createMediaGraphApi(options = {}) {
       for (const entityId of [...entityIds].sort()) {
         const resolved = resolveOrMissing(entityId)
         if (!resolved) continue
-        const sources = await buildSources(entityId)
+        const sources = await buildSources(entityId, scope)
         const renditions = new Map()
         for (const source of sources) {
           const manifest = assetManifestStore?.getManifest?.(source.publicationId)
@@ -419,6 +518,7 @@ export function createMediaGraphApi(options = {}) {
           subtitle: resolved.metadata.subtitle || null,
           claimCount: resolved.claims.length,
           conflictCount: resolved.conflicts.length,
+          availability: availabilityResponse(entityAvailability(sources, scope)),
           sources: sources.map(sourceResponse),
           renditions: [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId)),
         })
@@ -503,8 +603,9 @@ export function createMediaGraphApi(options = {}) {
           )
         }
       }
-      const sources = await buildSources(request.entityId)
-      const decorated = decorateSources(sources)
+      const scope = createAvailabilityScope()
+      const sources = await buildSources(request.entityId, scope)
+      const decorated = decorateSources(sources, scope)
       const result = pageRows(decorated, request, source => source.publicationId)
       if (result.error) return result.error
       return okPage(result.page, result.nextCursor)

@@ -212,6 +212,30 @@ export interface MediaRenditionDescriptor {
   segmentIndexId?: string | null;
 }
 
+/**
+ * Local, point-in-time reachability assessment for one immutable rendition.
+ * Never a durability or availability guarantee: it expires at `expiresAt`.
+ */
+export type MediaAvailabilityState =
+  | 'awaiting-replication'
+  | 'limited'
+  | 'healthy'
+  | 'unavailable';
+
+export interface MediaAvailability {
+  state: MediaAvailabilityState;
+  renditionId?: string | null;
+  observedAt?: number | null;
+  expiresAt?: number | null;
+  requiredRangeCount?: number | null;
+  reachableRangeCount?: number | null;
+  independentPeerCount?: number | null;
+  completePeerCount?: number | null;
+  offlinePlayable?: boolean | null;
+  archivePledged?: boolean | null;
+  reasonCodes?: string[] | null;
+}
+
 export interface MediaPublicationSource {
   publicationId: string;
   publisherId: string;
@@ -240,6 +264,7 @@ export interface MediaPublicationSource {
   availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null;
   stale?: boolean | null;
   incomplete?: boolean | null;
+  availability?: MediaAvailability | null;
 }
 
 export interface MediaEntitySummary {
@@ -250,6 +275,7 @@ export interface MediaEntitySummary {
   subtitle?: string | null;
   claimCount?: number | null;
   conflictCount?: number | null;
+  availability?: MediaAvailability | null;
   sources: MediaPublicationSource[];
   renditions: MediaRenditionDescriptor[];
 }

@@ -1,3 +1,16 @@
+import { availabilityScoreForState } from '../assets/availability.js'
+
+/**
+ * Availability is an assessed, expiring local observation. A publisher's
+ * claimed status never reaches the score: sources carry the assessment made by
+ * `assessAvailability`, and an unreachable source scores zero no matter how
+ * trusted its publisher is.
+ */
+export function sourceAvailabilityScore(source = {}) {
+  if (source.availability) return availabilityScoreForState(source.availability.state)
+  return 0
+}
+
 function safeScore(value) {
   const next = Number(value || 0)
   if (!Number.isFinite(next)) return 0

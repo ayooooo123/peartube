@@ -133,7 +133,9 @@ test('accepted catalog payloads project canonical manifests and claims with boun
     },
   }), [], 'a blocked publisher root filters claims signed by its authenticated delegated writer')
 
-  const api = createMediaGraphApi({ ctx: { mediaGraphStore: projection.mediaGraphStore, assetManifestStore: projection.assetManifestStore, mediaCatalogProjection: projection } })
+  // Availability carries an observation timestamp, so a projection-determinism
+  // comparison has to pin the clock rather than race the wall clock.
+  const api = createMediaGraphApi({ ctx: { mediaGraphStore: projection.mediaGraphStore, assetManifestStore: projection.assetManifestStore, mediaCatalogProjection: projection }, now: () => 200 })
   const page = await api.getMediaCatalog({ limitProvided: true, limit: 1 })
   t.is(page.success, true)
   t.is(page.items.length, 1)
@@ -160,6 +162,7 @@ test('accepted catalog payloads project canonical manifests and claims with boun
       assetManifestStore: restartedProjection.assetManifestStore,
       mediaCatalogProjection: restartedProjection,
     },
+    now: () => 200,
   })
   t.is(restarted.revision, rebuilt.revision)
   t.alike(await restartedApi.getMediaCatalog({ limitProvided: true, limit: 1 }), page)

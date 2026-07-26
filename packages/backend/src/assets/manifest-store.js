@@ -1,3 +1,4 @@
+import { requiredRangesForRendition } from './availability.js'
 import { verifyPublicationManifest } from './manifest.js'
 
 function signerHex(value) {
@@ -62,6 +63,32 @@ export function createAssetManifestStore(options = {}) {
 
     getManifest(publicationId) {
       return byPublication.get(publicationId) || null
+    },
+
+    /**
+     * The immutable rendition a consumer must actually receive, plus the block
+     * ranges a peer has to advertise and prove. Availability is assessed
+     * against this, never against the publisher's claimed status.
+     */
+    getRenditionRequirement(publicationId, renditionId = null) {
+      const manifest = byPublication.get(publicationId)
+      if (!manifest) return null
+      const rendition = (manifest.body?.renditions || []).find(candidate => (
+        candidate &&
+        candidate.blocked !== true &&
+        candidate.superseded !== true &&
+        typeof candidate.renditionId === 'string' &&
+        candidate.renditionId.length > 0 &&
+        (renditionId == null || candidate.renditionId === renditionId)
+      ))
+      if (!rendition) return null
+      return {
+        publicationId,
+        renditionId: rendition.renditionId,
+        coreKey: rendition.core?.key || null,
+        coreLength: Number(rendition.core?.length) || 0,
+        requiredRanges: requiredRangesForRendition(rendition),
+      }
     },
 
     getManifestByPublisherSequence(publisherId, sequence) {

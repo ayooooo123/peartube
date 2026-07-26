@@ -1618,6 +1618,81 @@
       ]
     },
     {
+      "name": "media-availability",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "state",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "renditionId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "observedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expiresAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "requiredRangeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "reachableRangeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "independentPeerCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "completePeerCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "offlinePlayable",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "archivePledged",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "reasonCodes",
+          "required": false,
+          "array": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "media-publication-source",
       "namespace": "peartube",
       "compact": false,
@@ -1790,6 +1865,12 @@
           "name": "incomplete",
           "required": false,
           "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "availability",
+          "required": false,
+          "type": "@peartube/media-availability",
           "version": 1
         }
       ]
@@ -2004,6 +2085,12 @@
           "name": "conflictCount",
           "required": false,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "availability",
+          "required": false,
+          "type": "@peartube/media-availability",
           "version": 1
         },
         {

@@ -405,6 +405,40 @@ export type RequestArchivePublicationResponse = {
   errorCode?: string | null
 }
 
+/**
+ * Local, point-in-time reachability assessment for one immutable rendition.
+ *
+ * It is not durability, consensus, or an SLA: `healthy` only means this device
+ * currently holds fresh hash-verified evidence from `MIN_HEALTHY_PEERS`
+ * independent transport identities, and it decays at `expiresAt`.
+ */
+export type MediaAvailabilityState =
+  | 'awaiting-replication'
+  | 'limited'
+  | 'healthy'
+  | 'unavailable'
+
+export type MediaAvailability = {
+  state: MediaAvailabilityState
+  renditionId?: string | null
+  /** Epoch ms of this assessment. */
+  observedAt?: number | null
+  /** Epoch ms after which the supporting evidence is stale. */
+  expiresAt?: number | null
+  requiredRangeCount?: number | null
+  reachableRangeCount?: number | null
+  /** Distinct authenticated Noise keys currently contributing fresh evidence. */
+  independentPeerCount?: number | null
+  /** Of those, the ones proving every required range. */
+  completePeerCount?: number | null
+  /** A local complete copy. Never counted as network availability. */
+  offlinePlayable?: boolean | null
+  /** A static retention pledge. Durability evidence only. */
+  archivePledged?: boolean | null
+  /** Stable codes in canonical order; at most 8 entries. */
+  reasonCodes?: string[] | null
+}
+
 export type MediaPublicationSource = {
   publicationId: string
   publisherId: string
@@ -440,6 +474,7 @@ export type MediaPublicationSource = {
   availabilityState?: 'available' | 'unavailable' | 'unknown' | 'stale' | null
   stale?: boolean | null
   incomplete?: boolean | null
+  availability?: MediaAvailability | null
 }
 
 export type MediaRenditionDescriptor = {
@@ -461,6 +496,7 @@ export type MediaEntitySummary = {
   subtitle?: string | null
   claimCount?: number | null
   conflictCount?: number | null
+  availability?: MediaAvailability | null
   sources: MediaPublicationSource[]
   renditions: MediaRenditionDescriptor[]
 }

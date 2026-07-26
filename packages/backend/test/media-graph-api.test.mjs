@@ -39,17 +39,47 @@ function rendition(id = 1) {
   })
 }
 
+const FIXED_NOW = 1_700_000_000_000
+
+function evidenceStore(byPublication = new Map()) {
+  return {
+    set(publicationId, evidence) {
+      byPublication.set(publicationId, evidence)
+      return this
+    },
+    getCachedEvidence(publicationId) {
+      return byPublication.get(publicationId) || {}
+    },
+  }
+}
+
+function completePeerEvidence(transportKeys, coreLength = 1) {
+  return {
+    peers: transportKeys.map(transportKey => ({
+      transportKey,
+      connected: true,
+      advertisedRanges: [{ start: 0, end: coreLength }],
+      advertisedAt: FIXED_NOW - 10_000,
+      challengeStatus: 'passed',
+      verifiedAt: FIXED_NOW - 1_000,
+    })),
+  }
+}
+
 async function fixture() {
   const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisherA.publicKey, publisherB.publicKey, curator.publicKey] })
   const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisherA.publicKey, publisherB.publicKey] })
   const sourcePreferenceStore = new Map()
+  const availabilityEvidenceStore = evidenceStore()
   const api = createMediaGraphApi({
     mediaGraphStore,
     assetManifestStore,
     sourcePreferenceStore,
+    availabilityEvidenceStore,
+    now: () => FIXED_NOW,
     trust: { [hex(publisherA.publicKey)]: 20, [hex(publisherB.publicKey)]: 5, [hex(curator.publicKey)]: 50 },
   })
-  return { api, mediaGraphStore, assetManifestStore, sourcePreferenceStore }
+  return { api, mediaGraphStore, assetManifestStore, sourcePreferenceStore, availabilityEvidenceStore }
 }
 
 async function ingestClaim(store, input) {
@@ -112,7 +142,7 @@ test('media graph API pages collection items and agent contributions from local 
 })
 
 test('media graph API orders publication sources by score and local source preference', async (t) => {
-  const { api, mediaGraphStore, assetManifestStore } = await fixture()
+  const { api, mediaGraphStore, assetManifestStore, availabilityEvidenceStore } = await fixture()
   const subject = workRef('pilot')
   const low = createPublicationManifest({ publisherId: publisherB.publicKey, sequence: 1, title: 'Low', renditions: [rendition(3)], keyPair: publisherB })
   const high = createPublicationManifest({ publisherId: publisherA.publicKey, sequence: 1, title: 'High', renditions: [rendition(1)], keyPair: publisherA })
@@ -120,6 +150,15 @@ test('media graph API orders publication sources by score and local source prefe
   await assetManifestStore.ingestManifest(high)
   await ingestClaim(mediaGraphStore, { claimType: 'AvailabilityObservation', subjectRefs: [subject], payload: { publicationId: low.publicationId, availabilityStatus: 'available' }, confidence: 300, keyPair: publisherB })
   await ingestClaim(mediaGraphStore, { claimType: 'AvailabilityObservation', subjectRefs: [subject], payload: { publicationId: high.publicationId, availabilityStatus: 'available' }, confidence: 300, keyPair: publisherA })
+
+  const claimed = await api.getPublicationSources({ entityId: subject.entityId })
+  t.is(claimed.success, true)
+  t.is(claimed.items[0].availability.state, 'awaiting-replication', 'a publisher claim is not evidence of reachability')
+  t.is(claimed.items[0].availabilityState, 'unknown')
+  t.absent(claimed.items[0].selected, 'nothing is selected without hash-verified reachability')
+
+  availabilityEvidenceStore.set(low.publicationId, completePeerEvidence(['aa', 'bb']))
+  availabilityEvidenceStore.set(high.publicationId, completePeerEvidence(['cc', 'dd']))
 
   const scored = await api.getPublicationSources({ entityId: subject.entityId })
   t.is(scored.success, true)
@@ -135,6 +174,10 @@ test('media graph API orders publication sources by score and local source prefe
   t.is(typeof scored.items[0].scorePublisherTrust, 'number')
   t.is(typeof scored.items[0].scoreAvailability, 'number')
   t.is(scored.items[0].availabilityState, 'available')
+  t.is(scored.items[0].availability.state, 'healthy')
+  t.is(scored.items[0].availability.independentPeerCount, 2)
+  t.is(scored.items[0].availability.observedAt, FIXED_NOW)
+  t.is(scored.items[0].availability.expiresAt, FIXED_NOW - 1_000 + 60_000)
 
   const preference = await api.setSourcePreference({ entityId: subject.entityId, publicationId: low.publicationId, preferred: true })
   t.is(preference.success, true)

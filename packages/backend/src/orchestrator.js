@@ -44,6 +44,7 @@ import {
   createPublisherCatalogProjection,
   projectAuthenticatedPublisherMediaRecords,
 } from './media-graph/catalog-projection.js'
+import { createAvailabilityEvidenceStore } from './assets/availability-evidence.js'
 import { createLocalMediaIndex } from './indexing/local-index.js'
 import { createIndexFeedManager } from './indexing/feed-manager.js'
 import { createIndexPublisherFollowReconciler } from './indexing/publisher-follow-reconciler.js'
@@ -494,6 +495,10 @@ export async function createBackendContext(config) {
   ctx.mediaCatalogProjection = mediaCatalogProjection
   ctx.mediaGraphStore = mediaCatalogProjection.mediaGraphStore
   ctx.assetManifestStore = mediaCatalogProjection.assetManifestStore
+  // Availability evidence is collected lazily by the asset/playback layer and
+  // read passively by the media graph API. An empty store honestly reports
+  // "awaiting replication" rather than inventing reachability.
+  ctx.availabilityEvidenceStore = createAvailabilityEvidenceStore()
   lifecycle.ownResource('publisher media catalog projection', mediaCatalogProjection, 'close', 5000)
   // These managers are deliberately shared by the scoped transport and local
   // consumer projection. Signed page ingestion happens once; catalog reads only

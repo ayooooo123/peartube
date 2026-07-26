@@ -26,6 +26,8 @@ import type {
   SubmitPublisherRootOperationResponse,
 } from '@peartube/host'
 import type {
+  MediaAvailability,
+  MediaAvailabilityState,
   MediaAgentContributionsResponse,
   MediaAgentResponse,
   MediaCatalogResponse,
@@ -63,6 +65,8 @@ export type {
   UploadVideoRequest,
 }
 export type {
+  MediaAvailability,
+  MediaAvailabilityState,
   MediaAgentContributionsResponse,
   MediaAgentResponse,
   MediaCatalogResponse,

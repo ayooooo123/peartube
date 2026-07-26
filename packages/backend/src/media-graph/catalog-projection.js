@@ -103,6 +103,7 @@ export function createPublisherCatalogProjection(options = {}) {
   const assetManifestStore = proxyStore(() => manifests, [
     'getManifest', 'getManifestByPublisherSequence', 'getManifestsByRendition',
     'getSupersedingManifests', 'getCurrentPublisherHead', 'getQuarantinedManifests', 'ingestManifest',
+    'getRenditionRequirement',
   ])
 
   async function catalogOperations(catalog, kind, remaining) {

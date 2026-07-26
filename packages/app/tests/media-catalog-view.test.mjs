@@ -42,6 +42,19 @@ const item = {
   subtitle: 'Episode one',
   claimCount: 3,
   conflictCount: 1,
+  availability: {
+    state: 'healthy',
+    renditionId: 'rendition:one',
+    observedAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+    requiredRangeCount: 1,
+    reachableRangeCount: 1,
+    independentPeerCount: 2,
+    completePeerCount: 2,
+    offlinePlayable: false,
+    archivePledged: true,
+    reasonCodes: ['COMPLETE_PEER_EVIDENCE'],
+  },
   sources: [{
     publicationId: 'pub:one',
     publisherId: 'publisher:trusted',
@@ -76,6 +89,8 @@ test('native and web media catalog views server-render source, archive, and trus
       assert.match(html, /Alpha/)
       assert.match(html, /publisher:trusted/)
       assert.match(html, /Archive: pledged/)
+      assert.match(html, /Available now/, 'the card quotes the assessed availability state')
+      assert.doesNotMatch(html, /awaiting-replication|healthy<|limited</, 'raw state ids never reach the card')
       assert.match(html, /3 verified claims/)
       assert.match(html, /1 conflict/)
       assert.match(html, /Load more/)

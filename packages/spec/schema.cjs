@@ -891,7 +891,15 @@ ns.register({
     { name: 'title', type: 'string', required: true },
     { name: 'description', type: 'string', required: false },
     { name: 'category', type: 'string', required: false },
-    { name: 'skipThumbnailGeneration', type: 'bool', required: false }
+    { name: 'skipThumbnailGeneration', type: 'bool', required: false },
+    { name: 'contentKind', type: 'string', required: false },
+    { name: 'seriesId', type: 'string', required: false },
+    { name: 'seriesTitle', type: 'string', required: false },
+    { name: 'mediaProvider', type: 'string', required: false },
+    { name: 'mediaId', type: 'string', required: false },
+    { name: 'seasonNumber', type: 'uint', required: false },
+    { name: 'episodeNumber', type: 'uint', required: false },
+    { name: 'expectedEpisodeCount', type: 'uint', required: false }
   ]
 })
 

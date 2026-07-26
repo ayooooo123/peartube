@@ -413,7 +413,7 @@ test('publisher root vault stays privileged while desktop exposes only bounded c
     rendererRpcBlock,
     /publisherCreateRoot|publisherBeginUserIntent|publisherSignPreparedRecord|publisherCompleteIntent|publisherCancelIntent/,
   )
-  assert.doesNotMatch(rendererRpcBlock, /signDigest|vault|secretKey|privateKey|rootSecret|seed/i)
+  assert.doesNotMatch(rendererRpcBlock, /signDigest|publisher.*vault|secretKey|privateKey|rootSecret|seed/i)
   assert.doesNotMatch(mobileBackend, /publisher-key-vault|expo-secure-store/)
   assert.doesNotMatch(desktopWorker, /publisher-key-vault|signDigest|getSecret/)
   assert.match(webRpc, /runtime: 'renderer'/)

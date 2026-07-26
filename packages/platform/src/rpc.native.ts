@@ -18,6 +18,7 @@ import type {
   PublisherRootIntentRequest,
   PublisherSignerBridgeLike,
   StorageStatsResponse,
+  UploadVideoRequest,
 } from './rpc.shared';
 import {
   createNativeRunner,
@@ -1051,7 +1052,7 @@ export const rpc = {
     return ensureRPC().getVideoStats(req);
   },
 
-  async uploadVideo(filePathOrReq: string | { filePath: string; title: string; description: string; category?: string }, title?: string, description?: string, category?: string) {
+  async uploadVideo(filePathOrReq: string | UploadVideoRequest, title?: string, description?: string, category?: string) {
     const req = typeof filePathOrReq === 'string'
       ? { filePath: filePathOrReq, title: title!, description: description!, category }
       : filePathOrReq;

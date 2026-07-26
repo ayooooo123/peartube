@@ -24,6 +24,7 @@
     "./identity": "./src/identity.js",
     "./legacy-publisher-root-preflight": "./src/legacy-publisher-root-preflight.js",
     "./upload": "./src/upload.js",
+    "./upload-video-contract": "./src/upload-video-contract.js",
     "./src/backend-entry.js": "./src/backend-entry.js",
     "./hrpc-handlers": "./src/hrpc-handlers.js",
     "./mobile-handlers": "./src/mobile-handlers.js",

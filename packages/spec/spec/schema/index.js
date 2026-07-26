@@ -3127,16 +3127,47 @@ const encoding79 = {
 // @peartube/upload-video-request
 const encoding80 = {
   preencode(state, m) {
+    const flags =
+      (m.description ? 1 : 0) |
+      (m.category ? 2 : 0) |
+      (m.skipThumbnailGeneration ? 4 : 0) |
+      (m.contentKind ? 8 : 0) |
+      (m.seriesId ? 16 : 0) |
+      (m.seriesTitle ? 32 : 0) |
+      (m.mediaProvider ? 64 : 0) |
+      (m.mediaId ? 128 : 0) |
+      (m.seasonNumber ? 256 : 0) |
+      (m.episodeNumber ? 512 : 0) |
+      (m.expectedEpisodeCount ? 1024 : 0)
+
     c.string.preencode(state, m.filePath)
     c.string.preencode(state, m.title)
-    state.end++ // max flag is 4 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.description) c.string.preencode(state, m.description)
     if (m.category) c.string.preencode(state, m.category)
+    if (m.contentKind) c.string.preencode(state, m.contentKind)
+    if (m.seriesId) c.string.preencode(state, m.seriesId)
+    if (m.seriesTitle) c.string.preencode(state, m.seriesTitle)
+    if (m.mediaProvider) c.string.preencode(state, m.mediaProvider)
+    if (m.mediaId) c.string.preencode(state, m.mediaId)
+    if (m.seasonNumber) c.uint.preencode(state, m.seasonNumber)
+    if (m.episodeNumber) c.uint.preencode(state, m.episodeNumber)
+    if (m.expectedEpisodeCount) c.uint.preencode(state, m.expectedEpisodeCount)
   },
   encode(state, m) {
     const flags =
-      (m.description ? 1 : 0) | (m.category ? 2 : 0) | (m.skipThumbnailGeneration ? 4 : 0)
+      (m.description ? 1 : 0) |
+      (m.category ? 2 : 0) |
+      (m.skipThumbnailGeneration ? 4 : 0) |
+      (m.contentKind ? 8 : 0) |
+      (m.seriesId ? 16 : 0) |
+      (m.seriesTitle ? 32 : 0) |
+      (m.mediaProvider ? 64 : 0) |
+      (m.mediaId ? 128 : 0) |
+      (m.seasonNumber ? 256 : 0) |
+      (m.episodeNumber ? 512 : 0) |
+      (m.expectedEpisodeCount ? 1024 : 0)
 
     c.string.encode(state, m.filePath)
     c.string.encode(state, m.title)
@@ -3144,6 +3175,14 @@ const encoding80 = {
 
     if (m.description) c.string.encode(state, m.description)
     if (m.category) c.string.encode(state, m.category)
+    if (m.contentKind) c.string.encode(state, m.contentKind)
+    if (m.seriesId) c.string.encode(state, m.seriesId)
+    if (m.seriesTitle) c.string.encode(state, m.seriesTitle)
+    if (m.mediaProvider) c.string.encode(state, m.mediaProvider)
+    if (m.mediaId) c.string.encode(state, m.mediaId)
+    if (m.seasonNumber) c.uint.encode(state, m.seasonNumber)
+    if (m.episodeNumber) c.uint.encode(state, m.episodeNumber)
+    if (m.expectedEpisodeCount) c.uint.encode(state, m.expectedEpisodeCount)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -3155,7 +3194,15 @@ const encoding80 = {
       title: r1,
       description: (flags & 1) !== 0 ? c.string.decode(state) : null,
       category: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      skipThumbnailGeneration: (flags & 4) !== 0
+      skipThumbnailGeneration: (flags & 4) !== 0,
+      contentKind: (flags & 8) !== 0 ? c.string.decode(state) : null,
+      seriesId: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      seriesTitle: (flags & 32) !== 0 ? c.string.decode(state) : null,
+      mediaProvider: (flags & 64) !== 0 ? c.string.decode(state) : null,
+      mediaId: (flags & 128) !== 0 ? c.string.decode(state) : null,
+      seasonNumber: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      episodeNumber: (flags & 512) !== 0 ? c.uint.decode(state) : 0,
+      expectedEpisodeCount: (flags & 1024) !== 0 ? c.uint.decode(state) : 0
     }
   }
 }

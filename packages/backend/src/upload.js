@@ -568,6 +568,9 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
  * @property {string} [mediaId] - Stable media provider ID
  * @property {number} [seasonNumber] - Season number
  * @property {number} [episodeNumber] - Episode number
+ * @property {string} [seriesId] - Canonical local series identifier
+ * @property {string} [seriesTitle] - Authenticated series title
+ * @property {number} [expectedEpisodeCount] - Expected collection member count
  * @property {number} [originalAirDate] - Original air date timestamp
  * @property {string} [provenanceVersion] - Metadata resolver version
  * @property {string} [publicationState] - Private/public publication state

@@ -8,6 +8,7 @@
  */
 
 import { resolveCompatPlaybackUrl } from './transcode/playback-compat-runtime.mjs'
+import { normalizeUploadVideoMediaMetadata } from './upload-video-contract.js'
 
 function isPearTubeLoopbackBlobUrl(value) {
   if (typeof value !== 'string' || value.length === 0) return false
@@ -338,7 +339,14 @@ export function attachMobileHandlers(B, deps) {
     if (filePath.startsWith('file://')) filePath = filePath.slice(7)
     const ext = filePath.split('.').pop()?.toLowerCase() || 'mp4'
     const mimeType = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', avi: 'video/x-msvideo' }[ext] || 'video/mp4'
-    const result = await uploadManager.uploadFromPath(channel, filePath, { title: r.title, description: r.description || '', mimeType, category: r.category || '' }, fs, (progress, bytesWritten, totalBytes, stats) => {
+    const mediaMetadata = normalizeUploadVideoMediaMetadata(r)
+    const result = await uploadManager.uploadFromPath(channel, filePath, {
+      title: r.title,
+      description: r.description || '',
+      mimeType,
+      category: r.category || '',
+      ...mediaMetadata,
+    }, fs, (progress, bytesWritten, totalBytes, stats) => {
       rpc.eventUploadProgress({ videoId: 'upload', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed ? Math.max(0, Math.round(stats.speed)) : 0, eta: stats?.eta ? Math.max(0, Math.round(stats.eta)) : 0 })
     })
     if (!result?.success) throw new Error(result?.error || 'Upload failed')

@@ -1054,7 +1054,8 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     mimeType: string = 'video/mp4',
     category: string = 'Other',
     onProgress?: (progress: number, speed?: number, eta?: number, isTranscoding?: boolean) => void,
-    skipThumbnailGeneration: boolean = false
+    skipThumbnailGeneration: boolean = false,
+    mediaMetadata?: import('@peartube/core').UploadVideoEpisodeMetadata
   ): Promise<any> => {
     if (!platformRPC) throw new Error('RPC not ready')
 
@@ -1091,6 +1092,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
         description,
         category,
         skipThumbnailGeneration,
+        ...mediaMetadata,
       })
       console.log('[App] Upload RPC returned:', JSON.stringify(result))
 

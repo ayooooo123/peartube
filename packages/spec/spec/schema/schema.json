@@ -3226,6 +3226,54 @@
           "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "contentKind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seriesId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seriesTitle",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaProvider",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episodeNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "expectedEpisodeCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
         }
       ]
     },

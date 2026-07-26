@@ -74,6 +74,22 @@ export const PROTOCOL_EVENT_BINDINGS: ReadonlyArray<readonly [string, string]>
 type ProtocolMethod = (request?: any) => Promise<any>
 type ProtocolNamespace = Record<string, ProtocolMethod>
 
+export type UploadVideoRequest = {
+  filePath: string
+  title: string
+  description?: string | null
+  category?: string | null
+  skipThumbnailGeneration?: boolean
+  contentKind?: 'episode' | 'movie' | null
+  seriesId?: string | null
+  seriesTitle?: string | null
+  mediaProvider?: 'tmdb' | null
+  mediaId?: string | null
+  seasonNumber?: number | null
+  episodeNumber?: number | null
+  expectedEpisodeCount?: number | null
+}
+
 export type PublisherRootRecordType =
   | 'publisher.namespace'
   | 'publisher.writer-admission'
@@ -607,6 +623,10 @@ export type MediaGraphProtocolNamespace = ProtocolNamespace & {
   }): Promise<SetSourcePreferenceResponse>
 }
 
+export type VideoProtocolNamespace = ProtocolNamespace & {
+  uploadVideo(request: UploadVideoRequest): Promise<any>
+}
+
 export type PublisherProtocolNamespace = {
   provisionPublisherCatalog(
     request: { publisherId: string; genesisRootKey: Uint8Array }
@@ -644,7 +664,7 @@ export function createProtocolClient(options: {
   publisher: PublisherProtocolNamespace
   channel: ProtocolNamespace
   mediaGraph: MediaGraphProtocolNamespace
-  video: ProtocolNamespace
+  video: VideoProtocolNamespace
   watch: ProtocolNamespace
   transfer: TransferProtocolNamespace
   search: ProtocolNamespace

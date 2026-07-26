@@ -5710,13 +5710,29 @@ public struct UploadVideoRequest {
   public var description: String?
   public var category: String?
   public var skipThumbnailGeneration: Bool
+  public var contentKind: String?
+  public var seriesId: String?
+  public var seriesTitle: String?
+  public var mediaProvider: String?
+  public var mediaId: String?
+  public var seasonNumber: UInt?
+  public var episodeNumber: UInt?
+  public var expectedEpisodeCount: UInt?
 
-  public init(filePath: String, title: String, description: String? = nil, category: String? = nil, skipThumbnailGeneration: Bool = false) {
+  public init(filePath: String, title: String, description: String? = nil, category: String? = nil, skipThumbnailGeneration: Bool = false, contentKind: String? = nil, seriesId: String? = nil, seriesTitle: String? = nil, mediaProvider: String? = nil, mediaId: String? = nil, seasonNumber: UInt? = nil, episodeNumber: UInt? = nil, expectedEpisodeCount: UInt? = nil) {
     self.filePath = filePath
     self.title = title
     self.description = description
     self.category = category
     self.skipThumbnailGeneration = skipThumbnailGeneration
+    self.contentKind = contentKind
+    self.seriesId = seriesId
+    self.seriesTitle = seriesTitle
+    self.mediaProvider = mediaProvider
+    self.mediaId = mediaId
+    self.seasonNumber = seasonNumber
+    self.episodeNumber = episodeNumber
+    self.expectedEpisodeCount = expectedEpisodeCount
   }
 }
 
@@ -5726,16 +5742,41 @@ public struct UploadVideoRequestCodec: Codec {
   let _categoryCodec = Primitive.UTF8()
   let _descriptionCodec = Primitive.UTF8()
   let _filePathCodec = Primitive.UTF8()
+  let _contentKindCodec = Primitive.UTF8()
+  let _seriesIdCodec = Primitive.UTF8()
+  let _seriesTitleCodec = Primitive.UTF8()
+  let _mediaProviderCodec = Primitive.UTF8()
+  let _mediaIdCodec = Primitive.UTF8()
   let _titleCodec = Primitive.UTF8()
 
   public init() {}
 
   public func preencode(_ state: inout State, _ value: UploadVideoRequest) {
+    let flags: UInt =
+      (value.description != nil ? 1 : 0) |
+      (value.category != nil ? 2 : 0) |
+      (value.skipThumbnailGeneration ? 4 : 0) |
+      (value.contentKind != nil ? 8 : 0) |
+      (value.seriesId != nil ? 16 : 0) |
+      (value.seriesTitle != nil ? 32 : 0) |
+      (value.mediaProvider != nil ? 64 : 0) |
+      (value.mediaId != nil ? 128 : 0) |
+      (value.seasonNumber != nil ? 256 : 0) |
+      (value.episodeNumber != nil ? 512 : 0) |
+      (value.expectedEpisodeCount != nil ? 1024 : 0)
     _filePathCodec.preencode(&state, value.filePath)
     _titleCodec.preencode(&state, value.title)
-    state.end += 1 // flags
+    Primitive.UInt().preencode(&state, flags)
     if let v = value.description { _descriptionCodec.preencode(&state, v) }
     if let v = value.category { _categoryCodec.preencode(&state, v) }
+    if let v = value.contentKind { _contentKindCodec.preencode(&state, v) }
+    if let v = value.seriesId { _seriesIdCodec.preencode(&state, v) }
+    if let v = value.seriesTitle { _seriesTitleCodec.preencode(&state, v) }
+    if let v = value.mediaProvider { _mediaProviderCodec.preencode(&state, v) }
+    if let v = value.mediaId { _mediaIdCodec.preencode(&state, v) }
+    if let v = value.seasonNumber { Primitive.UInt().preencode(&state, v) }
+    if let v = value.episodeNumber { Primitive.UInt().preencode(&state, v) }
+    if let v = value.expectedEpisodeCount { Primitive.UInt().preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: UploadVideoRequest) throws {
@@ -5743,12 +5784,28 @@ public struct UploadVideoRequestCodec: Codec {
     if value.description != nil { flags |= 1 }
     if value.category != nil { flags |= 2 }
     if value.skipThumbnailGeneration { flags |= 4 }
+    if value.contentKind != nil { flags |= 8 }
+    if value.seriesId != nil { flags |= 16 }
+    if value.seriesTitle != nil { flags |= 32 }
+    if value.mediaProvider != nil { flags |= 64 }
+    if value.mediaId != nil { flags |= 128 }
+    if value.seasonNumber != nil { flags |= 256 }
+    if value.episodeNumber != nil { flags |= 512 }
+    if value.expectedEpisodeCount != nil { flags |= 1024 }
 
     try _filePathCodec.encode(&state, value.filePath)
     try _titleCodec.encode(&state, value.title)
     try Primitive.UInt().encode(&state, flags)
     if let v = value.description { try _descriptionCodec.encode(&state, v) }
     if let v = value.category { try _categoryCodec.encode(&state, v) }
+    if let v = value.contentKind { try _contentKindCodec.encode(&state, v) }
+    if let v = value.seriesId { try _seriesIdCodec.encode(&state, v) }
+    if let v = value.seriesTitle { try _seriesTitleCodec.encode(&state, v) }
+    if let v = value.mediaProvider { try _mediaProviderCodec.encode(&state, v) }
+    if let v = value.mediaId { try _mediaIdCodec.encode(&state, v) }
+    if let v = value.seasonNumber { try Primitive.UInt().encode(&state, v) }
+    if let v = value.episodeNumber { try Primitive.UInt().encode(&state, v) }
+    if let v = value.expectedEpisodeCount { try Primitive.UInt().encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> UploadVideoRequest {
@@ -5757,12 +5814,28 @@ public struct UploadVideoRequestCodec: Codec {
     let flags = try Primitive.UInt().decode(&state)
     let _r2: String? = (flags & 1) != 0 ? try _descriptionCodec.decode(&state) : nil
     let _r3: String? = (flags & 2) != 0 ? try _categoryCodec.decode(&state) : nil
+    let _r4: String? = (flags & 8) != 0 ? try _contentKindCodec.decode(&state) : nil
+    let _r5: String? = (flags & 16) != 0 ? try _seriesIdCodec.decode(&state) : nil
+    let _r6: String? = (flags & 32) != 0 ? try _seriesTitleCodec.decode(&state) : nil
+    let _r7: String? = (flags & 64) != 0 ? try _mediaProviderCodec.decode(&state) : nil
+    let _r8: String? = (flags & 128) != 0 ? try _mediaIdCodec.decode(&state) : nil
+    let _r9: UInt? = (flags & 256) != 0 ? try Primitive.UInt().decode(&state) : nil
+    let _r10: UInt? = (flags & 512) != 0 ? try Primitive.UInt().decode(&state) : nil
+    let _r11: UInt? = (flags & 1024) != 0 ? try Primitive.UInt().decode(&state) : nil
     return UploadVideoRequest(
       filePath: _r0,
       title: _r1,
       description: _r2,
       category: _r3,
-      skipThumbnailGeneration: (flags & 4) != 0
+      skipThumbnailGeneration: (flags & 4) != 0,
+      contentKind: _r4,
+      seriesId: _r5,
+      seriesTitle: _r6,
+      mediaProvider: _r7,
+      mediaId: _r8,
+      seasonNumber: _r9,
+      episodeNumber: _r10,
+      expectedEpisodeCount: _r11
     )
   }
 }

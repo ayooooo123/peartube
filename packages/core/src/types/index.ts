@@ -85,6 +85,33 @@ export interface UploadVideoResult {
   metadata: Video;
 }
 
+export interface UploadVideoEpisodeMetadata {
+  contentKind: 'episode';
+  seriesId: string;
+  seriesTitle: string;
+  mediaProvider: 'tmdb';
+  mediaId: string;
+  seasonNumber: number;
+  episodeNumber: number;
+  expectedEpisodeCount: number;
+}
+
+export interface UploadVideoRequest {
+  filePath: string;
+  title: string;
+  description?: string;
+  category?: string;
+  skipThumbnailGeneration?: boolean;
+  contentKind?: 'episode' | 'movie';
+  seriesId?: string;
+  seriesTitle?: string;
+  mediaProvider?: 'tmdb';
+  mediaId?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  expectedEpisodeCount?: number;
+}
+
 // ============================================
 // Channel Types
 // ============================================

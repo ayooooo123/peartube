@@ -413,7 +413,8 @@ export default function RootLayout() {
     mimeType: string = 'video/mp4',
     category: string = 'Other',
     onProgress?: (progress: number, speed?: number, eta?: number, isTranscoding?: boolean) => void,
-    skipThumbnailGeneration: boolean = false
+    skipThumbnailGeneration: boolean = false,
+    mediaMetadata?: import('@peartube/core').UploadVideoEpisodeMetadata
   ): Promise<any> => {
     if (!platformRPC) throw new Error('RPC not ready')
 
@@ -441,6 +442,7 @@ export default function RootLayout() {
         description,
         category,
         skipThumbnailGeneration,
+        ...mediaMetadata,
       })
       console.log('[App] Upload RPC returned:', JSON.stringify(result))
 

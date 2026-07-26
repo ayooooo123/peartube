@@ -19,6 +19,7 @@ import type {
   RequestArchivePublicationResponse,
   SetArchiveParticipationRequest,
   StorageStatsResponse,
+  UploadVideoRequest,
   PreparePublisherRootOperationRequest,
   PreparePublisherRootOperationResponse,
   SubmitPublisherRootOperationRequest,
@@ -59,6 +60,7 @@ export type {
   RequestArchivePublicationResponse,
   SetArchiveParticipationRequest,
   StorageStatsResponse,
+  UploadVideoRequest,
 }
 export type {
   MediaAgentContributionsResponse,

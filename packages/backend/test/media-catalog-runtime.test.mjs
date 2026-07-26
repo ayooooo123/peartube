@@ -9,6 +9,7 @@ import {
   createPublisherCatalogProjection,
   projectAuthenticatedPublisherMediaRecords,
 } from '../src/media-graph/catalog-projection.js'
+import { attachMobileHandlers } from '../src/mobile-handlers.js'
 import { createEntityReference, createMediaClaim, encodeMediaClaimEnvelope } from '../src/media-graph/index.js'
 import { createLocalMediaIndex } from '../src/indexing/local-index.js'
 import { PUBLISHER_RECORD_TYPES, derivePublisherId } from '../src/publisher/index.js'
@@ -303,19 +304,48 @@ test('episode upload publishes canonical collection claims and projects an order
     async addVideo(metadata) { this.metadata = metadata },
   }
 
-  const result = await manager.uploadFromBuffer(channel, b4a.from('not-an-mp4'), {
+  const handlerBackend = {}
+  const handlerResults = []
+  attachMobileHandlers(handlerBackend, {
+    api: {},
+    identityManager: {
+      getActiveIdentity: () => ({ driveKey: 'active-drive' }),
+      getActiveChannel: async () => channel,
+      getIdentities: () => [],
+    },
+    uploadManager: {
+      async uploadFromPath(target, filePath, options) {
+        const uploaded = await manager.uploadFromBuffer(target, b4a.from(filePath), options)
+        handlerResults.push(uploaded)
+        return uploaded
+      },
+    },
+    ctx: {},
+    initializeIdentityFromMnemonic: async () => ({}),
+    rpc: { eventUploadProgress() {} },
+    fs: {},
+    path: {},
+    generateAndStoreThumbnail: async () => null,
+    transcoder: {},
+    castTranscoder: {},
+    player: 'exoplayer',
+  })
+
+  const result = await handlerBackend.uploadVideo({
+    filePath: '/fixtures/first.webm',
     title: 'Pilot',
-    mimeType: 'video/webm',
+    description: '',
+    skipThumbnailGeneration: true,
     contentKind: 'episode',
     mediaProvider: 'tmdb',
-    mediaId: 'show-42',
+    mediaId: '42',
     seasonNumber: 2,
     episodeNumber: 1,
     seriesId: 'show-42',
     seriesTitle: 'Authenticated Show',
     expectedEpisodeCount: 4,
   })
-  t.is(result.success, true)
+  t.ok(result.video.id)
   t.alike(appended.map(value => value.recordType), [
     PUBLISHER_RECORD_TYPES.PUBLICATION,
     PUBLISHER_RECORD_TYPES.CLAIM,
@@ -324,23 +354,27 @@ test('episode upload publishes canonical collection claims and projects an order
     PUBLISHER_RECORD_TYPES.CLAIM,
     PUBLISHER_RECORD_TYPES.CLAIM,
   ])
-  t.ok(result.metadata.immutablePublication?.manifest)
-  t.is((await manager.uploadFromBuffer(channel, b4a.from('second'), {
+  t.ok(handlerResults[0].metadata.immutablePublication?.manifest)
+  t.ok((await handlerBackend.uploadVideo({
+    filePath: '/fixtures/second.webm',
     title: 'Second',
-    mimeType: 'video/webm',
+    description: '',
+    skipThumbnailGeneration: true,
     contentKind: 'episode',
     mediaProvider: 'tmdb',
-    mediaId: 'show-42',
+    mediaId: '42',
     seasonNumber: 1,
     episodeNumber: 2,
     seriesId: 'show-42',
     seriesTitle: 'Authenticated Show',
     expectedEpisodeCount: 4,
-  })).success, true)
-  t.is((await manager.uploadFromBuffer(channel, b4a.from('movie'), {
+  })).video.id)
+  t.ok((await handlerBackend.uploadVideo({
+    filePath: '/fixtures/movie.webm',
     title: 'Authenticated Movie',
-    mimeType: 'video/webm',
-  })).success, true)
+    description: '',
+    skipThumbnailGeneration: true,
+  })).video.id)
   const projectedCatalog = fakeCatalog({
     publisherId,
     signer: device,

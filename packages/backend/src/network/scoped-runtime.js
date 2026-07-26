@@ -2243,11 +2243,32 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function scheduleReasonedPublisherFollow(publisherId) {
-    if (status !== 'active' || followedPublishers.has(publisherId) || publisherFollowWork.has(publisherId)) return
-    if (!publisherFollowReasons.get(publisherId)?.size || !bootstrapManager.getLocator?.(publisherId)) return
-    const attempts = bootstrapFollowAttempts.get(publisherId) || 0
+    if (status !== 'active' || publisherFollowWork.has(publisherId)) return
+    const locator = bootstrapManager.getLocator?.(publisherId)
+    if (!publisherFollowReasons.get(publisherId)?.size || !locator) return
+    const existing = followedPublishers.get(publisherId)
+    const locatorTopic = derivePublisherTopic({ publisherId, catalogEpoch: locator.catalogEpoch })
+    if (existing) {
+      const currentEpoch = Number(existing.scope.descriptor.catalogEpoch)
+      if (locator.catalogEpoch < currentEpoch || locator.catalogEpoch > currentEpoch + 1) return
+      const identical = locator.catalogEpoch === currentEpoch &&
+        b4a.equals(existing.scope.topic, locatorTopic) &&
+        locator.catalogBootstrapKey === b4a.toString(existing.scope.descriptor.catalogBootstrapKey, 'hex') &&
+        locator.catalogHead === existing.scope.advertisedCatalogHead &&
+        locator.authorizationChainDigest === existing.scope.advertisedAuthorizationStateDigest
+      if (identical) return
+    }
+    const fingerprint = [
+      locator.catalogEpoch,
+      b4a.toString(locatorTopic, 'hex'),
+      locator.catalogBootstrapKey,
+      locator.catalogHead,
+      locator.authorizationChainDigest,
+    ].join(':')
+    const prior = bootstrapFollowAttempts.get(publisherId)
+    const attempts = prior?.fingerprint === fingerprint ? prior.attempts : 0
     if (attempts >= 4) return
-    bootstrapFollowAttempts.set(publisherId, attempts + 1)
+    bootstrapFollowAttempts.set(publisherId, { fingerprint, attempts: attempts + 1 })
     const work = followBootstrapLocator({ publisherId })
       .then(async result => {
         if (!publisherFollowReasons.get(publisherId)?.size) {

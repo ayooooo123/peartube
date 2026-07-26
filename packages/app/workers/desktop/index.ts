@@ -31,6 +31,8 @@ import { createBackendContext } from '@peartube/backend/orchestrator'
 import { PROTOCOL_VERSION } from '@peartube/host'
 // @ts-ignore
 import { isExpectedBlobRequestCancellation } from '@peartube/backend/blob-request-cancellation'
+// @ts-ignore
+import { normalizeUploadVideoMediaMetadata } from '@peartube/backend/upload-video-contract'
 // Bare runtime globals (available when spawned via pear.run())
 declare const Bare: { argv: string[]; IPC: any } | undefined
 
@@ -711,7 +713,8 @@ B.uploadVideo = async (r: any) => {
   let uploadPath = r.filePath, mimeType = getMimeTypeFromPath(r.filePath)
   let videoDimensions = { width: 0, height: 0 }
   try { const p = await transcoder.probeMedia(uploadPath, r.title) as any; videoDimensions = { width: p.width || 0, height: p.height || 0 } } catch {}
-  const result = await uploadManager.uploadFromPath(channel, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height }, fs, (progress: number, bytesWritten: number, totalBytes: number, stats?: any) => { try { rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed || 0, eta: stats?.eta || 0 }) } catch {} })
+  const mediaMetadata = normalizeUploadVideoMediaMetadata(r)
+  const result = await uploadManager.uploadFromPath(channel, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height, ...mediaMetadata }, fs, (progress: number, bytesWritten: number, totalBytes: number, stats?: any) => { try { rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed || 0, eta: stats?.eta || 0 }) } catch {} })
   if (result.success && result.videoId && !r.skipThumbnailGeneration) {
     try { const t = await generateAndStoreThumbnail(r.filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
   }

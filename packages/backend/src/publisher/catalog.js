@@ -35,6 +35,7 @@ import {
   getPublisherViewSnapshot,
   listPublisherProjections,
   listPublisherRejections,
+  listPublisherAcceptedPage,
   openPublisherCatalogView
 } from './catalog-view.js'
 
@@ -259,6 +260,11 @@ export class PublisherCatalog extends ReadyResource {
   async listProjections (kind, options) {
     await this.update()
     return listPublisherProjections(this.view, kind, options)
+  }
+
+  async listAcceptedPage (options) {
+    await this.update()
+    return listPublisherAcceptedPage(this.view, options)
   }
 
   async getOperationReceipt (operationId) {

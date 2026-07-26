@@ -124,6 +124,26 @@ export function decodePublisherCatalogFrame (input) {
   invalid('unknown operation frame variant')
 }
 
+// Accepted projections used to retain only a frame. That loses the distinct
+// Autobase writer identity needed to replay authorization safely on another
+// device. New entries retain the exact authenticated journal provenance.
+function encodeAcceptedEntry (entry) {
+  assertBytes(entry.sourceWriterKey, 32, 'accepted source writer key')
+  return b4a.concat([entry.sourceWriterKey, entry.frame])
+}
+
+export function decodeAcceptedEntry (input) {
+  if (!isBytes(input) || input.byteLength <= 32) return null
+  const sourceWriterKey = b4a.from(input.subarray(0, 32))
+  const frame = b4a.from(input.subarray(32))
+  try {
+    const value = decodePublisherCatalogFrame(frame)
+    return { sourceWriterKey, frame, value }
+  } catch {
+    return null
+  }
+}
+
 export function openPublisherCatalogView (viewStore) {
   return new Hyperbee(viewStore.get('peartube-publisher-catalog-view'), {
     keyEncoding: 'utf-8',
@@ -171,7 +191,10 @@ async function getPersistedLegacyGenesisId (view, bootstrapKey, publisherId) {
 
   for (const entry of await collectPrefix(view, PREFIX.ACCEPTED)) {
     try {
-      const value = decodePublisherCatalogFrame(entry.value)
+      const accepted = decodeAcceptedEntry(entry.value)
+      // Legacy accepted frames are intentionally non-pageable, but may still
+      // establish the one bounded pre-cutover genesis migration.
+      const value = accepted?.value || decodePublisherCatalogFrame(entry.value)
       const operationId = idHex(value)
       if (value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE ||
           entry.key !== `${PREFIX.ACCEPTED}${operationId}` ||
@@ -513,7 +536,7 @@ export async function rebuildPublisherCatalogView (view, host, { keyProvider = c
   await view.put(STATE_DESCRIPTOR_KEY, encodePublisherNamespaceDescriptor(state.descriptor))
   await view.put(STATE_AUTHORIZATION_KEY, encodePublisherAuthorizationState(state))
   for (const [writerId, writerKey] of persistedRoster) await view.put(`${PREFIX.ROSTER}${writerId}`, writerKey)
-  for (const entry of accepted) await view.put(`${PREFIX.ACCEPTED}${idHex(entry.value)}`, entry.frame)
+  for (const entry of accepted) await view.put(`${PREFIX.ACCEPTED}${idHex(entry.value)}`, encodeAcceptedEntry(entry))
   for (const entry of canonicalRejected) await view.put(`${PREFIX.REJECTED}${idHex(entry.value)}`, rejectionValue(entry.value, entry.code, entry.error))
   for (const [key, entry] of projections) await view.put(key, entry.frame)
   return { descriptor: state.descriptor, state, accepted, rejected: canonicalRejected, projections }
@@ -797,6 +820,25 @@ export async function getPublisherViewHead (view, { hash = crypto.hash } = {}) {
     digest: hash(snapshot),
     authorizationStateDigest: hash(authorization?.value || b4a.alloc(0))
   }
+}
+
+export async function listPublisherAcceptedPage (view, { cursor = null, limit = 64 } = {}) {
+  if (cursor !== null && (typeof cursor !== 'string' || !/^[0-9a-f]{64}$/.test(cursor))) invalid('accepted page cursor is invalid')
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) invalid('accepted page limit is invalid')
+  const entries = []
+  for await (const entry of view.createReadStream({
+    gte: cursor === null ? PREFIX.ACCEPTED : `${PREFIX.ACCEPTED}${cursor}\u0000`,
+    lt: `${PREFIX.ACCEPTED}\xff`, limit: limit + 1,
+  })) {
+    const decoded = decodeAcceptedEntry(entry.value)
+    if (!decoded) continue
+    const operationId = idHex(decoded.value)
+    if (entry.key !== `${PREFIX.ACCEPTED}${operationId}`) continue
+    entries.push({ operationId, sourceWriterKey: b4a.from(decoded.sourceWriterKey), frame: b4a.from(decoded.frame) })
+    if (entries.length > limit) break
+  }
+  const page = entries.slice(0, limit)
+  return { entries: page, nextCursor: entries.length > limit ? page.at(-1).operationId : null }
 }
 
 export async function getPublisherProjection (view, kind, identifier) {

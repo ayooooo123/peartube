@@ -414,7 +414,7 @@ export async function createBackendContext(config) {
   try {
   // Phase 2: Create managers (synchronous, fast)
   const networkPolicyStore = ctx.metaDb
-  const initialNetworkPolicy = await loadNetworkPolicy({
+  let initialNetworkPolicy = await loadNetworkPolicy({
     store: networkPolicyStore,
     defaults: networkPolicy,
   })
@@ -423,7 +423,7 @@ export async function createBackendContext(config) {
     metered: network.metered === true,
     background: false,
   }
-  const initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
+  let initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(
     initialNetworkPolicy,
     initialNetworkEnvironment,
   )
@@ -779,6 +779,19 @@ export async function createBackendContext(config) {
   // playlists, watch history, settings) and expose it on ctx. Best-effort: a
   // failure here must not block backend startup.
   await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
+  // PersonalStore is the durable, encrypted device/paired-device authority for
+  // the local moderation profile. Network policy mirrors only its effective
+  // feed set so transport has no independent profile state to drift from.
+  const storedModerationProfile = await ctx.personal?.getSetting?.('consumer-moderation-profile:v1').catch(() => null)
+  if (storedModerationProfile && Array.isArray(storedModerationProfile.curatorSubscriptions)) {
+    initialNetworkPolicy = {
+      ...initialNetworkPolicy,
+      trustedModerationFeeds: storedModerationProfile.enabled === false
+        ? []
+        : storedModerationProfile.curatorSubscriptions.map(String),
+    }
+  }
+  initialRuntimeNetworkPolicy = resolveNetworkPolicyForEnvironment(initialNetworkPolicy, initialNetworkEnvironment)
 
   networkPolicyRuntime = createNetworkPolicyRuntime({
     initialPolicy: initialNetworkPolicy,
@@ -794,6 +807,13 @@ export async function createBackendContext(config) {
   ctx.networkPolicyStore = networkPolicyStore
   ctx.onNetworkPolicyChange = async policy => {
     pendingNetworkPolicy = policy
+    await ctx.personal?.setSetting?.('consumer-moderation-profile:v1', {
+      version: 1,
+      enabled: policy.trustedModerationFeeds.length > 0,
+      curatorSubscriptions: policy.trustedModerationFeeds.slice(),
+      scope: 'local-device',
+      protocolAuthority: false,
+    })
     if (!publicationV1Startup.ready) {
       return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
     }

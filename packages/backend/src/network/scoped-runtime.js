@@ -38,6 +38,7 @@ import {
   verifyPublisherNamespaceDescriptor,
 } from '../publisher/namespace.js'
 import { verifyPublisherNamespaceProof } from '../publisher/namespace-proof.js'
+import { decodePublisherCatalogFrame } from '../publisher/catalog-view.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
 
 
@@ -1683,6 +1684,24 @@ export function createScopedNetworkRuntime (options = {}) {
     return { status: 'provided', publisherId: id, catalogEpoch: verified.descriptor.catalogEpoch, topic: stableScopeDiagnostic(scope) }
   }
 
+  async function provideLocalPublisherNamespaceProof ({ publisherId, descriptor, catalog } = {}) {
+    const id = hex32(publisherId, 'publisherId')
+    let genesis = null
+    const transitions = []
+    const view = catalog?.view
+    if (!view?.createReadStream) fail('local catalog view is unavailable for namespace proof')
+    for await (const entry of view.createReadStream({ gte: 'accepted/', lt: 'accepted/\xff' })) {
+      const operation = decodePublisherCatalogFrame(entry.value)
+      if (operation.recordType === 'publisher.namespace' && !operation.transitionId) genesis ||= operation
+      else if (operation.recordType === 'publisher.root-transition') transitions.push(operation)
+    }
+    if (!genesis) fail('local catalog has no namespace genesis proof')
+    publisherProofProviders.set(id, { genesis, transitions })
+    const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
+    const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'candidate', publisherId: id, proofPending: null })
+    return { status: 'provided', publisherId: id, topic: stableScopeDiagnostic(scope) }
+  }
+
   async function provideIndexFeed ({ curatorId, fetchPage } = {}) {
     const id = hex32(curatorId, 'curatorId')
     if (typeof fetchPage !== 'function') fail('index feed provider requires fetchPage')
@@ -1775,6 +1794,12 @@ export function createScopedNetworkRuntime (options = {}) {
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('local catalog binding mismatch')
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({ purpose: 'publisher', topic, scopeId: id, mode: 'local', publisherId: id, descriptor, binding })
+    scope.publisherId = id
+    scope.descriptor = descriptor
+    scope.binding = binding
+    if (binding.catalog?.view?.createReadStream) {
+      await provideLocalPublisherNamespaceProof({ publisherId: id, descriptor, catalog: binding.catalog })
+    }
     const result = { status: 'published', publisherId: id, catalogBootstrapKey: hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey'), topic: stableScopeDiagnostic(scope) }
     localPublishers.set(id, { scope, result })
     return result
@@ -2224,6 +2249,7 @@ export function createScopedNetworkRuntime (options = {}) {
     followPublisher,
     followBootstrapLocator,
     providePublisherNamespaceProof,
+    provideLocalPublisherNamespaceProof,
     provideIndexFeed,
     subscribeIndexFeed,
     followIndexFeed,
@@ -2267,6 +2293,7 @@ export function createScopedNetworkApi (runtime) {
     followPublisher: request => runtime.followPublisher(request),
     followBootstrapLocator: request => runtime.followBootstrapLocator(request),
     providePublisherNamespaceProof: request => runtime.providePublisherNamespaceProof(request),
+    provideLocalPublisherNamespaceProof: request => runtime.provideLocalPublisherNamespaceProof(request),
     provideIndexFeed: request => runtime.provideIndexFeed(request),
     subscribeIndexFeed: request => runtime.subscribeIndexFeed(request),
     followIndexFeed: request => runtime.followIndexFeed(request),

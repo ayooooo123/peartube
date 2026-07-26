@@ -7,6 +7,7 @@ import { MigrationBackupPanel } from '@/components/maintenance/MigrationBackupPa
 import { useApp } from './_layout'
 import { saveBytesToFile, selectBytesFromFile, type SelectedFile } from '@/lib/maintenance-file-transfer.mjs'
 import type { MaintenanceFiles } from '@/components/maintenance/maintenance-model.mjs'
+import { DeveloperModeGate } from '@/lib/developer-mode'
 
 async function writeNativeExport(fileName: string, base64: string, mimeType: string): Promise<string> {
   if (Platform.OS === 'android') {
@@ -36,7 +37,7 @@ async function readNativeImport(uri: string, maxBytes: number): Promise<string> 
   return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
 }
 
-export default function MaintenanceScreen() {
+function MaintenanceScreen() {
   const router = useRouter()
   const { rpc } = useApp()
   const files = useMemo<MaintenanceFiles>(() => ({
@@ -58,4 +59,8 @@ export default function MaintenanceScreen() {
   }), [])
 
   return <MigrationBackupPanel rpc={rpc} files={files} onBack={() => router.back()} />
+}
+
+export default function DeveloperMaintenanceScreen() {
+  return <DeveloperModeGate><MaintenanceScreen /></DeveloperModeGate>
 }

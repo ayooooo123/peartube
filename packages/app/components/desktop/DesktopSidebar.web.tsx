@@ -30,6 +30,16 @@ function HomeIcon() {
   )
 }
 
+function DiscoverIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <title>Discover</title>
+      <circle cx="12" cy="12" r="9" />
+      <polygon points="15.5 8.5 13 13 8.5 15.5 11 11 15.5 8.5" />
+    </svg>
+  )
+}
+
 function UsersIcon() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -48,22 +58,6 @@ function PlaySquareIcon() {
       <title>Play</title>
       <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
       <polygon points="10 8 16 12 10 16 10 8" />
-    </svg>
-  )
-}
-
-function FilmIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <title>Your videos</title>
-      <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
-      <line x1="7" y1="2" x2="7" y2="22" />
-      <line x1="17" y1="2" x2="17" y2="22" />
-      <line x1="2" y1="12" x2="22" y2="12" />
-      <line x1="2" y1="7" x2="7" y2="7" />
-      <line x1="2" y1="17" x2="7" y2="17" />
-      <line x1="17" y1="17" x2="22" y2="17" />
-      <line x1="17" y1="7" x2="22" y2="7" />
     </svg>
   )
 }
@@ -87,11 +81,8 @@ interface NavItem {
 
 const mainNavItems: NavItem[] = [
   { path: '/', icon: HomeIcon, label: 'Home' },
+  { path: '/discover', icon: DiscoverIcon, label: 'Discover' },
   { path: '/library', icon: UsersIcon, label: 'Library' },
-]
-
-const yourContentItems: NavItem[] = [
-  { path: '/studio', icon: FilmIcon, label: 'Studio' },
 ]
 
 const bottomItems: NavItem[] = [
@@ -162,25 +153,6 @@ export function DesktopSidebar() {
         {/* Main navigation */}
         <div style={styles.section}>
           {mainNavItems.map((item) => (
-            <NavButton
-              key={item.path}
-              item={item}
-              isActive={isActive(item.path)}
-              isCollapsed={isCollapsed}
-              onClick={() => handleNavClick(item.path)}
-            />
-          ))}
-        </div>
-
-        {/* Divider */}
-        <div style={styles.divider} />
-
-        {/* Your content section */}
-        <div style={styles.section}>
-          {!isCollapsed && (
-            <span style={styles.sectionLabel}>You</span>
-          )}
-          {yourContentItems.map((item) => (
             <NavButton
               key={item.path}
               item={item}

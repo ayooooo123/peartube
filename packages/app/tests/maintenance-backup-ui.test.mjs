@@ -7,6 +7,7 @@ const fileTransferUrl = new URL('../lib/maintenance-file-transfer.mjs', import.m
 const panelUrl = new URL('../components/maintenance/MigrationBackupPanel.tsx', import.meta.url)
 const routeUrl = new URL('../app/maintenance.tsx', import.meta.url)
 const profileUrl = new URL('../app/profile.tsx', import.meta.url)
+const developerSettingsUrl = new URL('../app/developer-settings.tsx', import.meta.url)
 
 async function importRequired(url, label) {
   try {
@@ -281,11 +282,12 @@ test('file helper executes bounded web and native save/select branches', async (
   )
 })
 
-test('maintenance route injects RPC and the panel requires destructive restore confirmation', async () => {
-  const [route, panel, profile] = await Promise.all([
+test('maintenance route injects RPC, is gated, and is linked only from Developer Settings', async () => {
+  const [route, panel, profile, developerSettings] = await Promise.all([
     readRequired(routeUrl, 'maintenance route'),
     readRequired(panelUrl, 'maintenance panel'),
     readRequired(profileUrl, 'profile route'),
+    readRequired(developerSettingsUrl, 'Developer Settings route'),
   ])
 
   assert.match(route, /<MigrationBackupPanel\s+rpc=\{rpc\}/)
@@ -309,5 +311,7 @@ test('maintenance route injects RPC and the panel requires destructive restore c
   )
   assert.match(panel, /Private publisher root/)
   assert.match(panel, /Device-local/)
-  assert.match(profile, /router\.push\('\/maintenance'\)/)
+  assert.match(route, /DeveloperModeGate/)
+  assert.doesNotMatch(profile, /router\.push\('\/maintenance'\)/)
+  assert.match(developerSettings, /path: '\/maintenance'/)
 })

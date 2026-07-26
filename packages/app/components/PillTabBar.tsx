@@ -40,7 +40,6 @@ interface TabItem {
 const TABS: TabItem[] = [
   { name: 'index', path: '/', icon: 'home', label: 'Home' },
   { name: 'discover', path: '/discover', icon: 'zap', label: 'Discover' },
-  { name: 'studio', path: '/studio', icon: 'plus-circle', label: 'Studio', emphasized: true },
   { name: 'library', path: '/library', icon: 'layers', label: 'Library' },
 ]
 

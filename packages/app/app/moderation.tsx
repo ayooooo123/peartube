@@ -4,15 +4,20 @@ import { ModerationFeedEditor } from '@/components/library/ModerationFeedEditor'
 import { PolicyCard, PolicyHeading, PolicyScreenFrame } from '@/components/library/PolicyControls'
 import { useNetworkPolicy } from '@/hooks/useNetworkPolicy'
 import type { NetworkPolicy, NetworkPolicyRpc } from '@/lib/network-policy'
+import { DeveloperModeGate } from '@/lib/developer-mode'
 
 type Props = {
   rpc?: NetworkPolicyRpc | null
   policy?: Partial<NetworkPolicy> | null
 }
 
-export default function ModerationScreen({ rpc, policy }: Props) {
+function ModerationScreen({ rpc, policy }: Props) {
   if (rpc) return <ModerationContent rpc={rpc} initialPolicy={policy} />
   return <ConnectedModeration initialPolicy={policy} />
+}
+
+export default function DeveloperModerationScreen(props: Props) {
+  return <DeveloperModeGate><ModerationScreen {...props} /></DeveloperModeGate>
 }
 
 function ConnectedModeration({ initialPolicy }: { initialPolicy?: Partial<NetworkPolicy> | null }) {

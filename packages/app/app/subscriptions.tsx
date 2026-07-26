@@ -4,15 +4,20 @@ import { FeedTrustEditor } from '@/components/library/FeedTrustEditor'
 import { PolicyCard, PolicyHeading, PolicyScreenFrame } from '@/components/library/PolicyControls'
 import { useNetworkPolicy } from '@/hooks/useNetworkPolicy'
 import type { NetworkPolicy, NetworkPolicyRpc } from '@/lib/network-policy'
+import { DeveloperModeGate } from '@/lib/developer-mode'
 
 type Props = {
   rpc?: NetworkPolicyRpc | null
   policy?: Partial<NetworkPolicy> | null
 }
 
-export default function SubscriptionsScreen({ rpc, policy }: Props) {
+function SubscriptionsScreen({ rpc, policy }: Props) {
   if (rpc) return <SubscriptionsContent rpc={rpc} initialPolicy={policy} />
   return <ConnectedSubscriptions initialPolicy={policy} />
+}
+
+export default function DeveloperSubscriptionsScreen(props: Props) {
+  return <DeveloperModeGate><SubscriptionsScreen {...props} /></DeveloperModeGate>
 }
 
 function ConnectedSubscriptions({ initialPolicy }: { initialPolicy?: Partial<NetworkPolicy> | null }) {

@@ -84,9 +84,11 @@ test('native policy routes use the initialized RPC and React Native primitives',
   }
 })
 
-test('profile exposes the three local policy screens', () => {
-  const source = fs.readFileSync(path.resolve(import.meta.dirname, '../app/profile.tsx'), 'utf8')
-  assert.match(source, /\/network-policy/)
-  assert.match(source, /\/subscriptions/)
-  assert.match(source, /\/moderation/)
+test('Developer Settings exposes the three gated local policy screens', () => {
+  const profile = fs.readFileSync(path.resolve(import.meta.dirname, '../app/profile.tsx'), 'utf8')
+  const developerSettings = fs.readFileSync(path.resolve(import.meta.dirname, '../app/developer-settings.tsx'), 'utf8')
+  for (const route of ['/network-policy', '/subscriptions', '/moderation']) {
+    assert.doesNotMatch(profile, new RegExp(`router\\.push\\('${route.replace('/', '\\/')}'\\)`))
+    assert.match(developerSettings, new RegExp(`path: '${route.replace('/', '\\/')}'`))
+  }
 })

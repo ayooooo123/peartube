@@ -20,6 +20,7 @@ import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
 import { makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import type { Video } from '@peartube/core'
+import { DeveloperModeGate } from '@/lib/developer-mode'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -91,7 +92,7 @@ async function deleteCachedFile(uri: string | null | undefined): Promise<void> {
   }
 }
 
-export default function StudioScreen() {
+function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos, removeVideo } = useApp()
@@ -1037,4 +1038,8 @@ export default function StudioScreen() {
       />
     </View>
   )
+}
+
+export default function DeveloperStudioScreen() {
+  return <DeveloperModeGate><StudioScreen /></DeveloperModeGate>
 }

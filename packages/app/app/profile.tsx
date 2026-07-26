@@ -15,7 +15,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
@@ -26,6 +26,8 @@ import { useApp, colors } from './_layout'
 import { GlassCard, SectionHeader } from '@/components/primitives'
 import { fonts } from '@/lib/typography'
 import * as haptics from '@/lib/haptics'
+import { useDeveloperMode } from '@/lib/developer-mode'
+import { canShowIdentityTools, developerModeDestination } from '@/lib/developer-mode-routes'
 import {
   buildStorageLimitConfirmationCopy,
   runStorageLimitChange,
@@ -50,19 +52,6 @@ interface StorageStats extends StorageCategoryStats {
   untrackedStorageGB?: string
 }
 
-interface ArchiveParticipationStatus {
-  success: boolean
-  enabled: boolean
-  capacityBytes: number
-  maxRequestBytes: number
-  reservedBytes: number
-  availableBytes: number
-  acceptedRequests: number
-  receivedPledges: number
-  acceptancePermille: number
-  errorCode?: string | null
-}
-
 interface TranscodeSettings {
   videoToolboxDecodeEnabled: boolean
   videoToolboxDecodeLocked?: boolean
@@ -72,12 +61,6 @@ interface TranscodeSettings {
   videoToolboxHwMapLocked?: boolean
   videoToolboxHwMapDefault?: boolean
   videoToolboxHwMapSource?: string
-}
-
-function formatArchiveBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 GB'
-  const gib = bytes / GIB
-  return `${gib >= 10 ? gib.toFixed(0) : gib.toFixed(1)} GB`
 }
 
 /** Network-support presets are cache budgets — the knob that actually feeds peers. */
@@ -123,6 +106,8 @@ function requestStorageLimitConfirmation(title: string, message: string): Promis
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
+  const params = useLocalSearchParams<{ developer?: string }>()
+  const developerMode = useDeveloperMode()
   const { identity, createIdentity, rpc, loadIdentity } = useApp()
 
   const [newName, setNewName] = useState('')
@@ -137,9 +122,8 @@ export default function ProfileScreen() {
   const [customStorageLimit, setCustomStorageLimit] = useState('')
   const [storageLimitSaving, setStorageLimitSaving] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
-  const [archiveParticipation, setArchiveParticipation] = useState<ArchiveParticipationStatus | null>(null)
-  const [archiveParticipationSaving, setArchiveParticipationSaving] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [developerModeError, setDeveloperModeError] = useState<string | null>(null)
 
   // Devices
   const [devices, setDevices] = useState<any[]>([])
@@ -159,6 +143,8 @@ export default function ProfileScreen() {
   const [swarmStatus, setSwarmStatus] = useState<any | null>(null)
   const [seedingStatus, setSeedingStatus] = useState<any | null>(null)
   const [archiveOperatorStatus, setArchiveOperatorStatus] = useState<ArchiveOperatorStatus | null>(null)
+  const diagnosticsDestination = developerModeDestination(developerMode.enabled, '/profile?developer=diagnostics')
+  const showIdentityTools = canShowIdentityTools(developerMode.enabled)
 
 
   const loadStorageStats = useCallback(async () => {
@@ -173,19 +159,6 @@ export default function ProfileScreen() {
   }, [rpc])
 
   useEffect(() => { loadStorageStats() }, [loadStorageStats])
-
-  const loadArchiveParticipation = useCallback(async () => {
-    if (!rpc || typeof rpc.getArchiveParticipation !== 'function') return
-    try {
-      const status = await rpc.getArchiveParticipation()
-      setArchiveParticipation(status || null)
-    } catch (err) {
-      console.error('[Profile] Failed to load archive participation:', err)
-      setArchiveParticipation(null)
-    }
-  }, [rpc])
-
-  useEffect(() => { loadArchiveParticipation() }, [loadArchiveParticipation])
 
   const loadDiagnostics = useCallback(async () => {
     if (!rpc) return
@@ -206,7 +179,14 @@ export default function ProfileScreen() {
     }
   }, [rpc])
 
-  useEffect(() => { if (advancedOpen) loadDiagnostics() }, [advancedOpen, loadDiagnostics])
+  useEffect(() => {
+    if (!developerMode.enabled) setAdvancedOpen(false)
+    if (developerMode.enabled && params.developer === 'diagnostics') setAdvancedOpen(true)
+  }, [developerMode.enabled, params.developer])
+
+  useEffect(() => {
+    if (developerMode.enabled && advancedOpen) loadDiagnostics()
+  }, [advancedOpen, developerMode.enabled, loadDiagnostics])
 
   const loadDevices = useCallback(async () => {
     if (!rpc || !identity?.driveKey) return
@@ -354,31 +334,6 @@ export default function ProfileScreen() {
     await handleStorageLimitChange(parsed)
   }
 
-  const handleArchiveParticipationChange = async (enabled: boolean) => {
-    if (!rpc || typeof rpc.setArchiveParticipation !== 'function' || archiveParticipationSaving) return
-    const defaultCapacity = Math.max(GIB, Math.min(storageStats?.maxBytes || (5 * GIB), 5 * GIB))
-    const capacityBytes = archiveParticipation?.capacityBytes || defaultCapacity
-    const maxRequestBytes = Math.min(archiveParticipation?.maxRequestBytes || capacityBytes, capacityBytes)
-    const acceptancePermille = archiveParticipation?.acceptancePermille ?? 250
-    setArchiveParticipationSaving(true)
-    try {
-      const status = await rpc.setArchiveParticipation({
-        enabled,
-        capacityBytes,
-        maxRequestBytes,
-        acceptancePermille,
-      })
-      if (!status?.success) throw new Error(status?.errorCode || 'Archive participation is unavailable')
-      setArchiveParticipation(status)
-      haptics.success()
-    } catch (err: unknown) {
-      notify('Archive setting not changed', err instanceof Error ? err.message : 'The backend rejected this setting.')
-      await loadArchiveParticipation()
-    } finally {
-      setArchiveParticipationSaving(false)
-    }
-  }
-
   const handleClearCache = () => {
     if (!rpc) return
     confirmDestructive(
@@ -492,6 +447,15 @@ export default function ProfileScreen() {
     }
   }
 
+  const handleDeveloperModeChange = async (enabled: boolean) => {
+    setDeveloperModeError(null)
+    try {
+      await developerMode.setEnabled(enabled)
+    } catch {
+      setDeveloperModeError('Unable to update Developer Mode locally. Please try again.')
+    }
+  }
+
 
   // The budget tracks cache fetched from the network (seeded content). The
   // user's own uploads live in the same store but are never charged against
@@ -510,6 +474,38 @@ export default function ProfileScreen() {
     </View>
   )
 
+  const developerModeCard = (
+    <>
+      <SectionHeader title="Developer Mode" subtitle="Local operator tools for this device" />
+      <GlassCard style={styles.sectionCard}>
+        <View style={styles.switchRow}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={styles.cardTitle}>Developer Mode</Text>
+            <Text style={styles.cardMeta}>Shows publishing and network administration tools locally. It does not grant publishing permission.</Text>
+          </View>
+          <NativeSwitch
+            value={developerMode.enabled}
+            disabled={developerMode.isLoading}
+            onValueChange={(enabled: boolean) => { void handleDeveloperModeChange(enabled) }}
+            trackColor={{ false: colors.border, true: colors.primary }}
+            thumbColor={colors.text}
+          />
+        </View>
+        {developerModeError ? <Text accessibilityRole="alert" style={styles.developerModeError}>{developerModeError}</Text> : null}
+        {developerMode.enabled ? (
+          <Pressable onPress={() => router.push('/developer-settings')} style={styles.secondaryButton} accessibilityRole="button">
+            <Feather name="tool" size={15} color={colors.text} />
+            <Text style={styles.secondaryLabel}>Open Developer Settings</Text>
+          </Pressable>
+        ) : null}
+      </GlassCard>
+    </>
+  )
+
+  if (!developerMode.isLoading && params.developer && diagnosticsDestination) {
+    return <Redirect href={diagnosticsDestination as any} />
+  }
+
   // ---------- Onboarding (no identity yet) ----------
   if (!identity) {
     return (
@@ -521,6 +517,7 @@ export default function ProfileScreen() {
             <Text style={styles.heroSubtitle}>Video, peer to peer. No servers, no accounts.</Text>
           </View>
 
+          {showIdentityTools && <>
           <SectionHeader title="Start a channel" subtitle="Your channel lives on your devices" />
           <GlassCard highlight style={styles.sectionCard}>
             <TextInput
@@ -579,28 +576,12 @@ export default function ProfileScreen() {
 
           <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
           {renderRestoreCard()}
+          </>}
 
           <SectionHeader title="Network cache" subtitle="Works even without a channel" />
           {renderStorageCard()}
 
-          <SectionHeader title="Diagnostics" subtitle="Swarm, storage, and seeding state" />
-          <GlassCard padded={false} style={styles.sectionCard}>
-            <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
-              <Feather name="terminal" size={15} color={colors.textMuted} />
-              <Text style={styles.advancedLabel}>Network diagnostics</Text>
-              <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
-            </Pressable>
-            {advancedOpen && (
-              <DiagnosticsPanel
-                swarmStatus={swarmStatus}
-                storageStats={storageStats}
-                seedingStatus={seedingStatus}
-                operatorStatus={archiveOperatorStatus}
-                loading={diagnosticsLoading}
-                onRefresh={loadDiagnostics}
-              />
-            )}
-          </GlassCard>
+          {developerModeCard}
         </ScrollView>
       </View>
     )
@@ -755,36 +736,6 @@ export default function ProfileScreen() {
           </Text>
         ) : null}
 
-        <View style={styles.archiveParticipation}>
-          <View style={styles.archiveParticipationCopy}>
-            <View style={styles.archiveTitleRow}>
-              <Feather name="archive" size={14} color={archiveParticipation?.enabled ? colors.swarm : colors.textMuted} />
-              <Text style={styles.archiveTitle}>Volunteer archive</Text>
-            </View>
-            <Text style={styles.archiveDescription}>
-              Randomly accept complete-copy requests from publishers. No allowlist or operator account required.
-            </Text>
-            <Text style={styles.archiveStatus}>
-              {typeof rpc?.getArchiveParticipation !== 'function'
-                ? 'Unavailable in this backend'
-                : !archiveParticipation
-                  ? 'Loading archive status…'
-                  : !archiveParticipation.success
-                    ? `Unavailable · ${archiveParticipation.errorCode || 'backend rejected status'}`
-                    : archiveParticipation.enabled
-                      ? `${formatArchiveBytes(archiveParticipation.reservedBytes)} pledged of ${formatArchiveBytes(archiveParticipation.capacityBytes)} · ${archiveParticipation.acceptedRequests} accepted`
-                      : 'Off · no new archive requests will be accepted'}
-            </Text>
-          </View>
-          <NativeSwitch
-            value={archiveParticipation?.enabled === true}
-            onValueChange={handleArchiveParticipationChange}
-            disabled={!archiveParticipation?.success || archiveParticipationSaving}
-            trackColor={{ false: colors.border, true: colors.primary }}
-            thumbColor={colors.text}
-          />
-        </View>
-
         <Pressable
           onPress={handleClearCache}
           disabled={clearingCache}
@@ -801,6 +752,7 @@ export default function ProfileScreen() {
     <View style={styles.screen}>
       {header}
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
+        {showIdentityTools && <>
         {renderRecoveryPhraseCard()}
 
         {/* Identity */}
@@ -932,60 +884,24 @@ export default function ProfileScreen() {
             </Pressable>
           </GlassCard>
         )}
-
-        <GlassCard padded={false} style={styles.sectionCard}>
-          <Pressable onPress={() => router.push('/maintenance')} style={styles.advancedToggle} accessibilityRole="button">
-            <Feather name="archive" size={15} color={colors.textMuted} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.advancedLabel}>Maintenance & portable backup</Text>
-              <Text style={styles.cardMeta}>Migration status, reports, export, and restore</Text>
-            </View>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-        </GlassCard>
+        </>}
 
         {/* Storage / network support */}
         <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />
         {renderStorageCard()}
 
-        {/* Local trust and transfer policy */}
-        <SectionHeader title="Local policy" subtitle="Control what this device discovers, transfers, and trusts" />
-        <GlassCard padded={false} style={styles.sectionCard}>
-          <Pressable onPress={() => router.push('/network-policy')} style={styles.advancedToggle} accessibilityRole="button">
-            <Feather name="sliders" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Network, storage & retention</Text>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-          <Pressable
-            onPress={() => router.push('/subscriptions')}
-            style={[styles.advancedToggle, { borderTopWidth: 1, borderTopColor: colors.glassBorder }]}
-            accessibilityRole="button"
-          >
-            <Feather name="rss" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Subscriptions & feed trust</Text>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-          <Pressable
-            onPress={() => router.push('/moderation')}
-            style={[styles.advancedToggle, { borderTopWidth: 1, borderTopColor: colors.glassBorder }]}
-            accessibilityRole="button"
-          >
-            <Feather name="shield" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Moderation & analysis</Text>
-            <Feather name="chevron-right" size={17} color={colors.textMuted} />
-          </Pressable>
-        </GlassCard>
+        {developerModeCard}
 
-        {/* Advanced */}
-        <SectionHeader title="Advanced" />
-        <GlassCard padded={false} style={styles.sectionCard}>
-          <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
-            <Feather name="terminal" size={15} color={colors.textMuted} />
-            <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
-            <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
-          </Pressable>
-
-          {advancedOpen && (
+        {developerMode.enabled && (
+          <>
+            <SectionHeader title="Diagnostics" subtitle="Local swarm, storage, and technical state" />
+            <GlassCard padded={false} style={styles.sectionCard}>
+              <Pressable onPress={() => setAdvancedOpen((v) => !v)} style={styles.advancedToggle}>
+                <Feather name="terminal" size={15} color={colors.textMuted} />
+                <Text style={styles.advancedLabel}>Diagnostics & technical settings</Text>
+                <Feather name={advancedOpen ? 'chevron-up' : 'chevron-down'} size={17} color={colors.textMuted} />
+              </Pressable>
+              {advancedOpen && (
             <View style={styles.advancedBody}>
               <Text style={styles.advancedFieldLabel}>Public key</Text>
               <Pressable onPress={() => copyToClipboard(identity.publicKey, 'Public key')}>
@@ -1039,8 +955,10 @@ export default function ProfileScreen() {
                 />
               </View>
             </View>
-          )}
-        </GlassCard>
+              )}
+            </GlassCard>
+          </>
+        )}
 
         <Text style={styles.footer}>PearTube · Powered by Hyperswarm & Hyperdrive</Text>
       </ScrollView>
@@ -1359,40 +1277,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 12,
   },
-  archiveParticipation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.glassBorder,
-  },
-  archiveParticipationCopy: {
-    flex: 1,
-  },
-  archiveTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-  },
-  archiveTitle: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  archiveDescription: {
-    color: colors.textMuted,
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 5,
-  },
-  archiveStatus: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 7,
-  },
   advancedToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1428,6 +1312,12 @@ const styles = StyleSheet.create({
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  developerModeError: {
+    color: colors.error,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 10,
   },
   footer: {
     color: colors.textDisabled,

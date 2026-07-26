@@ -37,7 +37,8 @@ export default function TabLayout() {
       >
         <Tabs.Screen name="index" />
         <Tabs.Screen name="discover" />
-        <Tabs.Screen name="studio" />
+        {/* Registered for deep links, but intentionally absent from consumer navigation. */}
+        <Tabs.Screen name="studio" options={{ href: null }} />
         <Tabs.Screen name="library" />
         {/* Legacy routes kept as redirects so deep links survive */}
         <Tabs.Screen name="subscriptions" />

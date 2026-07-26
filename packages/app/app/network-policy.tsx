@@ -10,6 +10,7 @@ import {
 } from '@/components/library/PolicyControls'
 import { RetentionPolicyEditor } from '@/components/library/RetentionPolicyEditor'
 import type { NetworkPolicy, NetworkPolicyRpc } from '@/lib/network-policy'
+import { DeveloperModeGate } from '@/lib/developer-mode'
 
 const UPLOAD_OPTIONS = [
   { value: 'disabled', label: 'Do not upload', detail: 'This device will not serve media blocks to peers.' },
@@ -28,9 +29,13 @@ type Props = {
   policy?: Partial<NetworkPolicy> | null
 }
 
-export default function NetworkPolicyScreen({ rpc, policy }: Props) {
+function NetworkPolicyScreen({ rpc, policy }: Props) {
   if (rpc) return <NetworkPolicyContent rpc={rpc} initialPolicy={policy} />
   return <ConnectedNetworkPolicy initialPolicy={policy} />
+}
+
+export default function DeveloperNetworkPolicyScreen(props: Props) {
+  return <DeveloperModeGate><NetworkPolicyScreen {...props} /></DeveloperModeGate>
 }
 
 function ConnectedNetworkPolicy({ initialPolicy }: { initialPolicy?: Partial<NetworkPolicy> | null }) {

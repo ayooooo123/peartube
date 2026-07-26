@@ -204,6 +204,126 @@ test('media graph detail and source APIs exclude locally hidden publications wit
     'all-hidden detail state remains an honest local-policy miss without deleting graph records')
 })
 
+test('collection detail and membership omit hidden linked episodes before paging', async (t) => {
+  const { mediaGraphStore, assetManifestStore, sourcePreferenceStore } = await fixture()
+  const collection = collectionRef('moderated-season')
+  const visibleEpisode = workRef('visible-ep')
+  const hiddenEpisode = workRef('hidden-ep')
+  const visibleManifest = createPublicationManifest({
+    publisherId: publisherA.publicKey,
+    sequence: 1,
+    title: 'Visible episode',
+    renditions: [rendition(1)],
+    keyPair: publisherA,
+  })
+  const hiddenManifest = createPublicationManifest({
+    publisherId: publisherB.publicKey,
+    sequence: 1,
+    title: 'Hidden episode',
+    renditions: [rendition(3)],
+    keyPair: publisherB,
+  })
+  await assetManifestStore.ingestManifest(visibleManifest)
+  await assetManifestStore.ingestManifest(hiddenManifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [collection],
+    payload: { title: 'Moderated season' },
+    keyPair: curator,
+  })
+  const visibleMembership = await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionMembershipClaim',
+    subjectRefs: [collection],
+    payload: {
+      collectionRef: collection,
+      memberRef: visibleEpisode,
+      memberRole: 'episode',
+      position: { episode: 1 },
+      insertionId: 'visible',
+    },
+    keyPair: curator,
+  })
+  const hiddenMembership = await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionMembershipClaim',
+    subjectRefs: [collection],
+    payload: {
+      collectionRef: collection,
+      memberRef: hiddenEpisode,
+      memberRole: 'episode',
+      position: { episode: 2 },
+      insertionId: 'hidden',
+    },
+    keyPair: curator,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [visibleEpisode],
+    payload: { publicationId: visibleManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: publisherA,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [hiddenEpisode],
+    payload: { publicationId: hiddenManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: publisherB,
+  })
+
+  const visibleMembers = new Set([visibleEpisode.entityId])
+  const visiblePublications = new Set([visibleManifest.publicationId])
+  let collectionVisible = true
+  const projection = {
+    async update() {},
+    isVisible: entityId => (
+      (entityId === collection.entityId && collectionVisible) ||
+      visibleMembers.has(entityId)
+    ),
+    isPublicationVisible: publicationId => visiblePublications.has(publicationId),
+  }
+  const api = createMediaGraphApi({
+    mediaGraphStore,
+    assetManifestStore,
+    sourcePreferenceStore,
+    consumerCatalogProjection: projection,
+  })
+
+  const items = await api.getMediaCollectionItems({
+    collectionEntityId: collection.entityId,
+    limit: 1,
+    limitProvided: true,
+  })
+  t.alike(items.items.map(item => item.entityId), [visibleEpisode.entityId])
+  t.is(items.nextCursor, null, 'visibility filtering occurs before paging')
+
+  const detail = await api.getMediaCollection({
+    entityId: collection.entityId,
+    includeClaims: true,
+  })
+  t.is(detail.success, true)
+  t.ok(detail.claims.some(claim => claim.claimId === visibleMembership.claimId))
+  t.absent(detail.claims.some(claim => claim.claimId === hiddenMembership.claimId),
+    'hidden membership is absent from collection detail')
+  t.is(detail.entity.claimCount, 2, 'detail counts collection metadata plus the visible membership only')
+
+  visibleMembers.clear()
+  visiblePublications.clear()
+  const empty = await api.getMediaCollectionItems({ collectionEntityId: collection.entityId })
+  t.alike(empty, { success: true, items: [], nextCursor: null },
+    'all-hidden collection members are an honest local-policy empty state')
+  t.is(mediaGraphStore.getClaimsByCollection(collection.entityId).length, 2,
+    'local visibility filtering does not mutate authenticated graph truth')
+
+  visibleMembers.add(visibleEpisode.entityId)
+  visiblePublications.add(visibleManifest.publicationId)
+  collectionVisible = false
+  t.alike(await api.getMediaCollectionItems({ collectionEntityId: collection.entityId }), {
+    success: false,
+    errorCode: 'MEDIA_ENTITY_NOT_VISIBLE',
+    error: 'Media collection is not visible under this device policy',
+    items: [],
+    nextCursor: null,
+  }, 'a hidden collection root cannot enumerate otherwise visible members')
+})
+
 test('media graph API never auto-selects an unverified or unavailable playback source', async (t) => {
   const { api, mediaGraphStore } = await fixture()
   const subject = workRef('untrusted-only')

@@ -10,18 +10,21 @@ function matches(id, values) {
   return values.some(value => value != null && identity(value) === id)
 }
 
-function targets(entity = {}, record = {}) {
-  const id = identity(record.targetId)
+function targetValues(entity = {}, targetType) {
   const entityRef = entity.entityRef
-  switch (record.targetType) {
-    case 'publisher': return matches(id, [entity.publisherId, entity.publisherRootKey, entityRef])
-    case 'publication': return matches(id, [entity.publicationId, entityRef])
-    case 'work': return matches(id, [entity.workId, entity.entityId, entityRef])
-    case 'creator': return matches(id, [...(entity.creatorIds || []), entity.creatorId, entityRef])
-    case 'rendition': return matches(id, [entity.renditionId, entityRef])
-    case 'collection': return matches(id, [entity.collectionId, entityRef])
-    default: return false
+  switch (targetType) {
+    case 'publisher': return [entity.publisherId, entity.publisherRootKey, entityRef]
+    case 'publication': return [entity.publicationId, entityRef]
+    case 'work': return [...(entity.workIds || []), entity.workId, entity.entityId, entityRef]
+    case 'creator': return [...(entity.creatorIds || []), entity.creatorId, entityRef]
+    case 'rendition': return [entity.renditionId, entityRef]
+    case 'collection': return [...(entity.collectionIds || []), entity.collectionId, entityRef]
+    default: return []
   }
+}
+
+function targets(entity = {}, record = {}) {
+  return matches(identity(record.targetId), targetValues(entity, record.targetType))
 }
 
 function normalizeAction(record = {}) {
@@ -45,4 +48,47 @@ export function evaluateModerationPolicy(entity = {}, policy = {}) {
   const feedAllow = firstMatch(entity, policy.feedAllows)
   if (feedAllow) return { action: 'visible', reason: 'feed-allow', evidence: [{ source: 'feed', record: feedAllow }] }
   return { action: 'visible', reason: 'default', evidence: [] }
+}
+
+function compileRecords(records = []) {
+  const byType = new Map()
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index]
+    const id = identity(record?.targetId)
+    let byId = byType.get(record?.targetType)
+    if (!byId) {
+      byId = new Map()
+      byType.set(record?.targetType, byId)
+    }
+    if (!byId.has(id)) byId.set(id, { index, record })
+  }
+  return entity => {
+    let winner = null
+    for (const [targetType, byId] of byType) {
+      for (const value of targetValues(entity, targetType)) {
+        if (value == null) continue
+        const candidate = byId.get(identity(value))
+        if (candidate && (!winner || candidate.index < winner.index)) winner = candidate
+      }
+    }
+    return winner?.record || null
+  }
+}
+
+export function createModerationPolicyEvaluator(policy = {}) {
+  const localBlock = compileRecords(policy.localBlocks)
+  const localAllow = compileRecords(policy.localAllows)
+  const feedBlock = compileRecords(policy.feedBlocks)
+  const feedAllow = compileRecords(policy.feedAllows)
+  return (entity = {}) => {
+    const local = localBlock(entity)
+    if (local) return { action: normalizeAction(local), reason: 'local-block', evidence: [{ source: 'local', record: local }] }
+    const allow = localAllow(entity)
+    if (allow) return { action: 'visible', reason: 'local-allow', evidence: [{ source: 'local', record: allow }] }
+    const blocked = feedBlock(entity)
+    if (blocked) return { action: normalizeAction(blocked), reason: 'feed-block', evidence: [{ source: 'feed', record: blocked }] }
+    const feed = feedAllow(entity)
+    if (feed) return { action: 'visible', reason: 'feed-allow', evidence: [{ source: 'feed', record: feed }] }
+    return { action: 'visible', reason: 'default', evidence: [] }
+  }
 }

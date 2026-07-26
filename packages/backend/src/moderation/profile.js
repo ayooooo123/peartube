@@ -1,4 +1,4 @@
-import { evaluateModerationPolicy } from './policy.js'
+import { createModerationPolicyEvaluator } from './policy.js'
 
 export const CONSUMER_MODERATION_PROFILE_SETTING_KEY = 'consumer-moderation-profile:v1'
 
@@ -223,6 +223,31 @@ export function createConsumerModerationPolicy({
     throw new TypeError('moderation profile controller is required')
   }
 
+  function beginEvaluation() {
+    if (profileController.getProfile().enabled === false) {
+      return {
+        enabled: false,
+        evaluate: () => ({ action: 'visible', reason: 'profile-disabled', evidence: [] }),
+      }
+    }
+    const records = moderationManager?.getRecords?.() || []
+    const subscribedRecords = records.filter(record => {
+      const sourceId = String(record?.sourceId || '')
+      const separator = sourceId.indexOf(':')
+      const curatorId = separator === -1 ? sourceId : sourceId.slice(0, separator)
+      return profileController.isCuratorSubscribed(curatorId)
+    })
+    return {
+      enabled: true,
+      evaluate: createModerationPolicyEvaluator({
+        localBlocks: localBlocks(),
+        localAllows: localAllows(),
+        feedBlocks: subscribedRecords.filter(record => record.action !== 'allow'),
+        feedAllows: subscribedRecords.filter(record => record.action === 'allow'),
+      }),
+    }
+  }
+
   return {
     get enabled() {
       return profileController.getProfile().enabled !== false
@@ -230,23 +255,9 @@ export function createConsumerModerationPolicy({
     get curatorSubscriptions() {
       return profileController.getEffectiveCuratorSubscriptions()
     },
+    beginEvaluation,
     evaluate(entity) {
-      if (!this.enabled) {
-        return { action: 'visible', reason: 'profile-disabled', evidence: [] }
-      }
-      const records = moderationManager?.getRecords?.() || []
-      const subscribedRecords = records.filter(record => {
-        const sourceId = String(record?.sourceId || '')
-        const separator = sourceId.indexOf(':')
-        const curatorId = separator === -1 ? sourceId : sourceId.slice(0, separator)
-        return profileController.isCuratorSubscribed(curatorId)
-      })
-      return evaluateModerationPolicy(entity, {
-        localBlocks: localBlocks(),
-        localAllows: localAllows(),
-        feedBlocks: subscribedRecords.filter(record => record.action !== 'allow'),
-        feedAllows: subscribedRecords.filter(record => record.action === 'allow'),
-      })
+      return beginEvaluation().evaluate(entity)
     },
   }
 }

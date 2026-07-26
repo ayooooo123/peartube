@@ -258,6 +258,57 @@ export function createMediaGraphApi(options = {}) {
     })
   }
 
+  function isPublicationVisible(publicationId) {
+    if (typeof consumerCatalogProjection?.isPublicationVisible !== 'function') return true
+    return consumerCatalogProjection.isPublicationVisible(publicationId) === true
+  }
+
+  function isEntityVisible(entityId) {
+    if (typeof consumerCatalogProjection?.isVisible !== 'function') return true
+    return consumerCatalogProjection.isVisible(entityId) === true
+  }
+
+  function hasVisibleLinkedPublication(entityId) {
+    const publications = mediaGraphStore.getClaimsBySubject(entityId)
+      .filter(row => (
+        !row.revoked &&
+        row.body.claimType === 'AvailabilityObservation' &&
+        row.body.payload?.publicationId
+      ))
+      .map(row => row.body.payload.publicationId)
+    return publications.length === 0 || publications.some(isPublicationVisible)
+  }
+
+  function isConsumerClaimVisible(row) {
+    if (!consumerCatalogProjection) return true
+    if (
+      typeof consumerCatalogProjection.isClaimVisible === 'function' &&
+      consumerCatalogProjection.isClaimVisible(row.claimId) !== true
+    ) return false
+    const publicationId = row.body?.payload?.publicationId
+    if (publicationId && !isPublicationVisible(publicationId)) return false
+    if (row.body?.claimType === 'CollectionMembershipClaim') {
+      const memberId = row.body.payload?.memberRef?.entityId
+      return Boolean(memberId && isEntityVisible(memberId) && hasVisibleLinkedPublication(memberId))
+    }
+    const workSubjects = (row.body?.subjectRefs || []).filter(ref => ref.entityKind === 'work')
+    if (workSubjects.length > 0 && !workSubjects.some(ref => (
+      isEntityVisible(ref.entityId) && hasVisibleLinkedPublication(ref.entityId)
+    ))) return false
+    return true
+  }
+
+  function consumerStoreView() {
+    return {
+      getClaims() {
+        return mediaGraphStore.getClaims().filter(isConsumerClaimVisible)
+      },
+      getClaimsBySubject(entityId) {
+        return mediaGraphStore.getClaimsBySubject(entityId).filter(isConsumerClaimVisible)
+      },
+    }
+  }
+
   function decorateSources(sources) {
     const diagnostics = new Map(projectSourceSelectionDiagnostics(sources, {
       selectedPublicationId: sources[0]?.publicationId,
@@ -270,10 +321,11 @@ export function createMediaGraphApi(options = {}) {
     }))
   }
 
-  function resolveOrMissing(entityId) {
-    const claims = mediaGraphStore.getClaimsBySubject(entityId)
+  function resolveOrMissing(entityId, consumerVisible = false) {
+    const store = consumerVisible && consumerCatalogProjection ? consumerStoreView() : mediaGraphStore
+    const claims = store.getClaimsBySubject(entityId)
     if (claims.length === 0) return null
-    return resolveMediaEntity(mediaGraphStore, entityId, { trust })
+    return resolveMediaEntity(store, entityId, { trust })
   }
 
   async function entityResult(entityId, request = {}, agent = false) {
@@ -286,7 +338,7 @@ export function createMediaGraphApi(options = {}) {
         return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy')
       }
     }
-    const resolved = resolveOrMissing(entityId)
+    const resolved = resolveOrMissing(entityId, !agent)
     if (!resolved) return error('MEDIA_ENTITY_NOT_FOUND', 'Media entity not found')
     const sources = await buildSources(entityId)
     const entity = {
@@ -387,8 +439,23 @@ export function createMediaGraphApi(options = {}) {
     async getMediaCollectionItems(request = {}) {
       const missingStore = requireGraphStore()
       if (missingStore) return { ...missingStore, items: [], nextCursor: null }
+      if (consumerCatalogProjection) {
+        await options.ctx?.mediaCatalogProjection?.update?.()
+        await consumerCatalogProjection.update?.()
+        if (!isEntityVisible(request.collectionEntityId)) {
+          return error(
+            'MEDIA_ENTITY_NOT_VISIBLE',
+            'Media collection is not visible under this device policy',
+            { items: [], nextCursor: null },
+          )
+        }
+      }
       const rows = mediaGraphStore.getClaimsByCollection(request.collectionEntityId)
-        .filter(row => !row.revoked && row.body.claimType === 'CollectionMembershipClaim')
+        .filter(row => (
+          !row.revoked &&
+          row.body.claimType === 'CollectionMembershipClaim' &&
+          isConsumerClaimVisible(row)
+        ))
         .sort((a, b) => {
           const ap = a.body.payload?.position?.episode || a.body.payload?.position?.index || 0
           const bp = b.body.payload?.position?.episode || b.body.payload?.position?.index || 0

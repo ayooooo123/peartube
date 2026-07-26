@@ -210,6 +210,7 @@ export function createPublisherCatalogProjection(options = {}) {
     const nextGraph = createMediaGraphStore({
       authorizeSigner: signer => allowedSigners.has(exactHex(signer, 'claim signer')),
       acceptClaim: (_body, context) => allowedClaimIds.has(context.claimId),
+      resolvePublisherId: (_body, context) => nextClaimRecords.get(context.claimId)?.publisherId,
     })
     const orderedClaims = [...nextClaimRecords.values()].sort((left, right) => {
       const publisherOrder = left.publisherId.localeCompare(right.publisherId)
@@ -347,6 +348,141 @@ function claimMemberId(row) {
   return row?.body?.payload?.memberRef?.entityId || null
 }
 
+function claimModerationEntity(row, publicationId = null) {
+  const subjectRefs = row?.body?.subjectRefs || []
+  const payload = row?.body?.payload || {}
+  const relatedRefs = [
+    ...subjectRefs,
+    payload.collectionRef,
+    payload.memberRef,
+    payload.subjectRef,
+  ].filter(ref => ref?.entityId)
+  const workIds = Array.from(new Set(
+    relatedRefs.filter(ref => ref.entityKind === 'work').map(ref => ref.entityId)
+  ))
+  const collectionIds = Array.from(new Set(
+    relatedRefs.filter(ref => ref.entityKind === 'collection').map(ref => ref.entityId)
+  ))
+  const work = workIds[0] || null
+  const collection = collectionIds[0] || null
+  const entityRef = subjectRefs[0]?.entityId || work || collection || null
+  return {
+    entityRef,
+    entityId: entityRef,
+    workId: work,
+    workIds,
+    collectionId: collection,
+    collectionIds,
+    publisherId: row?.publisherId || row?.issuer || null,
+    publisherRootKey: row?.publisherId || row?.issuer || null,
+    publicationId: publicationId || payload.publicationId || null,
+  }
+}
+
+function claimRelatedEntityIds(row) {
+  const payload = row?.body?.payload || {}
+  return Array.from(new Set([
+    ...(row?.body?.subjectRefs || []).map(ref => ref?.entityId),
+    payload.collectionRef?.entityId,
+    payload.memberRef?.entityId,
+    payload.subjectRef?.entityId,
+  ].filter(Boolean)))
+}
+
+function publicationLinksByClaim(topologyClaims, availabilityClaims = topologyClaims) {
+  const parents = new Map()
+
+  function root(entityId) {
+    if (!parents.has(entityId)) parents.set(entityId, entityId)
+    let value = entityId
+    while (parents.get(value) !== value) value = parents.get(value)
+    let current = entityId
+    while (parents.get(current) !== current) {
+      const next = parents.get(current)
+      parents.set(current, value)
+      current = next
+    }
+    return value
+  }
+
+  function union(entityIds) {
+    if (entityIds.length < 2) return
+    const first = root(entityIds[0])
+    for (const entityId of entityIds.slice(1)) {
+      const next = root(entityId)
+      if (next !== first) parents.set(next, first)
+    }
+  }
+
+  for (const row of topologyClaims) {
+    const related = claimRelatedEntityIds(row)
+    for (const entityId of related) root(entityId)
+    if (
+      row.body?.claimType === 'EquivalentEntityClaim' ||
+      row.body?.claimType === 'CollectionMembershipClaim'
+    ) union(related)
+  }
+
+  const byIssuerAndCluster = new Map()
+  for (const row of availabilityClaims) {
+    if (row.body?.claimType !== 'AvailabilityObservation') continue
+    const publicationId = row.body?.payload?.publicationId
+    if (!publicationId) continue
+    const publisherId = row.publisherId || row.issuer
+    for (const entityId of claimRelatedEntityIds(row)) {
+      const key = `${publisherId}\0${root(entityId)}`
+      const linked = byIssuerAndCluster.get(key) || new Set()
+      linked.add(publicationId)
+      byIssuerAndCluster.set(key, linked)
+    }
+  }
+
+  return row => {
+    if (row.body?.payload?.publicationId) {
+      return new Set([row.body.payload.publicationId])
+    }
+    const publicationIds = new Set()
+    const publisherId = row.publisherId || row.issuer
+    for (const entityId of claimRelatedEntityIds(row)) {
+      const linked = byIssuerAndCluster.get(`${publisherId}\0${root(entityId)}`)
+      for (const publicationId of linked || []) publicationIds.add(publicationId)
+    }
+    return publicationIds
+  }
+}
+
+function visibleClaimsForConsumer(claims, moderationPolicy) {
+  const evaluation = typeof moderationPolicy?.beginEvaluation === 'function'
+    ? moderationPolicy.beginEvaluation()
+    : moderationPolicy
+  const enabled = getProfileEnabled(evaluation)
+  if (!enabled || typeof evaluation?.evaluate !== 'function') return claims.slice()
+  const baseVisibleClaims = claims.filter(row => {
+    const base = claimModerationEntity(row)
+    return isVisibleDecision(evaluation.evaluate(base))
+  })
+  const linkedPublicationIds = publicationLinksByClaim(baseVisibleClaims, claims)
+  return baseVisibleClaims.filter(row => {
+    if (row.body?.payload?.publicationId) return true
+    for (const publicationId of linkedPublicationIds(row)) {
+      if (!isVisibleDecision(evaluation.evaluate(claimModerationEntity(row, publicationId)))) return false
+    }
+    return true
+  })
+}
+
+function claimStoreView(store, claims) {
+  const allowed = new Set(claims.map(row => row.claimId))
+  return {
+    getClaims() {
+      return claims.slice()
+    },
+    getClaimsBySubject(entityId) {
+      return store.getClaimsBySubject(entityId).filter(row => allowed.has(row.claimId))
+    },
+  }
+}
+
 /**
  * Project only authenticated publisher catalog state into consumer records.
  * Collections remain graph entities; "series" is strictly a local presentation.
@@ -354,9 +490,15 @@ function claimMemberId(row) {
 export function projectAuthenticatedPublisherMediaRecords({
   mediaGraphStore,
   assetManifestStore,
+  moderationPolicy = null,
+  consumerClaims = null,
 } = {}) {
   if (!mediaGraphStore?.getClaims || !assetManifestStore?.getManifest) return []
-  const claims = mediaGraphStore.getClaims().filter(row => !row.revoked)
+  const authenticatedClaims = mediaGraphStore.getClaims().filter(row => !row.revoked)
+  const claims = Array.isArray(consumerClaims)
+    ? consumerClaims
+    : visibleClaimsForConsumer(authenticatedClaims, moderationPolicy)
+  const resolverStore = claimStoreView(mediaGraphStore, claims)
   const memberships = claims.filter(row =>
     row.body?.claimType === 'CollectionMembershipClaim' &&
     row.body?.payload?.memberRole === 'episode' &&
@@ -372,7 +514,7 @@ export function projectAuthenticatedPublisherMediaRecords({
     if (!manifest?.body?.publisherId) continue
     for (const subject of availability.body.subjectRefs || []) {
       const memberOf = memberships.filter(row => claimMemberId(row) === subject.entityId)
-      const work = resolveConsumerMediaEntity(mediaGraphStore, subject.entityId, { entityKind: 'work' })
+      const work = resolveConsumerMediaEntity(resolverStore, subject.entityId, { entityKind: 'work' })
       if (memberOf.length === 0) {
         records.push({
           directPublisher: true,
@@ -381,13 +523,15 @@ export function projectAuthenticatedPublisherMediaRecords({
           publicationId: manifest.publicationId,
           publisherId: manifest.body.publisherId,
           title: work.metadata.title || manifest.body.title || null,
+          artwork: work.metadata.artwork || null,
+          ranking: Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null,
           playable: true,
         })
         continue
       }
       for (const membership of memberOf) {
         const collectionId = claimCollectionId(membership)
-        const collection = resolveConsumerMediaEntity(mediaGraphStore, collectionId, { entityKind: 'collection' })
+        const collection = resolveConsumerMediaEntity(resolverStore, collectionId, { entityKind: 'collection' })
         const expectedEpisodeCount = structures
           .filter(row => claimCollectionId(row) === collectionId)
           .reduce((maximum, row) => Math.max(maximum, Number(row.body.payload.expectedSlots || 0)), 0)
@@ -399,6 +543,10 @@ export function projectAuthenticatedPublisherMediaRecords({
           publicationId: manifest.publicationId,
           publisherId: manifest.body.publisherId,
           title: collection.metadata.title || work.metadata.title || manifest.body.title || null,
+          artwork: collection.metadata.artwork || work.metadata.artwork || null,
+          ranking: Number.isFinite(collection.metadata.ranking)
+            ? collection.metadata.ranking
+            : (Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null),
           playable: true,
           expectedEpisodeCount,
           seriesEpisode: {
@@ -450,7 +598,9 @@ export function createConsumerCatalogProjection(options = {}) {
   let lastNextRetryAt = null
   let lastRebuild = { accepted: 0, rejected: 0, rejectionCodes: {} }
   let acceptedCandidates = new Map()
+  let visibleEntityRefs = new Set()
   let visiblePublicationIds = new Set()
+  let visibleClaimIds = null
   const downstream = {
     artwork: options.onArtwork,
     topic: options.onTopicJoin,
@@ -472,13 +622,19 @@ export function createConsumerCatalogProjection(options = {}) {
     rejectionCodes[rejectionCode] = (rejectionCodes[rejectionCode] || 0) + 1
   }
 
-  function resolvedRecord(record) {
+  function resolvedRecord(record, resolverStore) {
     if (!mediaGraphStore || typeof mediaGraphStore.getClaimsBySubject !== 'function') return record
     if (mediaGraphStore.getClaimsBySubject(record.entityRef).length === 0) return record
-    const resolved = resolveConsumerMediaEntity(mediaGraphStore, record.entityRef, { entityKind: record.kind })
+    const resolved = resolveConsumerMediaEntity(
+      resolverStore,
+      record.entityRef,
+      { entityKind: record.kind },
+    )
     return {
       ...record,
       title: resolved.metadata.title || record.title,
+      artwork: resolved.metadata.artwork || record.artwork,
+      ranking: Number.isFinite(resolved.metadata.ranking) ? resolved.metadata.ranking : record.ranking,
       entityKind: resolved.entityKind,
     }
   }
@@ -486,10 +642,24 @@ export function createConsumerCatalogProjection(options = {}) {
   return Object.freeze({
     rebuild() {
       const indexCandidates = indexFeedManager?.getRecords?.() || []
+      const moderationEvaluation = typeof moderationPolicy?.beginEvaluation === 'function'
+        ? moderationPolicy.beginEvaluation()
+        : moderationPolicy
+      const visibleClaims = mediaGraphStore?.getClaims
+        ? visibleClaimsForConsumer(
+            mediaGraphStore.getClaims().filter(row => !row.revoked),
+            moderationEvaluation,
+          )
+        : null
+      const resolverStore = visibleClaims
+        ? claimStoreView(mediaGraphStore, visibleClaims)
+        : mediaGraphStore
       // Catalog claims are the only display authority. Curator records are
       // bounded discovery/deduplication hints and are never returned as titles,
       // kinds, creators, or playable state.
-      const publisherRecords = (typeof options.publisherRecords === 'function' ? options.publisherRecords() || [] : [])
+      const publisherRecords = (typeof options.publisherRecords === 'function'
+        ? options.publisherRecords({ moderationPolicy: moderationEvaluation, visibleClaims }) || []
+        : [])
         .filter(record => record?.directPublisher === true)
       const authenticated = new Map()
       for (const record of publisherRecords) {
@@ -513,9 +683,9 @@ export function createConsumerCatalogProjection(options = {}) {
         const candidateKey = `${publisherId}\0${String(record.publicationId)}`
         if (acceptedKeys.has(candidateKey) || consideredKeys.has(candidateKey)) continue
         consideredKeys.add(candidateKey)
-        const enabled = getProfileEnabled(moderationPolicy)
-        const decision = enabled && typeof moderationPolicy?.evaluate === 'function'
-          ? moderationPolicy.evaluate(record)
+        const enabled = getProfileEnabled(moderationEvaluation)
+        const decision = enabled && typeof moderationEvaluation?.evaluate === 'function'
+          ? moderationEvaluation.evaluate(record)
           : { action: 'visible', reason: enabled ? 'default' : 'disabled' }
         if (!isVisibleDecision(decision)) {
           const code = `LOCAL_MODERATION_${String(decision.action || 'BLOCKED').toUpperCase()}`
@@ -526,7 +696,7 @@ export function createConsumerCatalogProjection(options = {}) {
           reject(record, 'CONSUMER_CANDIDATE_BUDGET_EXCEEDED', rejectionCodes)
           continue
         }
-        accepted.push(resolvedRecord(record))
+        accepted.push(resolvedRecord(record, resolverStore))
         acceptedKeys.add(candidateKey)
       }
       accepted.sort((left, right) => (
@@ -539,6 +709,7 @@ export function createConsumerCatalogProjection(options = {}) {
         accepted,
         rejected: rejectedCandidates,
         introducedPublisherIds,
+        visibleClaimIds: visibleClaims?.map(row => row.claimId).sort() || null,
       })
       const currentTime = Number(now())
       if (
@@ -556,7 +727,14 @@ export function createConsumerCatalogProjection(options = {}) {
         ? indexed.admittedRecords
         : (typeof localIndex.records === 'function' ? localIndex.records() : [])
       acceptedCandidates = new Map(admitted.map(record => [record.entityRef, record]))
+      visibleEntityRefs = new Set(admitted.flatMap(record => [
+        String(record.entityRef),
+        ...(record.seriesEpisode?.entityRef ? [String(record.seriesEpisode.entityRef)] : []),
+      ]))
       visiblePublicationIds = new Set(admitted.map(record => String(record.publicationId)))
+      visibleClaimIds = visibleClaims == null
+        ? null
+        : new Set(visibleClaims.map(row => row.claimId))
       lastInputFingerprint = fingerprint
       const retryTimes = (indexed.results || [])
         .map(result => Number(result?.resetAt))
@@ -591,12 +769,15 @@ export function createConsumerCatalogProjection(options = {}) {
       }
     },
     getRejectedCandidates() { return rejectedCandidates.slice() },
-    isVisible(entityRef) { return acceptedCandidates.has(String(entityRef)) },
+    isVisible(entityRef) { return visibleEntityRefs.has(String(entityRef)) },
     isPublicationVisible(publicationId) {
       const value = b4a.isBuffer(publicationId) || publicationId instanceof Uint8Array
         ? b4a.toString(b4a.from(publicationId), 'hex')
         : String(publicationId)
       return visiblePublicationIds.has(value)
+    },
+    isClaimVisible(claimId) {
+      return visibleClaimIds == null || visibleClaimIds.has(String(claimId))
     },
     getIntroducedPublishers() { return introducedPublisherIds.slice() },
     getCuratorSubscriptions() {

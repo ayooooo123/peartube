@@ -120,6 +120,18 @@ test('accepted catalog payloads project canonical manifests and claims with boun
   t.is(rebuilt.acceptedClaims, 1)
   t.is(projection.assetManifestStore.getManifest(manifest.publicationId).body.manifestId, manifest.body.manifestId)
   t.is(projection.mediaGraphStore.getClaim(claim.claimId).claimId, claim.claimId)
+  t.is(projection.mediaGraphStore.getClaim(claim.claimId).publisherId, publisherIdHex,
+    'publisher projection retains authenticated root provenance separately from its delegated writer')
+  t.alike(projectAuthenticatedPublisherMediaRecords({
+    mediaGraphStore: projection.mediaGraphStore,
+    assetManifestStore: projection.assetManifestStore,
+    moderationPolicy: {
+      enabled: true,
+      evaluate: entity => entity.publisherId === publisherIdHex
+        ? { action: 'hidden', reason: 'blocked-root' }
+        : { action: 'visible', reason: 'default' },
+    },
+  }), [], 'a blocked publisher root filters claims signed by its authenticated delegated writer')
 
   const api = createMediaGraphApi({ ctx: { mediaGraphStore: projection.mediaGraphStore, assetManifestStore: projection.assetManifestStore, mediaCatalogProjection: projection } })
   const page = await api.getMediaCatalog({ limitProvided: true, limit: 1 })

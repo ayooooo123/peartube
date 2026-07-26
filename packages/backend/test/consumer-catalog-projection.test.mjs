@@ -1,10 +1,38 @@
 import test from 'brittle'
+import b4a from 'b4a'
+import crypto from 'hypercore-crypto'
 
-import { createConsumerCatalogProjection } from '../src/media-graph/catalog-projection.js'
+import { createAssetManifestStore, createPublicationManifest } from '../src/assets/index.js'
+import {
+  createConsumerCatalogProjection,
+  projectAuthenticatedPublisherMediaRecords,
+} from '../src/media-graph/catalog-projection.js'
+import { createEntityReference, createMediaClaim, createMediaGraphStore } from '../src/media-graph/index.js'
 import { createLocalMediaIndex } from '../src/indexing/local-index.js'
 import { createMediaGraphApi } from '../src/api/media-graph.js'
+import { createModerationPolicyEvaluator } from '../src/moderation/policy.js'
 
 const id = (character) => character.repeat(64)
+
+async function ingestClaim(store, input) {
+  const claim = createMediaClaim(input)
+  const result = await store.ingestClaim(claim.envelope)
+  if (result.status !== 'accepted') throw new Error(`claim not accepted: ${result.status}`)
+  return claim
+}
+
+function testRendition(seed) {
+  return {
+    purpose: 'original',
+    format: 'video/mp4',
+    core: {
+      key: b4a.alloc(32, seed),
+      length: 1,
+      treeHash: b4a.alloc(32, seed + 1),
+      byteLength: 32,
+    },
+  }
+}
 
 test('one consumer projection deduplicates bounded publisher and index introductions, with movies and series first', (t) => {
   const authenticated = [
@@ -272,4 +300,425 @@ test('a changed candidate does not re-consume the unchanged publisher window bud
   // The new b record is rejected by the remaining publisher window budget;
   // unchanged a/b records remain visible and were not charged again.
   t.alike(projection.getCatalog().items.map(item => item.entityRef), ['work:a', 'work:b'])
+})
+
+test('moderation filters publisher claims before equivalent metadata and collection resolution', async (t) => {
+  const allowedPublisher = crypto.keyPair(b4a.alloc(32, 71))
+  const blockedPublisher = crypto.keyPair(b4a.alloc(32, 72))
+  const allowedPublisherId = b4a.toString(allowedPublisher.publicKey, 'hex')
+  const blockedPublisherId = b4a.toString(blockedPublisher.publicKey, 'hex')
+  const mediaGraphStore = createMediaGraphStore({
+    trustedSigners: [allowedPublisher.publicKey, blockedPublisher.publicKey],
+  })
+  const assetManifestStore = createAssetManifestStore({
+    trustedSigners: [allowedPublisher.publicKey, blockedPublisher.publicKey],
+  })
+  const work = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'moderated01',
+  })
+  const equivalentWork = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'moderated02',
+  })
+  const samePublisherAllowedWork = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'moderated03',
+  })
+  const allowedCollection = createEntityReference({
+    entityKind: 'collection',
+    namespace: 'issuer-native',
+    issuerRootKey: allowedPublisher.publicKey,
+    issuerLocalId: 'allowed-series',
+  })
+  const blockedCollection = createEntityReference({
+    entityKind: 'collection',
+    namespace: 'issuer-native',
+    issuerRootKey: blockedPublisher.publicKey,
+    issuerLocalId: 'blocked-series',
+  })
+  const allowedManifest = createPublicationManifest({
+    publisherId: allowedPublisher.publicKey,
+    sequence: 1,
+    title: 'Allowed fallback title',
+    renditions: [testRendition(73)],
+    keyPair: allowedPublisher,
+  })
+  const blockedManifest = createPublicationManifest({
+    publisherId: blockedPublisher.publicKey,
+    sequence: 1,
+    title: 'Blocked fallback title',
+    renditions: [testRendition(75)],
+    keyPair: blockedPublisher,
+  })
+  const samePublisherAllowedManifest = createPublicationManifest({
+    publisherId: blockedPublisher.publicKey,
+    sequence: 2,
+    title: 'Same-publisher allowed fallback',
+    renditions: [testRendition(77)],
+    keyPair: blockedPublisher,
+  })
+  await assetManifestStore.ingestManifest(allowedManifest)
+  await assetManifestStore.ingestManifest(blockedManifest)
+  await assetManifestStore.ingestManifest(samePublisherAllowedManifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [work],
+    payload: { title: 'Allowed Episode', artwork: 'p2p://allowed-poster', ranking: 1 },
+    confidence: 100,
+    keyPair: allowedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [equivalentWork],
+    payload: {
+      title: 'Blocked Episode',
+      artwork: 'https://blocked.invalid/poster',
+      ranking: 999,
+      publicationId: blockedManifest.publicationId,
+    },
+    confidence: 999,
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EquivalentEntityClaim',
+    subjectRefs: [work, equivalentWork, samePublisherAllowedWork],
+    payload: { basis: 'adversarial-equivalent-source-fixture' },
+    confidence: 100,
+    keyPair: allowedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [allowedCollection],
+    payload: { title: 'Allowed Series', artwork: 'p2p://allowed-series-poster', ranking: 1 },
+    confidence: 100,
+    keyPair: allowedPublisher,
+  })
+  const blockedCollectionMetadata = await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [allowedCollection],
+    payload: {
+      title: 'Blocked Series Override',
+      artwork: 'https://blocked.invalid/series',
+      ranking: 999,
+      publicationId: blockedManifest.publicationId,
+    },
+    confidence: 999,
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionMembershipClaim',
+    subjectRefs: [allowedCollection],
+    payload: {
+      collectionRef: allowedCollection,
+      memberRef: work,
+      memberRole: 'episode',
+      position: { season: 1, episode: 1 },
+      insertionId: 'allowed-membership',
+    },
+    keyPair: allowedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionStructureClaim',
+    subjectRefs: [allowedCollection],
+    payload: { collectionRef: allowedCollection, expectedSlots: 1 },
+    keyPair: allowedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionMembershipClaim',
+    subjectRefs: [blockedCollection],
+    payload: {
+      collectionRef: blockedCollection,
+      memberRef: equivalentWork,
+      memberRole: 'episode',
+      position: { season: 9, episode: 9 },
+      insertionId: 'blocked-membership',
+      publicationId: blockedManifest.publicationId,
+    },
+    confidence: 999,
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionStructureClaim',
+    subjectRefs: [allowedCollection],
+    payload: {
+      collectionRef: allowedCollection,
+      expectedSlots: 99,
+      publicationId: blockedManifest.publicationId,
+    },
+    confidence: 999,
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [work],
+    payload: { publicationId: allowedManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: allowedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [equivalentWork],
+    payload: { publicationId: blockedManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [samePublisherAllowedWork],
+    payload: {
+      title: 'Same-publisher Allowed Episode',
+      artwork: 'p2p://same-publisher-allowed-poster',
+      ranking: 2,
+      publicationId: samePublisherAllowedManifest.publicationId,
+    },
+    confidence: 200,
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'CollectionMembershipClaim',
+    subjectRefs: [allowedCollection, samePublisherAllowedWork],
+    payload: {
+      collectionRef: allowedCollection,
+      memberRef: samePublisherAllowedWork,
+      memberRole: 'episode',
+      position: { season: 1, episode: 2 },
+      insertionId: 'same-publisher-allowed-membership',
+      publicationId: samePublisherAllowedManifest.publicationId,
+    },
+    keyPair: blockedPublisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [samePublisherAllowedWork],
+    payload: {
+      publicationId: samePublisherAllowedManifest.publicationId,
+      availabilityStatus: 'available',
+    },
+    keyPair: blockedPublisher,
+  })
+
+  const moderationPolicy = {
+    enabled: true,
+    evaluate: record => record.publicationId === blockedManifest.publicationId
+      ? { action: 'hidden', reason: 'blocked-publication' }
+      : { action: 'visible', reason: 'default' },
+  }
+  const publisherFilteredRecords = projectAuthenticatedPublisherMediaRecords({
+    mediaGraphStore,
+    assetManifestStore,
+    moderationPolicy: {
+      enabled: true,
+      evaluate: record => record.publisherId === blockedPublisherId
+        ? { action: 'hidden', reason: 'blocked-publisher' }
+        : { action: 'visible', reason: 'default' },
+    },
+  })
+  t.alike(
+    publisherFilteredRecords.map(record => [record.entityRef, record.title, record.publisherId]),
+    [[allowedCollection.entityId, 'Allowed Series', allowedPublisherId]],
+    'publisher moderation also excludes its claims before equivalent and collection resolution',
+  )
+  const artworkWork = []
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    mediaGraphStore,
+    moderationPolicy,
+    publisherRecords: ({ moderationPolicy, visibleClaims } = {}) => projectAuthenticatedPublisherMediaRecords({
+      mediaGraphStore,
+      assetManifestStore,
+      moderationPolicy,
+      consumerClaims: visibleClaims,
+    }),
+    onArtwork: record => { artworkWork.push(record.artwork) },
+  })
+
+  t.is(projection.rebuild().accepted, 2)
+  const items = projection.getCatalog().items
+  t.is(items.length, 1, 'equivalent allowed publications remain one local entity')
+  t.is(items[0].entityRef, allowedCollection.entityId, 'blocked membership cannot introduce another collection')
+  t.is(items[0].title, 'Allowed Series', 'blocked higher-confidence metadata cannot win')
+  t.is(items[0].series.expectedEpisodes, 1, 'blocked structure cannot inflate collection completeness')
+  t.alike(items[0].series.seasons.map(season => season.episodes.map(episode => episode.episodeNumber)), [[1, 2]])
+  t.alike(
+    items[0].publications.map(publication => publication.publisherId).sort(),
+    [allowedPublisherId, blockedPublisherId].sort(),
+    'a different allowed publication from the same publisher survives')
+  t.ok(projection.isVisible(work.entityId), 'an admitted series episode is consumer-visible for collection APIs')
+  t.absent(projection.isVisible(equivalentWork.entityId), 'the blocked equivalent episode remains hidden')
+  t.ok(projection.isVisible(samePublisherAllowedWork.entityId),
+    'the same publisher remains visible through its separately allowed publication')
+  const api = createMediaGraphApi({
+    mediaGraphStore,
+    assetManifestStore,
+    consumerCatalogProjection: projection,
+  })
+  const detail = await api.getMediaCollection({
+    entityId: allowedCollection.entityId,
+    includeClaims: true,
+  })
+  t.is(detail.entity.title, 'Allowed Series', 'collection detail resolves the same moderated claim set')
+  t.absent(detail.claims.some(claim => claim.claimId === blockedCollectionMetadata.claimId),
+    'blocked metadata is absent from consumer detail provenance')
+  await projection.schedule(allowedCollection.entityId, ['artwork'])
+  t.alike(artworkWork, ['p2p://allowed-series-poster'], 'blocked artwork never reaches downstream work')
+})
+
+test('a hidden relation edge cannot poison publication association for an allowed legacy claim', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 81))
+  const edgeAttacker = crypto.keyPair(b4a.alloc(32, 82))
+  const publisherId = b4a.toString(publisher.publicKey, 'hex')
+  const attackerId = b4a.toString(edgeAttacker.publicKey, 'hex')
+  const mediaGraphStore = createMediaGraphStore({
+    trustedSigners: [publisher.publicKey, edgeAttacker.publicKey],
+  })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const visibleWork = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'edgepoison1',
+  })
+  const blockedWork = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'edgepoison2',
+  })
+  const visibleManifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Visible fallback',
+    renditions: [testRendition(83)],
+    keyPair: publisher,
+  })
+  const blockedManifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 2,
+    title: 'Blocked fallback',
+    renditions: [testRendition(85)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(visibleManifest)
+  await assetManifestStore.ingestManifest(blockedManifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [visibleWork],
+    payload: { title: 'Allowed source-neutral title' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EquivalentEntityClaim',
+    subjectRefs: [visibleWork, blockedWork],
+    payload: { basis: 'hidden-cluster-poisoning-edge' },
+    confidence: 999,
+    keyPair: edgeAttacker,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [visibleWork],
+    payload: { publicationId: visibleManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [blockedWork],
+    payload: { publicationId: blockedManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: publisher,
+  })
+  const records = projectAuthenticatedPublisherMediaRecords({
+    mediaGraphStore,
+    assetManifestStore,
+    moderationPolicy: {
+      enabled: true,
+      evaluate: entity => (
+        entity.publisherId === attackerId ||
+        entity.publicationId === blockedManifest.publicationId
+      )
+        ? { action: 'hidden', reason: 'local-block' }
+        : { action: 'visible', reason: 'default' },
+    },
+  })
+
+  t.alike(records.map(record => [record.publisherId, record.publicationId, record.title]), [[
+    publisherId,
+    visibleManifest.publicationId,
+    'Allowed source-neutral title',
+  ]], 'hidden topology cannot make a blocked publication suppress allowed metadata')
+})
+
+test('a moderation block on a non-first equivalent subject hides the whole relation edge', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 87))
+  const publisherId = b4a.toString(publisher.publicKey, 'hex')
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const visibleWork = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'multipub001',
+  })
+  const blockedWork = createEntityReference({
+    entityKind: 'work',
+    namespace: 'youtube-video',
+    normalizedIdentifier: 'multipub002',
+  })
+  const visibleManifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Visible fallback',
+    renditions: [testRendition(89)],
+    keyPair: publisher,
+  })
+  const blockedManifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 2,
+    title: 'Blocked fallback',
+    renditions: [testRendition(91)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(visibleManifest)
+  await assetManifestStore.ingestManifest(blockedManifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [visibleWork],
+    payload: { title: 'Non-poisoned source-neutral title' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EquivalentEntityClaim',
+    subjectRefs: [visibleWork, blockedWork],
+    payload: { basis: 'blocked-non-first-subject' },
+    confidence: 999,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [visibleWork],
+    payload: { publicationId: visibleManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [blockedWork],
+    payload: { publicationId: blockedManifest.publicationId, availabilityStatus: 'available' },
+    keyPair: publisher,
+  })
+  const evaluate = createModerationPolicyEvaluator({
+    localBlocks: [
+      { targetType: 'work', targetId: blockedWork.entityId, action: 'hide' },
+      { targetType: 'publication', targetId: blockedManifest.publicationId, action: 'hide' },
+    ],
+  })
+  const records = projectAuthenticatedPublisherMediaRecords({
+    mediaGraphStore,
+    assetManifestStore,
+    moderationPolicy: { enabled: true, evaluate },
+  })
+
+  t.alike(records.map(record => [record.publisherId, record.publicationId, record.title]), [[
+    publisherId,
+    visibleManifest.publicationId,
+    'Non-poisoned source-neutral title',
+  ]], 'a hidden non-first subject cannot keep an equivalence edge in consumer topology')
 })

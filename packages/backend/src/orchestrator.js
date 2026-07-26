@@ -583,18 +583,21 @@ export async function createBackendContext(config) {
   lifecycle.ownResource('scoped network runtime', scopedNetwork, 'close', 5000)
   // Consumer projection is a local view over the authenticated publisher graph
   // plus optional bounded index records. It owns neither a feed nor authority.
+  const consumerModerationPolicy = createConsumerModerationPolicy({
+    profileController: consumerModerationProfile,
+    moderationManager: consumerModerationManager,
+  })
   consumerCatalogProjection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex(),
     indexFeedManager: consumerIndexFeedManager,
     bootstrapManager: { listLocators: () => scopedNetwork.listBootstrapLocators() },
     mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
-    moderationPolicy: createConsumerModerationPolicy({
-      profileController: consumerModerationProfile,
-      moderationManager: consumerModerationManager,
-    }),
-    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({
+    moderationPolicy: consumerModerationPolicy,
+    publisherRecords: ({ moderationPolicy, visibleClaims } = {}) => projectAuthenticatedPublisherMediaRecords({
       mediaGraphStore: mediaCatalogProjection.mediaGraphStore,
       assetManifestStore: mediaCatalogProjection.assetManifestStore,
+      moderationPolicy,
+      consumerClaims: visibleClaims,
     }),
   })
   ctx.consumerIndexFeedManager = consumerIndexFeedManager

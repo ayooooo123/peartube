@@ -440,7 +440,8 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         subjectRefs: [collectionRef],
         payload: {
           title: metadata.seriesTitle || metadata.title || metadata.seriesId,
-          presentationKind: 'series'
+          presentationKind: 'series',
+          publicationId: manifest.publicationId
         },
         confidence: 1000,
         issuerSequence: firstSequence + 2,
@@ -454,7 +455,8 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         payload: {
           collectionRef,
           collectionRole: 'series',
-          expectedSlots: metadata.expectedEpisodeCount || 0
+          expectedSlots: metadata.expectedEpisodeCount || 0,
+          publicationId: manifest.publicationId
         },
         confidence: 1000,
         issuerSequence: firstSequence + 3,
@@ -469,6 +471,7 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
           collectionRef,
           memberRef: subjectRef,
           memberRole: 'episode',
+          publicationId: manifest.publicationId,
           position: {
             season: metadata.seasonNumber,
             episode: metadata.episodeNumber

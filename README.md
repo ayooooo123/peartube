@@ -13,6 +13,40 @@ PearTube is a pre-alpha decentralized video platform built on the Hypercore stac
 
 Pear OTA desktop release automation is not wired yet. Use the Electrobun build/release workflows in this repo; do not reintroduce `pear run` or claim OTA support without a dedicated release-flow change.
 
+## Risks & Transparency
+
+PearTube is pre-alpha, decentralized, and moves fast. Here's an honest picture of what running it means today. Not legal advice.
+
+### Running a mobile or desktop peer
+
+The apps are full P2P peers — viewers become seeders.
+
+- **Watching re-serves content.** `autoSeedWatched` is on by default (`packages/backend/src/seeding.js`), so playing a video caches its blocks and serves them to other peers while you're connected — including content you haven't vetted. Capped by a 5&nbsp;GB quota; seeding subscribed channels is opt-in. Adjust or disable via seeding settings (`setSeedingConfig`) and clear the cache anytime.
+- **Your IP is visible to peers.** Normal peers connect directly over Hyperswarm with no relay or proxy in front. Factor that into your threat model.
+- **Mobile costs.** P2P upload/download uses cellular data and battery, and can continue in the background.
+
+### Running a relay
+
+A relay does the above at larger scale, plus:
+
+- **It mirrors channels it doesn't own.** A relay runs as a Holepunch *blind peer* (`packages/backend/src/relay-blind-peer.js`), downloading and re-serving the channel cores it mirrors. "Blind" is a protocol-layer term (it replicates raw blocks) — it does **not** mean the content is hidden from you; public-feed videos stay viewable by any peer, operator included.
+- **Blind peers can also mirror encrypted cores** — serving ciphertext the operator has no key to read. PearTube doesn't use this for the public feed today, but may later for private/encrypted channels, giving operators a genuine "can't see it" position. Future direction, not a current property.
+- **You're responsible for what you host.** Redistributing third-party content can carry legal exposure depending on jurisdiction. For tighter control, use `docker-compose.local-relay.yml` to mirror a local directory you own instead of seeding the open network.
+
+### No moderation yet
+
+Discovery runs over a single public gossip topic with no allow-list. There are per-user comment actions, but **no network-level moderation**: no takedowns, blocklists, filtering, or way to purge content once replicated. A peer or relay can fetch and re-serve objectionable material before anyone reviews it.
+
+Moderation is a known gap. Once the protocol stabilizes we intend to add blocklists, relay-operator controls over what a node mirrors, and reporting flows — planned, not implemented, and subject to change.
+
+### Rapid development & LLM usage
+
+- **Pre-alpha.** APIs, schema, and on-disk formats can change without migration. Treat published/stored data as disposable.
+- **Heavily LLM-assisted.** Much of the code, tests, and docs were written with LLMs. Fast iteration, but expect subtle bugs and uneven review depth — read the code before relying on it.
+- **Not audited.** No formal security or privacy review. Don't use it for sensitive content.
+
+For current progress and constraints, see [DEV_STATUS.md](./DEV_STATUS.md).
+
 ## Architecture
 
 Every client boots or connects to the same backend contract:

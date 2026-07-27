@@ -151,3 +151,31 @@ test('a home card accepts thumbnail artwork as well as posters', async () => {
 
   assert.ok(html.includes(thumbnailUrl), 'the thumbnail URL reaches the rendered card')
 })
+
+// Home leads with a hero whose call to action is Play. Featuring a title that
+// is still replicating would promise playback the device cannot deliver, so the
+// hero is reserved for media that is actually playable.
+test('home leads with a hero when something is playable', async () => {
+  const html = await renderHome([{
+    entityId: 'playable-entity',
+    entityKind: 'work',
+    title: 'Ready To Watch',
+    posterUrl: 'https://image.example/ready.jpg',
+    availability: { state: 'healthy', label: 'Available now', playable: true },
+  }])
+
+  assert.ok(html.includes('Play Ready To Watch'), 'the hero offers to play the available title')
+})
+
+test('a hero for media that cannot play yet never offers to play it', async () => {
+  const html = await renderHome([{
+    entityId: 'pending-entity',
+    entityKind: 'work',
+    title: 'Still Arriving',
+    availability: { state: 'awaiting-replication', label: 'Awaiting replication', playable: false },
+  }])
+
+  assert.ok(html.includes('Still Arriving'), 'the title is still featured')
+  assert.ok(!html.includes('Play Still Arriving'), 'nothing offers to play a title that cannot play yet')
+  assert.ok(!html.includes('Play selected source'), 'the call to action does not promise playback')
+})

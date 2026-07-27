@@ -49,6 +49,13 @@ export interface HeroFeatureCardProps {
   onPress: () => void
   onChannelPress?: () => void
   onDetailsPress?: () => void
+  /**
+   * What this device can currently do with the feature. A hero that always
+   * reads "Play" promises playback even while the media is still replicating,
+   * so callers pass the real state and the card stops offering to play.
+   */
+  playable?: boolean
+  availabilityLabel?: string | null
 }
 
 
@@ -88,7 +95,15 @@ function getArchiveSummary(item: MediaCockpitItem): string | null {
   return status
 }
 
-function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress, onDetailsPress }: HeroFeatureCardProps) {
+function HeroFeatureCardComponent({
+  item,
+  peers,
+  onPress,
+  onChannelPress,
+  onDetailsPress,
+  playable = true,
+  availabilityLabel = null,
+}: HeroFeatureCardProps) {
   if (!item) return null
 
   const title = pickString(item.title) || 'Featured media'
@@ -116,7 +131,7 @@ function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress, onDeta
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`Play ${title}`}
+      accessibilityLabel={playable ? `Play ${title}` : `Open ${title}, ${availabilityLabel || 'not playable yet'}`}
       style={styles.card}
     >
       <View style={styles.mediaFrame}>
@@ -155,9 +170,11 @@ function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress, onDeta
           )}
           {conflictCount > 0 ? <Text style={styles.signalWarn} numberOfLines={1}>{conflictCount} conflict{conflictCount === 1 ? '' : 's'}</Text> : null}
         </View>
-        <View style={styles.playButton}>
-          <Ionicons name="play" size={16} color={colors.onPrimary} />
-          <Text style={styles.playText}>Play selected source</Text>
+        <View style={playable ? styles.playButton : styles.pendingButton}>
+          <Ionicons name={playable ? 'play' : 'cloud-download-outline'} size={16} color={playable ? colors.onPrimary : colors.text} />
+          <Text style={playable ? styles.playText : styles.pendingText}>
+            {playable ? 'Play selected source' : (availabilityLabel || 'Awaiting replication')}
+          </Text>
         </View>
       </View>
     </Pressable>
@@ -167,6 +184,23 @@ function HeroFeatureCardComponent({ item, peers, onPress, onChannelPress, onDeta
 export const HeroFeatureCard = memo(HeroFeatureCardComponent)
 
 const styles = StyleSheet.create({
+  pendingButton: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 999,
+    backgroundColor: colors.bgElevated,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
+  },
+  pendingText: {
+    color: colors.text,
+    fontFamily: fonts.headingMedium,
+    fontSize: 14,
+  },
   card: {
     marginHorizontal: 16,
     borderRadius: 28,

@@ -525,12 +525,6 @@ export function createMediaGraphApi(options = {}) {
           await options.ctx?.mediaCatalogProjection?.update?.()
           await consumerCatalogProjection.update?.()
           const page = consumerCatalogProjection.getCatalog(request)
-          // Home renders whatever survives here. When it is empty the cause is
-          // either nothing ingested or everything filtered, and those need very
-          // different fixes.
-          console.log('[MediaGraph] getMediaCatalog ->', page?.success ? 'ok' : 'fail',
-            'items:', page?.items?.length ?? 0,
-            'rejected:', JSON.stringify(page?.rejectionCodes || page?.diagnostics || null))
           if (!page?.success) return page
           return {
             success: true,

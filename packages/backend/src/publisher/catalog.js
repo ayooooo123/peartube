@@ -388,8 +388,6 @@ export class PublisherCatalog extends ReadyResource {
       publisherId: this.options.publisherId,
       journalLimit: this.options.journalLimit,
     })
-    console.log('[PublisherCatalog] page record types:',
-      nodes.map(entry => entry.operation.recordType).join(','))
     if (rebuilt.rejected.length > 0) {
       // The consumer aborts the whole page on any rejection, so without the
       // per-operation code an empty catalog is indistinguishable from a

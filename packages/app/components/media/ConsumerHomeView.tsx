@@ -11,6 +11,7 @@ import {
 import type { MediaEntitySummary } from '@peartube/core'
 import { MediaRail } from './MediaRail'
 import { MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
+import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { projectHomeRails } from '@/lib/home-rails.js'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
@@ -45,16 +46,36 @@ type RailItem = MediaEntitySummary & {
   resume?: { fraction: number }
 }
 
+function posterArtwork(item: RailItem): string | null {
+  const fields = item as unknown as Record<string, unknown>
+  const candidates = [
+    fields.posterUrl,
+    fields.thumbnailUrl,
+    fields.thumbnail,
+    fields.stillUrl,
+    fields.backdropUrl,
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate
+  }
+  return null
+}
+
 /**
  * One consumer card. It leads with the title and what a viewer can do with it
  * right now; publisher ids, claim counts, and archive mechanics are detail-view
  * concerns and deliberately absent here.
+ *
+ * Artwork goes through the same treatment as every other poster in the app.
+ * This used to paint a flat surface with the title's first letter, which meant
+ * a catalog of real media rendered as a row of grey rectangles.
  */
 function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
   const availability = item.availabilityView
   const resumePercent = item.resume ? Math.round(item.resume.fraction * 100) : null
+  const title = item.title || 'Untitled'
   const accessibilityLabel = [
-    item.title || 'Untitled',
+    title,
     availability?.label,
     resumePercent === null ? null : `${resumePercent} percent watched`,
   ].filter(Boolean).join(', ')
@@ -66,17 +87,20 @@ function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
       onPress={onPress}
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
     >
-      <View style={styles.artwork}>
-        <Text style={styles.artworkInitial} numberOfLines={1}>
-          {(item.title || '?').slice(0, 1).toUpperCase()}
-        </Text>
+      <View style={styles.posterFrame}>
+        <ThumbnailImage
+          thumbnailUrl={posterArtwork(item)}
+          channelInitial={title.charAt(0).toUpperCase()}
+          style={styles.poster}
+        />
+        <View pointerEvents="none" style={styles.posterScrim} />
         {resumePercent === null ? null : (
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${resumePercent}%` }]} />
           </View>
         )}
       </View>
-      <Text style={styles.cardTitle} numberOfLines={2}>{item.title || 'Untitled'}</Text>
+      <Text style={styles.cardTitle} numberOfLines={2}>{title}</Text>
       {item.subtitle ? <Text style={styles.cardSubtitle} numberOfLines={1}>{item.subtitle}</Text> : null}
       {availability ? (
         <Text style={[styles.availability, !availability.playable && styles.availabilityMuted]} numberOfLines={1}>
@@ -157,19 +181,30 @@ const styles = StyleSheet.create({
   cardPressed: {
     opacity: 0.75,
   },
-  artwork: {
+  posterFrame: {
     width: '100%',
     aspectRatio: 2 / 3,
-    borderRadius: 10,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 18,
+    backgroundColor: colors.bgElevated,
+    borderWidth: 1,
+    borderColor: colors.glassBorder,
     overflow: 'hidden',
   },
-  artworkInitial: {
-    color: colors.textMuted,
-    fontFamily: fonts.heading,
-    fontSize: 34,
+  // ThumbnailImage defaults to a 16:9 video still. Inside a 2:3 poster frame it
+  // has to fill the frame instead of imposing its own ratio and corners.
+  poster: {
+    width: '100%',
+    height: '100%',
+    aspectRatio: undefined,
+    borderRadius: 0,
+  },
+  posterScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 74,
+    backgroundColor: 'rgba(0,0,0,0.34)',
   },
   progressTrack: {
     position: 'absolute',

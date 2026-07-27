@@ -1928,10 +1928,6 @@ export function createScopedNetworkRuntime (options = {}) {
     const result = await bootstrapManager.ingestLocator(context.peerId, envelope)
     console.log('[ScopedNetwork] bootstrap locator received from', String(context.peerId).slice(0, 16),
       '- status:', result?.status, 'reason:', result?.reason || 'none')
-    if (result.status === 'accepted' && result.publisherId) {
-      console.log('[ScopedNetwork] locator accepted; peerConnected:', isPeerConnected(context.peerId),
-        'publisher:', String(result.publisherId).slice(0, 16))
-    }
     if (result.status === 'accepted' && result.publisherId && isPeerConnected(context.peerId)) {
       // Candidate promotion is bounded and best-effort. The locator itself is
       // never authority; followBootstrapLocator still requires the scoped
@@ -1982,11 +1978,8 @@ export function createScopedNetworkRuntime (options = {}) {
             // This is the only moment a consumer is told which publishers
             // exist. Nothing is sent when the map is empty, and the peer then
             // sees an empty catalog forever with no error anywhere.
-            console.log('[ScopedNetwork] bootstrap session active with', remoteKey.slice(0, 16),
-              '- locators to send:', localBootstrapLocators.size)
             for (const { locator } of localBootstrapLocators.values()) {
-              const sent = sendBootstrapLocatorToSession(tracked, locator)
-              console.log('[ScopedNetwork] bootstrap locator send ->', remoteKey.slice(0, 16), 'ok:', sent !== false)
+              sendBootstrapLocatorToSession(tracked, locator)
             }
           }
           if (scope.purpose === 'index' || scope.purpose === 'moderation') {
@@ -2398,20 +2391,11 @@ export function createScopedNetworkRuntime (options = {}) {
       }
     }
     if (!catalogRegistry?.bindNamespace) fail('catalog registry cannot bind verified namespaces')
-    // Each await here can stall a follow indefinitely, and a stalled follow is
-    // never retried because publisherFollowWork stays populated.
-    const stage = (name) => console.log('[ScopedNetwork] follow stage', id.slice(0, 16), name)
-    stage('bindNamespace start')
     const binding = await catalogRegistry.bindNamespace(descriptor, { verifiedNamespaceProof })
-    stage('bindNamespace done')
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('catalog binding mismatch')
-    stage('publisherManager.followPublisher start')
     await publisherManager.followPublisher(id)
-    stage('publisherManager.followPublisher done')
     await binding.catalog?.openVerifiedPageView?.()
-    stage('openVerifiedPageView done')
     const saved = await publisherSyncStateRepository?.load?.(id)
-    stage('syncState loaded')
     const restored = saved?.version === 1 && saved.publisherId === id &&
       saved.catalogEpoch === descriptor.catalogEpoch
       ? saved
@@ -2508,11 +2492,8 @@ export function createScopedNetworkRuntime (options = {}) {
     let verified
     let namespaceProof
     try {
-      console.log('[ScopedNetwork] follow stage', id.slice(0, 16), 'requesting namespace proof')
       namespaceProof = proof || await requestNamespaceProof(scope)
-      console.log('[ScopedNetwork] follow stage', id.slice(0, 16), 'proof received; verifying')
       verified = verifyPublisherNamespaceProof({ locator, ...namespaceProof })
-      console.log('[ScopedNetwork] follow stage', id.slice(0, 16), 'proof verified')
     } catch (error) {
       await leaveScope(scope, 'candidate')
       const rejected = new Error(error?.message || 'namespace proof rejected')

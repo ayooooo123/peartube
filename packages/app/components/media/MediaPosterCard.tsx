@@ -6,7 +6,7 @@ import { formatContentBadge } from '@/lib/formatters'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import type { MediaCockpitItem } from './HeroFeatureCard'
 
-export const MEDIA_POSTER_CARD_WIDTH = 154
+export const MEDIA_POSTER_CARD_WIDTH = 160
 
 export interface MediaPosterCardProps {
   item: MediaCockpitItem
@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 2 / 3,
     overflow: 'hidden',
-    borderRadius: 18,
+    borderRadius: 12,
     backgroundColor: colors.bgElevated,
     borderWidth: 1,
     borderColor: colors.glassBorder,

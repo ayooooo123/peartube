@@ -155,7 +155,7 @@ export function ConsumerHomeView({
         {state.status === 'loading' ? <ActivityIndicator color={colors.primary} /> : null}
         <Text style={styles.emptyTitle}>{diagnostic?.title || 'Nothing to watch yet'}</Text>
         <Text style={styles.emptyDetail}>
-          {diagnostic?.detail || 'No peers have shared anything this device can play yet.'}
+          {diagnostic?.detail || 'Nothing has reached this device yet. Pull to refresh once a publisher is sharing.'}
         </Text>
         {diagnostic?.errorCode ? <Text style={styles.emptyCode}>{diagnostic.errorCode}</Text> : null}
         <Pressable accessibilityRole="button" onPress={onRefresh} style={styles.emptyAction}>
@@ -179,7 +179,6 @@ export function ConsumerHomeView({
             playable={featured.availabilityView?.playable === true}
             availabilityLabel={featured.availabilityView?.label ?? null}
             onPress={() => onOpenEntity(featured.entityId, featured)}
-            onDetailsPress={() => onOpenEntity(featured.entityId, featured)}
           />
         </View>
       ) : null}
@@ -212,7 +211,7 @@ const styles = StyleSheet.create({
   posterFrame: {
     width: '100%',
     aspectRatio: 2 / 3,
-    borderRadius: 18,
+    borderRadius: 12,
     backgroundColor: colors.bgElevated,
     borderWidth: 1,
     borderColor: colors.glassBorder,

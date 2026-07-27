@@ -6,6 +6,11 @@ import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 
 const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024 // 5 GB
 
+// Rendered as a banner after a submission that carried neither a file nor a
+// source URL, so an ignored form is visibly ignored.
+const EMPTY_SUBMISSION_NOTICE = 'Nothing was archived: attach a video file or paste a source URL first.'
+const EMPTY_SUBMISSION_QUERY = 'notice=empty-submission'
+
 function buildArchiveForm(get) {
   return {
     url: get('url') || '',
@@ -311,11 +316,13 @@ export async function createArchiveConsole({
         const parsed = new URL(req.url, 'http://relay.local')
         if (parsed.pathname === '/' || parsed.pathname === '/ui') {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-          res.end(renderArchiveWebHome(await model({
+          const home = await model({
             query: parsed.searchParams.get('q') || '',
             type: parsed.searchParams.get('type') || 'movie',
             page: parsed.searchParams.get('page') || '1'
-          })))
+          })
+          if (parsed.searchParams.get('notice') === 'empty-submission') home.notice = EMPTY_SUBMISSION_NOTICE
+          res.end(renderArchiveWebHome(home))
           return
         }
       }
@@ -458,7 +465,11 @@ export async function createArchiveConsole({
       if (req.method === 'POST' && req.url === '/discover/archive') {
         const { form, file } = await readArchiveSubmission(req)
         if (!file && !form.url) {
-          res.writeHead(303, { location: '/#discover' })
+          // A submission with neither a file nor a URL enqueues nothing. Saying
+          // so beats a bare redirect that looks exactly like success and leaves
+          // the operator waiting for a job that was never created.
+          logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')
+          res.writeHead(303, { location: `/?${EMPTY_SUBMISSION_QUERY}#discover` })
           res.end()
           return
         }
@@ -477,7 +488,8 @@ export async function createArchiveConsole({
       if (req.method === 'POST' && req.url === '/archive') {
         const { form, file } = await readArchiveSubmission(req)
         if (!file && !form.url) {
-          res.writeHead(303, { location: '/' })
+          logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')
+          res.writeHead(303, { location: `/?${EMPTY_SUBMISSION_QUERY}` })
           res.end()
           return
         }

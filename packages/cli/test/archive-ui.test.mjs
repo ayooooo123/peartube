@@ -694,3 +694,30 @@ test('archive WebUI renders a season/episode picker for TV Discover cards', asyn
   t.ok(html.includes('/discover/seasons.json'), 'picker script fetches seasons')
   t.ok(html.includes('TV'), 'card labels the TV type')
 })
+
+test('an archive submission with no file and no URL is visibly ignored, not silently accepted', async (t) => {
+  // Regression: both POST handlers redirected 303 back to the page when the
+  // form carried neither a file nor a source URL. Nothing was enqueued and
+  // nothing was said, so the operator saw what looked like an accepted upload
+  // and waited for a job that never existed.
+  const console = readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8')
+
+  t.ok(console.includes('EMPTY_SUBMISSION_NOTICE'), 'the empty submission has a message')
+  t.is(
+    console.match(/\$\{EMPTY_SUBMISSION_QUERY\}/g)?.length,
+    2,
+    'both /discover/archive and /archive report an empty submission'
+  )
+  t.ok(
+    console.includes("logger?.archive?.warn?.('Archive submission ignored: no file and no source URL')"),
+    'an ignored submission is logged rather than dropped in silence'
+  )
+
+  const withNotice = renderArchiveWebHome({ notice: 'Nothing was archived: attach a video file or paste a source URL first.' })
+  t.ok(withNotice.includes('class="notice"'), 'the notice renders as a banner')
+  t.ok(withNotice.includes('Nothing was archived'), 'the banner carries the reason')
+  t.ok(withNotice.includes('role="status"'), 'the banner is announced to assistive tech')
+
+  const withoutNotice = renderArchiveWebHome({})
+  t.absent(withoutNotice.includes('class="notice"'), 'a normal page shows no banner')
+})

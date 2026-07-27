@@ -326,6 +326,7 @@ export function renderArchiveWebHome(model = {}) {
     .device form { margin: 0; }
     .mono-key { display: block; margin-top: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #0b0f19; }
     .note { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+    .notice { margin: 0 0 16px; padding: 12px 16px; border-radius: 8px; border: 1px solid #b45309; background: #78350f; color: #fef3c7; font-size: 14px; }
     .status-line { font-weight: 700; }
     .status-line.on { color: var(--ok); }
     /* discover */
@@ -369,6 +370,7 @@ export function renderArchiveWebHome(model = {}) {
     </div>
   </header>
   <main>
+    ${model.notice ? `<p class="notice" role="status">${escapeHtml(model.notice)}</p>` : ''}
     <div class="layout">
       <div class="col">
         <section class="card" id="discover">

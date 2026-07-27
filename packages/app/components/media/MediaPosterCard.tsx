@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
     aspectRatio: 2 / 3,
     overflow: 'hidden',
     borderRadius: 12,
-    backgroundColor: colors.bgElevated,
+    backgroundColor: colors.bgHover,
     borderWidth: 1,
     borderColor: colors.glassBorder,
   },

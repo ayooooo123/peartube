@@ -152,10 +152,10 @@ test('a home card accepts thumbnail artwork as well as posters', async () => {
   assert.ok(html.includes(thumbnailUrl), 'the thumbnail URL reaches the rendered card')
 })
 
-// Home leads with a hero whose call to action is Play. Featuring a title that
-// is still replicating would promise playback the device cannot deliver, so the
-// hero is reserved for media that is actually playable.
-test('home leads with a hero when something is playable', async () => {
+// Home is a board of shelves, the way a catalog app presents itself: rows of
+// posters, no feature panel promising playback. Anything a viewer can act on
+// they act on by opening the title.
+test('home presents shelves rather than a feature panel', async () => {
   const html = await renderHome([{
     entityId: 'playable-entity',
     entityKind: 'work',
@@ -164,10 +164,14 @@ test('home leads with a hero when something is playable', async () => {
     availability: { state: 'healthy', label: 'Available now', playable: true },
   }])
 
-  assert.ok(html.includes('Play Ready To Watch'), 'the hero offers to play the available title')
+  assert.ok(html.includes('Ready To Watch'), 'the title appears on a shelf')
+  assert.ok(html.includes('Recently Added'), 'the shelf is labelled')
+  assert.ok(!html.includes('Play Ready To Watch'), 'home does not carry a play affordance of its own')
 })
 
-test('a hero for media that cannot play yet never offers to play it', async () => {
+// Availability stays on the card so a viewer knows what they are looking at
+// before they open it, without the screen promising playback.
+test('a card states availability for media that cannot play yet', async () => {
   const html = await renderHome([{
     entityId: 'pending-entity',
     entityKind: 'work',
@@ -175,7 +179,7 @@ test('a hero for media that cannot play yet never offers to play it', async () =
     availability: { state: 'awaiting-replication', label: 'Awaiting replication', playable: false },
   }])
 
-  assert.ok(html.includes('Still Arriving'), 'the title is still featured')
+  assert.ok(html.includes('Still Arriving'), 'the title is listed')
+  assert.ok(html.includes('Awaiting replication'), 'the card says what it is waiting for')
   assert.ok(!html.includes('Play Still Arriving'), 'nothing offers to play a title that cannot play yet')
-  assert.ok(!html.includes('Play selected source'), 'the call to action does not promise playback')
 })

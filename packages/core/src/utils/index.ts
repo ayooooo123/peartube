@@ -10,13 +10,13 @@
 // ============================================
 
 export const colors = {
-  // Brand — warm pear green
-  primary: '#a3e635',
-  primaryHover: '#bef264',
-  primaryLight: 'rgba(163, 230, 53, 0.16)',
-  primaryDeep: '#65a30d',
+  // Brand — violet, the accent a media catalog is expected to wear
+  primary: '#7b5bf5',
+  primaryHover: '#9b7ff9',
+  primaryLight: 'rgba(123, 91, 245, 0.18)',
+  primaryDeep: '#5b3fd6',
   // Readable text/icon color on top of primary fills
-  onPrimary: '#101503',
+  onPrimary: '#ffffff',
 
   // Network/peer presence — teal, used only for swarm/peer ambient UI
   swarm: '#2dd4bf',
@@ -24,8 +24,8 @@ export const colors = {
   swarmDim: 'rgba(45, 212, 191, 0.12)',
 
   // Accent
-  accent: '#10b981',
-  accentHover: '#34d399',
+  accent: '#8b6df7',
+  accentHover: '#a78bfa',
 
   // Status
   success: '#27a644',
@@ -36,12 +36,12 @@ export const colors = {
   errorLight: 'rgba(239, 98, 98, 0.18)',
   red: '#ef6262',
 
-  // Backgrounds — green-tinted near-blacks
-  bg: '#0a0c0a',
-  bgElevated: '#111411',
-  bgSecondary: '#111411', // Alias for bgElevated
-  bgHover: '#1a1e1a',
-  bgActive: '#242924',
+  // Backgrounds — deep blue-violet near-blacks
+  bg: '#0b0b12',
+  bgElevated: '#14141e',
+  bgSecondary: '#14141e', // Alias for bgElevated
+  bgHover: '#1c1c2a',
+  bgActive: '#252537',
   bgOverlay: 'rgba(0, 0, 0, 0.85)',
   bgCard: 'rgba(255,255,255,0.035)',
 
@@ -53,7 +53,7 @@ export const colors = {
   // Glass surfaces
   glass: 'rgba(255,255,255,0.05)',
   glassBorder: 'rgba(255,255,255,0.09)',
-  glassHighlight: 'rgba(190, 242, 100, 0.06)',
+  glassHighlight: 'rgba(155, 127, 249, 0.07)',
 
   // Text
   text: '#f7f8f8', // Alias for textPrimary
@@ -65,7 +65,7 @@ export const colors = {
   // Borders
   border: 'rgba(255,255,255,0.08)',
   borderLight: 'rgba(255,255,255,0.12)',
-  borderFocus: '#bef264',
+  borderFocus: '#a78bfa',
 } as const;
 
 export const spacing = {

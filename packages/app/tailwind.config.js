@@ -21,18 +21,18 @@ module.exports = {
       colors: {
         // PearTube brand colors mapped to Gluestack semantic colors
         primary: {
-          0: "#FAFFF0",
-          50: "#F4FFD6",
-          100: "#ECFCCB",
-          200: "#D9F99D",
-          300: "#CDF381",
-          400: "#bef264", // PearTube primary hover
-          500: "#a3e635", // PearTube primary
-          600: "#84cc16",
-          700: "#65a30d", // PearTube primary deep
-          800: "#4d7c0f",
-          900: "#3f6212",
-          950: "#1a2e05",
+          0: "#F5F3FF",
+          50: "#EDE9FE",
+          100: "#DDD6FE",
+          200: "#C4B5FD",
+          300: "#A78BFA",
+          400: "#9b7ff9", // PearTube primary hover
+          500: "#7b5bf5", // PearTube primary
+          600: "#6d4ae0",
+          700: "#5b3fd6", // PearTube primary deep
+          800: "#4c33b8",
+          900: "#3b2790",
+          950: "#1a1033",
         },
         secondary: {
           0: "#FEFFFF",
@@ -192,9 +192,9 @@ module.exports = {
         },
         // PearTube legacy colors for backwards compatibility
         pear: {
-          primary: '#a3e635',
-          'primary-hover': '#bef264',
-          'primary-muted': 'rgba(163, 230, 53, 0.16)',
+          primary: '#7b5bf5',
+          'primary-hover': '#9b7ff9',
+          'primary-muted': 'rgba(123, 91, 245, 0.16)',
           bg: '#0a0c0a',
           'bg-elevated': '#111411',
           'bg-card': 'rgba(255,255,255,0.035)',
@@ -212,7 +212,7 @@ module.exports = {
           'swarm-dim': 'rgba(45, 212, 191, 0.12)',
           glass: 'rgba(255,255,255,0.05)',
           'glass-border': 'rgba(255,255,255,0.09)',
-          'glass-highlight': 'rgba(190, 242, 100, 0.06)',
+          'glass-highlight': 'rgba(155, 127, 249, 0.06)',
         },
       },
       fontFamily: {

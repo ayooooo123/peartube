@@ -9,7 +9,6 @@ import {
   View,
 } from 'react-native'
 import type { MediaEntitySummary } from '@peartube/core'
-import { HeroFeatureCard, type MediaCockpitItem } from './HeroFeatureCard'
 import { MediaRail } from './MediaRail'
 import { MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
@@ -130,18 +129,6 @@ export function ConsumerHomeView({
     [items, watchState, firstSeen, now],
   )
 
-  // Home leads with one feature so the screen has a focal point instead of
-  // opening on a row of thumbnails. Anything resumable comes first, then
-  // whatever is playable, and only then the newest title - a catalog that is
-  // still replicating still deserves a hero, it just must not offer to play.
-  const featured = useMemo(() => {
-    const ordered = [
-      ...(rails.find(rail => rail.id === 'continue-watching')?.items ?? []),
-      ...rails.flatMap(rail => rail.items ?? []),
-    ] as RailItem[]
-    return ordered.find(item => item.availabilityView?.playable === true) ?? ordered[0] ?? null
-  }, [rails])
-
   const renderItem = useCallback(({ item }: { item: RailItem }) => (
     <MemoizedHomeCard item={item} onPress={() => onOpenEntity(item.entityId, item)} />
   ), [onOpenEntity])
@@ -155,7 +142,7 @@ export function ConsumerHomeView({
         {state.status === 'loading' ? <ActivityIndicator color={colors.primary} /> : null}
         <Text style={styles.emptyTitle}>{diagnostic?.title || 'Nothing to watch yet'}</Text>
         <Text style={styles.emptyDetail}>
-          {diagnostic?.detail || 'Nothing has reached this device yet. Pull to refresh once a publisher is sharing.'}
+          {diagnostic?.detail || 'Nothing is available yet. Pull down to refresh.'}
         </Text>
         {diagnostic?.errorCode ? <Text style={styles.emptyCode}>{diagnostic.errorCode}</Text> : null}
         <Pressable accessibilityRole="button" onPress={onRefresh} style={styles.emptyAction}>
@@ -172,16 +159,6 @@ export function ConsumerHomeView({
       refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
       showsVerticalScrollIndicator={false}
     >
-      {featured ? (
-        <View style={styles.hero}>
-          <HeroFeatureCard
-            item={featured as unknown as MediaCockpitItem}
-            playable={featured.availabilityView?.playable === true}
-            availabilityLabel={featured.availabilityView?.label ?? null}
-            onPress={() => onOpenEntity(featured.entityId, featured)}
-          />
-        </View>
-      ) : null}
       {rails.map(rail => (
         <MediaRail
           key={rail.id}
@@ -198,10 +175,6 @@ export function ConsumerHomeView({
 }
 
 const styles = StyleSheet.create({
-  hero: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
   card: {
     width: MEDIA_POSTER_CARD_WIDTH,
   },
@@ -246,10 +219,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   cardTitle: {
-    marginTop: 8,
+    marginTop: 7,
     color: colors.text,
     fontFamily: fonts.headingMedium,
-    fontSize: 13,
+    fontSize: 12,
   },
   cardSubtitle: {
     marginTop: 2,

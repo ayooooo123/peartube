@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
   },
   ready: {
     backgroundColor: colors.primaryLight,
-    borderColor: 'rgba(163, 230, 53, 0.24)',
+    borderColor: 'rgba(123, 91, 245, 0.24)',
   },
   offline: {
     backgroundColor: colors.surface,

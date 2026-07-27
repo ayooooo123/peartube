@@ -258,8 +258,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   rowSelected: {
-    borderColor: 'rgba(163,230,53,0.34)',
-    backgroundColor: 'rgba(163,230,53,0.08)',
+    borderColor: 'rgba(123, 91, 245,0.34)',
+    backgroundColor: 'rgba(123, 91, 245,0.08)',
   },
   rowHeading: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   radio: {
@@ -280,8 +280,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(163,230,53,0.26)',
-    backgroundColor: 'rgba(163,230,53,0.08)',
+    borderColor: 'rgba(123, 91, 245,0.26)',
+    backgroundColor: 'rgba(123, 91, 245,0.08)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     fontSize: 10,

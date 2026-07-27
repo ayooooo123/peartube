@@ -17,13 +17,18 @@ function readRepo(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('mobile design tokens move away from Twitch purple toward the PearTube pear-green premium dark system', () => {
+test('mobile design tokens use the violet-on-navy catalog system', () => {
   const source = readRepo('packages/core/src/utils/index.ts')
 
-  assert.match(source, /primary:\s*'#a3e635'/, 'primary accent should use the pear-green brand token instead of the old saturated Twitch purple')
-  assert.match(source, /bg:\s*'#0a0c0a'/, 'mobile surface should use the current green-tinted near-black base')
+  // This deliberately replaces the earlier pear-green system: the product is a
+  // media catalog and is meant to read like one, so the accent is violet on a
+  // blue-violet near-black rather than lime on a green-tinted near-black.
+  assert.match(source, /primary:\s*'#7b5bf5'/, 'primary accent should use the violet brand token')
+  assert.match(source, /onPrimary:\s*'#ffffff'/, 'text on violet fills has to be white to stay legible')
+  assert.match(source, /bg:\s*'#0b0b12'/, 'the base surface should be the blue-violet near-black')
   assert.match(source, /surfaceBorder:\s*'rgba\(255,255,255,0\.08\)'/, 'surface borders should use translucent dark-mode-native separators')
-  assert.doesNotMatch(source, /primary:\s*'#9147ff'/, 'old Twitch purple should not remain as the primary brand color')
+  assert.doesNotMatch(source, /#a3e635|#bef264|#65a30d/, 'no lime tokens should survive the recolor')
+  assert.doesNotMatch(source, /primary:\s*'#9147ff'/, 'the accent is its own violet, not the old saturated Twitch purple')
 })
 
 test('native video cards use premium app-native surfaces and cover thumbnails', () => {

@@ -413,7 +413,7 @@ export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } =
   }
 }
 
-export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, createChannelFn = null }) {
+export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, storagePath = null, createChannelFn = null }) {
   if (!identityManager) throw new Error('identityManager is required')
   if (!uploadManager) throw new Error('uploadManager is required')
   if (!api) throw new Error('api is required')
@@ -446,13 +446,71 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     return { channel, channelKey, publicBeeKey, publisherId: relayIdentity.publicKey }
   }
 
+  // A relay is its own platform. On a phone the OS keychain generates and
+  // holds the 32-byte personal-store secret and hands it to the backend; a
+  // headless relay has no keychain, so it keeps the secret beside the
+  // corestore primary key at 0600 and provisions it the same way. Without
+  // this, creating the relay identity leaves its personal store closed and
+  // the first archive job dies with PERSONAL_STORE_SECRET_UNAVAILABLE.
+  async function ensureRelayPersonalSecret ({ deviceLocal = false } = {}) {
+    const secretDir = storagePath || runtime?.ctx?.storagePath || null
+    if (!secretDir || typeof api.provisionPersonalEncryption !== 'function') return false
+    const fsModule = fs || await import('#fs')
+    const secretPath = `${secretDir}/personal-secret`
+    let secret = null
+    let bootstrapKey = null
+    try {
+      const stored = fsModule.readFileSync(secretPath, 'utf8').trim()
+      if (/^[0-9a-f]{64}$/.test(stored)) {
+        secret = stored
+      } else {
+        const parsed = JSON.parse(stored)
+        if (/^[0-9a-f]{64}$/.test(parsed?.secret || '')) secret = parsed.secret
+        if (parsed?.bootstrapKey) bootstrapKey = parsed.bootstrapKey
+      }
+    } catch {
+      // No secret yet, or an unreadable one: provision a new secret below.
+    }
+    if (!secret) secret = b4a.toString(crypto.randomBytes(32), 'hex')
+
+    // The device-local store is keyed by a bootstrap key the backend derives on
+    // first provision. Persisting it alongside the secret is what lets a
+    // restarted relay reopen the same anonymous store instead of stranding it.
+    const request = { secret }
+    if (deviceLocal) {
+      request.deviceLocal = true
+      if (bootstrapKey) request.bootstrapKey = bootstrapKey
+    }
+    const result = await api.provisionPersonalEncryption(request)
+    if (!result?.success) throw new Error(`relay personal store provisioning failed: ${result?.error || 'unknown'}`)
+
+    // provisionSecret returns the opened store's key for either mode, so only
+    // the device-local call yields the anonymous bootstrap key. Recording the
+    // identity-keyed one here would overwrite it with the wrong store's key.
+    const nextBootstrapKey = deviceLocal ? (result.bootstrapKey || bootstrapKey || null) : bootstrapKey
+    const record = `${JSON.stringify({ secret, bootstrapKey: nextBootstrapKey || null })}\n`
+    fsModule.writeFileSync(secretPath, record, { mode: 0o600 })
+    return true
+  }
+
   // A grouped channel needs an active identity to vouch for its signed root
   // descriptor. Create the relay's default identity if none exists yet (the
   // shared-channel fallback does the same lazily).
   async function ensureRelayIdentity (fallbackName) {
     const active = identityManager.getActiveIdentity?.()
-    if (active?.publicKey) return active
+    if (active?.publicKey) {
+      await ensureRelayPersonalSecret()
+      return active
+    }
+    // Creating an identity activates it, and activation opens its personal
+    // store. On a fresh relay no secret exists yet, so seed the device-local
+    // store first: that gives activation something to fall back to instead of
+    // throwing before we ever reach the identity-keyed provisioning below.
+    await ensureRelayPersonalSecret({ deviceLocal: true })
     await identityManager.createIdentity(fallbackName || 'Relay Archive', true)
+    // The real secret is keyed by the active identity, so it can only be
+    // provisioned once that identity exists.
+    await ensureRelayPersonalSecret()
     return identityManager.getActiveIdentity?.()
   }
 
@@ -475,13 +533,20 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
 
       let identity = identityManager.getActiveIdentity?.()
       if (!identity?.driveKey) {
+        await ensureRelayPersonalSecret({ deviceLocal: true })
         const created = await identityManager.createIdentity(channelName || sourceIdentity?.creatorName || 'Anonymous Archive', true)
+        await ensureRelayPersonalSecret()
         identity = {
           publicKey: created.publicKey,
           driveKey: created.driveKey,
           channelKey: created.driveKey,
           name: channelName || sourceIdentity?.creatorName || 'Anonymous Archive'
         }
+      } else {
+        // A relay that created its identity before it had secret custody still
+        // has an unopenable personal store. Provisioning is idempotent, so do
+        // it here too rather than leaving those relays permanently broken.
+        await ensureRelayPersonalSecret()
       }
 
       const channel = await identityManager.getActiveChannel?.()

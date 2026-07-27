@@ -91,6 +91,7 @@ export async function createRelayService({
   function createLocalDrivePublisher(runtimeFsModule) {
     return createArchivePublisher({
       identityManager: runtime.identityManager,
+      storagePath: config.storage?.path,
       uploadManager: runtime.uploadManager,
       api: runtime.api,
       runtime,
@@ -468,6 +469,7 @@ export async function createRelayService({
         const runtimeFsModule = fsModule || await import('#fs')
         deferredPublisher.bind(createArchivePublisher({
           identityManager: runtime.identityManager,
+      storagePath: config.storage?.path,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
@@ -613,6 +615,7 @@ export async function createRelayService({
         }),
         publisher: createArchivePublisher({
           identityManager: runtime.identityManager,
+      storagePath: config.storage?.path,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,

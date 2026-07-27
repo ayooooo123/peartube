@@ -657,6 +657,11 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function recordProtocolError (scope, peerId, error) {
+    // These are the failures that decide whether a followed publisher ever
+    // becomes a visible catalog, and they were only ever readable through a
+    // diagnostics call nobody makes while debugging an empty screen.
+    console.log('[ScopedNetwork] scope error:', scope.purpose, String(scope.scopeId).slice(0, 16),
+      String(error?.code || 'SCOPED_NETWORK_REJECTED'), String(error?.message || error || '').slice(0, 160))
     recentErrors.push({
       purpose: scope.purpose,
       scopeId: scope.scopeId,
@@ -796,13 +801,23 @@ export function createScopedNetworkRuntime (options = {}) {
     )
   }
 
+  // A bootstrap session sends everything in localBootstrapLocators the moment
+  // it activates, so a publisher that never records one is invisible to every
+  // consumer while still reporting a healthy catalog. The early returns below
+  // are the difference between "discoverable" and "silently unreachable", so
+  // they say which one happened instead of returning a bare 'unavailable'.
   async function refreshLocalBootstrapLocator(publisherId) {
     const local = localPublishers.get(publisherId)
-    if (!local || !bootstrapLocatorKeyPair) return { status: 'unavailable' }
+    if (!local || !bootstrapLocatorKeyPair) {
+      const reason = !local ? 'no-local-publisher-scope' : 'no-bootstrap-locator-keypair'
+      console.log('[ScopedNetwork] bootstrap locator unavailable:', reason, publisherId.slice(0, 16))
+      return { status: 'unavailable', reason }
+    }
     const catalog = local.scope?.binding?.catalog
     if (typeof catalog?.getViewHead !== 'function' ||
         typeof catalog?.getAuthorizationState !== 'function') {
-      return { status: 'unavailable' }
+      console.log('[ScopedNetwork] bootstrap locator unavailable: catalog-not-inspectable', publisherId.slice(0, 16))
+      return { status: 'unavailable', reason: 'catalog-not-inspectable' }
     }
     const issuedAt = Number(now())
     if (!Number.isSafeInteger(issuedAt) || issuedAt < 0 ||
@@ -841,7 +856,9 @@ export function createScopedNetworkRuntime (options = {}) {
     if (previous?.timer) cancelBootstrapLocatorRefresh(previous.timer)
     const record = { locator, timer: null }
     localBootstrapLocators.set(publisherId, record)
-    if (networkEnabled) await publishBootstrapLocator({ locator })
+    const delivery = networkEnabled ? await publishBootstrapLocator({ locator }) : null
+    console.log('[ScopedNetwork] bootstrap locator recorded for', publisherId.slice(0, 16),
+      'networkEnabled:', networkEnabled, 'deliveredToSessions:', delivery?.delivered ?? 0)
     if (status === 'active') {
       record.timer = scheduleBootstrapLocatorRefresh(() => {
         void refreshLocalBootstrapLocator(publisherId).catch(error => {
@@ -1909,6 +1926,12 @@ export function createScopedNetworkRuntime (options = {}) {
     if (frame.type !== 'locator') return { status: 'rejected', reason: 'bootstrap-metadata-only' }
     const envelope = decodeApplicationEnvelope(frame.payload)
     const result = await bootstrapManager.ingestLocator(context.peerId, envelope)
+    console.log('[ScopedNetwork] bootstrap locator received from', String(context.peerId).slice(0, 16),
+      '- status:', result?.status, 'reason:', result?.reason || 'none')
+    if (result.status === 'accepted' && result.publisherId) {
+      console.log('[ScopedNetwork] locator accepted; peerConnected:', isPeerConnected(context.peerId),
+        'publisher:', String(result.publisherId).slice(0, 16))
+    }
     if (result.status === 'accepted' && result.publisherId && isPeerConnected(context.peerId)) {
       // Candidate promotion is bounded and best-effort. The locator itself is
       // never authority; followBootstrapLocator still requires the scoped
@@ -1916,7 +1939,7 @@ export function createScopedNetworkRuntime (options = {}) {
       void addPublisherFollowReason({
         publisherId: result.publisherId,
         reason: 'bootstrap:auto',
-      }).catch(() => {})
+      }).catch(error => console.log('[ScopedNetwork] follow-reason FAILED:', error?.message || error))
     }
     counters.acceptedFrames++
     return result
@@ -1956,8 +1979,14 @@ export function createScopedNetworkRuntime (options = {}) {
         if (tracked) {
           tracked.state = 'active'
           if (scope.purpose === 'bootstrap') {
+            // This is the only moment a consumer is told which publishers
+            // exist. Nothing is sent when the map is empty, and the peer then
+            // sees an empty catalog forever with no error anywhere.
+            console.log('[ScopedNetwork] bootstrap session active with', remoteKey.slice(0, 16),
+              '- locators to send:', localBootstrapLocators.size)
             for (const { locator } of localBootstrapLocators.values()) {
-              sendBootstrapLocatorToSession(tracked, locator)
+              const sent = sendBootstrapLocatorToSession(tracked, locator)
+              console.log('[ScopedNetwork] bootstrap locator send ->', remoteKey.slice(0, 16), 'ok:', sent !== false)
             }
           }
           if (scope.purpose === 'index' || scope.purpose === 'moderation') {
@@ -2235,20 +2264,25 @@ export function createScopedNetworkRuntime (options = {}) {
   }
 
   function scheduleReasonedPublisherFollow(publisherId) {
-    if (status !== 'active' || publisherFollowWork.has(publisherId)) return
+    // Every return below silently decides a discovered publisher will never be
+    // followed, which surfaces only as a permanently empty catalog.
+    const skip = (why) => console.log('[ScopedNetwork] follow not scheduled:', publisherId.slice(0, 16), why)
+    if (status !== 'active') return skip(`status=${status}`)
+    if (publisherFollowWork.has(publisherId)) return skip('follow already in flight')
     const locator = bootstrapManager.getLocator?.(publisherId)
-    if (!publisherFollowReasons.get(publisherId)?.size || !locator) return
+    if (!publisherFollowReasons.get(publisherId)?.size) return skip('no follow reasons')
+    if (!locator) return skip('no locator retained')
     const existing = followedPublishers.get(publisherId)
     const locatorTopic = derivePublisherTopic({ publisherId, catalogEpoch: locator.catalogEpoch })
     if (existing) {
       const currentEpoch = Number(existing.scope.descriptor.catalogEpoch)
-      if (locator.catalogEpoch < currentEpoch || locator.catalogEpoch > currentEpoch + 1) return
+      if (locator.catalogEpoch < currentEpoch || locator.catalogEpoch > currentEpoch + 1) return skip('locator epoch out of range')
       const identical = locator.catalogEpoch === currentEpoch &&
         b4a.equals(existing.scope.topic, locatorTopic) &&
         locator.catalogBootstrapKey === b4a.toString(existing.scope.descriptor.catalogBootstrapKey, 'hex') &&
         locator.catalogHead === existing.scope.advertisedCatalogHead &&
         locator.authorizationChainDigest === existing.scope.advertisedAuthorizationStateDigest
-      if (identical) return
+      if (identical) return skip('locator identical to current scope')
     }
     const fingerprint = [
       locator.catalogEpoch,
@@ -2259,7 +2293,7 @@ export function createScopedNetworkRuntime (options = {}) {
     ].join(':')
     const prior = bootstrapFollowAttempts.get(publisherId)
     const attempts = prior?.fingerprint === fingerprint ? prior.attempts : 0
-    if (attempts >= 4) return
+    if (attempts >= 4) return skip(`attempt cap reached (${attempts})`)
     bootstrapFollowAttempts.set(publisherId, { fingerprint, attempts: attempts + 1 })
     const work = followBootstrapLocator({ publisherId })
       .then(async result => {
@@ -2272,7 +2306,13 @@ export function createScopedNetworkRuntime (options = {}) {
       })
       .finally(() => publisherFollowWork.delete(publisherId))
     publisherFollowWork.set(publisherId, work)
-    void work.catch(() => {})
+    // Following is how a discovered publisher becomes a visible catalog. When
+    // it fails there is otherwise no trace anywhere: the peer stays connected,
+    // the locator stays accepted, and every catalog surface stays empty.
+    void work.then(
+      result => console.log('[ScopedNetwork] publisher follow ok:', publisherId.slice(0, 16), result?.status || 'followed'),
+      error => console.log('[ScopedNetwork] publisher follow FAILED:', publisherId.slice(0, 16), error?.code || error?.message || error)
+    )
   }
 
   async function addPublisherFollowReason({ publisherId, reason } = {}) {

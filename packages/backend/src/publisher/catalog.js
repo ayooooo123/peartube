@@ -314,6 +314,13 @@ export class PublisherCatalog extends ReadyResource {
       publisherId: this.options.publisherId,
       journalLimit: this.options.journalLimit,
     })
+    if (rebuilt.rejected.length > 0) {
+      // The consumer aborts the whole page on any rejection, so without the
+      // per-operation code an empty catalog is indistinguishable from a
+      // transport failure.
+      console.log('[PublisherCatalog] accepted page rejected', rebuilt.rejected.length, 'of', entries.length,
+        rebuilt.rejected.slice(0, 4).map(candidate => `${candidate?.code || 'UNKNOWN'}:${candidate?.reason || candidate?.value?.recordType || ''}`).join(' | '))
+    }
     return {
       accepted: entries.filter(entry => rebuilt.accepted.some(candidate =>
         b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId

@@ -1,6 +1,5 @@
 import ReadyResource from 'ready-resource'
 import Autobase from 'autobase'
-import { comparePublisherOperationEntries } from './authorization.js'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
@@ -86,6 +85,33 @@ function validateOptions (store, options) {
   if (!Number.isSafeInteger(journalLimit) || journalLimit < 1 || journalLimit > PUBLISHER_LIMITS.maxJournalOperations) invalid('journalLimit is out of bounds')
   if (options.keyProvider !== undefined && (!options.keyProvider || typeof options.keyProvider.verifySignature !== 'function' || typeof options.keyProvider.verifySignedEnvelope !== 'function' || typeof options.keyProvider.verifyMultiSignedEnvelope !== 'function')) invalid('keyProvider must expose verifySignature and publisher verification methods')
   return { key, publisherId, namespace, ownsStore: options.ownsStore === true, ackInterval, journalLimit, keyProvider: options.keyProvider || createPublisherKeyProvider(), deviceSigner }
+}
+
+// Replay order for a rebuilt catalog. The producer appended its namespace, then
+// its writer admissions, then data, and its journal positions follow that order.
+// comparePublisherOperationEntries cannot be reused here: it exists to resolve
+// conflicts and does not treat the namespace as a root record, so it replays an
+// admission ahead of the namespace and lands both at swapped journal positions,
+// which is enough to make the rebuilt head digest disagree with the advertised
+// one even though every operation was accepted.
+const REPLAY_ROOT_TYPES = new Set([
+  PUBLISHER_RECORD_TYPES.NAMESPACE,
+  PUBLISHER_RECORD_TYPES.WRITER_ADMISSION,
+  PUBLISHER_RECORD_TYPES.WRITER_REVOCATION,
+  PUBLISHER_RECORD_TYPES.ROOT_TRANSITION
+])
+
+function compareReplayOrder (left, right) {
+  const leftRoot = REPLAY_ROOT_TYPES.has(left.operation.recordType)
+  const rightRoot = REPLAY_ROOT_TYPES.has(right.operation.recordType)
+  if (leftRoot !== rightRoot) return leftRoot ? -1 : 1
+  if (left.operation.policyEpoch !== right.operation.policyEpoch) {
+    return left.operation.policyEpoch - right.operation.policyEpoch
+  }
+  if (left.operation.issuerSequence !== right.operation.issuerSequence) {
+    return left.operation.issuerSequence - right.operation.issuerSequence
+  }
+  return b4a.compare(left.operationId, right.operationId)
 }
 
 // A follower's catalog is rebuilt from verified accepted pages, so it must not
@@ -336,7 +362,11 @@ export class PublisherCatalog extends ReadyResource {
         invalid('accepted page operation ordering or identity is invalid')
       }
       prior = operationId
-      return { node: { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } }, operation, sourceWriterKey: entry.sourceWriterKey }
+      return {
+        node: { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } },
+        operation,
+        operationId: b4a.from(operationId, 'hex')
+      }
     })
     await this.openVerifiedPageView()
     // The wire order is operation-id ascending, which is a hash order and says
@@ -347,12 +377,7 @@ export class PublisherCatalog extends ReadyResource {
     // reduced them in: root records first, then by policy epoch and issuer
     // sequence. The transmitted order is untouched, so page verification and
     // deduplication are unaffected.
-    const ordered = [...nodes]
-      .sort((left, right) => comparePublisherOperationEntries(
-        { value: left.operation, sourceWriterKey: left.sourceWriterKey },
-        { value: right.operation, sourceWriterKey: right.sourceWriterKey }
-      ))
-      .map(entry => entry.node)
+    const ordered = [...nodes].sort(compareReplayOrder).map(entry => entry.node)
     const rebuilt = await applyPublisherCatalogNodes(ordered, this.verifiedPageView, {
       key: this.base?.key || this.options.key,
       async addWriter () {},

@@ -239,7 +239,9 @@ export async function createRelayService({
     const published = await runtime.publishPublisherCatalog({
       publisherId: job.publisherId
     })
-    if (published?.status !== 'published' && published?.status !== 'already-published') {
+    // 'refreshed' means the local publisher scope already existed and was
+    // rebound, which is a successful publication.
+    if (published?.status !== 'published' && published?.status !== 'already-published' && published?.status !== 'refreshed') {
       return { published: false, reason: published?.status || 'catalog-publication-failed' }
     }
 

@@ -1430,20 +1430,51 @@ export async function initializeStorage(config) {
   // peer discovery still flows exclusively through the Hyperswarm topic.
   let keyPair = null;
   const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null);
+  // hypercore-storage sweeps every unrecognized entry at the storage root into
+  // db/ when it opens. This key is written at the root and is not on its
+  // allowlist, so from the second startup onward the original only exists in
+  // db/. Reading just the root path made every restart mint a new device
+  // keypair, which silently invalidated the publisher writer admission bound to
+  // the old one.
+  //
+  // db/ is checked first on purpose: a relay that already suffered the rotation
+  // has the swept original in db/ and a newer replacement at the root, and the
+  // original is the identity peers and prior admissions know.
+  const swarmKeyCandidates = resolvedSwarmKeyPath
+    ? [...(path && storagePath && !swarmKeyPath
+        ? [path.join(storagePath, 'db', 'swarm-key.json')]
+        : []), resolvedSwarmKeyPath]
+    : [];
 
-  if (resolvedSwarmKeyPath && fs) {
+  for (const candidate of swarmKeyCandidates) {
+    if (keyPair || !fs) break;
     try {
-      const raw = fs.readFileSync(resolvedSwarmKeyPath, 'utf-8');
-      const parsed = JSON.parse(raw);
+      const raw = fs.readFileSync(candidate, 'utf-8');
+      const parsed = JSON.parse(typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8'));
       if (parsed?.publicKey && parsed?.secretKey) {
         keyPair = {
           publicKey: b4a.from(parsed.publicKey, 'hex'),
           secretKey: b4a.from(parsed.secretKey, 'hex')
         };
-        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16));
+        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16), 'from', candidate);
       }
     } catch (e) {
-      // If missing or invalid, we'll generate below
+      // Missing or invalid at this location; try the next one, then generate.
+    }
+  }
+
+  // The sweep renames the root file over db/, so a stale root copy left behind
+  // by an earlier rotation would overwrite the key just chosen and poison the
+  // next startup. Writing the chosen key back to the root makes that rename a
+  // no-op whichever copy the sweep moves.
+  if (keyPair && resolvedSwarmKeyPath && fs) {
+    try {
+      fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
+        publicKey: b4a.toString(keyPair.publicKey, 'hex'),
+        secretKey: b4a.toString(keyPair.secretKey, 'hex')
+      }));
+    } catch (e) {
+      console.log('[Storage] Could not canonicalize swarm key:', e.message);
     }
   }
 

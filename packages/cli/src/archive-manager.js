@@ -11,6 +11,7 @@ import {
   buildDownloadArgs
 } from './media/yt-dlp.js'
 import { buildWriterKeyName } from './archive/source-id.js'
+import { createRelayPublisherShell } from './publisher-shell.js'
 
 // A publisher proxy that WAITS for the real publisher to be bound instead of
 // failing when called early. The relay web console starts before the
@@ -413,10 +414,17 @@ export function createRoutingDownloader ({ directDownloader, ytDlpDownloader } =
   }
 }
 
-export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, storagePath = null, createChannelFn = null }) {
+export function createArchivePublisher({ identityManager, uploadManager, api, runtime, fs, storagePath = null, publisherShell = null, createChannelFn = null }) {
   if (!identityManager) throw new Error('identityManager is required')
   if (!uploadManager) throw new Error('uploadManager is required')
   if (!api) throw new Error('api is required')
+
+  // Publishing an upload requires a writable, admitted publisher catalog, and
+  // the relay has to authorize its own. Without it every upload fails late with
+  // "No admitted publisher catalog is available", after the file is on disk.
+  const relayPublisher = publisherShell || (storagePath
+    ? createRelayPublisherShell({ api, storagePath, fs, logger: runtime?.logger })
+    : null)
 
   const sourceChannels = new Map()
 
@@ -443,7 +451,10 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     const relayIdentity = await ensureRelayIdentity(name)
     const signed = await identityManager.signChannelRootDescriptorForOwnedChannel?.(channel, { profile: { name } })
     if (!signed?.ok) throw new Error(`source channel descriptor signing failed: ${signed?.reason || 'unavailable'}`)
-    return { channel, channelKey, publicBeeKey, publisherId: relayIdentity.publicKey }
+    // The archive job carries this id into catalog publication, so it must be
+    // the publisher-root catalog id, not the channel identity key.
+    const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || relayIdentity.publicKey
+    return { channel, channelKey, publicBeeKey, publisherId: catalogPublisherId, identityPublicKey: relayIdentity.publicKey }
   }
 
   // A relay is its own platform. On a phone the OS keychain generates and
@@ -459,17 +470,26 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     const secretPath = `${secretDir}/personal-secret`
     let secret = null
     let bootstrapKey = null
-    try {
-      const stored = fsModule.readFileSync(secretPath, 'utf8').trim()
-      if (/^[0-9a-f]{64}$/.test(stored)) {
-        secret = stored
-      } else {
-        const parsed = JSON.parse(stored)
-        if (/^[0-9a-f]{64}$/.test(parsed?.secret || '')) secret = parsed.secret
-        if (parsed?.bootstrapKey) bootstrapKey = parsed.bootstrapKey
+    // hypercore-storage sweeps unrecognized root entries into db/ when it
+    // opens, so a secret written during one run lives under db/ on the next.
+    // Reading only the root path would mint a fresh secret and strand the
+    // encrypted personal store written under the old one.
+    for (const candidate of [`${secretDir}/db/personal-secret`, secretPath]) {
+      if (secret) break
+      try {
+        const raw = fsModule.readFileSync(candidate, 'utf8')
+        // bare-fs can return a Buffer despite the encoding request.
+        const stored = (typeof raw === 'string' ? raw : b4a.toString(raw, 'utf8')).trim()
+        if (/^[0-9a-f]{64}$/.test(stored)) {
+          secret = stored
+        } else {
+          const parsed = JSON.parse(stored)
+          if (/^[0-9a-f]{64}$/.test(parsed?.secret || '')) secret = parsed.secret
+          if (parsed?.bootstrapKey) bootstrapKey = parsed.bootstrapKey
+        }
+      } catch {
+        // Missing or unreadable here; try the next location, then provision.
       }
-    } catch {
-      // No secret yet, or an unreadable one: provision a new secret below.
     }
     if (!secret) secret = b4a.toString(crypto.randomBytes(32), 'hex')
 
@@ -553,9 +573,13 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       if (!channel?.blobs) throw new Error('Anonymous channel blobs not initialized')
       const meta = await channel.getMetadata?.().catch(() => null)
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
-      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: identity.publicKey }
+      const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || identity.publicKey
+      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: catalogPublisherId, identityPublicKey: identity.publicKey }
     },
     async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, publish }) {
+      // upload.js refuses to publish unless the registry hands back exactly one
+      // writable binding, so the catalog has to exist before the file moves.
+      await relayPublisher?.ensureLocalPublisher()
       const result = await uploadManager.uploadFromPath(channel, filePath, {
         title,
         description,
@@ -604,11 +628,18 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       return result
     },
     async publishCatalog({ publisherId }) {
-      if (!publisherId || typeof runtime?.publishPublisherCatalog !== 'function') {
+      if (typeof runtime?.publishPublisherCatalog !== 'function') {
         throw new Error('publisher catalog is unavailable')
       }
-      const result = await runtime.publishPublisherCatalog({ publisherId })
-      if (result?.status !== 'published' && result?.status !== 'already-published') {
+      // The catalog is addressed by the publisher root, which is a different
+      // key from the channel identity the caller carries around. Publishing
+      // under the identity key would resolve a catalog the relay cannot write.
+      const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || publisherId
+      if (!catalogPublisherId) throw new Error('publisher catalog is unavailable')
+      const result = await runtime.publishPublisherCatalog({ publisherId: catalogPublisherId })
+      // 'refreshed' comes back when the local publisher scope already existed
+      // and was rebound; it is a success, not a failure.
+      if (result?.status !== 'published' && result?.status !== 'already-published' && result?.status !== 'refreshed') {
         throw new Error(`publisher catalog publication failed: ${result?.status || 'unknown'}`)
       }
       return result

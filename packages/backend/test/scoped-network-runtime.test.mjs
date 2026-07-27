@@ -2039,3 +2039,77 @@ test('release waits for asynchronous discovery and core cleanup', async (t) => {
   t.is(discoveryClosed, true)
   await runtime.close()
 })
+
+// A channel appends every rendition to one blobs core, so core.length describes
+// the whole core rather than one rendition's span. Retaining without an explicit
+// range used to default to 0..core.length, which only overlaps the first
+// rendition ever written; every later upload asked for blocks outside its own
+// upload provenance and failed authorization. In practice a relay could publish
+// exactly one video per channel and every subsequent archive job died with
+// "publication manifest authorization failed".
+test('retaining a rendition without a range uses its own upload span, not the whole shared core', async (t) => {
+  const publisher = crypto.keyPair(bytes(32, 61))
+  const coreKey = bytes(32, 62)
+  const rendition = createRenditionDescriptor({
+    purpose: 'original',
+    format: 'video/mp4',
+    core: {
+      key: coreKey,
+      // Six blocks total: an earlier rendition occupies 0..3, this one 3..6.
+      length: 6,
+      treeHash: bytes(32, 63),
+      byteLength: 6144,
+    },
+  })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 2,
+    title: 'Second upload into a shared core',
+    renditions: [rendition],
+    provenance: [{
+      type: 'upload',
+      renditionId: rendition.renditionId,
+      coreKey: b4a.toString(coreKey, 'hex'),
+      start: 3,
+      end: 6,
+    }],
+    keyPair: publisher,
+    signedAt: 10,
+    expiresAt: 1000,
+  })
+
+  const authorized = []
+  const runtime = createScopedNetworkRuntime({
+    swarm: fakeSwarm(),
+    muxFactory: () => ({}),
+    // Mirrors the real projection: a range is only authorized when a single
+    // upload provenance entry covers all of it.
+    authorizePublication: async ({ manifest: proposed, start, end }) => {
+      authorized.push({ start, end })
+      if (proposed !== manifest) return false
+      return start >= 3 && end !== null && end <= 6
+    },
+    store: {
+      get ({ key }) {
+        return {
+          key,
+          ready: async () => {},
+          replicate: () => {},
+          download: () => ({ destroy () {} }),
+          close () {},
+        }
+      },
+    },
+    now: () => 20,
+  })
+  await runtime.start()
+
+  const retained = await runtime.retainAuthorizedRendition({
+    manifest,
+    renditionId: rendition.renditionId,
+  })
+
+  t.is(retained.status, 'retained', 'the second rendition in a shared core retains')
+  t.alike(authorized.at(-1), { start: 3, end: 6 }, 'authorization is asked for the rendition span, not 0..core.length')
+  await runtime.close()
+})

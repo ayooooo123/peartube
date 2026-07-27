@@ -2709,7 +2709,30 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!rendition || rendition.blocked || rendition.superseded) fail('rendition is not manifest-authorized')
     const declaredLength = Number(rendition.core?.length)
     if (!Number.isSafeInteger(declaredLength) || declaredLength < 1) fail('rendition core length is invalid')
-    const range = safeRange(start, end === null ? declaredLength : end)
+    // A channel appends every rendition to one blobs core, so core.length is the
+    // whole core rather than this rendition's span. Defaulting an unspecified
+    // range to 0..core.length only authorizes for the first rendition ever
+    // written; every later one asks for blocks outside its own upload
+    // provenance and fails authorization. Fall back to the rendition's declared
+    // upload range instead.
+    const uploadProvenance = (manifest?.body?.provenance || []).filter(candidate =>
+      candidate?.type === 'upload' &&
+      candidate.renditionId === id &&
+      candidate.coreKey === rendition.core?.key &&
+      Number.isSafeInteger(candidate.start) &&
+      Number.isSafeInteger(candidate.end) &&
+      candidate.start >= 0 &&
+      candidate.end > candidate.start
+    )
+    // Authorization requires one provenance entry to cover the whole requested
+    // range, so a span stitched across several entries could never verify.
+    // Only derive a default when the rendition has exactly one upload span;
+    // anything else keeps the old default and fails loudly rather than
+    // silently retaining part of the rendition.
+    const soleUpload = uploadProvenance.length === 1 ? uploadProvenance[0] : null
+    const defaultStart = soleUpload ? soleUpload.start : 0
+    const defaultEnd = soleUpload ? soleUpload.end : declaredLength
+    const range = safeRange(start === 0 && end === null ? defaultStart : start, end === null ? defaultEnd : end)
     if (range.end > declaredLength) fail('rendition range exceeds the manifest core length')
     const verified = await authorizePublication({ manifest, renditionId: id, start: range.start, end: range.end })
     if (!verified) fail('publication manifest authorization failed')

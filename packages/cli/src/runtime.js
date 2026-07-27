@@ -22,9 +22,13 @@ function trustedSignerBytes (values) {
   return normalizeHexList(values).map((hex) => b4a.from(hex, 'hex'))
 }
 
-function roleCount (values, role) {
+// Scope diagnostics carry `purpose`, never `role`. Reading `role` made every
+// topic count silently zero, so a relay with live publisher and asset scopes
+// reported none and looked idle in exactly the diagnostics AGENTS.md says to
+// trust when a catalog turns up empty.
+function purposeCount (values, purpose) {
   if (!Array.isArray(values)) return 0
-  return values.reduce((count, value) => count + (value?.role === role ? 1 : 0), 0)
+  return values.reduce((count, value) => count + (value?.purpose === purpose ? 1 : 0), 0)
 }
 
 function counter (counters, ...names) {
@@ -181,8 +185,8 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
       ])
       const counters = scoped?.counters || {}
       const swarm = backend.ctx?.swarm
-      const publisherTopics = roleCount(scoped?.topics, 'publisher')
-      const assetTopics = roleCount(scoped?.topics, 'asset')
+      const publisherTopics = purposeCount(scoped?.topics, 'publisher')
+      const assetTopics = purposeCount(scoped?.topics, 'asset')
       return {
         network: {
           status: scoped?.status || 'unknown',
@@ -205,14 +209,17 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
           lastErrorCode: scoped?.lastErrorCode || null
         },
         bootstrap: {
-          joined: bootstrapEnabled && scoped?.status === 'ready',
+          // The scoped runtime reports 'active' once it is running; it never
+          // reports 'ready', so comparing against that pinned joined to false
+          // even while the bootstrap scope was live.
+          joined: bootstrapEnabled && scoped?.status === 'active',
           locators: Array.isArray(locators) ? locators.length : 0,
           rejected: counter(counters, 'locatorsRejected', 'bootstrapRejected'),
           maxLocators: counter(counters, 'maxLocators', 'bootstrapLimit')
         },
         assets: {
           retainedRenditions: counter(counters, 'retainedRenditions'),
-          activeSessions: roleCount(scoped?.sessions, 'asset'),
+          activeSessions: purposeCount(scoped?.sessions, 'asset'),
           topics: assetTopics,
           maxSessions: counter(counters, 'maxAssetSessions', 'assetSessionLimit')
         },

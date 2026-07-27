@@ -14,6 +14,7 @@ import {
 import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
 import { createPublisherCatalogProjection } from '../src/media-graph/catalog-projection.js'
 import {
+  createLegacyCatalogResolver,
   createPublicationV1CheckpointRepository,
   createPublicationV1LegacyRepository,
   createPublicationV1StartupLifecycle,
@@ -308,4 +309,68 @@ test('startup lifecycle gates initial projection discovery until migration becom
   await lifecycle.complete()
   t.is(migrations, 2, 'completed lifecycle is idempotent')
   t.is(starts, 1, 'completed lifecycle never starts discovery twice')
+})
+
+// A relay keys its catalog by a publisher root rather than by the channel
+// identity that owns the legacy videos. Before the fallback existed nothing
+// resolved, the migration stayed pending forever, and because
+// completeAdmissionLifecycle runs on every provisionPublisherCatalog the relay
+// could never publish again after its first restart.
+test('legacy sources fall back to the sole local writable catalog', async (t) => {
+  const ownerPublisherId = b4a.toString(b4a.alloc(32, 71), 'hex')
+  const localBinding = { publisherId: b4a.alloc(32, 72), catalog: { writable: true } }
+  const asked = []
+
+  const resolve = createLegacyCatalogResolver({
+    catalogRegistry: {
+      async resolve(publisherId) {
+        asked.push(b4a.toString(publisherId, 'hex'))
+        const error = new Error('PUBLISHER_CATALOG_UNAVAILABLE')
+        error.code = 'PUBLISHER_CATALOG_UNAVAILABLE'
+        throw error
+      },
+      async getWritableBindings() {
+        return [localBinding]
+      },
+    },
+    derivePublisherId: key => crypto.hash(key),
+  })
+
+  const resolved = await resolve({ ownerPublisherId })
+  t.is(resolved, localBinding, 'the local writable catalog adopts the legacy source')
+  t.is(asked.length, 1, 'the owner-derived catalog is still tried first')
+})
+
+test('a catalog owned by the source key wins over the local fallback', async (t) => {
+  const ownerPublisherId = b4a.toString(b4a.alloc(32, 73), 'hex')
+  const ownedBinding = { publisherId: b4a.alloc(32, 74), catalog: { writable: true } }
+
+  const resolve = createLegacyCatalogResolver({
+    catalogRegistry: {
+      async resolve() { return ownedBinding },
+      async getWritableBindings() {
+        t.fail('the fallback must not run when the source owns a catalog')
+        return []
+      },
+    },
+    derivePublisherId: key => crypto.hash(key),
+  })
+
+  t.is(await resolve({ ownerPublisherId }), ownedBinding, 'the owned catalog is used')
+})
+
+// Guessing which of several publishers owns the history would attribute a
+// device's videos to the wrong catalog.
+test('ambiguous local catalogs resolve nothing rather than guessing', async (t) => {
+  const resolve = createLegacyCatalogResolver({
+    catalogRegistry: {
+      async resolve() { return null },
+      async getWritableBindings() {
+        return [{ publisherId: b4a.alloc(32, 75) }, { publisherId: b4a.alloc(32, 76) }]
+      },
+    },
+    derivePublisherId: key => crypto.hash(key),
+  })
+
+  t.is(await resolve({ ownerPublisherId: b4a.toString(b4a.alloc(32, 77), 'hex') }), null, 'no catalog is chosen')
 })

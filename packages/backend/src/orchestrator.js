@@ -571,6 +571,11 @@ export async function createBackendContext(config) {
     onCatalogUpdate: async () => {
       try {
         await mediaCatalogProjection.rebuild()
+        // The consumer projection is what every catalog surface reads through.
+        // Rebuilding only the media graph leaves it holding the state from
+        // before the sync, so freshly ingested publications stay invisible and
+        // the app shows an empty catalog despite a clean ingest.
+        consumerCatalogProjection?.rebuild()
       } finally {
         await scopedNetwork?.revalidateRetainedRenditions?.()
       }
@@ -624,6 +629,18 @@ export async function createBackendContext(config) {
   ctx.consumerIndexFeedManager = consumerIndexFeedManager
   ctx.consumerModerationManager = consumerModerationManager
   ctx.consumerCatalogProjection = consumerCatalogProjection
+  // A device that already holds a synced catalog receives no further pages, so
+  // onCatalogUpdate never fires and nothing else populates these projections
+  // from what is already on disk. Without this, every catalog surface is empty
+  // after a restart until some publisher happens to append.
+  await mediaCatalogProjection.rebuild().catch(error => {
+    console.log('[Orchestrator] media catalog projection rebuild failed at startup:', error?.message || error)
+  })
+  try {
+    consumerCatalogProjection.rebuild()
+  } catch (error) {
+    console.log('[Orchestrator] consumer catalog projection rebuild failed at startup:', error?.message || error)
+  }
   const configuredOperabilityServices = config.operability?.services
     ? await Promise.resolve(config.operability.services)
     : config.operability?.servicesPromise

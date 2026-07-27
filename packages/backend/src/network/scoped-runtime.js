@@ -2378,6 +2378,17 @@ export function createScopedNetworkRuntime (options = {}) {
           existing.scope.advertisedAuthorizationStateDigest = authoritativeLocator.authorizationChainDigest
           existing.scope.advertisedLocatorSignerId = authoritativeLocator.signerId
           existing.scope.advertisedLocatorIssuedAt = authoritativeLocator.issuedAt
+          // Same reason as on first follow: a publisher that has appended now
+          // serves a head this scope is not walking toward, and the page
+          // response would be rejected as equivocation. Retarget the walk at
+          // the newly advertised head and drop the cursor for the old one.
+          if (existing.scope.catalogHeadDigest !== authoritativeLocator.catalogHead) {
+            existing.scope.catalogHeadDigest = authoritativeLocator.catalogHead
+            existing.scope.catalogAuthorizationStateDigest = null
+            existing.scope.catalogCursor = null
+            existing.scope.catalogResumeCursor = null
+            existing.scope.catalogPreviousPageDigest = null
+          }
           existing.scope.catalogComplete = false
           void syncPublisherCatalog(existing.scope).catch(error => {
             recordProtocolError(existing.scope, 'bootstrap-refresh', error)
@@ -2387,15 +2398,33 @@ export function createScopedNetworkRuntime (options = {}) {
       }
     }
     if (!catalogRegistry?.bindNamespace) fail('catalog registry cannot bind verified namespaces')
+    // Each await here can stall a follow indefinitely, and a stalled follow is
+    // never retried because publisherFollowWork stays populated.
+    const stage = (name) => console.log('[ScopedNetwork] follow stage', id.slice(0, 16), name)
+    stage('bindNamespace start')
     const binding = await catalogRegistry.bindNamespace(descriptor, { verifiedNamespaceProof })
+    stage('bindNamespace done')
     if (hex32(binding.catalogBootstrapKey, 'catalogBootstrapKey') !== b4a.toString(descriptor.catalogBootstrapKey, 'hex')) fail('catalog binding mismatch')
+    stage('publisherManager.followPublisher start')
     await publisherManager.followPublisher(id)
+    stage('publisherManager.followPublisher done')
     await binding.catalog?.openVerifiedPageView?.()
+    stage('openVerifiedPageView done')
     const saved = await publisherSyncStateRepository?.load?.(id)
+    stage('syncState loaded')
     const restored = saved?.version === 1 && saved.publisherId === id &&
       saved.catalogEpoch === descriptor.catalogEpoch
       ? saved
       : null
+    // The locator is signed and fresher than anything persisted here. Once a
+    // publisher appends, its advertised head no longer matches the head this
+    // device last synced to, and syncing toward the stale one makes the
+    // publisher's own pages look like head equivocation - so a catalog could
+    // never grow for anyone already following it. Adopt the advertised head
+    // and walk again from the start, because the saved cursor describes the
+    // head that has just been superseded.
+    const advertisedHead = authoritativeLocator?.catalogHead || null
+    const resumable = !advertisedHead || !restored?.headDigest || restored.headDigest === advertisedHead
     const topic = derivePublisherTopic({ publisherId: id, catalogEpoch: descriptor.catalogEpoch })
     const { scope } = joinScope({
       purpose: 'publisher',
@@ -2409,10 +2438,10 @@ export function createScopedNetworkRuntime (options = {}) {
       catalogPagePending: null,
       catalogSyncing: null,
       catalogCursor: null,
-      catalogResumeCursor: restored?.cursor || null,
+      catalogResumeCursor: resumable ? (restored?.cursor || null) : null,
       catalogPreviousPageDigest: null,
-      catalogHeadDigest: restored?.headDigest || authoritativeLocator?.catalogHead || null,
-      catalogAuthorizationStateDigest: restored?.authorizationStateDigest || null,
+      catalogHeadDigest: resumable ? (restored?.headDigest || advertisedHead) : advertisedHead,
+      catalogAuthorizationStateDigest: resumable ? (restored?.authorizationStateDigest || null) : null,
       advertisedCatalogHead: authoritativeLocator?.catalogHead || null,
       advertisedAuthorizationStateDigest: authoritativeLocator?.authorizationChainDigest || null,
       advertisedLocatorSignerId: authoritativeLocator?.signerId || null,
@@ -2479,8 +2508,11 @@ export function createScopedNetworkRuntime (options = {}) {
     let verified
     let namespaceProof
     try {
+      console.log('[ScopedNetwork] follow stage', id.slice(0, 16), 'requesting namespace proof')
       namespaceProof = proof || await requestNamespaceProof(scope)
+      console.log('[ScopedNetwork] follow stage', id.slice(0, 16), 'proof received; verifying')
       verified = verifyPublisherNamespaceProof({ locator, ...namespaceProof })
+      console.log('[ScopedNetwork] follow stage', id.slice(0, 16), 'proof verified')
     } catch (error) {
       await leaveScope(scope, 'candidate')
       const rejected = new Error(error?.message || 'namespace proof rejected')

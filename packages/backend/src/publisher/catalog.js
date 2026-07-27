@@ -1,5 +1,6 @@
 import ReadyResource from 'ready-resource'
 import Autobase from 'autobase'
+import { comparePublisherOperationEntries } from './authorization.js'
 import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 
@@ -87,6 +88,22 @@ function validateOptions (store, options) {
   return { key, publisherId, namespace, ownsStore: options.ownsStore === true, ackInterval, journalLimit, keyProvider: options.keyProvider || createPublisherKeyProvider(), deviceSigner }
 }
 
+// A follower's catalog is rebuilt from verified accepted pages, so it must not
+// be held hostage by an Autobase that can only open once a peer replicates.
+const REMOTE_CATALOG_OPEN_TIMEOUT_MS = 5000
+
+async function raceOpenBudget (promise, timeoutMs) {
+  let timer = null
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export class PublisherCatalog extends ReadyResource {
   constructor (store, options = {}) {
     const normalized = validateOptions(store, options)
@@ -110,25 +127,43 @@ export class PublisherCatalog extends ReadyResource {
       open: openPublisherCatalogView,
       apply: (nodes, view, host) => applyPublisherCatalogNodes(nodes, view, host, { keyProvider, publisherId: this.options.publisherId, journalLimit: this.options.journalLimit })
     })
-    await this.base.ready()
-    const descriptorEntry = await this.base.view.get('state/descriptor')
-    const journalCountEntry = await this.base.view.get('meta/journal-count')
-    let pinError = null
-    if (descriptorEntry) {
-      const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
-      if (!equalBytes(descriptor.publisherId, this.options.publisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
-    } else if (journalCountEntry && b4a.toString(journalCountEntry.value) !== '0') {
-      pinError = 'persisted catalog history has no descriptor matching expected publisherId'
-    }
-    if (pinError) {
-      const base = this.base
-      this.base = null
-      try {
-        await base.close()
-      } finally {
-        invalid(pinError)
+
+    // A follower opens this from a publisher's bootstrap key with no local
+    // history, so the Autobase cannot become ready until that core's first
+    // block replicates - and the scope that would replicate it is only joined
+    // after this call returns. Awaiting unconditionally deadlocks the first
+    // follow of every publisher, which is the whole of discovery.
+    //
+    // A follower does not need the base: its catalog is rebuilt locally from
+    // verified accepted pages. So bound the wait, and when it lapses continue
+    // with the page path while the base catches up on its own.
+    const readyWithinBudget = this.options.key
+      ? await raceOpenBudget(this.base.ready(), REMOTE_CATALOG_OPEN_TIMEOUT_MS)
+      : (await this.base.ready(), true)
+
+    if (readyWithinBudget) {
+      const descriptorEntry = await this.base.view.get('state/descriptor')
+      const journalCountEntry = await this.base.view.get('meta/journal-count')
+      let pinError = null
+      if (descriptorEntry) {
+        const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+        if (!equalBytes(descriptor.publisherId, this.options.publisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
+      } else if (journalCountEntry && b4a.toString(journalCountEntry.value) !== '0') {
+        pinError = 'persisted catalog history has no descriptor matching expected publisherId'
+      }
+      if (pinError) {
+        const base = this.base
+        this.base = null
+        try {
+          await base.close()
+        } finally {
+          invalid(pinError)
+        }
       }
     }
+    // Nothing is pinned against yet when the base never opened: there is no
+    // persisted history to contradict the expected publisher, and every page
+    // ingested later is verified against it regardless.
     this.publisherPinned = true
   }
 
@@ -301,11 +336,25 @@ export class PublisherCatalog extends ReadyResource {
         invalid('accepted page operation ordering or identity is invalid')
       }
       prior = operationId
-      return { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } }
+      return { node: { value: frame, from: { key: b4a.from(entry.sourceWriterKey) } }, operation, sourceWriterKey: entry.sourceWriterKey }
     })
     await this.openVerifiedPageView()
-    const rebuilt = await applyPublisherCatalogNodes(nodes, this.verifiedPageView, {
-      key: this.base.key,
+    // The wire order is operation-id ascending, which is a hash order and says
+    // nothing about causality. applyPublisherCatalogNodes replays nodes exactly
+    // as given, so a claim whose id sorts below the writer-admission that
+    // authorizes it gets reduced first and rejected WRITER_NOT_ADMITTED, which
+    // then voids the entire page. Replay in the same causal order the producer
+    // reduced them in: root records first, then by policy epoch and issuer
+    // sequence. The transmitted order is untouched, so page verification and
+    // deduplication are unaffected.
+    const ordered = [...nodes]
+      .sort((left, right) => comparePublisherOperationEntries(
+        { value: left.operation, sourceWriterKey: left.sourceWriterKey },
+        { value: right.operation, sourceWriterKey: right.sourceWriterKey }
+      ))
+      .map(entry => entry.node)
+    const rebuilt = await applyPublisherCatalogNodes(ordered, this.verifiedPageView, {
+      key: this.base?.key || this.options.key,
       async addWriter () {},
       removeable () { return false },
       async removeWriter () {},
@@ -314,6 +363,8 @@ export class PublisherCatalog extends ReadyResource {
       publisherId: this.options.publisherId,
       journalLimit: this.options.journalLimit,
     })
+    console.log('[PublisherCatalog] page record types:',
+      nodes.map(entry => entry.operation.recordType).join(','))
     if (rebuilt.rejected.length > 0) {
       // The consumer aborts the whole page on any rejection, so without the
       // per-operation code an empty catalog is indistinguishable from a

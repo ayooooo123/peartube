@@ -2167,3 +2167,37 @@ test('persisted pre-cutover namespace genesis migrates once and survives strict 
   await store.close()
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+// Discovery hands a consumer a publisher's bootstrap key and nothing else. The
+// Autobase behind that key cannot open until a peer replicates its first
+// block, and the scope that would replicate it is only joined once the catalog
+// has been bound - so awaiting Autobase readiness deadlocks the very first
+// follow of every publisher. A follower rebuilds the catalog locally from
+// verified accepted pages instead, so opening must not wait on the base.
+test('a catalog opened from an unreachable remote bootstrap key still becomes usable', async (t) => {
+  const dir = tempDir('peartube-publisher-remote-open-')
+  const store = new Corestore(dir)
+  await store.ready()
+  const root = crypto.keyPair(bytes(32, 231))
+  const publisherId = derivePublisherId(root.publicKey)
+  // A key no peer will ever serve, which is exactly a freshly discovered
+  // publisher before its scope is joined.
+  const unreachableBootstrapKey = bytes(32, 232)
+
+  const catalog = new PublisherCatalog(store, { publisherId, key: unreachableBootstrapKey })
+  const opened = await Promise.race([
+    catalog.ready().then(() => 'ready'),
+    new Promise(resolve => setTimeout(() => resolve('stalled'), 20000))
+  ])
+  t.is(opened, 'ready', 'opening does not block on an unreachable base')
+
+  // The base never opened, so nothing may present this as a writable catalog.
+  t.absent(catalog.writable, 'an unreplicated remote catalog is never writable')
+
+  // The verified page view is local and must be available for page ingest.
+  const view = await catalog.openVerifiedPageView()
+  t.ok(view, 'the verified page view opens without the base')
+
+  await catalog.close()
+  fs.rmSync(dir, { recursive: true, force: true })
+})

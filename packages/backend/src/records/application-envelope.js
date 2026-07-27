@@ -224,8 +224,15 @@ export async function verifyApplicationEnvelope(envelope, options = {}) {
 
   const now = options.now == null ? 0 : normalizeTimestamp(options.now, 'now')
   if (now > 0) {
-    if (normalized.issuedAt > 0 && normalized.issuedAt > now) return false
-    if (normalized.expiresAt > 0 && normalized.expiresAt < now) return false
+    // Two machines never agree on the time exactly. Callers that verify
+    // records issued by other devices pass a tolerance; without one, a
+    // publisher whose clock runs seconds ahead produces records this device
+    // refuses outright. The record's own lifetime still bounds it.
+    const skew = options.maxClockSkewMs == null
+      ? 0
+      : normalizeTimestamp(options.maxClockSkewMs, 'maxClockSkewMs')
+    if (normalized.issuedAt > 0 && normalized.issuedAt - skew > now) return false
+    if (normalized.expiresAt > 0 && normalized.expiresAt + skew < now) return false
   }
 
   const computedRecordId = deriveApplicationRecordId(normalized, options)

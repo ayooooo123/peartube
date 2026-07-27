@@ -420,6 +420,12 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         description: metadata.description || null,
         publicationId: manifest.publicationId,
         presentationKind: episodic ? 'episode' : 'movie',
+        // Artwork travels with the metadata claim: a consumer has no metadata
+        // provider credentials of its own, so a publisher that knows the cover
+        // has to say so or every catalog renders as blank placeholders.
+        ...(Array.isArray(metadata.artwork) && metadata.artwork.length > 0
+          ? { artwork: metadata.artwork }
+          : {}),
         ...(episodic
           ? {
               collectionRef,

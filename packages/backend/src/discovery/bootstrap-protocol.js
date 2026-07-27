@@ -170,6 +170,7 @@ export async function verifyBootstrapLocator(envelope, options = {}) {
     recordType: BOOTSTRAP_LOCATOR_RECORD_TYPE,
     allowedSigners: [envelope?.signer],
     now,
+    maxClockSkewMs: skew,
   })
   assertProtocolCompatibility(body, {
     protocolMajor: options.protocolMajor,

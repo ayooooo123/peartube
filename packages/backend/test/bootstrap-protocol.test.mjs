@@ -165,3 +165,48 @@ test('online bootstrap verifier never opts locator omissions into legacy compati
     t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
   }
 })
+
+// Two devices never agree on the time to the millisecond. With no tolerance a
+// consumer whose clock sat seconds behind a publisher rejected every locator
+// the publisher issued "now" as INVALID_LOCATOR, and could never discover
+// anything at all - which is exactly what an emulator running ~27s behind its
+// host did.
+test('a locator issued slightly ahead of this clock is still usable', async (t) => {
+  const record = locator({ issuedAt: 10_000, expiresAt: 20_000 })
+
+  t.absent(
+    await verifyBootstrapLocator(record.envelope, { now: 9_970, trustedSigners: [signer.publicKey] }),
+    'with no tolerance a locator 30s in the future is refused',
+  )
+  t.ok(
+    await verifyBootstrapLocator(record.envelope, {
+      now: 9_970,
+      maxClockSkewMs: 60_000,
+      trustedSigners: [signer.publicKey],
+    }),
+    'modest drift is tolerated when a skew allowance is configured',
+  )
+})
+
+// Tolerance must not become an unbounded window: the locator's own lifetime
+// still decides when it stops being usable.
+test('clock tolerance does not resurrect a locator that has genuinely expired', async (t) => {
+  const record = locator({ issuedAt: 10_000, expiresAt: 20_000 })
+
+  t.ok(
+    await verifyBootstrapLocator(record.envelope, {
+      now: 20_030,
+      maxClockSkewMs: 60_000,
+      trustedSigners: [signer.publicKey],
+    }),
+    'a locator just past expiry is still accepted inside the allowance',
+  )
+  t.absent(
+    await verifyBootstrapLocator(record.envelope, {
+      now: 200_000,
+      maxClockSkewMs: 60_000,
+      trustedSigners: [signer.publicKey],
+    }),
+    'a long-expired locator stays refused',
+  )
+})

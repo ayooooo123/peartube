@@ -29,6 +29,7 @@ import { createBootstrapManager } from '../discovery/bootstrap-manager.js'
 import { createPublisherManager } from '../discovery/publisher-manager.js'
 import { INDEX_FEED_CAPABILITY } from '../indexing/feed-contract.js'
 import { createIndexFeedManager } from '../indexing/feed-manager.js'
+import { DEFAULT_CLOCK_DRIFT_MS } from '../validators.js'
 import { createModerationManager } from '../moderation/manager.js'
 import {
   decodeApplicationEnvelope,
@@ -494,6 +495,12 @@ export function createScopedNetworkRuntime (options = {}) {
     protocolMajor,
     supportedCapabilities: [BOOTSTRAP_LOCATOR_CAPABILITY],
     verifyCatalogChain: options.verifyCatalogChain,
+    // Locator verification defaulted to zero tolerance, so a device whose clock
+    // sat seconds behind a publisher's rejected every locator issued "now" as
+    // INVALID_LOCATOR and could never discover anything. Every other timestamp
+    // check in the backend already allows this much drift; the locator's own
+    // TTL still bounds how long one stays usable.
+    maxClockSkewMs: options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS,
   })
   const indexFeedManager = options.indexFeedManager || createIndexFeedManager({ now: options.now })
   const moderationManager = options.moderationManager || createModerationManager({ now: options.now })
@@ -1083,7 +1090,27 @@ export function createScopedNetworkRuntime (options = {}) {
     if (!pending) fail('unexpected catalog page response')
     try {
       const response = normalizeCatalogResponse(frame.payload, pending.request)
-      if (scope.catalogHeadDigest && scope.catalogHeadDigest !== response.headDigest) fail('catalog head equivocation detected')
+      if (scope.catalogHeadDigest && scope.catalogHeadDigest !== response.headDigest) {
+        // A publisher that appended since this walk began serves a newer head.
+        // That is the catalog growing, not a publisher showing two faces, and
+        // the signed advertised head checked immediately below is what decides
+        // whether the response is authentic at all. Retarget the walk instead
+        // of rejecting the publisher, which previously meant a catalog could
+        // never gain a title once a device had synced it.
+        if (scope.advertisedCatalogHead && scope.advertisedCatalogHead === response.headDigest) {
+          // Adopt the signed locator's head, never the peer's claim. They are
+          // equal here by the test above; taking it from the locator keeps the
+          // provenance of this value obvious.
+          scope.catalogHeadDigest = scope.advertisedCatalogHead
+          scope.catalogAuthorizationStateDigest = null
+          scope.catalogCursor = null
+          scope.catalogResumeCursor = null
+          scope.catalogPreviousPageDigest = null
+          scope.catalogComplete = false
+        } else {
+          fail('catalog head equivocation detected')
+        }
+      }
       if (scope.advertisedCatalogHead && scope.advertisedCatalogHead !== response.headDigest) {
         fail('catalog response does not match the signed advertised head', 'PUBLISHER_CATALOG_ADVERTISED_HEAD_MISMATCH')
       }
@@ -1927,7 +1954,7 @@ export function createScopedNetworkRuntime (options = {}) {
     const envelope = decodeApplicationEnvelope(frame.payload)
     const result = await bootstrapManager.ingestLocator(context.peerId, envelope)
     console.log('[ScopedNetwork] bootstrap locator received from', String(context.peerId).slice(0, 16),
-      '- status:', result?.status, 'reason:', result?.reason || 'none')
+      '- status:', result?.status, 'errorCode:', result?.errorCode || result?.reason || 'none')
     if (result.status === 'accepted' && result.publisherId && isPeerConnected(context.peerId)) {
       // Candidate promotion is bounded and best-effort. The locator itself is
       // never authority; followBootstrapLocator still requires the scoped

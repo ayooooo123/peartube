@@ -1,5 +1,5 @@
 import test from 'brittle'
-import { createArchiveManager, createArchivePublisher, deriveMediaCoordinates, enqueueArchiveJob } from '../src/archive-manager.js'
+import { createArchiveManager, createArchivePublisher, deriveArtwork, deriveMediaCoordinates, enqueueArchiveJob } from '../src/archive-manager.js'
 
 function memStore () {
   const jobs = []
@@ -112,4 +112,23 @@ test('plain URL archive (no tmdb fields) is unchanged', async (t) => {
   t.absent(upload.mediaProvider)
   t.absent(completed.previewVideo.contentKind)
   t.absent(completed.previewVideo.classification)
+})
+
+// A consumer has no metadata-provider credentials, so cover art only reaches it
+// if the publisher puts it on the record. Without this every catalog renders as
+// a wall of identical placeholders no matter how good the metadata match was.
+test('deriveArtwork publishes the cover a metadata match already resolved', (t) => {
+  t.alike(deriveArtwork({ tmdbPosterPath: '/abc123.jpg' }), {
+    artwork: [{ role: 'poster', remoteUrl: 'https://image.tmdb.org/t/p/w342/abc123.jpg' }]
+  }, 'a poster path becomes a resolvable poster locator')
+
+  t.alike(deriveArtwork({ tmdbPosterPath: '/a.jpg', thumbnailUrl: 'https://cdn.example/t.jpg' }), {
+    artwork: [
+      { role: 'poster', remoteUrl: 'https://image.tmdb.org/t/p/w342/a.jpg' },
+      { role: 'thumbnail', remoteUrl: 'https://cdn.example/t.jpg' }
+    ]
+  }, 'a source thumbnail is published alongside the poster')
+
+  t.alike(deriveArtwork({}), {}, 'nothing is claimed when there is no artwork to claim')
+  t.alike(deriveArtwork({ tmdbPosterPath: '   ' }), {}, 'a blank poster path is not a locator')
 })

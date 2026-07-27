@@ -169,6 +169,21 @@ export function deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpiso
   return { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: id }
 }
 
+// A consumer holds no metadata-provider credentials, so cover art has to be
+// published with the record or every catalog renders as blank placeholders.
+// The poster path comes from the same classification that supplies the TMDB
+// coordinates, so publishing it costs nothing extra.
+export function deriveArtwork({ tmdbPosterPath, thumbnailUrl } = {}) {
+  const artwork = []
+  const posterPath = tmdbPosterPath ? String(tmdbPosterPath).trim() : ''
+  if (posterPath) {
+    artwork.push({ role: 'poster', remoteUrl: `https://image.tmdb.org/t/p/w342${posterPath}` })
+  }
+  const thumbnail = thumbnailUrl ? String(thumbnailUrl).trim() : ''
+  if (thumbnail) artwork.push({ role: 'thumbnail', remoteUrl: thumbnail })
+  return artwork.length > 0 ? { artwork } : {}
+}
+
 async function readValue(metaDb, key, fallback) {
   const entry = await metaDb.get(key).catch(() => null)
   return entry?.value ?? fallback
@@ -576,7 +591,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || identity.publicKey
       return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: catalogPublisherId, identityPublicKey: identity.publicKey }
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, publish }) {
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, tmdbPosterPath, publish }) {
       // upload.js refuses to publish unless the registry hands back exactly one
       // writable binding, so the catalog has to exist before the file moves.
       await relayPublisher?.ensureLocalPublisher()
@@ -599,7 +614,8 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         // TMDB coordinates make the movie/TV identity durable on the canonical
         // video record (schema already supports these fields), not just on the
         // relay-side job/feed previews.
-        ...deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode })
+        ...deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode }),
+        ...deriveArtwork({ tmdbPosterPath, thumbnailUrl })
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
 

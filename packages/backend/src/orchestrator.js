@@ -907,7 +907,14 @@ export async function createBackendContext(config) {
       ctx.completePublicationV1Migration = null
     }
   })
-  await completePublicationV1Migration()
+  // Scoped discovery only starts once this reports 'complete'. When it does
+  // not, the device stays on legacy channel discovery, joins no bootstrap
+  // scope, follows no publisher, and every catalog surface is empty with no
+  // indication of why. Say so plainly instead of leaving it to be inferred
+  // from an absence of logs.
+  const bootMigration = await completePublicationV1Migration()
+  console.log('[Orchestrator] publication v1 migration status:', bootMigration?.status ?? 'unknown',
+    'scopedDiscoveryStarted:', publicationV1Startup.ready)
 
   // Open the active identity's private multi-writer personal store (subscriptions,
   // playlists, watch history, settings) and expose it on ctx. Best-effort: a

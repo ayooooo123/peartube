@@ -2,6 +2,7 @@ import { createCliLogger } from './cli-logger.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
+import { createRelayPublisherShell } from './publisher-shell.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
@@ -466,15 +467,50 @@ export async function createRelayService({
       await runtime.start?.()
       logger.relay.info('Relay runtime network ready', { runtimeStartMs: Date.now() - runtimeStartedAt })
 
+      // The publisher root is CLI-owned, so the backend cannot restore a
+      // writable binding by itself: restoreLocalPublisherScopes() finds nothing
+      // at boot and the relay joins no publisher scope and announces no
+      // bootstrap locator. Consumers can connect and still discover nothing
+      // until some archive job happens to bind the catalog. Bind it here so a
+      // restarted relay is discoverable immediately.
+      //
+      // One shell instance is shared with the archive publisher; two would race
+      // over the same publisher-root file.
+      const runtimeFsModule = fsModule || await import('#fs')
+      const publisherShell = createRelayPublisherShell({
+        api: runtime.api,
+        storagePath: config.storage?.path,
+        fs: runtimeFsModule,
+        logger
+      })
+      try {
+        const local = await publisherShell.ensureLocalPublisher()
+        const published = await runtime.publishPublisherCatalog({ publisherId: local.publisherId })
+        logger.relay.info('Relay publisher catalog announced', {
+          publisherId: local.publisherId,
+          status: published?.status || 'unknown'
+        })
+      } catch (error) {
+        // An empty relay has no accepted publication to announce yet. That is
+        // normal on a fresh install and must not stop startup; a genuine
+        // provisioning failure is a different matter and says so.
+        const message = error?.message || String(error)
+        if (/no accepted publication or claim/.test(message)) {
+          logger.relay.info('Relay publisher catalog has nothing to announce yet')
+        } else {
+          logger.relay.warn('Relay publisher catalog announcement failed', { error: message })
+        }
+      }
+
       // Managers exist now — bind the real archive publisher behind the lazy proxy.
       if (config.archive?.uiEnabled) {
-        const runtimeFsModule = fsModule || await import('#fs')
         deferredPublisher.bind(createArchivePublisher({
           identityManager: runtime.identityManager,
-      storagePath: config.storage?.path,
+          storagePath: config.storage?.path,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
+          publisherShell,
           fs: runtimeFsModule
         }))
       }

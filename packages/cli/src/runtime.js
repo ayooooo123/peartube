@@ -68,7 +68,12 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
     },
     seedPin: config.seedPin || {},
     operability: {
-      operatorMode: config.mode || 'community'
+      // Relay mode (public/private) and archive operator mode
+      // (local-first/altruistic/friend-family/community/...) are different
+      // vocabularies. Passing the relay mode straight through made every
+      // public relay fail startup with "invalid archive operator mode", so the
+      // operator intent is configured on its own or defaults to community.
+      operatorMode: config.archiveOperatorMode || 'community'
     },
     ipcLog: (message) => logger?.runtime?.debug?.(message)
   })

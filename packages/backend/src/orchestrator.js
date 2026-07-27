@@ -877,7 +877,23 @@ export async function createBackendContext(config) {
         const genesisRootKey = b4a.from(source.ownerPublisherId, 'hex')
         const publisherId = derivePublisherId(genesisRootKey)
         try {
-          return await catalogRegistry.resolve(publisherId)
+          const owned = await catalogRegistry.resolve(publisherId)
+          if (owned) return owned
+        } catch (error) {
+          if (error?.code !== 'PUBLISHER_CATALOG_UNAVAILABLE' &&
+              !/PUBLISHER_CATALOG_UNAVAILABLE/.test(error?.message || '')) throw error
+        }
+        // These sources are this device's own channels. When the local
+        // publisher catalog is keyed by a publisher root rather than the
+        // channel identity - which is how a relay provisions one - nothing
+        // resolves from the owner key, the migration never completes, and
+        // every later provisionPublisherCatalog fails PUBLISHER_MIGRATION_
+        // PENDING. Migrating them into the one local writable catalog is what
+        // the plan already assumes, since it builds operations against
+        // binding.publisherId.
+        try {
+          const writable = await catalogRegistry.getWritableBindings()
+          return writable?.length === 1 ? writable[0] : null
         } catch (error) {
           if (error?.code === 'PUBLISHER_CATALOG_UNAVAILABLE' ||
               /PUBLISHER_CATALOG_UNAVAILABLE/.test(error?.message || '')) return null

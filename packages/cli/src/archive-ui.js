@@ -172,6 +172,8 @@ function discoverCard(item) {
             : `<input type="hidden" name="tmdbSeason" value="">
           <input type="hidden" name="tmdbEpisode" value="">`}
           <input type="hidden" name="tmdbPosterPath" value="${escapeHtml(item.posterPath || '')}">
+          <input type="hidden" name="tmdbOverview" value="${escapeHtml(item.overview || '')}">
+          <input type="hidden" name="tmdbGenres" value="${escapeHtml(Array.isArray(item.genres) ? item.genres.join(',') : '')}">
           <input type="hidden" name="sourceType" value="tmdb">
           <input type="hidden" name="sourceVideoId" value="${item.type === 'tv' ? '' : escapeHtml(tmdbSourceVideoId(item))}">
           <input type="hidden" name="channelName" value="${escapeHtml(title)}">

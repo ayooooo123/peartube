@@ -648,6 +648,19 @@ ns.register({
     // A consumer holds no metadata-provider credentials, so cover art only
     // reaches it if the publisher's claim carries it and this summary passes it
     // on. Without this the catalog arrives complete and still renders blank.
+    // The cover is a blob in the publisher's core, replicated on the same swarm
+    // as the content: no origin to reach, nothing leaked about who is browsing,
+    // and it still resolves offline. posterUrl remains for claims that predate
+    // that and name an origin instead.
+    // A consumer cannot look a title up, so everything a viewer reads before
+    // pressing play has to arrive with the catalog entry itself.
+    { name: 'releaseYear', type: 'uint', required: false },
+    { name: 'runtimeMinutes', type: 'uint', required: false },
+    { name: 'overview', type: 'string', required: false },
+    { name: 'genres', type: 'string', array: true },
+    { name: 'posterBlobId', type: 'string', required: false },
+    { name: 'posterBlobsCoreKey', type: 'string', required: false },
+    { name: 'posterMimeType', type: 'string', required: false },
     { name: 'posterUrl', type: 'string', required: false }
   ]
 })

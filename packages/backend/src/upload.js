@@ -106,6 +106,38 @@ function detectMimeType(buffer) {
  * @param {string} mimeType - MIME type
  * @returns {string} File extension without dot
  */
+const MAX_OVERVIEW_BYTES = 2048
+const MAX_GENRES = 8
+const MAX_GENRE_BYTES = 64
+
+// Descriptive metadata is bounded here rather than trusted: it is signed into a
+// claim that every consumer replays, and the claim itself is size-capped, so an
+// unbounded plot summary would cost every peer on the network.
+export function describeMedia(input) {
+  if (!input || typeof input !== 'object') return {}
+  const out = {}
+  const year = Number(input.releaseYear)
+  if (Number.isSafeInteger(year) && year >= 1870 && year <= 2200) out.releaseYear = year
+  const runtime = Number(input.runtimeMinutes)
+  if (Number.isSafeInteger(runtime) && runtime > 0 && runtime <= 100000) out.runtimeMinutes = runtime
+  if (typeof input.overview === 'string') {
+    const overview = input.overview.trim()
+    if (overview.length > 0) out.overview = overview.slice(0, MAX_OVERVIEW_BYTES)
+  }
+  if (Array.isArray(input.genres)) {
+    const genres = []
+    for (const genre of input.genres) {
+      if (typeof genre !== 'string') continue
+      const name = genre.trim()
+      if (!name || name.length > MAX_GENRE_BYTES) continue
+      if (!genres.includes(name)) genres.push(name)
+      if (genres.length >= MAX_GENRES) break
+    }
+    if (genres.length > 0) out.genres = genres
+  }
+  return out
+}
+
 export function getPlaybackSupportForMimeType(mimeType) {
   const normalized = String(mimeType || '').toLowerCase();
   if (normalized === 'video/mp4' || normalized === 'video/webm') {
@@ -428,6 +460,11 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
         ...(Array.isArray(metadata.artwork) && metadata.artwork.length > 0
           ? { artwork: metadata.artwork }
           : {}),
+        // The same reasoning covers the rest of what a viewer reads before
+        // pressing play. A consumer cannot look a title up, so a year, plot,
+        // runtime, or genre that stays with the publisher is a year, plot,
+        // runtime, or genre nobody downstream will ever see.
+        ...describeMedia(runtime.mediaMetadata),
         ...(episodic
           ? {
               collectionRef,
@@ -778,7 +815,8 @@ export function createUploadManager({
         );
         await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
           ...publicationRuntime,
-          publisherId: options.publisherId
+          publisherId: options.publisherId,
+          mediaMetadata: options.mediaMetadata
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
         await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4File(fs, filePath, { fileSize }));
@@ -859,7 +897,8 @@ export function createUploadManager({
         );
         await maybeAttachImmutablePublication(metadata, blobResult, channel, fileSize, mimeType, {
           ...publicationRuntime,
-          publisherId: options.publisherId
+          publisherId: options.publisherId,
+          mediaMetadata: options.mediaMetadata
         });
         immutableCommitConfirmed = Boolean(metadata.immutablePublication);
         await persistPlaybackProfile(channel, blobResult.id, mimeType, () => probeMp4Buffer(buffer));

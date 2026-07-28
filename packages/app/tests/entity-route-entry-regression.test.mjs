@@ -35,7 +35,9 @@ const appUiStubPlugin = {
       loader: 'js',
     }))
     context.onLoad({ filter: /^app-context$/, namespace: 'test-stub' }, () => ({
-      contents: 'export const useApp = () => ({ rpc: {} });',
+      // Cards resolve swarm cover art through the context directly, so the stub
+      // has to offer the context as well as the hook.
+      contents: "import React from 'react'; export const AppContext = React.createContext(null); export const useApp = () => ({ rpc: {} });",
       loader: 'js',
     }))
   },

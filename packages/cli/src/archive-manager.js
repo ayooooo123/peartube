@@ -169,19 +169,79 @@ export function deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpiso
   return { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: id }
 }
 
+const MAX_POSTER_BYTES = 4 * 1024 * 1024
+const POSTER_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+
 // A consumer holds no metadata-provider credentials, so cover art has to be
 // published with the record or every catalog renders as blank placeholders.
-// The poster path comes from the same classification that supplies the TMDB
-// coordinates, so publishing it costs nothing extra.
-export function deriveArtwork({ tmdbPosterPath, thumbnailUrl } = {}) {
-  const artwork = []
+// Publishing a metadata-provider URL would not fix that: the consumer would
+// have to reach an origin outside the swarm, which leaks who is browsing what,
+// fails wherever that origin is unreachable, and is simply unavailable offline.
+// The bytes are fetched once, here, by the publisher that already holds the
+// credentials, and everything downstream reads them from the swarm.
+export async function fetchPosterBytes(tmdbPosterPath, { fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
   const posterPath = tmdbPosterPath ? String(tmdbPosterPath).trim() : ''
-  if (posterPath) {
-    artwork.push({ role: 'poster', remoteUrl: `https://image.tmdb.org/t/p/w342${posterPath}` })
+  if (!posterPath) return null
+  // Stored once and replicated to every peer, so size the fetch for a poster
+  // card rather than pulling the original: w500 covers a 118dp card at 3x.
+  const url = posterPath.startsWith('/') ? `https://image.tmdb.org/t/p/w500${posterPath}` : null
+  if (!url) return null
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetchImpl(url, { signal: controller.signal })
+    if (!response?.ok) return null
+    const mimeType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim().toLowerCase()
+    if (!POSTER_MIME_TYPES.has(mimeType)) return null
+    const declared = Number(response.headers?.get?.('content-length') || 0)
+    if (Number.isFinite(declared) && declared > MAX_POSTER_BYTES) return null
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_POSTER_BYTES) return null
+    return { bytes, mimeType }
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
   }
-  const thumbnail = thumbnailUrl ? String(thumbnailUrl).trim() : ''
-  if (thumbnail) artwork.push({ role: 'thumbnail', remoteUrl: thumbnail })
-  return artwork.length > 0 ? { artwork } : {}
+}
+
+// The job carries what the metadata match resolved as strings from a form. The
+// claim wants typed, bounded values, and a viewer sees nothing at all unless
+// they make that trip, so convert here rather than publishing raw form input.
+export function describeTmdbMedia({ tmdbYear, tmdbOverview, tmdbRuntime, tmdbGenres } = {}) {
+  const out = {}
+  const year = Number.parseInt(String(tmdbYear ?? '').trim(), 10)
+  if (Number.isSafeInteger(year) && year >= 1870 && year <= 2200) out.releaseYear = year
+  const runtime = Number.parseInt(String(tmdbRuntime ?? '').trim(), 10)
+  if (Number.isSafeInteger(runtime) && runtime > 0) out.runtimeMinutes = runtime
+  const overview = String(tmdbOverview ?? '').trim()
+  if (overview) out.overview = overview
+  const genres = String(tmdbGenres ?? '')
+    .split(',')
+    .map(genre => genre.trim())
+    .filter(Boolean)
+  if (genres.length > 0) out.genres = genres
+  return out
+}
+
+// The poster lives in the publisher's own blob core, so it replicates on the
+// same swarm as the video and needs no origin of its own.
+export async function publishPosterArtwork(channel, poster) {
+  if (!channel || !poster?.bytes?.byteLength) return {}
+  const blobsCoreKey = channel.blobsKeyHex
+  if (!blobsCoreKey) return {}
+  const stored = await channel.putBlob(poster.bytes)
+  const blobId = stored?.id == null ? null : String(stored.id)
+  if (!blobId) return {}
+  return {
+    artwork: [{
+      role: 'poster',
+      blobId,
+      blobsCoreKey,
+      mimeType: poster.mimeType,
+    }],
+  }
 }
 
 async function readValue(metaDb, key, fallback) {
@@ -294,7 +354,13 @@ export async function enqueueArchiveJob(store, input = {}) {
     tmdbEpisode: input.tmdbEpisode ? String(input.tmdbEpisode) : null,
     tmdbPosterPath: input.tmdbPosterPath ? String(input.tmdbPosterPath) : null,
     tmdbTitle: input.tmdbTitle ? String(input.tmdbTitle) : null,
-    tmdbYear: input.tmdbYear ? String(input.tmdbYear) : null
+    tmdbYear: input.tmdbYear ? String(input.tmdbYear) : null,
+    // Carried so the publisher can put them on the claim: a consumer holds no
+    // provider credentials, so anything the relay knows and does not publish is
+    // lost to every viewer downstream.
+    tmdbOverview: input.tmdbOverview ? String(input.tmdbOverview) : null,
+    tmdbRuntime: input.tmdbRuntime ? String(input.tmdbRuntime) : null,
+    tmdbGenres: input.tmdbGenres ? String(input.tmdbGenres) : null
   })
 }
 
@@ -591,11 +657,16 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const catalogPublisherId = (await relayPublisher?.ensureLocalPublisher())?.publisherId || identity.publicKey
       return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey, publisherId: catalogPublisherId, identityPublicKey: identity.publicKey }
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, tmdbPosterPath, publish }) {
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, thumbnailFile, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl, tmdbType, tmdbId, tmdbSeason, tmdbEpisode, tmdbPosterPath, tmdbYear, tmdbOverview, tmdbRuntime, tmdbGenres, publish }) {
       // upload.js refuses to publish unless the registry hands back exactly one
       // writable binding, so the catalog has to exist before the file moves.
       await relayPublisher?.ensureLocalPublisher()
+      // Store the cover before the upload so the metadata claim can name it:
+      // the claim is authored during the upload, and artwork attached after the
+      // fact would never reach a consumer that already read the claim.
+      const poster = await publishPosterArtwork(channel, await fetchPosterBytes(tmdbPosterPath))
       const result = await uploadManager.uploadFromPath(channel, filePath, {
+        mediaMetadata: describeTmdbMedia({ tmdbYear, tmdbOverview, tmdbRuntime, tmdbGenres }),
         title,
         description,
         mimeType,
@@ -615,7 +686,7 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         // video record (schema already supports these fields), not just on the
         // relay-side job/feed previews.
         ...deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpisode }),
-        ...deriveArtwork({ tmdbPosterPath, thumbnailUrl })
+        ...poster
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
 

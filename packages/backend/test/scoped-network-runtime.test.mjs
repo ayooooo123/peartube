@@ -65,9 +65,12 @@ function bytes (size, fill) {
   return b4a.alloc(size, fill)
 }
 
-function connectionPair ({ sourcePeerFill = 202, consumerPeerFill = 201 } = {}) {
-  const aToB = new PassThrough()
-  const bToA = new PassThrough()
+function connectionPair ({ sourcePeerFill = 202, consumerPeerFill = 201, highWaterMark } = {}) {
+  // A tiny highWaterMark makes write() report backpressure while still
+  // buffering, which is exactly what a real socket does under a large frame.
+  const options = highWaterMark == null ? {} : { highWaterMark }
+  const aToB = new PassThrough(options)
+  const bToA = new PassThrough(options)
   const a = Duplex.from({ readable: bToA, writable: aToB })
   const b = Duplex.from({ readable: aToB, writable: bToA })
   a.userData = null
@@ -78,6 +81,30 @@ function connectionPair ({ sourcePeerFill = 202, consumerPeerFill = 201 } = {}) 
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+// A pair whose writes complete asynchronously, so a frame larger than the write
+// buffer leaves data queued and write() reports backpressure the way a real
+// congested socket does. PassThrough behind Duplex.from never does: it absorbs
+// the write and answers true.
+function backpressuredPair ({ sourcePeerFill = 206, consumerPeerFill = 205 } = {}) {
+  const make = (peer) => new Duplex({
+    highWaterMark: 1,
+    write (chunk, _encoding, callback) {
+      peer().push(chunk)
+      setImmediate(callback)
+    },
+    read () {},
+  })
+  let a = null
+  let b = null
+  a = make(() => b)
+  b = make(() => a)
+  a.userData = null
+  b.userData = null
+  a.remotePublicKey = bytes(32, consumerPeerFill)
+  b.remotePublicKey = bytes(32, sourcePeerFill)
+  return { a, b }
+}
 
 function namespaceGenesis (descriptor, root) {
   const prepared = prepareSignedEnvelope({
@@ -2221,6 +2248,121 @@ test('a catalog page too large for one frame fails loudly instead of stalling', 
   t.ok(
     errors.some(entry => /exceeds frame bound/.test(String(entry?.reason || entry?.message || ''))) || received.length === 0,
     'the publisher refuses the oversized page instead of stalling silently',
+  )
+
+  await consumer.close()
+  await source.close()
+  pair.a.destroy()
+  pair.b.destroy()
+})
+
+// A socket that reports backpressure has queued the frame, not dropped it.
+// Treating that as a send failure tears down the catalog walk exactly when a
+// page is big enough to fill the socket buffer, which is when it matters most:
+// the peer sees a disconnect and the catalog never arrives.
+test('a backpressured socket does not abort the catalog walk', async (t) => {
+  const root = crypto.keyPair(bytes(32, 240))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 241),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const genesisFrame = encodePublisherCatalogFrame(genesis)
+  const genesisId = b4a.toString(genesis.recordId, 'hex')
+  const sourceWriterKey = bytes(32, 242)
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+
+  // Two ~20 KiB operations: one page, comfortably inside the frame bound, and
+  // far past what a congested socket accepts without asking the writer to wait.
+  const bulky = []
+  for (let index = 0; index < 2; index++) {
+    const prepared = prepareSignedEnvelope({
+      recordType: PUBLISHER_RECORD_TYPES.CLAIM,
+      schemaMajor: 1,
+      schemaMinor: 0,
+      issuerIdentityKey: descriptor.publisherId,
+      signerKey: root.publicKey,
+      policyEpoch: 0,
+      issuerSequence: index + 1,
+      signedAt: 30 + index,
+      canonicalBody: encodePublisherOperationBody(PUBLISHER_RECORD_TYPES.CLAIM, {
+        claimId: crypto.hash(b4a.from(`backpressure-${index}`)),
+        claimType: 'EntityMetadataClaim',
+        payload: b4a.alloc(20 * 1024, index + 1),
+      }),
+    }, { hash: crypto.hash })
+    const operation = attachSignedEnvelopeSignature(prepared, crypto.sign(signedRecordSignaturePreimage(prepared), root.secretKey))
+    bulky.push({
+      operationId: b4a.toString(operation.recordId, 'hex'),
+      sourceWriterKey,
+      frame: encodePublisherCatalogFrame(operation),
+    })
+  }
+  const acceptedEntries = [
+    { operationId: genesisId, sourceWriterKey, frame: genesisFrame },
+    ...bulky,
+  ].sort((left, right) => left.operationId.localeCompare(right.operationId))
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor, limit }) => {
+    const start = cursor === null ? 0 : acceptedEntries.findIndex(entry => entry.operationId === cursor) + 1
+    const entries = acceptedEntries.slice(start, start + Math.max(1, Number(limit) || 1))
+    return { entries, nextCursor: entries.length > 0 ? entries.at(-1).operationId : null }
+  }
+  sourceRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: acceptedEntries.length,
+    digest: bytes(32, 243),
+    authorizationStateDigest: bytes(32, 244),
+  })
+  sourceRegistry.binding.catalog.view = {
+    async get (key) {
+      return key === 'state/descriptor'
+        ? { value: encodePublisherNamespaceDescriptor(descriptor) }
+        : null
+    },
+    async * createReadStream () {
+      yield { key: `accepted/${b4a.toString(genesis.recordId, 'hex')}`, value: genesisFrame }
+    },
+  }
+
+  const received = []
+  const consumerRegistry = fakeRegistry(descriptor)
+  consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => {
+    received.push(...entries)
+    return { accepted: entries.length, rejected: 0 }
+  }
+  consumerRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: received.length,
+    digest: bytes(32, 243),
+    authorizationStateDigest: bytes(32, 244),
+  })
+
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
+  const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
+  await source.start()
+  await consumer.start()
+  await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+
+  // A page this size cannot be written without the socket asking the writer to
+  // wait, so this is the exact condition that used to abort the walk.
+  const pair = backpressuredPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 300 && received.length < acceptedEntries.length; attempt++) await settle()
+
+  t.is(received.length, acceptedEntries.length, 'every entry reaches the consumer through a backpressured socket')
+  t.ok(
+    received.every((entry, index) => b4a.equals(entry.frame, acceptedEntries[index].frame)),
+    'queued frames arrive intact and in cursor order',
   )
 
   await consumer.close()

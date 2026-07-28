@@ -28,7 +28,12 @@ function buildArchiveForm(get) {
     tmdbEpisode: get('tmdbEpisode') || '',
     tmdbPosterPath: get('tmdbPosterPath') || '',
     tmdbTitle: get('tmdbTitle') || '',
-    tmdbYear: get('tmdbYear') || ''
+    tmdbYear: get('tmdbYear') || '',
+    // A consumer cannot look a title up, so whatever the match resolved has to
+    // travel with the job or it never reaches the claim.
+    tmdbOverview: get('tmdbOverview') || '',
+    tmdbRuntime: get('tmdbRuntime') || '',
+    tmdbGenres: get('tmdbGenres') || ''
   }
 }
 

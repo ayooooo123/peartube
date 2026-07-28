@@ -794,7 +794,16 @@ export function createScopedNetworkRuntime (options = {}) {
     const frame = encodePeerFrame({ purpose, type, requestId: nextRequestId++, payload })
     const sender = tracked.channel?.messages?.[0] || tracked.message
     if (!sender?.send) return false
-    if (sender.send(frame, tracked.channel) === false) return false
+    // Protomux returns stream.write()'s value: false means the frame is queued
+    // and the writer should ease off, not that anything was dropped. Treating
+    // it as a failure kills the catalog walk exactly when a page is large
+    // enough to fill the socket buffer, which is precisely when it matters.
+    // A closed session is the only real send failure.
+    const drained = sender.send(frame, tracked.channel)
+    if (drained === false) {
+      if (tracked.closed || tracked.channel?.closed) return false
+      counters.backpressuredFrames = (counters.backpressuredFrames || 0) + 1
+    }
     counters.outboundFrames++
     return true
   }

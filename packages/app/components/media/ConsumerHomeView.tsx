@@ -12,6 +12,7 @@ import type { MediaEntitySummary } from '@peartube/core'
 import { MediaRail } from './MediaRail'
 import { MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
+import { usePosterArtwork } from '@/hooks/usePosterArtwork'
 import { projectHomeRails } from '@/lib/home-rails.js'
 import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
@@ -46,7 +47,7 @@ type RailItem = MediaEntitySummary & {
   resume?: { fraction: number }
 }
 
-function posterArtwork(item: RailItem): string | null {
+function posterLocator(item: RailItem): string | null {
   const fields = item as unknown as Record<string, unknown>
   const candidates = [
     fields.posterUrl,
@@ -69,9 +70,13 @@ function posterArtwork(item: RailItem): string | null {
  * Artwork goes through the same treatment as every other poster in the app.
  * This used to paint a flat surface with the title's first letter, which meant
  * a catalog of real media rendered as a row of grey rectangles.
+ *
+ * Cover art claimed as a blob lives in the publisher's own core and resolves
+ * through the local blob server; only older claims still name an origin.
  */
 function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
   const availability = item.availabilityView
+  const artwork = usePosterArtwork(item, posterLocator(item))
   const resumePercent = item.resume ? Math.round(item.resume.fraction * 100) : null
   const title = item.title || 'Untitled'
   const accessibilityLabel = [
@@ -89,7 +94,7 @@ function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
     >
       <View style={styles.posterFrame}>
         <ThumbnailImage
-          thumbnailUrl={posterArtwork(item)}
+          thumbnailUrl={artwork}
           channelInitial={title.charAt(0).toUpperCase()}
           style={styles.poster}
         />

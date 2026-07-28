@@ -78,7 +78,19 @@ const stubNativeOnlyDeps = {
 
 async function loadHomeView() {
   const result = await build({
-    entryPoints: [path.join(appRoot, 'components/media/ConsumerHomeView.tsx')],
+    // The catalog hands over a blob reference, and the card resolves it through
+    // the app's RPC client. Pulling the context in alongside the view lets a
+    // render supply a stub client instead of reaching for a real blob server.
+    stdin: {
+      contents: [
+        "export { ConsumerHomeView } from './components/media/ConsumerHomeView'",
+        "export { AppContext } from './lib/AppContext'",
+        '',
+      ].join('\n'),
+      resolveDir: appRoot,
+      sourcefile: 'consumer-home-entry.ts',
+      loader: 'ts',
+    },
     bundle: true,
     format: 'cjs',
     external: ['react', 'react-dom'],
@@ -100,14 +112,26 @@ async function loadHomeView() {
   }
 }
 
+function renderWith(module, items, rpc) {
+  const home = React.createElement(module.ConsumerHomeView, {
+    state: { status: 'ready', items },
+    onRefresh() {},
+    onOpenEntity() {},
+  })
+  if (!rpc) return renderToStaticMarkup(home)
+  return renderToStaticMarkup(
+    React.createElement(module.AppContext.Provider, { value: { rpc, blobServerPort: 49_201 } }, home),
+  )
+}
+
 function renderHome(items) {
-  return loadHomeView().then(module => renderToStaticMarkup(
-    React.createElement(module.ConsumerHomeView, {
-      state: { status: 'ready', items },
-      onRefresh() {},
-      onOpenEntity() {},
-    }),
-  ))
+  return loadHomeView().then(module => renderWith(module, items))
+}
+
+// The card starts resolution while it renders and adopts the URL once the blob
+// server answers, so a second render is what a viewer sees a moment later.
+function settle() {
+  return new Promise(resolve => setImmediate(resolve))
 }
 
 // A card used to paint a flat surface with the title's first letter and never
@@ -197,4 +221,91 @@ test('a home card renders the catalog poster locator', async () => {
   }])
 
   assert.ok(html.includes(posterUrl), 'the claimed poster reaches the rendered card')
+})
+
+const BLOBS_CORE_KEY = 'a'.repeat(64)
+const BLOB_SERVER_URL = 'http://127.0.0.1:49201/blobs/poster-under-test.jpg'
+
+function recordingRpc(url = BLOB_SERVER_URL) {
+  const calls = []
+  return {
+    calls,
+    getVideoThumbnail: async request => {
+      calls.push(request)
+      return { exists: true, url }
+    },
+  }
+}
+
+// Cover art lives in the publisher's own blob core, never at an outside origin:
+// an origin says who is browsing what, is blockable, and is absent offline. The
+// card has to turn the reference into a local blob-server URL.
+test('a home card resolves a poster blob reference through the blob server', async () => {
+  const module = await loadHomeView()
+  const rpc = recordingRpc()
+  const items = [{
+    entityId: 'entity-blob-art',
+    entityKind: 'work',
+    title: 'Blob Art',
+    posterBlobId: '3:1:0:512',
+    posterBlobsCoreKey: BLOBS_CORE_KEY,
+    posterMimeType: 'image/jpeg',
+  }]
+
+  const before = renderWith(module, items, rpc)
+  assert.ok(before.includes('Blob Art'), 'the card renders while the poster is still resolving')
+  assert.equal(before, renderWith(module, [{ entityId: 'entity-blob-art', entityKind: 'work', title: 'Blob Art' }]),
+    'an unresolved poster is exactly the placeholder, so nothing shifts when it lands')
+
+  await settle()
+  const after = renderWith(module, items, rpc)
+
+  assert.equal(rpc.calls.length, 1, 'the same reference resolves once, not once per render')
+  assert.deepEqual(rpc.calls[0], {
+    channelKey: '',
+    videoId: '',
+    thumbnailBlobId: '3:1:0:512',
+    thumbnailBlobsCoreKey: BLOBS_CORE_KEY,
+    thumbnailMimeType: 'image/jpeg',
+  }, 'the poster reference is forwarded under the thumbnail ref names the backend reads')
+  assert.ok(after.includes(BLOB_SERVER_URL), 'the resolved blob-server URL reaches the rendered card')
+})
+
+// Claims made before publishers carried their own artwork still name an origin.
+// Those keep rendering as they always did, and ask the swarm for nothing.
+test('a home card with only a poster locator resolves nothing', async () => {
+  const module = await loadHomeView()
+  const rpc = recordingRpc()
+  const posterUrl = 'https://image.example/legacy-claim.jpg'
+
+  const html = renderWith(module, [{
+    entityId: 'entity-legacy-art',
+    entityKind: 'work',
+    title: 'Legacy Art',
+    posterUrl,
+  }], rpc)
+
+  assert.ok(html.includes(posterUrl), 'the claimed locator still renders')
+  assert.equal(rpc.calls.length, 0, 'a locator needs no blob resolution')
+})
+
+// Relay-archived media that never matched a metadata provider carries neither,
+// and must cost nothing rather than probing the swarm for a blob that is not
+// referenced anywhere.
+test('a home card with no artwork at all resolves nothing', async () => {
+  const module = await loadHomeView()
+  const rpc = recordingRpc()
+
+  const html = renderWith(module, [{
+    entityId: 'entity-no-art',
+    entityKind: 'work',
+    title: 'Bare Entity',
+  }], rpc)
+
+  assert.equal(html, renderWith(module, [{
+    entityId: 'entity-no-art',
+    entityKind: 'work',
+    title: 'Bare Entity',
+  }]), 'the card is exactly what it renders with no client at all: the placeholder')
+  assert.equal(rpc.calls.length, 0, 'nothing is asked of the blob server')
 })

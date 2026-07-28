@@ -747,10 +747,12 @@ test('claimed cover art reduces to one display locator and reaches the catalog w
       title: 'Illustrated',
       publicationId: manifest.publicationId,
       // Deliberately out of preference order: a backdrop must not stand in for
-      // a poster just because the publisher listed it first.
+      // a poster just because the publisher listed it first, and an origin must
+      // not win over a blob that replicates on this swarm.
       artwork: [
         { role: 'backdrop', remoteUrl: 'https://image.example/backdrop.jpg' },
         { role: 'poster', remoteUrl: 'https://image.example/poster.jpg' },
+        { role: 'poster', blobId: '3:1:0:512', blobsCoreKey: 'b'.repeat(64), mimeType: 'image/jpeg' },
       ],
     },
     confidence: 100,
@@ -769,7 +771,9 @@ test('claimed cover art reduces to one display locator and reaches the catalog w
     assetManifestStore,
   })
   t.is(records.length, 1, 'the illustrated work projects one record')
-  t.is(records[0].artwork, 'https://image.example/poster.jpg', 'the poster wins over the backdrop')
+  t.is(records[0].artwork, `blob:${'b'.repeat(64)}@3:1:0:512`,
+    'the swarm blob wins over any origin the claim names')
+  t.is(records[0].artworkMimeType, 'image/jpeg', 'the decoder is told what the blob holds')
 
   const projection = createConsumerCatalogProjection({
     localIndex: createLocalMediaIndex(),
@@ -781,5 +785,110 @@ test('claimed cover art reduces to one display locator and reaches the catalog w
 
   const api = createMediaGraphApi({ consumerCatalogProjection: projection })
   const page = await api.getMediaCatalog({})
-  t.is(page.items[0].posterUrl, 'https://image.example/poster.jpg', 'the poster reaches the catalog response')
+  t.is(page.items[0].posterBlobsCoreKey, 'b'.repeat(64), 'the consumer is told which core holds the cover')
+  t.is(page.items[0].posterBlobId, '3:1:0:512', 'the consumer is told which blob to replicate')
+  t.is(page.items[0].posterMimeType, 'image/jpeg')
+  t.absent(page.items[0].posterUrl, 'no origin is handed to a consumer that has a blob')
+})
+
+// Claims written before swarm-native covers name an origin. Those still have to
+// resolve, or upgrading the publisher would blank every catalog it already published.
+test('a cover claimed as an origin still reaches the consumer as a url', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 91))
+  const work = createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisher.publicKey, issuerLocalId: 'legacy-art' })
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Legacy art',
+    renditions: [testRendition(31)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(manifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [work],
+    payload: {
+      title: 'Legacy art',
+      publicationId: manifest.publicationId,
+      artwork: [{ role: 'poster', remoteUrl: 'https://image.example/legacy.jpg' }],
+    },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [work],
+    payload: { publicationId: manifest.publicationId, availabilityStatus: 'available' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [] },
+    indexFeedManager: { getRecords: () => [] },
+    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({ mediaGraphStore, assetManifestStore }),
+  })
+  projection.rebuild()
+
+  const api = createMediaGraphApi({ consumerCatalogProjection: projection })
+  const page = await api.getMediaCatalog({})
+  t.is(page.items[0].posterUrl, 'https://image.example/legacy.jpg', 'an origin-only cover is still offered')
+  t.absent(page.items[0].posterBlobId, 'nothing invents a blob that was never published')
+})
+
+// Everything a viewer reads before pressing play has to arrive with the catalog
+// entry. A consumer holds no metadata-provider credentials, so a year, plot,
+// runtime, or genre the publisher keeps to itself is one nobody ever sees.
+test('what a viewer reads before pressing play travels with the entry', async (t) => {
+  const publisher = crypto.keyPair(b4a.alloc(32, 93))
+  const work = createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisher.publicKey, issuerLocalId: 'described' })
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Described',
+    renditions: [testRendition(41)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(manifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [work],
+    payload: {
+      title: 'Described',
+      publicationId: manifest.publicationId,
+      releaseYear: 2005,
+      runtimeMinutes: 119,
+      overview: 'Two friends crash weddings.',
+      genres: ['Comedy', 'Romance'],
+    },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [work],
+    payload: { publicationId: manifest.publicationId, availabilityStatus: 'available' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [] },
+    indexFeedManager: { getRecords: () => [] },
+    publisherRecords: () => projectAuthenticatedPublisherMediaRecords({ mediaGraphStore, assetManifestStore }),
+  })
+  t.is(projection.rebuild().accepted, 1, 'a described record stays admissible')
+
+  const api = createMediaGraphApi({ consumerCatalogProjection: projection })
+  const [item] = (await api.getMediaCatalog({})).items
+  t.is(item.releaseYear, 2005)
+  t.is(item.runtimeMinutes, 119)
+  t.is(item.overview, 'Two friends crash weddings.')
+  t.alike(item.genres, ['Comedy', 'Romance'])
 })

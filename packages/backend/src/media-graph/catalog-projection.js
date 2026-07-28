@@ -492,19 +492,55 @@ function claimStoreView(store, claims) {
 // display locator, and moderation is applied to that locator. Preferring the
 // poster keeps a shelf uniform, and a plain string stays supported because
 // older claims carry the locator directly.
-function artworkLocator(artwork) {
-  if (typeof artwork === 'string') return artwork || null
+//
+// A blob in the publisher's own core wins over any origin the claim names: it
+// replicates on the same swarm as the content, so it works offline and does not
+// tell a third party who is browsing what. The locator is the canonical blob
+// ref string, which parseBlobRef already understands.
+function artworkEntry(artwork) {
+  if (typeof artwork === 'string') return artwork ? { locator: artwork, mimeType: null } : null
   if (!Array.isArray(artwork)) return null
-  for (const role of ['poster', 'thumbnail', 'still', 'backdrop']) {
-    for (const entry of artwork) {
-      if (entry?.role !== role) continue
-      const locator = typeof entry.remoteUrl === 'string' && entry.remoteUrl
-        ? entry.remoteUrl
-        : (typeof entry.blobId === 'string' ? entry.blobId : '')
-      if (locator) return locator
+  const roles = ['poster', 'thumbnail', 'still', 'backdrop']
+  for (const preferBlob of [true, false]) {
+    for (const role of roles) {
+      for (const entry of artwork) {
+        if (entry?.role !== role) continue
+        const mimeType = typeof entry.mimeType === 'string' && entry.mimeType ? entry.mimeType : null
+        const blobId = typeof entry.blobId === 'string' ? entry.blobId.trim() : ''
+        const blobsCoreKey = typeof entry.blobsCoreKey === 'string' ? entry.blobsCoreKey.trim() : ''
+        if (blobId && blobsCoreKey) return { locator: `blob:${blobsCoreKey}@${blobId}`, mimeType }
+        if (preferBlob) continue
+        const remoteUrl = typeof entry.remoteUrl === 'string' ? entry.remoteUrl.trim() : ''
+        if (remoteUrl) return { locator: remoteUrl, mimeType }
+      }
     }
   }
   return null
+}
+
+function artworkLocator(artwork) {
+  return artworkEntry(artwork)?.locator ?? null
+}
+
+function artworkMimeType(artwork) {
+  return artworkEntry(artwork)?.mimeType ?? null
+}
+
+// What a viewer reads before pressing play travels on the same claim as the
+// title, because a consumer holds no metadata-provider credentials and cannot
+// look any of it up.
+function describedMedia(metadata) {
+  const out = {}
+  const year = Number(metadata?.releaseYear)
+  if (Number.isSafeInteger(year) && year > 0) out.releaseYear = year
+  const runtime = Number(metadata?.runtimeMinutes)
+  if (Number.isSafeInteger(runtime) && runtime > 0) out.runtimeMinutes = runtime
+  if (typeof metadata?.overview === 'string' && metadata.overview) out.overview = metadata.overview
+  if (Array.isArray(metadata?.genres)) {
+    const genres = metadata.genres.filter(genre => typeof genre === 'string' && genre)
+    if (genres.length > 0) out.genres = genres
+  }
+  return out
 }
 
 export function projectAuthenticatedPublisherMediaRecords({
@@ -544,7 +580,9 @@ export function projectAuthenticatedPublisherMediaRecords({
           publisherId: manifest.body.publisherId,
           title: work.metadata.title || manifest.body.title || null,
           artwork: artworkLocator(work.metadata.artwork),
+          artworkMimeType: artworkMimeType(work.metadata.artwork),
           ranking: Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null,
+          ...describedMedia(work.metadata),
           playable: true,
         })
         continue
@@ -564,6 +602,7 @@ export function projectAuthenticatedPublisherMediaRecords({
           publisherId: manifest.body.publisherId,
           title: collection.metadata.title || work.metadata.title || manifest.body.title || null,
           artwork: artworkLocator(collection.metadata.artwork) || artworkLocator(work.metadata.artwork),
+          artworkMimeType: artworkMimeType(collection.metadata.artwork) || artworkMimeType(work.metadata.artwork),
           ranking: Number.isFinite(collection.metadata.ranking)
             ? collection.metadata.ranking
             : (Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null),
@@ -654,7 +693,12 @@ export function createConsumerCatalogProjection(options = {}) {
       ...record,
       title: resolved.metadata.title || record.title,
       artwork: artworkLocator(resolved.metadata.artwork) || record.artwork,
+      artworkMimeType: artworkMimeType(resolved.metadata.artwork) || record.artworkMimeType || null,
       ranking: Number.isFinite(resolved.metadata.ranking) ? resolved.metadata.ranking : record.ranking,
+      // Resolution can merge claims from several publishers; whichever one
+      // described the title wins over a record that carries nothing.
+      ...describedMedia(record),
+      ...describedMedia(resolved.metadata),
       entityKind: resolved.entityKind,
     }
   }

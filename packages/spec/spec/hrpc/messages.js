@@ -2048,6 +2048,8 @@ const encoding50_7 = encoding45_29
 const encoding50_8 = c.array(c.frame(encoding45))
 // @peartube/media-entity-summary.renditions
 const encoding50_9 = c.array(c.frame(encoding43))
+// @peartube/media-entity-summary.genres
+const encoding50_13 = encoding44_11
 
 // @peartube/media-entity-summary
 const encoding50 = {
@@ -2061,7 +2063,14 @@ const encoding50 = {
       (m.availability ? 32 : 0) |
       (m.sources ? 64 : 0) |
       (m.renditions ? 128 : 0) |
-      (m.posterUrl ? 256 : 0)
+      (m.releaseYear ? 256 : 0) |
+      (m.runtimeMinutes ? 512 : 0) |
+      (m.overview ? 1024 : 0) |
+      (m.genres ? 2048 : 0) |
+      (m.posterBlobId ? 4096 : 0) |
+      (m.posterBlobsCoreKey ? 8192 : 0) |
+      (m.posterMimeType ? 16384 : 0) |
+      (m.posterUrl ? 32768 : 0)
 
     c.string.preencode(state, m.entityId)
     c.string.preencode(state, m.entityKind)
@@ -2075,6 +2084,13 @@ const encoding50 = {
     if (m.availability) encoding50_7.preencode(state, m.availability)
     if (m.sources) encoding50_8.preencode(state, m.sources)
     if (m.renditions) encoding50_9.preencode(state, m.renditions)
+    if (m.releaseYear) c.uint.preencode(state, m.releaseYear)
+    if (m.runtimeMinutes) c.uint.preencode(state, m.runtimeMinutes)
+    if (m.overview) c.string.preencode(state, m.overview)
+    if (m.genres) encoding50_13.preencode(state, m.genres)
+    if (m.posterBlobId) c.string.preencode(state, m.posterBlobId)
+    if (m.posterBlobsCoreKey) c.string.preencode(state, m.posterBlobsCoreKey)
+    if (m.posterMimeType) c.string.preencode(state, m.posterMimeType)
     if (m.posterUrl) c.string.preencode(state, m.posterUrl)
   },
   encode(state, m) {
@@ -2087,7 +2103,14 @@ const encoding50 = {
       (m.availability ? 32 : 0) |
       (m.sources ? 64 : 0) |
       (m.renditions ? 128 : 0) |
-      (m.posterUrl ? 256 : 0)
+      (m.releaseYear ? 256 : 0) |
+      (m.runtimeMinutes ? 512 : 0) |
+      (m.overview ? 1024 : 0) |
+      (m.genres ? 2048 : 0) |
+      (m.posterBlobId ? 4096 : 0) |
+      (m.posterBlobsCoreKey ? 8192 : 0) |
+      (m.posterMimeType ? 16384 : 0) |
+      (m.posterUrl ? 32768 : 0)
 
     c.string.encode(state, m.entityId)
     c.string.encode(state, m.entityKind)
@@ -2101,6 +2124,13 @@ const encoding50 = {
     if (m.availability) encoding50_7.encode(state, m.availability)
     if (m.sources) encoding50_8.encode(state, m.sources)
     if (m.renditions) encoding50_9.encode(state, m.renditions)
+    if (m.releaseYear) c.uint.encode(state, m.releaseYear)
+    if (m.runtimeMinutes) c.uint.encode(state, m.runtimeMinutes)
+    if (m.overview) c.string.encode(state, m.overview)
+    if (m.genres) encoding50_13.encode(state, m.genres)
+    if (m.posterBlobId) c.string.encode(state, m.posterBlobId)
+    if (m.posterBlobsCoreKey) c.string.encode(state, m.posterBlobsCoreKey)
+    if (m.posterMimeType) c.string.encode(state, m.posterMimeType)
     if (m.posterUrl) c.string.encode(state, m.posterUrl)
   },
   decode(state) {
@@ -2119,7 +2149,14 @@ const encoding50 = {
       availability: (flags & 32) !== 0 ? encoding50_7.decode(state) : null,
       sources: (flags & 64) !== 0 ? encoding50_8.decode(state) : null,
       renditions: (flags & 128) !== 0 ? encoding50_9.decode(state) : null,
-      posterUrl: (flags & 256) !== 0 ? c.string.decode(state) : null
+      releaseYear: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      runtimeMinutes: (flags & 512) !== 0 ? c.uint.decode(state) : 0,
+      overview: (flags & 1024) !== 0 ? c.string.decode(state) : null,
+      genres: (flags & 2048) !== 0 ? encoding50_13.decode(state) : null,
+      posterBlobId: (flags & 4096) !== 0 ? c.string.decode(state) : null,
+      posterBlobsCoreKey: (flags & 8192) !== 0 ? c.string.decode(state) : null,
+      posterMimeType: (flags & 16384) !== 0 ? c.string.decode(state) : null,
+      posterUrl: (flags & 32768) !== 0 ? c.string.decode(state) : null
     }
   }
 }

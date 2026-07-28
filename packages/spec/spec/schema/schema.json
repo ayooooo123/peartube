@@ -2124,6 +2124,48 @@
           "version": 1
         },
         {
+          "name": "releaseYear",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "runtimeMinutes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "overview",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "genres",
+          "array": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterBlobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterBlobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "posterMimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
           "name": "posterUrl",
           "required": false,
           "type": "string",

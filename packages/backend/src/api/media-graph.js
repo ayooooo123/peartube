@@ -5,11 +5,43 @@ import { selectPlaybackSource, sourceAvailabilityScore } from '../media-graph/so
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 import { preparePlaybackSource } from '../playback/source-preparation.js'
 import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '../playback/errors.js'
+import { parseBlobRef } from '../blob-utils.js'
 
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 100
 const DEFAULT_CATALOG_PAGE_LIMIT = 20
 const MAX_CATALOG_PAGE_LIMIT = 50
+
+// The catalog carries one artwork locator. A swarm blob ref is handed to the
+// consumer as the blob it is, so the consumer replicates the bytes from the
+// publisher instead of fetching an origin; anything else is passed through as a
+// URL for claims that predate swarm-native covers.
+// Descriptive metadata reaches the consumer the same way the cover does: with
+// the entry, because there is nowhere else for a consumer to get it.
+function describedMediaResponse(item) {
+  const out = {}
+  if (Number.isSafeInteger(item?.releaseYear) && item.releaseYear > 0) out.releaseYear = item.releaseYear
+  if (Number.isSafeInteger(item?.runtimeMinutes) && item.runtimeMinutes > 0) out.runtimeMinutes = item.runtimeMinutes
+  if (typeof item?.overview === 'string' && item.overview) out.overview = item.overview
+  const genres = Array.isArray(item?.genres) ? item.genres.filter(genre => typeof genre === 'string' && genre) : []
+  if (genres.length > 0) out.genres = genres
+  return out
+}
+
+function posterResponse(item) {
+  const locator = typeof item?.artwork === 'string' ? item.artwork.trim() : ''
+  if (!locator) return {}
+  const blob = parseBlobRef({ blobRef: locator })
+  if (blob?.blobsCoreKey && blob?.blobId) {
+    const mimeType = typeof item.artworkMimeType === 'string' && item.artworkMimeType ? item.artworkMimeType : null
+    return {
+      posterBlobId: blob.blobId,
+      posterBlobsCoreKey: blob.blobsCoreKey,
+      ...(mimeType ? { posterMimeType: mimeType } : {}),
+    }
+  }
+  return { posterUrl: locator }
+}
 
 function okPage(items, nextCursor = null) {
   return { success: true, items, nextCursor }
@@ -554,7 +586,8 @@ export function createMediaGraphApi(options = {}) {
                 renditions: [],
                 // Cover art is published on the metadata claim; passing it on
                 // is what stops a fully synced catalog rendering blank.
-                ...(typeof item.artwork === 'string' && item.artwork ? { posterUrl: item.artwork } : {}),
+                ...posterResponse(item),
+                ...describedMediaResponse(item),
               }
             }),
             nextCursor: page.nextCursor,

@@ -6,6 +6,7 @@ import { colors } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { describeAvailability } from '@/lib/media-availability'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
+import { usePosterArtwork } from '@/hooks/usePosterArtwork'
 import { ArchiveStatus } from './ArchiveStatus'
 import { ConflictNotice } from './ConflictNotice'
 import { ProvenancePanel } from './ProvenancePanel'
@@ -247,7 +248,9 @@ export function MediaEntityDetailScreen({
   const item = useMemo(() => applySelectedSource(baseItem, selectedOverride), [baseItem, selectedOverride])
   const title = pickString(item?.title, item?.preferredMetadata?.title, item?.name, routeFallbackTitle(type, routeId)) || pageTitleFor(type)
   const subtitle = pickString(item?.subtitle, item?.creatorName, item?.sourceProviderName, item?.publisherName, item?.channelName, item?.channel?.name)
-  const artwork = pickString(item?.backdropUrl, item?.posterUrl, item?.stillUrl, item?.thumbnailUrl, item?.thumbnail)
+  // Same treatment the home rails give a poster: a blob-claimed cover resolves
+  // through the local blob server, and only older origin claims render flat.
+  const artwork = usePosterArtwork(item, pickString(item?.backdropUrl, item?.posterUrl, item?.stillUrl, item?.thumbnailUrl, item?.thumbnail))
   const duration = typeof item?.duration === 'number' && item.duration > 0
     ? item.duration
     : typeof item?.durationSec === 'number' && item.durationSec > 0

@@ -172,6 +172,18 @@ export function createLocalMediaIndex(options = {}) {
       indexId: record.indexId || null,
       agentId: record.agentId || null,
       artwork: record.artwork || null,
+      // A swarm blob carries no content type of its own, and a viewer's image
+      // decoder needs one. Losing it here means a correct cover that will not
+      // decode on some platforms.
+      artworkMimeType: typeof record.artworkMimeType === 'string' ? record.artworkMimeType : null,
+      // A viewer reads these before pressing play, and a consumer cannot look
+      // any of them up, so they have to survive indexing to be worth publishing.
+      releaseYear: Number.isSafeInteger(record.releaseYear) ? record.releaseYear : null,
+      runtimeMinutes: Number.isSafeInteger(record.runtimeMinutes) ? record.runtimeMinutes : null,
+      overview: typeof record.overview === 'string' ? record.overview : null,
+      genres: Array.isArray(record.genres)
+        ? record.genres.filter(genre => typeof genre === 'string' && genre).slice(0, 8)
+        : [],
       playable: record.playable === true,
     }
   }
@@ -195,6 +207,8 @@ export function createLocalMediaIndex(options = {}) {
       [record.agentId, 512],
       [record.model, 512],
       [record.artwork, 2048],
+      [record.artworkMimeType, 128],
+      [record.overview, 4096],
     ]) {
       if (!boundedString(value, max)) return false
     }
@@ -202,6 +216,14 @@ export function createLocalMediaIndex(options = {}) {
     for (const tag of record.tags || []) {
       if (!boundedString(tag, 128, true)) return false
     }
+    if (record.genres != null) {
+      if (!Array.isArray(record.genres) || record.genres.length > 8) return false
+      for (const genre of record.genres) {
+        if (!boundedString(genre, 64, true)) return false
+      }
+    }
+    if (record.releaseYear != null && !Number.isSafeInteger(record.releaseYear)) return false
+    if (record.runtimeMinutes != null && !Number.isSafeInteger(record.runtimeMinutes)) return false
     if (record.ranking != null && !Number.isFinite(record.ranking)) return false
     if (record.expectedEpisodeCount != null &&
         (!Number.isSafeInteger(record.expectedEpisodeCount) ||
@@ -270,6 +292,17 @@ export function createLocalMediaIndex(options = {}) {
       // group is not ordered by who does, so fall back across the group rather
       // than letting an art-less record decide the entity renders blank.
       artwork: first.artwork || recordGroup.find(record => record.artwork)?.artwork || null,
+      artworkMimeType: first.artwork
+        ? first.artworkMimeType
+        : (recordGroup.find(record => record.artwork)?.artworkMimeType ?? null),
+      // As with cover art, the publisher that described the title may not be
+      // the one that sorts first in the group.
+      releaseYear: first.releaseYear ?? recordGroup.find(record => record.releaseYear != null)?.releaseYear ?? null,
+      runtimeMinutes: first.runtimeMinutes ?? recordGroup.find(record => record.runtimeMinutes != null)?.runtimeMinutes ?? null,
+      overview: first.overview || recordGroup.find(record => record.overview)?.overview || null,
+      genres: first.genres?.length
+        ? first.genres
+        : (recordGroup.find(record => record.genres?.length)?.genres ?? []),
       collectionId: first.collectionId || null,
       tags: Array.from(tags).sort(),
       publications: projectedPublications,

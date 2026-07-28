@@ -1,5 +1,5 @@
 import test from 'brittle'
-import { createArchiveManager, createArchivePublisher, deriveArtwork, deriveMediaCoordinates, enqueueArchiveJob } from '../src/archive-manager.js'
+import { createArchiveManager, createArchivePublisher, deriveMediaCoordinates, enqueueArchiveJob, fetchPosterBytes, publishPosterArtwork } from '../src/archive-manager.js'
 
 function memStore () {
   const jobs = []
@@ -115,20 +115,67 @@ test('plain URL archive (no tmdb fields) is unchanged', async (t) => {
 })
 
 // A consumer has no metadata-provider credentials, so cover art only reaches it
-// if the publisher puts it on the record. Without this every catalog renders as
-// a wall of identical placeholders no matter how good the metadata match was.
-test('deriveArtwork publishes the cover a metadata match already resolved', (t) => {
-  t.alike(deriveArtwork({ tmdbPosterPath: '/abc123.jpg' }), {
-    artwork: [{ role: 'poster', remoteUrl: 'https://image.tmdb.org/t/p/w342/abc123.jpg' }]
-  }, 'a poster path becomes a resolvable poster locator')
+// if the publisher puts it on the record. Publishing a provider URL would not
+// do that: the consumer would have to leave the swarm to fetch it, which leaks
+// what it is browsing and fails wherever that origin is blocked or offline. The
+// bytes are fetched once by the publisher and replicate like any other content.
+test('the publisher fetches cover bytes rather than claiming a foreign origin', async (t) => {
+  const requested = []
+  const fetchImpl = async (url) => {
+    requested.push(url)
+    return {
+      ok: true,
+      headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'image/jpeg' : null) },
+      arrayBuffer: async () => new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer,
+    }
+  }
 
-  t.alike(deriveArtwork({ tmdbPosterPath: '/a.jpg', thumbnailUrl: 'https://cdn.example/t.jpg' }), {
-    artwork: [
-      { role: 'poster', remoteUrl: 'https://image.tmdb.org/t/p/w342/a.jpg' },
-      { role: 'thumbnail', remoteUrl: 'https://cdn.example/t.jpg' }
-    ]
-  }, 'a source thumbnail is published alongside the poster')
+  const poster = await fetchPosterBytes('/abc123.jpg', { fetchImpl })
+  t.is(requested.length, 1, 'the poster is fetched once, by the publisher')
+  t.ok(requested[0].endsWith('/abc123.jpg'), 'the resolved poster path is fetched')
+  t.is(poster.mimeType, 'image/jpeg')
+  t.is(poster.bytes.byteLength, 4, 'the bytes themselves are what gets published')
 
-  t.alike(deriveArtwork({}), {}, 'nothing is claimed when there is no artwork to claim')
-  t.alike(deriveArtwork({ tmdbPosterPath: '   ' }), {}, 'a blank poster path is not a locator')
+  t.is(await fetchPosterBytes('   ', { fetchImpl }), null, 'a blank poster path fetches nothing')
+  t.is(await fetchPosterBytes('abc.jpg', { fetchImpl }), null, 'a path that is not a poster path is refused')
+})
+
+test('a fetched cover is refused unless it is a bounded image', async (t) => {
+  const respond = (headers, bytes = new Uint8Array([1]).buffer, ok = true) => async () => ({
+    ok,
+    headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+    arrayBuffer: async () => bytes,
+  })
+
+  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: respond({ 'content-type': 'text/html' }) }), null,
+    'a document is not cover art')
+  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: respond({ 'content-type': 'image/jpeg', 'content-length': String(64 * 1024 * 1024) }) }), null,
+    'an oversized cover is refused before it is read')
+  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: respond({ 'content-type': 'image/jpeg' }, new ArrayBuffer(0)) }), null,
+    'an empty response is not cover art')
+  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: async () => { throw new Error('offline') } }), null,
+    'an unreachable provider degrades to no cover, not a failed archive')
+})
+
+// The cover has to land in the publisher's own blob core: that is what makes it
+// replicate on the same swarm as the video instead of needing an origin.
+test('a published cover names the blob a peer can replicate', async (t) => {
+  const stored = []
+  const channel = {
+    blobsKeyHex: 'a'.repeat(64),
+    async putBlob (bytes) {
+      stored.push(bytes)
+      return { id: '3:1:0:512' }
+    },
+  }
+
+  const published = await publishPosterArtwork(channel, { bytes: Buffer.from([1, 2, 3]), mimeType: 'image/jpeg' })
+  t.is(stored.length, 1, 'the bytes are written to the publisher blob core')
+  t.alike(published, {
+    artwork: [{ role: 'poster', blobId: '3:1:0:512', blobsCoreKey: 'a'.repeat(64), mimeType: 'image/jpeg' }],
+  }, 'the claim names the blob, not a foreign origin')
+
+  t.alike(await publishPosterArtwork(channel, null), {}, 'no cover claims nothing')
+  t.alike(await publishPosterArtwork({ blobsKeyHex: null, putBlob: channel.putBlob }, { bytes: Buffer.from([1]), mimeType: 'image/jpeg' }), {},
+    'a channel with no blob core claims nothing rather than an unreachable ref')
 })

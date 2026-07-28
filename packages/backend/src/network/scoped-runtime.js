@@ -567,6 +567,13 @@ export function createScopedNetworkRuntime (options = {}) {
     : true
   let uploadedBytes = 0
   let networkPolicyEpoch = 0
+  // A device that will not upload answers every block request with
+  // "unavailable", so its peers read a fully synced catalog as awaiting
+  // replication with nothing anywhere saying why. State it once at startup.
+  if (!uploadAllowed) {
+    console.log('[ScopedNetwork] uploads are off; this device serves no content bytes',
+      JSON.stringify({ uploadPermission, networkEnabled, uploadCeilingBytes }))
+  }
 
   function freshCatalogBudget(current = Number(now())) {
     return { windowStartedAt: current, pages: 0, records: 0, bytes: 0, work: 0, peers: {} }

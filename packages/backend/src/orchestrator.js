@@ -11,6 +11,7 @@
 
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import { isArtworkRendition } from './assets/rendition.js'
 import {
   DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   initializeStorage,
@@ -252,6 +253,57 @@ export async function startBackendSeedPin({
  * @param {BackendConfig} config - Configuration options
  * @returns {Promise<BackendContext>} - All backend components
  */
+// A publisher is only a source for what it currently holds. Publishing takes
+// custody for the life of that process; nothing did so again on the next start,
+// so a restarted relay advertised a catalog whose bytes no peer could fetch.
+// Bounded on purpose: this runs on every boot, and a publisher with a large
+// catalog must not spend its startup taking custody of all of it at once.
+const MAX_SERVED_LOCAL_PUBLICATIONS = 256
+
+async function serveLocalPublications(ctx, { catalogRegistry, assetManifestStore, scopedNetwork } = {}) {
+  if (typeof catalogRegistry?.getWritableBindings !== 'function') return
+  if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+  if (typeof assetManifestStore?.getManifest !== 'function') return
+
+  let served = 0
+  const bindings = await catalogRegistry.getWritableBindings()
+  for (const binding of Array.isArray(bindings) ? bindings : []) {
+    const catalog = binding?.catalog
+    if (!catalog?.writable || typeof catalog.listProjections !== 'function') continue
+    let cursor = null
+    do {
+      if (isContextShuttingDown(ctx)) return
+      const page = await catalog.listProjections('publication', { cursor, limit: 64 })
+      for (const item of page?.items || []) {
+        if (served >= MAX_SERVED_LOCAL_PUBLICATIONS) break
+        const publicationId = item?.body?.publicationId
+        const publicationIdHex = typeof publicationId === 'string'
+          ? publicationId
+          : (publicationId ? b4a.toString(publicationId, 'hex') : null)
+        if (!publicationIdHex) continue
+        const manifest = assetManifestStore.getManifest(publicationIdHex)
+        const rendition = (manifest?.body?.renditions || []).find(candidate => (
+          candidate && !candidate.blocked && !candidate.superseded && !isArtworkRendition(candidate)
+        ))
+        if (!rendition) continue
+        try {
+          // Artwork published with the title is taken along by the runtime.
+          await scopedNetwork.retainAuthorizedRendition({
+            manifest,
+            renditionId: rendition.renditionId,
+            publicationId: publicationIdHex,
+          })
+          served++
+        } catch {
+          // One title that cannot be served must not stop the rest.
+        }
+      }
+      cursor = served >= MAX_SERVED_LOCAL_PUBLICATIONS ? null : (page?.nextCursor || null)
+    } while (cursor)
+  }
+  if (served > 0) console.log('[Orchestrator] Serving local publications:', served)
+}
+
 export async function createBackendContext(config) {
   const {
     storagePath,
@@ -432,6 +484,21 @@ export async function createBackendContext(config) {
     store: networkPolicyStore,
     defaults: networkPolicy,
   })
+  // A stored policy wins over defaults, which is right for a person's device
+  // and wrong for a host whose whole job is serving. The shared default upload
+  // permission is 'manual' and uploadAllowed demands 'enabled', so a relay that
+  // booted once before it was configured keeps refusing every block request
+  // forever: it advertises a catalog it will never serve. When the caller
+  // starts a process whose purpose is to serve, that intent outranks a stored
+  // value nobody chose.
+  if (networkPolicy?.uploadPermission === 'enabled' && initialNetworkPolicy.uploadPermission !== 'enabled') {
+    console.log('[Orchestrator] Enabling uploads: this process is configured to serve')
+    initialNetworkPolicy = {
+      ...initialNetworkPolicy,
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: Number(networkPolicy.uploadCeilingBytes || initialNetworkPolicy.uploadCeilingBytes || 0),
+    }
+  }
   const consumerModerationProfile = createConsumerModerationProfileController({
     repository: {
       async load() {
@@ -1130,6 +1197,23 @@ export async function createBackendContext(config) {
         // Skip prefetch - it was causing errors and slowing things down
       } catch (e) {
         console.log('[Orchestrator] Warm-up skipped:', e?.message)
+      }
+
+      if (signal.aborted || isContextShuttingDown(ctx)) return
+      // Publishing announces a catalog for the life of one process, but the
+      // bytes are served from the rendition's asset scope, which only exists
+      // while something holds the publication. Restart the publisher and it
+      // keeps advertising titles nobody can fetch: peers ask, nothing answers,
+      // and every source reads as awaiting replication. Take custody of what
+      // this device published so it stays a source for it.
+      try {
+        await serveLocalPublications(ctx, {
+          catalogRegistry,
+          assetManifestStore: ctx.assetManifestStore,
+          scopedNetwork,
+        })
+      } catch (e) {
+        console.log('[Orchestrator] Local publications are not being served:', e?.message)
       }
 
       if (signal.aborted || isContextShuttingDown(ctx)) return

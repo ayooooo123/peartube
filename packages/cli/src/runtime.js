@@ -64,6 +64,17 @@ export async function createRelayRuntime ({ config, logger, dependencies = null 
       trustedBootstrapRootIds,
       bootstrapEnabled
     },
+    // A relay exists to make data available. The shared default upload
+    // permission is 'manual', which is right for a phone on a metered link and
+    // exactly wrong here: uploadAllowed requires 'enabled', so a relay left on
+    // the default answers every block request with "unavailable". It announces
+    // a catalog it will never serve, and every peer reads the whole library as
+    // awaiting replication. An operator can still narrow this at runtime.
+    networkPolicy: {
+      uploadPermission: 'enabled',
+      uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
+      ...(config.networkPolicy || {}),
+    },
     resources: {
       profile: { maxBytesPerDay: maxBytes },
       maxConcurrentSync: maxConcurrent,

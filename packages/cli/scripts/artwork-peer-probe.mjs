@@ -90,7 +90,37 @@ try {
           availability: source.availability?.state ?? source.availability ?? null,
           codes: source.rejectionReasonCodes || source.diagnostics?.rejectionReasonCodes || null,
         }))))
-        process.exit(jpeg ? 0 : 1)
+        // Proof of playback is bytes through the same HTTP blob server the
+        // player reads, on a peer whose store never held this file - not a
+        // core.get() behind the player's back.
+        let played = false
+        if (playback?.success === true) {
+          const entitySources = entity?.entity?.sources || entity?.sources || []
+          const rendition = entitySources.map(source => source.rendition || (source.renditions || [])[0])
+            .find(candidate => candidate?.coreKey)
+            || (playback.coreKey ? { coreKey: playback.coreKey, coreLength: 0, byteLength: 0 } : null)
+          log('RENDITION', JSON.stringify(rendition && {
+            coreKey: String(rendition.coreKey || '').slice(0, 12),
+            coreLength: rendition.coreLength ?? null,
+            byteLength: rendition.byteLength ?? null,
+          }))
+          if (playback.url) {
+            try {
+              log('VIDEO URL', String(playback.url).slice(0, 90))
+              const clip = await fetch(playback.url, { headers: { Range: 'bytes=0-1048575' } })
+              const body = Buffer.from(await clip.arrayBuffer())
+              const ftyp = body.length > 12 && body.subarray(4, 8).toString('latin1') === 'ftyp'
+              played = clip.status === 206 && ftyp && body.length > 65536
+              log('PLAYED', JSON.stringify({
+                status: clip.status,
+                bytes: body.length,
+                brand: body.subarray(8, 12).toString('latin1'),
+                ftyp,
+              }))
+            } catch (error) { log('PLAYED failed', error?.message) }
+          }
+        }
+        process.exit(jpeg && played ? 0 : 1)
       }
       log('  not yet', String(target.entityId).slice(0, 12), JSON.stringify(answer))
     }

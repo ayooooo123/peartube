@@ -79,6 +79,9 @@ export async function loadMediaEntity({ rpc, entityId }) {
  * `publicationId` is only ever the viewer's explicit choice from Other Sources,
  * and the backend still refuses it if it fails a hard gate.
  */
+/**
+ * @param {{ rpc: any, entityId: string, publicationId?: string | null }} request
+ */
 export async function startMediaPlayback({ rpc, entityId, publicationId = null }) {
   const prepare = requireMethod(rpc, 'prepareMediaPlayback')
   const response = await prepare(publicationId ? { entityId, publicationId } : { entityId })
@@ -87,6 +90,9 @@ export async function startMediaPlayback({ rpc, entityId, publicationId = null }
       publicationId: response.publicationId || null,
       renditionId: response.renditionId || null,
       coreKey: response.coreKey || null,
+      // The only field a player can act on: without it Play resolved a source
+      // and then had nowhere to send anyone.
+      url: response.url || null,
       attempts: Array.isArray(response.attempts) ? response.attempts : [],
       sources: Array.isArray(response.sources) ? response.sources : [],
     }

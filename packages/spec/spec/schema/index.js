@@ -2708,9 +2708,9 @@ const encoding67 = {
 }
 
 // @peartube/prepare-media-playback-response.attempts
-const encoding68_7 = c.array(c.frame(encoding66))
+const encoding68_8 = c.array(c.frame(encoding66))
 // @peartube/prepare-media-playback-response.sources
-const encoding68_8 = encoding50_8
+const encoding68_9 = encoding50_8
 
 // @peartube/prepare-media-playback-response
 const encoding68 = {
@@ -2723,8 +2723,9 @@ const encoding68 = {
       (m.publicationId ? 16 : 0) |
       (m.renditionId ? 32 : 0) |
       (m.coreKey ? 64 : 0) |
-      (m.attempts ? 128 : 0) |
-      (m.sources ? 256 : 0)
+      (m.url ? 128 : 0) |
+      (m.attempts ? 256 : 0) |
+      (m.sources ? 512 : 0)
 
     c.uint.preencode(state, flags)
 
@@ -2734,8 +2735,9 @@ const encoding68 = {
     if (m.publicationId) c.string.preencode(state, m.publicationId)
     if (m.renditionId) c.string.preencode(state, m.renditionId)
     if (m.coreKey) c.string.preencode(state, m.coreKey)
-    if (m.attempts) encoding68_7.preencode(state, m.attempts)
-    if (m.sources) encoding68_8.preencode(state, m.sources)
+    if (m.url) c.string.preencode(state, m.url)
+    if (m.attempts) encoding68_8.preencode(state, m.attempts)
+    if (m.sources) encoding68_9.preencode(state, m.sources)
   },
   encode(state, m) {
     const flags =
@@ -2746,8 +2748,9 @@ const encoding68 = {
       (m.publicationId ? 16 : 0) |
       (m.renditionId ? 32 : 0) |
       (m.coreKey ? 64 : 0) |
-      (m.attempts ? 128 : 0) |
-      (m.sources ? 256 : 0)
+      (m.url ? 128 : 0) |
+      (m.attempts ? 256 : 0) |
+      (m.sources ? 512 : 0)
 
     c.uint.encode(state, flags)
 
@@ -2757,8 +2760,9 @@ const encoding68 = {
     if (m.publicationId) c.string.encode(state, m.publicationId)
     if (m.renditionId) c.string.encode(state, m.renditionId)
     if (m.coreKey) c.string.encode(state, m.coreKey)
-    if (m.attempts) encoding68_7.encode(state, m.attempts)
-    if (m.sources) encoding68_8.encode(state, m.sources)
+    if (m.url) c.string.encode(state, m.url)
+    if (m.attempts) encoding68_8.encode(state, m.attempts)
+    if (m.sources) encoding68_9.encode(state, m.sources)
   },
   decode(state) {
     const flags = c.uint.decode(state)
@@ -2771,8 +2775,9 @@ const encoding68 = {
       publicationId: (flags & 16) !== 0 ? c.string.decode(state) : null,
       renditionId: (flags & 32) !== 0 ? c.string.decode(state) : null,
       coreKey: (flags & 64) !== 0 ? c.string.decode(state) : null,
-      attempts: (flags & 128) !== 0 ? encoding68_7.decode(state) : null,
-      sources: (flags & 256) !== 0 ? encoding68_8.decode(state) : null
+      url: (flags & 128) !== 0 ? c.string.decode(state) : null,
+      attempts: (flags & 256) !== 0 ? encoding68_8.decode(state) : null,
+      sources: (flags & 512) !== 0 ? encoding68_9.decode(state) : null
     }
   }
 }

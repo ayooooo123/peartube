@@ -216,6 +216,15 @@ export function useVideoPlayerActions() {
   return useRequiredVideoContext(useContext(VideoPlayerActionsContext), 'useVideoPlayerActions')
 }
 
+/**
+ * The actions when a player is mounted, null when one is not. A route that only
+ * hands a prepared URL to the player still has to render without it - server
+ * rendering and route-entry checks mount no provider.
+ */
+export function useOptionalVideoPlayerActions() {
+  return useContext(VideoPlayerActionsContext)
+}
+
 interface VideoPlayerProviderProps {
   children: ReactNode
 }

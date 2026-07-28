@@ -83,7 +83,15 @@ type Props = {
   publisherActionHandlers?: Partial<Record<PublisherCapabilityAction, () => void>>
   onSelectSource?: (source: { entityId: string, publicationId: string, renditionId: string }) => void
   /** Receives the source Play actually started, after any backend failover. */
-  onPlaybackPrepared?: (playback: { entityId: string, publicationId: string | null, renditionId: string | null }) => void
+  onPlaybackPrepared?: (playback: {
+    entityId: string,
+    publicationId: string | null,
+    renditionId: string | null,
+    // What preparation was for. A caller handed only ids has to go find the
+    // bytes itself, which is why Play used to stop here.
+    url: string | null,
+    title: string,
+  }) => void
   onPlaybackFailed?: (failure: { entityId: string, errorCode: string, message: string }) => void
 }
 
@@ -140,10 +148,22 @@ export default function MediaEntityPage({
     if (!mediaGraph?.prepareMediaPlayback || !entityId) return
     try {
       const prepared = await startMediaPlayback({ rpc: mediaGraph, entityId, publicationId })
+      // A source chosen but not servable is a failure with a name, not a Play
+      // button that quietly does nothing.
+      if (!prepared.url) {
+        onPlaybackFailed?.({
+          entityId,
+          errorCode: 'PLAYBACK_URL_UNAVAILABLE',
+          message: 'This source was selected but is not servable yet',
+        })
+        return
+      }
       onPlaybackPrepared?.({
         entityId,
         publicationId: prepared.publicationId,
         renditionId: prepared.renditionId,
+        url: prepared.url,
+        title: resolved.title,
       })
     } catch (error: unknown) {
       const failure = error instanceof Error ? error : null
@@ -156,7 +176,7 @@ export default function MediaEntityPage({
         message: failure?.message || 'Playback could not start',
       })
     }
-  }, [mediaGraph, entityId, onPlaybackPrepared, onPlaybackFailed])
+  }, [mediaGraph, entityId, resolved.title, onPlaybackPrepared, onPlaybackFailed])
 
   return (
     <MediaEntityDetailScreen

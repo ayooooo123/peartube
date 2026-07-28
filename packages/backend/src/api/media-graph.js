@@ -103,11 +103,16 @@ function findPosterRendition(manifest) {
 // byte offset inside the block region is not derivable from the block span, so
 // rebuilding the id would read the wrong bytes; the span is only a fallback for
 // a manifest that recorded no id.
-function posterBlobRef(manifest, rendition) {
+/**
+ * Where a rendition's bytes actually live. The publisher records this once per
+ * rendition - 'artwork' for a cover, 'upload' for the video - and it is the only
+ * way back to a block span: core.length is blockOffset + blockLength, so neither
+ * term survives on its own.
+ */
+function renditionBlobRef(manifest, rendition) {
   const coreKey = rendition?.core?.key
   if (!coreKey) return null
   const entry = (manifest?.body?.provenance || []).find(candidate => (
-    candidate?.type === 'artwork' &&
     candidate.renditionId === rendition.renditionId &&
     candidate.coreKey === coreKey
   ))
@@ -783,6 +788,30 @@ export function createMediaGraphApi(options = {}) {
     }
   }
 
+  /**
+   * The loopback URL that serves a rendition's bytes. Retention already joined
+   * the publication's asset scope and started the core replicating, so the blob
+   * server streams ranges as they land rather than waiting for a whole film.
+   */
+  function resolveRenditionUrl(publicationId, renditionId) {
+    const blobServer = options.blobServer || options.ctx?.blobServer || null
+    if (typeof blobServer?.getLink !== 'function') return null
+    const manifest = assetManifestStore?.getManifest?.(publicationId)
+    const rendition = (manifest?.body?.renditions || []).find(candidate => candidate.renditionId === renditionId)
+    if (!rendition) return null
+    const ref = renditionBlobRef(manifest, rendition)
+    if (!ref) return null
+    // Not the artwork link: that one is rewritten to the thumbnail path, which
+    // answers from a fixed-length buffer. A player wants the streaming pipe,
+    // which serves ranges as replication delivers them.
+    return String(blobServer.getLink(b4a.from(ref.blobsCoreKey, 'hex'), {
+      blob: ref.blob,
+      type: typeof rendition.format === 'string' ? rendition.format : 'video/mp4',
+      host: options.ctx?.blobServerHost || '127.0.0.1',
+      port: blobServer.port || options.ctx?.blobServerPort,
+    }))
+  }
+
   return {
     async getMediaCatalog(request = {}) {
       const scope = createAvailabilityScope()
@@ -1011,7 +1040,7 @@ export function createMediaGraphApi(options = {}) {
         const manifest = assetManifestStore?.getManifest?.(publicationId) || null
         const rendition = findPosterRendition(manifest)
         if (!rendition) continue
-        const ref = posterBlobRef(manifest, rendition)
+        const ref = renditionBlobRef(manifest, rendition)
         if (!ref) continue
         const url = await resolveArtworkUrl({ manifest, publicationId, rendition, ref, entityId })
         if (url) return { success: true, exists: true, url }
@@ -1095,6 +1124,11 @@ export function createMediaGraphApi(options = {}) {
         publicationId: prepared.publicationId,
         renditionId: prepared.renditionId,
         coreKey: prepared.session.coreKey || null,
+        // A core key is not something anyone can play. The blob server in this
+        // process serves the rendition's byte ranges over loopback and pulls
+        // blocks from the swarm as the player asks for them, so preparation
+        // ends where playback can actually begin.
+        url: resolveRenditionUrl(prepared.publicationId, prepared.renditionId),
         attempts: prepared.attempts,
         sources,
       }

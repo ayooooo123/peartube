@@ -787,6 +787,9 @@ ns.register({
     { name: 'publicationId', type: 'string', required: false },
     { name: 'renditionId', type: 'string', required: false },
     { name: 'coreKey', type: 'string', required: false },
+    // The loopback URL a player can open. A core key names bytes; this serves
+    // them, streaming ranges as replication delivers them.
+    { name: 'url', type: 'string', required: false },
     // Ordered, bounded record of what Play tried and why each attempt ended.
     { name: 'attempts', type: '@peartube/media-playback-attempt', array: true, required: false },
     { name: 'sources', type: '@peartube/media-publication-source', array: true, required: false }

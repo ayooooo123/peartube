@@ -170,3 +170,22 @@ test('the Play action carries an accessible label and disabled state', () => {
   assert.match(blocked, /aria-label="Play The Heist"/)
   assert.match(blocked, /disabled/, 'an unplayable title cannot be pressed')
 })
+
+// Runtime, year and genres are published on the claim because a consumer has
+// no way to look them up. The detail page is where a viewer expects them.
+test('the detail hero states what the publisher claimed about the title', () => {
+  const html = render(screen, {
+    item: { releaseYear: 2005, runtimeMinutes: 119, genres: ['Comedy', 'Romance'] },
+  })
+
+  assert.ok(html.includes('2005'), 'the claimed year is shown')
+  assert.ok(html.includes('1h 59m'), 'runtime is shown as a viewer reads it, not raw minutes')
+  assert.ok(html.includes('Comedy'), 'claimed genres are shown')
+})
+
+test('the detail hero omits facts the publisher never claimed', () => {
+  const html = render(screen, { item: {} })
+
+  assert.ok(!html.includes('NaN'), 'a missing runtime is absent, not malformed')
+  assert.ok(!html.includes('undefined'), 'nothing renders a placeholder for an unclaimed fact')
+})

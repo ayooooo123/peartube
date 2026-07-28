@@ -215,6 +215,29 @@ export function getMediaEntityRouteId(item: MediaCockpitItem & Record<string, an
   ) || 'entity'
 }
 
+/**
+ * Year, runtime and genres, as published on the claim. A consumer cannot look
+ * any of it up, so this line exists only because the publisher put it in the
+ * swarm alongside the title.
+ */
+function mediaFacts(item: MediaCockpitItem | null | undefined): string | null {
+  const fields = item as unknown as Record<string, unknown> | null | undefined
+  const parts: string[] = []
+  const year = typeof fields?.releaseYear === 'number' && fields.releaseYear > 0 ? fields.releaseYear : null
+  if (year) parts.push(String(year))
+  const runtime = typeof fields?.runtimeMinutes === 'number' && fields.runtimeMinutes > 0 ? fields.runtimeMinutes : null
+  if (runtime) {
+    const hours = Math.floor(runtime / 60)
+    const minutes = runtime % 60
+    parts.push(hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`)
+  }
+  const genres = Array.isArray(fields?.genres)
+    ? (fields.genres as unknown[]).filter((genre): genre is string => typeof genre === 'string' && genre.length > 0)
+    : []
+  if (genres.length > 0) parts.push(genres.slice(0, 3).join(', '))
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
 export function MediaEntityDetailScreen({
   type,
   routeId: routeIdProp,
@@ -281,6 +304,7 @@ export function MediaEntityDetailScreen({
             <Text style={styles.kicker}>{pageTitleFor(type)}</Text>
             <Text style={styles.title}>{title}</Text>
             {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+            {mediaFacts(item) ? <Text style={styles.subtitle}>{mediaFacts(item)}</Text> : null}
             {synopsis ? <Text style={styles.synopsis} numberOfLines={4}>{synopsis}</Text> : null}
             <Text
               style={[styles.availability, !availabilityView.playable && styles.availabilityMuted]}

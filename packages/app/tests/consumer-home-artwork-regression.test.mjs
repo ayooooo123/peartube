@@ -309,3 +309,42 @@ test('a home card with no artwork at all resolves nothing', async () => {
   }]), 'the card is exactly what it renders with no client at all: the placeholder')
   assert.equal(rpc.calls.length, 0, 'nothing is asked of the blob server')
 })
+
+// The year is published on the claim precisely because a consumer cannot look
+// it up. Carrying it across the network and then not drawing it wastes the
+// only chance a viewer has to see it.
+test('a home card shows the year the publisher claimed', async () => {
+  const html = await renderHome([{
+    entityId: 'entity-year',
+    entityKind: 'work',
+    title: 'Dated Work',
+    releaseYear: 2005,
+  }])
+
+  assert.ok(html.includes('2005'), 'the claimed year reaches the rendered card')
+})
+
+test('a claimed year and a publisher subtitle share the caption', async () => {
+  const html = await renderHome([{
+    entityId: 'entity-year-subtitle',
+    entityKind: 'work',
+    title: 'Dated Work',
+    subtitle: 'Some Publisher',
+    releaseYear: 1999,
+  }])
+
+  assert.ok(html.includes('1999'), 'the year is shown')
+  assert.ok(html.includes('Some Publisher'), 'the publisher subtitle is not dropped for it')
+})
+
+test('a card with no claimed year still renders its subtitle alone', async () => {
+  const html = await renderHome([{
+    entityId: 'entity-no-year',
+    entityKind: 'work',
+    title: 'Undated Work',
+    subtitle: 'Some Publisher',
+  }])
+
+  assert.ok(html.includes('Some Publisher'), 'the subtitle survives on its own')
+  assert.ok(!html.includes('·'), 'no separator is drawn with nothing to separate')
+})

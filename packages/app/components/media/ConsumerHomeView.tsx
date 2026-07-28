@@ -63,6 +63,19 @@ function posterLocator(item: RailItem): string | null {
 }
 
 /**
+ * The line under a title. A year is what a viewer actually scans a shelf for,
+ * and it now arrives with the catalog entry rather than from a lookup nobody
+ * downstream can perform, so prefer it over the publisher's own subtitle.
+ */
+function cardCaption(item: RailItem): string | null {
+  const fields = item as unknown as Record<string, unknown>
+  const year = typeof fields.releaseYear === 'number' && fields.releaseYear > 0 ? String(fields.releaseYear) : null
+  const subtitle = typeof item.subtitle === 'string' && item.subtitle.trim() ? item.subtitle.trim() : null
+  if (year && subtitle) return `${year} · ${subtitle}`
+  return year || subtitle
+}
+
+/**
  * One consumer card. It leads with the title and what a viewer can do with it
  * right now; publisher ids, claim counts, and archive mechanics are detail-view
  * concerns and deliberately absent here.
@@ -106,7 +119,7 @@ function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
         )}
       </View>
       <Text style={styles.cardTitle} numberOfLines={2}>{title}</Text>
-      {item.subtitle ? <Text style={styles.cardSubtitle} numberOfLines={1}>{item.subtitle}</Text> : null}
+      {cardCaption(item) ? <Text style={styles.cardSubtitle} numberOfLines={1}>{cardCaption(item)}</Text> : null}
       {availability ? (
         <Text style={[styles.availability, !availability.playable && styles.availabilityMuted]} numberOfLines={1}>
           {availability.label}

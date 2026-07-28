@@ -428,3 +428,25 @@ test('MultiWriterChannel persists cover art through a HyperDB round trip', async
     )
   })
 })
+
+// The whole point of publishing cover art as a blob is that the reference on
+// the claim resolves to bytes any peer can replicate from the publisher's own
+// core. If the ref does not round-trip locally it cannot round-trip remotely.
+test('a published cover reference resolves to the exact bytes', async () => {
+  await withChannel(async (channel) => {
+    const cover = Buffer.from('jpeg-cover-bytes-for-the-swarm')
+    const stored = await channel.putBlob(cover)
+
+    assert.ok(channel.blobsKeyHex, 'the publisher exposes the core a peer must replicate')
+    assert.match(channel.blobsKeyHex, /^[0-9a-f]{64}$/, 'the core key is a replicable hypercore key')
+
+    // Exactly the reference shape the metadata claim carries.
+    const locator = `blob:${channel.blobsKeyHex}@${stored.id}`
+    const [, coreKey, blobId] = locator.match(/^blob:([0-9a-f]{64})@(.+)$/)
+    assert.equal(coreKey, channel.blobsKeyHex)
+
+    const readBack = await channel.getBlob(blobId)
+    assert.ok(readBack, 'the reference on the claim resolves')
+    assert.equal(Buffer.from(readBack).toString(), cover.toString(), 'byte for byte, the cover the publisher claimed')
+  })
+})

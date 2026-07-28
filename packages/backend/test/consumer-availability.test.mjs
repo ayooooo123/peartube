@@ -43,7 +43,7 @@ test('a never-assessed publication is awaiting replication, not unavailable', (t
   t.is(result.state, AVAILABILITY_STATES.awaitingReplication)
   t.alike(result.reasonCodes, ['NEVER_ASSESSED'])
   t.is(result.observedAt, NOW)
-  t.is(result.expiresAt, NOW, 'nothing is holding, so nothing expires later')
+  t.is(result.expiresAt, 0, 'an assessment nobody has made cannot also be expired')
   t.is(result.requiredRangeCount, 1)
   t.is(result.reachableRangeCount, 0)
   t.is(result.independentPeerCount, 0)

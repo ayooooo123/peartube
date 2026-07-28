@@ -153,9 +153,8 @@ test('media graph API orders publication sources by score and local source prefe
 
   const claimed = await api.getPublicationSources({ entityId: subject.entityId })
   t.is(claimed.success, true)
-  t.is(claimed.items[0].availability.state, 'awaiting-replication', 'a publisher claim is not evidence of reachability')
+  t.is(claimed.items[0].availability.state, 'awaiting-replication', 'nobody has asked a peer yet')
   t.is(claimed.items[0].availabilityState, 'unknown')
-  t.absent(claimed.items[0].selected, 'nothing is selected without hash-verified reachability')
 
   // Playability decides, so the weaker source is the one with less evidence.
   availabilityEvidenceStore.set(low.publicationId, completePeerEvidence(['aa']))

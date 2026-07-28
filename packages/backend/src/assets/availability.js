@@ -283,6 +283,11 @@ export function assessAvailability(input = {}, options = {}) {
     return Object.freeze({
       ...base,
       state: AVAILABILITY_STATES.awaitingReplication,
+      // Nobody has asked a peer yet, so there is nothing to go stale. Dating
+      // this at the observation time made the summary expired the instant any
+      // later clock read it, and playback then refused sources its own entity
+      // view had just called eligible.
+      expiresAt: 0,
       reasonCodes: orderReasons(['METADATA_ONLY', ...(archivePledged ? ['ARCHIVE_PLEDGE_ONLY'] : [])]),
     })
   }
@@ -360,6 +365,7 @@ export function assessAvailability(input = {}, options = {}) {
     return Object.freeze({
       ...summary,
       state: AVAILABILITY_STATES.awaitingReplication,
+      expiresAt: 0,
       reasonCodes: orderReasons([
         evidence.budgetExceeded ? 'ASSESSMENT_BUDGET_EXCEEDED' : 'NEVER_ASSESSED',
         ...localReasons,

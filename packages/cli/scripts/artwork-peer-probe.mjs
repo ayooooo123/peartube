@@ -76,14 +76,19 @@ try {
         log('PLAYBACK', JSON.stringify({
           success: playback?.success ?? null,
           errorCode: playback?.errorCode ?? null,
-          url: playback?.url ? String(playback.url).slice(0, 60) : null,
-        }))
+          attempts: (playback?.attempts || []).map(a => a?.errorCode || a?.status || a),
+          url: playback?.url || playback?.source?.url || playback?.playback?.url || null,
+        }).slice(0, 400))
         // Why a source was refused matters more than that it was: a probe that
         // declares no codecs is refused for reasons a real client would not hit.
-        log('CANDIDATES', JSON.stringify((playback?.candidates || []).slice(0, 3).map(candidate => ({
-          publicationId: String(candidate.publicationId || '').slice(0, 10),
-          codes: candidate.rejectionReasonCodes || candidate.codes || null,
-          availability: candidate.availability?.state ?? candidate.availabilityStatus ?? null,
+        // Why a source is refused is the whole answer; ask the entity view,
+        // which carries the per-source diagnostics the selector produced.
+        const entity = await runtime.api.getMediaEntity({ entityId: target.entityId })
+          .catch(error => ({ error: error?.message }))
+        log('SOURCES', JSON.stringify((entity?.entity?.sources || entity?.sources || []).slice(0, 3).map(source => ({
+          publicationId: String(source.publicationId || '').slice(0, 10),
+          availability: source.availability?.state ?? source.availability ?? null,
+          codes: source.rejectionReasonCodes || source.diagnostics?.rejectionReasonCodes || null,
         }))))
         process.exit(jpeg ? 0 : 1)
       }

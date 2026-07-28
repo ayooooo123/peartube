@@ -59,7 +59,6 @@ test('every hard gate rejects before any scoring happens', (t) => {
     ['partial', { incomplete: true }, 'INCOMPLETE_PUBLICATION'],
     ['orphan-episode', { collectionMemberBound: false }, 'INCOMPLETE_COLLECTION_BINDING'],
     ['gone', { availability: availability('unavailable') }, 'NO_AVAILABLE_COPY'],
-    ['unchecked', { availability: availability('awaiting-replication') }, 'UNCONFIRMED_AVAILABILITY'],
   ]
   const capabilities = { drmSystems: [], codecs: ['avc1'], containers: ['video/mp4'] }
 

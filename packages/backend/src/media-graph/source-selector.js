@@ -101,7 +101,10 @@ function rejectionCodesFor(source, capabilities, now) {
   const expiresAt = Number(source.availability?.expiresAt)
   if (state === AVAILABILITY_STATES.unavailable) codes.push('NO_AVAILABLE_COPY')
   else if (Number.isFinite(now) && Number.isFinite(expiresAt) && expiresAt > 0 && now > expiresAt) codes.push('STALE_AVAILABILITY')
-  else if (state !== AVAILABILITY_STATES.healthy && state !== AVAILABILITY_STATES.limited) codes.push('UNCONFIRMED_AVAILABILITY')
+  // Not having asked a peer yet is not a reason to refuse: the catalog names
+  // the core, holding it is how bytes arrive, and trying is how anyone finds
+  // out. Only a decided negative - no copy, or an expired assessment - keeps a
+  // source out of the running.
 
   return codes.sort((left, right) => REJECTION_RANK.get(left) - REJECTION_RANK.get(right))
 }

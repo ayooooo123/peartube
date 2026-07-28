@@ -415,6 +415,10 @@ export function createMediaGraphApi(options = {}) {
   const trust = options.trust || options.ctx?.mediaGraphTrust || {}
   const consumerCatalogProjection = options.consumerCatalogProjection || options.ctx?.consumerCatalogProjection || null
   const availabilityEvidenceStore = options.availabilityEvidenceStore || options.ctx?.availabilityEvidenceStore || null
+  // Taking custody of a rendition is how this device becomes a holder of it, so
+  // the runtime that owns that is needed across this whole surface, not just in
+  // the artwork path that first reached for it.
+  const scopedNetwork = options.scopedNetwork || options.ctx?.scopedNetwork || null
   // What this device can actually decrypt and decode. An absent list leaves
   // that dimension unconstrained rather than silently rejecting every source.
   const deviceCapabilities = options.capabilities || options.ctx?.deviceCapabilities || {}
@@ -470,6 +474,40 @@ export function createMediaGraphApi(options = {}) {
    * Reading is passive: it consumes evidence the asset layer already collected
    * under its own lazy budget and never opens an asset swarm to render a page.
    */
+  /**
+   * Take custody of an entity's renditions so the core starts replicating. The
+   * catalog names the cores; holding one is all it takes to read and then serve
+   * it. Best effort: a title that cannot be retained yet surfaces as a playback
+   * error, never as a hang.
+   */
+  async function retainEntitySources(entityId, publicationId = null) {
+    if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+    const rows = mediaGraphStore?.getClaimsBySubject?.(entityId) || []
+    const publicationIds = publicationId
+      ? [publicationId]
+      : rows
+        .filter(row => !row.revoked && row.body.claimType === 'AvailabilityObservation' && row.body.payload?.publicationId)
+        .map(row => row.body.payload.publicationId)
+
+    for (const candidate of new Set(publicationIds)) {
+      if (typeof consumerCatalogProjection?.isPublicationVisible === 'function' &&
+          consumerCatalogProjection.isPublicationVisible(candidate) !== true) continue
+      const manifest = assetManifestStore?.getManifest?.(candidate) || null
+      const requirement = assetManifestStore?.getRenditionRequirement?.(candidate) || null
+      if (!manifest || !requirement?.renditionId) continue
+      try {
+        await scopedNetwork.retainAuthorizedRendition({
+          manifest,
+          renditionId: requirement.renditionId,
+          entityRef: entityId,
+          publicationId: candidate,
+        })
+      } catch {
+        // Already retained, or not authorized yet; the assessment below decides.
+      }
+    }
+  }
+
   function createAvailabilityScope() {
     const observedAt = clock()
     const cache = new Map()
@@ -713,7 +751,6 @@ export function createMediaGraphApi(options = {}) {
     if (!probe) return null
     try {
       if (!await probe.local()) {
-        const scopedNetwork = options.scopedNetwork || options.ctx?.scopedNetwork || null
         if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return null
         // Retention IS the transfer: it joins the publication's asset scope and
         // downloads exactly the poster's block span under the manifest the
@@ -1000,6 +1037,12 @@ export function createMediaGraphApi(options = {}) {
           )
         }
       }
+      // Pressing play is the request to fetch. Taking custody first is what
+      // makes this device a holder of the title, and holding is the only thing
+      // that turns "nobody has checked" into evidence it can serve back.
+      // Judging availability before ever asking is how a title that exists on
+      // the network stays permanently unplayable.
+      await retainEntitySources(request.entityId, request.publicationId)
       const scope = createAvailabilityScope()
       const built = await buildSources(request.entityId, scope)
       const prepared = await preparePlaybackSource({

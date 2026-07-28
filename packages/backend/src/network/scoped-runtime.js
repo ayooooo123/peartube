@@ -2070,7 +2070,11 @@ export function createScopedNetworkRuntime (options = {}) {
               recordProtocolError(scope, remoteKey, error)
             })
           }
-          if (scope.purpose === 'asset') startAssetPumpWhenOpen(scope, tracked)
+          // Asset bytes move by hypercore replication, which requests and
+          // verifies its own blocks. The scope's job is deciding whether this
+          // peer may have the core; asking for blocks by hand on top of that
+          // only produced proofs the receiver refused, and each refusal tore
+          // down the session replication was using.
           if (scope.purpose === 'archive' && !scope.archiveDiscovery) startArchivePumpWhenOpen(scope, tracked)
         }
       },

@@ -24,11 +24,15 @@ export type NetworkPolicyRpc = {
 }
 
 export const DEFAULT_NETWORK_POLICY: Readonly<NetworkPolicy> = Object.freeze({
-  uploadPermission: 'manual',
+  // Mirrors DEFAULT_NETWORK_POLICY in packages/backend/src/api/policy.js: a
+  // device that holds a title serves it. This copy is the fallback whenever a
+  // field is absent, so leaving it at 'manual' would quietly restore a
+  // download-only peer.
+  uploadPermission: 'enabled',
   meteredNetwork: 'pause-network',
   backgroundMode: 'local-only',
   diskCeilingBytes: 5 * 1024 * 1024 * 1024,
-  uploadCeilingBytes: 0,
+  uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
   retentionMode: 'none',
   followedPublishers: Object.freeze([]) as unknown as string[],
   followedIndexes: Object.freeze([]) as unknown as string[],

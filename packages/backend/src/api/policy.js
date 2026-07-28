@@ -1,9 +1,15 @@
 export const DEFAULT_NETWORK_POLICY = Object.freeze({
-  uploadPermission: 'manual',
+  // A peer that holds content serves it: that is the whole arrangement, and a
+  // network where every viewer takes without giving has one source for
+  // everything. 'manual' left uploadAllowed false, so a device answered every
+  // block request with "unavailable" no matter how much of the title it held.
+  // Metered links are still protected by meteredNetwork below, and an operator
+  // can narrow any of this at runtime.
+  uploadPermission: 'enabled',
   meteredNetwork: 'pause-network',
   backgroundMode: 'local-only',
   diskCeilingBytes: 5 * 1024 * 1024 * 1024,
-  uploadCeilingBytes: 0,
+  uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
   retentionMode: 'none',
   followedPublishers: [],
   followedIndexes: [],
@@ -126,10 +132,29 @@ async function writePolicyStore(store, policy) {
   else if (typeof store?.set === 'function') await store.set(NETWORK_POLICY_KEY, policy)
 }
 
+// The first release shipped 'manual'/0 as the default, and a stored policy
+// outranks any later default - so a device that merely booted once would refuse
+// to serve a byte forever, with nothing in the UI to explain why. A policy that
+// still carries the exact retired pair was never a choice anyone made, so it
+// migrates. An operator who deliberately picked 'manual' has a ceiling they set
+// or a 'disabled' permission, and either one is left alone.
+const RETIRED_UPLOAD_DEFAULT = Object.freeze({ uploadPermission: 'manual', uploadCeilingBytes: 0 })
+
+function migrateRetiredUploadDefault(stored, base) {
+  if (stored.uploadPermission !== RETIRED_UPLOAD_DEFAULT.uploadPermission) return stored
+  if (Number(stored.uploadCeilingBytes ?? 0) !== RETIRED_UPLOAD_DEFAULT.uploadCeilingBytes) return stored
+  return {
+    ...stored,
+    uploadPermission: base.uploadPermission,
+    uploadCeilingBytes: base.uploadCeilingBytes,
+  }
+}
+
 export async function loadNetworkPolicy({ store = new Map(), defaults = DEFAULT_NETWORK_POLICY } = {}) {
   const base = normalizeNetworkPolicy(defaults, DEFAULT_NETWORK_POLICY)
   const stored = await readPolicyStore(store)
-  return stored == null ? base : normalizeNetworkPolicy(stored, base)
+  if (stored == null) return base
+  return normalizeNetworkPolicy(migrateRetiredUploadDefault(stored, base), base)
 }
 
 function unsupportedPolicyError(field, detail) {

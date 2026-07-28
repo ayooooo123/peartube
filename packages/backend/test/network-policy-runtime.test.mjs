@@ -161,8 +161,10 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
 
   t.is(result.success, false)
   t.alike((await api.getNetworkPolicy()).policy, initialPolicy)
-  t.is(applied.at(-1).uploadAllowed, false)
-  t.is(applied.at(-1).uploadCeilingBytes, 0)
+  // Rolling back means landing on the policy we started from, whatever that
+  // is - pinning the old non-seeding defaults here would test the fixture.
+  t.is(applied.at(-1).uploadCeilingBytes, initialPolicy.uploadCeilingBytes)
+  t.is(applied.at(-1).uploadAllowed, initialPolicy.uploadPermission === 'enabled' && initialPolicy.uploadCeilingBytes > 0)
 })
 
 test('unsupported persisted policy fails before deferred manager startup', async (t) => {

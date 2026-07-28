@@ -68,6 +68,23 @@ try {
         const bytes = Buffer.from(await response.arrayBuffer())
         const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8
         log('RESULT bytes', bytes.byteLength, 'type', response.headers.get('content-type'), jpeg ? 'JPEG-OK' : 'NOT-JPEG')
+
+        // The cover proves the transport. Playback is the same path with a
+        // bigger rendition, so ask for it plainly rather than inferring.
+        const playback = await runtime.api.prepareMediaPlayback({ entityId: target.entityId })
+          .catch(error => ({ success: false, errorCode: error?.message }))
+        log('PLAYBACK', JSON.stringify({
+          success: playback?.success ?? null,
+          errorCode: playback?.errorCode ?? null,
+          url: playback?.url ? String(playback.url).slice(0, 60) : null,
+        }))
+        // Why a source was refused matters more than that it was: a probe that
+        // declares no codecs is refused for reasons a real client would not hit.
+        log('CANDIDATES', JSON.stringify((playback?.candidates || []).slice(0, 3).map(candidate => ({
+          publicationId: String(candidate.publicationId || '').slice(0, 10),
+          codes: candidate.rejectionReasonCodes || candidate.codes || null,
+          availability: candidate.availability?.state ?? candidate.availabilityStatus ?? null,
+        }))))
         process.exit(jpeg ? 0 : 1)
       }
       log('  not yet', String(target.entityId).slice(0, 12), JSON.stringify(answer))

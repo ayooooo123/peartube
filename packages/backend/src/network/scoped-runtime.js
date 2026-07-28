@@ -45,6 +45,7 @@ import { verifyPublisherNamespaceProof } from '../publisher/namespace-proof.js'
 import { decodePublisherCatalogFrame } from '../publisher/catalog-view.js'
 import { decodePublisherOperationBody } from '../publisher/canonical.js'
 import { verifyArchivePledge } from '../archive/pledge.js'
+import { isArtworkRendition } from '../assets/rendition.js'
 import {
   assertProtocolCompatibility,
   createProtocolAdvertisement,
@@ -2812,6 +2813,29 @@ export function createScopedNetworkRuntime (options = {}) {
     }
   }
 
+  // Artwork is small and belongs to the publication, so it is retained beside
+  // the media rather than on demand. Best effort by design: a cover that will
+  // not retain must never cost the caller the video it actually asked for.
+  async function retainPublicationArtwork({ manifest, entityRef, publicationId }) {
+    for (const candidate of manifest?.body?.renditions || []) {
+      if (!isArtworkRendition(candidate) || candidate.blocked || candidate.superseded) continue
+      if (renditions.has(String(candidate.renditionId))) continue
+      try {
+        await retainAuthorizedRendition({
+          manifest,
+          renditionId: candidate.renditionId,
+          entityRef,
+          publicationId,
+        })
+      } catch (error) {
+        // A missing cover is a blank card; a failed retain here would be a
+        // title that will not seed at all. Say why, or a publisher that is
+        // silently not serving its cover looks exactly like one that is.
+        console.log('[ScopedNetwork] cover not retained:', String(candidate.renditionId).slice(0, 12), error?.message)
+      }
+    }
+  }
+
   async function retainAuthorizedRendition ({ manifest, renditionId, start = 0, end = null, entityRef = null, publicationId = null } = {}) {
     if (status !== 'active') fail('runtime is not active')
     const consumerVisible = await authorizeConsumerWork({
@@ -2832,8 +2856,12 @@ export function createScopedNetworkRuntime (options = {}) {
     // written; every later one asks for blocks outside its own upload
     // provenance and fails authorization. Fall back to the rendition's declared
     // upload range instead.
+    // Cover art records its span the same way, under its own provenance type,
+    // so it is held over the blocks it actually occupies rather than the whole
+    // shared core — which would ask for blocks belonging to other renditions
+    // and fail authorization.
     const uploadProvenance = (manifest?.body?.provenance || []).filter(candidate =>
-      candidate?.type === 'upload' &&
+      (candidate?.type === 'upload' || candidate?.type === 'artwork') &&
       candidate.renditionId === id &&
       candidate.coreKey === rendition.core?.key &&
       Number.isSafeInteger(candidate.start) &&
@@ -2886,6 +2914,11 @@ export function createScopedNetworkRuntime (options = {}) {
       })
       const result = { status: 'retained', renditionId: id, coreKey, range: { ...range }, topic: stableScopeDiagnostic(scope) }
       renditions.set(id, { scope, result, manifest })
+      // Holding a title means holding what it looks like. Cover art rides the
+      // same manifest precisely so a peer that seeds the movie can answer for
+      // its poster too; leaving that to each caller means the one seeder that
+      // forgets is a title nobody downstream can render.
+      await retainPublicationArtwork({ manifest, entityRef, publicationId })
       return result
     } catch (error) {
       try { await core.close?.() } catch {}

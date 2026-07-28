@@ -60,6 +60,7 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-media-agent',
     'get-agent-contributions',
     'get-publication-sources',
+    'get-entity-artwork',
     'get-claim-provenance',
     'set-source-preference',
     'prepare-media-playback'

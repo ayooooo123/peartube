@@ -1,11 +1,14 @@
 import { AVAILABILITY_STATES, assessAvailability, isPlayableAvailability } from '../assets/availability.js'
 import { createAssetSession } from '../assets/asset-session.js'
 import { resolveMediaEntity } from '../media-graph/resolver.js'
+import { artworkEntry } from '../media-graph/catalog-projection.js'
 import { selectPlaybackSource, sourceAvailabilityScore } from '../media-graph/source-selector.js'
 import { projectSourceSelectionDiagnostics } from '../media-graph/selection-diagnostics.js'
 import { preparePlaybackSource } from '../playback/source-preparation.js'
 import { isPlaybackErrorCode, playbackErrorMessage, playbackErrorRetry } from '../playback/errors.js'
 import { parseBlobRef } from '../blob-utils.js'
+import { isArtworkRendition } from '../assets/rendition.js'
+import b4a from 'b4a'
 
 const DEFAULT_PAGE_LIMIT = 50
 const MAX_PAGE_LIMIT = 100
@@ -41,6 +44,104 @@ function posterResponse(item) {
     }
   }
   return { posterUrl: locator }
+}
+
+// The consumer projection hands its items one resolved display locator; the graph
+// resolver hands back the publisher's raw metadata claim. Normalizing here is
+// what keeps every media-entity-summary path carrying the same cover and the same
+// synopsis, so a title cannot show art on a shelf and none on its own page.
+function summaryMediaFields(metadata) {
+  const entry = artworkEntry(metadata?.artwork)
+  return {
+    ...posterResponse({ artwork: entry?.locator || null, artworkMimeType: entry?.mimeType || null }),
+    ...describedMediaResponse({
+      releaseYear: Number(metadata?.releaseYear),
+      runtimeMinutes: Number(metadata?.runtimeMinutes),
+      overview: metadata?.overview,
+      genres: metadata?.genres,
+    }),
+  }
+}
+
+// Cover art is an asset OF the publication, not a side channel: the publisher
+// signs it into the manifest as a `poster` rendition, so it seeds, authorizes,
+// and transfers over the same asset protocol as the video. `body.artwork` is not
+// reachable that way, so only a signed rendition can ever yield bytes.
+const POSTER_RENDITION_PURPOSE = 'poster'
+const DEFAULT_ARTWORK_TRANSFER_TIMEOUT_MS = 3_000
+const ARTWORK_RETAIN_TIMEOUT_MS = 3_000
+const ARTWORK_POLL_INTERVAL_MS = 100
+const ARTWORK_MISS = Symbol('artwork-miss')
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// A cold cover must never hold an RPC open, and a retain that rejects is the
+// same answer as one that has not finished: come back later.
+function boundedAttempt(promise, timeoutMs) {
+  let timer = null
+  return Promise.race([
+    Promise.resolve(promise).then(value => value, () => ARTWORK_MISS),
+    new Promise(resolve => { timer = setTimeout(() => resolve(ARTWORK_MISS), timeoutMs) }),
+  ]).then(value => {
+    clearTimeout(timer)
+    return value
+  })
+}
+
+function findPosterRendition(manifest) {
+  return (manifest?.body?.renditions || []).find(rendition => (
+    rendition?.purpose === POSTER_RENDITION_PURPOSE &&
+    rendition.blocked !== true &&
+    rendition.superseded !== true &&
+    typeof rendition.renditionId === 'string' && rendition.renditionId.length > 0
+  )) || null
+}
+
+// The publisher records the poster's hyperblobs id verbatim in provenance. Its
+// byte offset inside the block region is not derivable from the block span, so
+// rebuilding the id would read the wrong bytes; the span is only a fallback for
+// a manifest that recorded no id.
+function posterBlobRef(manifest, rendition) {
+  const coreKey = rendition?.core?.key
+  if (!coreKey) return null
+  const entry = (manifest?.body?.provenance || []).find(candidate => (
+    candidate?.type === 'artwork' &&
+    candidate.renditionId === rendition.renditionId &&
+    candidate.coreKey === coreKey
+  ))
+  if (!entry) return null
+  const direct = parseBlobRef({ blobsCoreKey: coreKey, blobId: entry.blobId })
+  if (direct) return direct
+  const start = Number(entry.start)
+  const end = Number(entry.end)
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) return null
+  return parseBlobRef({
+    blobsCoreKey: coreKey,
+    blobId: {
+      blockOffset: start,
+      blockLength: end - start,
+      byteOffset: 0,
+      byteLength: schemaUint(rendition.core?.byteLength),
+    },
+  })
+}
+
+// The same loopback path getVideoThumbnail uses: `pt_thumbnail=1` makes the blob
+// server answer from a buffer with a fixed Content-Length instead of a streaming
+// pipe that waits on replication, which is the only shape native image loaders
+// accept.
+function artworkBlobUrl(blobServer, ref, mimeType, host, port) {
+  const baseUrl = String(blobServer.getLink(b4a.from(ref.blobsCoreKey, 'hex'), {
+    blob: ref.blob,
+    type: mimeType,
+    host,
+    port,
+  }))
+  const [origin, query = ''] = baseUrl.split('?')
+  const pathUrl = `${origin.replace(/\/$/, '')}/__peartube_thumbnail__.jpg${query ? `?${query}` : ''}`
+  return `${pathUrl}${pathUrl.includes('?') ? '&' : '?'}pt_thumbnail=1`
 }
 
 function okPage(items, nextCursor = null) {
@@ -187,8 +288,12 @@ const LEGACY_AVAILABILITY_STATE = Object.freeze({
 
 function manifestSource(manifest, row, preferred, trust = {}, availability = null, entityId = null) {
   const publisherId = manifest?.body?.publisherId || row.issuer
+  // Cover art now rides the manifest as a rendition so it seeds with the
+  // publication. It is not something to play: without this filter a source
+  // resolves to the poster and a viewer presses Play on a JPEG.
   const rendition = manifest?.body?.renditions?.find(candidate => (
     candidate && candidate.blocked !== true && candidate.superseded !== true &&
+    !isArtworkRendition(candidate) &&
     typeof candidate.renditionId === 'string' && candidate.renditionId.length > 0
   )) || null
   const publicationId = manifest?.publicationId || row.body.payload?.publicationId
@@ -540,12 +645,104 @@ export function createMediaGraphApi(options = {}) {
       availability: availabilityResponse(entityAvailability(built, scope)),
       sources: decorateSources(built),
       renditions: [],
+      ...summaryMediaFields(resolved.metadata),
     }
     return {
       success: true,
       entity,
       claims: request.includeClaims ? resolved.claims.map(claimSummary) : [],
       conflicts: request.includeConflicts ? resolved.conflicts.map(conflictSummary) : [],
+    }
+  }
+
+  // How long one artwork resolution may spend waiting for the retained transfer
+  // before it answers "not yet". A retryable miss beats a hung RPC.
+  const artworkTransferTimeoutMs = Number.isSafeInteger(options.artworkTransferTimeoutMs) && options.artworkTransferTimeoutMs >= 0
+    ? options.artworkTransferTimeoutMs
+    : DEFAULT_ARTWORK_TRANSFER_TIMEOUT_MS
+
+  /**
+   * A read-only session on the local corestore, used only to observe whether the
+   * poster's blocks have arrived. Retaining the rendition is what pulls them, so
+   * this never becomes a second, unauthorized replication path.
+   */
+  async function openArtworkProbe(ref) {
+    const store = options.store || options.ctx?.store || null
+    if (typeof store?.get !== 'function') return null
+    const start = ref.blob.blockOffset
+    const end = start + ref.blob.blockLength
+    let core = null
+    try {
+      core = store.get({ key: b4a.from(ref.blobsCoreKey, 'hex') })
+      await core.ready?.()
+    } catch {
+      try { await core?.close?.() } catch { /* best effort */ }
+      return null
+    }
+    return {
+      async local() {
+        try { return await core.has(start, end) === true } catch { return false }
+      },
+      async close() {
+        try { await core.close?.() } catch { /* best effort */ }
+      },
+    }
+  }
+
+  // Polling counts attempts rather than reading a clock: the injected clock is
+  // frozen in tests, and a deadline compared against it would never expire.
+  async function waitForArtworkBytes(probe) {
+    const attempts = Math.max(1, Math.ceil(artworkTransferTimeoutMs / ARTWORK_POLL_INTERVAL_MS))
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (await probe.local()) return true
+      if (attempt + 1 < attempts) await sleep(ARTWORK_POLL_INTERVAL_MS)
+    }
+    return false
+  }
+
+  /**
+   * Make the poster's bytes local over the authorized asset path, then hand back
+   * the loopback URL that serves them. Null means "no bytes yet" — never an
+   * error, because a consumer that just discovered a title has not replicated
+   * its cover yet either.
+   */
+  async function resolveArtworkUrl({ manifest, publicationId, rendition, ref, entityId }) {
+    const blobServer = options.blobServer || options.ctx?.blobServer || null
+    if (typeof blobServer?.getLink !== 'function') return null
+    const probe = await openArtworkProbe(ref)
+    if (!probe) return null
+    try {
+      if (!await probe.local()) {
+        const scopedNetwork = options.scopedNetwork || options.ctx?.scopedNetwork || null
+        if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return null
+        // Retention IS the transfer: it joins the publication's asset scope and
+        // downloads exactly the poster's block span under the manifest the
+        // publisher signed. No raw core is opened for replication here.
+        const retained = await boundedAttempt(scopedNetwork.retainAuthorizedRendition({
+          manifest,
+          renditionId: rendition.renditionId,
+          start: ref.blob.blockOffset,
+          end: ref.blob.blockOffset + ref.blob.blockLength,
+          entityRef: entityId || null,
+          publicationId,
+        }), ARTWORK_RETAIN_TIMEOUT_MS)
+        if (retained === ARTWORK_MISS) return null
+        if (!await waitForArtworkBytes(probe)) return null
+      }
+      // The publisher declares the poster's encoding as the rendition format;
+      // mislabelled bytes are what native decoders refuse outright.
+      const mimeType = typeof rendition.format === 'string' && rendition.format.startsWith('image/')
+        ? rendition.format
+        : 'image/jpeg'
+      return artworkBlobUrl(
+        blobServer,
+        ref,
+        mimeType,
+        options.ctx?.blobServerHost || '127.0.0.1',
+        blobServer.port || options.ctx?.blobServerPort,
+      )
+    } finally {
+      await probe.close()
     }
   }
 
@@ -617,6 +814,9 @@ export function createMediaGraphApi(options = {}) {
         for (const source of built.sources) {
           const manifest = assetManifestStore?.getManifest?.(source.publicationId)
           for (const rendition of manifest?.body?.renditions || []) {
+            // Artwork seeds with the publication but is not one of the media
+            // renditions a client chooses between.
+            if (isArtworkRendition(rendition)) continue
             if (!rendition.blocked && !rendition.superseded) renditions.set(rendition.renditionId, renditionResponse(rendition))
           }
         }
@@ -631,6 +831,7 @@ export function createMediaGraphApi(options = {}) {
           availability: availabilityResponse(entityAvailability(built, scope)),
           sources: built.sources.map(sourceResponse),
           renditions: [...renditions.values()].sort((left, right) => left.renditionId.localeCompare(right.renditionId)),
+          ...summaryMediaFields(resolved.metadata),
         })
       }
       const result = pageCatalogRows(summaries, request)
@@ -718,6 +919,67 @@ export function createMediaGraphApi(options = {}) {
       const result = pageRows(decorated, request, source => source.publicationId)
       if (result.error) return result.error
       return okPage(result.page, result.nextCursor)
+    },
+
+    /**
+     * Cover art for one entity, as bytes this device already holds.
+     *
+     * The poster is an asset OF the publication: the publisher signs it into the
+     * manifest as a `poster` rendition, so retaining that rendition moves it over
+     * the same authorized asset protocol as the video. Nothing here reaches an
+     * origin, opens a raw blob core, or consults a separate artwork feed — a
+     * device that can play a title can also see its cover.
+     *
+     * `exists: false` with no errorCode means the bytes have not arrived yet.
+     * That is retryable, not a failure.
+     */
+    async getEntityArtwork(request = {}) {
+      const entityId = typeof request.entityId === 'string' ? request.entityId.trim() : ''
+      const requestedPublicationId = typeof request.publicationId === 'string' ? request.publicationId.trim() : ''
+      if (!entityId && !requestedPublicationId) {
+        return error('INVALID_ARTWORK_REQUEST', 'entityId or publicationId is required', { exists: false })
+      }
+
+      let publicationIds = []
+      if (requestedPublicationId) {
+        if (!isPublicationVisible(requestedPublicationId)) {
+          return error('MEDIA_ENTITY_NOT_VISIBLE', 'Publication is not visible under this device policy', { exists: false })
+        }
+        publicationIds = [requestedPublicationId]
+      } else {
+        const missingStore = requireGraphStore()
+        if (missingStore) return { ...missingStore, exists: false }
+        if (consumerCatalogProjection) {
+          // A stale projection still resolves covers this device already holds,
+          // so a refresh failure must not blank the artwork.
+          try {
+            await options.ctx?.mediaCatalogProjection?.update?.()
+            await consumerCatalogProjection.update?.()
+          } catch { /* best effort */ }
+          if (!isEntityVisible(entityId)) {
+            return error('MEDIA_ENTITY_NOT_VISIBLE', 'Media entity is not visible under this device policy', { exists: false })
+          }
+        }
+        publicationIds = mediaGraphStore.getClaimsBySubject(entityId)
+          .filter(row => (
+            !row.revoked &&
+            row.body.claimType === 'AvailabilityObservation' &&
+            row.body.payload?.publicationId
+          ))
+          .map(row => row.body.payload.publicationId)
+          .filter(isPublicationVisible)
+      }
+
+      for (const publicationId of new Set(publicationIds)) {
+        const manifest = assetManifestStore?.getManifest?.(publicationId) || null
+        const rendition = findPosterRendition(manifest)
+        if (!rendition) continue
+        const ref = posterBlobRef(manifest, rendition)
+        if (!ref) continue
+        const url = await resolveArtworkUrl({ manifest, publicationId, rendition, ref, entityId })
+        if (url) return { success: true, exists: true, url }
+      }
+      return { success: true, exists: false }
     },
 
     /**

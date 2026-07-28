@@ -728,6 +728,34 @@ for (const name of [
   })
 }
 
+// Cover art is an asset OF the publication: it rides the manifest as a `poster`
+// rendition and transfers over the same authorized asset protocol as the video.
+// The backend answers with a loopback blob-server URL, so the bytes are already
+// local by the time a client sees the URL and no image request ever leaves the
+// device. Either key identifies the artwork; a client that only knows the entity
+// does not have to learn which publication carries it.
+ns.register({
+  name: 'get-entity-artwork-request',
+  fields: [
+    { name: 'entityId', type: 'string', required: false },
+    { name: 'publicationId', type: 'string', required: false }
+  ]
+})
+
+// `exists: false` without an errorCode means the poster has not replicated yet.
+// That is retryable, not a failure: the call is bounded so a cold cover never
+// holds an RPC open.
+ns.register({
+  name: 'get-entity-artwork-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'errorCode', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'exists', type: 'bool', required: true },
+    { name: 'url', type: 'string', required: false }
+  ]
+})
+
 // One Play action. The backend selects a source, opens it, and fails over
 // between equivalent sources within one deadline; the client never picks.
 ns.register({
@@ -4181,6 +4209,7 @@ for (const name of [
   'get-media-agent',
   'get-agent-contributions',
   'get-publication-sources',
+  'get-entity-artwork',
   'get-claim-provenance',
   'set-source-preference',
   'prepare-media-playback'

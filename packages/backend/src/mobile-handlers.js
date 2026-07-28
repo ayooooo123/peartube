@@ -108,6 +108,7 @@ export function attachMobileHandlers(B, deps) {
   B.getMediaAgent = async (r) => api.getMediaAgent(r)
   B.getAgentContributions = async (r) => api.getAgentContributions(r)
   B.getPublicationSources = async (r) => api.getPublicationSources(r)
+  B.getEntityArtwork = async (r) => api.getEntityArtwork(r)
   B.getClaimProvenance = async (r) => api.getClaimProvenance(r)
   B.setSourcePreference = async (r) => api.setSourcePreference(r)
   B.prepareMediaPlayback = async (r) => api.prepareMediaPlayback(r)

@@ -275,30 +275,32 @@ const methods = new Map([
   [132, '@peartube/get-agent-contributions'],
   ['@peartube/get-publication-sources', 133],
   [133, '@peartube/get-publication-sources'],
-  ['@peartube/get-claim-provenance', 134],
-  [134, '@peartube/get-claim-provenance'],
-  ['@peartube/set-source-preference', 135],
-  [135, '@peartube/set-source-preference'],
-  ['@peartube/prepare-media-playback', 136],
-  [136, '@peartube/prepare-media-playback'],
-  ['@peartube/desktop-bootstrap', 137],
-  [137, '@peartube/desktop-bootstrap'],
-  ['@peartube/desktop-shutdown', 138],
-  [138, '@peartube/desktop-shutdown'],
-  ['@peartube/desktop-refresh-browse', 139],
-  [139, '@peartube/desktop-refresh-browse'],
-  ['@peartube/ffmpeg-decode-available', 140],
-  [140, '@peartube/ffmpeg-decode-available'],
-  ['@peartube/update-channel-avatar', 141],
-  [141, '@peartube/update-channel-avatar'],
-  ['@peartube/transcode-start', 142],
-  [142, '@peartube/transcode-start'],
-  ['@peartube/transcode-stop', 143],
-  [143, '@peartube/transcode-stop'],
-  ['@peartube/transcode-status', 144],
-  [144, '@peartube/transcode-status'],
-  ['@peartube/event-transcode-progress', 145],
-  [145, '@peartube/event-transcode-progress']
+  ['@peartube/get-entity-artwork', 134],
+  [134, '@peartube/get-entity-artwork'],
+  ['@peartube/get-claim-provenance', 135],
+  [135, '@peartube/get-claim-provenance'],
+  ['@peartube/set-source-preference', 136],
+  [136, '@peartube/set-source-preference'],
+  ['@peartube/prepare-media-playback', 137],
+  [137, '@peartube/prepare-media-playback'],
+  ['@peartube/desktop-bootstrap', 138],
+  [138, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 139],
+  [139, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 140],
+  [140, '@peartube/desktop-refresh-browse'],
+  ['@peartube/ffmpeg-decode-available', 141],
+  [141, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 142],
+  [142, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 143],
+  [143, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 144],
+  [144, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 145],
+  [145, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 146],
+  [146, '@peartube/event-transcode-progress']
 ])
 
 class HRPC {
@@ -440,6 +442,7 @@ class HRPC {
       ['@peartube/get-media-agent', getEncoding('@peartube/get-media-agent-request')],
       ['@peartube/get-agent-contributions', getEncoding('@peartube/get-agent-contributions-request')],
       ['@peartube/get-publication-sources', getEncoding('@peartube/get-publication-sources-request')],
+      ['@peartube/get-entity-artwork', getEncoding('@peartube/get-entity-artwork-request')],
       ['@peartube/get-claim-provenance', getEncoding('@peartube/get-claim-provenance-request')],
       ['@peartube/set-source-preference', getEncoding('@peartube/set-source-preference-request')],
       ['@peartube/prepare-media-playback', getEncoding('@peartube/prepare-media-playback-request')],
@@ -577,6 +580,7 @@ class HRPC {
       ['@peartube/get-media-agent', getEncoding('@peartube/get-media-agent-response')],
       ['@peartube/get-agent-contributions', getEncoding('@peartube/get-agent-contributions-response')],
       ['@peartube/get-publication-sources', getEncoding('@peartube/get-publication-sources-response')],
+      ['@peartube/get-entity-artwork', getEncoding('@peartube/get-entity-artwork-response')],
       ['@peartube/get-claim-provenance', getEncoding('@peartube/get-claim-provenance-response')],
       ['@peartube/set-source-preference', getEncoding('@peartube/set-source-preference-response')],
       ['@peartube/prepare-media-playback', getEncoding('@peartube/prepare-media-playback-response')],
@@ -1222,6 +1226,10 @@ class HRPC {
     return this._call('@peartube/get-publication-sources', args)
   }
 
+  async getEntityArtwork(args) {
+    return this._call('@peartube/get-entity-artwork', args)
+  }
+
   async getClaimProvenance(args) {
     return this._call('@peartube/get-claim-provenance', args)
   }
@@ -1804,6 +1812,10 @@ class HRPC {
 
   onGetPublicationSources(responseFn) {
     this._handlers['@peartube/get-publication-sources'] = responseFn
+  }
+
+  onGetEntityArtwork(responseFn) {
+    this._handlers['@peartube/get-entity-artwork'] = responseFn
   }
 
   onGetClaimProvenance(responseFn) {

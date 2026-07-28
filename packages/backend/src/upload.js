@@ -12,6 +12,7 @@
 
 import crypto from 'hypercore-crypto';
 import b4a from 'b4a';
+import { parseBlobId } from './blob-utils.js';
 
 import { probeMp4File, probeMp4Buffer, isMp4MimeType } from './mp4-playback-probe.js';
 import { saveBlobPlaybackProfile } from './blob-playback-profile.js';
@@ -284,6 +285,20 @@ function hashUploadFallback(metadata, blobResult, channel, fileSize) {
   }))), 'hex');
 }
 
+// The poster's identity label, mirroring uploadTreeHash for video: a stable
+// digest of what the publisher claims these bytes are, not a merkle root.
+function posterTreeHash(entry, blob) {
+  return b4a.toString(
+    crypto.hash(b4a.from([
+      String(entry.blobsCoreKey || ''),
+      String(entry.blobId || ''),
+      String(entry.mimeType || ''),
+      String(blob.byteLength)
+    ].join('\n'))),
+    'hex'
+  )
+}
+
 function uploadTreeHash(metadata, blobResult, channel, fileSize) {
   const fingerprint = typeof metadata.contentFingerprint === 'string' ? metadata.contentFingerprint : '';
   if (/^sha256:[0-9a-f]{64}$/i.test(fingerprint)) return fingerprint.slice(7).toLowerCase();
@@ -407,12 +422,45 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       byteLength: fileSize
     }
   });
+  // Cover art is part of the publication, not a side channel: a relay that
+  // seeds this movie holds the poster too, and a consumer fetches it over the
+  // same authorized asset path as the video. Nothing has to leave the swarm.
+  const posterRenditions = []
+  const posterProvenance = []
+  for (const entry of Array.isArray(metadata.artwork) ? metadata.artwork : []) {
+    if (entry?.role !== 'poster') continue
+    if (entry.blobsCoreKey !== channel.blobsKeyHex) continue
+    const blob = parseBlobId(String(entry.blobId || ''))
+    if (!blob) continue
+    const posterRendition = createRenditionDescriptor({
+      purpose: 'poster',
+      format: String(entry.mimeType || 'image/jpeg'),
+      core: {
+        key: channel.blobsKeyHex,
+        length: blob.blockOffset + blob.blockLength,
+        treeHash: posterTreeHash(entry, blob),
+        byteLength: blob.byteLength
+      }
+    })
+    posterRenditions.push(posterRendition)
+    posterProvenance.push({
+      type: 'artwork',
+      role: 'poster',
+      videoId: metadata.id,
+      blobId: String(entry.blobId),
+      coreKey: channel.blobsKeyHex,
+      renditionId: posterRendition.renditionId,
+      start: blob.blockOffset,
+      end: blob.blockOffset + blob.blockLength
+    })
+    break
+  }
   const manifest = createPublicationManifest({
     publisherId,
     sequence: firstSequence,
     title: metadata.title || metadata.id,
     description: metadata.description || null,
-    renditions: [rendition],
+    renditions: [rendition, ...posterRenditions],
     provenance: [{
       type: 'upload',
       videoId: metadata.id,
@@ -421,7 +469,7 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
       renditionId: rendition.renditionId,
       start: blockOffset,
       end: blockOffset + blockLength
-    }],
+    }, ...posterProvenance],
     keyPair: deviceKeyPair,
     signedAt: currentTime
   });
@@ -586,6 +634,24 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
     await scopedNetwork?.publishLocalPublisherCatalog?.({ publisherId });
   } catch (error) {
     throw markUploadCommitState(error, 'uploadCommitSucceeded');
+  }
+  // Announcing a catalog only tells peers the title exists. A consumer finds
+  // the bytes on the asset scope for the rendition, and until the publisher
+  // joins that scope there is nobody there to answer: the catalog syncs, every
+  // source reads as awaiting replication, and no cover ever arrives. Holding
+  // its own publication is what makes a publisher a source for it, and the
+  // runtime retains the cover published alongside it in the same step.
+  try {
+    await scopedNetwork?.retainAuthorizedRendition?.({
+      manifest,
+      renditionId: rendition.renditionId,
+      entityRef: subjectRef.entityId,
+      publicationId: manifest.publicationId
+    });
+  } catch (error) {
+    // A publisher that cannot serve yet still published; the catalog entry is
+    // committed and retention is retried by the runtime's own lifecycle.
+    console.log('[Upload] Publication is not being served yet:', error?.message);
   }
   return metadata;
   });

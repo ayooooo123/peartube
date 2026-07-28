@@ -77,6 +77,7 @@ export const SHARED_HANDLER_NAMES = [
   'GetMediaEntity',
   'GetAgentContributions',
   'GetPublicationSources',
+  'GetEntityArtwork',
   'GetClaimProvenance',
   'SetSourcePreference',
   'PrepareMediaPlayback',

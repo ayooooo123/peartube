@@ -1,5 +1,6 @@
 import { requiredRangesForRendition } from './availability.js'
 import { verifyPublicationManifest } from './manifest.js'
+import { isArtworkRendition } from './rendition.js'
 
 function signerHex(value) {
   return Buffer.from(value).toString('hex')
@@ -79,7 +80,9 @@ export function createAssetManifestStore(options = {}) {
         candidate.superseded !== true &&
         typeof candidate.renditionId === 'string' &&
         candidate.renditionId.length > 0 &&
-        (renditionId == null || candidate.renditionId === renditionId)
+        // Asked for by id, artwork answers for itself. Choosing on its own,
+        // this is picking the media a viewer came for, never its cover.
+        (renditionId == null ? !isArtworkRendition(candidate) : candidate.renditionId === renditionId)
       ))
       if (!rendition) return null
       return {

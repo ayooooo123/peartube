@@ -495,3 +495,166 @@ test('concurrent uploads reserve disjoint catalog sequence batches without parti
   t.is(second.success, true)
   t.alike(batches.map(batch => batch.map(value => value.issuerSequence)), [[1, 2, 3], [4, 5, 6]])
 })
+
+// Relays exist for availability: a peer that seeds a title has to be able to
+// answer for what it looks like too. That only holds if the cover is part of
+// the publication rather than a side channel, so it rides the signed manifest
+// as a rendition and travels the same authorized asset path as the video.
+test('a published cover rides the manifest and never stands in for the media', async t => {
+  const retained = []
+  const root = keyPair(40)
+  const device = keyPair(41)
+  const publisherId = derivePublisherId(root.publicKey)
+  let lastAcceptedSequence = 0
+  const catalog = {
+    writable: true,
+    localSignerKey: device.publicKey,
+    async getAuthorizationState() {
+      return {
+        policyEpoch: 0,
+        writers: [{
+          key: hex(b4a.alloc(32, 92)),
+          signerKey: hex(device.publicKey),
+          capabilities: ['claim', 'publish'],
+          firstAcceptedSequence: 1,
+          lastAcceptedSequence,
+          expiresAt: 10_000,
+          admissionPolicyEpoch: 0,
+          revocation: null,
+        }],
+      }
+    },
+    async createLocalOperation({ recordType, policyEpoch, sequence, signedAt, body }) {
+      return { ...operation(recordType, publisherId, device, body, sequence), signedAt }
+    },
+    async appendBatchAndConfirm(values) {
+      lastAcceptedSequence = values.at(-1).issuerSequence
+      return values.map((value, index) => ({
+        operationId: b4a.from(value.recordId || b4a.alloc(32, index + 1)),
+        accepted: true,
+      }))
+    },
+  }
+  const binding = { publisherId, catalog }
+  const manager = createUploadManager({
+    ctx: {},
+    catalogRegistry: {
+      async getWritableBindings() { return [binding] },
+      async resolve() { return binding },
+    },
+    mediaCatalogProjection: { async rebuild() {} },
+    scopedNetwork: {
+      async publishLocalPublisherCatalog() { return { status: 'published' } },
+      async retainAuthorizedRendition(request) { retained.push(request); return { status: 'retained' } },
+    },
+    deviceKeyPair: device,
+    now: () => 200,
+  })
+  const blobsKeyHex = hex(b4a.alloc(32, 42))
+  const channel = {
+    blobs: true,
+    blobsKeyHex,
+    localWriterKeyHex: hex(b4a.alloc(32, 43)),
+    async putBlob(buffer) {
+      return { id: `0:1:0:${buffer.byteLength}`, blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength }
+    },
+    async addVideo(metadata) { this.metadata = metadata },
+  }
+
+  const result = await manager.uploadFromBuffer(channel, b4a.from('video-bytes'), {
+    title: 'Illustrated',
+    mimeType: 'video/webm',
+    publicationState: 'published',
+    artwork: [{ role: 'poster', blobId: '7:1:900:53905', blobsCoreKey: blobsKeyHex, mimeType: 'image/jpeg' }],
+  })
+
+  t.is(result.success, true)
+  const manifest = result.metadata.immutablePublication.manifest
+  const renditions = manifest.body.renditions
+  t.is(renditions.length, 2, 'the cover is published with the media, not separately')
+
+  const poster = renditions.find(rendition => rendition.purpose === 'poster')
+  t.ok(poster, 'the manifest carries the cover as a rendition a peer can be authorized for')
+  t.is(poster.format, 'image/jpeg')
+  t.is(poster.core.key, blobsKeyHex, 'the cover lives in the same core the publisher already seeds')
+  t.is(poster.core.length, 8, 'the authorized read is bounded by the block the cover occupies')
+
+  // The whole point of the provenance entry: byteOffset cannot be recovered
+  // from a block range, and reading the wrong offset returns the wrong bytes.
+  const provenance = manifest.body.provenance.find(entry => entry.type === 'artwork')
+  t.ok(provenance, 'the cover has provenance of its own')
+  t.is(provenance.blobId, '7:1:900:53905', 'the exact blob a peer must ask for survives verbatim')
+  t.is(provenance.renditionId, poster.renditionId, 'provenance names the rendition it describes')
+
+  t.is(
+    result.metadata.immutablePublication.renditionId,
+    renditions.find(rendition => rendition.purpose === 'original').renditionId,
+    'the publication still plays the media, never the cover',
+  )
+
+  // Announcing a catalog only says the title exists. A consumer looks for the
+  // bytes on the rendition's asset scope, so a publisher that never joins it is
+  // a title nobody can fetch: catalog syncs, sources read awaiting replication.
+  t.is(retained.length, 1, 'publishing makes the publisher a source for its own title')
+  t.is(retained[0].renditionId, renditions.find(rendition => rendition.purpose === 'original').renditionId)
+  t.is(retained[0].publicationId, manifest.publicationId, 'it is held as the publication it belongs to')
+})
+
+test('an upload with no cover publishes exactly one rendition', async t => {
+  const root = keyPair(44)
+  const device = keyPair(45)
+  const publisherId = derivePublisherId(root.publicKey)
+  let lastAcceptedSequence = 0
+  const catalog = {
+    writable: true,
+    localSignerKey: device.publicKey,
+    async getAuthorizationState() {
+      return {
+        policyEpoch: 0,
+        writers: [{
+          key: hex(b4a.alloc(32, 93)),
+          signerKey: hex(device.publicKey),
+          capabilities: ['claim', 'publish'],
+          firstAcceptedSequence: 1,
+          lastAcceptedSequence,
+          expiresAt: 10_000,
+          admissionPolicyEpoch: 0,
+          revocation: null,
+        }],
+      }
+    },
+    async createLocalOperation({ recordType, policyEpoch, sequence, signedAt, body }) {
+      return { ...operation(recordType, publisherId, device, body, sequence), signedAt }
+    },
+    async appendBatchAndConfirm(values) {
+      lastAcceptedSequence = values.at(-1).issuerSequence
+      return values.map((value, index) => ({ operationId: b4a.from(value.recordId || b4a.alloc(32, index + 1)), accepted: true }))
+    },
+  }
+  const binding = { publisherId, catalog }
+  const manager = createUploadManager({
+    ctx: {},
+    catalogRegistry: { async getWritableBindings() { return [binding] }, async resolve() { return binding } },
+    mediaCatalogProjection: { async rebuild() {} },
+    scopedNetwork: { async publishLocalPublisherCatalog() { return { status: 'published' } } },
+    deviceKeyPair: device,
+    now: () => 200,
+  })
+  const channel = {
+    blobs: true,
+    blobsKeyHex: hex(b4a.alloc(32, 46)),
+    localWriterKeyHex: hex(b4a.alloc(32, 47)),
+    async putBlob(buffer) { return { id: `0:1:0:${buffer.byteLength}`, blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: buffer.byteLength } },
+    async addVideo(metadata) { this.metadata = metadata },
+  }
+
+  const result = await manager.uploadFromBuffer(channel, b4a.from('video-bytes'), {
+    title: 'Plain',
+    mimeType: 'video/webm',
+    publicationState: 'published',
+  })
+
+  t.is(result.success, true)
+  t.is(result.metadata.immutablePublication.manifest.body.renditions.length, 1,
+    'nothing invents a cover rendition for a title that has none')
+})

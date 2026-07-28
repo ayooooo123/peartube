@@ -25,6 +25,16 @@ export function deriveRenditionId(input = {}) {
   return b4a.toString(hashCanonical(RENDITION_ID_DOMAIN, unsignedRenditionDescriptor(input)), 'hex')
 }
 
+// Cover art rides the manifest so it seeds and transfers with the publication
+// it belongs to. Everything that picks something to PLAY has to skip it, so the
+// test for "this is artwork, not media" lives with the descriptor rather than
+// being re-guessed at each call site.
+export const ARTWORK_RENDITION_PURPOSES = Object.freeze(new Set(['poster', 'backdrop', 'thumbnail', 'still']))
+
+export function isArtworkRendition(rendition) {
+  return ARTWORK_RENDITION_PURPOSES.has(String(rendition?.purpose || ''))
+}
+
 export function createRenditionDescriptor(input = {}) {
   const body = unsignedRenditionDescriptor(input)
   return { ...body, renditionId: deriveRenditionId(body) }

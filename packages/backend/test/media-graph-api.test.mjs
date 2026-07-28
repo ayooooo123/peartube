@@ -467,3 +467,187 @@ test('claim provenance lookup returns typed local claim summaries', async (t) =>
   t.is(result.claim.claimType, 'EntityMetadataClaim')
   t.is(result.claim.confidence, 777)
 })
+
+const POSTER_CORE_KEY = 'ab'.repeat(32)
+const POSTER_BLOB_ID = '5:1:120:4096'
+
+function posterRendition() {
+  return createRenditionDescriptor({
+    purpose: 'poster',
+    format: 'image/jpeg',
+    core: { key: POSTER_CORE_KEY, length: 9, treeHash: 'cd'.repeat(32), byteLength: 4096 },
+  })
+}
+
+/**
+ * One publication whose manifest carries the cover as a signed `poster`
+ * rendition plus the artwork provenance entry that records its hyperblobs id.
+ * Every collaborator that would touch the network is stubbed: `retain` stands in
+ * for the authorized asset transfer and `local` for what the corestore holds.
+ */
+async function artworkFixture({ poster = true, local = false, localAfterRetain = false, artworkTransferTimeoutMs = 0 } = {}) {
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisherA.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisherA.publicKey] })
+  const cover = posterRendition()
+  const manifest = createPublicationManifest({
+    publisherId: publisherA.publicKey,
+    sequence: 1,
+    title: 'Cover',
+    renditions: poster ? [rendition(1), cover] : [rendition(1)],
+    provenance: poster
+      ? [{
+        type: 'artwork',
+        role: 'poster',
+        videoId: 'cover-1',
+        blobId: POSTER_BLOB_ID,
+        coreKey: cover.core.key,
+        renditionId: cover.renditionId,
+        start: 5,
+        end: 6,
+      }]
+      : [],
+    keyPair: publisherA,
+  })
+  await assetManifestStore.ingestManifest(manifest)
+  const subject = workRef('cover')
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [subject],
+    payload: { publicationId: manifest.publicationId, availabilityStatus: 'available' },
+    confidence: 300,
+    keyPair: publisherA,
+  })
+
+  const retained = []
+  let bytesLocal = local
+  const closedSessions = []
+  const api = createMediaGraphApi({
+    mediaGraphStore,
+    assetManifestStore,
+    sourcePreferenceStore: new Map(),
+    now: () => FIXED_NOW,
+    artworkTransferTimeoutMs,
+    scopedNetwork: {
+      async retainAuthorizedRendition(request) {
+        retained.push(request)
+        if (localAfterRetain) bytesLocal = true
+        return { status: 'retained', renditionId: request.renditionId }
+      },
+    },
+    store: {
+      get({ key }) {
+        const coreKey = b4a.toString(key, 'hex')
+        return {
+          async ready() {},
+          async has(start, end) {
+            return coreKey === POSTER_CORE_KEY && start === 5 && end === 6 && bytesLocal
+          },
+          async close() { closedSessions.push(coreKey) },
+        }
+      },
+    },
+    blobServer: {
+      port: 49_001,
+      getLink(key, opts) {
+        return `http://127.0.0.1:49001/?key=${b4a.toString(key, 'hex')}&blob=${opts.blob.blockOffset}:${opts.blob.blockLength}:${opts.blob.byteOffset}:${opts.blob.byteLength}&type=${opts.type}&token=tok`
+      },
+    },
+  })
+  return { api, cover, manifest, subject, retained, closedSessions }
+}
+
+test('entity artwork resolves the manifest poster rendition to a loopback URL once the authorized transfer lands', async (t) => {
+  const { api, cover, manifest, subject, retained, closedSessions } = await artworkFixture({ localAfterRetain: true })
+
+  const result = await api.getEntityArtwork({ entityId: subject.entityId })
+  t.is(result.success, true)
+  t.is(result.exists, true)
+  t.absent(result.errorCode)
+  t.ok(result.url.startsWith('http://127.0.0.1:49001/'), 'artwork is served from loopback, never an origin')
+  t.ok(result.url.includes('/__peartube_thumbnail__.jpg'), 'the buffered blob-server path serves it')
+  t.ok(result.url.includes('pt_thumbnail=1'), 'the response is buffered so native image loaders accept it')
+  t.ok(result.url.includes(`blob=${POSTER_BLOB_ID}`), 'the published hyperblobs id is used verbatim')
+  t.ok(result.url.includes(`key=${POSTER_CORE_KEY}`), 'bytes are read from the rendition core the manifest signed')
+  t.ok(result.url.includes('type=image%2Fjpeg') || result.url.includes('type=image/jpeg'), 'the declared encoding is carried')
+
+  t.alike(retained, [{
+    manifest,
+    renditionId: cover.renditionId,
+    start: 5,
+    end: 6,
+    entityRef: subject.entityId,
+    publicationId: manifest.publicationId,
+  }], 'exactly the poster rendition range is retained over the authorized asset path')
+  t.alike(closedSessions, [POSTER_CORE_KEY], 'the locality probe leaves no open core session')
+})
+
+test('entity artwork reports a retryable miss instead of failing when a manifest carries no poster', async (t) => {
+  const { api, subject, retained } = await artworkFixture({ poster: false })
+
+  const result = await api.getEntityArtwork({ entityId: subject.entityId })
+  t.alike(result, { success: true, exists: false }, 'no poster is an absent cover, not an error')
+  t.alike(retained, [], 'nothing is retained when there is no poster rendition to fetch')
+})
+
+test('entity artwork reports a retryable miss while the poster bytes are still in flight', async (t) => {
+  const { api, cover, subject, retained } = await artworkFixture({ localAfterRetain: false })
+
+  const result = await api.getEntityArtwork({ entityId: subject.entityId })
+  t.alike(result, { success: true, exists: false }, 'unreplicated bytes are retryable, never a thrown RPC')
+  t.is(retained.length, 1, 'the transfer was requested so a later call can succeed')
+  t.is(retained[0].renditionId, cover.renditionId)
+
+  const byPublication = await api.getEntityArtwork({ publicationId: retained[0].publicationId })
+  t.alike(byPublication, { success: true, exists: false }, 'the publication-keyed lookup answers the same way')
+
+  t.alike(
+    await api.getEntityArtwork({}),
+    { success: false, errorCode: 'INVALID_ARTWORK_REQUEST', error: 'entityId or publicationId is required', exists: false },
+    'a request naming neither key is rejected outright'
+  )
+})
+
+test('the same entity carries the same cover and synopsis whether it is fetched as a catalog row or on its own page', async (t) => {
+  const { api, mediaGraphStore } = await fixture()
+  const subject = workRef('described')
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [subject],
+    payload: {
+      title: 'Described',
+      releaseYear: 1999,
+      runtimeMinutes: 136,
+      overview: 'A synopsis a consumer cannot look up anywhere else.',
+      genres: ['Action', 'Sci-Fi'],
+      artwork: [
+        { role: 'backdrop', remoteUrl: 'https://image.example/backdrop.jpg' },
+        { role: 'poster', blobId: '3:1:0:512', blobsCoreKey: 'b'.repeat(64), mimeType: 'image/jpeg' },
+      ],
+    },
+    confidence: 900,
+    keyPair: publisherA,
+  })
+
+  const expected = {
+    posterBlobId: '3:1:0:512',
+    posterBlobsCoreKey: 'b'.repeat(64),
+    posterMimeType: 'image/jpeg',
+    releaseYear: 1999,
+    runtimeMinutes: 136,
+    overview: 'A synopsis a consumer cannot look up anywhere else.',
+    genres: ['Action', 'Sci-Fi'],
+  }
+  const pick = summary => Object.fromEntries(Object.keys(expected).map(key => [key, summary[key]]))
+
+  const detail = await api.getMediaEntity({ entityId: subject.entityId })
+  t.is(detail.success, true)
+  t.alike(pick(detail.entity), expected, 'the detail page knows the title has publisher artwork to ask for')
+
+  const catalog = await api.getMediaCatalog({})
+  t.is(catalog.success, true)
+  const row = catalog.items.find(item => item.entityId === subject.entityId)
+  t.ok(row, 'the entity appears in the catalog')
+  t.alike(pick(row), pick(detail.entity), 'both fetch paths agree, so art never appears on a shelf and vanish on the page')
+
+  t.absent(row.posterUrl, 'a swarm blob is never downgraded to an origin URL')
+})

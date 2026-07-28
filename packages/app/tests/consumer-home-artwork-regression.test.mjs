@@ -226,56 +226,124 @@ test('a home card renders the catalog poster locator', async () => {
 const BLOBS_CORE_KEY = 'a'.repeat(64)
 const BLOB_SERVER_URL = 'http://127.0.0.1:49201/blobs/poster-under-test.jpg'
 
-function recordingRpc(url = BLOB_SERVER_URL) {
+// The publisher's cover art is a rendition of the publication, served over the
+// same authorized asset path as the video. A card names the entity and is handed
+// a URL that is already byte-local; it never names bytes or a core itself.
+// The last answer repeats, so a caller can spell out only what changes.
+function artworkRpc(...answers) {
   const calls = []
   return {
     calls,
-    getVideoThumbnail: async request => {
+    getEntityArtwork: async request => {
       calls.push(request)
-      return { exists: true, url }
+      return answers.length > 1 ? answers.shift() : answers[0]
     },
   }
 }
 
-// Cover art lives in the publisher's own blob core, never at an outside origin:
-// an origin says who is browsing what, is blockable, and is absent offline. The
-// card has to turn the reference into a local blob-server URL.
-test('a home card resolves a poster blob reference through the blob server', async () => {
-  const module = await loadHomeView()
-  const rpc = recordingRpc()
-  const items = [{
-    entityId: 'entity-blob-art',
-    entityKind: 'work',
-    title: 'Blob Art',
-    posterBlobId: '3:1:0:512',
-    posterBlobsCoreKey: BLOBS_CORE_KEY,
-    posterMimeType: 'image/jpeg',
-  }]
+// The very same card with nothing to put in its poster frame: what a viewer
+// looks at while artwork resolves, so any difference here is a layout shift.
+function placeholderCard(module, item) {
+  const bare = { ...item }
+  delete bare.posterBlobId
+  delete bare.posterBlobsCoreKey
+  delete bare.posterMimeType
+  delete bare.posterUrl
+  return renderWith(module, [bare])
+}
 
-  const before = renderWith(module, items, rpc)
+const BLOB_CLAIM_ITEM = {
+  entityId: 'entity-blob-art',
+  entityKind: 'work',
+  title: 'Blob Art',
+  publicationId: 'publication-blob-art',
+  posterBlobId: '3:1:0:512',
+  posterBlobsCoreKey: BLOBS_CORE_KEY,
+  posterMimeType: 'image/jpeg',
+}
+
+// Cover art lives inside the publication a relay already seeds, never at an
+// outside origin: an origin says who is browsing what, is blockable, and is
+// absent offline. Resolving it through the raw blob core the claim names found
+// peers: 0 and left every card grey, so the card asks for the entity instead.
+test('a home card resolves entity artwork through the backend', async () => {
+  const module = await loadHomeView()
+  const rpc = artworkRpc({ success: true, exists: true, url: BLOB_SERVER_URL })
+
+  const before = renderWith(module, [BLOB_CLAIM_ITEM], rpc)
   assert.ok(before.includes('Blob Art'), 'the card renders while the poster is still resolving')
-  assert.equal(before, renderWith(module, [{ entityId: 'entity-blob-art', entityKind: 'work', title: 'Blob Art' }]),
+  assert.equal(before, placeholderCard(module, BLOB_CLAIM_ITEM),
     'an unresolved poster is exactly the placeholder, so nothing shifts when it lands')
 
   await settle()
-  const after = renderWith(module, items, rpc)
+  const after = renderWith(module, [BLOB_CLAIM_ITEM], rpc)
 
-  assert.equal(rpc.calls.length, 1, 'the same reference resolves once, not once per render')
-  assert.deepEqual(rpc.calls[0], {
-    channelKey: '',
-    videoId: '',
-    thumbnailBlobId: '3:1:0:512',
-    thumbnailBlobsCoreKey: BLOBS_CORE_KEY,
-    thumbnailMimeType: 'image/jpeg',
-  }, 'the poster reference is forwarded under the thumbnail ref names the backend reads')
-  assert.ok(after.includes(BLOB_SERVER_URL), 'the resolved blob-server URL reaches the rendered card')
+  assert.equal(rpc.calls.length, 1, 'the same entity resolves once, not once per render')
+  assert.deepEqual(rpc.calls[0], { entityId: 'entity-blob-art', publicationId: 'publication-blob-art' },
+    'the entity is named, never the bytes')
+  assert.ok(after.includes(BLOB_SERVER_URL), 'the resolved loopback URL reaches the rendered card')
+})
+
+// A poster that has not replicated here yet is the ordinary first answer, not a
+// verdict. Recording that miss would leave a permanent placeholder on art that
+// arrives seconds later, which is why the card keeps asking.
+test('a home card asks again for a poster that has not replicated yet', async () => {
+  const module = await loadHomeView()
+  const rpc = artworkRpc(
+    { success: true, exists: false },
+    { success: true, exists: true, url: BLOB_SERVER_URL },
+  )
+  const item = { ...BLOB_CLAIM_ITEM, entityId: 'entity-slow-art', title: 'Slow Art' }
+
+  renderWith(module, [item], rpc)
+  await settle()
+  assert.equal(rpc.calls.length, 1, 'the card asks the backend for the entity')
+
+  const afterMiss = renderWith(module, [item], rpc)
+  assert.equal(afterMiss, placeholderCard(module, item),
+    'a poster that has not arrived leaves the placeholder standing')
+  assert.equal(rpc.calls.length, 2, 'the miss is not cached as final, so the card asks again')
+
+  await settle()
+  const landed = renderWith(module, [item], rpc)
+  assert.ok(landed.includes(BLOB_SERVER_URL), 'the poster appears as soon as it replicates')
+  assert.equal(rpc.calls.length, 2, 'and the resolved URL is remembered rather than fetched twice')
+})
+
+// The one case a miss is final. A backend reporting a hard failure will not
+// start succeeding mid-session, and a whole shelf walking the retry ladder at
+// it is noise for art that is genuinely gone.
+test('a home card stops asking when artwork resolution fails outright', async () => {
+  const module = await loadHomeView()
+  const rpc = artworkRpc({ success: false, exists: false, errorCode: 'ARTWORK_UNAVAILABLE' })
+  const item = { ...BLOB_CLAIM_ITEM, entityId: 'entity-failed-art', title: 'Failed Art' }
+
+  renderWith(module, [item], rpc)
+  await settle()
+  const html = renderWith(module, [item], rpc)
+
+  assert.equal(html, placeholderCard(module, item), 'the card degrades to its placeholder')
+  assert.equal(rpc.calls.length, 1,
+    'a hard failure is final, unlike a poster that simply has not arrived yet')
+})
+
+// A backend older than this screen has no artwork method at all. Reaching for
+// one has to end at the placeholder rather than throwing out of a render.
+test('a home card renders its placeholder when the backend cannot resolve artwork', async () => {
+  const module = await loadHomeView()
+  const item = { ...BLOB_CLAIM_ITEM, entityId: 'entity-unsupported-art', title: 'Unsupported Art' }
+
+  const html = renderWith(module, [item], { getVideoThumbnail: async () => ({ exists: false }) })
+
+  assert.equal(html, placeholderCard(module, item),
+    'no artwork method means the placeholder, not a crash')
 })
 
 // Claims made before publishers carried their own artwork still name an origin.
 // Those keep rendering as they always did, and ask the swarm for nothing.
 test('a home card with only a poster locator resolves nothing', async () => {
   const module = await loadHomeView()
-  const rpc = recordingRpc()
+  const rpc = artworkRpc({ success: true, exists: true, url: BLOB_SERVER_URL })
   const posterUrl = 'https://image.example/legacy-claim.jpg'
 
   const html = renderWith(module, [{
@@ -286,28 +354,22 @@ test('a home card with only a poster locator resolves nothing', async () => {
   }], rpc)
 
   assert.ok(html.includes(posterUrl), 'the claimed locator still renders')
-  assert.equal(rpc.calls.length, 0, 'a locator needs no blob resolution')
+  assert.equal(rpc.calls.length, 0, 'a locator needs no resolution')
 })
 
 // Relay-archived media that never matched a metadata provider carries neither,
-// and must cost nothing rather than probing the swarm for a blob that is not
-// referenced anywhere.
+// and must cost nothing rather than asking the backend for artwork no publisher
+// ever claimed.
 test('a home card with no artwork at all resolves nothing', async () => {
   const module = await loadHomeView()
-  const rpc = recordingRpc()
+  const rpc = artworkRpc({ success: true, exists: true, url: BLOB_SERVER_URL })
+  const item = { entityId: 'entity-no-art', entityKind: 'work', title: 'Bare Entity' }
 
-  const html = renderWith(module, [{
-    entityId: 'entity-no-art',
-    entityKind: 'work',
-    title: 'Bare Entity',
-  }], rpc)
+  const html = renderWith(module, [item], rpc)
 
-  assert.equal(html, renderWith(module, [{
-    entityId: 'entity-no-art',
-    entityKind: 'work',
-    title: 'Bare Entity',
-  }]), 'the card is exactly what it renders with no client at all: the placeholder')
-  assert.equal(rpc.calls.length, 0, 'nothing is asked of the blob server')
+  assert.equal(html, placeholderCard(module, item),
+    'the card is exactly what it renders with no client at all: the placeholder')
+  assert.equal(rpc.calls.length, 0, 'nothing is asked of the backend')
 })
 
 // The year is published on the claim precisely because a consumer cannot look

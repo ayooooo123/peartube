@@ -497,7 +497,10 @@ function claimStoreView(store, claims) {
 // replicates on the same swarm as the content, so it works offline and does not
 // tell a third party who is browsing what. The locator is the canonical blob
 // ref string, which parseBlobRef already understands.
-function artworkEntry(artwork) {
+// Exported because the graph-resolver paths in the media-graph API must land on
+// the same single display locator this projection picks; two pickers would mean a
+// title showing art on a shelf and none on its own page.
+export function artworkEntry(artwork) {
   if (typeof artwork === 'string') return artwork ? { locator: artwork, mimeType: null } : null
   if (!Array.isArray(artwork)) return null
   const roles = ['poster', 'thumbnail', 'still', 'backdrop']

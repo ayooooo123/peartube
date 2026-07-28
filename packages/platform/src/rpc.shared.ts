@@ -26,6 +26,7 @@ import type {
   SubmitPublisherRootOperationResponse,
 } from '@peartube/host'
 import type {
+  EntityArtworkResponse,
   MediaAvailability,
   MediaAvailabilityState,
   MediaAgentContributionsResponse,
@@ -67,6 +68,7 @@ export type {
   UploadVideoRequest,
 }
 export type {
+  EntityArtworkResponse,
   MediaAvailability,
   MediaAvailabilityState,
   MediaAgentContributionsResponse,
@@ -316,6 +318,10 @@ type MediaGraphMethods = {
     entityId: string
     publicationId?: string
   }): Promise<PrepareMediaPlaybackResponse>
+  getEntityArtwork(request: {
+    entityId?: string
+    publicationId?: string
+  }): Promise<EntityArtworkResponse>
 }
 
 type MediaGraphProtocolClient = {
@@ -801,6 +807,19 @@ export function createMediaGraphRpc(ensureClient: () => MediaGraphProtocolClient
       await client.ready()
       const handler = client.mediaGraph.prepareMediaPlayback
       if (!handler) throw new Error('Host protocol client does not expose mediaGraph.prepareMediaPlayback')
+      return handler(request)
+    },
+
+    /**
+     * Cover art for one entity, resolved from the publication manifest's poster
+     * rendition over the authorized asset path — the same path the video takes.
+     * The answer is a loopback URL, so it is already byte-local.
+     */
+    async getEntityArtwork(request: { entityId?: string; publicationId?: string }) {
+      const client = ensureClient()
+      await client.ready()
+      const handler = client.mediaGraph.getEntityArtwork
+      if (!handler) throw new Error('Host protocol client does not expose mediaGraph.getEntityArtwork')
       return handler(request)
     },
   }

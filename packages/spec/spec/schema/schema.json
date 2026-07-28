@@ -2633,6 +2633,64 @@
       ]
     },
     {
+      "name": "get-entity-artwork-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "entityId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicationId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-entity-artwork-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "errorCode",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "exists",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "url",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "media-playback-attempt",
       "namespace": "peartube",
       "compact": false,

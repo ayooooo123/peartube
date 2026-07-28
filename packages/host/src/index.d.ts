@@ -662,6 +662,23 @@ export type PrepareMediaPlaybackResponse = {
   sources?: MediaPublicationSource[] | null
 }
 
+/**
+ * Cover art for one entity. The poster is a rendition of the publication, so it
+ * arrives over the same authorized asset path as the video and is already byte-
+ * local by the time a URL is handed back.
+ *
+ * `exists: false` with no `errorCode` is not a failure: the publication is
+ * known and its poster simply has not replicated here yet, so asking again
+ * later is the correct response.
+ */
+export type EntityArtworkResponse = {
+  success: boolean
+  exists: boolean
+  url?: string | null
+  errorCode?: string | null
+  error?: string | null
+}
+
 export type SystemProtocolNamespace = ProtocolNamespace & {
   getStatus(request?: Record<string, never>): Promise<any>
   getSwarmStatus(request?: Record<string, never>): Promise<ProtocolNetworkStatus>
@@ -719,6 +736,10 @@ export type MediaGraphProtocolNamespace = ProtocolNamespace & {
     /** Optional override from Other Sources; honoured only while eligible. */
     publicationId?: string
   }): Promise<PrepareMediaPlaybackResponse>
+  getEntityArtwork(request: {
+    entityId?: string
+    publicationId?: string
+  }): Promise<EntityArtworkResponse>
 }
 
 export type VideoProtocolNamespace = ProtocolNamespace & {

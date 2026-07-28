@@ -2370,3 +2370,75 @@ test('a backpressured socket does not abort the catalog walk', async (t) => {
   pair.a.destroy()
   pair.b.destroy()
 })
+
+// Relays exist for availability. Seeding a title has to mean seeding what it
+// looks like as well, or the peer that holds the movie still cannot answer for
+// its cover and every catalog that finds it renders blank. Leaving that to each
+// caller means the one seeder that forgets breaks the title for everyone.
+test('retaining a title also retains the cover published with it', async (t) => {
+  const publisher = crypto.keyPair(bytes(32, 71))
+  const coreKey = bytes(32, 72)
+  const media = createRenditionDescriptor({
+    purpose: 'original',
+    format: 'video/mp4',
+    core: { key: coreKey, length: 6, treeHash: bytes(32, 73), byteLength: 6144 },
+  })
+  const poster = createRenditionDescriptor({
+    purpose: 'poster',
+    format: 'image/jpeg',
+    core: { key: coreKey, length: 8, treeHash: bytes(32, 74), byteLength: 53905 },
+  })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 3,
+    title: 'Seeded with its cover',
+    renditions: [media, poster],
+    provenance: [
+      { type: 'upload', renditionId: media.renditionId, coreKey: b4a.toString(coreKey, 'hex'), start: 0, end: 6 },
+      { type: 'artwork', role: 'poster', renditionId: poster.renditionId, coreKey: b4a.toString(coreKey, 'hex'), blobId: '7:1:900:53905', start: 7, end: 8 },
+    ],
+    keyPair: publisher,
+    signedAt: 10,
+    expiresAt: 1000,
+  })
+
+  // Authorization is asked once per rendition being held, so it records what
+  // this seeder actually took custody of.
+  const authorized = []
+  const runtime = createScopedNetworkRuntime({
+    swarm: fakeSwarm(),
+    muxFactory: () => ({}),
+    authorizePublication: async ({ renditionId, start, end }) => {
+      authorized.push({ renditionId, start, end })
+      return true
+    },
+    store: {
+      get ({ key }) {
+        return { key, ready: async () => {}, replicate: () => {}, download: () => ({ destroy () {} }), close () {} }
+      },
+    },
+    now: () => 20,
+  })
+  await runtime.start()
+
+  // Ask only for the media, exactly as a seeder does.
+  const retained = await runtime.retainAuthorizedRendition({ manifest, renditionId: media.renditionId })
+  t.is(retained.status, 'retained', 'the media retains')
+
+  t.ok(
+    authorized.some(entry => entry.renditionId === poster.renditionId),
+    'the cover is taken custody of too, without the caller asking for it',
+  )
+  t.alike(
+    authorized.find(entry => entry.renditionId === poster.renditionId),
+    { renditionId: poster.renditionId, start: 7, end: 8 },
+    'the cover is held over its own published span, not the whole shared core',
+  )
+
+  // A seeder that retains again must not re-take or throw.
+  const before = authorized.length
+  await runtime.retainAuthorizedRendition({ manifest, renditionId: media.renditionId })
+  t.ok(authorized.length >= before, 'retaining twice is not an error')
+
+  await runtime.close()
+})

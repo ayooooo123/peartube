@@ -1994,6 +1994,28 @@ export function createScopedNetworkRuntime (options = {}) {
     return result
   }
 
+  // One replication stream per core per connection. Hypercore verifies every
+  // block it accepts, so nothing here has to build or check a proof.
+  const replicatedCores = new WeakMap()
+
+  function replicateAuthorizedCore (scope, connection, mux) {
+    if (!scope.core || !connection) return
+    let cores = replicatedCores.get(connection)
+    if (!cores) {
+      cores = new Set()
+      replicatedCores.set(connection, cores)
+    }
+    const key = scope.coreKey || scope.scopeId
+    if (cores.has(key)) return
+    cores.add(key)
+    try {
+      scope.core.replicate(mux)
+    } catch (error) {
+      cores.delete(key)
+      console.log('[ScopedNetwork] asset core replication failed:', error?.message)
+    }
+  }
+
   function attachScope (scope, connection, info) {
     if (!networkEnabled || scope.closed) return
     const remoteKey = connectionKey(connection, info)
@@ -2021,6 +2043,11 @@ export function createScopedNetworkRuntime (options = {}) {
             end: range.end,
           })
           if (!current) fail('publication manifest authorization failed')
+          // The scope decides whether this peer may have the core at all; the
+          // core itself moves and verifies its own blocks. Hand-rolling that
+          // transfer meant hand-rolling proofs, and every one of them was
+          // refused on arrival as an invalid signature.
+          replicateAuthorizedCore(scope, connection, mux)
           tracked = scope.sessions.get(remoteKey)
         }
         const result = authorizeScopeConnection(scope, { peerId: remoteKey, connection, tracked })

@@ -61,8 +61,14 @@ try {
       const answer = await runtime.api.getEntityArtwork({ entityId: target.entityId })
         .catch(error => ({ success: false, exists: false, errorCode: error?.message }))
       if (answer?.exists) {
-        log('RESULT cover transferred over the swarm ->', answer.url)
-        process.exit(0)
+        log('cover resolved ->', answer.url)
+        // A URL only proves the reference resolved. Read it to prove the bytes
+        // themselves crossed the swarm and are a decodable image.
+        const response = await fetch(answer.url)
+        const bytes = Buffer.from(await response.arrayBuffer())
+        const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8
+        log('RESULT bytes', bytes.byteLength, 'type', response.headers.get('content-type'), jpeg ? 'JPEG-OK' : 'NOT-JPEG')
+        process.exit(jpeg ? 0 : 1)
       }
       log('  not yet', String(target.entityId).slice(0, 12), JSON.stringify(answer))
     }

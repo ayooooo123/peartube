@@ -193,8 +193,8 @@ export function createLocalMediaIndex(options = {}) {
       [record.sourceId, 1024],
       [record.indexId, 512],
       [record.agentId, 512],
-      [record.artwork, 2048],
       [record.model, 512],
+      [record.artwork, 2048],
     ]) {
       if (!boundedString(value, max)) return false
     }
@@ -266,6 +266,10 @@ export function createLocalMediaIndex(options = {}) {
       entityKind: first.kind || 'unknown',
       title: first.title || projectedPublications.find(publication => publication.title)?.title || null,
       creator: first.creator || null,
+      // Any publisher in the group may be the one that knows the cover, and the
+      // group is not ordered by who does, so fall back across the group rather
+      // than letting an art-less record decide the entity renders blank.
+      artwork: first.artwork || recordGroup.find(record => record.artwork)?.artwork || null,
       collectionId: first.collectionId || null,
       tags: Array.from(tags).sort(),
       publications: projectedPublications,

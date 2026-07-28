@@ -644,7 +644,11 @@ ns.register({
     { name: 'conflictCount', type: 'uint', required: false },
     { name: 'availability', type: '@peartube/media-availability', required: false },
     { name: 'sources', type: '@peartube/media-publication-source', array: true },
-    { name: 'renditions', type: '@peartube/media-rendition-descriptor', array: true }
+    { name: 'renditions', type: '@peartube/media-rendition-descriptor', array: true },
+    // A consumer holds no metadata-provider credentials, so cover art only
+    // reaches it if the publisher's claim carries it and this summary passes it
+    // on. Without this the catalog arrives complete and still renders blank.
+    { name: 'posterUrl', type: 'string', required: false }
   ]
 })
 

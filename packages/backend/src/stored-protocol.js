@@ -18,9 +18,19 @@ function validateProtocol5To6Transition(_context, step = {}) {
   }
 }
 
+// Protocol 8 adds cover art to the content record and the catalog response.
+// Both are appended, version-gated fields: records written before the bump
+// decode unchanged and simply carry no artwork, so no user data is rewritten.
+function validateProtocol7To8Transition(_context, step = {}) {
+  if (step.fromVersion !== 7 || step.toVersion !== 8 || step.expectedVersion < 8) {
+    throw new Error('invalid stored protocol 7 to 8 transition')
+  }
+}
+
 export const DEFAULT_STORED_PROTOCOL_MIGRATIONS = Object.freeze({
   4: validateProtocol4To5Transition,
   5: validateProtocol5To6Transition,
+  7: validateProtocol7To8Transition,
 })
 
 const MAX_MARKER_BYTES = 128

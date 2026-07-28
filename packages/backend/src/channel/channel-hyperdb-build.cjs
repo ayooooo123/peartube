@@ -92,6 +92,21 @@ ns.register({
   ]
 })
 
+// Cover art has to survive a restart on the publisher as well as travel on a
+// claim, so the content record carries the same role/locator shape the media
+// graph publishes.
+ns.register({
+  name: 'contentArtwork',
+  compact: true,
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'blobId', type: 'string' },
+    { name: 'blobsCoreKey', type: 'string' },
+    { name: 'mimeType', type: 'string' },
+    { name: 'remoteUrl', type: 'string' }
+  ]
+})
+
 ns.register({
   name: 'contentDetails',
   fields: [
@@ -113,7 +128,8 @@ ns.register({
     { name: 'publicationState', type: 'string' },
     { name: 'contentFingerprint', type: 'string' },
     { name: 'importIdentityKey', type: 'string' },
-    { name: 'importClaimantId', type: 'string' }
+    { name: 'importClaimantId', type: 'string' },
+    { name: 'artwork', type: '@peartubeChannel/contentArtwork', array: true }
   ]
 })
 

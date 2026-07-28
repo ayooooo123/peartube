@@ -68,6 +68,21 @@ publicSchema.register({
   ],
 })
 
+// Cover art has to survive a restart on the publisher as well as travel on a
+// claim, so the content record carries the same role/locator shape the media
+// graph publishes.
+publicSchema.register({
+  name: 'contentArtwork',
+  compact: true,
+  fields: [
+    { name: 'role', type: 'string', required: true },
+    { name: 'blobId', type: 'string' },
+    { name: 'blobsCoreKey', type: 'string' },
+    { name: 'mimeType', type: 'string' },
+    { name: 'remoteUrl', type: 'string' }
+  ]
+})
+
 publicSchema.register({
   name: 'contentDetails',
   fields: [
@@ -92,6 +107,7 @@ publicSchema.register({
     { name: 'importClaimantId', type: 'string' },
     { name: 'canonicalVisibility', type: 'string' },
     { name: 'duplicateOfClaimantId', type: 'string' },
+    { name: 'artwork', type: '@peartubePublic/contentArtwork', array: true },
   ],
 })
 

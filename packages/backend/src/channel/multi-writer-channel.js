@@ -109,6 +109,7 @@ const CONTENT_DETAIL_FIELDS = [
   'episodeNumber',
   'originalAirDate',
   'thumbnailUrl',
+  'artwork',
   'provenanceVersion',
   'publicationState',
   'contentFingerprint',

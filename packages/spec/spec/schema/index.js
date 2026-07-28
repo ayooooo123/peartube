@@ -2060,7 +2060,8 @@ const encoding50 = {
       (m.conflictCount ? 16 : 0) |
       (m.availability ? 32 : 0) |
       (m.sources ? 64 : 0) |
-      (m.renditions ? 128 : 0)
+      (m.renditions ? 128 : 0) |
+      (m.posterUrl ? 256 : 0)
 
     c.string.preencode(state, m.entityId)
     c.string.preencode(state, m.entityKind)
@@ -2074,6 +2075,7 @@ const encoding50 = {
     if (m.availability) encoding50_7.preencode(state, m.availability)
     if (m.sources) encoding50_8.preencode(state, m.sources)
     if (m.renditions) encoding50_9.preencode(state, m.renditions)
+    if (m.posterUrl) c.string.preencode(state, m.posterUrl)
   },
   encode(state, m) {
     const flags =
@@ -2084,7 +2086,8 @@ const encoding50 = {
       (m.conflictCount ? 16 : 0) |
       (m.availability ? 32 : 0) |
       (m.sources ? 64 : 0) |
-      (m.renditions ? 128 : 0)
+      (m.renditions ? 128 : 0) |
+      (m.posterUrl ? 256 : 0)
 
     c.string.encode(state, m.entityId)
     c.string.encode(state, m.entityKind)
@@ -2098,6 +2101,7 @@ const encoding50 = {
     if (m.availability) encoding50_7.encode(state, m.availability)
     if (m.sources) encoding50_8.encode(state, m.sources)
     if (m.renditions) encoding50_9.encode(state, m.renditions)
+    if (m.posterUrl) c.string.encode(state, m.posterUrl)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -2114,7 +2118,8 @@ const encoding50 = {
       conflictCount: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
       availability: (flags & 32) !== 0 ? encoding50_7.decode(state) : null,
       sources: (flags & 64) !== 0 ? encoding50_8.decode(state) : null,
-      renditions: (flags & 128) !== 0 ? encoding50_9.decode(state) : null
+      renditions: (flags & 128) !== 0 ? encoding50_9.decode(state) : null,
+      posterUrl: (flags & 256) !== 0 ? c.string.decode(state) : null
     }
   }
 }

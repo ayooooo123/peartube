@@ -2122,6 +2122,12 @@
           "array": true,
           "type": "@peartube/media-rendition-descriptor",
           "version": 1
+        },
+        {
+          "name": "posterUrl",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },

@@ -488,6 +488,25 @@ function claimStoreView(store, claims) {
  * Project only authenticated publisher catalog state into consumer records.
  * Collections remain graph entities; "series" is strictly a local presentation.
  */
+// A publisher may claim several artwork roles; the catalog record carries one
+// display locator, and moderation is applied to that locator. Preferring the
+// poster keeps a shelf uniform, and a plain string stays supported because
+// older claims carry the locator directly.
+function artworkLocator(artwork) {
+  if (typeof artwork === 'string') return artwork || null
+  if (!Array.isArray(artwork)) return null
+  for (const role of ['poster', 'thumbnail', 'still', 'backdrop']) {
+    for (const entry of artwork) {
+      if (entry?.role !== role) continue
+      const locator = typeof entry.remoteUrl === 'string' && entry.remoteUrl
+        ? entry.remoteUrl
+        : (typeof entry.blobId === 'string' ? entry.blobId : '')
+      if (locator) return locator
+    }
+  }
+  return null
+}
+
 export function projectAuthenticatedPublisherMediaRecords({
   mediaGraphStore,
   assetManifestStore,
@@ -524,7 +543,7 @@ export function projectAuthenticatedPublisherMediaRecords({
           publicationId: manifest.publicationId,
           publisherId: manifest.body.publisherId,
           title: work.metadata.title || manifest.body.title || null,
-          artwork: work.metadata.artwork || null,
+          artwork: artworkLocator(work.metadata.artwork),
           ranking: Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null,
           playable: true,
         })
@@ -544,7 +563,7 @@ export function projectAuthenticatedPublisherMediaRecords({
           publicationId: manifest.publicationId,
           publisherId: manifest.body.publisherId,
           title: collection.metadata.title || work.metadata.title || manifest.body.title || null,
-          artwork: collection.metadata.artwork || work.metadata.artwork || null,
+          artwork: artworkLocator(collection.metadata.artwork) || artworkLocator(work.metadata.artwork),
           ranking: Number.isFinite(collection.metadata.ranking)
             ? collection.metadata.ranking
             : (Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null),
@@ -634,7 +653,7 @@ export function createConsumerCatalogProjection(options = {}) {
     return {
       ...record,
       title: resolved.metadata.title || record.title,
-      artwork: resolved.metadata.artwork || record.artwork,
+      artwork: artworkLocator(resolved.metadata.artwork) || record.artwork,
       ranking: Number.isFinite(resolved.metadata.ranking) ? resolved.metadata.ranking : record.ranking,
       entityKind: resolved.entityKind,
     }

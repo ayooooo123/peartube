@@ -27,6 +27,11 @@ export const CONTENT_KINDS = new Set(['episode', 'movie', 'video', 'stream', 'tr
 export const PUBLICATION_STATES = new Set(['replicationPending', 'durabilityVerified', 'published'])
 export const ARTWORK_ROLES = new Set(['avatar', 'poster', 'banner', 'backdrop'])
 
+// A channel and a work do not illustrate themselves the same way, and asset
+// bindings require every role ARTWORK_ROLES names. Content roles therefore live
+// in their own set: widening the channel set silently demands new bound assets.
+export const CONTENT_ARTWORK_ROLES = new Set(['poster', 'backdrop', 'thumbnail', 'still'])
+
 function sha256Hex (payload) {
   const digest = b4a.allocUnsafe(sodium.crypto_hash_sha256_BYTES)
   sodium.crypto_hash_sha256(digest, payload)
@@ -113,6 +118,10 @@ export function normalizeArtworkRole (value) {
   return normalizeSetValue(value, ARTWORK_ROLES, 'artwork role')
 }
 
+export function normalizeContentArtworkRole (value) {
+  return normalizeSetValue(value, CONTENT_ARTWORK_ROLES, 'content artwork role')
+}
+
 const PROFILE_FIELDS = new Set([
   'id',
   'profileKind',
@@ -151,6 +160,7 @@ const CONTENT_FIELDS = new Set([
   'episodeNumber',
   'originalAirDate',
   'thumbnailUrl',
+  'artwork',
   'provenanceVersion',
   'publicationState',
   'contentFingerprint',
@@ -175,6 +185,9 @@ export function normalizeContentDetails (details) {
   assignPersistedInteger(out, input, 'episodeNumber')
   assignPersistedInteger(out, input, 'originalAirDate')
   assignString(out, input, 'thumbnailUrl', MAX_URL_LENGTH)
+  if (input.artwork !== undefined && input.artwork !== null) {
+    out.artwork = normalizeContentArtworkList(input.artwork)
+  }
   assignString(out, input, 'provenanceVersion', MAX_PROVENANCE_LENGTH)
   if (input.publicationState !== undefined && input.publicationState !== null) {
     out.publicationState = normalizePublicationState(input.publicationState)
@@ -306,6 +319,8 @@ export function normalizeChannelSource (source) {
   return out
 }
 
+const MAX_CONTENT_ARTWORK_ENTRIES = 8
+
 const CHANNEL_ARTWORK_FIELDS = new Set([
   'role',
   'blobId',
@@ -315,9 +330,35 @@ const CHANNEL_ARTWORK_FIELDS = new Set([
   'updatedAt'
 ])
 
-export function normalizeChannelArtwork (artwork) {
+// Cover art reaches a consumer only as publisher-signed metadata, and it
+// originates in operator form input. Every entry is validated with the same
+// role and URL rules as channel artwork before it can be signed into a claim.
+export function normalizeContentArtworkList (artwork) {
+  if (!Array.isArray(artwork)) throw new Error('artwork must be an array')
+  if (artwork.length > MAX_CONTENT_ARTWORK_ENTRIES) {
+    throw new Error(`artwork must hold at most ${MAX_CONTENT_ARTWORK_ENTRIES} entries`)
+  }
+  const out = []
+  const seenRoles = new Set()
+  for (const entry of artwork) {
+    const normalized = normalizeChannelArtwork(entry, normalizeContentArtworkRole)
+    // Content artwork is published through the media-graph content-artwork
+    // struct, which carries no updatedAt. Dropping it here keeps a claim from
+    // signing a field the wire format cannot represent.
+    delete normalized.updatedAt
+    if (normalized.blobId === undefined && normalized.remoteUrl === undefined) {
+      throw new Error('artwork requires either blobId or remoteUrl')
+    }
+    if (seenRoles.has(normalized.role)) throw new Error(`artwork role ${normalized.role} is duplicated`)
+    seenRoles.add(normalized.role)
+    out.push(normalized)
+  }
+  return out
+}
+
+export function normalizeChannelArtwork (artwork, normalizeRole = normalizeArtworkRole) {
   const input = assertAllowedFields(artwork, CHANNEL_ARTWORK_FIELDS, 'channel artwork')
-  const out = { role: normalizeArtworkRole(input.role) }
+  const out = { role: normalizeRole(input.role) }
   assignString(out, input, 'blobId', MAX_ID_LENGTH)
   assignString(out, input, 'blobsCoreKey', MAX_ID_LENGTH)
   assignString(out, input, 'mimeType', MAX_MIME_TYPE_LENGTH)

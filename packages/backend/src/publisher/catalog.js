@@ -395,10 +395,20 @@ export class PublisherCatalog extends ReadyResource {
       console.log('[PublisherCatalog] accepted page rejected', rebuilt.rejected.length, 'of', entries.length,
         rebuilt.rejected.slice(0, 4).map(candidate => `${candidate?.code || 'UNKNOWN'}:${candidate?.reason || candidate?.value?.recordType || ''}`).join(' | '))
     }
+    const acceptedCount = entries.filter(entry => rebuilt.accepted.some(candidate =>
+      b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
+    )).length
+    if (acceptedCount !== entries.length && rebuilt.rejected.length === 0) {
+      // Operations can also be dropped without being rejected: a page whose
+      // namespace genesis or writer admission sits in a different page applies
+      // nothing at all. Without this the consumer reports the page inadmissible
+      // with no per-operation code and an empty catalog looks like a transport
+      // fault rather than a causally incomplete page.
+      console.log('[PublisherCatalog] accepted page applied nothing', acceptedCount, 'of', entries.length,
+        'types:', entries.map(entry => decodePublisherCatalogFrame(entry.frame).recordType).join(','))
+    }
     return {
-      accepted: entries.filter(entry => rebuilt.accepted.some(candidate =>
-        b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
-      )).length,
+      accepted: acceptedCount,
       rejected: entries.filter(entry => rebuilt.rejected.some(candidate =>
         b4a.toString(candidate.value.recordId || candidate.value.transitionId, 'hex') === entry.operationId
       )).length,

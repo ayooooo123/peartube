@@ -170,6 +170,7 @@ function normalizeVideoMetadata(options, videoId) {
   const seriesId = options.seriesId;
   const seriesTitle = options.seriesTitle;
   const expectedEpisodeCount = options.expectedEpisodeCount;
+  const artwork = options.artwork;
 
   const metadata = normalizeContentDetails({
     id: videoId,
@@ -186,6 +187,7 @@ function normalizeVideoMetadata(options, videoId) {
     episodeNumber,
     originalAirDate,
     thumbnailUrl,
+    artwork,
     provenanceVersion,
     publicationState,
     contentFingerprint,

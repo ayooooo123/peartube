@@ -722,3 +722,64 @@ test('a moderation block on a non-first equivalent subject hides the whole relat
     'Non-poisoned source-neutral title',
   ]], 'a hidden non-first subject cannot keep an equivalence edge in consumer topology')
 })
+
+// A publisher claims cover art as role-tagged entries because a consumer holds
+// no metadata-provider credentials of its own. The catalog carries one display
+// locator, so the claim has to be reduced to one, and it has to reach the wire:
+// a catalog that syncs completely and renders blank is the failure this guards.
+test('claimed cover art reduces to one display locator and reaches the catalog wire', async (t) => {
+  const publisher = crypto.keyPair()
+  const work = createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisher.publicKey, issuerLocalId: 'art' })
+  const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
+  const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
+  const manifest = createPublicationManifest({
+    publisherId: publisher.publicKey,
+    sequence: 1,
+    title: 'Illustrated',
+    renditions: [testRendition(11)],
+    keyPair: publisher,
+  })
+  await assetManifestStore.ingestManifest(manifest)
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'EntityMetadataClaim',
+    subjectRefs: [work],
+    payload: {
+      title: 'Illustrated',
+      publicationId: manifest.publicationId,
+      // Deliberately out of preference order: a backdrop must not stand in for
+      // a poster just because the publisher listed it first.
+      artwork: [
+        { role: 'backdrop', remoteUrl: 'https://image.example/backdrop.jpg' },
+        { role: 'poster', remoteUrl: 'https://image.example/poster.jpg' },
+      ],
+    },
+    confidence: 100,
+    keyPair: publisher,
+  })
+  await ingestClaim(mediaGraphStore, {
+    claimType: 'AvailabilityObservation',
+    subjectRefs: [work],
+    payload: { publicationId: manifest.publicationId, availabilityStatus: 'available' },
+    confidence: 100,
+    keyPair: publisher,
+  })
+
+  const records = projectAuthenticatedPublisherMediaRecords({
+    mediaGraphStore,
+    assetManifestStore,
+  })
+  t.is(records.length, 1, 'the illustrated work projects one record')
+  t.is(records[0].artwork, 'https://image.example/poster.jpg', 'the poster wins over the backdrop')
+
+  const projection = createConsumerCatalogProjection({
+    localIndex: createLocalMediaIndex(),
+    bootstrapManager: { listLocators: () => [] },
+    indexFeedManager: { getRecords: () => [] },
+    publisherRecords: () => records,
+  })
+  t.is(projection.rebuild().accepted, 1, 'a record carrying cover art stays admissible')
+
+  const api = createMediaGraphApi({ consumerCatalogProjection: projection })
+  const page = await api.getMediaCatalog({})
+  t.is(page.items[0].posterUrl, 'https://image.example/poster.jpg', 'the poster reaches the catalog response')
+})

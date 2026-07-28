@@ -552,6 +552,9 @@ export function createMediaGraphApi(options = {}) {
                   availability: availabilityResponse(source.availability),
                 })),
                 renditions: [],
+                // Cover art is published on the metadata claim; passing it on
+                // is what stops a fully synced catalog rendering blank.
+                ...(typeof item.artwork === 'string' && item.artwork ? { posterUrl: item.artwork } : {}),
               }
             }),
             nextCursor: page.nextCursor,

@@ -1055,6 +1055,14 @@ export function createScopedNetworkRuntime (options = {}) {
       sourceWriterKey: exactBuffer(entry?.sourceWriterKey, 32, 'sourceWriterKey'),
       frame: b4a.from(entry?.frame || []),
     }))
+    // NOTE: a page that encodes past the frame bound cannot simply be served in
+    // smaller slices. Wire order is operation-id ascending (a hash order), and
+    // causality is repaired only *within* a page, so a slice can separate an
+    // operation from the namespace genesis or writer admission that authorizes
+    // it. The consumer then applies nothing and reports the page inadmissible.
+    // Fixing this needs either transport-level fragmentation of one logical
+    // page or consumer-side deferral of operations whose dependencies have not
+    // arrived yet; shrinking here alone corrupts the walk.
     const nextCursor = normalizeCatalogCursor(page.nextCursor)
     const unsigned = {
       version: 1,
@@ -1070,8 +1078,9 @@ export function createScopedNetworkRuntime (options = {}) {
     }
     const response = { ...unsigned, pageDigest: b4a.toString(pageDigest(unsigned), 'hex') }
     const payload = canonicalCatalogPayload(response, 'catalog page response')
+    const entriesServed = entries
     const nextPages = tracked.catalogServePages + 1
-    const nextRecords = tracked.catalogServeRecords + entries.length
+    const nextRecords = tracked.catalogServeRecords + entriesServed.length
     const nextBytes = tracked.catalogServeBytes + payload.byteLength
     if (nextPages > MAX_CATALOG_SESSION_PAGES || nextRecords > MAX_CATALOG_SESSION_RECORDS ||
         nextBytes > MAX_CATALOG_SESSION_BYTES || nextRecords * 2 > MAX_CATALOG_VERIFICATION_WORK) {
@@ -1082,7 +1091,7 @@ export function createScopedNetworkRuntime (options = {}) {
     tracked.catalogServeRecords = nextRecords
     tracked.catalogServeBytes = nextBytes
     tracked.catalogServeDigest = response.pageDigest
-    return { status: 'sent', records: entries.length, nextCursor }
+    return { status: 'sent', records: entriesServed.length, nextCursor }
   }
 
   async function acceptCatalogPage(scope, tracked, frame) {
@@ -2302,7 +2311,26 @@ export function createScopedNetworkRuntime (options = {}) {
         locator.catalogBootstrapKey === b4a.toString(existing.scope.descriptor.catalogBootstrapKey, 'hex') &&
         locator.catalogHead === existing.scope.advertisedCatalogHead &&
         locator.authorizationChainDigest === existing.scope.advertisedAuthorizationStateDigest
-      if (identical) return skip('locator identical to current scope')
+      if (identical) {
+        // The locator has not moved, but a walk that never finished leaves the
+        // catalog permanently short: a peer that dropped mid-page is recorded
+        // as a scope error and nothing ever asks again. A republished locator
+        // is the natural retry tick, so use it as one rather than skipping.
+        //
+        // Only retry while a session is actually live. A locator arrives before
+        // the transport is up, and the proof step waits one second for a peer,
+        // so retrying eagerly just burns the attempt and logs a failure that
+        // reads like a broken publisher rather than a connection still forming.
+        const live = [...existing.scope.sessions.values()]
+          .some(session => !session.closed && session.state === 'active')
+        if (existing.scope.catalogComplete !== true && live) {
+          void syncPublisherCatalog(existing.scope).catch(error => {
+            recordProtocolError(existing.scope, 'locator-retry', error)
+          })
+          return skip('locator unchanged; retrying an unfinished catalog walk')
+        }
+        return skip(live ? 'locator identical to current scope' : 'locator identical; no live session yet')
+      }
     }
     const fingerprint = [
       locator.catalogEpoch,

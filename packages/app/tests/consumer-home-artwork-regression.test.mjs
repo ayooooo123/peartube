@@ -183,3 +183,18 @@ test('a card states availability for media that cannot play yet', async () => {
   assert.ok(html.includes('Awaiting replication'), 'the card says what it is waiting for')
   assert.ok(!html.includes('Play Still Arriving'), 'nothing offers to play a title that cannot play yet')
 })
+
+// Cover art reaches the catalog as the display locator the publisher claimed.
+// The card has to render it, or a catalog that arrives complete with artwork
+// still shows blank placeholders.
+test('a home card renders the catalog poster locator', async () => {
+  const posterUrl = 'https://image.example/claimed-poster.jpg'
+  const html = await renderHome([{
+    entityId: 'entity-claimed-art',
+    entityKind: 'work',
+    title: 'Claimed Art',
+    posterUrl,
+  }])
+
+  assert.ok(html.includes(posterUrl), 'the claimed poster reaches the rendered card')
+})

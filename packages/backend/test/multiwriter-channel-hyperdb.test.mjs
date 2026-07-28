@@ -397,3 +397,34 @@ test('MultiWriterChannel decodes a referenced blobs key without opening a redund
     byteLength: 128,
   })
 })
+
+// Cover art is only useful if it survives a restart: the record is what a
+// republish reads from. A schema that accepts artwork and drops it on encode
+// looks identical to a working one until the process comes back up.
+test('MultiWriterChannel persists cover art through a HyperDB round trip', async () => {
+  await withChannel(async (channel) => {
+    const artwork = [
+      { role: 'poster', remoteUrl: 'https://image.example/poster.jpg', mimeType: 'image/jpeg' },
+      { role: 'thumbnail', blobId: 'blob-1', blobsCoreKey: 'ff00' }
+    ]
+    await channel.addVideo({ id: 'art', title: 'Art', uploadedAt: 10, artwork })
+
+    // HyperDB materializes absent optionals as null rather than omitting them,
+    // so compare the fields that were actually claimed.
+    const stored = await channel.getVideo('art')
+    assert.deepEqual(
+      stored.artwork.map((entry) => Object.fromEntries(
+        Object.entries(entry).filter(([, value]) => value !== null && value !== undefined)
+      )),
+      artwork,
+      'every claimed role and locator decodes back out of HyperDB'
+    )
+
+    const published = await channel.publicBee.getVideo('art')
+    assert.deepEqual(
+      published.artwork.map((entry) => entry.role),
+      ['poster', 'thumbnail'],
+      'the public row carries the art a consumer needs'
+    )
+  })
+})

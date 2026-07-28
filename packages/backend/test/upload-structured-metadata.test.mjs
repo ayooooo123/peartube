@@ -483,3 +483,54 @@ test('both paths snapshot allowlisted options once before caller mutation or upl
   t.alike(bufferState.reads, expectedOptionReads(), 'buffer reads each allowlisted field exactly once')
   t.is(bufferChannel.addVideoCalls.length, 1, 'buffer has no late validation failure')
 })
+
+// A consumer holds no metadata-provider credentials. Cover art reaches it only
+// if the publisher's upload carries it into the record it persists, so a drop
+// anywhere along this path renders every catalog as blank placeholders.
+test('uploads carry validated cover art into the persisted record', async (t) => {
+  const manager = createUploadManager({ ctx: {} })
+  const channel = makeChannel()
+
+  const result = await manager.uploadFromBuffer(channel, FIXTURE_BYTES, {
+    title: 'Cover art',
+    mimeType: 'video/webm',
+    artwork: [
+      { role: 'poster', remoteUrl: 'https://image.example/poster.jpg' },
+      { role: 'thumbnail', remoteUrl: 'https://image.example/thumb.jpg' }
+    ]
+  })
+
+  t.is(result.success, true)
+  t.alike(
+    channel.addVideoCalls[0].metadata.artwork,
+    [
+      { role: 'poster', remoteUrl: 'https://image.example/poster.jpg' },
+      { role: 'thumbnail', remoteUrl: 'https://image.example/thumb.jpg' }
+    ],
+    'the persisted record keeps every claimed role and locator'
+  )
+})
+
+test('malformed cover art is rejected before anything is persisted', async (t) => {
+  const manager = createUploadManager({ ctx: {} })
+  const cases = [
+    { artwork: [{ role: 'nope', remoteUrl: 'https://image.example/x.jpg' }], error: /artwork role/ },
+    { artwork: [{ role: 'poster' }], error: /blobId or remoteUrl/ },
+    {
+      artwork: [
+        { role: 'poster', remoteUrl: 'https://image.example/a.jpg' },
+        { role: 'poster', remoteUrl: 'https://image.example/b.jpg' }
+      ],
+      error: /duplicated/
+    },
+    { artwork: [{ role: 'poster', remoteUrl: 'https://image.example/a.jpg', bogus: 'x' }], error: /channel artwork/ }
+  ]
+
+  for (const { artwork, error } of cases) {
+    const channel = makeChannel()
+    const result = await manager.uploadFromBuffer(channel, FIXTURE_BYTES, { title: 'Bad art', mimeType: 'video/webm', artwork })
+    t.is(result.success, false, 'the upload reports failure rather than publishing unvalidated art')
+    t.ok(error.test(String(result.error)), `the failure names the problem: ${result.error}`)
+    t.is(channel.addVideoCalls.length, 0, 'nothing is persisted when cover art does not validate')
+  }
+})

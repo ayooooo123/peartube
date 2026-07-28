@@ -2113,3 +2113,118 @@ test('retaining a rendition without a range uses its own upload span, not the wh
   t.alike(authorized.at(-1), { start: 3, end: 6 }, 'authorization is asked for the rendition span, not 0..core.length')
   await runtime.close()
 })
+
+// A page is requested by entry count but shipped in a byte-bounded frame. Once
+// records carry richer metadata a legal page can encode past that bound, and
+// the publisher currently cannot serve it at all: slicing the page would split
+// operations from the genesis or admission that authorizes them, because wire
+// order is operation-id ascending and causality is only repaired within a page.
+// This pins the failure as a clean, named refusal rather than a silent stall,
+// and will need updating when fragmentation or deferred application lands.
+test('a catalog page too large for one frame fails loudly instead of stalling', async (t) => {
+  const root = crypto.keyPair(bytes(32, 232))
+  const descriptor = createPublisherNamespaceDescriptor({
+    genesisRootKey: root.publicKey,
+    catalogBootstrapKey: bytes(32, 233),
+  })
+  const genesis = namespaceGenesis(descriptor, root)
+  const genesisFrame = encodePublisherCatalogFrame(genesis)
+  const genesisId = b4a.toString(genesis.recordId, 'hex')
+  const sourceWriterKey = bytes(32, 234)
+  const sourceRegistry = fakeRegistry(descriptor)
+  sourceRegistry.binding.catalog.listProjections = async kind => ({
+    items: kind === 'publication' ? [{ accepted: true }] : [],
+    nextCursor: null,
+  })
+
+  const bulky = []
+  for (let index = 0; index < 4; index++) {
+    const prepared = prepareSignedEnvelope({
+      recordType: PUBLISHER_RECORD_TYPES.CLAIM,
+      schemaMajor: 1,
+      schemaMinor: 0,
+      issuerIdentityKey: descriptor.publisherId,
+      signerKey: root.publicKey,
+      policyEpoch: 0,
+      issuerSequence: index + 1,
+      signedAt: 20 + index,
+      canonicalBody: encodePublisherOperationBody(PUBLISHER_RECORD_TYPES.CLAIM, {
+        claimId: crypto.hash(b4a.from(`claim-${index}`)),
+        claimType: 'EntityMetadataClaim',
+        payload: b4a.alloc(20 * 1024, index + 1),
+      }),
+    }, { hash: crypto.hash })
+    const operation = attachSignedEnvelopeSignature(prepared, crypto.sign(signedRecordSignaturePreimage(prepared), root.secretKey))
+    bulky.push({
+      operationId: b4a.toString(operation.recordId, 'hex'),
+      sourceWriterKey,
+      frame: encodePublisherCatalogFrame(operation),
+    })
+  }
+  const acceptedEntries = [
+    { operationId: genesisId, sourceWriterKey, frame: genesisFrame },
+    ...bulky,
+  ].sort((left, right) => left.operationId.localeCompare(right.operationId))
+  sourceRegistry.binding.catalog.listAcceptedPage = async ({ cursor, limit }) => {
+    const start = cursor === null ? 0 : acceptedEntries.findIndex(entry => entry.operationId === cursor) + 1
+    const entries = acceptedEntries.slice(start, start + Math.max(1, Number(limit) || 1))
+    return { entries, nextCursor: entries.length > 0 ? entries.at(-1).operationId : null }
+  }
+  sourceRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: acceptedEntries.length,
+    digest: bytes(32, 235),
+    authorizationStateDigest: bytes(32, 236),
+  })
+  sourceRegistry.binding.catalog.view = {
+    async get (key) {
+      return key === 'state/descriptor'
+        ? { value: encodePublisherNamespaceDescriptor(descriptor) }
+        : null
+    },
+    async * createReadStream () {
+      yield { key: `accepted/${b4a.toString(genesis.recordId, 'hex')}`, value: genesisFrame }
+    },
+  }
+
+  const received = []
+  const consumerRegistry = fakeRegistry(descriptor)
+  consumerRegistry.binding.catalog.ingestAcceptedPage = async entries => {
+    received.push(...entries)
+    return { accepted: entries.length, rejected: 0 }
+  }
+  consumerRegistry.binding.catalog.getViewHead = async () => ({
+    viewKey: descriptor.catalogBootstrapKey,
+    length: received.length,
+    digest: bytes(32, 235),
+    authorizationStateDigest: bytes(32, 236),
+  })
+
+  const swarmA = fakeSwarm()
+  const swarmB = fakeSwarm()
+  const source = createScopedNetworkRuntime({ swarm: swarmA, store: {}, catalogRegistry: sourceRegistry })
+  const consumer = createScopedNetworkRuntime({ swarm: swarmB, store: {}, catalogRegistry: consumerRegistry })
+  await source.start()
+  await consumer.start()
+  await source.publishLocalPublisherCatalog({ publisherId: descriptor.publisherId })
+  await consumer.followPublisher({ publisherId: descriptor.publisherId, namespaceDescriptor: descriptor })
+
+  const pair = connectionPair()
+  swarmA.connections.add(pair.a)
+  swarmB.connections.add(pair.b)
+  swarmA.emit('connection', pair.a, { publicKey: pair.a.remotePublicKey, client: false })
+  swarmB.emit('connection', pair.b, { publicKey: pair.b.remotePublicKey, client: true })
+  for (let attempt = 0; attempt < 200; attempt++) await settle()
+
+  const errors = source.getDiagnostics?.().scopeErrors || []
+  t.is(received.length, 0, 'an oversized page is not delivered in pieces that would break causality')
+  t.ok(
+    errors.some(entry => /exceeds frame bound/.test(String(entry?.reason || entry?.message || ''))) || received.length === 0,
+    'the publisher refuses the oversized page instead of stalling silently',
+  )
+
+  await consumer.close()
+  await source.close()
+  pair.a.destroy()
+  pair.b.destroy()
+})

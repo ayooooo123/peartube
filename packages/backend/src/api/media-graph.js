@@ -72,6 +72,7 @@ const DEFAULT_ARTWORK_TRANSFER_TIMEOUT_MS = 3_000
 const ARTWORK_RETAIN_TIMEOUT_MS = 3_000
 const ARTWORK_POLL_INTERVAL_MS = 100
 const ARTWORK_MISS = Symbol('artwork-miss')
+const RENDITION_RETAIN_TIMEOUT_MS = 3_000
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -812,6 +813,65 @@ export function createMediaGraphApi(options = {}) {
     }))
   }
 
+  // Retaining a rendition is what makes this device a holder of it: the same call
+  // playback preparation makes (retainEntitySources), so a relay that holds only
+  // the manifest starts pulling the bytes because someone asked for them. Bounded
+  // and best-effort — the read below blocks on the blocks it needs anyway, so a
+  // retain that has not settled must not hold the caller.
+  async function retainRenditionForRead(manifest, renditionId, publicationId) {
+    if (typeof scopedNetwork?.retainAuthorizedRendition !== 'function') return
+    await boundedAttempt(scopedNetwork.retainAuthorizedRendition({
+      manifest,
+      renditionId,
+      entityRef: entityRefForPublication(publicationId),
+      publicationId,
+    }), RENDITION_RETAIN_TIMEOUT_MS)
+  }
+
+  // Retention scopes itself to an entity when it can name one. The graph knows
+  // which entity a publication was claimed against; without it the retain still
+  // works, just unscoped.
+  function entityRefForPublication(publicationId) {
+    const rows = mediaGraphStore?.getClaims?.() || []
+    const row = rows.find(candidate => (
+      !candidate.revoked &&
+      candidate.body?.payload?.publicationId === publicationId &&
+      typeof candidate.body?.subjectRefs?.[0]?.entityId === 'string'
+    ))
+    return row?.body?.subjectRefs?.[0]?.entityId || null
+  }
+
+  /**
+   * Walk a blob's blocks and yield exactly the requested byte window. `core.get`
+   * waits on replication, which is what lets a caller range-request a rendition
+   * this device has not finished pulling: the bytes arrive as they land instead
+   * of the request failing because they are not local yet.
+   */
+  async function* readBlobRange(core, blob, start, length) {
+    let remaining = length
+    let index = blob.blockOffset
+    let offset = 0
+    if (start > 0) {
+      const seek = await core.seek(Number(blob.byteOffset || 0) + start)
+      if (!seek) throw new Error('rendition start byte is unavailable')
+      index = seek[0]
+      offset = seek[1] || 0
+    }
+    const blockEnd = blob.blockOffset + blob.blockLength
+    while (remaining > 0 && index < blockEnd) {
+      let block = await core.get(index)
+      if (!block || block.byteLength === 0) throw new Error(`rendition block ${index} is unavailable`)
+      if (offset > 0) {
+        block = block.subarray(offset)
+        offset = 0
+      }
+      if (block.byteLength > remaining) block = block.subarray(0, remaining)
+      yield block
+      remaining -= block.byteLength
+      index++
+    }
+  }
+
   return {
     async getMediaCatalog(request = {}) {
       const scope = createAvailabilityScope()
@@ -1131,6 +1191,61 @@ export function createMediaGraphApi(options = {}) {
         url: resolveRenditionUrl(prepared.publicationId, prepared.renditionId),
         attempts: prepared.attempts,
         sources,
+      }
+    },
+
+    /**
+     * Open one rendition's bytes for a caller that is not this process. A core key
+     * is a swarm reference, not something an HTTP player can read, and the loopback
+     * blob-server link prepareMediaPlayback hands back is this box's own address —
+     * meaningless to another machine. This yields a reader instead, so whoever
+     * serves it can answer byte ranges over its own transport.
+     *
+     * Not RPC-shaped on purpose: `read` is a function, so this is for in-process
+     * callers (the relay's HTTP surface) only.
+     */
+    async openMediaRendition(request = {}) {
+      const publicationId = typeof request.publicationId === 'string' ? request.publicationId.trim() : ''
+      const renditionId = typeof request.renditionId === 'string' ? request.renditionId.trim() : ''
+      if (!publicationId || !renditionId) return error('INVALID_RENDITION_REQUEST', 'publicationId and renditionId are required')
+      const corestore = options.store || options.ctx?.store || null
+      if (typeof assetManifestStore?.getManifest !== 'function' || typeof corestore?.get !== 'function') {
+        return error('MEDIA_GRAPH_UNAVAILABLE', 'Media graph is not bound yet')
+      }
+      const manifest = assetManifestStore.getManifest(publicationId)
+      if (!manifest) return error('MEDIA_PUBLICATION_NOT_FOUND', 'Media publication not found')
+      const rendition = (manifest.body?.renditions || []).find(candidate => candidate.renditionId === renditionId)
+      if (!rendition) return error('MEDIA_RENDITION_NOT_FOUND', 'Media rendition not found')
+      const ref = renditionBlobRef(manifest, rendition)
+      // A signed rendition whose provenance names no blob span cannot be read at
+      // all: that is a publisher that has not finished, not a missing rendition.
+      if (!ref) return error('MEDIA_RENDITION_UNRESOLVED', 'Media rendition has no readable blob reference yet')
+
+      // Asking for the bytes is what fetches them.
+      await retainRenditionForRead(manifest, renditionId, publicationId)
+
+      let core = null
+      try {
+        core = corestore.get({ key: b4a.from(ref.blobsCoreKey, 'hex') })
+        await core.ready?.()
+      } catch (err) {
+        try { await core?.close?.() } catch { /* best effort */ }
+        return error('MEDIA_RENDITION_UNAVAILABLE', err?.message || 'Media rendition core could not be opened')
+      }
+
+      const byteLength = ref.blob.byteLength || schemaUint(rendition.core?.byteLength) || 0
+      return {
+        success: true,
+        publicationId,
+        renditionId,
+        contentType: typeof rendition.format === 'string' && rendition.format ? rendition.format : 'video/mp4',
+        byteLength,
+        read({ start = 0, length = byteLength - start } = {}) {
+          return readBlobRange(core, ref.blob, start, length)
+        },
+        async close() {
+          try { await core.close?.() } catch { /* best effort */ }
+        },
       }
     },
 

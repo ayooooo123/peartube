@@ -291,6 +291,10 @@ export async function createArchiveConsole({
     mediaCatalog: (request) => service.runtime?.api?.getMediaCatalog?.(request),
     publicationSources: (request) => service.runtime?.api?.getPublicationSources?.(request),
     assetManifest: (publicationId) => service.runtime?.ctx?.assetManifestStore?.getManifest?.(publicationId),
+    // Serving a rendition's bytes is the only way an off-box consumer can play
+    // what this relay published: a core key needs a PearTube node, and the blob
+    // server's link is loopback.
+    openRendition: (request) => service.runtime?.api?.openMediaRendition?.(request),
     logger
   })
 

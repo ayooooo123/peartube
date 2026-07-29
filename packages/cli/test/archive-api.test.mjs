@@ -399,6 +399,128 @@ test('unknown /api/v1 paths and wrong methods answer JSON, never the HTML consol
   })
 })
 
+// A catalog entry names a Hypercore, which only a PearTube node can resolve. The
+// stream endpoint is what makes a published rendition readable by anything that
+// speaks HTTP byte ranges, so these cover the exact shape a player - or a Go
+// backend fronting one - depends on.
+
+const RENDITION_BYTES = Buffer.from(Array.from({ length: 4096 }, (_, index) => index % 251))
+
+async function* chunked(bytes, size = 1500) {
+  for (let offset = 0; offset < bytes.byteLength; offset += size) {
+    yield bytes.subarray(offset, Math.min(offset + size, bytes.byteLength))
+  }
+}
+
+function renditionService({ bytes = RENDITION_BYTES, contentType = 'video/mp4', open = null } = {}) {
+  const service = fakeService()
+  const opens = []
+  const closes = []
+  service.runtime.api.openMediaRendition = async (request) => {
+    opens.push(request)
+    if (open) return open(request)
+    if (request.publicationId !== 'pub-1') return { success: false, errorCode: 'MEDIA_PUBLICATION_NOT_FOUND', error: 'Media publication not found' }
+    if (request.renditionId !== 'rend-1') return { success: false, errorCode: 'MEDIA_RENDITION_NOT_FOUND', error: 'Media rendition not found' }
+    return {
+      success: true,
+      publicationId: request.publicationId,
+      renditionId: request.renditionId,
+      contentType,
+      byteLength: bytes.byteLength,
+      read({ start = 0, length = bytes.byteLength - start } = {}) {
+        return chunked(bytes.subarray(start, start + length))
+      },
+      async close() { closes.push(true) }
+    }
+  }
+  return { service, opens, closes }
+}
+
+test('GET /api/v1/stream/:publicationId/:renditionId serves the whole rendition', async function (t) {
+  const { service, opens, closes } = renditionService()
+  await withRelay(async ({ base }) => {
+    const res = await fetch(`${base}/api/v1/stream/pub-1/rend-1`)
+
+    t.is(res.status, 200)
+    t.is(res.headers.get('content-type'), 'video/mp4', 'the rendition declares its own format')
+    t.is(res.headers.get('content-length'), String(RENDITION_BYTES.byteLength))
+    t.is(res.headers.get('accept-ranges'), 'bytes', 'a player must be told it may seek')
+    t.is(res.headers.get('content-range'), null, 'a full response is not a partial one')
+    t.alike(Buffer.from(await res.arrayBuffer()), RENDITION_BYTES, 'the bytes are served, not a reference to them')
+    t.alike(opens, [{ publicationId: 'pub-1', renditionId: 'rend-1' }], 'the request is what asks the media graph for the bytes')
+    t.is(closes.length, 1, 'the rendition is released once the response ends')
+  }, { service })
+})
+
+test('a Range request answers 206 with exactly the window asked for', async function (t) {
+  const { service } = renditionService()
+  await withRelay(async ({ base }) => {
+    const head = await fetch(`${base}/api/v1/stream/pub-1/rend-1`, { headers: { range: 'bytes=0-1023' } })
+    t.is(head.status, 206)
+    t.is(head.headers.get('content-range'), `bytes 0-1023/${RENDITION_BYTES.byteLength}`)
+    t.is(head.headers.get('content-length'), '1024')
+    t.is(head.headers.get('accept-ranges'), 'bytes')
+    const headBody = Buffer.from(await head.arrayBuffer())
+    t.is(headBody.byteLength, 1024, 'a seeking player gets the window it asked for and nothing more')
+    t.alike(headBody, RENDITION_BYTES.subarray(0, 1024))
+
+    // Mid-file: the offset arithmetic is the part a player breaks on.
+    const middle = await fetch(`${base}/api/v1/stream/pub-1/rend-1`, { headers: { range: 'bytes=1024-2047' } })
+    t.is(middle.status, 206)
+    t.is(middle.headers.get('content-range'), `bytes 1024-2047/${RENDITION_BYTES.byteLength}`)
+    t.alike(Buffer.from(await middle.arrayBuffer()), RENDITION_BYTES.subarray(1024, 2048))
+
+    // An open-ended range is how a player streams the remainder.
+    const tail = await fetch(`${base}/api/v1/stream/pub-1/rend-1`, { headers: { range: 'bytes=4000-' } })
+    t.is(tail.status, 206)
+    t.is(tail.headers.get('content-range'), `bytes 4000-4095/${RENDITION_BYTES.byteLength}`)
+    t.alike(Buffer.from(await tail.arrayBuffer()), RENDITION_BYTES.subarray(4000))
+  }, { service })
+})
+
+test('a range past the end of the rendition is refused with 416, never truncated bytes', async function (t) {
+  const { service } = renditionService()
+  await withRelay(async ({ base }) => {
+    const res = await fetch(`${base}/api/v1/stream/pub-1/rend-1`, { headers: { range: 'bytes=9999-10999' } })
+    t.is(res.status, 416)
+    t.is(res.headers.get('content-range'), `bytes */${RENDITION_BYTES.byteLength}`, 'the client is told how long the rendition actually is')
+    t.is(res.headers.get('accept-ranges'), 'bytes')
+    t.is((await res.json()).error.code, 'RANGE_NOT_SATISFIABLE')
+  }, { service })
+})
+
+test('an unknown publication or rendition answers 404 as JSON', async function (t) {
+  const { service } = renditionService()
+  await withRelay(async ({ base }) => {
+    const unknownPublication = await fetch(`${base}/api/v1/stream/pub-missing/rend-1`)
+    t.is(unknownPublication.status, 404)
+    t.is(unknownPublication.headers.get('content-type'), 'application/json; charset=utf-8')
+    t.is((await unknownPublication.json()).error.code, 'MEDIA_PUBLICATION_NOT_FOUND')
+
+    const unknownRendition = await fetch(`${base}/api/v1/stream/pub-1/rend-missing`)
+    t.is(unknownRendition.status, 404)
+    t.is((await unknownRendition.json()).error.code, 'MEDIA_RENDITION_NOT_FOUND')
+
+    const noRendition = await fetch(`${base}/api/v1/stream/pub-1`)
+    t.is(noRendition.status, 404)
+    t.is((await noRendition.json()).error.code, 'NOT_FOUND', 'both coordinates are required')
+  }, { service })
+})
+
+test('the stream says so when the relay has no media graph bound yet', async function (t) {
+  const service = fakeService()
+  service.runtime.api = {}
+  await withRelay(async ({ base }) => {
+    const res = await fetch(`${base}/api/v1/stream/pub-1/rend-1`)
+    t.is(res.status, 503, 'a relay that is not bound yet is a retry, not a missing title')
+    t.is((await res.json()).error.code, 'MEDIA_GRAPH_UNAVAILABLE')
+
+    const wrongMethod = await fetch(`${base}/api/v1/stream/pub-1/rend-1`, { method: 'POST' })
+    t.is(wrongMethod.status, 405)
+    t.is(wrongMethod.headers.get('allow'), 'GET')
+  }, { service })
+})
+
 test('the browser console form still redirects exactly as before', async function (t) {
   await withRelay(async ({ base }) => {
     const body = new FormData()

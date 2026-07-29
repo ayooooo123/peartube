@@ -39,13 +39,16 @@ const MAX_CATALOG_PAGE_LIMIT = 50
 // projection rebuild. A caller polling for what has been published needs an
 // answer it can retry, so the read gets a deadline.
 const CATALOG_DEADLINE_MS = 10_000
-const CATALOG_TIMEOUT = Symbol('catalog-timeout')
+// A rendition open resolves the manifest and takes custody of the core; it must
+// not hold the caller's connection open if the runtime is wedged.
+const STREAM_OPEN_DEADLINE_MS = 10_000
+const DEADLINE_EXPIRED = Symbol('deadline-expired')
 
 function withDeadline(promise, timeoutMs) {
   let timer = null
   return Promise.race([
     Promise.resolve(promise),
-    new Promise((resolve) => { timer = setTimeout(() => resolve(CATALOG_TIMEOUT), timeoutMs) })
+    new Promise((resolve) => { timer = setTimeout(() => resolve(DEADLINE_EXPIRED), timeoutMs) })
   ]).then((value) => {
     clearTimeout(timer)
     return value
@@ -207,7 +210,7 @@ export async function portableEntitySources(item, { publicationSources = null, a
     )
     // A source list that has not arrived leaves the publication as the page
     // reported it, rather than holding the whole page open for one entity.
-    if (page !== CATALOG_TIMEOUT && page?.success === true && page.items?.length > 0) sources = page.items
+    if (page !== DEADLINE_EXPIRED && page?.success === true && page.items?.length > 0) sources = page.items
   }
 
   return sources.map((source) => {
@@ -233,6 +236,36 @@ export async function portableCatalogEntity(item, resolvers = {}) {
   }
 }
 
+// One byte range, which is the only form a seeking player sends. A header this
+// does not understand is ignored rather than refused (RFC 9110: an unsatisfiable
+// range is a 416, an unparseable one is not a range at all), so a caller that
+// asks for something exotic still gets the whole rendition.
+export function parseByteRange(header, byteLength) {
+  if (typeof header !== 'string') return null
+  const match = /^bytes=([0-9]*)-([0-9]*)$/.exec(header.trim())
+  if (!match) return null
+  const [, rawStart, rawEnd] = match
+  if (rawStart === '' && rawEnd === '') return null
+
+  // `bytes=-N`: the last N bytes. A suffix longer than the rendition is the whole
+  // rendition, never an error.
+  if (rawStart === '') {
+    const suffix = uint(rawEnd)
+    if (!suffix) return null
+    if (byteLength === 0) return { unsatisfiable: true }
+    return { start: Math.max(0, byteLength - suffix), end: byteLength - 1 }
+  }
+
+  const start = uint(rawStart)
+  if (start === null) return null
+  if (start >= byteLength) return { unsatisfiable: true }
+  const requestedEnd = rawEnd === '' ? byteLength - 1 : uint(rawEnd)
+  if (requestedEnd === null) return null
+  const end = Math.min(requestedEnd, byteLength - 1)
+  if (end < start) return { unsatisfiable: true }
+  return { start, end }
+}
+
 // Map a submission-parsing failure onto a status a client can act on. The
 // multipart receiver reports these as plain errors; without the mapping every
 // one of them would read as a generic 500 that the caller cannot distinguish
@@ -251,7 +284,7 @@ function multipartFailure(err) {
   return invalid('INVALID_MULTIPART', message, null, 400)
 }
 
-export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, logger = null }) {
+export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, logger = null }) {
   if (typeof readSubmission !== 'function') throw new Error('readSubmission is required')
   if (typeof enqueue !== 'function') throw new Error('enqueue is required')
   if (!store) throw new Error('store is required')
@@ -341,7 +374,7 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     }
 
     const page = await withDeadline(mediaCatalog(request), CATALOG_DEADLINE_MS)
-    if (page === CATALOG_TIMEOUT) {
+    if (page === DEADLINE_EXPIRED) {
       logger?.archive?.warn?.('Relay media catalog read timed out', { timeoutMs: CATALOG_DEADLINE_MS })
       sendError(res, invalid('CATALOG_TIMEOUT', `relay media catalog did not answer within ${CATALOG_DEADLINE_MS}ms; retry`, null, 503))
       return
@@ -366,6 +399,113 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     })
   }
 
+  // Backpressure matters here in a way it does not for a JSON body: a rendition
+  // is a film, and writing it faster than the socket drains would buffer it all
+  // in the relay's memory.
+  async function writeChunk(res, chunk) {
+    if (res.write(chunk) !== false) return
+    await new Promise((resolve) => {
+      const done = () => {
+        res.off?.('drain', done)
+        res.off?.('close', done)
+        res.off?.('error', done)
+        resolve()
+      }
+      res.once('drain', done)
+      res.once('close', done)
+      res.once('error', done)
+    })
+  }
+
+  // Serve one published rendition's bytes.
+  //
+  // The catalog names cores, which only a PearTube node can resolve. A consumer
+  // that is not one - a media server, a browser, a player asking for byte ranges
+  // - needs an origin it can range-request, and the relay's own blob server
+  // answers on 127.0.0.1, so it cannot be that origin for anyone else. This is.
+  //
+  // Trust model: unauthenticated, exactly like every other route here. Whoever
+  // can reach the relay can read what the relay has published.
+  async function getStream(req, res, publicationId, renditionId) {
+    if (typeof openRendition !== 'function') {
+      sendError(res, invalid('MEDIA_GRAPH_UNAVAILABLE', 'relay media graph is not bound yet', null, 503))
+      return
+    }
+
+    const opened = await withDeadline(openRendition({ publicationId, renditionId }), STREAM_OPEN_DEADLINE_MS)
+    if (opened === DEADLINE_EXPIRED) {
+      logger?.archive?.warn?.('Relay rendition open timed out', { publicationId, renditionId, timeoutMs: STREAM_OPEN_DEADLINE_MS })
+      sendError(res, invalid('STREAM_TIMEOUT', `relay media graph did not open ${publicationId}/${renditionId} within ${STREAM_OPEN_DEADLINE_MS}ms; retry`, null, 503))
+      return
+    }
+    if (!opened) {
+      sendError(res, invalid('MEDIA_GRAPH_UNAVAILABLE', 'relay media graph is not bound yet', null, 503))
+      return
+    }
+    if (opened.success !== true) {
+      // A publication or rendition this relay does not hold is the caller's
+      // mistake (404); anything else is the relay not being ready (503).
+      const code = opened.errorCode || 'MEDIA_GRAPH_UNAVAILABLE'
+      const missing = code === 'MEDIA_PUBLICATION_NOT_FOUND' || code === 'MEDIA_RENDITION_NOT_FOUND'
+      sendError(res, invalid(code, opened.error || `no rendition ${renditionId} on publication ${publicationId}`, null, missing ? 404 : 503))
+      return
+    }
+
+    try {
+      const byteLength = uint(opened.byteLength)
+      if (byteLength === null) {
+        sendError(res, invalid('MEDIA_RENDITION_UNRESOLVED', `rendition ${renditionId} declares no byte length yet`, null, 503))
+        return
+      }
+      const contentType = typeof opened.contentType === 'string' && opened.contentType ? opened.contentType : 'video/mp4'
+      const range = parseByteRange(req.headers?.range, byteLength)
+      if (range?.unsatisfiable) {
+        sendError(
+          res,
+          invalid('RANGE_NOT_SATISFIABLE', `requested range is outside the ${byteLength} bytes of rendition ${renditionId}`, null, 416),
+          { 'accept-ranges': 'bytes', 'content-range': `bytes */${byteLength}` }
+        )
+        return
+      }
+
+      const start = range ? range.start : 0
+      const end = range ? range.end : Math.max(0, byteLength - 1)
+      const length = byteLength === 0 ? 0 : end - start + 1
+      const headers = {
+        'content-type': contentType,
+        'content-length': String(length),
+        'accept-ranges': 'bytes',
+        'cache-control': 'no-store'
+      }
+      if (range) headers['content-range'] = `bytes ${start}-${end}/${byteLength}`
+      res.writeHead(range ? 206 : 200, headers)
+      if (length === 0) {
+        res.end()
+        return
+      }
+
+      // The blocks behind this window may still be replicating; the reader waits
+      // on each one, so the response streams as the bytes land rather than
+      // failing because the relay has not finished pulling the title.
+      for await (const chunk of opened.read({ start, length })) {
+        if (res.writableEnded || res.destroyed) break
+        await writeChunk(res, chunk)
+      }
+      if (!res.writableEnded && !res.destroyed) res.end()
+    } catch (err) {
+      logger?.archive?.error?.('Relay rendition stream failed', { publicationId, renditionId, error: err?.message || String(err) })
+      // Once a body has started there is no status left to send: cutting the
+      // response is what tells the client the range is incomplete.
+      if (res.headersSent) {
+        try { res.destroy?.() } catch { /* best effort */ }
+        return
+      }
+      sendError(res, invalid('STREAM_FAILED', err?.message || String(err), null, 503))
+    } finally {
+      await opened.close?.()
+    }
+  }
+
   // The sub-path under the prefix, or null when the request is not ours.
   function route(url) {
     let pathname = null
@@ -388,6 +528,22 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     } catch {
       return raw
     }
+  }
+
+  // /stream/<publicationId>/<renditionId> — both coordinates, exactly as the
+  // catalog reported them.
+  function streamTargetFrom(path) {
+    const segments = path.slice('/stream/'.length).split('/')
+    if (segments.length !== 2) return null
+    const [publicationId, renditionId] = segments.map((segment) => {
+      try {
+        return decodeURIComponent(segment)
+      } catch {
+        return segment
+      }
+    })
+    if (!publicationId || !renditionId) return null
+    return { publicationId, renditionId }
   }
 
   return {
@@ -425,6 +581,20 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
             return
           }
           await getCatalog(res, new URL(req.url, 'http://relay.local').searchParams)
+          return
+        }
+
+        if (path.startsWith('/stream/')) {
+          if (req.method !== 'GET') {
+            sendError(res, invalid('METHOD_NOT_ALLOWED', `${req.method} is not allowed on ${ARCHIVE_API_PREFIX}/stream/:publicationId/:renditionId`, null, 405), { allow: 'GET' })
+            return
+          }
+          const target = streamTargetFrom(path)
+          if (!target) {
+            sendError(res, invalid('NOT_FOUND', `stream requests are ${ARCHIVE_API_PREFIX}/stream/:publicationId/:renditionId`, null, 404))
+            return
+          }
+          await getStream(req, res, target.publicationId, target.renditionId)
           return
         }
 

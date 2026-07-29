@@ -6,8 +6,9 @@ import { join } from 'node:path'
 import * as nodeFs from 'node:fs'
 import * as nodePath from 'node:path'
 
-import { createDirectDownloader, isDirectVideoUrl } from '../src/media/direct-download.js'
+import { createDirectDownloader, isDirectVideoUrl, byteCeiling } from '../src/media/direct-download.js'
 import { createRoutingDownloader } from '../src/archive-manager.js'
+import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../src/constants.js'
 
 const VIDEO = Buffer.from('DIRECT-DOWNLOAD-EPISODE-BYTES-'.repeat(200))
 
@@ -155,6 +156,81 @@ test('a download stops at its byte ceiling instead of filling the disk', async f
       'a body past the ceiling fails rather than streaming forever'
     )
     t.absent(existsSync(join(outputDir, 'arch_cap')), 'the partial download is removed')
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true })
+    server.close()
+  }
+})
+
+// The ceiling that failed the first real auto-seed: a 7,044,201,146-byte movie
+// against a hardcoded 5 GiB cap no operator could raise. A guarded fetch cannot
+// be driven end to end from a loopback test server by design (the socket check
+// refuses it), so the ceiling policy itself is asserted directly.
+test('the guarded ceiling is the operator ceiling, not a hardcoded 5 GiB', function (t) {
+  const FIVE_GIB = 5 * 1024 * 1024 * 1024
+  const REAL_MOVIE = 7_044_201_146
+
+  t.ok(DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES > FIVE_GIB, 'the default clears the old cap')
+  t.ok(
+    byteCeiling(DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, true, null) > REAL_MOVIE,
+    'and clears the 7 GB movie that failed'
+  )
+  t.is(
+    byteCeiling(20 * FIVE_GIB, true, null),
+    20 * FIVE_GIB,
+    'an operator raising it past 5 GiB is honoured, which is the whole defect'
+  )
+  t.is(byteCeiling(64, true, null), 64, "an operator's lower ceiling still wins")
+  t.is(byteCeiling(0, true, null), DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, 'a guarded fetch is never unbounded by omission')
+  t.is(byteCeiling(0, false, null), 0, 'a console download with no ceiling is unchanged')
+  t.is(byteCeiling(DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, true, 4096), 4096, 'disk headroom lowers it')
+  t.is(byteCeiling(0, false, 4096), 4096, 'and bounds an otherwise unbounded console download')
+})
+
+test('the storage gate lowers the ceiling and refuses at the free-disk floor', async function (t) {
+  const { server, base } = await startServer()
+  const outputDir = mkdtempSync(join(tmpdir(), 'pt-direct-headroom-'))
+  let hits = 0
+  server.on('request', () => { hits += 1 })
+  try {
+    const cramped = createDirectDownloader({
+      outputDir,
+      fs: nodeFs,
+      path: nodePath,
+      maxBytes: DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
+      storageHeadroom: () => 32
+    })
+    await t.exception(
+      cramped.download({ id: 'arch_room', url: `${base}/episode.mp4` }),
+      /32 byte ceiling/,
+      'remaining disk headroom lowers a much larger configured ceiling'
+    )
+
+    const atFloor = createDirectDownloader({
+      outputDir,
+      fs: nodeFs,
+      path: nodePath,
+      maxBytes: DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
+      storageHeadroom: () => 0
+    })
+    const before = hits
+    await t.exception(
+      atFloor.download({ id: 'arch_floor', url: `${base}/episode.mp4` }),
+      /free disk floor/,
+      'at the floor it refuses by name'
+    )
+    t.is(hits, before, 'and refuses before fetching a byte')
+    t.absent(existsSync(join(outputDir, 'arch_floor')), 'with no temp dir left behind')
+
+    const unmeasured = createDirectDownloader({
+      outputDir,
+      fs: nodeFs,
+      path: nodePath,
+      maxBytes: DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
+      storageHeadroom: () => null
+    })
+    const ok = await unmeasured.download({ id: 'arch_unmeasured', url: `${base}/episode.mp4` })
+    t.alike(readFileSync(ok.filePath), VIDEO, 'an unmeasurable disk leaves the configured ceiling alone')
   } finally {
     rmSync(outputDir, { recursive: true, force: true })
     server.close()

@@ -6,6 +6,7 @@ import {
   DEFAULT_ARCHIVE_FFMPEG_PATH,
   DEFAULT_ARCHIVE_FORMAT,
   DEFAULT_ARCHIVE_JS_RUNTIME,
+  DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
   DEFAULT_ARCHIVE_MAX_ITEMS,
   DEFAULT_ARCHIVE_MAX_RETRIES,
   DEFAULT_ARCHIVE_POLL_SECONDS,
@@ -307,6 +308,7 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_TMP_PATH ||
     env.PEARTUBE_ARCHIVE_ENABLED ||
     env.PEARTUBE_ARCHIVE_POLL ||
+    env.PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES ||
     env.PEARTUBE_ARCHIVE_FORMAT ||
     env.PEARTUBE_ARCHIVE_YT_DLP_PATH ||
     env.PEARTUBE_ARCHIVE_FFMPEG_PATH ||
@@ -337,6 +339,9 @@ function configFromEnv(env = {}) {
       if (parsed !== undefined) config.archive.enabled = parsed
     }
     if (env.PEARTUBE_ARCHIVE_POLL) config.archive.poll = Number(env.PEARTUBE_ARCHIVE_POLL)
+    if (env.PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES) {
+      config.archive.maxDirectDownloadBytes = Number(env.PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES)
+    }
     if (env.PEARTUBE_ARCHIVE_FORMAT) config.archive.format = env.PEARTUBE_ARCHIVE_FORMAT
     if (env.PEARTUBE_ARCHIVE_YT_DLP_PATH) config.archive.ytDlpPath = env.PEARTUBE_ARCHIVE_YT_DLP_PATH
     if (env.PEARTUBE_ARCHIVE_FFMPEG_PATH) config.archive.ffmpegPath = env.PEARTUBE_ARCHIVE_FFMPEG_PATH
@@ -401,13 +406,16 @@ function configFromCli(cli = {}) {
     config.logging = { level: cli.logLevel }
   }
 
-  if (cli.host || cli.port || cli.apiOpen) {
+  if (cli.host || cli.port || cli.apiOpen || cli.maxDirectDownloadBytes !== undefined) {
     config.archive = config.archive || {}
     if (cli.host) config.archive.uiHost = cli.host
     if (cli.port) config.archive.uiPort = Number(cli.port)
     // Only ever turned on from here: --api-open is a bare flag, so its absence
     // must not overwrite an operator's config file either way.
     if (cli.apiOpen) config.archive.apiOpen = true
+    if (cli.maxDirectDownloadBytes !== undefined) {
+      config.archive.maxDirectDownloadBytes = Number(cli.maxDirectDownloadBytes)
+    }
   }
 
   if (cli.localMirrorPath || cli.localMirrorPoll || cli.localMirrorChannelName) {
@@ -521,6 +529,15 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   merged.maxItems = Number(merged.maxItems)
   if (!Number.isFinite(merged.maxItems) || merged.maxItems <= 0) {
     merged.maxItems = DEFAULT_ARCHIVE_MAX_ITEMS
+  }
+
+  // An explicit ceiling always exists: a garbage or non-positive value falls back
+  // to the default rather than being read as "unlimited".
+  merged.maxDirectDownloadBytes = Number(merged.maxDirectDownloadBytes)
+  if (!Number.isFinite(merged.maxDirectDownloadBytes) || merged.maxDirectDownloadBytes <= 0) {
+    merged.maxDirectDownloadBytes = DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES
+  } else {
+    merged.maxDirectDownloadBytes = Math.floor(merged.maxDirectDownloadBytes)
   }
 
   if (typeof merged.tmpPath !== 'string' || !merged.tmpPath) {
@@ -804,6 +821,7 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  enabled: ${Boolean(archive.enabled)}`,
     `  poll: ${archive.poll || DEFAULT_ARCHIVE_POLL_SECONDS}`,
     `  maxItems: ${archive.maxItems || DEFAULT_ARCHIVE_MAX_ITEMS}`,
+    `  maxDirectDownloadBytes: ${archive.maxDirectDownloadBytes || DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES}`,
     `  maxRetries: ${archive.maxRetries ?? DEFAULT_ARCHIVE_MAX_RETRIES}`,
     `  format: "${archive.format || DEFAULT_ARCHIVE_FORMAT}"`
   )

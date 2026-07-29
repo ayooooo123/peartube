@@ -66,6 +66,25 @@ test('storage guard trips on free-disk floor', function (t) {
   t.absent(guard.canIngest())
 })
 
+test('storage guard reports the bytes a single ingest may still write', function (t) {
+  const guard = createStorageGuard({
+    storagePath: 'root',
+    minFreeBytes: 2_000_000,
+    statfsSync: () => ({ bsize: 4096, bavail: 1000 }), // 4_096_000 bytes free
+  })
+  t.is(guard.headroomBytes(), 2_096_000, 'free space above the floor, not raw free space')
+
+  const atFloor = createStorageGuard({
+    storagePath: 'root',
+    minFreeBytes: 2_000_000,
+    statfsSync: () => ({ bsize: 4096, bavail: 100 }),
+  })
+  t.is(atFloor.headroomBytes(), 0, 'never negative: at the floor there is nothing to write')
+
+  const unmeasurable = createStorageGuard({ storagePath: 'root', maxBytes: 1 })
+  t.is(unmeasurable.headroomBytes(), null, 'null when free space cannot be measured')
+})
+
 test('storage guard degrades to a no-op without fs primitives', function (t) {
   const guard = createStorageGuard({ storagePath: 'root', maxBytes: 1, minFreeBytes: 1 })
   t.ok(guard.canIngest(), 'fails open when it cannot measure')

@@ -125,6 +125,16 @@ export function createStorageGuard({
     hasMinFreeDisk() {
       return !snapshot().lowDisk
     },
+    // Bytes a single deliberate ingest may still write before it would reach the
+    // free-disk floor, so a per-download ceiling can be clamped to what the disk
+    // actually has. null when free space is not measurable (no statfs, or no
+    // floor configured), which leaves the caller on its configured ceiling.
+    headroomBytes() {
+      const snap = snapshot()
+      if (snap.freeBytes === null) return null
+      const room = snap.freeBytes - snap.minFreeBytes
+      return room > 0 ? room : 0
+    },
     snapshot,
     // Force the next snapshot to re-measure (e.g. right after an eviction).
     invalidate() {

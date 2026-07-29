@@ -480,7 +480,12 @@ async function buildRelayService({
             directDownloader: createDirectDownloader({
               outputDir: config.archive.tmpPath,
               fs: runtimeFsModule,
-              path: runtimePathModule
+              path: runtimePathModule,
+              maxBytes: config.archive.maxDirectDownloadBytes,
+              // Same free-disk floor archive ingestion is gated on, read per
+              // download: the configured ceiling is what an operator allows, this
+              // is what the volume actually has left.
+              storageHeadroom: () => storageGuard.headroomBytes()
             }),
             ytDlpDownloader: createYtDlpDownloader({
               bin: config.archive.ytDlpPath,

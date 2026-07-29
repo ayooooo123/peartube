@@ -118,6 +118,11 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--max-direct-download-bytes') {
+      flags.maxDirectDownloadBytes = consumeValue()
+      continue
+    }
+
     if (arg === '--key') {
       flags.key = consumeValue()
       continue

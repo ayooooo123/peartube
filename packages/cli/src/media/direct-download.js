@@ -1,6 +1,7 @@
 import { requestOnce } from './http-get.js'
 import { getVideoMimeType } from './yt-dlp.js'
 import { assertPublicHttpUrl, blockedAddressReason } from './public-url-guard.js'
+import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../constants.js'
 
 // Direct HTTP(S) downloader for archive sources that are a plain link to the
 // media file itself (e.g. a show/episode hosted on a file server or CDN) rather
@@ -32,9 +33,10 @@ import { assertPublicHttpUrl, blockedAddressReason } from './public-url-guard.js
 const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|mov|avi|ts|m2ts|flv|ogv|ogg|wmv|mpg|mpeg)$/i
 const VIDEO_CONTENT_TYPE = /^(video\/|application\/octet-stream|application\/mp4|binary\/octet-stream)/i
 const MAX_REDIRECTS = 5
-// Mirrors the console's multipart ceiling (DEFAULT_MAX_UPLOAD_BYTES, 5 GB), so
-// a url seed cannot put more on the relay's disk than an upload could.
-const MAX_GUARDED_BYTES = 5 * 1024 * 1024 * 1024
+// Fallback ceiling for a guarded fetch when the instance was given none, so an
+// unauthenticated caller is never unbounded by omission. Operators set the real
+// number with archive.maxDirectDownloadBytes.
+const DEFAULT_MAX_GUARDED_BYTES = DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES
 
 export function isDirectVideoUrl (url) {
   try {
@@ -140,15 +142,29 @@ function pipeToFile (res, filePath, fs, maxBytes = 0) {
   })
 }
 
-function byteCeiling (maxBytes, requirePublicSource) {
-  if (!requirePublicSource) return maxBytes
-  return maxBytes > 0 ? Math.min(maxBytes, MAX_GUARDED_BYTES) : MAX_GUARDED_BYTES
+// Bytes this download may write. `0` means unbounded, which only a trusted
+// (console) source can ask for and only when the operator left no ceiling.
+// `headroomBytes` is what the relay's storage gate says is still free above its
+// min-free-disk floor: it can only ever lower the ceiling, and is ignored when
+// free space cannot be measured (null), which is the Bare/limited-fs case.
+export function byteCeiling (maxBytes, requirePublicSource, headroomBytes) {
+  let ceiling = maxBytes > 0 ? Math.floor(maxBytes) : 0
+  if (requirePublicSource && ceiling === 0) ceiling = DEFAULT_MAX_GUARDED_BYTES
+  if (Number.isFinite(headroomBytes) && headroomBytes > 0) {
+    const room = Math.floor(headroomBytes)
+    ceiling = ceiling > 0 ? Math.min(ceiling, room) : room
+  }
+  return ceiling
 }
 
-// `maxBytes` caps every download this instance performs; 0 leaves them
-// unbounded, which is what the console has always been. A guarded url seed is
-// capped whether or not one is set, and an operator's lower ceiling wins.
-export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, maxBytes = 0, lookup = null } = {}) {
+// `maxBytes` caps every download this instance performs; 0 leaves a console
+// download unbounded, which is what the console has always been, while a
+// guarded url seed still falls back to DEFAULT_MAX_GUARDED_BYTES. An operator's
+// lower ceiling wins, and so does the storage gate's remaining headroom:
+// `storageHeadroom` is an optional `() => bytes|null` reading the same free-disk
+// floor archive ingestion is already gated on, so raising the ceiling for real
+// media cannot turn into unbounded disk use.
+export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, maxBytes = 0, lookup = null, storageHeadroom = null } = {}) {
   if (!outputDir) throw new Error('outputDir is required')
   return {
     async download (input = {}) {
@@ -156,6 +172,14 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, ma
       if (!url) throw new Error('direct download requires a url')
       const requirePublicSource = input.requirePublicSource === true
       const id = input.id || `dl_${Date.now()}`
+      // Read once, before a byte is fetched: the same free-disk floor archive
+      // ingestion is gated on. At or below the floor there is nothing to write
+      // into, so say so instead of streaming a body onto a full volume.
+      const headroomBytes = typeof storageHeadroom === 'function' ? storageHeadroom() : null
+      if (Number.isFinite(headroomBytes) && headroomBytes <= 0) {
+        throw new Error('relay is at its minimum free disk floor; refusing direct download')
+      }
+      const ceiling = byteCeiling(maxBytes, requirePublicSource, headroomBytes)
       const targetDir = path.join(outputDir, id)
       fs.mkdirSync(targetDir, { recursive: true })
 
@@ -189,7 +213,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, ma
       const filePath = path.join(targetDir, fileName)
 
       try {
-        await pipeToFile(res, filePath, fs, byteCeiling(maxBytes, requirePublicSource))
+        await pipeToFile(res, filePath, fs, ceiling)
       } catch (err) {
         try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
         throw err

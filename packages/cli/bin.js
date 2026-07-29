@@ -57,6 +57,7 @@ function printHelp() {
     '  --storage, -s <path>',
     '  --max-bytes <n>',
     '  --max-storage <mb>',
+    '  --max-direct-download-bytes <n>  (per-download ceiling for url seeds)',
     '  --channel <key>',
     '  --owner <key>',
     '  --key <device-key-hex>',

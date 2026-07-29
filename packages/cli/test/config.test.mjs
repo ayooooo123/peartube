@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { loadRelayConfig, resolveRelayConfig } from '../src/config.js'
+import { loadRelayConfig, resolveRelayConfig, renderExampleConfig } from '../src/config.js'
+import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../src/constants.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -105,6 +106,32 @@ test('loadRelayConfig uses built-in defaults without a config file', async (t) =
   t.is(config.paths.catalog, 'peartube-relay/db/relay-catalog.json')
   t.is(config.paths.status, 'peartube-relay/db/relay-status.json')
   t.is(config.paths.config, undefined)
+})
+
+test('the direct-download ceiling is configurable through env and flag', async (t) => {
+  const fromDefaults = await loadRelayConfig({}, { env: {} })
+  t.is(
+    fromDefaults.archive.maxDirectDownloadBytes,
+    DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
+    'a relay with no configuration gets a ceiling real media fits under'
+  )
+
+  const fromEnv = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
+  t.is(fromEnv.archive.maxDirectDownloadBytes, 17179869184, 'env wins over the default')
+
+  const fromFlag = await loadRelayConfig({ maxDirectDownloadBytes: '4096' }, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
+  t.is(fromFlag.archive.maxDirectDownloadBytes, 4096, 'the flag wins over env')
+
+  // Never read as "unlimited": a bad value falls back to a real ceiling.
+  const fromGarbage = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: 'lots' } })
+  t.is(fromGarbage.archive.maxDirectDownloadBytes, DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, 'garbage falls back')
+  const fromZero = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '0' } })
+  t.is(fromZero.archive.maxDirectDownloadBytes, DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, 'zero is not unlimited')
+
+  t.ok(
+    renderExampleConfig(fromEnv).includes('maxDirectDownloadBytes: 17179869184'),
+    'and the operator can read it back off the config summary'
+  )
 })
 
 test('loadRelayConfig supports env-only relay configuration', async (t) => {

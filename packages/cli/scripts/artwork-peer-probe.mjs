@@ -44,6 +44,9 @@ try {
   }
 
   log('catalog items:', catalog.items?.length || 0)
+  for (const item of (catalog.items || []).slice(0, 12)) {
+    log('  entity', String(item.entityId || '').slice(0, 10), 'sources', (item.sources || []).length, String(item.title || '').slice(0, 30))
+  }
   log(JSON.stringify(summarize(catalog.items || []), null, 1))
 
   // Older publications advertise a cover on the claim but predate carrying one

@@ -473,26 +473,49 @@ async function maybeAttachImmutablePublication(metadata, blobResult, channel, fi
     keyPair: deviceKeyPair,
     signedAt: currentTime
   });
-  const subjectRef = createEntityReference({
-    entityKind: 'work',
-    namespace: 'issuer-native',
-    issuerRootKey: publisherId,
-    issuerLocalId: metadata.id
-  });
   const episodic = metadata.contentKind === 'episode' &&
     Number.isSafeInteger(metadata.seasonNumber) &&
     Number.isSafeInteger(metadata.episodeNumber);
-  const collectionRef = episodic
+  // Two people uploading the same film are describing one work, and the entity
+  // id is a hash of what it is named by. Keyed on the uploader and the upload's
+  // own id, every copy was a separate title forever - four Wedding Crashers
+  // cards, none of them a source for the others. A provider identity is the
+  // one name both uploads already agree on, so it decides the entity and
+  // 'issuer-native' stays the fallback for titles no catalogue knows.
+  const providerId = metadata.mediaProvider === 'tmdb' && metadata.mediaId
+    ? String(metadata.mediaId)
+    : null;
+  // TMDB numbers movies and shows in separate spaces, and an episode upload
+  // carries its show's id, so the shape has to say which is meant.
+  const workIdentifier = episodic
+    ? `show:${providerId}:s${metadata.seasonNumber}:e${metadata.episodeNumber}`
+    : `movie:${providerId}`;
+  const subjectRef = providerId
     ? createEntityReference({
-        entityKind: 'collection',
+        entityKind: 'work',
+        namespace: metadata.mediaProvider,
+        normalizedIdentifier: workIdentifier
+      })
+    : createEntityReference({
+        entityKind: 'work',
         namespace: 'issuer-native',
         issuerRootKey: publisherId,
-        issuerLocalId: metadata.seriesId ||
-          (metadata.mediaProvider && metadata.mediaId
-            ? `series:${metadata.mediaProvider}:${metadata.mediaId}`
-            : `series:${metadata.id}`)
-      })
-    : null;
+        issuerLocalId: metadata.id
+      });
+  const collectionRef = !episodic
+    ? null
+    : providerId
+      ? createEntityReference({
+          entityKind: 'collection',
+          namespace: metadata.mediaProvider,
+          normalizedIdentifier: `show:${providerId}`
+        })
+      : createEntityReference({
+          entityKind: 'collection',
+          namespace: 'issuer-native',
+          issuerRootKey: publisherId,
+          issuerLocalId: metadata.seriesId || `series:${metadata.id}`
+        });
   const claims = [
     createMediaClaim({
       claimType: 'EntityMetadataClaim',

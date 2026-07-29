@@ -179,3 +179,32 @@ test('a published cover names the blob a peer can replicate', async (t) => {
   t.alike(await publishPosterArtwork({ blobsKeyHex: null, putBlob: channel.putBlob }, { bytes: Buffer.from([1]), mimeType: 'image/jpeg' }), {},
     'a channel with no blob core claims nothing rather than an unreachable ref')
 })
+
+test('an upload picked from the catalogue is named after the film, not the file', async (t) => {
+  const store = memStore()
+  const job = await enqueueArchiveJob(store, {
+    uploadPath: '/tmp/WeddingCrashers2005REPACK1080pBluRay51YTSMX-xpost.mp4',
+    uploadFilename: 'WeddingCrashers2005REPACK1080pBluRay51YTSMX-xpost.mp4',
+    channelName: 'Archive',
+    tmdbType: 'movie',
+    tmdbId: '9522',
+    tmdbTitle: 'Wedding Crashers',
+    tmdbOverview: 'Two divorce mediators crash weddings to meet women.',
+    tmdbYear: '2005'
+  })
+
+  t.is(job.title, 'Wedding Crashers', 'the catalogue name wins over the release filename')
+  t.is(job.description, 'Two divorce mediators crash weddings to meet women.')
+
+  const explicit = await enqueueArchiveJob(store, {
+    uploadPath: '/tmp/clip.mp4',
+    uploadFilename: 'clip.mp4',
+    channelName: 'Archive',
+    title: 'A name someone typed',
+    tmdbType: 'movie',
+    tmdbId: '9522',
+    tmdbTitle: 'Wedding Crashers'
+  })
+
+  t.is(explicit.title, 'A name someone typed', 'an explicit title still outranks the catalogue')
+})

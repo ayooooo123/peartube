@@ -321,8 +321,14 @@ export async function enqueueArchiveJob(store, input = {}) {
     id: makeJobId(url || uploadPath),
     status: 'queued',
     channelName: sanitizeName(input.channelName),
-    title: input.title ? String(input.title) : null,
-    description: input.description ? String(input.description) : '',
+    // Someone who picked this title out of a catalogue told us its name. Only
+    // falling back to the filename stem meant every card read
+    // "WeddingCrashers2005REPACK1080pBluRay51YTSMX-xpost" - the release
+    // scene's name for a file, not the film's name.
+    title: input.title ? String(input.title) : (input.tmdbTitle ? String(input.tmdbTitle) : null),
+    description: input.description
+      ? String(input.description)
+      : (input.tmdbOverview ? String(input.tmdbOverview) : ''),
     publish: input.publish !== false,
     anonymous: input.anonymous !== false,
     createdAt,

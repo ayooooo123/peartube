@@ -23,6 +23,7 @@ const TEST_FILES = [
   'admission.test.mjs',
   'archive-console-creators.test.mjs',
   'archive-console-catalog.test.mjs',
+  'archive-api.test.mjs',
   'archive-ui.test.mjs',
   'archive-upload.test.mjs',
   'archive-grouping.test.mjs',

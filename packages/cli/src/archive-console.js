@@ -3,6 +3,7 @@ import { createArchiveJobStore, createArchiveManager } from './archive-manager.j
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
+import { createArchiveApi } from './archive-api.js'
 
 const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024 // 5 GB
 
@@ -37,9 +38,12 @@ function buildArchiveForm(get) {
   }
 }
 
-function parseForm(body) {
-  const params = new URLSearchParams(body)
-  return buildArchiveForm((key) => params.get(key) || '')
+// The machine API validates raw submitted fields (contentKind and friends) that
+// the archive form does not carry, so both entry points read one parse.
+function formFields(params) {
+  const fields = {}
+  for (const [key, value] of params) fields[key] = value
+  return fields
 }
 
 function uploadFields(file) {
@@ -258,10 +262,37 @@ export async function createArchiveConsole({
       if (!boundary) throw new Error('multipart upload is missing its boundary')
       if (!uploadDir) throw new Error('relay archive upload directory is not configured')
       const { fields, file } = await receiveMultipartUpload(req, { boundary, uploadDir, maxBytes: maxUploadBytes })
-      return { form: buildArchiveForm((key) => fields[key] ?? ''), file }
+      return { form: buildArchiveForm((key) => fields[key] ?? ''), file, fields }
     }
-    return { form: parseForm(await collectBody(req)), file: null }
+    const params = new URLSearchParams(await collectBody(req))
+    return { form: buildArchiveForm((key) => params.get(key) || ''), file: null, fields: formFields(params) }
   }
+
+  // One enqueue path for a catalogue-identified submission, shared by the
+  // browser Discover form and the machine API: they differ in how they answer,
+  // never in what they enqueue.
+  async function enqueueCatalogSubmission(form, file) {
+    const job = await manager.enqueue({
+      ...form,
+      ...uploadFields(file),
+      sourceType: form.sourceType || 'tmdb',
+      sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
+    })
+    manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
+    return job
+  }
+
+  const archiveApi = createArchiveApi({
+    readSubmission: readArchiveSubmission,
+    enqueue: enqueueCatalogSubmission,
+    store,
+    // Resolved per request: the console starts before the network-bound runtime,
+    // so the media graph it reads from is not bound yet at construction time.
+    mediaCatalog: (request) => service.runtime?.api?.getMediaCatalog?.(request),
+    publicationSources: (request) => service.runtime?.api?.getPublicationSources?.(request),
+    assetManifest: (publicationId) => service.runtime?.ctx?.assetManifestStore?.getManifest?.(publicationId),
+    logger
+  })
 
   function creatorsView() {
     const creators = service.creators?.getCreators?.() || []
@@ -311,6 +342,13 @@ export async function createArchiveConsole({
 
   const server = await serverFactory(async (req, res) => {
     try {
+      // Machine-facing routes answer JSON for every outcome, including unknown
+      // paths and wrong methods, so a program never receives the HTML console.
+      if (archiveApi.owns(req.url)) {
+        await archiveApi.handle(req, res)
+        return
+      }
+
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
@@ -478,13 +516,7 @@ export async function createArchiveConsole({
           res.end()
           return
         }
-        await manager.enqueue({
-          ...form,
-          ...uploadFields(file),
-          sourceType: form.sourceType || 'tmdb',
-          sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
-        })
-        manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
+        await enqueueCatalogSubmission(form, file)
         res.writeHead(303, { location: '/#discover' })
         res.end()
         return

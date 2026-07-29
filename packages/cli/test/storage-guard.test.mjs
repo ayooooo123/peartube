@@ -1,4 +1,5 @@
 import test from 'brittle'
+import { readFile } from 'node:fs/promises'
 import { createStorageGuard } from '../src/storage-guard.js'
 
 // Build a fake fs over an in-memory tree: { 'db': { 'a.blob': blocks, ... } }.
@@ -106,4 +107,46 @@ test('storage guard caches within ttl and re-measures after invalidate', functio
   guard.invalidate()
   guard.snapshot()
   t.is(calls, 2, 'invalidate forces re-measure')
+})
+
+// The bug this test exists for: `#fs` did not export `statfsSync` for Bare, so
+// on every real relay the configured free-disk floor measured nothing, refused
+// nothing, and said nothing about it. The guard now states what it can measure.
+test('storage guard says which signals it can measure, especially the missing one', function (t) {
+  const lines = []
+  const fs = fakeFs({ root: { db: { 'a.blob': 100 } } })
+
+  createStorageGuard({
+    storagePath: 'root',
+    maxBytes: 1_000_000,
+    minFreeBytes: 2_000_000,
+    statSync: fs.statSync,
+    readdirSync: fs.readdirSync,
+    // Exactly the Bare relay's shape until the shim exported statfsSync.
+    statfsSync: null,
+    log: (line) => lines.push(line),
+  })
+  t.ok(lines[0].includes('free=unmeasurable'), 'a floor it cannot measure is named as such')
+  t.ok(lines[0].includes('usage=measurable'), 'and the signal that does work is distinguished')
+  t.ok(lines[0].includes('floor=2000000'), 'with the floor the operator configured')
+  t.is(lines.length, 1, 'no free-space probe is claimed when free space cannot be read')
+
+  lines.length = 0
+  createStorageGuard({
+    storagePath: 'root',
+    minFreeBytes: 2_000_000,
+    statfsSync: () => ({ bsize: 4096, bavail: 1000 }),
+    log: (line) => lines.push(line),
+  })
+  t.ok(lines[0].includes('free=measurable'), 'a runtime that can statfs says so')
+  t.ok(lines[1].includes('freeBytes=4096000'), 'and puts the measured number on the record at boot')
+})
+
+// The shim is the contract: the guard reads these names off `#fs`, and a name
+// that is absent arrives as undefined and disables its signal in silence.
+test('the Bare fs shim exports every name the storage guard reads', async function (t) {
+  const source = await readFile(new URL('../src/shims/fs.bare.js', import.meta.url), 'utf8')
+  for (const name of ['statfsSync', 'statSync', 'readdirSync']) {
+    t.ok(new RegExp(`^\\s*${name},?$`, 'm').test(source), `#fs exports ${name} under Bare`)
+  }
 })

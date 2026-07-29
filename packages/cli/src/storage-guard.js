@@ -36,6 +36,22 @@ export function createStorageGuard({
   let cached = null
   let cachedAt = 0
 
+  // What this runtime can actually measure, stated once at construction.
+  //
+  // A missing fs primitive degrades silently: the affected signal reads null,
+  // its boundary never trips, and nothing anywhere says so. That is not
+  // hypothetical — `#fs` did not export `statfsSync` for Bare, so on every real
+  // relay `canMeasureFree` was false, `lowDisk` was permanently false, and the
+  // configured free-disk floor measured nothing for this project's entire life
+  // while the Node tests passed. A gate you cannot see is a gate you cannot
+  // trust, so it reports its own capability, and the free-space probe runs once
+  // here so the number is on the record rather than inferred from a later
+  // refusal that may never come.
+  log?.(`[storage-guard] path=${hasPath ? storagePath : 'unset'}` +
+    ` budget=${budget > 0 ? budget : 'off'} usage=${canMeasureUsage ? 'measurable' : 'unmeasurable'}` +
+    ` floor=${floor > 0 ? floor : 'off'} free=${canMeasureFree ? 'measurable' : 'unmeasurable'}`)
+  if (canMeasureFree) log?.(`[storage-guard] statfs ${storagePath}: freeBytes=${measureFreeBytes()}`)
+
   // Actual allocated bytes under the storage dir. Uses block allocation
   // (blocks * 512) so sparse Hypercore/RocksDB .blob files — and holes punched
   // by eviction — are measured like `du`, not by logical file length.

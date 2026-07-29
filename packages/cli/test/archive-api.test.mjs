@@ -181,26 +181,177 @@ test('a movie upload cannot smuggle episode coordinates', async function (t) {
   })
 })
 
-test('an upload with no file part is refused rather than enqueued as a URL job', async function (t) {
+// A url seed hands the relay a source to fetch instead of bytes to receive.
+// Resolution is stubbed to a public address only where the test's host has to
+// be reachable in principle; every refusal below runs the real resolver.
+const PUBLIC_LOOKUP = (host, opts, cb) => cb(null, [{ address: '93.184.216.34', family: 4 }])
+
+function seed(body) {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  }
+}
+
+// Records what the pipeline was actually asked to fetch, then fails the job so
+// nothing tries to publish it.
+function recordingDownloader(seen) {
+  return {
+    async download(input) {
+      seen.push(input)
+      throw new Error('download not attempted in this test')
+    }
+  }
+}
+
+test('POST /api/v1/archive accepts a movie url seed and enqueues the fetch', async function (t) {
+  const seen = []
+  await withRelay(async ({ base, uploadDir }) => {
+    const res = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/wedding-crashers.mp4',
+      contentKind: 'movie',
+      // A typed client sends this as a number; the contract accepts both.
+      tmdbId: 9367,
+      tmdbTitle: 'Wedding Crashers',
+      tmdbYear: '2005',
+      tmdbGenres: ['Comedy', 'Romance']
+    }))
+
+    t.is(res.status, 202)
+    const body = await res.json()
+    t.ok(/^arch_[0-9a-f]{16}$/.test(body.jobId), 'a url seed is polled by job id like any other')
+    t.is(body.status, 'queued')
+    t.is(body.entityHint, 'movie:9367', 'a url seed collapses onto the same work key an upload would')
+
+    await settledJob(base, body.jobId)
+    t.is(seen.length, 1, 'the relay fetches the source itself')
+    t.is(seen[0].url, 'https://cdn.example.com/wedding-crashers.mp4')
+    t.ok(seen[0].requirePublicSource, 'the job is marked so the downloader re-checks every redirect hop')
+    t.absent(seen[0].uploadPath, 'no bytes were staged for a url seed')
+    t.is(readdirSync(uploadDir).length, 0, 'a url seed writes nothing to the upload directory')
+  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
+})
+
+test('POST /api/v1/archive derives the show:season:episode hint for a url seed', async function (t) {
+  const seen = []
   await withRelay(async ({ base }) => {
-    const body = new FormData()
-    body.set('contentKind', 'movie')
-    body.set('tmdbId', '9367')
-    body.set('tmdbTitle', 'Wedding Crashers')
-    const res = await fetch(`${base}/api/v1/archive`, { method: 'POST', body })
+    const res = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/severance-s02e04.mkv',
+      contentKind: 'episode',
+      tmdbId: '95396',
+      tmdbTitle: 'Severance',
+      tmdbSeason: 2,
+      tmdbEpisode: 4
+    }))
 
-    t.is(res.status, 400)
-    t.is((await res.json()).error.code, 'FILE_REQUIRED')
+    t.is(res.status, 202)
+    t.is((await res.json()).entityHint, 'show:95396:s2:e4')
+  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
+})
 
-    // A client that sends JSON instead of the bytes gets the same answer: this
-    // endpoint publishes what the caller uploads, and nothing else.
-    const asJson = await fetch(`${base}/api/v1/archive`, {
+test('a url seed is validated against the same coordinates an upload is', async function (t) {
+  await withRelay(async ({ base }) => {
+    const missingSeason = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/severance.mkv',
+      contentKind: 'episode',
+      tmdbId: '95396',
+      tmdbTitle: 'Severance',
+      tmdbEpisode: '4'
+    }))
+    t.is(missingSeason.status, 400)
+    t.is((await missingSeason.json()).error.code, 'INVALID_SEASON')
+
+    const badKind = await fetch(`${base}/api/v1/archive`, seed({
+      url: 'https://cdn.example.com/x.mp4',
+      contentKind: 'trailer',
+      tmdbId: '9367',
+      tmdbTitle: 'Wedding Crashers'
+    }))
+    t.is(badKind.status, 400)
+    t.is((await badKind.json()).error.code, 'INVALID_CONTENT_KIND')
+  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP } })
+})
+
+test('a submission carries either a file or a url, never both and never neither', async function (t) {
+  await withRelay(async ({ base, uploadDir }) => {
+    const neither = new FormData()
+    neither.set('contentKind', 'movie')
+    neither.set('tmdbId', '9367')
+    neither.set('tmdbTitle', 'Wedding Crashers')
+    const noSource = await fetch(`${base}/api/v1/archive`, { method: 'POST', body: neither })
+    t.is(noSource.status, 400)
+    t.is((await noSource.json()).error.code, 'SOURCE_REQUIRED')
+
+    const asJson = await fetch(`${base}/api/v1/archive`, seed({
+      contentKind: 'movie',
+      tmdbId: '9367',
+      tmdbTitle: 'Wedding Crashers',
+      // A caller still cannot name a path on the relay's disk: only `url` is
+      // read, and a path is not a url.
+      filePath: '/etc/passwd'
+    }))
+    t.is(asJson.status, 400)
+    t.is((await asJson.json()).error.code, 'SOURCE_REQUIRED')
+
+    const both = new FormData()
+    both.set('contentKind', 'movie')
+    both.set('tmdbId', '9367')
+    both.set('tmdbTitle', 'Wedding Crashers')
+    both.set('url', 'https://cdn.example.com/wedding-crashers.mp4')
+    both.set('file', new Blob([Buffer.from('FAKE-MP4-BYTES')], { type: 'video/mp4' }), 'clip.mp4')
+    const ambiguous = await fetch(`${base}/api/v1/archive`, { method: 'POST', body: both })
+    t.is(ambiguous.status, 400)
+    const body = await ambiguous.json()
+    t.is(body.error.code, 'AMBIGUOUS_SOURCE')
+    t.is(body.error.field, 'url', 'the caller is told which of the two to drop')
+    t.absent(readdirSync(join(uploadDir, 'uploads'), { withFileTypes: true }).length > 0, 'the staged upload is discarded')
+  })
+})
+
+test('the relay refuses to fetch a url that is not public http(s)', async function (t) {
+  // No stubbed resolver here: these run the guard the relay actually ships.
+  await withRelay(async ({ base }) => {
+    const coordinates = { contentKind: 'movie', tmdbId: '9367', tmdbTitle: 'Wedding Crashers' }
+    const refusals = [
+      ['file:///etc/shadow', 'SOURCE_SCHEME_NOT_ALLOWED'],
+      ['gopher://example.com/1', 'SOURCE_SCHEME_NOT_ALLOWED'],
+      ['https://someone:secret@cdn.example.com/x.mp4', 'SOURCE_CREDENTIALS_NOT_ALLOWED'],
+      // A literal in private space, and the same address written to look like
+      // it is not one.
+      ['http://10.0.0.5/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
+      ['http://192.168.1.1/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
+      ['http://169.254.169.254/latest/meta-data/', 'SOURCE_HOST_NOT_PUBLIC'],
+      ['http://2130706433/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
+      ['http://[::1]/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
+      // Resolved, not pattern-matched: `localhost` is a name, and it is
+      // refused because of what it points at.
+      ['http://localhost:9/x.mp4', 'SOURCE_HOST_NOT_PUBLIC'],
+      ['http://not-a-url', 'SOURCE_HOST_UNRESOLVABLE']
+    ]
+
+    for (const [url, code] of refusals) {
+      const res = await fetch(`${base}/api/v1/archive`, seed({ ...coordinates, url }))
+      t.is(res.status, 400, `${url} is refused`)
+      const body = await res.json()
+      t.is(body.error.code, code, `${url} names why`)
+      t.is(body.error.field, 'url')
+    }
+
+    const jobs = await (await fetch(`${base}/jobs`)).json()
+    t.is(jobs.jobs.length, 0, 'nothing the guard refused ever became a job')
+  })
+})
+
+test('a malformed JSON submission is named as JSON rather than as a bad upload', async function (t) {
+  await withRelay(async ({ base }) => {
+    const res = await fetch(`${base}/api/v1/archive`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ contentKind: 'movie', tmdbId: '9367', tmdbTitle: 'Wedding Crashers', filePath: '/etc/passwd' })
+      body: '{"url": '
     })
-    t.is(asJson.status, 400)
-    t.is((await asJson.json()).error.code, 'FILE_REQUIRED')
+    t.is(res.status, 400)
+    t.is((await res.json()).error.code, 'INVALID_JSON')
   })
 })
 

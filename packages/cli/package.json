@@ -35,6 +35,10 @@
       "bare": "./src/shims/subprocess.bare.js",
       "default": "./src/shims/subprocess.node.js"
     },
+    "#dns": {
+      "bare": "./src/shims/dns.bare.js",
+      "default": "./src/shims/dns.node.js"
+    },
     "#http": {
       "bare": "./src/shims/http.bare.js",
       "default": "./src/shims/http.node.js"
@@ -52,6 +56,7 @@
     "@peartube/backend": "file:../backend",
     "@peartube/host": "file:../host",
     "b4a": "^1.8.0",
+    "bare-dns": "^2.1.4",
     "bare-http1": "^4.5.6",
     "bare-https": "^3.0.0",
     "bare-process": "^4.4.1",

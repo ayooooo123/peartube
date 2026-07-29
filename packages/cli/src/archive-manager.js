@@ -354,6 +354,11 @@ export async function enqueueArchiveJob(store, input = {}) {
     sourceType: input.sourceType ? String(input.sourceType) : null,
     sourceUrl: input.sourceUrl ? String(input.sourceUrl) : (url || null),
     sourceVideoId: input.sourceVideoId ? String(input.sourceVideoId) : null,
+    // Set only by the machine API's url ingest: this job fetches a url a
+    // stranger supplied, so the downloader re-checks every redirect hop and
+    // caps what it will pull. A console submission never sets it, and the
+    // console's downloads are unchanged.
+    requirePublicSource: input.requirePublicSource === true,
     tmdbType: input.tmdbType ? String(input.tmdbType) : null,
     tmdbId: input.tmdbId ? String(input.tmdbId) : null,
     tmdbSeason: input.tmdbSeason ? String(input.tmdbSeason) : null,

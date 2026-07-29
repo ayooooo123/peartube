@@ -1,4 +1,5 @@
 import { rmSync } from '#fs'
+import { assertPublicHttpUrl, parsePublicHttpUrl, PublicUrlError, URL_INVALID } from './media/public-url-guard.js'
 
 // Machine-facing relay API, mounted beside the browser console.
 //
@@ -9,10 +10,47 @@ import { rmSync } from '#fs'
 // so the two entry points cannot drift.
 //
 // Trust model: nothing here is authenticated, so the only thing standing between
-// a caller and this API is how the relay is bound. Submission is unchanged from
-// the console it is mounted beside — POST /archive and GET /archive/:jobId answer
-// whoever can reach the console form on the same interface, and a caller submits
-// the bytes it wants published and can never name a path on the relay's disk.
+// a caller and this API is how the relay is bound. Submission answers whoever
+// can reach the console form on the same interface, and a caller can never name
+// a path on the relay's disk.
+//
+// A submission is either bytes the caller uploads or a URL the relay fetches,
+// and exactly one of the two. The URL form exists because the caller often
+// cannot send the bytes: a client that resolved a playable link from a debrid
+// provider has a source the relay can reach, and pulling gigabytes down to the
+// client only to push them back up is the one thing a permissionless CDN should
+// not require. This replaces the earlier rule that a submitted url was always
+// refused because it "would describe bytes nobody sent" — that reasoning holds
+// for a caller naming a source it never supplies, and is exactly wrong for a
+// caller asking the relay to fetch a source the relay can reach itself.
+//
+// The console form has accepted a url since before this API existed, so URL
+// ingest is not a capability the relay lacked. It is still treated here as a
+// NEW one: the console is a person typing a single link, while an
+// unauthenticated JSON endpoint is a general-purpose downloader any program can
+// drive on a loop. So this path carries its own guard rather than inheriting
+// the console's, and the console's own behaviour is left exactly as it was.
+//
+// That guard is SSRF, and it is the real consideration on this route: the relay
+// makes the request, from inside a network the caller is not in, so a URL is an
+// instruction to reach something the caller cannot reach itself. See
+// media/public-url-guard.js — http(s) only, no embedded credentials, and every
+// address the host RESOLVES to must be public, so a name pointed at 127.0.0.1
+// is refused at the door. media/direct-download.js re-applies the same check on
+// every redirect hop and against the address the socket actually connected to,
+// and states plainly what remains unsolved.
+//
+// URL ingest is NOT behind an opt-in switch of its own, which was the
+// alternative to building the guard. The guard is enforced at the door, on
+// every hop and against the connected socket, so the relay only ever fetches
+// public hosts; what a caller can still do is make the relay spend bandwidth
+// and disk on media it did not ask for, and that is bounded by the same
+// storage gate that already stops console uploads filling the disk
+// (archive-manager `canIngest`) plus the downloader's byte ceiling. A switch
+// defaulting off would buy nothing beyond that and would make the ordinary
+// case — a client seeding what it is watching — require an operator to flip it
+// on every relay, which is how a switch becomes blanket-on and stops meaning
+// anything.
 //
 // Enumeration and byte serving are gated, because they are what this API added.
 // /catalog lists every publication and /stream serves its bytes; neither is a
@@ -63,6 +101,9 @@ const TMDB_ID = /^[1-9][0-9]{0,19}$/
 const MAX_TITLE_BYTES = 512
 const MAX_EPISODE_PART = 100000
 const MAX_JOB_ID_LENGTH = 128
+// A JSON submission carries coordinates, not media, so a body past this is a
+// caller doing something other than describing one title.
+export const MAX_JSON_BODY_BYTES = 64 * 1024
 // The media graph's own ceiling for a source page (MAX_PAGE_LIMIT), asked for
 // explicitly so an entity with many publishers is not silently truncated to the
 // default 50.
@@ -182,8 +223,30 @@ export function deriveEntityHint({ contentKind, tmdbId, tmdbSeason, tmdbEpisode 
 // Everything is checked here, BEFORE anything is enqueued: a half-specified
 // episode that reached the pipeline would publish under the wrong identity or
 // fail deep inside a job the caller can no longer correct.
+//
+// Synchronous by design — every check that does not need the network lives
+// here, and the one that does (resolving the source host) runs in postArchive
+// against the url this hands back.
 export function normalizeArchiveSubmission(fields = {}, file = null) {
-  if (!file) return invalid('FILE_REQUIRED', 'a multipart file part carrying the media bytes is required', 'file')
+  const submittedUrl = text(fields, 'url')
+  // A file and a url are two different answers to "where are the bytes", and
+  // honouring one would silently discard the other.
+  if (file && submittedUrl) {
+    return invalid('AMBIGUOUS_SOURCE', 'a submission carries either a multipart file or a url, never both', 'url')
+  }
+  if (!file && !submittedUrl) {
+    return invalid('SOURCE_REQUIRED', 'a submission requires either a multipart file part or a url the relay can fetch', 'url')
+  }
+
+  let remoteSource = null
+  if (submittedUrl) {
+    try {
+      remoteSource = parsePublicHttpUrl(submittedUrl).toString()
+    } catch (err) {
+      if (!(err instanceof PublicUrlError)) throw err
+      return invalid(err.code, err.message, 'url')
+    }
+  }
 
   const contentKind = text(fields, 'contentKind')
   if (!CONTENT_KINDS.has(contentKind)) {
@@ -219,6 +282,9 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
 
   return {
     entityHint: deriveEntityHint({ contentKind, tmdbId, tmdbSeason, tmdbEpisode }),
+    // The url still needs its host resolved before anything is enqueued; the
+    // caller of this function owns that step.
+    remoteSource,
     // Overrides on top of the console's own form. `tmdbType` is the vocabulary
     // the pipeline speaks; the catalogue title also names the grouped channel,
     // exactly as the console's Discover form does, so both entry points land in
@@ -233,11 +299,15 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
       title: text(fields, 'title') || tmdbTitle,
       sourceType: 'tmdb',
       // Identity comes from the validated coordinates above, never from caller
-      // free text: a submitted url would describe bytes nobody sent, and a
-      // submitted source id would name a different title than the one checked.
-      url: '',
+      // free text: a submitted source id would name a different title than the
+      // one checked. The url is the sole exception, and only after the guard
+      // has cleared it — it says where the bytes are, never who they are.
+      url: remoteSource || '',
       sourceUrl: '',
-      sourceVideoId: ''
+      sourceVideoId: '',
+      // Marks the job as fetching a stranger's url, which is what makes the
+      // downloader re-check every redirect hop and cap what it will pull.
+      requirePublicSource: Boolean(remoteSource)
     }
   }
 }
@@ -357,11 +427,19 @@ export function parseByteRange(header, byteLength) {
 }
 
 // Map a submission-parsing failure onto a status a client can act on. The
-// multipart receiver reports these as plain errors; without the mapping every
-// one of them would read as a generic 500 that the caller cannot distinguish
-// from a relay bug.
-function multipartFailure(err) {
+// multipart receiver and the JSON reader report these as plain errors; without
+// the mapping every one of them would read as a generic 500 that the caller
+// cannot distinguish from a relay bug.
+function submissionFailure(err) {
   const message = err?.message || String(err)
+  // JSON is checked first: its own oversize message would otherwise be read as
+  // an oversize upload and blamed on a file part the caller never sent.
+  if (/json body exceeds/i.test(message)) {
+    return invalid('PAYLOAD_TOO_LARGE', message, null, 413)
+  }
+  if (/json body/i.test(message)) {
+    return invalid('INVALID_JSON', message, null, 400)
+  }
   if (/exceeds max size|field too large/i.test(message)) {
     return invalid('PAYLOAD_TOO_LARGE', message, 'file', 413)
   }
@@ -374,7 +452,7 @@ function multipartFailure(err) {
   return invalid('INVALID_MULTIPART', message, null, 400)
 }
 
-export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, bindHost = null, apiOpen = false, logger = null }) {
+export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, bindHost = null, apiOpen = false, lookup = null, logger = null }) {
   if (typeof readSubmission !== 'function') throw new Error('readSubmission is required')
   if (typeof enqueue !== 'function') throw new Error('enqueue is required')
   if (!store) throw new Error('store is required')
@@ -413,7 +491,7 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     try {
       submission = await readSubmission(req)
     } catch (err) {
-      sendError(res, multipartFailure(err))
+      sendError(res, submissionFailure(err))
       return
     }
 
@@ -422,6 +500,19 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
       discardStagedUpload(submission.file)
       sendError(res, normalized)
       return
+    }
+
+    // Resolving the host is the half of the guard that needs the network, and
+    // it runs before the enqueue: a job that exists is a job that will be
+    // fetched, so a url pointed at the operator's LAN must never become one.
+    if (normalized.remoteSource) {
+      try {
+        await assertPublicHttpUrl(normalized.remoteSource, lookup ? { lookup } : {})
+      } catch (err) {
+        if (!(err instanceof PublicUrlError)) throw err
+        sendError(res, invalid(err.code || URL_INVALID, err.message, 'url'))
+        return
+      }
     }
 
     const job = await enqueue({ ...submission.form, ...normalized.form }, submission.file)

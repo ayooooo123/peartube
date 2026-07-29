@@ -5,6 +5,7 @@ import { resolveTmdbOptions } from './settings.js'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 import {
   ARCHIVE_API_PREFIX,
+  MAX_JSON_BODY_BYTES,
   archiveApiRoute,
   createArchiveApi,
   createOpenAccessGate,
@@ -52,6 +53,39 @@ function formFields(params) {
   return fields
 }
 
+// A JSON submission speaks the same field names as the form, so the machine
+// API's JSON body and the console's form bodies land in one parse. Scalars are
+// stringified because every downstream check reads text, and a number is what a
+// typed client naturally sends for tmdbId. Every message here starts with
+// "json body" so the API can name the failure as JSON rather than multipart.
+function jsonFields(body) {
+  let parsed = null
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    throw new Error('json body is not valid JSON')
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('json body must be a JSON object')
+  }
+  const fields = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    if (value === null || value === undefined) continue
+    if (Array.isArray(value)) {
+      // tmdbGenres is the list case, and the pipeline reads it as comma-joined
+      // text; accepting the array spares every client the join.
+      if (value.some((entry) => entry !== null && typeof entry === 'object')) {
+        throw new Error(`json body field ${key} must be a scalar or a list of scalars`)
+      }
+      fields[key] = value.filter((entry) => entry !== null && entry !== undefined).map(String).join(',')
+      continue
+    }
+    if (typeof value === 'object') throw new Error(`json body field ${key} must be a scalar or a list of scalars`)
+    fields[key] = String(value)
+  }
+  return fields
+}
+
 function uploadFields(file) {
   if (!file) return {}
   return {
@@ -91,10 +125,23 @@ function parseClientForm(body) {
   }
 }
 
-async function collectBody(req) {
+// `maxBytes` is opt-in: the console's own form posts are read exactly as they
+// always were, and only the machine API's JSON body is bounded.
+async function collectBody(req, { maxBytes = 0, kind = 'request' } = {}) {
   return new Promise((resolve, reject) => {
     let body = ''
-    req.on('data', (chunk) => { body += String(chunk) })
+    let bytes = 0
+    req.on('data', (chunk) => {
+      if (maxBytes > 0) {
+        bytes += chunk?.length ?? 0
+        if (bytes > maxBytes) {
+          req.destroy?.()
+          reject(new Error(`${kind} body exceeds max size of ${maxBytes} bytes`))
+          return
+        }
+      }
+      body += String(chunk)
+    })
     req.on('end', () => resolve(body))
     req.on('error', reject)
   })
@@ -379,6 +426,10 @@ export async function createArchiveConsole({
   // Opens the machine API's enumeration and byte-serving routes on a
   // non-loopback bind. Off unless the operator asked for it.
   apiOpen = false,
+  // How the machine API resolves a submitted source host before it will fetch
+  // it. Injectable so a test can stand in for the system resolver; the guard
+  // itself is never optional.
+  sourceLookup = null,
   // A socket already bound and answering as a warming relay. The console adopts
   // it rather than opening its own, so nothing rebinds and no request between
   // bind and readiness is refused.
@@ -389,9 +440,9 @@ export async function createArchiveConsole({
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
   const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job) })
 
-  // Read an archive submission as either a browser file upload
-  // (multipart/form-data, streamed to disk) or a URL-encoded form. Returns the
-  // normalized archive form plus an optional uploaded file descriptor.
+  // Read an archive submission as a browser file upload (multipart/form-data,
+  // streamed to disk), a machine API JSON body, or a URL-encoded form. Returns
+  // the normalized archive form plus an optional uploaded file descriptor.
   async function readArchiveSubmission(req) {
     const contentType = req.headers?.['content-type'] || req.headers?.['Content-Type'] || ''
     if (/multipart\/form-data/i.test(contentType)) {
@@ -400,6 +451,10 @@ export async function createArchiveConsole({
       if (!uploadDir) throw new Error('relay archive upload directory is not configured')
       const { fields, file } = await receiveMultipartUpload(req, { boundary, uploadDir, maxBytes: maxUploadBytes })
       return { form: buildArchiveForm((key) => fields[key] ?? ''), file, fields }
+    }
+    if (/application\/json/i.test(contentType)) {
+      const fields = jsonFields(await collectBody(req, { maxBytes: MAX_JSON_BODY_BYTES, kind: 'json' }))
+      return { form: buildArchiveForm((key) => fields[key] ?? ''), file: null, fields }
     }
     const params = new URLSearchParams(await collectBody(req))
     return { form: buildArchiveForm((key) => params.get(key) || ''), file: null, fields: formFields(params) }
@@ -436,6 +491,7 @@ export async function createArchiveConsole({
     // interface only with the operator's switch.
     bindHost: host,
     apiOpen,
+    lookup: sourceLookup,
     logger
   })
 

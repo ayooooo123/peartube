@@ -110,3 +110,53 @@ test('routing downloader uses yt-dlp only for creator imports', async function (
   t.is((await router.download({ url: 'https://cdn/clip.mp4' })).via, 'direct', 'single-video direct url -> direct')
   t.is((await router.download({ url: 'https://www.youtube.com/watch?v=x' })).via, 'direct', 'non-creator page -> direct (yt-dlp is creators-only)')
 })
+
+// A job carrying `requirePublicSource` came from the unauthenticated machine
+// API, where the url is a stranger's. Every check below is off for a console
+// download and on for that one.
+test('a guarded download refuses a target that is not a public address', async function (t) {
+  const { server, base } = await startServer()
+  const outputDir = mkdtempSync(join(tmpdir(), 'pt-direct-guard-'))
+  const dl = createDirectDownloader({ outputDir, fs: nodeFs, path: nodePath })
+  try {
+    // The same url the console fetches happily: the test server is on
+    // loopback, which is exactly what a url seed must never reach.
+    await t.exception(
+      dl.download({ id: 'arch_g1', url: `${base}/episode.mp4`, requirePublicSource: true }),
+      /loopback/,
+      'a loopback target is refused'
+    )
+    t.absent(existsSync(join(outputDir, 'arch_g1')), 'nothing was staged')
+
+    // The redirect case is the same check on a later pass of the same loop, so
+    // a hop into loopback cannot slip past a door-only guard either.
+    await t.exception(
+      dl.download({ id: 'arch_g2', url: `${base}/redirect`, requirePublicSource: true }),
+      /loopback/,
+      'every hop is checked, not just the first'
+    )
+
+    const unguarded = await dl.download({ id: 'arch_g3', url: `${base}/episode.mp4` })
+    t.alike(readFileSync(unguarded.filePath), VIDEO, 'a console download is unchanged by any of it')
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true })
+    server.close()
+  }
+})
+
+test('a download stops at its byte ceiling instead of filling the disk', async function (t) {
+  const { server, base } = await startServer()
+  const outputDir = mkdtempSync(join(tmpdir(), 'pt-direct-cap-'))
+  const dl = createDirectDownloader({ outputDir, fs: nodeFs, path: nodePath, maxBytes: 64 })
+  try {
+    await t.exception(
+      dl.download({ id: 'arch_cap', url: `${base}/episode.mp4` }),
+      /64 byte ceiling/,
+      'a body past the ceiling fails rather than streaming forever'
+    )
+    t.absent(existsSync(join(outputDir, 'arch_cap')), 'the partial download is removed')
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true })
+    server.close()
+  }
+})

@@ -485,6 +485,65 @@ test('the catalog resolves cores through the signed manifest when a page omits r
   }, { service })
 })
 
+test('the catalog resolves an episode rendition its series entity holds no claim for', async function (t) {
+  // The shape that published a title nobody could use. A real auto-seeded
+  // episode (Rick and Morty S09E09, relay job arch_7cc9584280032f13) reached
+  // `completed` and served bytes, but the projection lists the SERIES entity
+  // while the publication's availability claim is anchored to the EPISODE
+  // entity — so the per-entity source lookup asks about a subject that holds no
+  // claim and comes back empty. The catalog then advertised renditionId null,
+  // which MediaStorm's search drops outright (nobody can be served the episode)
+  // and its own catalog check reads as "not seeded" (so it re-seeds forever).
+  const requested = []
+  const service = fakeService({
+    catalog: () => ({
+      success: true,
+      items: [{
+        entityId: 'series-rick-and-morty',
+        entityKind: 'series',
+        title: 'Rick and Morty',
+        releaseYear: null,
+        sources: [{ publicationId: 'pub-episode', publisherId: 'ab'.repeat(32) }],
+        renditions: []
+      }],
+      nextCursor: null
+    })
+  })
+  service.runtime.api.getPublicationSources = async (request) => {
+    requested.push(request)
+    // What the graph really answers for a series id: the claim is on the episode.
+    return { success: true, items: [], nextCursor: null }
+  }
+  service.runtime.ctx.assetManifestStore = {
+    getManifest(publicationId) {
+      if (publicationId !== 'pub-episode') return null
+      return {
+        body: {
+          renditions: [
+            { renditionId: 'poster-1', purpose: 'poster', core: { key: '11'.repeat(32), length: 1, byteLength: 512 } },
+            { renditionId: 'blocked-1', purpose: 'source', blocked: true, core: { key: '22'.repeat(32), length: 2, byteLength: 4 } },
+            { renditionId: 'old-1', purpose: 'source', superseded: true, core: { key: '33'.repeat(32), length: 3, byteLength: 8 } },
+            { renditionId: 'rend-episode', purpose: 'source', core: { key: CORE_KEY, length: 16698, byteLength: 1094291238 } }
+          ]
+        }
+      }
+    }
+  }
+
+  await withRelay(async ({ base }) => {
+    const [entity] = JSON.parse(await (await fetch(`${base}/api/v1/catalog`)).text()).entities
+    t.is(requested[0].entityId, 'series-rick-and-morty', 'the source list is still asked first')
+    t.alike(entity.sources, [{
+      publicationId: 'pub-episode',
+      publisherId: 'ab'.repeat(32),
+      renditionId: 'rend-episode',
+      coreKey: CORE_KEY,
+      coreLength: 16698,
+      byteLength: 1094291238
+    }], 'the signed manifest names a rendition a consumer can actually address')
+  }, { service })
+})
+
 test('GET /api/v1/catalog passes pagination through to the media graph', async function (t) {
   const requests = []
   const service = fakeService({

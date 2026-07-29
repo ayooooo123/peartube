@@ -1,4 +1,5 @@
 import { rmSync } from '#fs'
+import { isArtworkRendition } from '@peartube/backend/assets'
 import { assertPublicHttpUrl, parsePublicHttpUrl, PublicUrlError, URL_INVALID } from './media/public-url-guard.js'
 
 // Machine-facing relay API, mounted beside the browser console.
@@ -45,9 +46,9 @@ import { assertPublicHttpUrl, parsePublicHttpUrl, PublicUrlError, URL_INVALID } 
 // every hop and against the connected socket, so the relay only ever fetches
 // public hosts; what a caller can still do is make the relay spend bandwidth
 // and disk on media it did not ask for, and that is bounded by the same
-// storage gate that already stops console uploads filling the disk
-// (archive-manager `canIngest`) plus the downloader's byte ceiling. A switch
-// defaulting off would buy nothing beyond that and would make the ordinary
+// archive storage gate plus live archive-temp and persisted-volume headroom
+// checks that stop console uploads filling the disk.
+// A switch defaulting off would buy nothing beyond that and would make the ordinary
 // case — a client seeding what it is watching — require an operator to flip it
 // on every relay, which is how a switch becomes blanket-on and stops meaning
 // anything.
@@ -305,8 +306,8 @@ export function normalizeArchiveSubmission(fields = {}, file = null) {
       url: remoteSource || '',
       sourceUrl: '',
       sourceVideoId: '',
-      // Marks the job as fetching a stranger's url, which is what makes the
-      // downloader re-check every redirect hop and cap what it will pull.
+      // Marks the job as fetching a stranger's url, which makes the downloader
+      // re-check every redirect hop and enforce live storage headroom while it streams.
       requirePublicSource: Boolean(remoteSource)
     }
   }
@@ -332,16 +333,37 @@ export function jobSourceReference(job) {
   }
 }
 
-// The core behind one source, read off the publication's signed asset manifest.
-// A catalog page carries renditions only when it is served straight from the
-// media graph; through the consumer projection every device uses, it does not,
-// and the manifest is where those bytes are named.
+// The rendition behind one source, read off the publication's signed asset
+// manifest. A catalog page carries renditions only when it is served straight
+// from the media graph; through the consumer projection every device uses, it
+// does not, and the manifest is where those bytes are named.
+//
+// A source that arrives without a renditionId is resolved to the publication's
+// primary rendition rather than left unresolvable. That case is not exotic — it
+// is every episode. The projection lists the SERIES entity, while the
+// publication's availability claim is anchored to the EPISODE entity, so the
+// per-entity source lookup below asks about a subject that holds no claim and
+// comes back empty. Picking the first playable rendition is what the media graph
+// itself does when it builds a source (api/media-graph.js:301), so this agrees
+// with the graph rather than inventing a second rule.
+function isPlayableRendition(rendition) {
+  return Boolean(
+    rendition?.renditionId &&
+    rendition.blocked !== true &&
+    rendition.superseded !== true &&
+    !isArtworkRendition(rendition)
+  )
+}
+
 function manifestRendition(assetManifest, source) {
-  if (typeof assetManifest !== 'function' || !source?.publicationId || !source?.renditionId) return null
-  const rendition = (assetManifest(source.publicationId)?.body?.renditions || [])
-    .find((candidate) => candidate.renditionId === source.renditionId)
+  if (typeof assetManifest !== 'function' || !source?.publicationId) return null
+  const renditions = assetManifest(source.publicationId)?.body?.renditions || []
+  const rendition = source.renditionId
+    ? renditions.find((candidate) => candidate?.renditionId === source.renditionId)
+    : renditions.find(isPlayableRendition)
   if (!rendition) return null
   return {
+    renditionId: rendition.renditionId || null,
     coreKey: rendition.core?.key || null,
     coreLength: rendition.core?.length,
     byteLength: rendition.core?.byteLength
@@ -378,7 +400,10 @@ export async function portableEntitySources(item, { publicationSources = null, a
     return {
       publicationId: source?.publicationId || null,
       publisherId: source?.publisherId || null,
-      renditionId: source?.renditionId || null,
+      // A publication with no resolvable rendition is worse than absent: a
+      // consumer drops the source (it cannot address the stream route) while the
+      // seeder's own catalog check reads the title as unseeded and re-seeds it.
+      renditionId: source?.renditionId || rendition?.renditionId || null,
       coreKey: rendition?.coreKey || null,
       coreLength: uint(rendition?.coreLength),
       byteLength: uint(rendition?.byteLength)

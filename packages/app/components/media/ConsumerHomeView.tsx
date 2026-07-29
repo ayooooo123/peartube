@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native'
 import type { MediaEntitySummary } from '@peartube/core'
+import { HeroFeatureCard } from './HeroFeatureCard'
 import { MediaRail } from './MediaRail'
 import { MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
@@ -88,13 +89,11 @@ function cardCaption(item: RailItem): string | null {
  * through the local blob server; only older claims still name an origin.
  */
 function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
-  const availability = item.availabilityView
   const artwork = usePosterArtwork(item, posterLocator(item))
   const resumePercent = item.resume ? Math.round(item.resume.fraction * 100) : null
   const title = item.title || 'Untitled'
   const accessibilityLabel = [
     title,
-    availability?.label,
     resumePercent === null ? null : `${resumePercent} percent watched`,
   ].filter(Boolean).join(', ')
 
@@ -120,13 +119,30 @@ function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
       </View>
       <Text style={styles.cardTitle} numberOfLines={2}>{title}</Text>
       {cardCaption(item) ? <Text style={styles.cardSubtitle} numberOfLines={1}>{cardCaption(item)}</Text> : null}
-      {availability ? (
-        <Text style={[styles.availability, !availability.playable && styles.availabilityMuted]} numberOfLines={1}>
-          {availability.label}
-        </Text>
-      ) : null}
+      {/*
+        No availability line here. "Awaiting replication" is what the network
+        calls a title nobody has fetched yet, which is every title on a home
+        screen, and printing it under each poster told a viewer their whole
+        catalogue was broken. Pressing Play is what checks; the detail screen
+        and the source list are where the mechanics belong.
+      */}
     </Pressable>
   )
+}
+
+/**
+ * The hero reads a plain URL, while a cover that arrived over the swarm is a
+ * blob reference until the local server resolves it. Resolving it here is what
+ * keeps the feature card showing the same artwork the rail does instead of
+ * falling back to a placeholder.
+ */
+function FeaturedHero({ item, onPress }: { item: RailItem; onPress(): void }) {
+  const artwork = usePosterArtwork(item, posterLocator(item))
+  const featured = useMemo(
+    () => ({ ...item, posterUrl: artwork || posterLocator(item) || null }),
+    [item, artwork],
+  )
+  return <HeroFeatureCard item={featured as never} onPress={onPress} playable />
 }
 
 const MemoizedHomeCard = memo(HomeCard)
@@ -141,11 +157,19 @@ export function ConsumerHomeView({
   contentBottomInset = 24,
   now,
 }: ConsumerHomeProps) {
-  const items = useMemo(() => (Array.isArray(state.items) ? state.items : []), [state.items])
+  const items = useMemo<MediaEntitySummary[]>(() => (Array.isArray(state.items) ? state.items : []), [state.items])
   const rails = useMemo(
     () => projectHomeRails({ items, watchState, firstSeen, now: now ?? Date.now() }),
     [items, watchState, firstSeen, now],
   )
+
+  // A single-title catalogue rendered as one small poster in the top-left left
+  // four fifths of the screen empty. The hero card was built for this and had
+  // never been rendered anywhere - only its type was ever imported.
+  const featured = useMemo(() => {
+    const first = rails[0]?.items?.[0] as RailItem | undefined
+    return first || null
+  }, [rails])
 
   const renderItem = useCallback(({ item }: { item: RailItem }) => (
     <MemoizedHomeCard item={item} onPress={() => onOpenEntity(item.entityId, item)} />
@@ -177,17 +201,27 @@ export function ConsumerHomeView({
       refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
       showsVerticalScrollIndicator={false}
     >
-      {rails.map(rail => (
-        <MediaRail
-          key={rail.id}
-          title={rail.title}
-          subtitle={rail.subtitle ?? undefined}
-          data={rail.items as RailItem[]}
-          itemWidth={MEDIA_POSTER_CARD_WIDTH}
-          renderItem={renderItem}
-          keyExtractor={(item: RailItem) => `${rail.id}:${item.entityId}`}
-        />
-      ))}
+      {featured ? (
+        <FeaturedHero item={featured} onPress={() => onOpenEntity(featured.entityId, featured)} />
+      ) : null}
+      {rails.map(rail => {
+        // The featured title is shown above, so it does not also ride the rail
+        // it came from: on a small catalogue that turned one film into two
+        // copies of itself rather than a fuller screen.
+        const data = (rail.items as RailItem[]).filter(item => item.entityId !== featured?.entityId)
+        if (data.length === 0) return null
+        return (
+          <MediaRail
+            key={rail.id}
+            title={rail.title}
+            subtitle={rail.subtitle ?? undefined}
+            data={data}
+            itemWidth={MEDIA_POSTER_CARD_WIDTH}
+            renderItem={renderItem}
+            keyExtractor={(item: RailItem) => `${rail.id}:${item.entityId}`}
+          />
+        )
+      })}
     </ScrollView>
   )
 }

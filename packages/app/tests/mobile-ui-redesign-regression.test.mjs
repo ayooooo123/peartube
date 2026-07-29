@@ -17,18 +17,22 @@ function readRepo(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('mobile design tokens use the violet-on-navy catalog system', () => {
+test('mobile design tokens use the MediaStorm dark catalog system', () => {
   const source = readRepo('packages/core/src/utils/index.ts')
 
-  // This deliberately replaces the earlier pear-green system: the product is a
-  // media catalog and is meant to read like one, so the accent is violet on a
-  // blue-violet near-black rather than lime on a green-tinted near-black.
-  assert.match(source, /primary:\s*'#7b5bf5'/, 'primary accent should use the violet brand token')
-  assert.match(source, /onPrimary:\s*'#ffffff'/, 'text on violet fills has to be white to stay legible')
-  assert.match(source, /bg:\s*'#0b0b12'/, 'the base surface should be the blue-violet near-black')
-  assert.match(source, /surfaceBorder:\s*'rgba\(255,255,255,0\.08\)'/, 'surface borders should use translucent dark-mode-native separators')
+  // Supersedes the earlier violet-on-navy system. The product now adopts
+  // MediaStorm's dark theme wholesale — an accent blue on a neutral near-black
+  // with two solid lift steps — so these assertions pin the new palette rather
+  // than the violet one they replace.
+  assert.match(source, /primary:\s*'#3f66ff'/, 'primary accent should use the MediaStorm accent blue')
+  assert.match(source, /accentSecondary:\s*'#ff9f1a'/, 'the amber secondary accent has to stay available for badges and warnings')
+  assert.match(source, /onPrimary:\s*'#ffffff'/, 'text on accent fills has to be white to stay legible')
+  assert.match(source, /bg:\s*'#0b0b0f'/, 'the base surface should be the neutral near-black')
+  assert.match(source, /surface:\s*'#16161f'/, 'cards and panels sit one solid step above the base')
+  assert.match(source, /surfaceBorder:\s*'#2b2f3c'/, 'separators are a solid subtle border, not a translucent white wash')
+  assert.match(source, /overlayButton:\s*'rgba\(255, 255, 255, 0\.12\)'/, 'secondary actions over artwork need the button overlay fill')
   assert.doesNotMatch(source, /#a3e635|#bef264|#65a30d/, 'no lime tokens should survive the recolor')
-  assert.doesNotMatch(source, /primary:\s*'#9147ff'/, 'the accent is its own violet, not the old saturated Twitch purple')
+  assert.doesNotMatch(source, /primary:\s*'#7b5bf5'/, 'the violet brand accent is fully replaced by the MediaStorm blue')
 })
 
 test('native video cards use premium app-native surfaces and cover thumbnails', () => {

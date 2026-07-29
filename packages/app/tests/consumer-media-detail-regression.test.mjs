@@ -11,14 +11,16 @@ import { renderToStaticMarkup } from 'react-dom/server'
 const appRoot = path.resolve(import.meta.dirname, '..')
 const NOW = Date.now()
 
-// The detail screen pulls in an icon set, safe-area natives, and the router,
-// none of which exist off-device. The server render cares about copy, roles,
-// and states, so those are stubbed rather than bundled. The screen takes its
-// route id and item as props here, so the router stub returns empty params.
+// The detail screen pulls in an icon set, safe-area natives, the router, and a
+// native gradient view, none of which exist off-device. The server render
+// cares about copy, roles, and states, so those are stubbed rather than
+// bundled. The screen takes its route id and item as props here, so the router
+// stub returns empty params.
 const STUBS = {
   'expo-vector-icons': 'export const Ionicons = () => null\nexport default { Ionicons }\n',
   'safe-area': 'export const useSafeAreaInsets = () => ({ top: 0, bottom: 0, left: 0, right: 0 })\n',
   'expo-router': 'export const useLocalSearchParams = () => ({})\nexport const useRouter = () => ({ back() {}, push() {} })\n',
+  'linear-gradient': 'export const LinearGradient = () => null\nexport default { LinearGradient }\n',
 }
 
 const stubNativeOnlyDeps = {
@@ -27,6 +29,7 @@ const stubNativeOnlyDeps = {
     builder.onResolve({ filter: /^@expo\/vector-icons/ }, () => ({ path: 'expo-vector-icons', namespace: 'stub' }))
     builder.onResolve({ filter: /^react-native-safe-area-context$/ }, () => ({ path: 'safe-area', namespace: 'stub' }))
     builder.onResolve({ filter: /^expo-router$/ }, () => ({ path: 'expo-router', namespace: 'stub' }))
+    builder.onResolve({ filter: /^expo-linear-gradient$/ }, () => ({ path: 'linear-gradient', namespace: 'stub' }))
     builder.onLoad({ filter: /.*/, namespace: 'stub' }, args => ({
       contents: STUBS[args.path],
       loader: 'js',
@@ -107,22 +110,27 @@ test('load the detail screen once', async () => {
   assert.ok(screen.MediaEntityDetailScreen)
 })
 
-test('the detail screen leads with title, synopsis, availability, and one Play action', () => {
+// The primary action reads "Watch Now" rather than "Play": the app adopted
+// MediaStorm's detail screen wholesale, and that dominant accent-blue button
+// is its centrepiece. The behaviour behind it is unchanged — one tap, no
+// source picker — so only the label moved.
+test('the detail screen leads with title, synopsis, availability, and one Watch Now action', () => {
   const html = render(screen)
 
   assert.match(html, /The Heist/)
   assert.match(html, /Director A/)
   assert.match(html, /A crew assembles for one last job\./)
   assert.match(html, /Available now/, 'the assessed availability leads')
-  assert.match(html, />Play</, 'exactly one primary action')
+  assert.match(html, />Watch Now</, 'exactly one primary action')
   assert.doesNotMatch(html, />Resume</, 'nothing to resume yet')
 })
 
-test('a partly watched title offers Resume instead of Play', () => {
+test('a partly watched title offers Resume instead of Watch Now', () => {
   const html = render(screen, { resumeFraction: 0.4 })
 
   assert.match(html, />Resume</)
-  assert.doesNotMatch(html, />Play</)
+  assert.doesNotMatch(html, />Watch Now</)
+  assert.match(html, />40%</, 'the local watch progress rides alongside the action')
 })
 
 test('operational detail is hidden until a viewer opens it', () => {
@@ -140,7 +148,7 @@ test('the disclosure advertises how many sources are behind it', () => {
   assert.match(html, /Details and other sources \(2\)/)
 })
 
-test('an unavailable title disables Play and explains why', () => {
+test('an unavailable title disables Watch Now and explains why', () => {
   const html = render(screen, { item: { availability: availability('unavailable') } })
 
   assert.match(html, /Unavailable/)
@@ -159,15 +167,15 @@ test('a title with no artwork or synopsis still renders its actions', () => {
   const html = render(screen, { item: { synopsis: null, posterUrl: null, thumbnailUrl: null } })
 
   assert.match(html, /The Heist/)
-  assert.match(html, />Play</)
+  assert.match(html, />Watch Now</)
 })
 
-test('the Play action carries an accessible label and disabled state', () => {
+test('the Watch Now action carries an accessible label and disabled state', () => {
   const playable = render(screen)
-  assert.match(playable, /aria-label="Play The Heist"/)
+  assert.match(playable, /aria-label="Watch Now The Heist"/)
 
   const blocked = render(screen, { item: { availability: availability('unavailable') } })
-  assert.match(blocked, /aria-label="Play The Heist"/)
+  assert.match(blocked, /aria-label="Watch Now The Heist"/)
   assert.match(blocked, /disabled/, 'an unplayable title cannot be pressed')
 })
 

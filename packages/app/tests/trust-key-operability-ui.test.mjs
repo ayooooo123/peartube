@@ -26,12 +26,21 @@ const appUiStubPlugin = {
       path: 'app-context',
       namespace: 'test-stub',
     }))
+    context.onResolve({ filter: /^expo-linear-gradient$/ }, () => ({
+      path: 'linear-gradient',
+      namespace: 'test-stub',
+    }))
     context.onLoad({ filter: /^vector-icons$/, namespace: 'test-stub' }, () => ({
       contents: "import React from 'react'; export const Ionicons = (props) => React.createElement('span', props);",
       loader: 'js',
     }))
     context.onLoad({ filter: /^expo-router$/, namespace: 'test-stub' }, () => ({
       contents: 'export const useLocalSearchParams = () => ({}); export const useRouter = () => ({ back() {} });',
+      loader: 'js',
+    }))
+    // The detail screen's backdrop fade is a native view off-device.
+    context.onLoad({ filter: /^linear-gradient$/, namespace: 'test-stub' }, () => ({
+      contents: "import React from 'react'; export const LinearGradient = (props) => React.createElement('span', props);",
       loader: 'js',
     }))
     context.onLoad({ filter: /^app-context$/, namespace: 'test-stub' }, () => ({

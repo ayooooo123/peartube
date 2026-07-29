@@ -21,18 +21,18 @@ module.exports = {
       colors: {
         // PearTube brand colors mapped to Gluestack semantic colors
         primary: {
-          0: "#F5F3FF",
-          50: "#EDE9FE",
-          100: "#DDD6FE",
-          200: "#C4B5FD",
-          300: "#A78BFA",
-          400: "#9b7ff9", // PearTube primary hover
-          500: "#7b5bf5", // PearTube primary
-          600: "#6d4ae0",
-          700: "#5b3fd6", // PearTube primary deep
-          800: "#4c33b8",
-          900: "#3b2790",
-          950: "#1a1033",
+          0: "#F0F3FF",
+          50: "#E0E7FF",
+          100: "#C7D2FF",
+          200: "#A5B6FF",
+          300: "#8AA0FF",
+          400: "#6b88ff", // PearTube primary hover
+          500: "#3f66ff", // PearTube primary
+          600: "#3557e6",
+          700: "#2f4fd6", // PearTube primary deep
+          800: "#2440ab",
+          900: "#1c3186",
+          950: "#0f1c4d",
         },
         secondary: {
           0: "#FEFFFF",
@@ -190,29 +190,29 @@ module.exports = {
           light: "#FBFBFB",
           dark: "#181719",
         },
-        // PearTube legacy colors for backwards compatibility
+        // PearTube palette, kept in step with @peartube/core design tokens
         pear: {
-          primary: '#7b5bf5',
-          'primary-hover': '#9b7ff9',
-          'primary-muted': 'rgba(123, 91, 245, 0.16)',
-          bg: '#0a0c0a',
-          'bg-elevated': '#111411',
-          'bg-card': 'rgba(255,255,255,0.035)',
-          'bg-input': '#1a1e1a',
-          text: '#f7f8f8',
-          'text-secondary': '#d0d6e0',
-          'text-muted': '#8a8f98',
-          border: 'rgba(255,255,255,0.08)',
-          'border-light': 'rgba(255,255,255,0.12)',
-          error: '#ef6262',
-          success: '#27a644',
-          warning: '#d6a243',
+          primary: '#3f66ff',
+          'primary-hover': '#6b88ff',
+          'primary-muted': 'rgba(63, 102, 255, 0.18)',
+          bg: '#0b0b0f',
+          'bg-elevated': '#16161f',
+          'bg-card': '#16161f',
+          'bg-input': '#1f1f2a',
+          text: '#ffffff',
+          'text-secondary': '#c7cad6',
+          'text-muted': '#8c90a6',
+          border: '#2b2f3c',
+          'border-light': '#4a4f5e',
+          error: '#e74c3c',
+          success: '#2ecc71',
+          warning: '#f1c40f',
           swarm: '#2dd4bf',
           'swarm-glow': 'rgba(45, 212, 191, 0.35)',
           'swarm-dim': 'rgba(45, 212, 191, 0.12)',
-          glass: 'rgba(255,255,255,0.05)',
-          'glass-border': 'rgba(255,255,255,0.09)',
-          'glass-highlight': 'rgba(155, 127, 249, 0.06)',
+          glass: 'rgba(255,255,255,0.08)',
+          'glass-border': 'rgba(255,255,255,0.12)',
+          'glass-highlight': 'rgba(63, 102, 255, 0.12)',
         },
       },
       fontFamily: {

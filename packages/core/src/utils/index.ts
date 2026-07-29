@@ -10,72 +10,92 @@
 // ============================================
 
 export const colors = {
-  // Brand — violet, the accent a media catalog is expected to wear
-  primary: '#7b5bf5',
-  primaryHover: '#9b7ff9',
-  primaryLight: 'rgba(123, 91, 245, 0.18)',
-  primaryDeep: '#5b3fd6',
+  // Brand — MediaStorm accent blue, the primary call-to-action fill
+  primary: '#3f66ff',
+  primaryHover: '#6b88ff',
+  primaryLight: 'rgba(63, 102, 255, 0.18)',
+  primaryDeep: '#2f4fd6',
   // Readable text/icon color on top of primary fills
   onPrimary: '#ffffff',
 
-  // Network/peer presence — teal, used only for swarm/peer ambient UI
+  // Network/peer presence — teal, used only for swarm/peer ambient UI.
+  // Deliberately outside the MediaStorm palette: it signals P2P state, not brand.
   swarm: '#2dd4bf',
   swarmGlow: 'rgba(45, 212, 191, 0.35)',
   swarmDim: 'rgba(45, 212, 191, 0.12)',
 
-  // Accent
-  accent: '#8b6df7',
-  accentHover: '#a78bfa',
+  // Accent — MediaStorm has a single accent pair; `accent` mirrors `primary`
+  // so legacy call sites that used it for emphasis stay on-brand.
+  accent: '#3f66ff',
+  accentHover: '#6b88ff',
+  accentSecondary: '#ff9f1a',
+  accentSecondaryLight: 'rgba(255, 159, 26, 0.18)',
 
   // Status
-  success: '#27a644',
-  successLight: 'rgba(39, 166, 68, 0.18)',
-  warning: '#d6a243',
-  warningLight: 'rgba(214, 162, 67, 0.18)',
-  error: '#ef6262',
-  errorLight: 'rgba(239, 98, 98, 0.18)',
-  red: '#ef6262',
+  success: '#2ecc71',
+  successLight: 'rgba(46, 204, 113, 0.18)',
+  warning: '#f1c40f',
+  warningLight: 'rgba(241, 196, 15, 0.15)',
+  error: '#e74c3c',
+  errorLight: 'rgba(231, 76, 60, 0.18)',
+  red: '#e74c3c',
 
-  // Backgrounds — deep blue-violet near-blacks
-  bg: '#0b0b12',
-  bgElevated: '#14141e',
-  bgSecondary: '#14141e', // Alias for bgElevated
-  bgHover: '#1c1c2a',
-  bgActive: '#252537',
-  bgOverlay: 'rgba(0, 0, 0, 0.85)',
-  bgCard: 'rgba(255,255,255,0.035)',
+  // Backgrounds — MediaStorm's near-black base with two lift steps
+  bg: '#0b0b0f',
+  base: '#0b0b0f', // Alias for bg, matching MediaStorm's `background.base`
+  bgElevated: '#16161f',
+  bgSecondary: '#16161f', // Alias for bgElevated
+  bgHover: '#1f1f2a',
+  bgActive: '#2b2f3c',
+  bgOverlay: 'rgba(11, 11, 15, 0.85)',
+  // Cards sit on the surface step. Solid, not translucent white: MediaStorm
+  // poster cards are opaque panels, so stacking this over art no longer bleeds.
+  bgCard: '#16161f',
+  contrast: '#000000',
 
   // Surfaces
-  surface: 'rgba(255,255,255,0.035)',
-  surfaceHover: 'rgba(255,255,255,0.055)',
-  surfaceBorder: 'rgba(255,255,255,0.08)',
+  surface: '#16161f',
+  surfaceHover: '#1f1f2a',
+  surfaceElevated: '#1f1f2a',
+  surfaceModal: '#1f1f2a',
+  surfaceBorder: '#2b2f3c',
 
-  // Glass surfaces
-  glass: 'rgba(255,255,255,0.05)',
-  glassBorder: 'rgba(255,255,255,0.09)',
-  glassHighlight: 'rgba(155, 127, 249, 0.07)',
+  // Glass surfaces — translucent white washes for blurred/overlaid chrome
+  glass: 'rgba(255, 255, 255, 0.08)',
+  glassBorder: 'rgba(255, 255, 255, 0.12)',
+  glassHighlight: 'rgba(63, 102, 255, 0.12)',
+  // Fill for secondary action buttons laid over artwork or blur
+  overlayButton: 'rgba(255, 255, 255, 0.12)',
+  overlayMedium: 'rgba(255, 255, 255, 0.08)',
+  // Base-tinted scrim for backdrops and sheets
+  scrim: 'rgba(11, 11, 15, 0.72)',
 
   // Text
-  text: '#f7f8f8', // Alias for textPrimary
-  textPrimary: '#f7f8f8',
-  textSecondary: '#d0d6e0',
-  textMuted: '#8a8f98',
-  textDisabled: '#62666d',
+  text: '#ffffff', // Alias for textPrimary
+  textPrimary: '#ffffff',
+  textSecondary: '#c7cad6',
+  textMuted: '#8c90a6',
+  textDisabled: '#555866',
+  // Dark theme only, so "inverse" is still white; kept for API parity.
+  textInverse: '#ffffff',
 
   // Borders
-  border: 'rgba(255,255,255,0.08)',
-  borderLight: 'rgba(255,255,255,0.12)',
-  borderFocus: '#a78bfa',
+  border: '#2b2f3c',
+  borderSubtle: '#2b2f3c', // Alias for border
+  borderLight: '#4a4f5e',
+  borderEmphasis: '#4a4f5e', // Alias for borderLight
+  borderFocus: '#3f66ff',
 } as const;
 
 export const spacing = {
+  none: 0,
   xs: 4,
   sm: 8,
   md: 12,
   lg: 16,
   xl: 24,
   xxl: 32,
-  xxxl: 48,
+  xxxl: 40,
 } as const;
 
 export const fontSize = {
@@ -89,10 +109,14 @@ export const fontSize = {
 } as const;
 
 export const borderRadius = {
+  none: 0,
+  xs: 2,
   sm: 4,
   md: 8,
   lg: 12,
+  card: 12, // Poster/card radius, named so call sites read intent
   xl: 16,
+  pill: 999,
   full: 9999,
 } as const;
 

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { LinearGradient } from 'expo-linear-gradient'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 import { describeAvailability } from '@/lib/media-availability'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
@@ -216,26 +217,100 @@ export function getMediaEntityRouteId(item: MediaCockpitItem & Record<string, an
 }
 
 /**
- * Year, runtime and genres, as published on the claim. A consumer cannot look
- * any of it up, so this line exists only because the publisher put it in the
- * swarm alongside the title.
+ * Year, runtime, genres, ratings and certification, as published on the claim.
+ * A consumer cannot look any of it up, so each of these reads straight off the
+ * swarm payload and its row simply disappears when the publisher never
+ * claimed it — nothing here is fetched from a service.
  */
-function mediaFacts(item: MediaCockpitItem | null | undefined): string | null {
-  const fields = item as unknown as Record<string, unknown> | null | undefined
-  const parts: string[] = []
-  const year = typeof fields?.releaseYear === 'number' && fields.releaseYear > 0 ? fields.releaseYear : null
-  if (year) parts.push(String(year))
-  const runtime = typeof fields?.runtimeMinutes === 'number' && fields.runtimeMinutes > 0 ? fields.runtimeMinutes : null
-  if (runtime) {
-    const hours = Math.floor(runtime / 60)
-    const minutes = runtime % 60
-    parts.push(hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`)
-  }
-  const genres = Array.isArray(fields?.genres)
-    ? (fields.genres as unknown[]).filter((genre): genre is string => typeof genre === 'string' && genre.length > 0)
+function mediaGenres(item: Record<string, any> | null | undefined): string[] {
+  const genres = item?.genres
+  return Array.isArray(genres)
+    ? genres.filter((genre): genre is string => typeof genre === 'string' && genre.trim().length > 0).slice(0, 4)
     : []
-  if (genres.length > 0) parts.push(genres.slice(0, 3).join(', '))
-  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+function releaseYear(item: Record<string, any> | null | undefined): number | null {
+  const year = item?.releaseYear
+  return typeof year === 'number' && year > 0 ? year : null
+}
+
+/**
+ * Runtime as a viewer reads it. The publisher's claimed minutes win; a
+ * rendition that carries its own duration covers the titles without a claim.
+ */
+function runtimeLabel(item: Record<string, any> | null | undefined): string | null {
+  const claimed = item?.runtimeMinutes
+  const seconds = typeof item?.duration === 'number' && item.duration > 0
+    ? item.duration
+    : typeof item?.durationSec === 'number' && item.durationSec > 0
+      ? item.durationSec
+      : 0
+  const runtime = typeof claimed === 'number' && claimed > 0 ? claimed : Math.round(seconds / 60)
+  if (runtime <= 0) return null
+  const hours = Math.floor(runtime / 60)
+  const minutes = runtime % 60
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
+}
+
+function ratingText(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(Math.round(value * 10) / 10)
+  return pickString(value)
+}
+
+function claimedRatings(item: Record<string, any> | null | undefined): Array<{ label: string; value: string }> {
+  return asArray(item?.ratings)
+    .map((entry) => {
+      const value = ratingText(entry?.value ?? entry?.score ?? entry?.rating)
+      if (!value) return null
+      return { label: pickString(entry?.source, entry?.provider, entry?.label) || 'Rating', value }
+    })
+    .filter((entry): entry is { label: string; value: string } => entry !== null)
+    .slice(0, 3)
+}
+
+/** Lines of overview shown before the reader asks for the rest. */
+const OVERVIEW_LINES = 4
+
+/**
+ * Room the backdrop gets above the metadata panel, so the artwork reads as a
+ * full-bleed hero rather than a strip behind the title.
+ */
+const HERO_SPACER_HEIGHT = 200
+
+/**
+ * Touch surfaces clamp the overview and reveal the rest on tap. The two hidden
+ * copies measure the clamped and full heights, so the toggle only appears when
+ * there is genuinely more text behind it.
+ */
+function ExpandableOverview({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [clampedHeight, setClampedHeight] = useState(0)
+  const [fullHeight, setFullHeight] = useState(0)
+  const overflows = clampedHeight > 0 && fullHeight > clampedHeight + 1
+
+  return (
+    <Pressable
+      accessibilityRole={overflows ? 'button' : undefined}
+      accessibilityLabel={overflows ? (expanded ? 'Show less of the overview' : 'Show the full overview') : undefined}
+      onPress={overflows ? () => setExpanded(open => !open) : undefined}
+    >
+      <Text
+        style={[styles.overview, styles.overviewMeasure]}
+        numberOfLines={OVERVIEW_LINES}
+        onLayout={(event) => setClampedHeight(height => height || event.nativeEvent.layout.height)}
+      >
+        {text}
+      </Text>
+      <Text
+        style={[styles.overview, styles.overviewMeasure]}
+        onLayout={(event) => setFullHeight(height => height || event.nativeEvent.layout.height)}
+      >
+        {text}
+      </Text>
+      <Text style={styles.overview} numberOfLines={expanded ? undefined : OVERVIEW_LINES}>{text}</Text>
+      {overflows ? <Text style={styles.overviewToggle}>{expanded ? 'Show less' : 'More'}</Text> : null}
+    </Pressable>
+  )
 }
 
 export function MediaEntityDetailScreen({
@@ -274,11 +349,6 @@ export function MediaEntityDetailScreen({
   // Same treatment the home rails give a poster: a blob-claimed cover resolves
   // through the local blob server, and only older origin claims render flat.
   const artwork = usePosterArtwork(item, pickString(item?.backdropUrl, item?.posterUrl, item?.stillUrl, item?.thumbnailUrl, item?.thumbnail))
-  const duration = typeof item?.duration === 'number' && item.duration > 0
-    ? item.duration
-    : typeof item?.durationSec === 'number' && item.durationSec > 0
-      ? item.durationSec
-      : undefined
   const sourceCount = typeof item?.sourceCount === 'number' ? item.sourceCount : Array.isArray(item?.sources) ? item.sources.length : 0
   const synopsis = pickString(item?.synopsis, item?.description, item?.overview)
   // One availability answer for the whole screen, from the same assessment the
@@ -286,32 +356,127 @@ export function MediaEntityDetailScreen({
   const availabilityView = describeAvailability(
     item?.availability ?? asArray(item?.sources).find((source) => source?.selected)?.availability ?? null,
   )
-  const playLabel = typeof resumeFraction === 'number' && resumeFraction > 0 ? 'Resume' : 'Play'
+  const genres = mediaGenres(item)
+  const year = releaseYear(item)
+  const runtime = runtimeLabel(item)
+  const ratings = claimedRatings(item)
+  const certification = pickString(item?.certification, item?.contentRating, item?.ageRating)
+  // Watch progress is device-local, so the primary action can offer to resume
+  // without asking anything of the swarm.
+  const progressPercent = typeof resumeFraction === 'number' && resumeFraction > 0
+    ? Math.min(99, Math.max(1, Math.round(resumeFraction * 100)))
+    : null
+  const playLabel = progressPercent === null ? 'Watch Now' : 'Resume'
+  const detailsLabel = detailsOpen
+    ? 'Hide details'
+    : `Details and other sources${sourceCount > 1 ? ` (${sourceCount})` : ''}`
 
   return (
     <View style={styles.root}>
+      {/* The artwork sits full-bleed behind everything at a third of its
+          strength, and a gradient carries it down into the base colour over
+          the lower two thirds of the screen. */}
+      <View style={styles.backdrop}>
+        {artwork ? (
+          <View style={styles.backdropArtwork}>
+            <ThumbnailImage
+              thumbnailUrl={artwork}
+              channelInitial={title.charAt(0).toUpperCase()}
+              style={styles.backdropImage}
+            />
+          </View>
+        ) : null}
+        <LinearGradient
+          colors={['transparent', colors.scrim, colors.bg]}
+          locations={[0, 0.7, 1]}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          style={styles.heroFade}
+        />
+        <LinearGradient
+          colors={['transparent', colors.scrim, colors.bg]}
+          locations={[0, 0.7, 1]}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          style={styles.screenFade}
+        />
+      </View>
+
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Pressable onPress={onBack || (() => router.back())} accessibilityRole="button" accessibilityLabel="Go back" style={styles.backButton}>
           <Ionicons name="chevron-back" color={colors.text} size={18} />
           <Text style={styles.backText}>Back</Text>
         </Pressable>
 
-        <View style={styles.hero}>
-          <View style={styles.artworkFrame}>
-            <ThumbnailImage thumbnailUrl={artwork} duration={duration} channelInitial={title.charAt(0).toUpperCase()} style={styles.artwork} />
-          </View>
-          <View style={styles.heroCopy}>
-            <Text style={styles.kicker}>{pageTitleFor(type)}</Text>
-            <Text style={styles.title}>{title}</Text>
-            {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-            {mediaFacts(item) ? <Text style={styles.subtitle}>{mediaFacts(item)}</Text> : null}
-            {synopsis ? <Text style={styles.synopsis} numberOfLines={4}>{synopsis}</Text> : null}
-            <Text
-              style={[styles.availability, !availabilityView.playable && styles.availabilityMuted]}
-              accessibilityLabel={`Availability: ${availabilityView.label}. ${availabilityView.detail}`}
-            >
-              {availabilityView.label}
-            </Text>
+        <View style={styles.heroSpacer} />
+
+        <View style={styles.panel}>
+          <Text style={styles.kicker}>{pageTitleFor(type)}</Text>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.byline}>{subtitle}</Text> : null}
+
+          {ratings.length > 0 ? (
+            <View style={styles.badgeRow}>
+              {ratings.map((rating) => (
+                <View key={rating.label} style={styles.ratingBadge}>
+                  <Ionicons name="star" color={colors.accentSecondary} size={12} />
+                  <Text style={styles.ratingValue}>{rating.value}</Text>
+                  <Text style={styles.ratingLabel}>{rating.label}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {certification || genres.length > 0 ? (
+            <View style={styles.badgeRow}>
+              {certification ? (
+                <View style={styles.badge}><Text style={styles.badgeText}>{certification}</Text></View>
+              ) : null}
+              {certification && genres.length > 0 ? <Text style={styles.badgeSeparator}>|</Text> : null}
+              {genres.map((genre) => (
+                <View key={genre} style={styles.badge}><Text style={styles.badgeText}>{genre}</Text></View>
+              ))}
+            </View>
+          ) : null}
+
+          {year !== null || runtime ? (
+            <View style={styles.releaseRow}>
+              {year !== null ? (
+                <View style={styles.releaseItem}>
+                  <Ionicons name="calendar-outline" color={colors.textSecondary} size={14} style={styles.releaseIcon} />
+                  <Text style={styles.releaseValue}>{String(year)}</Text>
+                </View>
+              ) : null}
+              {runtime ? (
+                <View style={styles.releaseItem}>
+                  <Ionicons name="time-outline" color={colors.textSecondary} size={14} style={styles.releaseIcon} />
+                  <Text style={styles.releaseValue}>{runtime}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {synopsis
+            ? Platform.OS === 'web'
+              ? <Text style={styles.overview}>{synopsis}</Text>
+              : <ExpandableOverview text={synopsis} />
+            : null}
+
+          <Text
+            style={[styles.availability, !availabilityView.playable && styles.availabilityMuted]}
+            accessibilityLabel={`Availability: ${availabilityView.label}. ${availabilityView.detail}`}
+          >
+            {availabilityView.label}
+          </Text>
+
+          {/* One tap plays. The backend already picked the source and fails
+              over, so nothing stands between this button and playback; the
+              per-source diagnostics live behind the disclosure beside it. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.actionRow}
+          >
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`${playLabel} ${title}`}
@@ -319,35 +484,40 @@ export function MediaEntityDetailScreen({
               disabled={!availabilityView.playable}
               onPress={() => onPlay?.()}
               style={({ pressed }) => [
-                styles.playButton,
-                !availabilityView.playable && styles.playButtonDisabled,
-                pressed && styles.playButtonPressed,
+                styles.primaryAction,
+                !availabilityView.playable && styles.actionDisabled,
+                pressed && styles.actionPressed,
               ]}
             >
-              <Ionicons name="play" color={colors.bg} size={18} />
-              <Text style={styles.playLabel}>{playLabel}</Text>
+              <Ionicons name="play" color={colors.onPrimary} size={20} />
+              <Text style={styles.primaryActionLabel}>{playLabel}</Text>
             </Pressable>
-            {availabilityView.playable ? null : (
-              <Text style={styles.availabilityDetail}>{availabilityView.detail}</Text>
-            )}
-          </View>
-        </View>
 
-        {/* Consumer surface ends here. Everything below is operational detail
-            a viewer opens deliberately: source diagnostics, archive mechanics,
-            provenance, and publisher device state. */}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={detailsOpen ? 'Hide details and other sources' : 'Show details and other sources'}
-          accessibilityState={{ expanded: detailsOpen }}
-          onPress={() => setDetailsOpen(open => !open)}
-          style={styles.detailsToggle}
-        >
-          <Text style={styles.detailsToggleLabel}>
-            {detailsOpen ? 'Hide details' : `Details and other sources${sourceCount > 1 ? ` (${sourceCount})` : ''}`}
-          </Text>
-          <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textMuted} size={16} />
-        </Pressable>
+            {progressPercent === null ? null : (
+              <View style={styles.progressPill}>
+                <Text style={styles.progressText}>{`${progressPercent}%`}</Text>
+              </View>
+            )}
+
+            {/* Consumer surface ends here. Everything behind this disclosure is
+                operational detail a viewer opens deliberately: source
+                diagnostics, archive mechanics, provenance, publisher state. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={detailsOpen ? 'Hide details and other sources' : 'Show details and other sources'}
+              accessibilityState={{ expanded: detailsOpen }}
+              onPress={() => setDetailsOpen(open => !open)}
+              style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}
+            >
+              <Text style={styles.secondaryActionLabel}>{detailsLabel}</Text>
+              <Ionicons name={detailsOpen ? 'chevron-up' : 'chevron-down'} color={colors.textSecondary} size={16} />
+            </Pressable>
+          </ScrollView>
+
+          {availabilityView.playable ? null : (
+            <Text style={styles.availabilityDetail}>{availabilityView.detail}</Text>
+          )}
+        </View>
 
         {!detailsOpen ? null : (
         <View style={styles.panels}>
@@ -384,230 +554,295 @@ export function MediaEntityDetailScreen({
   )
 }
 
+// React Native 0.85 dropped `StyleSheet.absoluteFillObject`, and its
+// `absoluteFill` is a compiled handle on web rather than a plain object, so
+// the overlay geometry is spelled out once here and spread where needed.
+const ABSOLUTE_FILL = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const
+
 const styles = StyleSheet.create({
-  detailsToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: 44,
-    marginTop: 24,
-    paddingHorizontal: 4,
-  },
-  detailsToggleLabel: {
-    color: colors.textMuted,
-    fontFamily: fonts.headingMedium,
-    fontSize: 13,
-  },
   root: {
     flex: 1,
     backgroundColor: colors.bg,
   },
+  backdrop: {
+    ...ABSOLUTE_FILL,
+    overflow: 'hidden',
+    pointerEvents: 'none',
+  },
+  backdropArtwork: {
+    ...ABSOLUTE_FILL,
+    opacity: 0.3,
+  },
+  // ThumbnailImage is 16:9 by default; the backdrop fills whatever the screen is.
+  backdropImage: {
+    width: '100%',
+    height: '100%',
+    aspectRatio: undefined,
+    borderRadius: radius.none,
+  },
+  heroFade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '65%',
+  },
+  screenFade: {
+    ...ABSOLUTE_FILL,
+  },
   content: {
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 40,
-    gap: 18,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xxl,
+    gap: spacing.lg,
+  },
+  heroSpacer: {
+    height: HERO_SPACER_HEIGHT,
   },
   backButton: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
+    gap: spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: colors.overlayButton,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
   backText: {
+    ...fonts.label.md,
     color: colors.text,
-    fontWeight: '800',
   },
-  hero: {
-    borderRadius: 28,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.bgElevated,
-  },
-  artworkFrame: {
-    height: 210,
-    backgroundColor: colors.bgSecondary,
-  },
-  artwork: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 0,
-  },
-  heroCopy: {
-    padding: 18,
+  panel: {
+    backgroundColor: colors.scrim,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.overlayMedium,
+    padding: spacing.lg,
+    gap: spacing.md,
   },
   kicker: {
+    ...fonts.caption.sm,
     color: colors.primary,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0.7,
+    fontWeight: '700',
     textTransform: 'uppercase',
   },
   title: {
-    color: colors.text,
+    ...fonts.title.lg,
     fontFamily: fonts.heading,
-    fontSize: 28,
-    lineHeight: 33,
-    marginTop: 8,
+    color: colors.text,
   },
-  subtitle: {
-    color: colors.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 8,
+  byline: {
+    ...fonts.body.sm,
+    color: colors.textSecondary,
   },
-  chipRow: {
+  badgeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 14,
+    alignItems: 'center',
+    gap: spacing.sm,
   },
-  synopsis: {
+  ratingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.overlayMedium,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  ratingValue: {
+    ...fonts.body.sm,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  ratingLabel: {
+    ...fonts.caption.sm,
     color: colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 10,
+  },
+  badge: {
+    backgroundColor: colors.overlayMedium,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  badgeText: {
+    ...fonts.caption.sm,
+    color: colors.textSecondary,
+  },
+  badgeSeparator: {
+    ...fonts.body.sm,
+    fontWeight: '900',
+    color: colors.textSecondary,
+  },
+  releaseRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  releaseItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  releaseIcon: {
+    marginRight: spacing.xs,
+  },
+  releaseValue: {
+    ...fonts.body.sm,
+    color: colors.textSecondary,
+  },
+  overview: {
+    ...fonts.body.md,
+    color: colors.textSecondary,
+  },
+  // Measurement copies: laid out, never seen.
+  overviewMeasure: {
+    position: 'absolute',
+    opacity: 0,
+    zIndex: -1,
+  },
+  overviewToggle: {
+    ...fonts.body.sm,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
   availability: {
+    ...fonts.label.md,
     color: colors.primary,
-    fontFamily: fonts.headingMedium,
-    fontSize: 13,
-    marginTop: 12,
   },
   availabilityMuted: {
     color: colors.textMuted,
   },
   availabilityDetail: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 6,
   },
-  playButton: {
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingRight: spacing.xs,
+  },
+  // Accent blue, taller and wider than anything beside it: the one thing on
+  // this screen a viewer is meant to press.
+  primaryAction: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    alignSelf: 'flex-start',
-    minHeight: 44,
-    paddingHorizontal: 22,
-    borderRadius: 999,
-    marginTop: 14,
+    gap: spacing.sm,
+    minHeight: 52,
+    paddingHorizontal: spacing.xxl,
+    borderRadius: radius.md,
     backgroundColor: colors.primary,
   },
-  playButtonDisabled: {
+  primaryActionLabel: {
+    ...fonts.label.md,
+    fontFamily: fonts.headingMedium,
+    color: colors.onPrimary,
+  },
+  secondaryAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.overlayButton,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderSubtle,
+  },
+  secondaryActionLabel: {
+    ...fonts.body.sm,
+    color: colors.text,
+  },
+  actionDisabled: {
     opacity: 0.45,
   },
-  playButtonPressed: {
+  actionPressed: {
     opacity: 0.8,
   },
-  playLabel: {
-    color: colors.bg,
-    fontFamily: fonts.headingMedium,
-    fontSize: 15,
+  progressPill: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.pill,
+    backgroundColor: colors.overlayMedium,
   },
-  chip: {
-    color: colors.primary,
-    borderWidth: 1,
-    borderColor: 'rgba(123, 91, 245,0.26)',
-    backgroundColor: 'rgba(123, 91, 245,0.08)',
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  warnChip: {
-    color: '#fde68a',
-    borderWidth: 1,
-    borderColor: 'rgba(251,191,36,0.28)',
-    backgroundColor: 'rgba(251,191,36,0.10)',
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    fontSize: 11,
-    fontWeight: '900',
-    textTransform: 'uppercase',
+  progressText: {
+    ...fonts.caption.sm,
+    color: colors.textSecondary,
   },
   panels: {
-    gap: 14,
+    gap: spacing.md,
   },
   detailCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderSubtle,
     backgroundColor: colors.bgElevated,
-    padding: 16,
+    padding: spacing.lg,
   },
   detailTitle: {
-    color: colors.text,
+    ...fonts.title.md,
     fontFamily: fonts.headingMedium,
-    fontSize: 16,
-    marginTop: 3,
+    color: colors.text,
+    marginTop: spacing.xs,
   },
   summaryRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 13,
-    marginBottom: 10,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
   },
   summaryPill: {
+    ...fonts.caption.sm,
     color: colors.primary,
-    borderRadius: 999,
+    borderRadius: radius.pill,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(123, 91, 245,0.26)',
-    backgroundColor: 'rgba(123, 91, 245,0.08)',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    fontSize: 10,
-    fontWeight: '900',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
     textTransform: 'uppercase',
   },
   mutedPill: {
+    ...fonts.caption.sm,
     color: colors.textMuted,
-    borderRadius: 999,
+    borderRadius: radius.pill,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    backgroundColor: 'rgba(255,255,255,0.035)',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    fontSize: 10,
-    fontWeight: '900',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.overlayMedium,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
     textTransform: 'uppercase',
   },
   subsection: {
-    marginTop: 12,
-    gap: 6,
+    marginTop: spacing.md,
+    gap: spacing.xs,
   },
   detailLabel: {
+    ...fonts.caption.sm,
     color: colors.text,
-    fontSize: 12,
-    fontWeight: '900',
+    fontWeight: '700',
     textTransform: 'uppercase',
   },
   detailLine: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 5,
+    marginTop: spacing.xs,
   },
   detailMuted: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 8,
+    marginTop: spacing.sm,
   },
 })

@@ -176,10 +176,11 @@ test('a home card accepts thumbnail artwork as well as posters', async () => {
   assert.ok(html.includes(thumbnailUrl), 'the thumbnail URL reaches the rendered card')
 })
 
-// Home is a board of shelves, the way a catalog app presents itself: rows of
-// posters, no feature panel promising playback. Anything a viewer can act on
-// they act on by opening the title.
-test('home presents shelves rather than a feature panel', async () => {
+// Home is a hero over a grid of posters: a featured carousel at the top, then
+// one labelled section per shelf whose titles wrap into rows. It used to be
+// horizontal rails with no hero, which left a single-title catalog as one card
+// against an empty screen; the design this app now follows leads with the hero.
+test('home presents a hero over a grid of sections', async () => {
   const html = await renderHome([{
     entityId: 'playable-entity',
     entityKind: 'work',
@@ -188,10 +189,15 @@ test('home presents shelves rather than a feature panel', async () => {
     availability: { state: 'healthy', label: 'Available now', playable: true },
   }])
 
-  // A feature panel was tried here and looked worse: the hero crops a portrait
-  // poster into a landscape frame and cuts the artwork off. Shelves stay.
-  assert.ok(html.includes('Ready To Watch'), 'the title appears on a shelf')
-  assert.ok(html.includes('Recently Added'), 'the shelf is labelled')
+  assert.ok(html.includes('Ready To Watch'), 'the title appears in its section')
+  assert.ok(html.includes('Recently Added'), 'the section is labelled')
+  assert.ok(html.includes('home-hero'), 'a featured carousel leads the screen')
+  assert.ok(html.includes('home-section-recently-added'), 'the shelf renders as a grid section')
+  // The earlier feature panel was reverted because it cropped a portrait poster
+  // into a landscape frame and cut the artwork off, and because it promised
+  // playback Home cannot deliver. The hero here does neither: a title with no
+  // landscape source keeps its whole poster, and acting on anything still means
+  // opening it.
   assert.ok(!html.includes('Play Ready To Watch'), 'home does not carry a play affordance of its own')
 })
 

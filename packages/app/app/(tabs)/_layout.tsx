@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { DesktopLayout } from '@/components/desktop/DesktopLayout'
 import { PillTabBar } from '@/components/PillTabBar'
-import { colors } from '../_layout'
+import { colors } from '@/lib/colors'
 
 export default function TabLayout() {
   const { isDesktop: platformIsDesktop } = usePlatform()

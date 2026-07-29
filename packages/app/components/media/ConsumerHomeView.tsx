@@ -7,14 +7,13 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native'
 import type { MediaEntitySummary } from '@peartube/core'
-import { MediaRail } from './MediaRail'
-import { MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
-import { ThumbnailImage } from '@/components/video/ThumbnailImage'
-import { usePosterArtwork } from '@/hooks/usePosterArtwork'
+import { MediaPosterCard, MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
+import { HomeHeroCarousel, type HomeHeroItem } from './HomeHeroCarousel'
 import { projectHomeRails } from '@/lib/home-rails.js'
-import { colors } from '@/lib/colors'
+import { colors, radius, spacing } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
 export type ConsumerHomeState = {
@@ -42,100 +41,42 @@ export type ConsumerHomeProps = {
   now?: number
 }
 
-type RailItem = MediaEntitySummary & {
+type GridItem = MediaEntitySummary & {
   availabilityView?: { label: string; playable: boolean }
   resume?: { fraction: number }
 }
 
-function posterLocator(item: RailItem): string | null {
-  const fields = item as unknown as Record<string, unknown>
-  const candidates = [
-    fields.posterUrl,
-    fields.thumbnailUrl,
-    fields.thumbnail,
-    fields.stillUrl,
-    fields.backdropUrl,
-  ]
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate
-  }
-  return null
-}
+const PAGE_PADDING = spacing.lg
+const COLUMN_GUTTER = spacing.md
+const ROW_GUTTER = spacing.lg
+// The column count is whatever lands closest to the poster card's own width at
+// the current window width - two on a phone, more as the window grows. The
+// clamp keeps a narrow phone from dropping to a single oversized column and a
+// desktop from shrinking posters into thumbnails.
+const TARGET_CARD_WIDTH = MEDIA_POSTER_CARD_WIDTH
+const MIN_COLUMNS = 2
+const MAX_COLUMNS = 5
+const HERO_ITEM_LIMIT = 5
 
 /**
- * The line under a title. A year is what a viewer actually scans a shelf for,
- * and it now arrives with the catalog entry rather than from a lookup nobody
- * downstream can perform, so prefer it over the publisher's own subtitle.
+ * One grid cell. The stable `onPress` is the point: an inline closure at the
+ * call site would hand every card a new function on each render and defeat the
+ * memo inside the poster card.
  */
-function cardCaption(item: RailItem): string | null {
-  const fields = item as unknown as Record<string, unknown>
-  const year = typeof fields.releaseYear === 'number' && fields.releaseYear > 0 ? String(fields.releaseYear) : null
-  const subtitle = typeof item.subtitle === 'string' && item.subtitle.trim() ? item.subtitle.trim() : null
-  if (year && subtitle) return `${year} · ${subtitle}`
-  return year || subtitle
+function GridCard({
+  item,
+  width,
+  onOpenEntity,
+}: {
+  item: GridItem
+  width: number
+  onOpenEntity(entityId: string, item: MediaEntitySummary): void
+}) {
+  const onPress = useCallback(() => onOpenEntity(item.entityId, item), [item, onOpenEntity])
+  return <MediaPosterCard item={item} width={width} onPress={onPress} />
 }
 
-/**
- * One consumer card. It leads with the title and what a viewer can do with it
- * right now; publisher ids, claim counts, and archive mechanics are detail-view
- * concerns and deliberately absent here.
- *
- * Artwork goes through the same treatment as every other poster in the app.
- * This used to paint a flat surface with the title's first letter, which meant
- * a catalog of real media rendered as a row of grey rectangles.
- *
- * Cover art claimed as a blob lives in the publisher's own core and resolves
- * through the local blob server; only older claims still name an origin.
- */
-function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
-  const artwork = usePosterArtwork(item, posterLocator(item))
-  const resumePercent = item.resume ? Math.round(item.resume.fraction * 100) : null
-  const title = item.title || 'Untitled'
-  const accessibilityLabel = [
-    title,
-    resumePercent === null ? null : `${resumePercent} percent watched`,
-  ].filter(Boolean).join(', ')
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
-    >
-      <View style={styles.posterFrame}>
-        <ThumbnailImage
-          thumbnailUrl={artwork}
-          channelInitial={title.charAt(0).toUpperCase()}
-          style={styles.poster}
-        />
-        {/*
-          No scrim. A scrim earns its keep by making overlaid text legible, and
-          nothing is overlaid here - the title and caption sit below the poster.
-          What it actually did was lay a hard-edged 74px black band at 34% over
-          the bottom third of every cover, which is the grey stripe across the
-          artwork on every card.
-        */}
-        {resumePercent === null ? null : (
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${resumePercent}%` }]} />
-          </View>
-        )}
-      </View>
-      <Text style={styles.cardTitle} numberOfLines={2}>{title}</Text>
-      {cardCaption(item) ? <Text style={styles.cardSubtitle} numberOfLines={1}>{cardCaption(item)}</Text> : null}
-      {/*
-        No availability line here. "Awaiting replication" is what the network
-        calls a title nobody has fetched yet, which is every title on a home
-        screen, and printing it under each poster told a viewer their whole
-        catalogue was broken. Pressing Play is what checks; the detail screen
-        and the source list are where the mechanics belong.
-      */}
-    </Pressable>
-  )
-}
-
-const MemoizedHomeCard = memo(HomeCard)
+const MemoizedGridCard = memo(GridCard)
 
 export function ConsumerHomeView({
   state,
@@ -147,15 +88,34 @@ export function ConsumerHomeView({
   contentBottomInset = 24,
   now,
 }: ConsumerHomeProps) {
+  const { width: windowWidth } = useWindowDimensions()
   const items = useMemo<MediaEntitySummary[]>(() => (Array.isArray(state.items) ? state.items : []), [state.items])
   const rails = useMemo(
     () => projectHomeRails({ items, watchState, firstSeen, now: now ?? Date.now() }),
     [items, watchState, firstSeen, now],
   )
 
-  const renderItem = useCallback(({ item }: { item: RailItem }) => (
-    <MemoizedHomeCard item={item} onPress={() => onOpenEntity(item.entityId, item)} />
-  ), [onOpenEntity])
+  // Cards are sized to fill the row edge to edge: the leftover after the page
+  // padding and the gutters between columns, split evenly. One title no longer
+  // leaves the rest of the row empty.
+  const cardWidth = useMemo(() => {
+    const available = windowWidth - PAGE_PADDING * 2
+    // Only before layout has reported a width, which is also what a static
+    // render sees. The card's own baseline width is the honest stand-in.
+    if (available <= 0) return MEDIA_POSTER_CARD_WIDTH
+    const fit = Math.round((available + COLUMN_GUTTER) / (TARGET_CARD_WIDTH + COLUMN_GUTTER))
+    const columns = Math.min(MAX_COLUMNS, Math.max(MIN_COLUMNS, fit))
+    return Math.max(1, Math.floor((available - COLUMN_GUTTER * (columns - 1)) / columns))
+  }, [windowWidth])
+
+  // The hero features the top shelf, the way MediaStorm's does. Artwork is not
+  // a condition of appearing there: a title with none draws the same placeholder
+  // the grid draws, and a hero that comes and goes with replication state would
+  // move the whole screen under the viewer.
+  const featured = useMemo(
+    () => ((rails[0]?.items ?? []) as HomeHeroItem[]).slice(0, HERO_ITEM_LIMIT),
+    [rails],
+  )
 
   if (rails.length === 0) {
     return (
@@ -183,112 +143,85 @@ export function ConsumerHomeView({
       refreshControl={<RefreshControl refreshing={state.refreshing === true} onRefresh={onRefresh} />}
       showsVerticalScrollIndicator={false}
     >
+      <HomeHeroCarousel items={featured} windowWidth={windowWidth} onOpenEntity={onOpenEntity} />
       {rails.map(rail => (
-        <MediaRail
-          key={rail.id}
-          title={rail.title}
-          subtitle={rail.subtitle ?? undefined}
-          data={rail.items as RailItem[]}
-          itemWidth={MEDIA_POSTER_CARD_WIDTH}
-          renderItem={renderItem}
-          keyExtractor={(item: RailItem) => `${rail.id}:${item.entityId}`}
-        />
+        <View key={rail.id} testID={`home-section-${rail.id}`} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>{rail.title}</Text>
+            {rail.subtitle ? <Text style={styles.sectionSubtitle}>{rail.subtitle}</Text> : null}
+          </View>
+          <View style={styles.grid}>
+            {(rail.items as GridItem[]).map(item => (
+              <MemoizedGridCard
+                key={item.entityId}
+                item={item}
+                width={cardWidth}
+                onOpenEntity={onOpenEntity}
+              />
+            ))}
+          </View>
+        </View>
       ))}
     </ScrollView>
   )
 }
 
 const styles = StyleSheet.create({
-  card: {
-    width: MEDIA_POSTER_CARD_WIDTH,
+  section: {
+    marginTop: spacing.xl,
   },
-  cardPressed: {
-    opacity: 0.75,
+  sectionHeader: {
+    paddingHorizontal: PAGE_PADDING,
+    marginBottom: spacing.md,
   },
-  posterFrame: {
-    width: '100%',
-    aspectRatio: 2 / 3,
-    borderRadius: 12,
-    backgroundColor: colors.bgHover,
-    borderWidth: 1,
-    borderColor: colors.glassBorder,
-    overflow: 'hidden',
-  },
-  // ThumbnailImage defaults to a 16:9 video still. Inside a 2:3 poster frame it
-  // has to fill the frame instead of imposing its own ratio and corners.
-  poster: {
-    width: '100%',
-    height: '100%',
-    aspectRatio: undefined,
-    borderRadius: 0,
-  },
-  progressTrack: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 3,
-    backgroundColor: colors.border,
-  },
-  progressFill: {
-    height: 3,
-    backgroundColor: colors.primary,
-  },
-  cardTitle: {
-    marginTop: 7,
+  sectionTitle: {
+    ...fonts.title.md,
+    fontFamily: fonts.heading,
     color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 12,
   },
-  cardSubtitle: {
-    marginTop: 2,
+  sectionSubtitle: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontFamily: fonts.headingMedium,
-    fontSize: 11,
+    marginTop: spacing.xs,
   },
-  availability: {
-    marginTop: 4,
-    color: colors.primary,
-    fontFamily: fonts.headingMedium,
-    fontSize: 11,
-  },
-  availabilityMuted: {
-    color: colors.textMuted,
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: PAGE_PADDING,
+    columnGap: COLUMN_GUTTER,
+    rowGap: ROW_GUTTER,
   },
   emptyContent: {
     flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
-    gap: 8,
+    padding: spacing.xxl,
+    gap: spacing.sm,
   },
   emptyTitle: {
+    ...fonts.title.md,
+    fontFamily: fonts.heading,
     color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 17,
     textAlign: 'center',
   },
   emptyDetail: {
+    ...fonts.body.sm,
     color: colors.textMuted,
-    fontFamily: fonts.headingMedium,
-    fontSize: 13,
     textAlign: 'center',
   },
   emptyCode: {
-    color: colors.textMuted,
-    
-    fontSize: 11,
+    ...fonts.caption.sm,
+    color: colors.textDisabled,
   },
   emptyAction: {
-    marginTop: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: colors.surface,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.bgHover,
   },
   emptyActionLabel: {
+    ...fonts.label.md,
     color: colors.text,
-    fontFamily: fonts.headingMedium,
-    fontSize: 13,
   },
 })

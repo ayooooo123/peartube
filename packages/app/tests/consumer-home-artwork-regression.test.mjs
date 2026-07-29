@@ -179,7 +179,7 @@ test('a home card accepts thumbnail artwork as well as posters', async () => {
 // Home is a board of shelves, the way a catalog app presents itself: rows of
 // posters, no feature panel promising playback. Anything a viewer can act on
 // they act on by opening the title.
-test('home leads with a feature panel and does not repeat it on the shelf', async () => {
+test('home presents shelves rather than a feature panel', async () => {
   const html = await renderHome([{
     entityId: 'playable-entity',
     entityKind: 'work',
@@ -188,12 +188,11 @@ test('home leads with a feature panel and does not repeat it on the shelf', asyn
     availability: { state: 'healthy', label: 'Available now', playable: true },
   }])
 
-  // One title used to render as a single small poster in a corner, leaving
-  // most of the screen empty. The top title is now the feature panel, and a
-  // shelf holding only that same title is not drawn at all.
-  assert.ok(html.includes('Ready To Watch'), 'the featured title is named')
-  assert.ok(!html.includes('Recently Added'), 'a shelf holding only the featured title is dropped')
-  assert.ok(html.includes('Play Ready To Watch'), 'the feature panel is where Play lives')
+  // A feature panel was tried here and looked worse: the hero crops a portrait
+  // poster into a landscape frame and cuts the artwork off. Shelves stay.
+  assert.ok(html.includes('Ready To Watch'), 'the title appears on a shelf')
+  assert.ok(html.includes('Recently Added'), 'the shelf is labelled')
+  assert.ok(!html.includes('Play Ready To Watch'), 'home does not carry a play affordance of its own')
 })
 
 // Availability stays on the card so a viewer knows what they are looking at
@@ -211,8 +210,7 @@ test('a card states availability for media that cannot play yet', async () => {
   // peer, and pressing Play is what asks - so a shelf of them told a viewer
   // their whole catalogue was broken. The mechanics live on the detail screen.
   assert.ok(!html.includes('Awaiting replication'), 'replication wording stays off the shelf')
-  // Play is what checks a peer, so it is offered before availability is known.
-  assert.ok(html.includes('Play Still Arriving'), 'Play is offered; pressing it is what asks a peer')
+  assert.ok(!html.includes('Play Still Arriving'), 'home does not offer Play; the detail screen does')
 })
 
 // Cover art reaches the catalog as the display locator the publisher claimed.

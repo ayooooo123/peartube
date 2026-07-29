@@ -1,5 +1,4 @@
-import { request as httpsRequest } from '#https'
-import { request as httpRequest } from '#http'
+import { requestOnce } from './http-get.js'
 import { getVideoMimeType } from './yt-dlp.js'
 import { assertPublicHttpUrl, blockedAddressReason } from './public-url-guard.js'
 
@@ -45,10 +44,6 @@ export function isDirectVideoUrl (url) {
   }
 }
 
-function requestFor (url) {
-  return new URL(url).protocol === 'http:' ? httpRequest : httpsRequest
-}
-
 function extensionForContentType (contentType) {
   const ct = String(contentType || '').toLowerCase()
   if (ct.includes('webm')) return '.webm'
@@ -73,26 +68,6 @@ function safeName (name, fallbackExt) {
   return VIDEO_EXT.test(cleaned) ? cleaned : `${cleaned}${fallbackExt}`
 }
 
-function requestOnce (url, headers, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const doRequest = requestFor(url)
-    let req
-    try {
-      req = doRequest(url, { method: 'GET', headers }, (res) => { settled = true; resolve(res) })
-    } catch (err) {
-      reject(err)
-      return
-    }
-    if (timeoutMs > 0) {
-      const timer = setTimeout(() => { if (!settled) { req.destroy?.(new Error('direct download timed out')) } }, timeoutMs)
-      timer?.unref?.()
-    }
-    req.on('error', (err) => { if (!settled) reject(err) })
-    req.end()
-  })
-}
-
 // The address this response actually came from. Read off the socket rather
 // than re-resolved, so there is no window between the check and the connect
 // for a name to change what it points at.
@@ -114,7 +89,11 @@ async function openStream (url, { maxRedirects = MAX_REDIRECTS, timeoutMs = 0, r
     // Every hop, not just the first: the caller only chose the first one, and
     // the host it redirects to is chosen by whoever answered.
     if (requirePublicSource) await assertPublicHttpUrl(current, lookup ? { lookup } : {})
-    const res = await requestOnce(current, { 'user-agent': 'PearTube-Relay', accept: '*/*' }, timeoutMs)
+    const res = await requestOnce(current, {
+      headers: { 'user-agent': 'PearTube-Relay', accept: '*/*' },
+      timeoutMs,
+      timeoutMessage: 'direct download timed out'
+    })
     if (requirePublicSource) assertSocketIsPublic(res, current)
     const status = res.statusCode || 0
     if (status >= 300 && status < 400 && res.headers?.location) {

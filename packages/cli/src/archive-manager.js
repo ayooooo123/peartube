@@ -10,6 +10,7 @@ import {
   getVideoMimeType,
   buildDownloadArgs
 } from './media/yt-dlp.js'
+import { openResponse, readBody } from './media/http-get.js'
 import { buildWriterKeyName } from './archive/source-id.js'
 import { createRelayPublisherShell } from './publisher-shell.js'
 
@@ -171,6 +172,16 @@ export function deriveMediaCoordinates({ tmdbType, tmdbId, tmdbSeason, tmdbEpiso
 
 const MAX_POSTER_BYTES = 4 * 1024 * 1024
 const POSTER_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const POSTER_TIMEOUT_MS = 15_000
+
+// The HTTP client, named once here so the default below is a module-scope
+// reference rather than a global lookup. It used to be `fetchImpl = fetch`,
+// which read the global at every call — and the relay runs on Bare, which has
+// no global fetch, so every publish died on `fetch is not defined` before the
+// function body ran. Node has one, so all 45 test files passed while the
+// feature was broken in production. Same story for the AbortController that
+// used to time this out; the timeout now lives in the request itself.
+const posterHttp = { open: openResponse, read: readBody }
 
 // A consumer holds no metadata-provider credentials, so cover art has to be
 // published with the record or every catalog renders as blank placeholders.
@@ -179,7 +190,7 @@ const POSTER_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 // fails wherever that origin is unreachable, and is simply unavailable offline.
 // The bytes are fetched once, here, by the publisher that already holds the
 // credentials, and everything downstream reads them from the swarm.
-export async function fetchPosterBytes(tmdbPosterPath, { fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
+export async function fetchPosterBytes(tmdbPosterPath, { http = posterHttp, timeoutMs = POSTER_TIMEOUT_MS } = {}) {
   const posterPath = tmdbPosterPath ? String(tmdbPosterPath).trim() : ''
   if (!posterPath) return null
   // Stored once and replicated to every peer, so size the fetch for a poster
@@ -187,23 +198,38 @@ export async function fetchPosterBytes(tmdbPosterPath, { fetchImpl = fetch, time
   const url = posterPath.startsWith('/') ? `https://image.tmdb.org/t/p/w500${posterPath}` : null
   if (!url) return null
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res = null
   try {
-    const response = await fetchImpl(url, { signal: controller.signal })
-    if (!response?.ok) return null
-    const mimeType = String(response.headers?.get?.('content-type') || '').split(';')[0].trim().toLowerCase()
+    // Headers first, body second, so a wrong type or an oversized cover is
+    // refused without pulling it. The origin is one this function chose, not a
+    // caller's, which is why this uses the plain client and not the guarded
+    // downloader — but the redirect budget is still bounded, where the global
+    // fetch this replaced would have followed twenty of them anywhere.
+    ;({ res } = await posterRequest(http, url, timeoutMs))
+    const status = res.statusCode || 0
+    if (status < 200 || status >= 300) return null
+    const mimeType = String(res.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase()
     if (!POSTER_MIME_TYPES.has(mimeType)) return null
-    const declared = Number(response.headers?.get?.('content-length') || 0)
+    const declared = Number(res.headers?.['content-length'] || 0)
     if (Number.isFinite(declared) && declared > MAX_POSTER_BYTES) return null
-    const bytes = Buffer.from(await response.arrayBuffer())
-    if (bytes.byteLength === 0 || bytes.byteLength > MAX_POSTER_BYTES) return null
+    const bytes = await http.read(res, { maxBytes: MAX_POSTER_BYTES })
+    res = null
+    if (!bytes || bytes.byteLength === 0) return null
     return { bytes, mimeType }
   } catch {
+    // An unreachable provider costs the archive its cover, never the archive.
     return null
   } finally {
-    clearTimeout(timer)
+    res?.destroy?.()
   }
+}
+
+function posterRequest(http, url, timeoutMs) {
+  return http.open(url, {
+    headers: { 'user-agent': 'PearTube-Relay', accept: 'image/*' },
+    timeoutMs,
+    timeoutMessage: 'poster fetch timed out'
+  })
 }
 
 // The job carries what the metadata match resolved as strings from a form. The

@@ -121,39 +121,45 @@ test('plain URL archive (no tmdb fields) is unchanged', async (t) => {
 // bytes are fetched once by the publisher and replicate like any other content.
 test('the publisher fetches cover bytes rather than claiming a foreign origin', async (t) => {
   const requested = []
-  const fetchImpl = async (url) => {
-    requested.push(url)
-    return {
-      ok: true,
-      headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'image/jpeg' : null) },
-      arrayBuffer: async () => new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer,
-    }
+  const http = {
+    async open (url) {
+      requested.push(url)
+      return { res: { statusCode: 200, headers: { 'content-type': 'image/jpeg' } } }
+    },
+    async read () { return new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) }
   }
 
-  const poster = await fetchPosterBytes('/abc123.jpg', { fetchImpl })
+  const poster = await fetchPosterBytes('/abc123.jpg', { http })
   t.is(requested.length, 1, 'the poster is fetched once, by the publisher')
   t.ok(requested[0].endsWith('/abc123.jpg'), 'the resolved poster path is fetched')
   t.is(poster.mimeType, 'image/jpeg')
   t.is(poster.bytes.byteLength, 4, 'the bytes themselves are what gets published')
 
-  t.is(await fetchPosterBytes('   ', { fetchImpl }), null, 'a blank poster path fetches nothing')
-  t.is(await fetchPosterBytes('abc.jpg', { fetchImpl }), null, 'a path that is not a poster path is refused')
+  t.is(await fetchPosterBytes('   ', { http }), null, 'a blank poster path fetches nothing')
+  t.is(await fetchPosterBytes('abc.jpg', { http }), null, 'a path that is not a poster path is refused')
+  t.is(requested.length, 1, 'a path the function refuses is never requested')
 })
 
 test('a fetched cover is refused unless it is a bounded image', async (t) => {
-  const respond = (headers, bytes = new Uint8Array([1]).buffer, ok = true) => async () => ({
-    ok,
-    headers: { get: (name) => headers[name.toLowerCase()] ?? null },
-    arrayBuffer: async () => bytes,
+  // Counts body reads, because refusing on the headers is the point: a wrong
+  // type or an oversized cover must cost nothing but the response line.
+  const reads = { count: 0 }
+  const respond = (headers, bytes = new Uint8Array([1]), statusCode = 200) => ({
+    async open () { return { res: { statusCode, headers } } },
+    async read () { reads.count += 1; return bytes }
   })
 
-  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: respond({ 'content-type': 'text/html' }) }), null,
+  t.is(await fetchPosterBytes('/a.jpg', { http: respond({ 'content-type': 'text/html' }) }), null,
     'a document is not cover art')
-  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: respond({ 'content-type': 'image/jpeg', 'content-length': String(64 * 1024 * 1024) }) }), null,
+  t.is(await fetchPosterBytes('/a.jpg', { http: respond({ 'content-type': 'image/jpeg', 'content-length': String(64 * 1024 * 1024) }) }), null,
     'an oversized cover is refused before it is read')
-  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: respond({ 'content-type': 'image/jpeg' }, new ArrayBuffer(0)) }), null,
+  t.is(reads.count, 0, 'neither one had its body pulled')
+
+  t.is(await fetchPosterBytes('/a.jpg', { http: respond({ 'content-type': 'image/jpeg' }, new Uint8Array(0)) }), null,
     'an empty response is not cover art')
-  t.is(await fetchPosterBytes('/a.jpg', { fetchImpl: async () => { throw new Error('offline') } }), null,
+  t.is(await fetchPosterBytes('/a.jpg', { http: respond({ 'content-type': 'image/jpeg' }, null, 404) }), null,
+    'a miss at the provider is not cover art')
+  t.is(await fetchPosterBytes('/a.jpg', { http: { open: async () => { throw new Error('offline') } } }), null,
     'an unreachable provider degrades to no cover, not a failed archive')
 })
 

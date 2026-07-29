@@ -29,6 +29,7 @@ const TEST_FILES = [
   'archive-grouping.test.mjs',
   'multipart.test.mjs',
   'archive-media-coordinates.test.mjs',
+  'bare-runtime-globals.test.mjs',
   'archive-storage-gate.test.mjs',
   'storage-guard.test.mjs',
   'deferred-publisher.test.mjs',

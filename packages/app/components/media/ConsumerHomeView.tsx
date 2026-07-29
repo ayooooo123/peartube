@@ -109,7 +109,13 @@ function HomeCard({ item, onPress }: { item: RailItem; onPress(): void }) {
           channelInitial={title.charAt(0).toUpperCase()}
           style={styles.poster}
         />
-        <View pointerEvents="none" style={styles.posterScrim} />
+        {/*
+          No scrim. A scrim earns its keep by making overlaid text legible, and
+          nothing is overlaid here - the title and caption sit below the poster.
+          What it actually did was lay a hard-edged 74px black band at 34% over
+          the bottom third of every cover, which is the grey stripe across the
+          artwork on every card.
+        */}
         {resumePercent === null ? null : (
           <View style={styles.progressTrack}>
             <View style={[styles.progressFill, { width: `${resumePercent}%` }]} />
@@ -215,14 +221,6 @@ const styles = StyleSheet.create({
     height: '100%',
     aspectRatio: undefined,
     borderRadius: 0,
-  },
-  posterScrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 74,
-    backgroundColor: 'rgba(0,0,0,0.34)',
   },
   progressTrack: {
     position: 'absolute',

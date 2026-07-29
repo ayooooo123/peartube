@@ -69,11 +69,18 @@ function MediaPosterCardComponent({ item, onPress }: MediaPosterCardProps) {
     >
       <View style={styles.posterFrame}>
         <ThumbnailImage thumbnailUrl={thumbnailUrl} duration={duration} channelInitial={title.charAt(0).toUpperCase()} style={styles.thumbnail} />
-        <View pointerEvents="none" style={styles.posterScrim} />
+        {/*
+          The scrim exists to keep the badge legible over bright artwork, so it
+          appears with the badge. Unconditionally, it laid a hard-edged band
+          across the bottom third of every poster that had no badge at all.
+        */}
         {badge ? (
-          <View style={styles.badgeWrap} pointerEvents="none">
-            <Text style={styles.badge} numberOfLines={1}>{badge}</Text>
-          </View>
+          <>
+            <View pointerEvents="none" style={styles.posterScrim} />
+            <View style={styles.badgeWrap} pointerEvents="none">
+              <Text style={styles.badge} numberOfLines={1}>{badge}</Text>
+            </View>
+          </>
         ) : null}
       </View>
       <View style={styles.copy}>

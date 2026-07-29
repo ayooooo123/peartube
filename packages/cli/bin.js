@@ -125,7 +125,10 @@ async function uiCommand(flags) {
   config.archive.uiEnabled = true
   config.archive.uiHost = flags.host || config.archive.uiHost || '0.0.0.0'
   config.archive.uiPort = Number(flags.port || config.archive.uiPort || 8174)
-  writeLine(`[relay] archive WebUI listening on ${config.archive.uiHost}:${config.archive.uiPort}\n`)
+  // Intent, not fact: the bind happens inside startRelay. Printing it as though
+  // the port were already open is what made a relay that never bound look like
+  // one that had.
+  writeLine(`[relay] starting archive WebUI on ${config.archive.uiHost}:${config.archive.uiPort}\n`)
   await runCommand({ ...flags, archive: config.archive })
 }
 

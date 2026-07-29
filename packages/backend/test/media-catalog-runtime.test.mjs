@@ -232,15 +232,18 @@ test('nested substitution and currently revoked or stale catalog signers fail cl
 })
 
 test('catalog projection reruns when an update arrives during an in-flight rebuild', async t => {
-  let releaseFirstUpdate
-  const firstUpdate = new Promise(resolve => { releaseFirstUpdate = resolve })
-  let updateCalls = 0
+  let releaseFirstScan
+  const firstScan = new Promise(resolve => { releaseFirstScan = resolve })
+  let scans = 0
   const catalog = {
-    async update() {
-      updateCalls++
-      if (updateCalls === 1) await firstUpdate
+    async update() {},
+    // What a pass actually reads a binding through, so counting these counts
+    // passes.
+    async getAuthorizationState() {
+      scans++
+      if (scans === 1) await firstScan
+      return { policyEpoch: 0, writers: [] }
     },
-    async getAuthorizationState() { return { policyEpoch: 0, writers: [] } },
     async listProjections() { return { items: [], nextCursor: null } },
   }
   const projection = createPublisherCatalogProjection({
@@ -252,10 +255,86 @@ test('catalog projection reruns when an update arrives during an in-flight rebui
   const first = projection.rebuild()
   await Promise.resolve()
   const second = projection.rebuild()
-  releaseFirstUpdate()
+  releaseFirstScan()
   await Promise.all([first, second])
 
-  t.is(updateCalls, 2, 'an overlapping rebuild request is not absorbed')
+  t.is(scans, 2, 'an overlapping rebuild request is not absorbed')
+  await projection.close()
+})
+
+// A publisher catalog answers from an Autobase view, and both the advance before
+// a read and the view read itself wait on peers with no bound. Seen on a live
+// relay: one bound catalog went quiet and every projection pass behind it hung,
+// so the boot-time rebuild never returned and the relay never opened its port.
+test('a binding that stops answering is carried forward instead of hanging the projection', async t => {
+  const root = keyPair(40)
+  const device = keyPair(41)
+  const publisherId = derivePublisherId(root.publicKey)
+  const source = rendition(42)
+  const manifest = createPublicationManifest({
+    publisherId,
+    sequence: 1,
+    title: 'Held open by a quiet peer',
+    renditions: [source],
+    provenance: [{ type: 'upload', renditionId: source.renditionId, coreKey: source.core.key, start: 0, end: 4 }],
+    keyPair: device,
+    signedAt: 100,
+  })
+  const publicationOperation = operation(PUBLISHER_RECORD_TYPES.PUBLICATION, publisherId, device, {
+    publicationId: b4a.from(manifest.publicationId, 'hex'),
+    manifestId: b4a.from(manifest.body.manifestId, 'hex'),
+    payload: encodePublicationManifest(manifest),
+  }, 1)
+
+  const answering = fakeCatalog({ publisherId, signer: device, publications: [publicationOperation], claims: [] })
+  let quiet = false
+  const catalog = {
+    ...answering,
+    async getAuthorizationState() {
+      if (quiet) await new Promise(() => {})
+      return answering.getAuthorizationState()
+    },
+  }
+  const projection = createPublisherCatalogProjection({
+    catalogRegistry: { async listBindings() { return [{ publisherId, catalog }] } },
+    now: () => 200,
+    bindingScanTimeoutMs: 50,
+  })
+
+  const first = await projection.rebuild()
+  t.is(first.acceptedPublications, 1)
+
+  quiet = true
+  const stalled = await projection.rebuild()
+  t.is(stalled.acceptedPublications, 1, 'a publication does not vanish because its publisher went quiet')
+  t.is(projection.assetManifestStore.getManifest(manifest.publicationId).body.manifestId, manifest.body.manifestId)
+  t.is(projection.revision, first.revision, 'and the projection is unchanged rather than emptied')
+
+  await projection.close()
+})
+
+test('a binding that has never answered is skipped rather than held onto', async t => {
+  const publisherId = b4a.alloc(32, 7)
+  const projection = createPublisherCatalogProjection({
+    catalogRegistry: {
+      async listBindings() {
+        return [{
+          publisherId,
+          catalog: {
+            async update() {},
+            async getAuthorizationState() { return new Promise(() => {}) },
+            async listProjections() { return { items: [], nextCursor: null } },
+          },
+        }]
+      },
+    },
+    bindingScanTimeoutMs: 50,
+  })
+
+  const rebuilt = await projection.rebuild()
+  t.is(rebuilt.acceptedPublications, 0, 'the pass completes instead of waiting on a peer that never answers')
+  t.is(rebuilt.acceptedClaims, 0)
+
   await projection.close()
 })
 

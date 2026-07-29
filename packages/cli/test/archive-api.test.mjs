@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createArchiveConsole } from '../src/archive-console.js'
+import { createArchiveConsole, createArchiveHttpSurface } from '../src/archive-console.js'
 import { isLoopbackHost } from '../src/archive-api.js'
+import { createRelayService } from '../src/service.js'
+import { resolveRelayConfig } from '../src/config.js'
 
 // A relay's own console answers submissions with 303 redirects, which a program
 // cannot read. These cover the machine-facing surface a MediaStorm backend
@@ -668,4 +670,153 @@ test('only an address that means this machine counts as loopback', async functio
   for (const host of ['0.0.0.0', '::', '192.168.1.20', '10.0.0.5', 'relay.example.com', '', '   ', null, undefined]) {
     t.absent(isLoopbackHost(host), `${JSON.stringify(host)} is treated as a network`)
   }
+})
+
+// A relay's HTTP surface must not wait on its store.
+//
+// Observed on a 46 GB relay: the universal backend's bring-up runs before
+// anything binds, so the P2P side came up with three peers while the console
+// port stayed closed indefinitely — a live process indistinguishable from a
+// dead one. These cover the shape of the fix: bind first, degrade the routes
+// that genuinely need the store, and upgrade in place on the same socket.
+
+const silentLogger = Object.fromEntries(
+  ['relay', 'runtime', 'status', 'archive', 'admission', 'discovery', 'mirror', 'storage'].map((scope) => [
+    scope,
+    { info() {}, warn() {}, error() {}, debug() {} }
+  ])
+)
+
+test('the relay answers before its store-dependent side exists, then upgrades on the same socket', async function (t) {
+  const surface = createArchiveHttpSurface({ host: '127.0.0.1', port: 0 })
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-api-warm-'))
+  t.teardown(async () => {
+    await surface.close()
+    rmSync(uploadDir, { recursive: true, force: true })
+  })
+
+  const base = `http://127.0.0.1:${await surface.listen()}`
+
+  const warmHealth = await fetch(`${base}/health`)
+  t.is(warmHealth.status, 200, 'an operator can tell the process is alive')
+  t.alike(await warmHealth.json(), { ok: true, ready: false, waitingFor: 'relay-storage' })
+
+  const warmCatalog = await fetch(`${base}/api/v1/catalog`)
+  t.is(warmCatalog.status, 503, 'a poller is told to retry rather than met with a dead socket')
+  t.is(warmCatalog.headers.get('content-type'), 'application/json; charset=utf-8')
+  t.is((await warmCatalog.json()).error.code, 'CATALOG_UNAVAILABLE', 'a code the client already retries on')
+
+  const warmPage = await fetch(`${base}/`)
+  t.is(warmPage.status, 200, 'the browser console is reachable while the store opens')
+  t.ok((await warmPage.text()).includes('starting'), 'and says what it is waiting for')
+
+  // The store-dependent side arrives. Nothing rebinds.
+  const relay = await createArchiveConsole({
+    service: fakeService(),
+    downloader: { async download() { throw new Error('not used') } },
+    publisher: {},
+    uploadDir,
+    httpSurface: surface,
+    host: '127.0.0.1',
+    port: 0
+  })
+  await relay.start()
+
+  const readyCatalog = await fetch(`${base}/api/v1/catalog`)
+  t.is(readyCatalog.status, 200, '503 then 200, on one uninterrupted socket')
+  t.is((await readyCatalog.json()).entities.length, 1)
+  t.alike(await (await fetch(`${base}/health`)).json(), { ok: true, ready: true })
+})
+
+test('a relay whose backend never comes up still binds, and its catalog stays retryable', async function (t) {
+  // The real failure: everything the console reads lives behind a backend
+  // bring-up that walks the whole store, and on a populated one it can stall
+  // without ever failing. The bind must not be behind it.
+  const storagePath = mkdtempSync(join(tmpdir(), 'pt-api-stalled-'))
+  const surface = createArchiveHttpSurface({ host: '127.0.0.1', port: 0 })
+  t.teardown(async () => {
+    await surface.close()
+    rmSync(storagePath, { recursive: true, force: true })
+  })
+
+  const config = resolveRelayConfig({
+    storage: { path: storagePath, maxBytes: 4096, minFreeBytes: 0 },
+    archive: { enabled: false, uiEnabled: true, uiHost: '127.0.0.1', uiPort: 8174, localMirror: { enabled: false } },
+    classification: { tmdb: { enabled: false } },
+    discovery: { enabled: false, seedDiscovered: false }
+  }, { env: {} })
+
+  let runtimeAsked = false
+  const stalled = createRelayService({
+    config,
+    logger: silentLogger,
+    archiveHttp: surface,
+    writeStatusFile: async () => {},
+    runtimeFactory: () => {
+      runtimeAsked = true
+      return new Promise(() => {})
+    }
+  })
+  // It never resolves; the point is that nothing below waits for it.
+  stalled.catch(() => {})
+
+  const base = `http://127.0.0.1:${await surface.listen()}`
+  const health = await fetch(`${base}/health`)
+  t.is(health.status, 200, 'the relay is reachable while its backend is still coming up')
+  t.is((await health.json()).ready, false)
+
+  const catalog = await fetch(`${base}/api/v1/catalog`)
+  t.is(catalog.status, 503, 'not a refused connection and not a held one')
+  t.is((await catalog.json()).error.code, 'CATALOG_UNAVAILABLE')
+  t.ok(runtimeAsked, 'the backend bring-up was started, just not waited on to bind')
+})
+
+test('the access gate holds while the relay is still warming', async function (t) {
+  // A relay that is not ready yet must never be the easier way in: the switch is
+  // read off the bind, which readiness cannot change.
+  const exposed = createArchiveHttpSurface({ host: '0.0.0.0', port: 0 })
+  const opened = createArchiveHttpSurface({ host: '0.0.0.0', port: 0, apiOpen: true })
+  t.teardown(async () => {
+    await exposed.close()
+    await opened.close()
+  })
+
+  const refused = await fetch(`http://127.0.0.1:${await exposed.listen()}/api/v1/catalog`)
+  t.is(refused.status, 403, 'a non-loopback bind refuses enumeration exactly as a started relay does')
+  const refusedBody = await refused.json()
+  t.is(refusedBody.error.code, 'OPEN_ACCESS_NOT_ENABLED')
+  t.ok(refusedBody.error.message.includes('--api-open'), 'and still names the switch that lifts it')
+
+  const warming = await fetch(`http://127.0.0.1:${await opened.listen()}/api/v1/catalog`)
+  t.is(warming.status, 503, 'with the switch set, the answer is the retryable one')
+  t.is((await warming.json()).error.code, 'CATALOG_UNAVAILABLE')
+
+  const submit = await fetch(`http://127.0.0.1:${exposed.port}/api/v1/archive`, { method: 'POST' })
+  t.is(submit.status, 503, 'submission was never gated, so it degrades rather than refusing')
+  t.is((await submit.json()).error.code, 'MEDIA_GRAPH_UNAVAILABLE')
+})
+
+test('a media graph that stalls after answering once serves its last catalog rather than 503 forever', async function (t) {
+  // A relay that has answered can always answer again. Riding the deadline into
+  // a permanent 503 tells a caller nothing it can act on.
+  let reads = 0
+  const service = fakeService({
+    catalog: () => {
+      reads += 1
+      return reads === 1 ? catalogPage() : new Promise(() => {})
+    }
+  })
+
+  await withRelay(async ({ base }) => {
+    const live = await fetch(`${base}/api/v1/catalog`)
+    t.is(live.status, 200)
+    t.absent((await live.json()).stale, 'a live read is not marked stale')
+
+    const stalled = await fetch(`${base}/api/v1/catalog`)
+    t.is(stalled.status, 200, 'the stall is survivable for a caller that only needs to know what exists')
+    const body = await stalled.json()
+    t.is(body.entities.length, 1)
+    t.is(body.stale, true, 'and is honest that the graph did not answer this time')
+    t.ok(Number.isFinite(body.staleForMs), 'with how long ago it last did')
+  }, { service })
 })

@@ -3,7 +3,13 @@ import { createArchiveJobStore, createArchiveManager } from './archive-manager.j
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
-import { createArchiveApi } from './archive-api.js'
+import {
+  ARCHIVE_API_PREFIX,
+  archiveApiRoute,
+  createArchiveApi,
+  createOpenAccessGate,
+  isGatedArchiveApiRoute
+} from './archive-api.js'
 
 const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024 // 5 GB
 
@@ -96,6 +102,130 @@ async function collectBody(req) {
 
 function createDefaultServer(handler) {
   return createServer(handler)
+}
+
+// What the relay answers with before its store is open.
+//
+// Everything the console reads — the job store, the catalog, the media graph —
+// lives behind the universal backend, and bringing that up walks the whole
+// store: the media-graph rebuild, the publication-v1 migration and seed-pin
+// registration all run before it hands back a context. On a large store that
+// takes minutes and can stall indefinitely on a core waiting for a peer. A
+// socket opened only afterwards leaves an operator with a refused connection and
+// no way to tell a warming relay from a wedged one — observed on a 46 GB relay
+// whose P2P side was up with three peers while its console port never opened.
+//
+// So the socket is bound first and answers from the start, and the console
+// adopts it once the store-dependent side exists.
+const WARMING_NOTICE = 'The relay is starting. Its storage and media graph are still opening, so the console and the machine API are not answering yet.'
+
+function warmingPage() {
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>PearTube relay — starting</title><meta http-equiv="refresh" content="5"></head>
+<body>
+<h1>PearTube relay is starting</h1>
+<p>${WARMING_NOTICE}</p>
+<p>This page reloads every five seconds and becomes the archive console as soon as the relay is ready.</p>
+</body>
+</html>
+`
+}
+
+export function createArchiveHttpSurface({
+  host = '127.0.0.1',
+  port = 8174,
+  apiOpen = false,
+  logger = null,
+  serverFactory = createDefaultServer,
+  now = Date.now
+} = {}) {
+  const gate = createOpenAccessGate({ bindHost: host, apiOpen })
+  const createdAt = now()
+  let listening = null
+  let closed = false
+  let boundPort = Number(port)
+
+  function sendJson(res, status, body) {
+    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify(body, null, 2))
+  }
+
+  function warmingHandler(req, res) {
+    const apiPath = archiveApiRoute(req.url)
+    if (apiPath !== null) {
+      // The gate is decided by the bind, never by readiness: a relay that is
+      // still starting must not answer what a started one refuses.
+      if (gate.refusal && isGatedArchiveApiRoute(apiPath)) {
+        sendJson(res, gate.refusal.status, { error: gate.refusal.error })
+        return
+      }
+      // The same retryable codes the live API answers with while the media graph
+      // is unbound, so a client polling the catalog reads 503 and then 200
+      // instead of a refused connection.
+      const code = apiPath === '/catalog' ? 'CATALOG_UNAVAILABLE' : 'MEDIA_GRAPH_UNAVAILABLE'
+      sendJson(res, 503, {
+        error: {
+          code,
+          message: `relay storage is still opening; retry ${ARCHIVE_API_PREFIX}${apiPath === '/' ? '' : apiPath}`,
+          field: null
+        }
+      })
+      return
+    }
+
+    if (req.method === 'GET' && req.url === '/health') {
+      sendJson(res, 200, { ok: true, ready: false, waitingFor: 'relay-storage' })
+      return
+    }
+
+    if (req.method === 'GET' && (req.url === '/' || req.url === '/ui' || req.url.startsWith('/?'))) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(warmingPage())
+      return
+    }
+
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(`${WARMING_NOTICE}\n`)
+  }
+
+  let handler = warmingHandler
+  const server = serverFactory((req, res) => handler(req, res))
+
+  return {
+    server,
+    host,
+    get port() { return boundPort },
+    get adopted() { return handler !== warmingHandler },
+    // How long the surface answered as a warming relay, which is what tells an
+    // operator "still opening the store" from "stuck".
+    warmupMs() { return now() - createdAt },
+    adopt(next) {
+      if (typeof next !== 'function') throw new Error('archive http surface requires a request handler')
+      handler = next
+    },
+    // Memoized rather than flagged: whoever calls this second — the service, a
+    // console adopting the surface, a test — must get the bound port, not an
+    // early return while the first bind is still in flight.
+    listen() {
+      if (!listening) {
+        listening = (async () => {
+          await new Promise((resolve) => server.listen(Number(port), host, resolve))
+          boundPort = server.address?.()?.port || Number(port)
+          logger?.archive?.info?.('Archive WebUI bound before the relay store is open', { host, port: boundPort })
+          return boundPort
+        })()
+      }
+      return listening
+    },
+    async close() {
+      if (closed) return
+      closed = true
+      if (!listening) return
+      await listening.catch(() => {})
+      await new Promise((resolve) => server.close(resolve))
+    }
+  }
 }
 
 function normalizeCatalogPreviewVideos(channel, previewVideos = []) {
@@ -249,6 +379,10 @@ export async function createArchiveConsole({
   // Opens the machine API's enumeration and byte-serving routes on a
   // non-loopback bind. Off unless the operator asked for it.
   apiOpen = false,
+  // A socket already bound and answering as a warming relay. The console adopts
+  // it rather than opening its own, so nothing rebinds and no request between
+  // bind and readiness is refused.
+  httpSurface = null,
   serverFactory = createDefaultServer
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
@@ -351,7 +485,7 @@ export async function createArchiveConsole({
     }
   }
 
-  const server = await serverFactory(async (req, res) => {
+  const handleRequest = async (req, res) => {
     try {
       // Machine-facing routes answer JSON for every outcome, including unknown
       // paths and wrong methods, so a program never receives the HTML console.
@@ -362,7 +496,7 @@ export async function createArchiveConsole({
 
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ ok: true }))
+        res.end(JSON.stringify({ ok: true, ready: true }))
         return
       }
 
@@ -594,32 +728,47 @@ export async function createArchiveConsole({
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
       res.end(err?.message || String(err))
     }
-  })
+  }
+
+  // Adopt the pre-bound socket, or open one when this console is the only thing
+  // serving (tests, and any caller that builds a console on its own).
+  const server = httpSurface ? httpSurface.server : await serverFactory(handleRequest)
+  httpSurface?.adopt(handleRequest)
+  const boundPort = () => (httpSurface ? httpSurface.port : Number(port))
 
   return {
     store,
     manager,
     server,
     async start() {
-      await new Promise((resolve) => server.listen(Number(port), host, resolve))
-      logger?.archive?.info?.('Archive WebUI started', { host, port: Number(port) })
+      // Idempotent on an adopted surface: it is already listening, and this is
+      // the moment the store-dependent side became answerable.
+      if (httpSurface) await httpSurface.listen()
+      else await new Promise((resolve) => server.listen(Number(port), host, resolve))
+      logger?.archive?.info?.('Archive WebUI started', httpSurface
+        ? { host, port: boundPort(), storeWarmupMs: httpSurface.warmupMs() }
+        : { host, port: boundPort() })
       // Which mode the machine API is in, said once and out loud: an operator
       // should learn it here, not from a 403 or from reading archive-api.js.
       const { openAccess } = archiveApi
       if (openAccess.exposed && !openAccess.enabled) {
         logger?.archive?.warn?.(
           `Relay API is bound to ${openAccess.boundTo}, so ${archiveApi.prefix}/catalog and ${archiveApi.prefix}/stream refuse with OPEN_ACCESS_NOT_ENABLED; pass ${openAccess.flag} (or ${openAccess.env}=1) to open them`,
-          { host, port: Number(port), apiOpen: false }
+          { host, port: boundPort(), apiOpen: false }
         )
       } else if (openAccess.enabled) {
         logger?.archive?.warn?.(
           `Relay API is open on ${openAccess.boundTo}: ${archiveApi.prefix}/catalog enumerates every publication and ${archiveApi.prefix}/stream serves media bytes, unauthenticated, to this whole network`,
-          { host, port: Number(port), apiOpen: true }
+          { host, port: boundPort(), apiOpen: true }
         )
       }
       return this
     },
     async close() {
+      if (httpSurface) {
+        await httpSurface.close()
+        return
+      }
       await new Promise((resolve) => server.close(resolve))
     }
   }

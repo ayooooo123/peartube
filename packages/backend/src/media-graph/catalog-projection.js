@@ -77,6 +77,39 @@ function revisionFor(keys) {
   return b4a.toString(crypto.hash(b4a.from([...keys].sort().join('\n'))), 'hex')
 }
 
+// A binding that cannot be read must not take the whole projection down with it.
+//
+// Reading a publisher catalog answers from its Autobase view, and both the
+// advance that precedes the read and the view read itself wait on peers with no
+// bound of their own. Observed on a live relay: seconds after the swarm attaches
+// peers, one bound catalog stops answering entirely. Because every media-graph
+// surface projects through this rebuild, that single quiet peer hung everything
+// behind it — the boot-time rebuild never returned, so the relay's backend never
+// handed back a context and its HTTP port never opened, and once past boot every
+// catalog read rode its own deadline into a permanent 503.
+//
+// So each binding is read under a deadline, and a binding that misses it keeps
+// the records it contributed to the previous pass instead of vanishing from the
+// catalog. Nothing is discarded on a timeout, only deferred: the next pass reads
+// it again, by which time the blocks it was waiting on may well be local.
+// A binding that just missed its deadline is left alone for a while too: without
+// that, every pass — and so every catalog read behind it — pays the deadline
+// again, and a relay with one dead publisher answers everything slowly forever.
+const BINDING_SCAN_TIMEOUT_MS = 2_000
+const BINDING_SCAN_BACKOFF_MS = 30_000
+const SCAN_TIMED_OUT = Symbol('binding-scan-timed-out')
+
+function withScanDeadline(pending, timeoutMs) {
+  let timer = null
+  return Promise.race([
+    pending,
+    // Deliberately refed: this timer is the only thing that will finish a pass
+    // whose binding never answers, so it has to keep the loop alive until it
+    // fires. It is cleared as soon as the race settles.
+    new Promise((resolve) => { timer = setTimeout(() => resolve(SCAN_TIMED_OUT), timeoutMs) })
+  ]).finally(() => clearTimeout(timer))
+}
+
 export function createPublisherCatalogProjection(options = {}) {
   const registry = options.catalogRegistry
   if (!registry || typeof registry.listBindings !== 'function') throw new TypeError('catalogRegistry.listBindings is required')
@@ -84,6 +117,13 @@ export function createPublisherCatalogProjection(options = {}) {
   const onUpdate = typeof options.onUpdate === 'function' ? options.onUpdate : null
   const maxCatalogs = safeLimit(options.maxCatalogs, DEFAULT_MAX_CATALOGS, DEFAULT_MAX_CATALOGS, 'maxCatalogs')
   const maxOperations = safeLimit(options.maxOperations, DEFAULT_MAX_OPERATIONS, DEFAULT_MAX_OPERATIONS, 'maxOperations')
+  // Wall clock, deliberately not `now`: `now` is the logical clock a record's
+  // validity is judged against, and a deadline is not a judgement about records.
+  const bindingScanTimeoutMs = Number.isFinite(Number(options.bindingScanTimeoutMs))
+    ? Math.max(0, Number(options.bindingScanTimeoutMs))
+    : BINDING_SCAN_TIMEOUT_MS
+  // What each publisher contributed to the last pass that could read it.
+  const lastScanByPublisher = new Map()
 
   let activePublicationRecords = new Map()
   let activeClaimRecords = new Map()
@@ -92,6 +132,7 @@ export function createPublisherCatalogProjection(options = {}) {
   let revision = revisionFor(new Set())
   let acceptedKeys = new Set()
   let rebuilding = null
+  let currentPass = null
   let rebuildRequested = false
   let closed = false
 
@@ -124,6 +165,34 @@ export function createPublisherCatalogProjection(options = {}) {
     return output
   }
 
+  // One binding's whole contribution, or what it last contributed if it cannot
+  // answer in time. Returns null only for a binding that has never been read.
+  async function scanBinding(catalog, publisherId, remaining) {
+    const remembered = lastScanByPublisher.get(publisherId) || null
+    if (remembered && remembered.stalledUntil > Date.now()) return remembered.scan
+    const pending = (async () => {
+      const authorization = await catalog.getAuthorizationState()
+      const publications = await catalogOperations(catalog, 'publication', remaining)
+      const claims = await catalogOperations(catalog, 'claim', remaining - publications.length)
+      return { authorization, publications, claims }
+    })()
+    // The abandoned read still settles; nothing is left to reject into the void
+    // once this pass has moved on without it.
+    pending.catch(() => {})
+    const scan = bindingScanTimeoutMs > 0
+      ? await withScanDeadline(pending, bindingScanTimeoutMs)
+      : await pending
+    if (scan !== SCAN_TIMED_OUT) {
+      lastScanByPublisher.set(publisherId, { scan, stalledUntil: 0 })
+      return scan
+    }
+    lastScanByPublisher.set(publisherId, {
+      scan: remembered?.scan || null,
+      stalledUntil: Date.now() + BINDING_SCAN_BACKOFF_MS
+    })
+    return remembered?.scan || null
+  }
+
   async function performRebuild() {
     if (closed) throw new Error('publisher catalog projection is closed')
     const bindings = await registry.listBindings()
@@ -138,15 +207,12 @@ export function createPublisherCatalogProjection(options = {}) {
       if (!catalog || typeof catalog.update !== 'function' || typeof catalog.getAuthorizationState !== 'function' || typeof catalog.listProjections !== 'function') {
         throw new Error('publisher catalog binding is incomplete')
       }
-      await catalog.update()
-      const authorization = await catalog.getAuthorizationState()
       const publisherId = exactHex(binding.publisherId, 'publisherId')
-      const publications = await catalogOperations(catalog, 'publication', maxOperations - scanned)
-      scanned += publications.length
-      const claims = await catalogOperations(catalog, 'claim', maxOperations - scanned)
-      scanned += claims.length
-      for (const operation of publications) publicationCandidates.push({ authorization, publisherId, operation })
-      for (const operation of claims) claimCandidates.push({ authorization, publisherId, operation })
+      const scan = await scanBinding(catalog, publisherId, maxOperations - scanned)
+      if (!scan) continue
+      scanned += scan.publications.length + scan.claims.length
+      for (const operation of scan.publications) publicationCandidates.push({ authorization: scan.authorization, publisherId, operation })
+      for (const operation of scan.claims) claimCandidates.push({ authorization: scan.authorization, publisherId, operation })
     }
 
     const nextPublicationRecords = new Map()
@@ -269,18 +335,41 @@ export function createPublisherCatalogProjection(options = {}) {
       let result
       do {
         rebuildRequested = false
-        result = await performRebuild()
+        currentPass = performRebuild()
+        try {
+          result = await currentPass
+        } finally {
+          currentPass = null
+        }
       } while (rebuildRequested && !closed)
       return result
     })().finally(() => { rebuilding = null })
     return rebuilding
   }
 
+  // What a reader waits for.
+  //
+  // `rebuild()` drains every pass requested while it runs, which is what a
+  // writer or an authorizer needs: their decision must see state that postdates
+  // their own request. A reader needs no such thing, and paying for it is what
+  // starves it — on a relay whose peers keep appending, each arriving catalog
+  // update requests another pass, so a reader that joined mid-drain waits on a
+  // sequence with no end. Every catalog read then rides its deadline into a 503
+  // while the projection is in fact healthy and advancing.
+  //
+  // A pass walks the whole registry, so its result is complete as of the moment
+  // it started, which is exactly what a read can answer from. Join the pass that
+  // is already running; start one only when none is.
+  function update() {
+    if (currentPass) return currentPass
+    return rebuild()
+  }
+
   return Object.freeze({
     mediaGraphStore,
     assetManifestStore,
     rebuild,
-    update: rebuild,
+    update,
     get revision() { return revision },
     async authorizeRendition({ manifest, renditionId, start = 0, end = null } = {}) {
       await rebuild()

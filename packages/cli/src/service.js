@@ -1,7 +1,7 @@
 import { createCliLogger } from './cli-logger.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
-import { createArchiveConsole } from './archive-console.js'
+import { createArchiveConsole, createArchiveHttpSurface } from './archive-console.js'
 import { createRelayPublisherShell } from './publisher-shell.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
@@ -16,7 +16,49 @@ import { createStorageGuard } from './storage-guard.js'
 import tmdbFetch from '#fetch'
 
 
-export async function createRelayService({
+// 0 means "any free port", so the default must not swallow it.
+function archiveUiPort(config) {
+  const port = Number(config?.archive?.uiPort)
+  return Number.isSafeInteger(port) && port >= 0 ? port : 8174
+}
+
+function archiveUiHost(config) {
+  return config?.archive?.uiHost || '127.0.0.1'
+}
+
+// Bind the operator's HTTP surface before anything reads the store.
+//
+// Everything below this line walks storage: the relay catalog, the creators DB,
+// and above all the universal backend, whose bring-up rebuilds the media graph,
+// runs the publication-v1 migration and registers seed-pin before it hands back
+// a context. On a large store that is minutes, and it can stall indefinitely on
+// a core waiting for a peer. Binding after it is what left a populated relay
+// answering P2P traffic with its console port closed forever, indistinguishable
+// from a dead process.
+//
+// The surface answers as a warming relay until the console adopts it, so the
+// bind is unconditional and readiness is what arrives late.
+export async function createRelayService(options = {}) {
+  const uiEnabled = Boolean(options.config?.archive?.uiEnabled)
+  const archiveHttp = options.archiveHttp || (uiEnabled
+    ? createArchiveHttpSurface({
+      host: archiveUiHost(options.config),
+      port: archiveUiPort(options.config),
+      apiOpen: Boolean(options.config?.archive?.apiOpen),
+      logger: options.logger
+    })
+    : null)
+  await archiveHttp?.listen()
+  try {
+    return await buildRelayService({ ...options, archiveHttp })
+  } catch (error) {
+    // The relay never came up, so the socket must not outlive it.
+    await archiveHttp?.close().catch(() => {})
+    throw error
+  }
+}
+
+async function buildRelayService({
   config,
   runtimeFactory,
   writeStatusFile = writeRelayStatus,
@@ -27,7 +69,8 @@ export async function createRelayService({
   fsModule = null,
   pathModule = null,
   spawnFn = null,
-  nowFn = Date.now
+  nowFn = Date.now,
+  archiveHttp = null
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -415,14 +458,13 @@ export async function createRelayService({
         ...candidate
       }))
 
-      // Bring the archive web console up FIRST — before the slow, network-bound
-      // runtime bring-up (swarm join + channel seeding) — so the operator web UI
-      // is reachable within seconds instead of waiting minutes on boot. The
-      // console only needs metaDb (opened by the runtime factory, already ready)
-      // to serve browse/discover/settings/upload pages. The archive *publisher*
-      // needs managers created during runtime.start(), so it is bound lazily: an
-      // archive submitted in the brief pre-ready window waits for the publisher
-      // (see below) rather than failing and discarding the upload.
+      // The socket is already bound and answering as a warming relay (see
+      // createRelayService). This is where the console takes it over: the job
+      // store needs metaDb, which only exists once the runtime factory has
+      // returned. The archive *publisher* needs managers created during
+      // runtime.start(), so it is bound lazily: an archive submitted in the
+      // brief pre-ready window waits for the publisher (see below) rather than
+      // failing and discarding the upload.
       const deferredPublisher = createDeferredPublisher()
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
@@ -430,8 +472,8 @@ export async function createRelayService({
         archiveConsole = await createArchiveConsole({
           service,
           logger,
-          host: config.archive.uiHost || '127.0.0.1',
-          port: config.archive.uiPort || 8174,
+          host: archiveUiHost(config),
+          port: archiveUiPort(config),
           apiOpen: Boolean(config.archive.apiOpen),
           uploadDir: config.archive.tmpPath,
           downloader: createRoutingDownloader({
@@ -454,12 +496,15 @@ export async function createRelayService({
               path: runtimePathModule
             })
           }),
-          publisher: deferredPublisher.publisher
+          publisher: deferredPublisher.publisher,
+          httpSurface: archiveHttp
         })
         await archiveConsole.start()
-        logger.relay.info('Relay archive WebUI listening', {
-          host: config.archive.uiHost || '127.0.0.1',
-          port: config.archive.uiPort || 8174,
+        // The one line that separates "still opening the store" from "stuck":
+        // everything the console reads is answerable from here on.
+        logger.relay.info('Relay archive console ready', {
+          host: archiveUiHost(config),
+          port: archiveHttp ? archiveHttp.port : archiveUiPort(config),
           bootMs: Date.now() - bootStartedAt
         })
       }
@@ -697,6 +742,9 @@ export async function createRelayService({
         await archiveConsole.close().catch(() => {})
         archiveConsole = null
       }
+      // The surface outlives the console when the relay never got far enough to
+      // build one, which is exactly the case a shutdown has to clean up after.
+      await archiveHttp?.close().catch(() => {})
       await queue.catch(() => {})
       await persistStatus()
       await runtime.close?.()

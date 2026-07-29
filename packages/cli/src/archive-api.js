@@ -78,6 +78,10 @@ const MAX_CATALOG_PAGE_LIMIT = 50
 // projection rebuild. A caller polling for what has been published needs an
 // answer it can retry, so the read gets a deadline.
 const CATALOG_DEADLINE_MS = 10_000
+// How many distinct catalog pages a relay keeps as its last known-good answer.
+// A polling client reads the first page; the rest are there so paging through a
+// stall does not restart from nothing.
+const MAX_CACHED_CATALOG_PAGES = 8
 // A rendition open resolves the manifest and takes custody of the core; it must
 // not hold the caller's connection open if the runtime is wedged.
 const STREAM_OPEN_DEADLINE_MS = 10_000
@@ -115,6 +119,53 @@ function uint(value) {
 
 function invalid(code, message, field = null, status = 400) {
   return { status, error: { code, message, field } }
+}
+
+// The gate, decided from the bind alone. Shared so the warming surface a
+// starting relay answers from refuses exactly what a started relay refuses: a
+// relay that is not ready yet must never be the easier way in.
+export function createOpenAccessGate({ bindHost = null, apiOpen = false } = {}) {
+  const exposed = !isLoopbackHost(bindHost)
+  const allowed = !exposed || Boolean(apiOpen)
+  const boundTo = typeof bindHost === 'string' && bindHost.trim() ? bindHost.trim() : 'every interface'
+  return {
+    exposed,
+    enabled: allowed && exposed,
+    boundTo,
+    flag: API_OPEN_FLAG,
+    env: API_OPEN_ENV,
+    // A refusal that does not name the switch is a support ticket, so the
+    // message carries both spellings of it and the bind that triggered it.
+    refusal: allowed
+      ? null
+      : invalid(
+        'OPEN_ACCESS_NOT_ENABLED',
+        `the relay is bound to ${boundTo} rather than loopback, so ${ARCHIVE_API_PREFIX}/catalog and ${ARCHIVE_API_PREFIX}/stream refuse to enumerate or serve media; restart the relay with ${API_OPEN_FLAG} (or ${API_OPEN_ENV}=1) to serve media bytes to this network`,
+        null,
+        403
+      )
+  }
+}
+
+// The two routes the switch guards: enumeration and byte serving, the half of
+// this API a key holder did not already have.
+export function isGatedArchiveApiRoute(path) {
+  return path === '/catalog' || String(path || '').startsWith('/stream/')
+}
+
+// The sub-path under the prefix, or null when the request is not ours.
+export function archiveApiRoute(url) {
+  let pathname = null
+  try {
+    pathname = new URL(String(url || '/'), 'http://relay.local').pathname
+  } catch {
+    // An unparseable request target was never ours; leave it to the console so
+    // this dispatch cannot change how any existing route answers.
+    return null
+  }
+  if (pathname === ARCHIVE_API_PREFIX) return '/'
+  if (!pathname.startsWith(`${ARCHIVE_API_PREFIX}/`)) return null
+  return pathname.slice(ARCHIVE_API_PREFIX.length)
 }
 
 // The canonical work key the publisher will derive from these coordinates (see
@@ -330,19 +381,8 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
 
   // Decided once, at construction: the bind cannot change while the server is
   // listening, and a per-request re-check would only invite a way to skip it.
-  const exposed = !isLoopbackHost(bindHost)
-  const openAccessAllowed = !exposed || Boolean(apiOpen)
-  const boundTo = typeof bindHost === 'string' && bindHost.trim() ? bindHost.trim() : 'every interface'
-  // A refusal that does not name the switch is a support ticket, so the message
-  // carries both spellings of it and the bind that triggered it.
-  const openAccessRefusal = openAccessAllowed
-    ? null
-    : invalid(
-      'OPEN_ACCESS_NOT_ENABLED',
-      `the relay is bound to ${boundTo} rather than loopback, so ${ARCHIVE_API_PREFIX}/catalog and ${ARCHIVE_API_PREFIX}/stream refuse to enumerate or serve media; restart the relay with ${API_OPEN_FLAG} (or ${API_OPEN_ENV}=1) to serve media bytes to this network`,
-      null,
-      403
-    )
+  const openAccess = createOpenAccessGate({ bindHost, apiOpen })
+  const openAccessRefusal = openAccess.refusal
 
   function send(res, status, body, headers = {}) {
     // No CORS headers: this is a server-to-server API on an unauthenticated
@@ -407,6 +447,36 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     })
   }
 
+  // The last page the media graph actually produced, per page key.
+  //
+  // A catalog read walks every bound publisher catalog, so a single publisher
+  // waiting on a peer stalls the read for everyone. The deadline below keeps
+  // that from holding the caller's connection open, but a relay whose graph
+  // stalls would then answer 503 forever, and a client cannot tell "this relay
+  // has published nothing" from "this relay is stuck". Answering with what the
+  // graph last said — marked stale, so nobody mistakes it for a live read —
+  // keeps a polling client working through a stall it can do nothing about.
+  const lastGoodPages = new Map()
+
+  function rememberPage(key, payload) {
+    lastGoodPages.delete(key)
+    lastGoodPages.set(key, payload)
+    // Cursors are caller-supplied, so the cache is bounded by eviction rather
+    // than by trusting whoever is paging.
+    while (lastGoodPages.size > MAX_CACHED_CATALOG_PAGES) {
+      lastGoodPages.delete(lastGoodPages.keys().next().value)
+    }
+  }
+
+  function sendLastGoodPage(res, key) {
+    const cached = lastGoodPages.get(key)
+    if (!cached) return false
+    const staleForMs = Date.now() - cached.updatedAt
+    logger?.archive?.warn?.('Relay media catalog answered from its last good read', { staleForMs })
+    send(res, 200, { ...cached, stale: true, staleForMs })
+    return true
+  }
+
   async function getCatalog(res, searchParams) {
     if (typeof mediaCatalog !== 'function') {
       sendError(res, invalid('CATALOG_UNAVAILABLE', 'relay media catalog is not available yet', null, 503))
@@ -428,30 +498,41 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
       request.limitProvided = true
     }
 
+    const pageKey = `${request.cursor || ''}|${request.limit || ''}`
     const page = await withDeadline(mediaCatalog(request), CATALOG_DEADLINE_MS)
     if (page === DEADLINE_EXPIRED) {
       logger?.archive?.warn?.('Relay media catalog read timed out', { timeoutMs: CATALOG_DEADLINE_MS })
+      if (sendLastGoodPage(res, pageKey)) return
       sendError(res, invalid('CATALOG_TIMEOUT', `relay media catalog did not answer within ${CATALOG_DEADLINE_MS}ms; retry`, null, 503))
       return
     }
     if (!page) {
+      if (sendLastGoodPage(res, pageKey)) return
       sendError(res, invalid('CATALOG_UNAVAILABLE', 'relay media catalog is not available yet', null, 503))
       return
     }
     if (page.success !== true) {
       const code = page.errorCode || 'CATALOG_UNAVAILABLE'
-      const status = code === 'INVALID_CURSOR' || code === 'INVALID_LIMIT' ? 400 : 503
-      const field = code === 'INVALID_CURSOR' ? 'cursor' : (code === 'INVALID_LIMIT' ? 'limit' : null)
-      sendError(res, invalid(code, page.error || 'relay media catalog is unavailable', field, status))
+      // A malformed request is the caller's to fix and must never be answered
+      // with a cached page; a relay-side failure is what the cache is for.
+      if (code === 'INVALID_CURSOR' || code === 'INVALID_LIMIT') {
+        const field = code === 'INVALID_CURSOR' ? 'cursor' : 'limit'
+        sendError(res, invalid(code, page.error || 'relay media catalog is unavailable', field, 400))
+        return
+      }
+      if (sendLastGoodPage(res, pageKey)) return
+      sendError(res, invalid(code, page.error || 'relay media catalog is unavailable', null, 503))
       return
     }
-    send(res, 200, {
+    const payload = {
       schema: 'peartube.relayMediaCatalog',
       version: 1,
       updatedAt: Date.now(),
       entities: await Promise.all((page.items || []).map((item) => portableCatalogEntity(item, { publicationSources, assetManifest }))),
       nextCursor: page.nextCursor || null
-    })
+    }
+    rememberPage(pageKey, payload)
+    send(res, 200, payload)
   }
 
   // Backpressure matters here in a way it does not for a JSON body: a rendition
@@ -562,21 +643,6 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     }
   }
 
-  // The sub-path under the prefix, or null when the request is not ours.
-  function route(url) {
-    let pathname = null
-    try {
-      pathname = new URL(String(url || '/'), 'http://relay.local').pathname
-    } catch {
-      // An unparseable request target was never ours; leave it to the console so
-      // this dispatch cannot change how any existing route answers.
-      return null
-    }
-    if (pathname === ARCHIVE_API_PREFIX) return '/'
-    if (!pathname.startsWith(`${ARCHIVE_API_PREFIX}/`)) return null
-    return pathname.slice(ARCHIVE_API_PREFIX.length)
-  }
-
   function jobIdFrom(path) {
     const raw = path.slice('/archive/'.length)
     try {
@@ -606,15 +672,15 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
     prefix: ARCHIVE_API_PREFIX,
     // How the gated routes will answer, so whatever started this server can say
     // so once at boot instead of leaving an operator to discover it as a 403.
-    openAccess: { exposed, enabled: openAccessAllowed && exposed, boundTo, flag: API_OPEN_FLAG, env: API_OPEN_ENV },
+    openAccess,
     owns(url) {
-      return route(url) !== null
+      return archiveApiRoute(url) !== null
     },
     // Answers every /api/v1 request itself, including its own failures: an
     // unknown path or a wrong method must not fall through to the HTML console,
     // which would hand a program a page it cannot read.
     async handle(req, res) {
-      const path = route(req.url)
+      const path = archiveApiRoute(req.url)
       try {
         if (path === '/archive') {
           if (req.method !== 'POST') {

@@ -297,13 +297,22 @@ function ExpandableOverview({ text }: { text: string }) {
       <Text
         style={[styles.overview, styles.overviewMeasure]}
         numberOfLines={OVERVIEW_LINES}
-        onLayout={(event) => setClampedHeight(height => height || event.nativeEvent.layout.height)}
+        onLayout={(event) => {
+          // Android fires onLayout on these offscreen measurers with a null
+          // layout, which threw and took the whole detail screen down to the
+          // error boundary. No measurement is better than no screen.
+          const height = event?.nativeEvent?.layout?.height
+          if (height) setClampedHeight(current => current || height)
+        }}
       >
         {text}
       </Text>
       <Text
         style={[styles.overview, styles.overviewMeasure]}
-        onLayout={(event) => setFullHeight(height => height || event.nativeEvent.layout.height)}
+        onLayout={(event) => {
+          const height = event?.nativeEvent?.layout?.height
+          if (height) setFullHeight(current => current || height)
+        }}
       >
         {text}
       </Text>

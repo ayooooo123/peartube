@@ -72,6 +72,7 @@ function printHelp() {
     '  --description <text>',
     '  --host <host>',
     '  --port <port>',
+    '  --api-open  (open /api/v1 catalog and stream when bound off loopback)',
     '  --run-now',
     '  --debug, -d',
     '  --json',

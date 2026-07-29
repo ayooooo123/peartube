@@ -97,7 +97,10 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   },
   uiEnabled: false,
   uiHost: '127.0.0.1',
-  uiPort: 8174
+  uiPort: 8174,
+  // The machine API's catalog and stream routes on a non-loopback bind. Off by
+  // default: a relay is not asked to serve its media to a network by accident.
+  apiOpen: false
 }
 
 export const DEFAULT_RELAY_CONFIG = {

@@ -432,6 +432,7 @@ export async function createRelayService({
           logger,
           host: config.archive.uiHost || '127.0.0.1',
           port: config.archive.uiPort || 8174,
+          apiOpen: Boolean(config.archive.apiOpen),
           uploadDir: config.archive.tmpPath,
           downloader: createRoutingDownloader({
             directDownloader: createDirectDownloader({

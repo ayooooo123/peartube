@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createArchiveConsole } from '../src/archive-console.js'
+import { isLoopbackHost } from '../src/archive-api.js'
 
 // A relay's own console answers submissions with 303 redirects, which a program
 // cannot read. These cover the machine-facing surface a MediaStorm backend
@@ -51,7 +52,9 @@ function fakeService(overrides = {}) {
   }
 }
 
-async function withRelay(fn, { service = fakeService(), consoleOptions = {} } = {}) {
+// `host` is the bind the gate reads: a relay on 0.0.0.0 is still reachable over
+// 127.0.0.1, so a non-loopback bind is exercised for real rather than faked.
+async function withRelay(fn, { service = fakeService(), consoleOptions = {}, host = '127.0.0.1' } = {}) {
   const uploadDir = mkdtempSync(join(tmpdir(), 'pt-api-upload-'))
   const relay = await createArchiveConsole({
     service,
@@ -59,7 +62,7 @@ async function withRelay(fn, { service = fakeService(), consoleOptions = {} } = 
     publisher: {},
     uploadDir,
     ...consoleOptions,
-    host: '127.0.0.1',
+    host,
     port: 0
   })
   await relay.start()
@@ -554,4 +557,115 @@ test('an empty console submission still reports itself rather than redirecting t
     t.is(res.status, 303)
     t.is(res.headers.get('location'), '/?notice=empty-submission#discover')
   })
+})
+
+// How the relay is bound is the only thing standing in front of an
+// unauthenticated API, so it decides what the enumerating and byte-serving half
+// of it answers. A MediaStorm backend in Docker reaches the relay over a
+// non-loopback address, which is exactly the case that has to be opted into
+// rather than assumed.
+
+// Every route the gate touches or deliberately does not, driven in one pass so
+// each mode is asserted as a whole surface instead of one endpoint at a time.
+async function driveApi(base) {
+  const catalog = await fetch(`${base}/api/v1/catalog`)
+  const catalogBody = await catalog.json()
+  const stream = await fetch(`${base}/api/v1/stream/pub-1/rend-1`)
+  const streamBody = /json/.test(stream.headers.get('content-type') || '')
+    ? await stream.json()
+    : Buffer.from(await stream.arrayBuffer())
+  const posted = await fetch(`${base}/api/v1/archive`, upload({
+    contentKind: 'movie',
+    tmdbId: '9367',
+    tmdbTitle: 'Wedding Crashers'
+  }))
+  const postedBody = await posted.json()
+  const job = await fetch(`${base}/api/v1/archive/${postedBody.jobId}`)
+  return { catalog, catalogBody, stream, streamBody, posted, postedBody, job, jobBody: await job.json() }
+}
+
+test('a relay bound to loopback serves catalog and stream with no configuration at all', async function (t) {
+  const { service, opens } = renditionService()
+  await withRelay(async ({ base }) => {
+    const api = await driveApi(base)
+
+    t.is(api.catalog.status, 200, 'a local integration test needs no switch')
+    t.is(api.catalogBody.entities.length, 1)
+    t.is(api.stream.status, 200)
+    t.alike(api.streamBody, RENDITION_BYTES, 'bytes are served on the interface only this machine can reach')
+    t.is(opens.length, 1)
+    t.is(api.posted.status, 202)
+    t.is(api.job.status, 200)
+  }, { service })
+})
+
+test('a relay bound to 0.0.0.0 refuses catalog and stream until the operator opts in', async function (t) {
+  const { service, opens } = renditionService()
+  await withRelay(async ({ base }) => {
+    const api = await driveApi(base)
+
+    t.is(api.catalog.status, 403)
+    t.is(api.catalog.headers.get('content-type'), 'application/json; charset=utf-8')
+    t.is(api.catalogBody.error.code, 'OPEN_ACCESS_NOT_ENABLED')
+    t.ok(api.catalogBody.error.message.includes('--api-open'), 'the refusal names the flag that lifts it')
+    t.ok(api.catalogBody.error.message.includes('PEARTUBE_ARCHIVE_API_OPEN=1'), 'and the env var, for a relay in a container')
+    t.ok(api.catalogBody.error.message.includes('0.0.0.0'), 'and the bind that triggered it')
+
+    t.is(api.stream.status, 403)
+    t.is(api.streamBody.error.code, 'OPEN_ACCESS_NOT_ENABLED')
+    t.is(opens.length, 0, 'a refused stream never asks the media graph to open anything')
+
+    // Submission was already reachable through the console form on this same
+    // interface, so gating it would break the archive flow and close nothing.
+    t.is(api.posted.status, 202)
+    t.is(api.job.status, 200)
+    t.is(api.jobBody.jobId, api.postedBody.jobId)
+  }, { service, host: '0.0.0.0' })
+})
+
+test('the same relay serves catalog and stream once the operator sets the switch', async function (t) {
+  const { service, opens } = renditionService()
+  await withRelay(async ({ base }) => {
+    const api = await driveApi(base)
+
+    t.is(api.catalog.status, 200)
+    t.is(api.catalogBody.entities.length, 1, 'the MediaStorm integration test can enumerate again')
+    t.is(api.stream.status, 200)
+    t.alike(api.streamBody, RENDITION_BYTES, 'and read the bytes over HTTP')
+    t.is(opens.length, 1)
+    t.is(api.posted.status, 202)
+    t.is(api.job.status, 200)
+  }, { service, host: '0.0.0.0', consoleOptions: { apiOpen: true } })
+})
+
+test('the relay states which mode its API is in at startup', async function (t) {
+  const warnings = []
+  const logger = { archive: { info() {}, warn: (msg) => warnings.push(msg), error() {} } }
+  const { service } = renditionService()
+
+  await withRelay(async () => {}, { service, host: '0.0.0.0', consoleOptions: { logger } })
+  t.is(warnings.length, 1, 'an exposed relay says so once, not per request')
+  t.ok(warnings[0].includes('OPEN_ACCESS_NOT_ENABLED'), 'the operator is told what callers will see')
+  t.ok(warnings[0].includes('--api-open'), 'and how to change it')
+
+  warnings.length = 0
+  await withRelay(async () => {}, { service, host: '0.0.0.0', consoleOptions: { logger, apiOpen: true } })
+  t.is(warnings.length, 1)
+  t.ok(warnings[0].includes('serves media bytes'), 'opting in is stated as what it is')
+  t.ok(warnings[0].includes('network'))
+
+  warnings.length = 0
+  await withRelay(async () => {}, { service, consoleOptions: { logger } })
+  t.is(warnings.length, 0, 'a loopback relay has nothing to warn about')
+})
+
+test('only an address that means this machine counts as loopback', async function (t) {
+  for (const host of ['127.0.0.1', '127.1.2.3', 'localhost', 'LOCALHOST', ' 127.0.0.1 ', '::1', '[::1]', '::ffff:127.0.0.1']) {
+    t.ok(isLoopbackHost(host), `${host} reaches nothing but this machine`)
+  }
+  // An unreadable bind is a network: guessing loopback here is the one mistake
+  // that would serve media to an interface nobody meant to expose.
+  for (const host of ['0.0.0.0', '::', '192.168.1.20', '10.0.0.5', 'relay.example.com', '', '   ', null, undefined]) {
+    t.absent(isLoopbackHost(host), `${JSON.stringify(host)} is treated as a network`)
+  }
 })

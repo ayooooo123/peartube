@@ -303,6 +303,7 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_UI_ENABLED ||
     env.PEARTUBE_ARCHIVE_UI_HOST ||
     env.PEARTUBE_ARCHIVE_UI_PORT ||
+    env.PEARTUBE_ARCHIVE_API_OPEN ||
     env.PEARTUBE_ARCHIVE_TMP_PATH ||
     env.PEARTUBE_ARCHIVE_ENABLED ||
     env.PEARTUBE_ARCHIVE_POLL ||
@@ -326,6 +327,10 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
     if (env.PEARTUBE_ARCHIVE_UI_HOST) config.archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
     if (env.PEARTUBE_ARCHIVE_UI_PORT) config.archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
+    if (env.PEARTUBE_ARCHIVE_API_OPEN) {
+      const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_API_OPEN)
+      if (parsed !== undefined) config.archive.apiOpen = parsed
+    }
     if (env.PEARTUBE_ARCHIVE_TMP_PATH) config.archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
     if (env.PEARTUBE_ARCHIVE_ENABLED) {
       const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_ENABLED)
@@ -396,10 +401,13 @@ function configFromCli(cli = {}) {
     config.logging = { level: cli.logLevel }
   }
 
-  if (cli.host || cli.port) {
+  if (cli.host || cli.port || cli.apiOpen) {
     config.archive = config.archive || {}
     if (cli.host) config.archive.uiHost = cli.host
     if (cli.port) config.archive.uiPort = Number(cli.port)
+    // Only ever turned on from here: --api-open is a bare flag, so its absence
+    // must not overwrite an operator's config file either way.
+    if (cli.apiOpen) config.archive.apiOpen = true
   }
 
   if (cli.localMirrorPath || cli.localMirrorPoll || cli.localMirrorChannelName) {
@@ -527,6 +535,7 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   if (!Number.isFinite(merged.uiPort) || merged.uiPort <= 0) {
     throw new Error('archive.uiPort must be a positive number')
   }
+  merged.apiOpen = Boolean(merged.apiOpen)
 
   const sourceDefaults = {
     format: merged.format,
@@ -790,6 +799,7 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  uiEnabled: ${Boolean(archive.uiEnabled)}`,
     `  uiHost: ${archive.uiHost || '127.0.0.1'}`,
     `  uiPort: ${archive.uiPort || 8174}`,
+    `  apiOpen: ${Boolean(archive.apiOpen)}`,
     `  tmpPath: ${archive.tmpPath || './peartube-relay/archive-tmp'}`,
     `  enabled: ${Boolean(archive.enabled)}`,
     `  poll: ${archive.poll || DEFAULT_ARCHIVE_POLL_SECONDS}`,

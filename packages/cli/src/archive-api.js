@@ -8,12 +8,51 @@ import { rmSync } from '#fs'
 // an explicit status instead, and shares the console's parsing and enqueue path
 // so the two entry points cannot drift.
 //
-// Trust model: identical to the console this is mounted beside — the relay's
-// HTTP surface is unauthenticated, so whoever can reach the console can reach
-// this. Nothing here widens that. A caller submits the bytes it wants published
-// and can never name a path on the relay's disk.
+// Trust model: nothing here is authenticated, so the only thing standing between
+// a caller and this API is how the relay is bound. Submission is unchanged from
+// the console it is mounted beside — POST /archive and GET /archive/:jobId answer
+// whoever can reach the console form on the same interface, and a caller submits
+// the bytes it wants published and can never name a path on the relay's disk.
+//
+// Enumeration and byte serving are gated, because they are what this API added.
+// /catalog lists every publication and /stream serves its bytes; neither is a
+// confidentiality leak — published media is already served to anyone holding the
+// core key, which is the point of the network — but a caller no longer needs the
+// key, and the relay spends its own bandwidth on the request. Fine on a trusted
+// LAN, wrong on a public interface. So:
+//
+//   bound to loopback        -> both routes answer as they always have
+//   bound anywhere else      -> both refuse 403 OPEN_ACCESS_NOT_ENABLED, naming
+//                               the switch, unless the operator set it
+//
+// The switch is one explicit flag (--api-open / PEARTUBE_ARCHIVE_API_OPEN), and a
+// bind this module cannot read counts as exposed: assuming loopback is the single
+// mistake that would serve bytes to a network nobody meant to serve.
 
 export const ARCHIVE_API_PREFIX = '/api/v1'
+
+// The one switch that opens enumeration and byte serving on a non-loopback bind.
+// Named here rather than at the call sites so the refusal, the startup line and
+// the CLI help can never disagree about what an operator has to set.
+export const API_OPEN_FLAG = '--api-open'
+export const API_OPEN_ENV = 'PEARTUBE_ARCHIVE_API_OPEN'
+
+// Hostnames and addresses that mean "this machine only". Anything else — a LAN
+// address, 0.0.0.0, :: — is a network, and a bind that is absent or unreadable is
+// treated as a network too.
+const LOOPBACK_HOSTNAMES = new Set(['localhost', 'ip6-localhost', 'ip6-loopback', '::1'])
+const LOOPBACK_IPV4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
+
+export function isLoopbackHost(host) {
+  if (typeof host !== 'string') return false
+  // A config file may bracket an IPv6 literal and a link-local one carries a
+  // zone; both are the same address as far as this question goes.
+  const bare = host.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '').split('%')[0]
+  if (!bare) return false
+  if (LOOPBACK_HOSTNAMES.has(bare)) return true
+  // Node reports the IPv4-mapped form on a dual-stack listener.
+  return LOOPBACK_IPV4.test(bare.startsWith('::ffff:') ? bare.slice('::ffff:'.length) : bare)
+}
 
 const CONTENT_KINDS = new Set(['movie', 'episode'])
 // The id/title/part bounds the upload contract enforces
@@ -284,10 +323,26 @@ function multipartFailure(err) {
   return invalid('INVALID_MULTIPART', message, null, 400)
 }
 
-export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, logger = null }) {
+export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog, publicationSources = null, assetManifest = null, openRendition = null, bindHost = null, apiOpen = false, logger = null }) {
   if (typeof readSubmission !== 'function') throw new Error('readSubmission is required')
   if (typeof enqueue !== 'function') throw new Error('enqueue is required')
   if (!store) throw new Error('store is required')
+
+  // Decided once, at construction: the bind cannot change while the server is
+  // listening, and a per-request re-check would only invite a way to skip it.
+  const exposed = !isLoopbackHost(bindHost)
+  const openAccessAllowed = !exposed || Boolean(apiOpen)
+  const boundTo = typeof bindHost === 'string' && bindHost.trim() ? bindHost.trim() : 'every interface'
+  // A refusal that does not name the switch is a support ticket, so the message
+  // carries both spellings of it and the bind that triggered it.
+  const openAccessRefusal = openAccessAllowed
+    ? null
+    : invalid(
+      'OPEN_ACCESS_NOT_ENABLED',
+      `the relay is bound to ${boundTo} rather than loopback, so ${ARCHIVE_API_PREFIX}/catalog and ${ARCHIVE_API_PREFIX}/stream refuse to enumerate or serve media; restart the relay with ${API_OPEN_FLAG} (or ${API_OPEN_ENV}=1) to serve media bytes to this network`,
+      null,
+      403
+    )
 
   function send(res, status, body, headers = {}) {
     // No CORS headers: this is a server-to-server API on an unauthenticated
@@ -424,8 +479,9 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
   // - needs an origin it can range-request, and the relay's own blob server
   // answers on 127.0.0.1, so it cannot be that origin for anyone else. This is.
   //
-  // Trust model: unauthenticated, exactly like every other route here. Whoever
-  // can reach the relay can read what the relay has published.
+  // Trust model: unauthenticated, so the dispatch below only reaches this on a
+  // loopback bind or with the operator's switch set. Whoever gets here can read
+  // what the relay has published.
   async function getStream(req, res, publicationId, renditionId) {
     if (typeof openRendition !== 'function') {
       sendError(res, invalid('MEDIA_GRAPH_UNAVAILABLE', 'relay media graph is not bound yet', null, 503))
@@ -548,6 +604,9 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
 
   return {
     prefix: ARCHIVE_API_PREFIX,
+    // How the gated routes will answer, so whatever started this server can say
+    // so once at boot instead of leaving an operator to discover it as a 403.
+    openAccess: { exposed, enabled: openAccessAllowed && exposed, boundTo, flag: API_OPEN_FLAG, env: API_OPEN_ENV },
     owns(url) {
       return route(url) !== null
     },
@@ -580,6 +639,12 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
             sendError(res, invalid('METHOD_NOT_ALLOWED', `${req.method} is not allowed on ${ARCHIVE_API_PREFIX}/catalog`, null, 405), { allow: 'GET' })
             return
           }
+          // Enumeration is the half of this API that a key holder did not
+          // already have; on an exposed relay it waits for the switch.
+          if (openAccessRefusal) {
+            sendError(res, openAccessRefusal)
+            return
+          }
           await getCatalog(res, new URL(req.url, 'http://relay.local').searchParams)
           return
         }
@@ -587,6 +652,10 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
         if (path.startsWith('/stream/')) {
           if (req.method !== 'GET') {
             sendError(res, invalid('METHOD_NOT_ALLOWED', `${req.method} is not allowed on ${ARCHIVE_API_PREFIX}/stream/:publicationId/:renditionId`, null, 405), { allow: 'GET' })
+            return
+          }
+          if (openAccessRefusal) {
+            sendError(res, openAccessRefusal)
             return
           }
           const target = streamTargetFrom(path)

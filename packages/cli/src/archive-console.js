@@ -246,6 +246,9 @@ export async function createArchiveConsole({
   logger = null,
   uploadDir = null,
   maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
+  // Opens the machine API's enumeration and byte-serving routes on a
+  // non-loopback bind. Off unless the operator asked for it.
+  apiOpen = false,
   serverFactory = createDefaultServer
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
@@ -295,6 +298,10 @@ export async function createArchiveConsole({
     // what this relay published: a core key needs a PearTube node, and the blob
     // server's link is loopback.
     openRendition: (request) => service.runtime?.api?.openMediaRendition?.(request),
+    // The gate: catalog and stream answer freely on loopback, and on any other
+    // interface only with the operator's switch.
+    bindHost: host,
+    apiOpen,
     logger
   })
 
@@ -596,6 +603,20 @@ export async function createArchiveConsole({
     async start() {
       await new Promise((resolve) => server.listen(Number(port), host, resolve))
       logger?.archive?.info?.('Archive WebUI started', { host, port: Number(port) })
+      // Which mode the machine API is in, said once and out loud: an operator
+      // should learn it here, not from a 403 or from reading archive-api.js.
+      const { openAccess } = archiveApi
+      if (openAccess.exposed && !openAccess.enabled) {
+        logger?.archive?.warn?.(
+          `Relay API is bound to ${openAccess.boundTo}, so ${archiveApi.prefix}/catalog and ${archiveApi.prefix}/stream refuse with OPEN_ACCESS_NOT_ENABLED; pass ${openAccess.flag} (or ${openAccess.env}=1) to open them`,
+          { host, port: Number(port), apiOpen: false }
+        )
+      } else if (openAccess.enabled) {
+        logger?.archive?.warn?.(
+          `Relay API is open on ${openAccess.boundTo}: ${archiveApi.prefix}/catalog enumerates every publication and ${archiveApi.prefix}/stream serves media bytes, unauthenticated, to this whole network`,
+          { host, port: Number(port), apiOpen: true }
+        )
+      }
       return this
     },
     async close() {

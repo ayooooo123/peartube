@@ -1,5 +1,6 @@
 import type { ComponentProps } from 'react'
 import React from 'react'
+import { Alert } from 'react-native'
 import { useApp } from '@/lib/AppContext'
 import { useOptionalVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import MediaEntityPage, { normalizeMediaEntityView } from '../../components/routes/MediaEntityPage'
@@ -29,11 +30,23 @@ export default function MediaWebRoute(props: ComponentProps<typeof MediaEntityPa
     } as any, prepared.url)
   }, [playerActions])
 
+  // Play failing is an answer the viewer is owed. Without this the button
+  // absorbed every refusal - selection, moderation, no servable source - and
+  // looked broken instead of explaining itself.
+  const onPlaybackFailed = React.useCallback((failure: {
+    entityId: string
+    errorCode: string
+    message: string
+  }) => {
+    Alert.alert('Cannot play', `${failure.message} (${failure.errorCode})`)
+  }, [])
+
   return (
     <MediaEntityPage
       {...props}
       mediaGraph={props.mediaGraph || rpc}
       onPlaybackPrepared={props.onPlaybackPrepared || onPlaybackPrepared}
+      onPlaybackFailed={props.onPlaybackFailed || onPlaybackFailed}
     />
   )
 }

@@ -145,7 +145,20 @@ export default function MediaEntityPage({
   // refuses the choice if it fails a hard gate and still fails over between
   // equivalent sources.
   const play = React.useCallback(async (publicationId: string | null) => {
-    if (!mediaGraph?.prepareMediaPlayback || !entityId) return
+    // Every one of these used to be the same silent return, which is
+    // indistinguishable from a dead button to anyone holding the device.
+    if (!entityId) {
+      onPlaybackFailed?.({ entityId: '', errorCode: 'ENTITY_ID_MISSING', message: 'This screen has no entity to play' })
+      return
+    }
+    if (!mediaGraph) {
+      onPlaybackFailed?.({ entityId, errorCode: 'RPC_NOT_READY', message: 'The backend connection is not ready yet' })
+      return
+    }
+    if (!mediaGraph.prepareMediaPlayback) {
+      onPlaybackFailed?.({ entityId, errorCode: 'PREPARE_METHOD_MISSING', message: 'This build cannot ask the backend to prepare playback' })
+      return
+    }
     try {
       const prepared = await startMediaPlayback({ rpc: mediaGraph, entityId, publicationId })
       // A source chosen but not servable is a failure with a name, not a Play

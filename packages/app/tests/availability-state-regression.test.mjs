@@ -50,7 +50,9 @@ test('every availability state renders one honest label', () => {
     'healthy',
     'unavailable',
   ])
-  assert.deepEqual(rendered.map(item => item.playable), [false, true, true, false])
+  // Awaiting replication is playable: nobody has asked a peer yet, and asking
+  // is what Play does. Only a decided no keeps the button down.
+  assert.deepEqual(rendered.map(item => item.playable), [true, true, true, false])
   for (const item of rendered) {
     assert.ok(item.label.length > 0)
     assert.ok(item.detail.length > 0)
@@ -65,7 +67,8 @@ test('every availability state renders one honest label', () => {
 test('an unknown state degrades to awaiting replication rather than inventing availability', () => {
   assert.equal(effectiveAvailabilityState({ state: 'excellent' }, NOW), AVAILABILITY_STATES.awaitingReplication)
   assert.equal(effectiveAvailabilityState(null, NOW), AVAILABILITY_STATES.awaitingReplication)
-  assert.equal(isAvailabilityPlayable(undefined, NOW), false)
+  // Missing evidence degrades to awaiting replication, which Play may attempt.
+  assert.equal(isAvailabilityPlayable(undefined, NOW), true)
 })
 
 test('healthy evidence expires on the device that holds it', () => {
@@ -96,14 +99,14 @@ test('an archive pledge is reported but never promoted to availability', () => {
     NOW
   )
   assert.equal(pledged.state, AVAILABILITY_STATES.awaitingReplication)
-  assert.equal(pledged.playable, false)
+  assert.equal(pledged.playable, true, 'a pledge is not a refusal; Play still checks')
   assert.equal(pledged.archivePledged, true)
 })
 
 test('source playability follows the assessed availability, not a publisher claim', () => {
   assert.equal(isMediaSourcePlayable(source({ availability: availability('healthy') })), true)
   assert.equal(isMediaSourcePlayable(source({ availability: availability('limited') })), true)
-  assert.equal(isMediaSourcePlayable(source({ availability: availability('awaiting-replication') })), false)
+  assert.equal(isMediaSourcePlayable(source({ availability: availability('awaiting-replication') })), true)
   assert.equal(isMediaSourcePlayable(source({ availability: availability('unavailable') })), false)
   assert.equal(
     isMediaSourcePlayable(source({ availabilityState: 'available', availability: availability('unavailable') })),

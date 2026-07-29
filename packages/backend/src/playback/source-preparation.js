@@ -1,5 +1,6 @@
 import { areSourcesEquivalent, selectPlaybackSource } from '../media-graph/source-selector.js'
 import { RETRYABLE_PLAYBACK_ERROR_CODES } from './errors.js'
+import { createAbortController } from '../abort-controller.js'
 
 const DEFAULT_DEADLINE_MS = 15_000
 const DEFAULT_MAX_ATTEMPTS = 3
@@ -88,7 +89,7 @@ export async function preparePlaybackSource(options = {}) {
     // One cancellation tree: the caller's signal and the shared deadline both
     // abort the in-flight attempt, and an opener that ignores the abort loses
     // the race and has its late session closed rather than leaked.
-    const controller = new AbortController()
+    const controller = createAbortController()
     const abortAttempt = () => controller.abort()
     options.signal?.addEventListener?.('abort', abortAttempt, { once: true })
     let deadlineTimer = null

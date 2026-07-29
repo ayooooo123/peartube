@@ -4,7 +4,8 @@
  * Handles Corestore, Hyperbee, Hyperblobs, and BlobServer setup.
  */
 
-import Corestore from 'corestore';
+import Corestore from 'corestore'
+import { createAbortController } from './abort-controller.js';
 import Hyperbee from 'hyperbee';
 import BlobServer from 'hypercore-blob-server';
 import b4a from 'b4a';
@@ -39,55 +40,13 @@ export { DEFAULT_STORED_PROTOCOL_MIGRATIONS, prepareStoredProtocolState }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000
 
-function createLifecycleAbortController() {
-  const AbortControllerCtor = globalThis?.AbortController
-  if (typeof AbortControllerCtor === 'function') return new AbortControllerCtor()
-
-  let aborted = false
-  const listeners = new Map()
-  const signal = {
-    onabort: null,
-    get aborted() {
-      return aborted
-    },
-    addEventListener(type, listener, options = {}) {
-      if (type !== 'abort' || (!listener?.handleEvent && typeof listener !== 'function')) return
-      listeners.set(listener, options?.once === true)
-    },
-    removeEventListener(type, listener) {
-      if (type === 'abort') listeners.delete(listener)
-    },
-  }
-
-  return {
-    signal,
-    abort() {
-      if (aborted) return
-      aborted = true
-      const event = { type: 'abort', target: signal, currentTarget: signal }
-      const notify = (listener) => {
-        try {
-          if (typeof listener === 'function') listener.call(signal, event)
-          else listener.handleEvent(event)
-        } catch (error) {
-          console.warn('[BackendLifecycle] abort listener failed:', error?.message || error)
-        }
-      }
-      const onabort = signal.onabort
-      const pendingListeners = Array.from(listeners.keys())
-      listeners.clear()
-      if (typeof onabort === 'function') notify(onabort)
-      for (const listener of pendingListeners) notify(listener)
-    },
-  }
-}
 
 export function createBackendLifecycle({
   scheduleDeferred = typeof setImmediate === 'function' ? setImmediate : (fn) => setTimeout(fn, 0),
   cancelDeferred = typeof clearImmediate === 'function' ? clearImmediate : clearTimeout,
   shutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 } = {}) {
-  const controller = createLifecycleAbortController()
+  const controller = createAbortController()
   const ownership = new Set()
   let shutdownPromise = null
 

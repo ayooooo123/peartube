@@ -26,8 +26,12 @@ const PRESENTATION = Object.freeze({
   }),
   [AVAILABILITY_STATES.awaitingReplication]: Object.freeze({
     label: 'Awaiting replication',
-    detail: 'No peer has been checked for this title yet.',
-    playable: false,
+    detail: 'No peer has been checked for this title yet. Play checks.',
+    // Nobody has asked a peer yet, which is not the same as being told no.
+    // Disabling Play here made the button unpressable for exactly the titles
+    // where pressing it is what starts replication, so the state could never
+    // resolve: the check only happens when someone asks for the bytes.
+    playable: true,
   }),
   [AVAILABILITY_STATES.unavailable]: Object.freeze({
     label: 'Unavailable',

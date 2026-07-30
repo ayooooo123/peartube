@@ -170,6 +170,11 @@ export const SHARED_HANDLER_NAMES = [
   'SetPersonalSetting',
   'GetPersonalSettings',
   'ProvisionPersonalEncryption',
+  'LibraryStatus',
+  'LibraryScan',
+  'LibraryConfirm',
+  'LibraryUnseed',
+  'LibraryVerify',
 ]
 
 function toCamelCase(name) {

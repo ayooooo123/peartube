@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -1849,6 +1849,71 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 23,
+      "name": "@peartube/library-status",
+      "request": {
+        "name": "@peartube/library-status-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/library-status-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 24,
+      "name": "@peartube/library-scan",
+      "request": {
+        "name": "@peartube/library-scan-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/library-scan-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 25,
+      "name": "@peartube/library-confirm",
+      "request": {
+        "name": "@peartube/library-confirm-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/library-confirm-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 26,
+      "name": "@peartube/library-unseed",
+      "request": {
+        "name": "@peartube/library-unseed-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/library-unseed-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 27,
+      "name": "@peartube/library-verify",
+      "request": {
+        "name": "@peartube/library-verify-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/library-verify-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

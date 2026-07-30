@@ -9,28 +9,10 @@ admission:
   channels: []
   owners: []
 
-seedPin:
-  enabled: true
-  maxBytes: 536870912000
-  maxConcurrent: 2
-  retentionDays: 30       # 0 allows immediate release; disable reception with enabled: false
-  trustedClients: []     # exact 32-byte identity public keys (hex), never device/transport keys
-
 discovery:
   enabled: true
   maxChannels: 500
   maxChannelsPerOwner: 20
-
-# Optional: interactive `peartube add` content-import preferences.
-# Environment variables always override these (TMDB_API_KEY, PEARTUBE_YTDLP_PATH,
-# PEARTUBE_YTDLP_COOKIES) and secret-bearing files are written with mode 0600.
-content:
-  storagePath: ~/.peartube/content
-  tmdbApiKey: ""          # TMDB read token; leave blank to use TMDB_API_KEY
-  ytDlpPath: yt-dlp       # yt-dlp executable path or PATH name
-  ytDlpCookiesPath: ""    # optional cookies file, validated but never logged
-  searchLimit: 12
-  claimRetentionDays: 30
 
 # Optional: archive YouTube channels into PearTube channels owned by this relay.
 # Each source URL maps to one PearTube channel (deterministic per relay identity).
@@ -47,6 +29,36 @@ archive:
     - url: https://www.youtube.com/@somechannel
       label: Some Channel
     # - url: https://www.youtube.com/playlist?list=PLxxxxxxx
+
+# Optional: seed your own on-disk media library into PearTube.
+# Each folder becomes one or more channels; the relay keeps them available.
+# SAFETY: disabled by default; audience defaults to `private` (never announced
+# to the public feed). A `public` folder is scanned but NOT published until you
+# confirm it with `peartube-relay library confirm <path>` (or set confirmed: true).
+library:
+  enabled: false
+  pollSeconds: 300          # seconds between folder rescans
+  caps:
+    maxBytes: 0             # 0 = no library-specific cap (still bounded by storage.maxBytes)
+  folders:
+    - path: /media/Family   # mount read-only; originals are never modified
+      audience: private     # private = your devices only, never the public feed
+    # - path: /media/PublicMovies
+    #   audience: public     # requires `library confirm` before it publishes
+    #   confirmed: false
+
+# Optional: delegate durable availability to a co-installed HiveRelay (Blindspark).
+# When enabled, published library cores are handed to the relay via its
+# publisher-signed seed-request API. Absent/unreachable relay = self-seed only.
+hiverelay:
+  enabled: false
+  endpoint: null            # e.g. http://127.0.0.1:8181
+  # authToken: null
+  seedRequest:
+    durability: 1           # 1 = archive class
+    ttlSeconds: 2592000     # renewed automatically before expiry
+    revocable: true
+  verifyIntervalHours: 24
 
 logging:
   level: info

@@ -34,6 +34,22 @@ export function requireHostProtocolVersion(protocolVersion, callerName) {
   return protocolVersion
 }
 
+
+function getLibraryAgentClient(backend) {
+  if (backend?.libraryAgentClient) return backend.libraryAgentClient
+  return null
+}
+
+async function createLazyLibraryClient(backend) {
+  if (backend?.libraryAgentClient) return backend.libraryAgentClient
+  const mod = await import('./library-agent-client.js')
+  const client = mod.createLibraryAgentClient({
+    endpoint: backend?.libraryAgentEndpoint || globalThis?.process?.env?.PEARTUBE_LIBRARY_AGENT_URL || null
+  })
+  if (backend && typeof backend === 'object') backend.libraryAgentClient = client
+  return client
+}
+
 export function buildSharedSystemHandlers(backend, options = {}) {
   const protocolVersion = requireHostProtocolVersion(
     options.protocolVersion,
@@ -41,6 +57,27 @@ export function buildSharedSystemHandlers(backend, options = {}) {
   )
 
   return {
+    async LibraryStatus() {
+      const client = getLibraryAgentClient(backend) || await createLazyLibraryClient(backend)
+      return client.status()
+    },
+    async LibraryScan() {
+      const client = getLibraryAgentClient(backend) || await createLazyLibraryClient(backend)
+      return client.scan()
+    },
+    async LibraryConfirm(req) {
+      const client = getLibraryAgentClient(backend) || await createLazyLibraryClient(backend)
+      return client.confirm(req?.folderPath || req?.path || '')
+    },
+    async LibraryUnseed(req) {
+      const client = getLibraryAgentClient(backend) || await createLazyLibraryClient(backend)
+      return client.unseed(req?.target || '')
+    },
+    async LibraryVerify() {
+      const client = getLibraryAgentClient(backend) || await createLazyLibraryClient(backend)
+      return client.verify()
+    },
+
     async DesktopBootstrap(req) {
       const emptySnapshot = {
         generatedAt: Date.now(),

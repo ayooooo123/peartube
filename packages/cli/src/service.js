@@ -5,6 +5,10 @@ import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createDeferredPublisher, createYtDlpDownloader, createRoutingDownloader } from './archive-manager.js'
 import { createDirectDownloader } from './media/direct-download.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
+import { createLibraryManager } from './library.js'
+import { LibraryInventory } from './library-inventory.js'
+import { createHiveRelayClient } from './hiverelay-client.js'
+import { RETENTION_PRIORITY } from './constants.js'
 import { RelayCreators, creatorIdFromClassifiedSource } from './creators.js'
 import { RelayClassificationStore } from './classification/store.js'
 import { createTmdbClassifier, createTmdbDiscoverClient } from './classification/tmdb.js'
@@ -79,6 +83,10 @@ export async function createRelayService({
 
   const runtime = await runtimeFactory({ config, logger })
 
+  let libraryManager = null
+  let libraryTimer = null
+  let enforcingQuota = false
+  const quotaState = { overQuota: false, lastEvictions: [], lastCheckedAt: null }
   let closed = false
   let currentStatus = null
   let queue = Promise.resolve()
@@ -179,9 +187,7 @@ export async function createRelayService({
     const runtimeStats = typeof runtime.getDiagnostics === 'function'
       ? await runtime.getDiagnostics()
       : {}
-    currentStatus = buildRelayStatus({
-      config,
-      catalog: relayCatalog,
+    currentStatus = buildRelayStatus({ config, catalog: relayCatalog, library: libraryManager?.getStatusSection?.() || null, quota: quotaState.lastCheckedAt ? { ...quotaState } : null,
       runtimeStats,
       trustedClientsCount: trustedClients.list().length
     })
@@ -290,6 +296,67 @@ export async function createRelayService({
     return queue
   }
 
+
+  async function enforceRelayQuota() {
+    if (enforcingQuota || closed) return quotaState
+    enforcingQuota = true
+    try {
+      quotaState.lastCheckedAt = Number(typeof nowFn === 'function' ? nowFn() : Date.now()) || Date.now()
+      const maxBytes = Number(config.storage.maxBytes) || 0
+      if (maxBytes <= 0) return quotaState
+
+      let usedBytes = relayCatalog.getSummary().usedBytes
+      if (usedBytes <= maxBytes) {
+        quotaState.overQuota = false
+        return quotaState
+      }
+
+      const evictable = relayCatalog.getChannels()
+        .filter((channel) => {
+          if (channel.retentionClass === 'private') return false
+          if (channel.retentionClass === 'allowlist' && config.retention?.protectAllowlist !== false) return false
+          return (Number(channel.bytes) || 0) > 0
+        })
+        .sort((left, right) => {
+          const priority = (RETENTION_PRIORITY[left.retentionClass] || 0) - (RETENTION_PRIORITY[right.retentionClass] || 0)
+          if (priority !== 0) return priority
+          return (left.mirroredAt || 0) - (right.mirroredAt || 0)
+        })
+
+      const evictions = []
+      for (const channel of evictable) {
+        if (usedBytes <= maxBytes) break
+        await runtime.seeder?.unseedChannel?.({ driveKey: channel.channelKey }).catch(() => null)
+        await runtime.cacheManager?.removeChannel?.(channel.channelKey).catch(() => null)
+        await relayCatalog.removeChannel(channel.channelKey).catch(() => null)
+        usedBytes -= Number(channel.bytes) || 0
+        evictions.push({
+          channelKey: channel.channelKey,
+          retentionClass: channel.retentionClass,
+          bytes: Number(channel.bytes) || 0
+        })
+        logger.status?.warn?.('Channel evicted to enforce storage quota', {
+          channelKey: channel.channelKey,
+          retentionClass: channel.retentionClass,
+          bytes: channel.bytes || 0,
+          usedBytes,
+          maxBytes
+        })
+      }
+
+      await runtime.cacheManager?.enforceQuota?.().catch(() => null)
+      quotaState.lastEvictions = evictions
+      quotaState.overQuota = usedBytes > maxBytes
+      if (quotaState.overQuota) {
+        logger.status?.error?.('Relay remains over quota: only protected content is left', { usedBytes, maxBytes })
+        libraryManager?.pauseImports?.('storage over quota with only protected content')
+      }
+      return quotaState
+    } finally {
+      enforcingQuota = false
+    }
+  }
+
   const service = {
     config,
     logger,
@@ -395,7 +462,8 @@ export async function createRelayService({
       }, { runNow })
       return { creator, job }
     },
-    async start() {
+  
+  async start() {
       logger.relay.info('Relay starting', {
         mode: config.mode,
         policy: config.policy,
@@ -452,6 +520,69 @@ export async function createRelayService({
           publisher: deferredPublisher.publisher
         })
         await archiveConsole.start()
+
+      if (config.library?.enabled) {
+        const runtimeFsModule = fsModule || await import('#fs')
+        const missingFolders = config.library.folders
+          .filter((folder) => !runtimeFsModule.existsSync(folder.path))
+          .map((folder) => folder.path)
+        if (missingFolders.length > 0) {
+          throw new Error(`library folders do not exist or are not readable: ${missingFolders.join(', ')}`)
+        }
+
+        const inventory = await LibraryInventory.open({
+          inventoryPath: config.paths.libraryInventory,
+          nowFn: typeof nowFn === 'function' ? nowFn : Date.now
+        })
+        const hiverelayClient = config.hiverelay?.enabled
+          ? createHiveRelayClient({
+            endpoint: config.hiverelay.endpoint,
+            authToken: config.hiverelay.authToken,
+            seedRequest: config.hiverelay.seedRequest,
+            logger: logger.status
+          })
+          : null
+        libraryManager = createLibraryManager({
+          config,
+          runtime,
+          catalog: relayCatalog,
+          inventory,
+          createPublisher: (publisherFs) => createArchivePublisher({
+            identityManager: runtime.identityManager,
+            uploadManager: runtime.uploadManager,
+            api: runtime.api,
+            runtime,
+            publicFeed: runtime.publicFeed,
+            logger,
+            fs: publisherFs
+          }),
+          hiverelay: hiverelayClient,
+          logger,
+          fsModule: runtimeFsModule,
+          nowFn: typeof nowFn === 'function' ? nowFn : Date.now
+        })
+        await libraryManager.resumeIncompleteUnseeds()
+
+        const libraryPollMs = Math.max(1, Number(config.library.pollSeconds || 300)) * 1000
+        const triggerLibraryScan = () => libraryManager.scanOnce()
+          .then(async () => {
+            await enforceRelayQuota()
+            await persistStatus()
+          })
+          .catch((err) => {
+            logger.archive?.error?.('Library scan failed', { error: err?.message || String(err) })
+          })
+        libraryTimer = setIntervalFn(triggerLibraryScan, libraryPollMs)
+        libraryTimer?.unref?.()
+        triggerLibraryScan()
+        logger.relay?.info?.('Library started', {
+          folders: config.library.folders.length,
+          pollSeconds: config.library.pollSeconds,
+          hiverelay: Boolean(hiverelayClient)
+        })
+      }
+
+
         logger.relay.info('Relay archive WebUI listening', {
           host: config.archive.uiHost || '127.0.0.1',
           port: config.archive.uiPort || 8174,
@@ -634,15 +765,57 @@ export async function createRelayService({
         maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity
       })
     },
+
+    async libraryScanOnce() {
+      if (!libraryManager) throw new Error('library is not enabled (set library.enabled in config)')
+      const result = await libraryManager.scanOnce()
+      await enforceRelayQuota()
+      await persistStatus()
+      return result
+    },
+    async libraryUnseed(target) {
+      if (!libraryManager) throw new Error('library is not enabled (set library.enabled in config)')
+      const result = await libraryManager.unseed(target)
+      await persistStatus()
+      return result
+    },
+    async libraryReconcile() {
+      if (!libraryManager) throw new Error('library is not enabled (set library.enabled in config)')
+      const result = await libraryManager.reconcileDurability()
+      await persistStatus()
+      return result
+    },
+    getLibraryStatus() {
+      return libraryManager?.getStatusSection?.() || null
+    },
+    async confirmLibraryFolder(folderPath) {
+      if (!libraryManager) throw new Error('library is not enabled (set library.enabled in config)')
+      if (typeof libraryManager.confirmFolder !== 'function') {
+        throw new Error('library confirm is not available')
+      }
+      await libraryManager.confirmFolder(folderPath)
+      await persistStatus()
+      return { confirmed: true }
+    },
+    async enforceQuota() {
+      return enforceRelayQuota()
+    },
     getStatus() {
-      return currentStatus || buildRelayStatus({
-        config,
-        catalog: relayCatalog,
+      return currentStatus || buildRelayStatus({ config, catalog: relayCatalog, library: libraryManager?.getStatusSection?.() || null, quota: quotaState.lastCheckedAt ? { ...quotaState } : null,
+        library: libraryManager?.getStatusSection?.() || null,
+        quota: quotaState.lastCheckedAt ? { ...quotaState } : null,
         runtimeStats: {}
       })
     },
     async close() {
       closed = true
+      if (libraryTimer) {
+        clearIntervalFn(libraryTimer)
+        libraryTimer = null
+      }
+      if (libraryManager) {
+        await libraryManager.close().catch(() => {})
+      }
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null

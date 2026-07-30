@@ -296,7 +296,17 @@ const methods = new Map([
   ['@peartube/transcode-status', 143],
   [143, '@peartube/transcode-status'],
   ['@peartube/event-transcode-progress', 144],
-  [144, '@peartube/event-transcode-progress']
+  [144, '@peartube/event-transcode-progress'],
+  ['@peartube/library-status', 145],
+  [145, '@peartube/library-status'],
+  ['@peartube/library-scan', 146],
+  [146, '@peartube/library-scan'],
+  ['@peartube/library-confirm', 147],
+  [147, '@peartube/library-confirm'],
+  ['@peartube/library-unseed', 148],
+  [148, '@peartube/library-unseed'],
+  ['@peartube/library-verify', 149],
+  [149, '@peartube/library-verify']
 ])
 
 class HRPC {
@@ -448,7 +458,12 @@ class HRPC {
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
       ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
-      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')],
+      ['@peartube/library-status', getEncoding('@peartube/library-status-request')],
+      ['@peartube/library-scan', getEncoding('@peartube/library-scan-request')],
+      ['@peartube/library-confirm', getEncoding('@peartube/library-confirm-request')],
+      ['@peartube/library-unseed', getEncoding('@peartube/library-unseed-request')],
+      ['@peartube/library-verify', getEncoding('@peartube/library-verify-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -583,7 +598,12 @@ class HRPC {
       ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
       ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
       ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
-      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')],
+      ['@peartube/library-status', getEncoding('@peartube/library-status-response')],
+      ['@peartube/library-scan', getEncoding('@peartube/library-scan-response')],
+      ['@peartube/library-confirm', getEncoding('@peartube/library-confirm-response')],
+      ['@peartube/library-unseed', getEncoding('@peartube/library-unseed-response')],
+      ['@peartube/library-verify', getEncoding('@peartube/library-verify-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -1262,6 +1282,26 @@ class HRPC {
     return this._callSync('@peartube/event-transcode-progress', args)
   }
 
+  async libraryStatus(args) {
+    return this._call('@peartube/library-status', args)
+  }
+
+  async libraryScan(args) {
+    return this._call('@peartube/library-scan', args)
+  }
+
+  async libraryConfirm(args) {
+    return this._call('@peartube/library-confirm', args)
+  }
+
+  async libraryUnseed(args) {
+    return this._call('@peartube/library-unseed', args)
+  }
+
+  async libraryVerify(args) {
+    return this._call('@peartube/library-verify', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1840,6 +1880,26 @@ class HRPC {
 
   onEventTranscodeProgress(responseFn) {
     this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
+  onLibraryStatus(responseFn) {
+    this._handlers['@peartube/library-status'] = responseFn
+  }
+
+  onLibraryScan(responseFn) {
+    this._handlers['@peartube/library-scan'] = responseFn
+  }
+
+  onLibraryConfirm(responseFn) {
+    this._handlers['@peartube/library-confirm'] = responseFn
+  }
+
+  onLibraryUnseed(responseFn) {
+    this._handlers['@peartube/library-unseed'] = responseFn
+  }
+
+  onLibraryVerify(responseFn) {
+    this._handlers['@peartube/library-verify'] = responseFn
   }
 
   _requestIsStream(command) {

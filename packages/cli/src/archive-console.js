@@ -528,6 +528,118 @@ export async function createArchiveConsole({
         return
       }
 
+      // Home-media library control plane (Phase 3 adapter surface).
+      // The app / paired clients call these over HTTP when PEARTUBE_LIBRARY_AGENT_URL
+      // points at this console; CLI library commands remain the primary operator path.
+      if (req.method === 'GET' && (req.url === '/library' || req.url === '/library/status')) {
+        const library = typeof service.getLibraryStatus === 'function' ? service.getLibraryStatus() : null
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({
+          enabled: Boolean(library?.enabled),
+          folders: Number(library?.folders || 0),
+          totalItems: Number(library?.totalItems || 0),
+          durableItems: Number(library?.items?.durable || 0),
+          selfOnlyItems: Number(library?.items?.['self-only'] || library?.items?.selfOnly || 0),
+          pendingApprovalItems: Number(library?.items?.['pending-approval'] || library?.items?.pendingApproval || 0),
+          failedItems: Number(library?.items?.failed || 0),
+          bytes: Number(library?.bytes || 0),
+          capBytes: Number(library?.capBytes || 0),
+          importsPaused: Boolean(library?.importsPaused),
+          hiverelayDetected: Boolean(library?.hiverelay?.enabled && library?.hiverelay?.endpoint),
+          hiverelayEndpoint: library?.hiverelay?.endpoint || null,
+          library: library || null
+        }, null, 2))
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/library/scan') {
+        if (typeof service.libraryScanOnce !== 'function') {
+          res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'library-not-enabled' }))
+          return
+        }
+        const result = await service.libraryScanOnce()
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({
+          scanned: Number(result?.scanned || 0),
+          imported: Number(result?.imported || 0),
+          skipped: Number(result?.skipped || 0),
+          failed: Number(result?.failed || 0)
+        }))
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/library/confirm') {
+        const body = await collectBody(req)
+        let folderPath = ''
+        try {
+          const parsed = body ? JSON.parse(body) : {}
+          folderPath = parsed.folderPath || parsed.path || ''
+        } catch {
+          folderPath = new URLSearchParams(body).get('folderPath') || ''
+        }
+        if (!folderPath) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'folderPath-required', confirmed: false }))
+          return
+        }
+        // Confirm is inventory-level; service does not expose confirm directly —
+        // re-open inventory path via status config if available, else 503.
+        if (typeof service.confirmLibraryFolder !== 'function') {
+          res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'library-confirm-unavailable', confirmed: false }))
+          return
+        }
+        await service.confirmLibraryFolder(folderPath)
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ confirmed: true }))
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/library/unseed') {
+        if (typeof service.libraryUnseed !== 'function') {
+          res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'library-not-enabled', unseeded: 0 }))
+          return
+        }
+        const body = await collectBody(req)
+        let target = ''
+        try {
+          const parsed = body ? JSON.parse(body) : {}
+          target = parsed.target || ''
+        } catch {
+          target = new URLSearchParams(body).get('target') || ''
+        }
+        if (!target) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'target-required', unseeded: 0 }))
+          return
+        }
+        const result = await service.libraryUnseed(target)
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({
+          unseeded: Number(result?.unseeded || result?.count || 0),
+          state: result?.state || 'unseeded'
+        }))
+        return
+      }
+
+      if (req.method === 'POST' && req.url === '/library/verify') {
+        if (typeof service.libraryReconcile !== 'function') {
+          res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ error: 'library-not-enabled', verified: 0, failures: 0 }))
+          return
+        }
+        const result = await service.libraryReconcile()
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({
+          verified: Number(result?.verified || result?.checked || 0),
+          failures: Number(result?.failures || result?.failed || 0)
+        }))
+        return
+      }
+
+
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
       res.end('not found')
     } catch (err) {

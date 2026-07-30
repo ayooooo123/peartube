@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -10197,6 +10197,277 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "library-item",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "channelKey",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "path",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "audience",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "state",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "bytes",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "durable",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "lastError",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-status-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "library-status-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "folders",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "totalItems",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "durableItems",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "selfOnlyItems",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "pendingApprovalItems",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "failedItems",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "bytes",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "capBytes",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "importsPaused",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "hiverelayDetected",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "hiverelayEndpoint",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-scan-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "library-scan-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "scanned",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "imported",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "skipped",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "failed",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-confirm-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "folderPath",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-confirm-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "confirmed",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-unseed-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "target",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-unseed-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "unseeded",
+          "required": true,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "state",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "library-verify-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "library-verify-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "verified",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "failures",
+          "required": false,
+          "type": "uint",
+          "version": 2
         }
       ]
     }

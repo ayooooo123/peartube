@@ -938,6 +938,107 @@ ns.register({
   ]
 })
 
+// The paired app controls the home-media library inventory, audience modes,
+// and unseed over the existing HRPC boundary (renderer delegates P2P control
+// to the bare backend). Keys are never surfaced to the renderer.
+
+ns.register({
+  name: 'library-item',
+  fields: [
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'path', type: 'string', required: true },
+    { name: 'audience', type: 'string', required: false },
+    { name: 'state', type: 'string', required: false },
+    { name: 'bytes', type: 'uint', required: false },
+    { name: 'durable', type: 'bool', required: false },
+    { name: 'lastError', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'library-status-request',
+  fields: []
+})
+
+ns.register({
+  name: 'library-status-response',
+  fields: [
+    { name: 'enabled', type: 'bool', required: true },
+    { name: 'folders', type: 'uint', required: false },
+    { name: 'totalItems', type: 'uint', required: false },
+    { name: 'durableItems', type: 'uint', required: false },
+    { name: 'selfOnlyItems', type: 'uint', required: false },
+    { name: 'pendingApprovalItems', type: 'uint', required: false },
+    { name: 'failedItems', type: 'uint', required: false },
+    { name: 'bytes', type: 'uint', required: false },
+    { name: 'capBytes', type: 'uint', required: false },
+    { name: 'importsPaused', type: 'bool', required: false },
+    { name: 'hiverelayDetected', type: 'bool', required: false },
+    { name: 'hiverelayEndpoint', type: 'string', required: false }
+    // Per-item detail rides existing video/channel list endpoints; this is a
+    // summary (state counts + durability posture) to keep the schema flat.
+  ]
+})
+
+ns.register({
+  name: 'library-scan-request',
+  fields: []
+})
+
+ns.register({
+  name: 'library-scan-response',
+  fields: [
+    { name: 'scanned', type: 'uint', required: false },
+    { name: 'imported', type: 'uint', required: false },
+    { name: 'skipped', type: 'uint', required: false },
+    { name: 'failed', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'library-confirm-request',
+  fields: [
+    { name: 'folderPath', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'library-confirm-response',
+  fields: [
+    { name: 'confirmed', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'library-unseed-request',
+  fields: [
+    // One of: videoId | channelKey | folderPath (matches CLI target resolution)
+    { name: 'target', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'library-unseed-response',
+  fields: [
+    { name: 'unseeded', type: 'uint', required: true },
+    { name: 'state', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'library-verify-request',
+  fields: []
+})
+
+ns.register({
+  name: 'library-verify-response',
+  fields: [
+    { name: 'verified', type: 'uint', required: false },
+    { name: 'failures', type: 'uint', required: false }
+  ]
+})
+
 // Livestreaming structs
 ns.register({
   name: 'start-livestream-request',
@@ -3485,6 +3586,37 @@ rpcNs.register({
   name: 'delete-video',
   request: { name: '@peartube/delete-video-request', stream: false },
   response: { name: '@peartube/delete-video-response', stream: false }
+})
+
+// Home-media library commands (publisher agent control plane)
+rpcNs.register({
+  name: 'library-status',
+  request: { name: '@peartube/library-status-request', stream: false },
+  response: { name: '@peartube/library-status-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'library-scan',
+  request: { name: '@peartube/library-scan-request', stream: false },
+  response: { name: '@peartube/library-scan-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'library-confirm',
+  request: { name: '@peartube/library-confirm-request', stream: false },
+  response: { name: '@peartube/library-confirm-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'library-unseed',
+  request: { name: '@peartube/library-unseed-request', stream: false },
+  response: { name: '@peartube/library-unseed-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'library-verify',
+  request: { name: '@peartube/library-verify-request', stream: false },
+  response: { name: '@peartube/library-verify-response', stream: false }
 })
 
 // Livestreaming commands

@@ -1,0 +1,87 @@
+# PearTube home-media publisher agent + HiveRelay (Blindspark)
+#
+# Reference install for home appliances (TrueNAS, Umbrel, StartOS, Unraid) and
+# plain Docker hosts. The peartube-relay service runs as the *publisher agent*
+# (scan/import/publish/inventory/unseed); HiveRelay holds durable copies of the
+# published cores through its generic seed-request surface — it never learns
+# what the cores contain.
+#
+# Spec: docs/superpowers/specs/2026-07-24-peartube-seeder-spec.md (Phase 2)
+# Quickstart: docs/SEEDER-QUICKSTART.md
+#
+# Bring up:
+#   PEARTUBE_MEDIA=/mnt/media docker compose -f docker-compose.library.yml up -d
+# Inspect the agent inventory:
+#   docker compose -f docker-compose.library.yml exec peartube-relay \
+#     /peartube-relay library status --json
+#
+# First-run trust (one-time, see SEEDER-QUICKSTART.md):
+#   docker compose -f docker-compose.library.yml exec peartube-relay \
+#     node /app/scripts/library-bootstrap-trust.mjs --relay http://hiverelay:9100
+
+services:
+  peartube-relay:
+    image: ghcr.io/ayooooo123/peartube-relay:latest
+    pull_policy: always
+    restart: unless-stopped
+    depends_on:
+      - hiverelay
+    environment:
+      # Agent posture: default private. A public folder still needs an explicit
+      # `library confirm` before it is announced (the publish gate is enforced
+      # in code, not just config — see config.js VALID_MODES).
+      PEARTUBE_MODE: private
+      PEARTUBE_POLICY: allowlist
+      PEARTUBE_STORAGE_PATH: /var/lib/peartube-relay
+      PEARTUBE_STORAGE_MAX_BYTES: "107374182400"
+      PEARTUBE_LOG_LEVEL: info
+
+      # Library subsystem (the publisher agent).
+      PEARTUBE_LIBRARY_ENABLED: "true"
+      PEARTUBE_LIBRARY_POLL_SECONDS: "300"
+      # Read-only media is mounted at /media. Audience is private by default;
+      # a public folder must be confirmed before it publishes.
+      PEARTUBE_LIBRARY_FOLDERS: '[{"path":"/media/PublicMovies","audience":"public","confirmed":false,"recursive":true},{"path":"/media/Family","audience":"private","recursive":true}]'
+      PEARTUBE_LIBRARY_CAPS_MAX_BYTES: "500000000000"
+
+      # Durability delegation: hand opaque core keys to the co-installed relay.
+      # The relay is reached over the shared compose network. If it is down, the
+      # agent self-seeds and marks items `self-only` — it never blocks imports.
+      PEARTUBE_HIVERELAY_ENABLED: "true"
+      PEARTUBE_HIVERELAY_ENDPOINT: http://hiverelay:9100
+      PEARTUBE_HIVERELAY_SEED_REQUEST_DURABILITY: "1"
+      PEARTUBE_HIVERELAY_SEED_REQUEST_TTL_SECONDS: "2592000"
+      PEARTUBE_HIVERELAY_SEED_REQUEST_REVOCABLE: "true"
+      PEARTUBE_HIVERELAY_VERIFY_INTERVAL_HOURS: "24"
+
+      # Trust bootstrap target (filled in by library-bootstrap-trust.mjs):
+      #   PEARTUBE_TRUST_DURABLE_RELAY_KEYS: '["<relay-public-key-hex>"]'
+    volumes:
+      - peartube-relay-data:/var/lib/peartube-relay
+      # Originals are sacred — media is mounted READ-ONLY into the agent only.
+      # The relay never sees these mounts; it receives opaque core keys.
+      - ${PEARTUBE_MEDIA:-./media}:/media:ro
+      # First-run helper (bundled in image at /app for custom builds; for the
+      # published image mount the repo script if it is not present).
+      - ./scripts:/app/scripts:ro
+    command: ["run"]
+
+  hiverelay:
+    # Pin: :latest currently crashes on pear-gracedown missing (2026-07-29).
+    # Bump when GHCR latest is green again.
+    image: ghcr.io/bigdestiny2/p2p-hiverelay:1.0.0-rc.1
+    pull_policy: if_not_present
+    restart: unless-stopped
+    ports:
+      - "${HIVERELAY_PORT:-9100}:9100"   # management API + dashboard
+    environment:
+      # Review mode: the first seed request from the agent surfaces here for a
+      # one-time operator approval. After approval, package the agent's
+      # publisher key into the relay allowlist so later requests auto-accept.
+      HIVERELAY_ACCEPT_MODE: review
+    volumes:
+      - hiverelay-data:/data
+
+volumes:
+  peartube-relay-data:
+  hiverelay-data:

@@ -7,6 +7,11 @@ const path = require('path')
 const APP_RPC_NAMESPACES = Object.freeze({
   system: [
     'get-status',
+    'library-status',
+    'library-scan',
+    'library-confirm',
+    'library-unseed',
+    'library-verify',
     'get-swarm-status',
     'get-blob-server-port',
     'get-network-policy',

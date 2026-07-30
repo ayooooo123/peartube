@@ -30,8 +30,14 @@ import {
   RELAY_POLICY_DISCOVERY,
   RELAY_STATUS_FILENAME,
   VALID_MODES,
-  VALID_POLICIES
-} from './constants.js'
+  VALID_POLICIES,
+  DEFAULT_HIVERELAY_CONFIG,
+  DEFAULT_LIBRARY_CONFIG,
+  DEFAULT_LIBRARY_FOLDER_MAX_FILES,
+  DEFAULT_LIBRARY_POLL_SECONDS,
+  LIBRARY_AUDIENCE_PRIVATE,
+  LIBRARY_INVENTORY_FILENAME,
+  VALID_LIBRARY_AUDIENCES} from './constants.js'
 import { buildSourceId, classifySourceUrl } from './archive/source-id.js'
 
 function isPlainObject(value) {
@@ -634,6 +640,90 @@ function resolveSeedPinConfig(rawSeedPin) {
   }
 }
 
+
+function resolveLibraryConfig(rawLibrary) {
+  const merged = deepMerge(clone(DEFAULT_LIBRARY_CONFIG), isPlainObject(rawLibrary) ? rawLibrary : {})
+
+  merged.enabled = Boolean(merged.enabled)
+
+  merged.pollSeconds = Number(merged.pollSeconds)
+  if (!Number.isFinite(merged.pollSeconds) || merged.pollSeconds <= 0) {
+    merged.pollSeconds = DEFAULT_LIBRARY_POLL_SECONDS
+  }
+
+  merged.caps = isPlainObject(merged.caps) ? merged.caps : {}
+  merged.caps.maxBytes = Number(merged.caps.maxBytes)
+  if (!Number.isFinite(merged.caps.maxBytes) || merged.caps.maxBytes < 0) {
+    merged.caps.maxBytes = 0
+  }
+
+  const folders = Array.isArray(merged.folders) ? merged.folders : []
+  const seenPaths = new Set()
+  merged.folders = folders.map((entry) => {
+    const folder = isPlainObject(entry) ? entry : { path: entry }
+    const path = typeof folder.path === 'string' ? folder.path.trim() : ''
+    if (!path) throw new Error('library.folders entries must include a path')
+    if (seenPaths.has(path)) throw new Error(`Duplicate library folder: ${path}`)
+    seenPaths.add(path)
+
+    const audience = typeof folder.audience === 'string' && folder.audience.trim()
+      ? folder.audience.trim().toLowerCase()
+      : LIBRARY_AUDIENCE_PRIVATE
+    if (!VALID_LIBRARY_AUDIENCES.includes(audience)) {
+      throw new Error(`Invalid library audience "${folder.audience}" for ${path} (expected private|public)`)
+    }
+
+    const maxFiles = Number(folder.maxFiles)
+    return {
+      path,
+      recursive: folder.recursive !== false,
+      audience,
+      confirmed: folder.confirmed === true,
+      channelName: typeof folder.channelName === 'string' && folder.channelName.trim()
+        ? folder.channelName.trim()
+        : null,
+      maxFiles: Number.isFinite(maxFiles) && maxFiles > 0 ? maxFiles : DEFAULT_LIBRARY_FOLDER_MAX_FILES
+    }
+  })
+
+  if (merged.enabled && merged.folders.length === 0) {
+    throw new Error('library.enabled is true but library.folders is empty')
+  }
+
+  return merged
+}
+
+function resolveHiveRelayConfig(rawHiveRelay) {
+  const merged = deepMerge(clone(DEFAULT_HIVERELAY_CONFIG), isPlainObject(rawHiveRelay) ? rawHiveRelay : {})
+
+  merged.enabled = Boolean(merged.enabled)
+  merged.endpoint = typeof merged.endpoint === 'string' && merged.endpoint.trim()
+    ? merged.endpoint.trim().replace(/\/+$/, '')
+    : null
+  merged.authToken = typeof merged.authToken === 'string' && merged.authToken.trim()
+    ? merged.authToken.trim()
+    : null
+
+  merged.seedRequest = isPlainObject(merged.seedRequest) ? merged.seedRequest : {}
+  merged.seedRequest.durability = Number(merged.seedRequest.durability) === 0 ? 0 : 1
+  merged.seedRequest.ttlSeconds = Number(merged.seedRequest.ttlSeconds)
+  if (!Number.isFinite(merged.seedRequest.ttlSeconds) || merged.seedRequest.ttlSeconds <= 0) {
+    merged.seedRequest.ttlSeconds = DEFAULT_HIVERELAY_CONFIG.seedRequest.ttlSeconds
+  }
+  merged.seedRequest.revocable = merged.seedRequest.revocable !== false
+
+  merged.verifyIntervalHours = Number(merged.verifyIntervalHours)
+  if (!Number.isFinite(merged.verifyIntervalHours) || merged.verifyIntervalHours <= 0) {
+    merged.verifyIntervalHours = DEFAULT_HIVERELAY_CONFIG.verifyIntervalHours
+  }
+
+  if (merged.enabled && !merged.endpoint) {
+    throw new Error('hiverelay.enabled is true but hiverelay.endpoint is empty')
+  }
+
+  return merged
+}
+
 export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
   const requestedMode = input.mode
   const requestedPolicy = input.policy
@@ -696,12 +786,48 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
 
   config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
   config.classification = resolveClassificationConfig(config.classification)
+    if (env.PEARTUBE_LIBRARY_ENABLED || env.PEARTUBE_LIBRARY_POLL || env.PEARTUBE_LIBRARY_FOLDERS || env.PEARTUBE_LIBRARY_MAX_BYTES) {
+    config.library = {}
+    if (env.PEARTUBE_LIBRARY_ENABLED) config.library.enabled = parseBoolean(env.PEARTUBE_LIBRARY_ENABLED)
+    if (env.PEARTUBE_LIBRARY_POLL) config.library.pollSeconds = Number(env.PEARTUBE_LIBRARY_POLL)
+    if (env.PEARTUBE_LIBRARY_MAX_BYTES) config.library.caps = { maxBytes: Number(env.PEARTUBE_LIBRARY_MAX_BYTES) }
+    if (env.PEARTUBE_LIBRARY_FOLDERS) {
+      try {
+        const parsed = JSON.parse(env.PEARTUBE_LIBRARY_FOLDERS)
+        // Strip `confirmed` from the env surface: public-audience confirmation
+        // must come from `library confirm` or a hand-edited config file, not
+        // from an env var an orchestration template could set by accident.
+        config.library.folders = Array.isArray(parsed)
+          ? parsed.map((folder) => {
+            if (folder && typeof folder === 'object' && 'confirmed' in folder) {
+              const copy = { ...folder }
+              delete copy.confirmed
+              return copy
+            }
+            return folder
+          })
+          : []
+      } catch {
+        throw new Error('PEARTUBE_LIBRARY_FOLDERS must be a JSON array of folder entries')
+      }
+    }
+  }
+  if (env.PEARTUBE_HIVERELAY_ENABLED || env.PEARTUBE_HIVERELAY_ENDPOINT || env.PEARTUBE_HIVERELAY_AUTH_TOKEN) {
+    config.hiverelay = {}
+    if (env.PEARTUBE_HIVERELAY_ENABLED) config.hiverelay.enabled = parseBoolean(env.PEARTUBE_HIVERELAY_ENABLED)
+    if (env.PEARTUBE_HIVERELAY_ENDPOINT) config.hiverelay.endpoint = env.PEARTUBE_HIVERELAY_ENDPOINT
+    if (env.PEARTUBE_HIVERELAY_AUTH_TOKEN) config.hiverelay.authToken = env.PEARTUBE_HIVERELAY_AUTH_TOKEN
+  }
+
+  config.library = resolveLibraryConfig(config.library)
+  config.hiverelay = resolveHiveRelayConfig(config.hiverelay)
 
   const runtimeDbPath = join(config.storage.path, 'db')
   config.paths = {
     catalog: join(runtimeDbPath, RELAY_CATALOG_FILENAME),
     status: join(runtimeDbPath, RELAY_STATUS_FILENAME),
     creators: join(runtimeDbPath, RELAY_CREATORS_FILENAME),
+    libraryInventory: join(runtimeDbPath, LIBRARY_INVENTORY_FILENAME),
     classification: join(runtimeDbPath, RELAY_CLASSIFICATION_FILENAME),
     trustedClients: join(runtimeDbPath, RELAY_TRUSTED_CLIENTS_FILENAME),
     corestore: join(config.storage.path, 'corestore'),

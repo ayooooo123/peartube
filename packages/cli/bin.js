@@ -8,6 +8,7 @@ import { RelayCatalog } from './src/catalog.js'
 import { RelayCreators, summarizeCreatorsFromCatalog, rankUnseededTargets } from './src/creators.js'
 import { TrustedClients } from './src/trusted-clients.js'
 import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
+import { LibraryInventory } from './src/library-inventory.js'
 
 function writeLine(message, preferredStream = 'stdout') {
   const text = typeof message === 'string' ? message : String(message)
@@ -42,6 +43,7 @@ function printHelp() {
     '  archive  Queue or run anonymous YouTube archive jobs',
     '  mirror-local  Import local video files into the relay channel',
     '  validate  Validate and print the normalized relay config',
+    '  library <action>  Manage the home media library (status | scan | confirm <folder> | unseed <target> | verify)',
     '  status    Print relay status from the local catalog',
     '  creators  List tracked creators and unseeded targets',
     '  clients   List authorized creator client devices',
@@ -304,6 +306,66 @@ async function initCommand(flags) {
   writeLine(`Wrote ${target}\n`)
 }
 
+
+async function libraryCommand(flags) {
+  const action = flags.action || 'status'
+  const config = await loadRelayConfig(flags)
+
+  if (action === 'status') {
+    const status = readRelayStatus(config.paths.status)
+    const library = status?.library || null
+    if (flags.json) {
+      writeLine(JSON.stringify(library, null, 2) + '\n')
+      return
+    }
+    if (!library) {
+      writeLine('No library status recorded yet. Enable library in config and run the relay (or `library scan`).\n')
+      return
+    }
+    const items = library.items || {}
+    writeLine([
+      `enabled: ${library.enabled}`,
+      `folders: ${library.folders}`,
+      `items: ${library.totalItems ?? 0} (${Object.entries(items).filter(([, count]) => count > 0).map(([state, count]) => `${state}=${count}`).join(' ') || 'none'})`,
+      `bytes: ${library.bytes ?? 0}${library.capBytes ? `/${library.capBytes}` : ''}`,
+      `importsPaused: ${Boolean(library.importsPaused)}${library.importsPausedReason ? ` (${library.importsPausedReason})` : ''}`,
+      `hiverelay: ${library.hiverelay?.endpoint || 'disabled'}`,
+      ...(library.awaitingPublicConfirmation?.length
+        ? ['awaitingPublicConfirmation:', ...library.awaitingPublicConfirmation.map((path) => `- ${path}`)]
+        : [])
+    ].join('\n') + '\n')
+    return
+  }
+
+  if (action === 'confirm') {
+    if (!flags.target) throw new Error('library confirm requires a folder path')
+    const inventory = await LibraryInventory.open({ inventoryPath: config.paths.libraryInventory })
+    const confirmed = await inventory.confirmFolder(flags.target)
+    writeLine(JSON.stringify({ confirmed }, null, 2) + '\n')
+    return
+  }
+
+  if (action === 'scan' || action === 'unseed' || action === 'verify') {
+    if (action === 'unseed' && !flags.target) throw new Error('library unseed requires a videoId, channelKey, or folder path')
+    const { startRelay } = await import('./src/index.js')
+    const relay = await startRelay({ config })
+    try {
+      const result = action === 'scan'
+        ? await relay.libraryScanOnce()
+        : action === 'unseed'
+          ? await relay.libraryUnseed(flags.target)
+          : await relay.libraryReconcile()
+      const output = flags.json || action !== 'verify' ? result : relay.getLibraryStatus()
+      writeLine(JSON.stringify(output, null, 2) + '\n')
+    } finally {
+      await relay.close()
+    }
+    return
+  }
+
+  throw new Error(`Unknown library action "${action}" (expected status | scan | confirm | unseed | verify)`)
+}
+
 async function main() {
   const { command, flags } = parseArgv(normalizeCliArgv(process.argv))
 
@@ -327,6 +389,9 @@ async function main() {
       break
     case 'validate':
       await validateCommand(flags)
+      break
+    case 'library':
+      await libraryCommand(flags)
       break
     case 'status':
       await statusCommand(flags)

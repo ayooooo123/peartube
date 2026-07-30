@@ -1638,6 +1638,61 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": true,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 23,
+      "command": "library-status",
+      "method": "libraryStatus",
+      "handler": "LibraryStatus",
+      "request": "@peartube/library-status-request",
+      "response": "@peartube/library-status-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 24,
+      "command": "library-scan",
+      "method": "libraryScan",
+      "handler": "LibraryScan",
+      "request": "@peartube/library-scan-request",
+      "response": "@peartube/library-scan-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 25,
+      "command": "library-confirm",
+      "method": "libraryConfirm",
+      "handler": "LibraryConfirm",
+      "request": "@peartube/library-confirm-request",
+      "response": "@peartube/library-confirm-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 26,
+      "command": "library-unseed",
+      "method": "libraryUnseed",
+      "handler": "LibraryUnseed",
+      "request": "@peartube/library-unseed-request",
+      "response": "@peartube/library-unseed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
+    },
+    {
+      "id": 27,
+      "command": "library-verify",
+      "method": "libraryVerify",
+      "handler": "LibraryVerify",
+      "request": "@peartube/library-verify-request",
+      "response": "@peartube/library-verify-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -1649,6 +1704,61 @@ export const APP_RPC_METADATA = Object.freeze({
         "handler": "GetStatus",
         "request": "@peartube/get-status-request",
         "response": "@peartube/get-status-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 23,
+        "command": "library-status",
+        "method": "libraryStatus",
+        "handler": "LibraryStatus",
+        "request": "@peartube/library-status-request",
+        "response": "@peartube/library-status-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 24,
+        "command": "library-scan",
+        "method": "libraryScan",
+        "handler": "LibraryScan",
+        "request": "@peartube/library-scan-request",
+        "response": "@peartube/library-scan-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 25,
+        "command": "library-confirm",
+        "method": "libraryConfirm",
+        "handler": "LibraryConfirm",
+        "request": "@peartube/library-confirm-request",
+        "response": "@peartube/library-confirm-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 26,
+        "command": "library-unseed",
+        "method": "libraryUnseed",
+        "handler": "LibraryUnseed",
+        "request": "@peartube/library-unseed-request",
+        "response": "@peartube/library-unseed-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
+      {
+        "id": 27,
+        "command": "library-verify",
+        "method": "libraryVerify",
+        "handler": "LibraryVerify",
+        "request": "@peartube/library-verify-request",
+        "response": "@peartube/library-verify-response",
         "send": false,
         "requestStream": false,
         "responseStream": false
@@ -3204,6 +3314,11 @@ export const APP_RPC_METADATA = Object.freeze({
     "hide-comment",
     "index-video-vectors",
     "join-channel",
+    "library-confirm",
+    "library-scan",
+    "library-status",
+    "library-unseed",
+    "library-verify",
     "list-comments",
     "list-devices",
     "list-resume-positions",

@@ -249,13 +249,18 @@ export async function mirrorLocalDriveToRelayChannel({
   description = '',
   recursive = true,
   maxFiles = Infinity,
+  skipPaths = null,
   fs = { existsSync, readFileSync, readdirSync, statSync },
   path = defaultPath,
   state = null,
   logger = null
 } = {}) {
   if (!publisher) throw new Error('publisher is required')
+  const skipped = skipPaths instanceof Set
+    ? skipPaths
+    : new Set(Array.isArray(skipPaths) ? skipPaths : [])
   const videos = listLocalDriveVideos(rootPath, { fs, path, recursive, maxFiles })
+    .filter((video) => !skipped.has(video.filePath))
   const pendingVideos = state?.seen
     ? videos.filter((video) => getSeenFingerprint(state.seen.get(video.filePath)) !== fingerprintVideo(video))
     : videos

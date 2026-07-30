@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "appId": "peartube",
+  "status": "planning",
+  "anchorProject": "../../00-core/hiverelay",
+  "relayCapabilityDiscovery": {
+    "endpoint": "/.well-known/hiverelay.json",
+    "requiredFeatures": ["capability-doc"],
+    "preferredFeatures": ["seeding-registry", "seed-revocability", "dht-relay-ws", "federation"],
+    "notes": "Fetch candidate HiveRelay capability docs before any future catalog/gateway seed handoff. PearTube's current peartube-relay remains the media availability path."
+  },
+  "bridgeTopics": [
+    "peartube-network",
+    "peartube:channel:<driveKey>"
+  ],
+  "dataPolicy": {
+    "optInRequired": true,
+    "optInField": "channel.publicListed",
+    "excludedByDefault": [
+      "watchHistory",
+      "personalSync",
+      "sourceArchiveUrls",
+      "privateIdentityKeys",
+      "commentsDrafts",
+      "localPlaybackCache",
+      "relayOperatorSecrets"
+    ],
+    "notes": "Only public channel/video metadata and release-site assets should enter a HiveRelay/Pear Browser catalog bridge. Private media, local caches, credentials, and archive source URLs stay outside public relay metadata."
+  },
+  "publishFlow": {
+    "stageCommand": "npm run desktop:build",
+    "seedEndpoints": ["/api/v1/seed", "/seed"],
+    "gatewayPath": "/v1/hyper/:driveKey/*path",
+    "catalogEndpoint": "/catalog.json",
+    "requiredBeforeCatalog": ["driveKey", "pearLink", "link", "screenshots"]
+  },
+  "catalogOutputs": {
+    "catalogDraft": "./catalog-entry.draft.json",
+    "companionSite": "./index.html",
+    "rootManifest": "../manifest.json"
+  },
+  "nextImplementationSteps": [
+    "Decide whether Pear Browser should link a desktop release artifact, a future Pear app drive, or both.",
+    "Prototype HiveRelay catalog seeding with static site assets only, not private video blobs.",
+    "Add screenshots and a release handoff note after the desktop/mobile build surfaces are validated."
+  ]
+}

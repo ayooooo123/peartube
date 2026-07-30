@@ -8,7 +8,8 @@
     "peartube-relay": "bin.js",
     "peartube-peer": "bin.js",
     "peartube-relay-bare": "bare-bin.js",
-    "peartube-peer-bare": "bare-bin.js"
+    "peartube-peer-bare": "bare-bin.js",
+    "peartube-seeder": "bin.js"
   },
   "scripts": {
     "test": "node scripts/run-tests.mjs",

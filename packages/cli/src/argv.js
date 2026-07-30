@@ -44,6 +44,11 @@ export function parseArgv(argv = []) {
 
   const flags = {}
 
+  if (command === 'library') {
+    if (args[0] && !args[0].startsWith('-')) flags.action = args.shift()
+    if (args[0] && !args[0].startsWith('-')) flags.target = args.shift()
+  }
+
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
 
@@ -143,6 +148,22 @@ export function parseArgv(argv = []) {
 
     if (arg === '--max-files') {
       flags.maxFiles = consumeValue()
+      continue
+    }
+
+    
+    if (arg === '--library-path') {
+      pushFlag(flags, 'libraryPath', consumeValue())
+      continue
+    }
+
+    if (arg === '--library-audience') {
+      flags.libraryAudience = consumeValue()
+      continue
+    }
+
+    if (arg === '--library-poll') {
+      flags.libraryPoll = consumeValue()
       continue
     }
 

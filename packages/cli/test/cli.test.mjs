@@ -56,6 +56,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   // Each test file runs in its own process (scripts/run-tests.mjs) so a leaked
   // async teardown timer in one file cannot crash a later file's run.
   t.is(pkg.scripts['test'], 'node scripts/run-tests.mjs')
+  t.is(pkg.bin['peartube-seeder'], 'bin.js')
   t.is(pkg.imports['#subprocess'].bare, './src/shims/subprocess.bare.js')
   t.is(pkg.imports['#subprocess'].default, './src/shims/subprocess.node.js')
   t.is(pkg.imports['#http'].bare, './src/shims/http.bare.js')

@@ -100,6 +100,48 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   uiPort: 8174
 }
 
+
+export const LIBRARY_INVENTORY_FILENAME = 'library-inventory.json'
+
+export const LIBRARY_AUDIENCE_PRIVATE = 'private'
+export const LIBRARY_AUDIENCE_PUBLIC = 'public'
+export const VALID_LIBRARY_AUDIENCES = [LIBRARY_AUDIENCE_PRIVATE, LIBRARY_AUDIENCE_PUBLIC]
+
+export const LIBRARY_ITEM_STATES = [
+  'imported',
+  'published',
+  'durable',
+  'self-only',
+  'pending-approval',
+  'unseeding',
+  'unseeded',
+  'failed'
+]
+
+export const DEFAULT_LIBRARY_POLL_SECONDS = 300
+export const DEFAULT_LIBRARY_FOLDER_MAX_FILES = 5000
+
+export const DEFAULT_LIBRARY_CONFIG = {
+  enabled: false,
+  pollSeconds: DEFAULT_LIBRARY_POLL_SECONDS,
+  folders: [],
+  caps: {
+    maxBytes: 0
+  }
+}
+
+export const DEFAULT_HIVERELAY_CONFIG = {
+  enabled: false,
+  endpoint: null,
+  authToken: null,
+  seedRequest: {
+    durability: 1,
+    ttlSeconds: 2592000,
+    revocable: true
+  },
+  verifyIntervalHours: 24
+}
+
 export const DEFAULT_RELAY_CONFIG = {
   mode: RELAY_MODE_PUBLIC,
   policy: RELAY_POLICY_DISCOVERY,
@@ -130,6 +172,8 @@ export const DEFAULT_RELAY_CONFIG = {
   },
   archive: DEFAULT_ARCHIVE_CONFIG,
   classification: DEFAULT_CLASSIFICATION_CONFIG,
+  library: DEFAULT_LIBRARY_CONFIG,
+  hiverelay: DEFAULT_HIVERELAY_CONFIG,
   logging: {
     level: 'info'
   }

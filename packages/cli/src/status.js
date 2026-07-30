@@ -36,6 +36,22 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {}, creators 
   const channels = catalog.getChannels()
   const summary = catalog.getSummary()
   const creatorRecords = Array.isArray(creators) ? creators : summarizeCreatorsFromCatalog(channels)
+if (status.library) {
+    const items = status.library.items || {}
+    lines.push(
+      `library: folders=${status.library.folders} items=${status.library.totalItems ?? 0} bytes=${status.library.bytes ?? 0}${status.library.capBytes ? `/${status.library.capBytes}` : ''}`,
+      `libraryStates: published=${items.published || 0} durable=${items.durable || 0} selfOnly=${items['self-only'] || 0} pendingApproval=${items['pending-approval'] || 0} failed=${items.failed || 0} unseeded=${items.unseeded || 0}`,
+      `libraryImports: paused=${Boolean(status.library.importsPaused)}${status.library.importsPausedReason ? ` reason=${status.library.importsPausedReason}` : ''}`,
+      `libraryHiverelay: enabled=${Boolean(status.library.hiverelay?.enabled)} endpoint=${status.library.hiverelay?.endpoint || 'none'}`
+    )
+    if (Array.isArray(status.library.awaitingPublicConfirmation) && status.library.awaitingPublicConfirmation.length > 0) {
+      lines.push('libraryAwaitingPublicConfirmation:')
+      for (const path of status.library.awaitingPublicConfirmation) {
+        lines.push(`- ${path}`)
+      }
+    }
+  }
+
   const unseededTargets = rankUnseededTargets(creatorRecords, { limit: UNSEEDED_TARGET_LIMIT })
 
   return {
@@ -43,6 +59,8 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {}, creators 
       ...summarizeCreators(creatorRecords),
       unseededTargets
     },
+    ...(library ? { library } : {}),
+    ...(quota ? { quota } : {}),
     generatedAt: Date.now(),
     mode: config.mode,
     policy: config.policy,

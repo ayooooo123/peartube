@@ -70,17 +70,6 @@ export const DEFAULT_ARCHIVE_JS_RUNTIME = ''
 export const DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS = []
 export const DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS = []
 export const DEFAULT_LOCAL_MIRROR_POLL_SECONDS = 30
-// Per-download ceiling for the direct (plain HTTP link) downloader, in bytes.
-//
-// This number exists to stop a caller aiming the relay at an endless body, not
-// to express an opinion about media quality — so it belongs above every real
-// single video file and below infinity. The largest file real media produces is
-// a UHD Blu-ray full-disc remux (BD-100, ~93 GiB); 1080p remuxes run 7-40 GB.
-// 128 GiB clears BD-100 with room to spare. Aggregate disk use is the storage
-// gate's job (storage.minFreeBytes), which is consulted per download and only
-// ever lowers this.
-export const DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES = 128 * 1024 * 1024 * 1024
-
 export const DEFAULT_ARCHIVE_CONFIG = {
   enabled: false,
   poll: DEFAULT_ARCHIVE_POLL_SECONDS,
@@ -95,7 +84,7 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   maxRetries: DEFAULT_ARCHIVE_MAX_RETRIES,
   budgetReservePercent: DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT,
   maxItems: DEFAULT_ARCHIVE_MAX_ITEMS,
-  maxDirectDownloadBytes: DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
+  maxDirectDownloadBytes: 0,
   sources: [],
   localMirror: {
     enabled: false,

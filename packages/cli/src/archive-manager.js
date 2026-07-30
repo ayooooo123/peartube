@@ -823,124 +823,141 @@ function loadUploadedFile (privateInput) {
   }
 }
 
-export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, canIngest = null }) {
+export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, canIngest = null, runQueue = null, onUploadReleased = null }) {
   if (!store) throw new Error('store is required')
   if (!downloader) throw new Error('downloader is required')
   if (!publisher) throw new Error('publisher is required')
+
+  const queue = runQueue || { tail: Promise.resolve() }
+  if (!queue.tail || typeof queue.tail.then !== 'function') queue.tail = Promise.resolve()
+  const runExclusive = (fn) => {
+    const next = queue.tail.then(fn, fn)
+    queue.tail = next.catch(() => {})
+    return next
+  }
+
+  async function runJobUnlocked(id) {
+    const privateInput = await store.getPrivateInput(id)
+    const isUpload = Boolean(privateInput?.uploadPath)
+    if (!isUpload && !privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
+    // Refuse to download/import when the relay is over its storage threshold
+    // or low on free disk, so archive imports (incl. web-console uploads) can't
+    // fill the disk and crash the relay. Mark failed WITHOUT touching the
+    // staged upload temp so runNext() retries cleanly once space is reclaimed
+    // (a URL job re-downloads; an upload re-reads its still-present temp).
+    if (typeof canIngest === 'function' && !canIngest()) {
+      logger?.archive?.warn?.('[archive-stage] refused: storage threshold reached', { id })
+      return store.updateJob(id, { status: 'failed', error: 'relay storage threshold reached; free space or raise storage.maxBytes' })
+    }
+    await store.updateJob(id, { status: 'running', error: null })
+    logger?.archive?.info?.('[archive-stage] running', { id, isUpload })
+    let downloaded = null
+
+    try {
+      downloaded = isUpload
+        ? loadUploadedFile(privateInput)
+        : await downloader.download({ id, ...privateInput })
+      const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
+      logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null })
+      const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity })
+      logger?.archive?.info?.('[archive-stage] channel-ready', { id, channelKey: channelInfo?.channelKey || null, publicBeeKey: channelInfo?.publicBeeKey || null })
+      const sourceTitle = downloaded.title || privateInput.title
+      const sourceDescription = downloaded.description || privateInput.description
+      const imported = await publisher.importVideo({
+        ...privateInput,
+        ...downloaded,
+        channel: channelInfo.channel,
+        title: sourceTitle,
+        description: sourceDescription
+      })
+      logger?.archive?.info?.('[archive-stage] imported', { id, videoId: imported?.videoId || null })
+      const importedMetadata = imported?.metadata || imported
+
+      const previewVideo = imported?.videoId ? {
+        id: imported.videoId,
+        title: sourceTitle || imported.videoId,
+        description: sourceDescription || '',
+        path: importedMetadata.path || `/videos/${imported.videoId}.mp4`,
+        uploadedAt: importedMetadata.uploadedAt || now(),
+        duration: Number(importedMetadata.duration || downloaded.duration || 0) || 0,
+        size: Number(importedMetadata.size || downloaded.size || 0) || 0,
+        mimeType: importedMetadata.mimeType || downloaded.mimeType || 'video/mp4',
+        sourceVideoId: privateInput.sourceVideoId || downloaded.sourceVideoId || null,
+        creatorSourceId: privateInput.creatorSourceId || downloaded.creatorSourceId || null,
+        creatorName: privateInput.creatorName || downloaded.creatorName || null,
+        creatorHandle: privateInput.creatorHandle || downloaded.creatorHandle || null,
+        availability: 'playable',
+        blobId: importedMetadata.blobId || null,
+        blobsCoreKey: importedMetadata.blobsCoreKey || null,
+        thumbnailBlobId: importedMetadata.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
+        thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
+        thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null,
+        immutablePublication: importedMetadata.immutablePublication || null,
+        ...deriveMediaCoordinates(privateInput),
+        classification: privateInput.tmdbId ? {
+          type: privateInput.tmdbType || 'movie',
+          tmdbId: Number(privateInput.tmdbId) || privateInput.tmdbId,
+          title: privateInput.tmdbTitle || sourceTitle || null,
+          year: Number(privateInput.tmdbYear || 0) || null,
+          posterPath: privateInput.tmdbPosterPath || null,
+          season: Number(privateInput.tmdbSeason || 0) || null,
+          episode: Number(privateInput.tmdbEpisode || 0) || null,
+          classifiedAt: now()
+        } : undefined
+      } : null
+      logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
+      if (privateInput.publish !== false) {
+        await publisher.publishCatalog(channelInfo)
+        await publisher.retainAssets({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
+      }
+      logger?.archive?.info?.('[archive-stage] published', { id })
+
+      const completed = await store.updateJob(id, {
+        status: 'completed',
+        title: sourceTitle || downloaded.title,
+        videoId: imported.videoId,
+        channelKey: channelInfo.channelKey,
+        publicBeeKey: channelInfo.publicBeeKey || null,
+        publisherId: channelInfo.publisherId || null,
+        previewVideo,
+        completedAt: now(),
+        error: null
+      })
+      if (typeof onCompleted === 'function') {
+        await onCompleted(completed)
+      }
+      return completed
+    } catch (err) {
+      logger?.archive?.error?.('Archive job failed', { id, error: err?.message || String(err) })
+      const failed = await store.updateJob(id, { status: 'failed', error: err?.message || String(err) })
+      return failed
+    } finally {
+      try {
+        downloaded?.cleanup?.()
+      } catch (err) {
+        // Best effort: import result is already persisted before cleanup runs.
+      }
+      if (isUpload && typeof onUploadReleased === 'function') {
+        try { onUploadReleased(privateInput.uploadPath) } catch {}
+      }
+    }
+  }
 
   return {
     enqueue(input) {
       return enqueueArchiveJob(store, input)
     },
-    async runNext() {
-      const jobs = await store.listJobs()
-      const job = jobs.find((item) => item.status === 'queued' || item.status === 'failed')
-      if (!job) return null
-      return this.runJob(job.id)
+    runNext() {
+      return runExclusive(async () => {
+        const jobs = await store.listJobs()
+        const job = jobs.find((item) => item.status === 'queued' || item.status === 'failed')
+        if (!job) return null
+        return runJobUnlocked(job.id)
+      })
     },
-    async runJob(id) {
-      const privateInput = await store.getPrivateInput(id)
-      const isUpload = Boolean(privateInput?.uploadPath)
-      if (!isUpload && !privateInput?.url) throw new Error(`Archive job ${id} has no private URL input`)
-      // Refuse to download/import when the relay is over its storage threshold
-      // or low on free disk, so archive imports (incl. web-console uploads) can't
-      // fill the disk and crash the relay. Mark failed WITHOUT touching the
-      // staged upload temp so runNext() retries cleanly once space is reclaimed
-      // (a URL job re-downloads; an upload re-reads its still-present temp).
-      if (typeof canIngest === 'function' && !canIngest()) {
-        logger?.archive?.warn?.('[archive-stage] refused: storage threshold reached', { id })
-        return store.updateJob(id, { status: 'failed', error: 'relay storage threshold reached; free space or raise storage.maxBytes' })
-      }
-      await store.updateJob(id, { status: 'running', error: null })
-      logger?.archive?.info?.('[archive-stage] running', { id, isUpload })
-      let downloaded = null
-
-      try {
-        downloaded = isUpload
-          ? loadUploadedFile(privateInput)
-          : await downloader.download({ id, ...privateInput })
-        const sourceIdentity = privateInput.sourceIdentity || deriveArchiveSourceIdentity(privateInput)
-        logger?.archive?.info?.('[archive-stage] ensuring-channel', { id, sourceId: sourceIdentity?.sourceId || null })
-        const channelInfo = await publisher.ensureAnonymousChannel({ ...privateInput, sourceIdentity })
-        logger?.archive?.info?.('[archive-stage] channel-ready', { id, channelKey: channelInfo?.channelKey || null, publicBeeKey: channelInfo?.publicBeeKey || null })
-        const sourceTitle = downloaded.title || privateInput.title
-        const sourceDescription = downloaded.description || privateInput.description
-        const imported = await publisher.importVideo({
-          ...privateInput,
-          ...downloaded,
-          channel: channelInfo.channel,
-          title: sourceTitle,
-          description: sourceDescription
-        })
-        logger?.archive?.info?.('[archive-stage] imported', { id, videoId: imported?.videoId || null })
-        const importedMetadata = imported?.metadata || imported
-
-        const previewVideo = imported?.videoId ? {
-          id: imported.videoId,
-          title: sourceTitle || imported.videoId,
-          description: sourceDescription || '',
-          path: importedMetadata.path || `/videos/${imported.videoId}.mp4`,
-          uploadedAt: importedMetadata.uploadedAt || now(),
-          duration: Number(importedMetadata.duration || downloaded.duration || 0) || 0,
-          size: Number(importedMetadata.size || downloaded.size || 0) || 0,
-          mimeType: importedMetadata.mimeType || downloaded.mimeType || 'video/mp4',
-          sourceVideoId: privateInput.sourceVideoId || downloaded.sourceVideoId || null,
-          creatorSourceId: privateInput.creatorSourceId || downloaded.creatorSourceId || null,
-          creatorName: privateInput.creatorName || downloaded.creatorName || null,
-          creatorHandle: privateInput.creatorHandle || downloaded.creatorHandle || null,
-          availability: 'playable',
-          blobId: importedMetadata.blobId || null,
-          blobsCoreKey: importedMetadata.blobsCoreKey || null,
-          thumbnailBlobId: importedMetadata.thumbnailBlobId || null,
-          thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
-          thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
-          thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null,
-          immutablePublication: importedMetadata.immutablePublication || null,
-          ...deriveMediaCoordinates(privateInput),
-          classification: privateInput.tmdbId ? {
-            type: privateInput.tmdbType || 'movie',
-            tmdbId: Number(privateInput.tmdbId) || privateInput.tmdbId,
-            title: privateInput.tmdbTitle || sourceTitle || null,
-            year: Number(privateInput.tmdbYear || 0) || null,
-            posterPath: privateInput.tmdbPosterPath || null,
-            season: Number(privateInput.tmdbSeason || 0) || null,
-            episode: Number(privateInput.tmdbEpisode || 0) || null,
-            classifiedAt: now()
-          } : undefined
-        } : null
-        logger?.archive?.info?.('[archive-stage] publishing', { id, publish: privateInput.publish !== false })
-        if (privateInput.publish !== false) {
-          await publisher.publishCatalog(channelInfo)
-          await publisher.retainAssets({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
-        }
-        logger?.archive?.info?.('[archive-stage] published', { id })
-
-        const completed = await store.updateJob(id, {
-          status: 'completed',
-          title: sourceTitle || downloaded.title,
-          videoId: imported.videoId,
-          channelKey: channelInfo.channelKey,
-          publicBeeKey: channelInfo.publicBeeKey || null,
-          publisherId: channelInfo.publisherId || null,
-          previewVideo,
-          completedAt: now(),
-          error: null
-        })
-        if (typeof onCompleted === 'function') {
-          await onCompleted(completed)
-        }
-        return completed
-      } catch (err) {
-        logger?.archive?.error?.('Archive job failed', { id, error: err?.message || String(err) })
-        const failed = await store.updateJob(id, { status: 'failed', error: err?.message || String(err) })
-        return failed
-      } finally {
-        try {
-          downloaded?.cleanup?.()
-        } catch (err) {
-          // Best effort: import result is already persisted before cleanup runs.
-        }
-      }
+    runJob(id) {
+      return runExclusive(() => runJobUnlocked(id))
     }
   }
 }

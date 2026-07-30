@@ -1,7 +1,6 @@
 import { requestOnce } from './http-get.js'
 import { getVideoMimeType } from './yt-dlp.js'
 import { assertPublicHttpUrl, blockedAddressReason } from './public-url-guard.js'
-import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../constants.js'
 
 // Direct HTTP(S) downloader for archive sources that are a plain link to the
 // media file itself (e.g. a show/episode hosted on a file server or CDN) rather
@@ -21,8 +20,9 @@ import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../constants.js'
 //                    closes DNS rebinding between the check and the connect
 //   the content type the response must say it is a video; a `.mp4` on the end
 //                    of a caller-chosen path is not evidence of anything
-//   the size         capped, so an unauthenticated caller cannot aim the relay
-//                    at an endless body
+//   disk floor       the relay refuses when it is already at its configured
+//                    minimum free-space floor, and measurable headroom is the
+//                    only byte bound while writing
 //
 // What this does NOT stop: the TCP connection to a hop is established before
 // its socket address can be read, so a redirect into private space still costs
@@ -33,10 +33,6 @@ import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../constants.js'
 const VIDEO_EXT = /\.(mp4|m4v|mkv|webm|mov|avi|ts|m2ts|flv|ogv|ogg|wmv|mpg|mpeg)$/i
 const VIDEO_CONTENT_TYPE = /^(video\/|application\/octet-stream|application\/mp4|binary\/octet-stream)/i
 const MAX_REDIRECTS = 5
-// Fallback ceiling for a guarded fetch when the instance was given none, so an
-// unauthenticated caller is never unbounded by omission. Operators set the real
-// number with archive.maxDirectDownloadBytes.
-const DEFAULT_MAX_GUARDED_BYTES = DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES
 
 export function isDirectVideoUrl (url) {
   try {
@@ -113,7 +109,57 @@ async function openStream (url, { maxRedirects = MAX_REDIRECTS, timeoutMs = 0, r
   throw new Error('too many redirects during direct download')
 }
 
-function pipeToFile (res, filePath, fs, maxBytes = 0) {
+function atStorageFloor(snapshot) {
+  if (Number.isFinite(snapshot)) return snapshot <= 0
+  if (!snapshot || typeof snapshot !== 'object') return false
+  const values = [snapshot.tmp, snapshot.storage].filter((value) => Number.isFinite(value))
+  return values.length > 0 && Math.min(...values) <= 0
+}
+
+function reserveAdjustedHeadroom(snapshot, reservedBytes) {
+  const reserved = Number.isFinite(reservedBytes) && reservedBytes > 0 ? Math.floor(reservedBytes) : 0
+  if (reserved <= 0) return snapshot
+  if (Number.isFinite(snapshot)) return Math.max(0, Math.floor(snapshot) - reserved)
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  const storage = Number.isFinite(snapshot.storage) ? Math.max(0, Math.floor(snapshot.storage) - reserved) : snapshot.storage
+  if (snapshot.sharedVolume === false) return { ...snapshot, storage }
+  return {
+    ...snapshot,
+    tmp: Number.isFinite(snapshot.tmp) ? Math.max(0, Math.floor(snapshot.tmp) - reserved) : snapshot.tmp,
+    storage
+  }
+}
+
+function storageHeadroomError(snapshot, written, chunkLength, kind, state = null) {
+  const staged = written + chunkLength
+  if (Number.isFinite(snapshot)) {
+    const room = Math.floor(snapshot)
+    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
+    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
+    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
+    return `${kind} exceeded available storage headroom of ${Math.max(0, room)} bytes`
+  }
+  if (!snapshot || typeof snapshot !== 'object') return `${kind} cannot measure archive storage headroom`
+  const tmp = Math.floor(snapshot.tmp)
+  const storage = Math.floor(snapshot.storage)
+  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return `${kind} cannot measure archive storage headroom`
+  if (snapshot.sharedVolume !== false) {
+    const room = Math.min(tmp, storage)
+    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
+    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
+    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
+    return `${kind} exceeded available storage headroom of ${Math.max(0, room)} bytes`
+  }
+  if (state && !Number.isFinite(state.tmpRoom)) state.tmpRoom = tmp
+  if (state && !Number.isFinite(state.storageRoom)) state.storageRoom = storage
+  const tmpBaseline = state && Number.isFinite(state.tmpRoom) ? state.tmpRoom : tmp
+  const storageBaseline = state && Number.isFinite(state.storageRoom) ? state.storageRoom : storage
+  if (staged > tmpBaseline || tmp < chunkLength) return `${kind} exceeded available archive temp headroom of ${Math.max(0, Math.min(tmp, tmpBaseline))} bytes`
+  if (staged > storageBaseline || storage < staged) return `${kind} exceeded available archive storage headroom of ${Math.max(0, Math.min(storage, storageBaseline))} bytes`
+  return null
+}
+
+function pipeToFile (res, filePath, fs, { storageHeadroom = null, headroomState = null, reserveStorageBytes = null, releaseStorageBytes = null } = {}) {
   return new Promise((resolve, reject) => {
     let fd
     try { fd = fs.openSync(filePath, 'w') } catch (err) { reject(err); return }
@@ -127,44 +173,45 @@ function pipeToFile (res, filePath, fs, maxBytes = 0) {
     }
     res.on('data', (chunk) => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      if (maxBytes > 0) {
-        written += bytes.length
-        if (written > maxBytes) {
+      if (typeof storageHeadroom === 'function') {
+        const error = storageHeadroomError(storageHeadroom(), written, bytes.length, 'direct download', headroomState)
+        if (error) {
           res.destroy?.()
-          finish(new Error(`direct download exceeded the ${maxBytes} byte ceiling`))
+          finish(new Error(error))
           return
         }
       }
-      try { fs.writeSync(fd, bytes) } catch (err) { res.destroy?.(); finish(err) }
+      let reserved = false
+      if (typeof reserveStorageBytes === 'function') {
+        reserveStorageBytes(bytes.length)
+        reserved = true
+      }
+      try {
+        fs.writeSync(fd, bytes)
+        written += bytes.length
+      } catch (err) {
+        if (reserved && typeof releaseStorageBytes === 'function') releaseStorageBytes(bytes.length)
+        res.destroy?.()
+        finish(err)
+      }
     })
     res.on('end', () => finish())
     res.on('error', (err) => finish(err))
   })
 }
 
-// Bytes this download may write. `0` means unbounded, which only a trusted
-// (console) source can ask for and only when the operator left no ceiling.
-// `headroomBytes` is what the relay's storage gate says is still free above its
-// min-free-disk floor: it can only ever lower the ceiling, and is ignored when
-// free space cannot be measured (null), which is the Bare/limited-fs case.
-export function byteCeiling (maxBytes, requirePublicSource, headroomBytes) {
-  let ceiling = maxBytes > 0 ? Math.floor(maxBytes) : 0
-  if (requirePublicSource && ceiling === 0) ceiling = DEFAULT_MAX_GUARDED_BYTES
-  if (Number.isFinite(headroomBytes) && headroomBytes > 0) {
-    const room = Math.floor(headroomBytes)
-    ceiling = ceiling > 0 ? Math.min(ceiling, room) : room
-  }
-  return ceiling
+// Static helper for tests and config reasoning. `0` means unbounded by file
+// size; only measurable storage headroom may become a byte bound.
+export function byteCeiling (_maxBytes, _requirePublicSource, headroomBytes) {
+  if (Number.isFinite(headroomBytes) && headroomBytes > 0) return Math.floor(headroomBytes)
+  return 0
 }
 
-// `maxBytes` caps every download this instance performs; 0 leaves a console
-// download unbounded, which is what the console has always been, while a
-// guarded url seed still falls back to DEFAULT_MAX_GUARDED_BYTES. An operator's
-// lower ceiling wins, and so does the storage gate's remaining headroom:
-// `storageHeadroom` is an optional `() => bytes|null` reading the same free-disk
-// floor archive ingestion is already gated on, so raising the ceiling for real
-// media cannot turn into unbounded disk use.
-export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, maxBytes = 0, lookup = null, storageHeadroom = null } = {}) {
+// Downloads are not capped by media file size. `storageHeadroom` is an optional
+// `() => bytes|null` reading the free-space floor for the archive temp/output
+// volume. It is checked while streaming, so concurrent failed huge fetches stop
+// at the disk floor and clean up their partial temp directories.
+export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lookup = null, storageHeadroom = null, storageReservations = null } = {}) {
   if (!outputDir) throw new Error('outputDir is required')
   return {
     async download (input = {}) {
@@ -175,11 +222,34 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, ma
       // Read once, before a byte is fetched: the same free-disk floor archive
       // ingestion is gated on. At or below the floor there is nothing to write
       // into, so say so instead of streaming a body onto a full volume.
-      const headroomBytes = typeof storageHeadroom === 'function' ? storageHeadroom() : null
-      if (Number.isFinite(headroomBytes) && headroomBytes <= 0) {
-        throw new Error('relay is at its minimum free disk floor; refusing direct download')
+      const reservation = { bytes: 0, released: false }
+      const reserveBytes = (bytes) => {
+        const size = Math.max(0, Math.floor(Number(bytes) || 0))
+        if (size <= 0 || !storageReservations) return
+        reservation.bytes += size
+        storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0)) + size
       }
-      const ceiling = byteCeiling(maxBytes, requirePublicSource, headroomBytes)
+      const releaseBytes = (bytes) => {
+        const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
+        if (size <= 0 || !storageReservations) return
+        reservation.bytes -= size
+        storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - size)
+      }
+      const releaseReservation = () => {
+        if (reservation.released) return
+        reservation.released = true
+        releaseBytes(reservation.bytes)
+      }
+      const measuredHeadroom = typeof storageHeadroom === 'function'
+        ? () => reserveAdjustedHeadroom(storageHeadroom(), Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0) - reservation.bytes))
+        : null
+      const headroomState = {}
+      if (typeof measuredHeadroom === 'function') {
+        const snapshot = measuredHeadroom()
+        if (atStorageFloor(snapshot)) throw new Error('relay is at its minimum free disk floor; refusing direct download')
+        const error = storageHeadroomError(snapshot, 0, 1, 'direct download', headroomState)
+        if (error) throw new Error(error)
+      }
       const targetDir = path.join(outputDir, id)
       fs.mkdirSync(targetDir, { recursive: true })
 
@@ -213,9 +283,15 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, ma
       const filePath = path.join(targetDir, fileName)
 
       try {
-        await pipeToFile(res, filePath, fs, ceiling)
+        await pipeToFile(res, filePath, fs, {
+          storageHeadroom: measuredHeadroom,
+          headroomState,
+          reserveStorageBytes: reserveBytes,
+          releaseStorageBytes: releaseBytes
+        })
       } catch (err) {
         try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
+        releaseReservation()
         throw err
       }
 
@@ -231,8 +307,10 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, ma
         thumbnailFile: null,
         creatorName: input.creatorName || null,
         mimeType,
+        releaseStorageReservation: releaseReservation,
         cleanup () {
           try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch { /* best effort */ }
+          releaseReservation()
         }
       }
     }

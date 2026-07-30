@@ -1,4 +1,5 @@
 import { createServer } from '#http'
+import { rmSync } from '#fs'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
@@ -12,7 +13,6 @@ import {
   isGatedArchiveApiRoute
 } from './archive-api.js'
 
-const DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024 // 5 GB
 
 // Rendered as a banner after a submission that carried neither a file nor a
 // source URL, so an ignored form is visibly ignored.
@@ -414,6 +414,20 @@ export async function buildCatalogChannels({ channels = [], store = null } = {})
   return Array.from(byKey.values())
 }
 
+function reserveAdjustedHeadroom(snapshot, reservedBytes) {
+  const reserved = Number.isFinite(reservedBytes) && reservedBytes > 0 ? Math.floor(reservedBytes) : 0
+  if (reserved <= 0) return snapshot
+  if (Number.isFinite(snapshot)) return Math.max(0, Math.floor(snapshot) - reserved)
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  const storage = Number.isFinite(snapshot.storage) ? Math.max(0, Math.floor(snapshot.storage) - reserved) : snapshot.storage
+  if (snapshot.sharedVolume === false) return { ...snapshot, storage }
+  return {
+    ...snapshot,
+    tmp: Number.isFinite(snapshot.tmp) ? Math.max(0, Math.floor(snapshot.tmp) - reserved) : snapshot.tmp,
+    storage
+  }
+}
+
 export async function createArchiveConsole({
   service,
   downloader,
@@ -422,7 +436,7 @@ export async function createArchiveConsole({
   port = 8174,
   logger = null,
   uploadDir = null,
-  maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
+  uploadStorageHeadroom = null,
   // Opens the machine API's enumeration and byte-serving routes on a
   // non-loopback bind. Off unless the operator asked for it.
   apiOpen = false,
@@ -434,11 +448,39 @@ export async function createArchiveConsole({
   // it rather than opening its own, so nothing rebinds and no request between
   // bind and readiness is refused.
   httpSurface = null,
-  serverFactory = createDefaultServer
+  serverFactory = createDefaultServer,
+  runQueue = null,
+  storageReservations = null
 }) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
-  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job) })
+  const copyReservations = storageReservations || { bytes: 0 }
+  const uploadReservations = new Map()
+  const releaseUploadReservation = (reservation) => {
+    if (!reservation || reservation.released) return
+    reservation.released = true
+    copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - reservation.bytes)
+    reservation.bytes = 0
+  }
+  const releaseUploadReservationByPath = (uploadPath) => {
+    const release = uploadReservations.get(uploadPath)
+    if (!release) return
+    uploadReservations.delete(uploadPath)
+    release()
+  }
+  const reserveUploadBytes = (reservation, bytes) => {
+    const size = Math.max(0, Math.floor(Number(bytes) || 0))
+    if (size <= 0) return
+    reservation.bytes += size
+    copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0)) + size
+  }
+  const releaseUploadBytes = (reservation, bytes) => {
+    const size = Math.max(0, Math.min(reservation.bytes, Math.floor(Number(bytes) || 0)))
+    if (size <= 0) return
+    reservation.bytes -= size
+    copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - size)
+  }
+  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job), runQueue, onUploadReleased: releaseUploadReservationByPath })
 
   // Read an archive submission as a browser file upload (multipart/form-data,
   // streamed to disk), a machine API JSON body, or a URL-encoded form. Returns
@@ -449,7 +491,25 @@ export async function createArchiveConsole({
       const boundary = parseBoundary(contentType)
       if (!boundary) throw new Error('multipart upload is missing its boundary')
       if (!uploadDir) throw new Error('relay archive upload directory is not configured')
-      const { fields, file } = await receiveMultipartUpload(req, { boundary, uploadDir, maxBytes: maxUploadBytes })
+      const reservation = { bytes: 0, released: false }
+      const storageHeadroom = typeof uploadStorageHeadroom === 'function'
+        ? () => reserveAdjustedHeadroom(uploadStorageHeadroom(), Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - reservation.bytes))
+        : null
+      const { fields, file } = await receiveMultipartUpload(req, {
+        boundary,
+        uploadDir,
+        storageHeadroom,
+        reserveStorageBytes: (bytes) => reserveUploadBytes(reservation, bytes),
+        releaseStorageBytes: (bytes) => releaseUploadBytes(reservation, bytes)
+      })
+      if (file?.path && typeof file.releaseStorageReservation === 'function') {
+        const release = file.releaseStorageReservation
+        file.releaseStorageReservation = () => {
+          uploadReservations.delete(file.path)
+          release()
+        }
+        uploadReservations.set(file.path, file.releaseStorageReservation)
+      }
       return { form: buildArchiveForm((key) => fields[key] ?? ''), file, fields }
     }
     if (/application\/json/i.test(contentType)) {
@@ -460,16 +520,37 @@ export async function createArchiveConsole({
     return { form: buildArchiveForm((key) => params.get(key) || ''), file: null, fields: formFields(params) }
   }
 
+  function discardUploadFile(file) {
+    if (!file) return
+    try {
+      if (file.dir) rmSync(file.dir, { recursive: true, force: true })
+    } catch (err) {
+      logger?.archive?.warn?.('Discarding a rejected upload failed', { error: err?.message || String(err) })
+    } finally {
+      if (typeof file.releaseStorageReservation === 'function') {
+        try { file.releaseStorageReservation() } catch {}
+      } else if (file.path) {
+        releaseUploadReservationByPath(file.path)
+      }
+    }
+  }
+
   // One enqueue path for a catalogue-identified submission, shared by the
   // browser Discover form and the machine API: they differ in how they answer,
   // never in what they enqueue.
   async function enqueueCatalogSubmission(form, file) {
-    const job = await manager.enqueue({
-      ...form,
-      ...uploadFields(file),
-      sourceType: form.sourceType || 'tmdb',
-      sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
-    })
+    let job
+    try {
+      job = await manager.enqueue({
+        ...form,
+        ...uploadFields(file),
+        sourceType: form.sourceType || 'tmdb',
+        sourceVideoId: form.sourceVideoId || tmdbSourceVideoId(form.tmdbType, form.tmdbId, form.tmdbSeason, form.tmdbEpisode)
+      })
+    } catch (err) {
+      discardUploadFile(file)
+      throw err
+    }
     manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
     return job
   }
@@ -731,8 +812,7 @@ export async function createArchiveConsole({
           res.end()
           return
         }
-        await manager.enqueue({ ...form, ...uploadFields(file) })
-        manager.runNext().catch((err) => logger?.archive?.error?.('Archive run failed', { error: err?.message || String(err) }))
+        await enqueueCatalogSubmission(form, file)
         res.writeHead(303, { location: '/' })
         res.end()
         return

@@ -508,6 +508,10 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
       rmSync(file.dir, { recursive: true, force: true })
     } catch (err) {
       logger?.archive?.warn?.('Discarding a rejected upload failed', { error: err?.message || String(err) })
+    } finally {
+      if (typeof file.releaseStorageReservation === 'function') {
+        try { file.releaseStorageReservation() } catch {}
+      }
     }
   }
 

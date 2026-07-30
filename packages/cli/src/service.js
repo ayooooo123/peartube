@@ -26,6 +26,40 @@ function archiveUiHost(config) {
   return config?.archive?.uiHost || '127.0.0.1'
 }
 
+function liveFreeDiskHeadroom({ fsModule, path, minFreeBytes = 0, log = null }) {
+  const floor = Number.isFinite(Number(minFreeBytes)) && Number(minFreeBytes) > 0 ? Math.floor(Number(minFreeBytes)) : 0
+  return () => {
+    if (!path || typeof fsModule?.statfsSync !== 'function') return null
+    try {
+      const st = fsModule.statfsSync(path)
+      const bsize = Number(st?.bsize) || 0
+      const bavail = Number(st?.bavail) || 0
+      if (bsize <= 0 || bavail < 0) return null
+      return Math.max(0, (bavail * bsize) - floor)
+    } catch (err) {
+      log?.('[archive-headroom] statfs failed', err?.message || String(err))
+      return null
+    }
+  }
+}
+
+function maybeSameVolume(fsModule, left, right) {
+  if (typeof fsModule?.statSync !== 'function' || !left || !right) return true
+  try {
+    return fsModule.statSync(left).dev === fsModule.statSync(right).dev
+  } catch {
+    return true
+  }
+}
+
+function archiveWriteHeadroom({ tmpHeadroom, storageHeadroom, sharedVolume = true }) {
+  return () => ({
+    tmp: typeof tmpHeadroom === 'function' ? tmpHeadroom() : null,
+    storage: typeof storageHeadroom === 'function' ? storageHeadroom() : null,
+    sharedVolume
+  })
+}
+
 // Bind the operator's HTTP surface before anything reads the store.
 //
 // Everything below this line walks storage: the relay catalog, the creators DB,
@@ -83,6 +117,7 @@ async function buildRelayService({
     storagePath: config.storage.path,
     creatorsPath: config.paths.creators
   })
+  const archiveRunQueue = { tail: Promise.resolve() }
   const relaySettings = await RelaySettings.open({ storagePath: config.storage.path })
 
   // Storage threshold gate: refuse new ingestion (discovery mirroring, archive
@@ -469,6 +504,25 @@ async function buildRelayService({
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
+        try { runtimeFsModule?.mkdirSync?.(config.archive.tmpPath, { recursive: true }) } catch {}
+        const tmpHeadroom = liveFreeDiskHeadroom({
+          fsModule: runtimeFsModule,
+          path: config.archive.tmpPath,
+          minFreeBytes: config.storage.minFreeBytes || 0,
+          log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
+        })
+        const persistedHeadroom = liveFreeDiskHeadroom({
+          fsModule: runtimeFsModule,
+          path: config.storage.path,
+          minFreeBytes: config.storage.minFreeBytes || 0,
+          log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
+        })
+        const archiveHeadroom = archiveWriteHeadroom({
+          tmpHeadroom,
+          storageHeadroom: persistedHeadroom,
+          sharedVolume: maybeSameVolume(runtimeFsModule, config.archive.tmpPath, config.storage.path)
+        })
+        const archiveStorageReservations = { bytes: 0 }
         archiveConsole = await createArchiveConsole({
           service,
           logger,
@@ -476,16 +530,18 @@ async function buildRelayService({
           port: archiveUiPort(config),
           apiOpen: Boolean(config.archive.apiOpen),
           uploadDir: config.archive.tmpPath,
+          uploadStorageHeadroom: archiveHeadroom,
+          storageReservations: archiveStorageReservations,
+          runQueue: archiveRunQueue,
           downloader: createRoutingDownloader({
             directDownloader: createDirectDownloader({
               outputDir: config.archive.tmpPath,
               fs: runtimeFsModule,
               path: runtimePathModule,
-              maxBytes: config.archive.maxDirectDownloadBytes,
-              // Same free-disk floor archive ingestion is gated on, read per
-              // download: the configured ceiling is what an operator allows, this
-              // is what the volume actually has left.
-              storageHeadroom: () => storageGuard.headroomBytes()
+              // No media-size cap: the live archive temp/persisted-volume
+              // headroom callback is the only byte bound.
+              storageHeadroom: archiveHeadroom,
+              storageReservations: archiveStorageReservations
             }),
             ytDlpDownloader: createYtDlpDownloader({
               bin: config.archive.ytDlpPath,
@@ -688,6 +744,7 @@ async function buildRelayService({
       const manager = createArchiveManager({
         store,
         logger,
+        runQueue: archiveRunQueue,
         canIngest: () => storageGuard.hasMinFreeDisk(),
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,

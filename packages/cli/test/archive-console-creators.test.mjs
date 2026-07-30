@@ -1,6 +1,6 @@
 import test from 'brittle'
 import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole } from '../src/archive-console.js'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,6 +11,16 @@ function fakeMetaDb() {
     async put(key, value) { map.set(key, value) }
   }
 }
+function directoryBytes(path) {
+  let total = 0
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const child = join(path, entry.name)
+    if (entry.isDirectory()) total += directoryBytes(child)
+    else if (entry.isFile()) total += statSync(child).size
+  }
+  return total
+}
+
 
 function fakeService(overrides = {}) {
   const tmdb = { apiKey: '', enabled: false }
@@ -343,6 +353,95 @@ test('POST /archive accepts a multipart file upload and enqueues an upload job',
       t.ok(jobs.jobs.some((job) => job.title === 'Severance S01E02'), 'job carries the submitted title')
     }, { uploadDir })
   } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+})
+
+test('POST /archive reserves staged uploads against later multipart requests', async function (t) {
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-upload-reserve-'))
+  let firstImportStartedResolve
+  let releaseFirstImport
+  const firstImportStarted = new Promise((resolve) => { firstImportStartedResolve = resolve })
+  const releaseFirst = new Promise((resolve) => { releaseFirstImport = resolve })
+  const publisher = {
+    async ensureAnonymousChannel() {
+      firstImportStartedResolve()
+      await releaseFirst
+      throw new Error('stop-after-reservation-check')
+    }
+  }
+  const headroom = () => {
+    const free = Math.max(0, 1000 - directoryBytes(uploadDir))
+    return { tmp: free, storage: free, sharedVolume: true }
+  }
+  try {
+    await withConsole(fakeService(), async (base) => {
+      const first = new FormData()
+      first.set('channelName', 'Reservation')
+      first.set('title', 'Large staged upload')
+      first.set('publish', 'false')
+      first.set('file', new Blob([Buffer.alloc(400, 0x61)], { type: 'video/mp4' }), 'large.mp4')
+      const firstRes = await fetch(`${base}/archive`, { method: 'POST', body: first, redirect: 'manual' })
+      t.is(firstRes.status, 303, 'the first upload stages and enqueues')
+      await firstImportStarted
+
+      const second = new FormData()
+      second.set('channelName', 'Reservation')
+      second.set('title', 'Second staged upload')
+      second.set('publish', 'false')
+      second.set('file', new Blob([Buffer.alloc(300, 0x62)], { type: 'video/mp4' }), 'second.mp4')
+      const secondRes = await fetch(`${base}/archive`, { method: 'POST', body: second, redirect: 'manual' })
+      t.is(secondRes.status, 500, 'the second upload is refused before overbooking the shared-volume peak')
+      t.ok(/storage headroom/.test(await secondRes.text()), 'the refusal names storage headroom')
+
+      releaseFirstImport()
+      for (let i = 0; i < 50 && directoryBytes(uploadDir) !== 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      t.is(directoryBytes(uploadDir), 0, 'completed job cleanup releases the staged upload reservation')
+
+      const third = new FormData()
+      third.set('channelName', 'Reservation')
+      third.set('title', 'Upload after cleanup')
+      third.set('publish', 'false')
+      third.set('file', new Blob([Buffer.alloc(400, 0x63)], { type: 'video/mp4' }), 'after-cleanup.mp4')
+      const thirdRes = await fetch(`${base}/archive`, { method: 'POST', body: third, redirect: 'manual' })
+      t.is(thirdRes.status, 303, 'a new upload succeeds after the prior reservation is released')
+      for (let i = 0; i < 50 && directoryBytes(uploadDir) !== 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      t.is(directoryBytes(uploadDir), 0, 'third upload cleanup also releases before the mixed reservation check')
+
+      const directReservations = { bytes: 400 }
+      await withConsole(fakeService(), async (secondBase) => {
+        const mixed = new FormData()
+        mixed.set('channelName', 'Reservation')
+        mixed.set('title', 'Upload beside direct')
+        mixed.set('publish', 'false')
+        mixed.set('file', new Blob([Buffer.alloc(250, 0x64)], { type: 'video/mp4' }), 'beside-direct.mp4')
+        const mixedRes = await fetch(`${secondBase}/archive`, { method: 'POST', body: mixed, redirect: 'manual' })
+        t.is(mixedRes.status, 500, 'multipart staging subtracts active direct download reservations')
+        t.ok(/storage headroom/.test(await mixedRes.text()), 'mixed direct/upload overbooking is refused by headroom')
+        directReservations.bytes = 0
+        const afterDirect = new FormData()
+        afterDirect.set('channelName', 'Reservation')
+        afterDirect.set('title', 'Upload after direct')
+        afterDirect.set('publish', 'false')
+        afterDirect.set('file', new Blob([Buffer.alloc(250, 0x65)], { type: 'video/mp4' }), 'after-direct.mp4')
+        const afterRes = await fetch(`${secondBase}/archive`, { method: 'POST', body: afterDirect, redirect: 'manual' })
+        t.is(afterRes.status, 303, 'multipart staging succeeds once the direct reservation is gone')
+      }, {
+        uploadDir,
+        uploadStorageHeadroom: () => {
+          const free = Math.max(0, 600 - directoryBytes(uploadDir))
+          return { tmp: free, storage: free, sharedVolume: true }
+        },
+        storageReservations: directReservations,
+        publisher
+      })
+    }, { uploadDir, uploadStorageHeadroom: headroom, publisher })
+  } finally {
+    releaseFirstImport?.()
     rmSync(uploadDir, { recursive: true, force: true })
   }
 })

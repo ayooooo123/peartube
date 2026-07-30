@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { loadRelayConfig, resolveRelayConfig, renderExampleConfig } from '../src/config.js'
-import { DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES } from '../src/constants.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -108,29 +107,19 @@ test('loadRelayConfig uses built-in defaults without a config file', async (t) =
   t.is(config.paths.config, undefined)
 })
 
-test('the direct-download ceiling is configurable through env and flag', async (t) => {
+test('direct downloads have no file-size ceiling config surface', async (t) => {
   const fromDefaults = await loadRelayConfig({}, { env: {} })
-  t.is(
-    fromDefaults.archive.maxDirectDownloadBytes,
-    DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES,
-    'a relay with no configuration gets a ceiling real media fits under'
-  )
+  t.is(fromDefaults.archive.maxDirectDownloadBytes, 0, 'zero means no archive file-size cap')
 
   const fromEnv = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
-  t.is(fromEnv.archive.maxDirectDownloadBytes, 17179869184, 'env wins over the default')
+  t.is(fromEnv.archive.maxDirectDownloadBytes, 0, 'legacy env ceiling is ignored')
 
-  const fromFlag = await loadRelayConfig({ maxDirectDownloadBytes: '4096' }, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
-  t.is(fromFlag.archive.maxDirectDownloadBytes, 4096, 'the flag wins over env')
+  const fromProgrammaticLegacy = await loadRelayConfig({ maxDirectDownloadBytes: '4096' }, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '17179869184' } })
+  t.is(fromProgrammaticLegacy.archive.maxDirectDownloadBytes, 0, 'legacy programmatic ceiling is ignored')
 
-  // Never read as "unlimited": a bad value falls back to a real ceiling.
-  const fromGarbage = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: 'lots' } })
-  t.is(fromGarbage.archive.maxDirectDownloadBytes, DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, 'garbage falls back')
-  const fromZero = await loadRelayConfig({}, { env: { PEARTUBE_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES: '0' } })
-  t.is(fromZero.archive.maxDirectDownloadBytes, DEFAULT_ARCHIVE_MAX_DIRECT_DOWNLOAD_BYTES, 'zero is not unlimited')
-
-  t.ok(
-    renderExampleConfig(fromEnv).includes('maxDirectDownloadBytes: 17179869184'),
-    'and the operator can read it back off the config summary'
+  t.absent(
+    renderExampleConfig(fromEnv).includes('maxDirectDownloadBytes'),
+    'the example config does not advertise an archive file-size cap'
   )
 })
 

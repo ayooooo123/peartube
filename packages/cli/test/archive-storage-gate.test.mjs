@@ -51,3 +51,49 @@ test('runJob proceeds when the storage guard allows ingestion', async function (
   t.is(result.status, 'failed')
   t.ok(/stop-after-download/.test(result.error), 'failed past the guard, at the channel step')
 })
+
+test('runNext serializes archive jobs so concurrent POSTs cannot overbook storage', async function (t) {
+  const store = fakeStore({ url: 'https://example.com/v.mp4' })
+  store.jobs.set('job-1', { id: 'job-1', status: 'queued' })
+  store.jobs.set('job-2', { id: 'job-2', status: 'queued' })
+
+  let activeDownloads = 0
+  let overlapped = false
+  let firstStartedResolve
+  let releaseFirst
+  const firstStarted = new Promise((resolve) => { firstStartedResolve = resolve })
+  const release = new Promise((resolve) => { releaseFirst = resolve })
+  let first = true
+
+  const runQueue = { tail: Promise.resolve() }
+  const makeManager = () => createArchiveManager({
+    store,
+    runQueue,
+    downloader: {
+      async download () {
+        activeDownloads += 1
+        if (activeDownloads > 1) overlapped = true
+        if (first) {
+          first = false
+          firstStartedResolve()
+          await release
+        }
+        activeDownloads -= 1
+        return { title: 't', cleanup () {} }
+      }
+    },
+    publisher: { async ensureAnonymousChannel () { throw new Error('stop-after-download') } },
+    canIngest: () => true,
+  })
+
+  const managerA = makeManager()
+  const managerB = makeManager()
+  const a = managerA.runNext()
+  await firstStarted
+  const b = managerB.runNext()
+  await Promise.resolve()
+  t.is(activeDownloads, 1, 'second runNext waits while the first download is active')
+  releaseFirst()
+  await Promise.all([a, b])
+  t.absent(overlapped, 'downloads never overlap inside one archive manager')
+})

@@ -14,7 +14,6 @@ const DOUBLE_CRLF = Buffer.from('\r\n\r\n')
 const DASH = 0x2d // '-'
 const CR = 0x0d
 const LF = 0x0a
-const DEFAULT_MAX_BYTES = 5 * 1024 * 1024 * 1024 // 5 GB
 
 export function parseBoundary (contentType = '') {
   const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(String(contentType || ''))
@@ -42,7 +41,9 @@ function asBuffer (chunk) {
 export function receiveMultipartUpload (req, {
   boundary,
   uploadDir,
-  maxBytes = DEFAULT_MAX_BYTES,
+  storageHeadroom = null,
+  reserveStorageBytes = null,
+  releaseStorageBytes = null,
   fs = { mkdirSync, openSync, writeSync, closeSync, rmSync },
   path = { join }
 } = {}) {
@@ -65,17 +66,25 @@ export function receiveMultipartUpload (req, {
     let state = 'preamble' // preamble | headers | body | tail | done
     let part = null
     let settled = false
-
+    const headroomState = {}
+    let reservedStorageBytes = 0
     const detach = () => {
       req.removeListener?.('data', onData)
       req.removeListener?.('end', onEnd)
       req.removeListener?.('error', onError)
+    }
+    const releaseReservedStorage = () => {
+      if (reservedStorageBytes <= 0 || typeof releaseStorageBytes !== 'function') return
+      const bytes = reservedStorageBytes
+      reservedStorageBytes = 0
+      releaseStorageBytes(bytes)
     }
     const fail = (err) => {
       if (settled) return
       settled = true
       if (part?.fd != null) { try { fs.closeSync(part.fd) } catch {} }
       if (part?.dir || file?.dir) { try { fs.rmSync(part?.dir || file.dir, { recursive: true, force: true }) } catch {} }
+      releaseReservedStorage()
       detach()
       reject(err)
     }
@@ -107,12 +116,58 @@ export function receiveMultipartUpload (req, {
       return true
     }
 
+function uploadHeadroomError(snapshot, written, chunkLength, state = null) {
+  const staged = written + chunkLength
+  if (Number.isFinite(snapshot)) {
+    const room = Math.floor(snapshot)
+    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
+    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
+    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
+    return `upload exceeded available storage headroom of ${Math.max(0, room)} bytes`
+  }
+  if (!snapshot || typeof snapshot !== 'object') return 'upload cannot measure archive storage headroom'
+  const tmp = Math.floor(snapshot.tmp)
+  const storage = Math.floor(snapshot.storage)
+  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return 'upload cannot measure archive storage headroom'
+  if (snapshot.sharedVolume !== false) {
+    const room = Math.min(tmp, storage)
+    if (state && !Number.isFinite(state.sharedRoom)) state.sharedRoom = room
+    const baseline = state && Number.isFinite(state.sharedRoom) ? state.sharedRoom : room
+    if ((2 * staged) <= baseline && written + (2 * chunkLength) <= room) return null
+    return `upload exceeded available storage headroom of ${Math.max(0, room)} bytes`
+  }
+  if (state && !Number.isFinite(state.tmpRoom)) state.tmpRoom = tmp
+  if (state && !Number.isFinite(state.storageRoom)) state.storageRoom = storage
+  const tmpBaseline = state && Number.isFinite(state.tmpRoom) ? state.tmpRoom : tmp
+  const storageBaseline = state && Number.isFinite(state.storageRoom) ? state.storageRoom : storage
+  if (staged > tmpBaseline || tmp < chunkLength) return `upload exceeded available archive temp headroom of ${Math.max(0, Math.min(tmp, tmpBaseline))} bytes`
+  if (staged > storageBaseline || storage < staged) return `upload exceeded available archive storage headroom of ${Math.max(0, Math.min(storage, storageBaseline))} bytes`
+  return null
+}
+
     function appendBody (chunk) {
       if (chunk.length === 0) return
       if (part.fd != null) {
-        part.size += chunk.length
-        if (part.size > maxBytes) throw new Error(`upload exceeds max size of ${maxBytes} bytes`)
-        fs.writeSync(part.fd, chunk)
+        if (typeof storageHeadroom === 'function') {
+          const error = uploadHeadroomError(storageHeadroom(), part.size, chunk.length, headroomState)
+          if (error) throw new Error(error)
+        }
+        let reserved = false
+        if (typeof reserveStorageBytes === 'function') {
+          reserveStorageBytes(chunk.length)
+          reservedStorageBytes += chunk.length
+          reserved = true
+        }
+        try {
+          fs.writeSync(part.fd, chunk)
+          part.size += chunk.length
+        } catch (err) {
+          if (reserved) {
+            reservedStorageBytes -= chunk.length
+            if (typeof releaseStorageBytes === 'function') releaseStorageBytes(chunk.length)
+          }
+          throw err
+        }
       } else if (!part.isFile) {
         part.size += chunk.length
         if (part.size > 1_048_576) throw new Error('multipart text field too large')
@@ -123,7 +178,7 @@ export function receiveMultipartUpload (req, {
     function finishPart () {
       if (part.fd != null) {
         try { fs.closeSync(part.fd) } catch {}
-        file = { field: part.name, filename: part.filename, mimeType: part.contentType, path: part.filePath, dir: part.dir, size: part.size }
+        file = { field: part.name, filename: part.filename, mimeType: part.contentType, path: part.filePath, dir: part.dir, size: part.size, releaseStorageReservation: releaseReservedStorage }
       } else if (!part.isFile && part.name != null) {
         fields[part.name] = Buffer.concat(part.chunks).toString('utf8')
       }

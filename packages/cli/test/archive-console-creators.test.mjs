@@ -1,6 +1,7 @@
 import test from 'brittle'
 import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole } from '../src/archive-console.js'
-import { mkdtempSync, rmSync, readdirSync, statSync } from 'node:fs'
+import { createArchiveJobStore } from '../src/archive-manager.js'
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -470,4 +471,35 @@ test('GET /discover/episodes.json returns TMDB episodes for a season', async fun
     t.is(body.episodes[0].title, 'Pilot')
   })
   t.is(service.calls.episodes.season, '1', 'season passed through from the query string')
+})
+
+test('archive console startup recovers interrupted jobs before listening', async function (t) {
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-recovery-'))
+  const service = fakeService()
+  const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
+  await store.addJob({ id: 'arch_stale', status: 'queued', title: 'stale' }, { url: 'https://example.com/video.mkv' })
+  await store.updateJob('arch_stale', { status: 'running', error: null })
+  const directDir = join(uploadDir, 'arch_stale')
+  mkdirSync(directDir, { recursive: true })
+  writeFileSync(join(directDir, 'partial.mkv'), 'partial')
+
+  const archiveConsole = await createArchiveConsole({
+    service,
+    downloader: { async download() { throw new Error('not used') } },
+    publisher: {},
+    uploadDir,
+    host: '127.0.0.1',
+    port: 0
+  })
+
+  try {
+    await archiveConsole.start()
+    const jobs = await store.listJobs()
+    t.is(jobs.find((job) => job.id === 'arch_stale').status, 'failed')
+    t.ok(/interrupted by relay restart/.test(jobs.find((job) => job.id === 'arch_stale').error))
+    t.absent(existsSync(directDir), 'startup removed stale direct staging before serving requests')
+  } finally {
+    await archiveConsole.close().catch(() => {})
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
 })

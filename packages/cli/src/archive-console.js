@@ -480,7 +480,7 @@ export async function createArchiveConsole({
     reservation.bytes -= size
     copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - size)
   }
-  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job), runQueue, onUploadReleased: releaseUploadReservationByPath })
+  const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job), runQueue, onUploadReleased: releaseUploadReservationByPath, stagingRoot: uploadDir })
 
   // Read an archive submission as a browser file upload (multipart/form-data,
   // streamed to disk), a machine API JSON body, or a URL-encoded form. Returns
@@ -869,7 +869,6 @@ export async function createArchiveConsole({
   // Adopt the pre-bound socket, or open one when this console is the only thing
   // serving (tests, and any caller that builds a console on its own).
   const server = httpSurface ? httpSurface.server : await serverFactory(handleRequest)
-  httpSurface?.adopt(handleRequest)
   const boundPort = () => (httpSurface ? httpSurface.port : Number(port))
 
   return {
@@ -877,10 +876,19 @@ export async function createArchiveConsole({
     manager,
     server,
     async start() {
-      // Idempotent on an adopted surface: it is already listening, and this is
-      // the moment the store-dependent side became answerable.
-      if (httpSurface) await httpSurface.listen()
-      else await new Promise((resolve) => server.listen(Number(port), host, resolve))
+      const recovered = await manager.recoverInterruptedJobs()
+      if (recovered?.recovered > 0) {
+        logger?.archive?.warn?.('Recovered interrupted archive jobs before opening archive console', { recovered: recovered.recovered })
+      }
+      // Idempotent on an adopted surface: it is already listening as a warming
+      // relay; only adopt the live handler after interrupted-job recovery, so a
+      // pre-ready request cannot be mistaken for stale work.
+      if (httpSurface) {
+        await httpSurface.listen()
+        httpSurface.adopt(handleRequest)
+      } else {
+        await new Promise((resolve) => server.listen(Number(port), host, resolve))
+      }
       logger?.archive?.info?.('Archive WebUI started', httpSurface
         ? { host, port: boundPort(), storeWarmupMs: httpSurface.warmupMs() }
         : { host, port: boundPort() })

@@ -823,7 +823,24 @@ function loadUploadedFile (privateInput) {
   }
 }
 
-export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, canIngest = null, runQueue = null, onUploadReleased = null }) {
+
+function normalizeStagingPath(value) {
+  const raw = String(value || '').replace(/\\/g, '/')
+  const absolute = raw.startsWith('/')
+  const parts = []
+  for (const part of raw.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (parts.length > 0 && parts[parts.length - 1] !== '..') parts.pop()
+      else if (!absolute) parts.push('..')
+      continue
+    }
+    parts.push(part)
+  }
+  return `${absolute ? '/' : ''}${parts.join('/')}` || (absolute ? '/' : '.')
+}
+
+export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null, canIngest = null, runQueue = null, onUploadReleased = null, stagingRoot = null }) {
   if (!store) throw new Error('store is required')
   if (!downloader) throw new Error('downloader is required')
   if (!publisher) throw new Error('publisher is required')
@@ -834,6 +851,60 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
     const next = queue.tail.then(fn, fn)
     queue.tail = next.catch(() => {})
     return next
+  }
+
+
+  function safeRemoveStagingTarget(target) {
+    const root = normalizeStagingPath(stagingRoot)
+    const candidate = normalizeStagingPath(target)
+    if (!stagingRoot || !target) return false
+    if (candidate === root) return false
+    const inside = candidate.startsWith(`${root}/`)
+    if (!inside) return false
+    try {
+      rmSync(candidate, { recursive: true, force: true })
+      return true
+    } catch (err) {
+      logger?.archive?.warn?.('Interrupted archive staging cleanup failed', { path: candidate, error: err?.message || String(err) })
+      return false
+    }
+  }
+
+  function uploadStagingDir(privateInput) {
+    const filePath = String(privateInput?.uploadPath || '')
+    if (!filePath) return null
+    const separator = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+    return separator > 0 ? filePath.slice(0, separator) : null
+  }
+
+  function directStagingDir(job) {
+    const id = String(job?.id || '')
+    if (!id || id.includes('..') || /[\\/]/.test(id)) return null
+    return join(String(stagingRoot || ''), id)
+  }
+
+  async function recoverInterruptedJobsUnlocked() {
+    const jobs = await store.listJobs()
+    const running = jobs.filter((job) => job?.status === 'running')
+    let recovered = 0
+    for (const job of running) {
+      const privateInput = await store.getPrivateInput(job.id).catch(() => null)
+      const isUpload = Boolean(privateInput?.uploadPath)
+      const cleanupTarget = isUpload ? uploadStagingDir(privateInput) : directStagingDir(job)
+      const cleaned = cleanupTarget ? safeRemoveStagingTarget(cleanupTarget) : false
+      const status = isUpload ? 'skipped' : 'failed'
+      const error = isUpload
+        ? 'archive upload interrupted by relay restart; staged upload was discarded and cannot be retried'
+        : 'archive job interrupted by relay restart; staged bytes were discarded'
+      await store.updateJob(job.id, {
+        status,
+        error,
+        recoveredAt: now()
+      })
+      logger?.archive?.warn?.('[archive-stage] recovered interrupted job', { id: job.id, isUpload, cleaned })
+      recovered += 1
+    }
+    return { recovered }
   }
 
   async function runJobUnlocked(id) {
@@ -958,6 +1029,9 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
     },
     runJob(id) {
       return runExclusive(() => runJobUnlocked(id))
+    },
+    recoverInterruptedJobs() {
+      return runExclusive(recoverInterruptedJobsUnlocked)
     }
   }
 }

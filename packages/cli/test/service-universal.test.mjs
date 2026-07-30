@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -6,6 +6,7 @@ import test from 'brittle'
 
 import { resolveRelayConfig } from '../src/config.js'
 import { createRelayService } from '../src/service.js'
+import { createArchiveJobStore } from '../src/archive-manager.js'
 
 const noop = () => {}
 const logger = Object.fromEntries(
@@ -24,6 +25,14 @@ function diagnostics () {
     seedRetention: { activeSeeds: 2, pinnedChannels: 1 },
     archive: { success: true, activePledgeCount: 1 },
     storage: { success: true, totalCategorizedBytes: 128 }
+  }
+}
+
+function fakeMetaDb() {
+  const map = new Map()
+  return {
+    async get(key) { return map.has(key) ? { value: map.get(key) } : null },
+    async put(key, value) { map.set(key, value) }
   }
 }
 
@@ -118,5 +127,38 @@ test('completed archive publishes an authenticated catalog and retains bounded a
   t.alike(result, { published: true, previewVideos: 1, retained: 2 })
   t.alike(calls.map(([name]) => name), ['publish', 'retain-rendition', 'retain-archive'])
   t.is(service.catalog.getChannel('channel-1').publisherId, 'a'.repeat(64))
+  await service.close()
+})
+
+test('relay service recovers interrupted archive jobs when WebUI is disabled', async (t) => {
+  const storagePath = mkdtempSync(join(tmpdir(), 'peartube-cli-service-recovery-'))
+  t.teardown(() => rmSync(storagePath, { recursive: true, force: true }))
+  const calls = []
+  const runtime = fakeRuntime(calls)
+  runtime.ctx.metaDb = fakeMetaDb()
+  const config = configFor(storagePath)
+  config.archive.tmpPath = join(storagePath, 'archive-tmp')
+  config.archive.uiEnabled = false
+  mkdirSync(join(config.archive.tmpPath, 'arch_stale'), { recursive: true })
+  writeFileSync(join(config.archive.tmpPath, 'arch_stale', 'partial.mkv'), 'partial')
+  const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+  await store.addJob({ id: 'arch_stale', status: 'queued', title: 'stale' }, { url: 'https://example.com/video.mkv' })
+  await store.updateJob('arch_stale', { status: 'running', error: null })
+
+  const service = await createRelayService({
+    config,
+    logger,
+    runtimeFactory: async () => runtime,
+    writeStatusFile: async () => {},
+    setIntervalFn: () => ({ unref: noop }),
+    clearIntervalFn: noop
+  })
+
+  await service.start()
+  const jobs = await store.listJobs()
+  t.is(jobs.find((job) => job.id === 'arch_stale').status, 'failed')
+  t.ok(/interrupted by relay restart/.test(jobs.find((job) => job.id === 'arch_stale').error))
+  t.absent(existsSync(join(config.archive.tmpPath, 'arch_stale')), 'stale direct staging is removed during service startup')
+
   await service.close()
 })

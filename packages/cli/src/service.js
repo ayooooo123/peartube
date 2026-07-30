@@ -420,6 +420,7 @@ async function buildRelayService({
       if (removed) {
         config.seedPin.trustedClients = mergeTrustedClientKeys([], trustedClients.keys())
         await runtime.refreshAuthorization?.(config.seedPin.trustedClients).catch?.(() => false)
+
         await persistStatus()
       }
       return { removed: Boolean(removed) }
@@ -501,6 +502,25 @@ async function buildRelayService({
       // brief pre-ready window waits for the publisher (see below) rather than
       // failing and discarding the upload.
       const deferredPublisher = createDeferredPublisher()
+      if (runtime.ctx?.metaDb && config.archive?.tmpPath) {
+        const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+        const recoveryManager = createArchiveManager({
+          store,
+          logger,
+          runQueue: archiveRunQueue,
+          downloader: {},
+          publisher: {},
+          stagingRoot: config.archive.tmpPath
+        })
+        const recovered = await recoveryManager.recoverInterruptedJobs().catch((err) => {
+          logger.archive.warn('Interrupted archive recovery failed', { error: err?.message || String(err) })
+          return { recovered: 0 }
+        })
+        if (recovered.recovered > 0) {
+          logger.archive.warn('Recovered interrupted archive jobs during relay startup', { recovered: recovered.recovered })
+        }
+      }
+
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
         const runtimePathModule = pathModule || await import('#path')
@@ -761,13 +781,14 @@ async function buildRelayService({
         }),
         publisher: createArchivePublisher({
           identityManager: runtime.identityManager,
-      storagePath: config.storage?.path,
+          storagePath: config.storage?.path,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
           fs: runtimeFsModule
         }),
-        onCompleted: (job) => service.publishArchiveJob(job)
+        onCompleted: (job) => service.publishArchiveJob(job),
+        stagingRoot: config.archive?.tmpPath || './peartube-relay/archive-tmp'
       })
       const job = await manager.enqueue(input)
       if (runNow) return manager.runJob(job.id)

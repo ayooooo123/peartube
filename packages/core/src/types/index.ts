@@ -254,16 +254,16 @@ export type MediaAvailabilityState =
 export interface MediaAvailability {
   state: MediaAvailabilityState;
   renditionId?: string | null;
-  observedAt?: number | null;
-  expiresAt?: number | null;
-  requiredRangeCount?: number | null;
-  reachableRangeCount?: number | null;
-  independentPeerCount?: number | null;
-  completePeerCount?: number | null;
-  measuredLatencyMs?: number | null;
-  offlinePlayable?: boolean | null;
-  archivePledged?: boolean | null;
-  reasonCodes?: string[] | null;
+  observedAt: number;
+  expiresAt: number;
+  requiredRangeCount: number;
+  reachableRangeCount: number;
+  independentPeerCount: number;
+  completePeerCount: number;
+  measuredLatencyMs: number;
+  offlinePlayable: boolean;
+  archivePledged: boolean;
+  reasonCodes: string[];
 }
 
 export interface MediaPublicationSource {

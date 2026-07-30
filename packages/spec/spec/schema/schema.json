@@ -1637,43 +1637,43 @@
         },
         {
           "name": "observedAt",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
           "name": "expiresAt",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
           "name": "requiredRangeCount",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
           "name": "reachableRangeCount",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
           "name": "independentPeerCount",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
           "name": "completePeerCount",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
         {
           "name": "measuredLatencyMs",
-          "required": false,
+          "required": true,
           "type": "uint",
           "version": 1
         },
@@ -1691,7 +1691,7 @@
         },
         {
           "name": "reasonCodes",
-          "required": false,
+          "required": true,
           "array": true,
           "type": "string",
           "version": 1

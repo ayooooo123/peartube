@@ -1630,58 +1630,34 @@ const encoding44_11 = c.array(c.string)
 // @peartube/media-availability
 const encoding44 = {
   preencode(state, m) {
-    const flags =
-      (m.renditionId ? 1 : 0) |
-      (m.observedAt ? 2 : 0) |
-      (m.expiresAt ? 4 : 0) |
-      (m.requiredRangeCount ? 8 : 0) |
-      (m.reachableRangeCount ? 16 : 0) |
-      (m.independentPeerCount ? 32 : 0) |
-      (m.completePeerCount ? 64 : 0) |
-      (m.measuredLatencyMs ? 128 : 0) |
-      (m.offlinePlayable ? 256 : 0) |
-      (m.archivePledged ? 512 : 0) |
-      (m.reasonCodes ? 1024 : 0)
-
     c.string.preencode(state, m.state)
-    c.uint.preencode(state, flags)
+    state.end++ // max flag is 4 so always one byte
 
     if (m.renditionId) c.string.preencode(state, m.renditionId)
-    if (m.observedAt) c.uint.preencode(state, m.observedAt)
-    if (m.expiresAt) c.uint.preencode(state, m.expiresAt)
-    if (m.requiredRangeCount) c.uint.preencode(state, m.requiredRangeCount)
-    if (m.reachableRangeCount) c.uint.preencode(state, m.reachableRangeCount)
-    if (m.independentPeerCount) c.uint.preencode(state, m.independentPeerCount)
-    if (m.completePeerCount) c.uint.preencode(state, m.completePeerCount)
-    if (m.measuredLatencyMs) c.uint.preencode(state, m.measuredLatencyMs)
-    if (m.reasonCodes) encoding44_11.preencode(state, m.reasonCodes)
+    c.uint.preencode(state, m.observedAt)
+    c.uint.preencode(state, m.expiresAt)
+    c.uint.preencode(state, m.requiredRangeCount)
+    c.uint.preencode(state, m.reachableRangeCount)
+    c.uint.preencode(state, m.independentPeerCount)
+    c.uint.preencode(state, m.completePeerCount)
+    c.uint.preencode(state, m.measuredLatencyMs)
+    encoding44_11.preencode(state, m.reasonCodes)
   },
   encode(state, m) {
-    const flags =
-      (m.renditionId ? 1 : 0) |
-      (m.observedAt ? 2 : 0) |
-      (m.expiresAt ? 4 : 0) |
-      (m.requiredRangeCount ? 8 : 0) |
-      (m.reachableRangeCount ? 16 : 0) |
-      (m.independentPeerCount ? 32 : 0) |
-      (m.completePeerCount ? 64 : 0) |
-      (m.measuredLatencyMs ? 128 : 0) |
-      (m.offlinePlayable ? 256 : 0) |
-      (m.archivePledged ? 512 : 0) |
-      (m.reasonCodes ? 1024 : 0)
+    const flags = (m.renditionId ? 1 : 0) | (m.offlinePlayable ? 2 : 0) | (m.archivePledged ? 4 : 0)
 
     c.string.encode(state, m.state)
     c.uint.encode(state, flags)
 
     if (m.renditionId) c.string.encode(state, m.renditionId)
-    if (m.observedAt) c.uint.encode(state, m.observedAt)
-    if (m.expiresAt) c.uint.encode(state, m.expiresAt)
-    if (m.requiredRangeCount) c.uint.encode(state, m.requiredRangeCount)
-    if (m.reachableRangeCount) c.uint.encode(state, m.reachableRangeCount)
-    if (m.independentPeerCount) c.uint.encode(state, m.independentPeerCount)
-    if (m.completePeerCount) c.uint.encode(state, m.completePeerCount)
-    if (m.measuredLatencyMs) c.uint.encode(state, m.measuredLatencyMs)
-    if (m.reasonCodes) encoding44_11.encode(state, m.reasonCodes)
+    c.uint.encode(state, m.observedAt)
+    c.uint.encode(state, m.expiresAt)
+    c.uint.encode(state, m.requiredRangeCount)
+    c.uint.encode(state, m.reachableRangeCount)
+    c.uint.encode(state, m.independentPeerCount)
+    c.uint.encode(state, m.completePeerCount)
+    c.uint.encode(state, m.measuredLatencyMs)
+    encoding44_11.encode(state, m.reasonCodes)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -1690,16 +1666,16 @@ const encoding44 = {
     return {
       state: r0,
       renditionId: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      observedAt: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      expiresAt: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
-      requiredRangeCount: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
-      reachableRangeCount: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
-      independentPeerCount: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
-      completePeerCount: (flags & 64) !== 0 ? c.uint.decode(state) : 0,
-      measuredLatencyMs: (flags & 128) !== 0 ? c.uint.decode(state) : 0,
-      offlinePlayable: (flags & 256) !== 0,
-      archivePledged: (flags & 512) !== 0,
-      reasonCodes: (flags & 1024) !== 0 ? encoding44_11.decode(state) : null
+      observedAt: c.uint.decode(state),
+      expiresAt: c.uint.decode(state),
+      requiredRangeCount: c.uint.decode(state),
+      reachableRangeCount: c.uint.decode(state),
+      independentPeerCount: c.uint.decode(state),
+      completePeerCount: c.uint.decode(state),
+      measuredLatencyMs: c.uint.decode(state),
+      offlinePlayable: (flags & 2) !== 0,
+      archivePledged: (flags & 4) !== 0,
+      reasonCodes: encoding44_11.decode(state)
     }
   }
 }

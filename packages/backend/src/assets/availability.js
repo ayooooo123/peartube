@@ -28,7 +28,7 @@ export const AVAILABILITY_REASON_CODES = Object.freeze([
   'ASSESSMENT_BUDGET_EXCEEDED',
   'COMPLETE_PEER_EVIDENCE',
   'UNION_RANGE_COVERAGE',
-  'INSUFFICIENT_INDEPENDENT_PEERS',
+  'INSUFFICIENT_COMPLETE_PEERS',
   'PARTIAL_RANGE_COVERAGE',
   'EVIDENCE_EXPIRED',
   'VALIDATION_MISMATCH',
@@ -349,7 +349,7 @@ export function assessAvailability(input = {}, options = {}) {
       expiresAt: Math.min(...contributors.map(peer => peer.verifiedAt + AVAILABILITY_EVIDENCE_TTL_MS)),
       reasonCodes: orderReasons([
         completePeers.length > 0 ? 'COMPLETE_PEER_EVIDENCE' : 'UNION_RANGE_COVERAGE',
-        'INSUFFICIENT_INDEPENDENT_PEERS',
+        'INSUFFICIENT_COMPLETE_PEERS',
         ...exclusions,
         ...localReasons,
       ]),

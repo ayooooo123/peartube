@@ -526,25 +526,25 @@ ns.register({
 })
 
 // Availability is a local, point-in-time, expiring assessment. `state` is one
-// of awaiting-replication | limited | healthy | unavailable. Omitted fields
-// decode to the explicit defaults in packages/host/src/index.d.ts, never to a
-// silent zero that would read as "no peers".
+// of awaiting-replication | limited | healthy | unavailable. Counters and the
+// reason list are required so older frames cannot silently decode absence as
+// a zero-count assessment; compact booleans are always represented in flags.
 // MAX_AVAILABILITY_REASON_CODES = 8
 ns.register({
   name: 'media-availability',
   fields: [
     { name: 'state', type: 'string', required: true },
     { name: 'renditionId', type: 'string', required: false },
-    { name: 'observedAt', type: 'uint', required: false },
-    { name: 'expiresAt', type: 'uint', required: false },
-    { name: 'requiredRangeCount', type: 'uint', required: false },
-    { name: 'reachableRangeCount', type: 'uint', required: false },
-    { name: 'independentPeerCount', type: 'uint', required: false },
-    { name: 'completePeerCount', type: 'uint', required: false },
-    { name: 'measuredLatencyMs', type: 'uint', required: false },
-    { name: 'offlinePlayable', type: 'bool', required: false },
-    { name: 'archivePledged', type: 'bool', required: false },
-    { name: 'reasonCodes', type: 'string', array: true, required: false },
+    { name: 'observedAt', type: 'uint', required: true },
+    { name: 'expiresAt', type: 'uint', required: true },
+    { name: 'requiredRangeCount', type: 'uint', required: true },
+    { name: 'reachableRangeCount', type: 'uint', required: true },
+    { name: 'independentPeerCount', type: 'uint', required: true },
+    { name: 'completePeerCount', type: 'uint', required: true },
+    { name: 'measuredLatencyMs', type: 'uint', required: true },
+    { name: 'offlinePlayable', type: 'bool', required: true },
+    { name: 'archivePledged', type: 'bool', required: true },
+    { name: 'reasonCodes', type: 'string', array: true, required: true },
   ]
 })
 

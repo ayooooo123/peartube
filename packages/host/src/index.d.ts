@@ -422,23 +422,23 @@ export type MediaAvailability = {
   state: MediaAvailabilityState
   renditionId?: string | null
   /** Epoch ms of this assessment. */
-  observedAt?: number | null
+  observedAt: number
   /** Epoch ms after which the supporting evidence is stale. */
-  expiresAt?: number | null
-  requiredRangeCount?: number | null
-  reachableRangeCount?: number | null
+  expiresAt: number
+  requiredRangeCount: number
+  reachableRangeCount: number
   /** Distinct authenticated Noise keys currently contributing fresh evidence. */
-  independentPeerCount?: number | null
+  independentPeerCount: number
   /** Of those, the ones proving every required range. */
-  completePeerCount?: number | null
+  completePeerCount: number
   /** Best round trip measured against a contributing peer; 0 means unmeasured. */
-  measuredLatencyMs?: number | null
+  measuredLatencyMs: number
   /** A local complete copy. Never counted as network availability. */
-  offlinePlayable?: boolean | null
+  offlinePlayable: boolean
   /** A static retention pledge. Durability evidence only. */
-  archivePledged?: boolean | null
+  archivePledged: boolean
   /** Stable codes in canonical order; at most 8 entries. */
-  reasonCodes?: string[] | null
+  reasonCodes: string[]
 }
 
 export type MediaPublicationSource = {

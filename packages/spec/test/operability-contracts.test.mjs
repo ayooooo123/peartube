@@ -88,6 +88,22 @@ test('publication sources, storage stats, previews, and archive status are struc
     'availabilityState', 'stale', 'incomplete'
   ]) t.ok(messageFields(schema, 'media-publication-source').has(field), `publication source has ${field}`)
 
+  const availability = schema.schema.find((entry) => entry.name === 'media-availability')
+  const requiredAvailabilityFields = new Set([
+    'state', 'observedAt', 'expiresAt', 'requiredRangeCount', 'reachableRangeCount',
+    'independentPeerCount', 'completePeerCount', 'measuredLatencyMs', 'reasonCodes'
+  ])
+  for (const field of availability?.fields || []) {
+    if (requiredAvailabilityFields.has(field.name)) {
+      t.is(field.required, true, `availability ${field.name} is explicit on every frame`)
+    }
+  }
+  t.is(
+    [...requiredAvailabilityFields].every((name) => availability?.fields?.some((field) => field.name === name)),
+    true,
+    'availability frames contain every required non-boolean contract field'
+  )
+
   for (const field of [
     'ownedOriginalBytes', 'immutablePublicationBytes', 'pledgedArchiveBytes', 'localCacheBytes',
     'thumbnailBytes', 'indexBytes', 'temporaryTransferBytes', 'totalCategorizedBytes',

@@ -61,7 +61,7 @@ test('metadata without an immutable rendition is never healthy', (t) => {
 test('one complete peer is limited, never healthy', (t) => {
   const result = assess({ peers: [peer('aa')] })
   t.is(result.state, AVAILABILITY_STATES.limited)
-  t.alike(result.reasonCodes, ['COMPLETE_PEER_EVIDENCE', 'INSUFFICIENT_INDEPENDENT_PEERS'])
+  t.alike(result.reasonCodes, ['COMPLETE_PEER_EVIDENCE', 'INSUFFICIENT_COMPLETE_PEERS'])
   t.is(result.reachableRangeCount, 1)
   t.is(result.independentPeerCount, 1)
   t.is(result.completePeerCount, 1)
@@ -113,7 +113,7 @@ test('partial peers that together cover every required range are limited', (t) =
     ],
   })
   t.is(result.state, AVAILABILITY_STATES.limited)
-  t.alike(result.reasonCodes, ['UNION_RANGE_COVERAGE', 'INSUFFICIENT_INDEPENDENT_PEERS'])
+  t.alike(result.reasonCodes, ['UNION_RANGE_COVERAGE', 'INSUFFICIENT_COMPLETE_PEERS'])
   t.is(result.reachableRangeCount, 1)
   t.is(result.independentPeerCount, 2)
   t.is(result.completePeerCount, 0, 'two partial peers are not two complete peers')

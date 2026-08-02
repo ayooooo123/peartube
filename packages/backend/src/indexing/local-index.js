@@ -154,6 +154,11 @@ export function createLocalMediaIndex(options = {}) {
       title: record.title || null,
       creator: record.creator || null,
       collectionId: record.collectionId || null,
+      contentKind: typeof record.contentKind === 'string' ? record.contentKind : null,
+      mediaProvider: typeof record.mediaProvider === 'string' ? record.mediaProvider : null,
+      mediaId: typeof record.mediaId === 'string' ? record.mediaId : null,
+      seasonNumber: Number.isSafeInteger(record.seasonNumber) ? record.seasonNumber : null,
+      episodeNumber: Number.isSafeInteger(record.episodeNumber) ? record.episodeNumber : null,
       expectedEpisodeCount: Number.isSafeInteger(record.expectedEpisodeCount) ? record.expectedEpisodeCount : 0,
       seriesEpisode: record.seriesEpisode
         ? {
@@ -163,6 +168,9 @@ export function createLocalMediaIndex(options = {}) {
             episodeNumber: record.seriesEpisode.episodeNumber,
             publicationId: record.seriesEpisode.publicationId,
             publisherId: record.seriesEpisode.publisherId || null,
+            contentKind: typeof record.seriesEpisode.contentKind === 'string' ? record.seriesEpisode.contentKind : null,
+            mediaProvider: typeof record.seriesEpisode.mediaProvider === 'string' ? record.seriesEpisode.mediaProvider : null,
+            mediaId: typeof record.seriesEpisode.mediaId === 'string' ? record.seriesEpisode.mediaId : null,
           }
         : null,
       tags: Array.isArray(record.tags) ? record.tags.slice(0, maxTagsPerEntity) : [],
@@ -202,6 +210,9 @@ export function createLocalMediaIndex(options = {}) {
       [record.title, 512],
       [record.creator, 512],
       [record.collectionId, 512],
+      [record.contentKind, 32],
+      [record.mediaProvider, 64],
+      [record.mediaId, 128],
       [record.sourceId, 1024],
       [record.indexId, 512],
       [record.agentId, 512],
@@ -223,6 +234,8 @@ export function createLocalMediaIndex(options = {}) {
       }
     }
     if (record.releaseYear != null && !Number.isSafeInteger(record.releaseYear)) return false
+    if (record.seasonNumber != null && (!Number.isSafeInteger(record.seasonNumber) || record.seasonNumber < 1)) return false
+    if (record.episodeNumber != null && (!Number.isSafeInteger(record.episodeNumber) || record.episodeNumber < 1)) return false
     if (record.runtimeMinutes != null && !Number.isSafeInteger(record.runtimeMinutes)) return false
     if (record.ranking != null && !Number.isFinite(record.ranking)) return false
     if (record.expectedEpisodeCount != null &&
@@ -235,6 +248,9 @@ export function createLocalMediaIndex(options = {}) {
           !boundedString(episode.title, 512) ||
           !boundedString(episode.publicationId, 512, true) ||
           !boundedString(episode.publisherId, 128) ||
+          !boundedString(episode.contentKind, 32) ||
+          !boundedString(episode.mediaProvider, 64) ||
+          !boundedString(episode.mediaId, 128) ||
           !Number.isSafeInteger(episode.seasonNumber) || episode.seasonNumber < 0 ||
           !Number.isSafeInteger(episode.episodeNumber) || episode.episodeNumber < 0) return false
     }
@@ -261,11 +277,17 @@ export function createLocalMediaIndex(options = {}) {
       }
       const publicationKey = `${record.publisherId || ''}\0${record.publicationId}`
       if (!publications.has(publicationKey) && publications.size < maxPublicationsPerEntity) {
+        const coordinates = record.seriesEpisode || record
         publications.set(publicationKey, {
           publicationId: record.publicationId,
           publisherId: record.publisherId,
           title: record.title || null,
           playable: record.playable === true,
+          contentKind: coordinates.contentKind || null,
+          mediaProvider: coordinates.mediaProvider || null,
+          mediaId: coordinates.mediaId || null,
+          seasonNumber: coordinates.seasonNumber || null,
+          episodeNumber: coordinates.episodeNumber || null,
         })
       }
     }

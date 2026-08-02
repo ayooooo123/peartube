@@ -312,6 +312,23 @@ export function createArchiveJobStore({ metaDb }) {
       await writePrivateInputs(inputs)
       return publicJob(job)
     },
+    async replaceJob(id, job, privateInput) {
+      const jobs = await readJobsRaw()
+      const existing = jobs.find((candidate) => candidate.id === id)
+      if (!existing) throw new Error(`archive job ${id} does not exist`)
+      const replacement = publicJob({
+        ...existing,
+        ...job,
+        id,
+        createdAt: existing.createdAt,
+        updatedAt: now()
+      })
+      await writeJobsRaw(jobs.map((candidate) => candidate.id === id ? replacement : candidate))
+      const inputs = await readPrivateInputs()
+      inputs[id] = privateInput
+      await writePrivateInputs(inputs)
+      return replacement
+    },
     async updateJob(id, patch) {
       const jobs = await readJobsRaw()
       const updated = jobs.map((job) => job.id === id ? publicJob({ ...job, ...patch, updatedAt: now() }) : job)
@@ -344,7 +361,7 @@ export async function enqueueArchiveJob(store, input = {}) {
   const url = uploadPath ? null : sanitizeUrl(input.url)
   const createdAt = now()
   const job = {
-    id: makeJobId(url || uploadPath),
+    id: input.reuseJobId ? String(input.reuseJobId) : makeJobId(url || uploadPath),
     status: 'queued',
     channelName: sanitizeName(input.channelName),
     // Someone who picked this title out of a catalogue told us its name. Only
@@ -359,10 +376,12 @@ export async function enqueueArchiveJob(store, input = {}) {
     anonymous: input.anonymous !== false,
     createdAt,
     updatedAt: createdAt,
+    idempotencyKey: input.idempotencyKey ? String(input.idempotencyKey) : null,
+    entityHint: input.entityHint ? String(input.entityHint) : null,
     error: null
   }
 
-  return store.addJob(job, {
+  const privateInput = {
     url,
     uploadPath,
     uploadFilename: input.uploadFilename ? String(input.uploadFilename) : null,
@@ -398,7 +417,40 @@ export async function enqueueArchiveJob(store, input = {}) {
     tmdbOverview: input.tmdbOverview ? String(input.tmdbOverview) : null,
     tmdbRuntime: input.tmdbRuntime ? String(input.tmdbRuntime) : null,
     tmdbGenres: input.tmdbGenres ? String(input.tmdbGenres) : null
-  })
+  }
+  return input.reuseJobId
+    ? store.replaceJob(job.id, job, privateInput)
+    : store.addJob(job, privateInput)
+}
+function reserveAdjustedArchiveHeadroom(snapshot, reservedBytes = 0) {
+  const reserved = Math.max(0, Math.floor(Number(reservedBytes) || 0))
+  if (Number.isFinite(snapshot)) return Math.max(0, snapshot - reserved)
+  if (!snapshot || typeof snapshot !== 'object') return snapshot
+  if (snapshot.sharedVolume === false) {
+    return { ...snapshot, storage: Math.max(0, Number(snapshot.storage) - reserved) }
+  }
+  return {
+    ...snapshot,
+    tmp: Math.max(0, Number(snapshot.tmp) - reserved),
+    storage: Math.max(0, Number(snapshot.storage) - reserved)
+  }
+}
+
+function archiveFileSizeLimit(snapshot) {
+  // bv*+ba/b may hold separate video, audio, and merged output in staging.
+  // The persisted archive is a fourth copy on a shared volume.
+  if (Number.isFinite(snapshot)) return Math.max(0, Math.floor(snapshot / 4))
+  if (!snapshot || typeof snapshot !== 'object') return 0
+  const tmp = Number(snapshot.tmp)
+  const storage = Number(snapshot.storage)
+  if (!Number.isFinite(tmp) || !Number.isFinite(storage)) return 0
+  return snapshot.sharedVolume === false
+    ? Math.max(0, Math.floor(Math.min(tmp / 3, storage)))
+    : Math.max(0, Math.floor(Math.min(tmp, storage) / 4))
+}
+
+function archiveHeadroomExhausted(snapshot) {
+  return archiveFileSizeLimit(snapshot) <= 0
 }
 
 export function createYtDlpDownloader({
@@ -410,6 +462,9 @@ export function createYtDlpDownloader({
   jsRuntime = null,
   ytDlpExtraArgs = [],
   ytDlpRetryExtraArgs = [],
+  storageHeadroom = null,
+  storageReservations = null,
+  onStorageChanged = null,
   spawnFn = spawn,
   fs = { mkdirSync, rmSync, existsSync, readFileSync },
   path = { join }
@@ -418,8 +473,29 @@ export function createYtDlpDownloader({
 
   return {
     async download(input) {
+      const existingReservations = Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0))
+      const maxFileSize = typeof storageHeadroom === 'function'
+        ? archiveFileSizeLimit(reserveAdjustedArchiveHeadroom(storageHeadroom(), existingReservations))
+        : 0
+      if (typeof storageHeadroom === 'function' && maxFileSize <= 0) {
+        throw new Error('relay has no measurable archive storage headroom for yt-dlp')
+      }
+      let reservationReleased = false
+      const releaseReservation = () => {
+        if (reservationReleased || !storageReservations) return
+        reservationReleased = true
+        storageReservations.bytes = Math.max(0, Math.floor(Number(storageReservations.bytes) || 0) - maxFileSize)
+        storageReservations.invalidate?.()
+      }
+      if (storageReservations && maxFileSize > 0) {
+        storageReservations.bytes = existingReservations + maxFileSize
+        storageReservations.invalidate?.()
+      }
+      let storageExceeded = false
+      let targetDir = null
+      try {
       const id = input.id || makeJobId(input.url)
-      const targetDir = path.join(outputDir, id)
+      targetDir = path.join(outputDir, id)
       fs.mkdirSync(targetDir, { recursive: true })
       const outputTemplate = path.join(targetDir, '%(title).200B [%(id)s].%(ext)s')
       const buildArgs = (extraArgs = [], sourceUrl = input.url) => buildDownloadArgs({
@@ -427,10 +503,34 @@ export function createYtDlpDownloader({
         outputTemplate,
         ffmpegPath,
         cookiesPath,
+        maxFileSize,
         jsRuntime,
         extraArgs,
         sourceUrl
       })
+      const monitoredSpawn = (...args) => {
+        const child = spawnFn(...args)
+        if (typeof storageHeadroom !== 'function' || typeof child?.kill !== 'function') return child
+        let stopped = false
+        const stop = () => {
+          if (stopped) return
+          stopped = true
+          clearInterval(timer)
+        }
+        const timer = setInterval(() => {
+          onStorageChanged?.()
+          storageReservations?.invalidate?.()
+          const reservedBytes = Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0))
+          const remaining = reserveAdjustedArchiveHeadroom(storageHeadroom(), reservedBytes)
+          if (!archiveHeadroomExhausted(remaining)) return
+          storageExceeded = true
+          stop()
+          child.kill('SIGTERM')
+        }, 100)
+        child.on?.('close', stop)
+        child.on?.('error', stop)
+        return child
+      }
 
       const invidiousFallbackUrls = buildInvidiousFallbackUrls(input.url, input.invidiousInstance)
       const attempts = [
@@ -444,7 +544,7 @@ export function createYtDlpDownloader({
       for (let attempt = 0; attempt < attempts.length; attempt += 1) {
         const args = buildArgs(attempts[attempt].args, attempts[attempt].url)
         try {
-          const result = await runYtDlp(bin, args, { spawnFn })
+          const result = await runYtDlp(bin, args, { spawnFn: monitoredSpawn })
           stdout = result.stdout
           filePath = parseReportedFilePath(stdout)
           if (!filePath) throw new Error('yt-dlp did not report an output file')
@@ -506,10 +606,22 @@ export function createYtDlpDownloader({
         cleanup() {
           try {
             fs.rmSync(targetDir, { recursive: true, force: true })
-          } catch (err) {
+          } catch {
             // Best effort: stale archive temp directories are harmless and can be cleaned on the next run.
+          } finally {
+            onStorageChanged?.()
+            releaseReservation()
           }
         }
+      }
+      } catch (err) {
+        releaseReservation()
+        if (targetDir) {
+          try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
+        }
+        throw storageExceeded
+          ? new Error('relay archive storage headroom exhausted during yt-dlp download')
+          : err
       }
     }
   }
@@ -1022,7 +1134,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
     runNext() {
       return runExclusive(async () => {
         const jobs = await store.listJobs()
-        const job = jobs.find((item) => item.status === 'queued' || item.status === 'failed')
+        const job = jobs.find((item) => item.status === 'queued')
         if (!job) return null
         return runJobUnlocked(job.id)
       })

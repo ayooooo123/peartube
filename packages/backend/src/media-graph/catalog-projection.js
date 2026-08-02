@@ -635,6 +635,23 @@ function describedMedia(metadata) {
   return out
 }
 
+function mediaCoordinatesFromReference(ref) {
+  if (ref?.namespace !== 'tmdb' || typeof ref.normalizedIdentifier !== 'string') return {}
+  const episode = /^show:([1-9][0-9]{0,19}):s([1-9][0-9]{0,5}):e([1-9][0-9]{0,5})$/.exec(ref.normalizedIdentifier)
+  if (episode) {
+    return {
+      contentKind: 'episode',
+      mediaProvider: 'tmdb',
+      mediaId: episode[1],
+      seasonNumber: Number(episode[2]),
+      episodeNumber: Number(episode[3]),
+    }
+  }
+  const movie = /^movie:([1-9][0-9]{0,19})$/.exec(ref.normalizedIdentifier)
+  if (!movie) return {}
+  return { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: movie[1] }
+}
+
 export function projectAuthenticatedPublisherMediaRecords({
   mediaGraphStore,
   assetManifestStore,
@@ -675,6 +692,7 @@ export function projectAuthenticatedPublisherMediaRecords({
           artworkMimeType: artworkMimeType(work.metadata.artwork),
           ranking: Number.isFinite(work.metadata.ranking) ? work.metadata.ranking : null,
           ...describedMedia(work.metadata),
+          ...mediaCoordinatesFromReference(subject),
           playable: true,
         })
         continue
@@ -707,6 +725,7 @@ export function projectAuthenticatedPublisherMediaRecords({
             episodeNumber: Number(membership.body.payload.position?.episode || 0),
             publicationId: manifest.publicationId,
             publisherId: manifest.body.publisherId,
+            ...mediaCoordinatesFromReference(subject),
           },
         })
       }

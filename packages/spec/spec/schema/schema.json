@@ -1699,6 +1699,44 @@
       ]
     },
     {
+      "name": "media-source-coordinates",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "contentKind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaProvider",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mediaId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "seasonNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episodeNumber",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "media-publication-source",
       "namespace": "peartube",
       "compact": false,
@@ -1889,6 +1927,12 @@
           "name": "availability",
           "required": false,
           "type": "@peartube/media-availability",
+          "version": 1
+        },
+        {
+          "name": "mediaCoordinates",
+          "required": false,
+          "type": "@peartube/media-source-coordinates",
           "version": 1
         }
       ]

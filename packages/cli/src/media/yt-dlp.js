@@ -107,6 +107,7 @@ export function buildDownloadArgs ({
   cookiesPath = null,
   jsRuntime = null,
   extraArgs = [],
+  maxFileSize = 0,
   sourceUrl
 } = {}) {
   const args = [
@@ -121,6 +122,7 @@ export function buildDownloadArgs ({
   if (cookiesPath) args.push('--cookies', cookiesPath)
   if (jsRuntime) args.push('--js-runtimes', jsRuntime)
   if (Array.isArray(extraArgs) && extraArgs.length) args.push(...extraArgs)
+  if (Number.isSafeInteger(maxFileSize) && maxFileSize > 0) args.push('--max-filesize', String(maxFileSize))
   args.push(sourceUrl)
   return args
 }

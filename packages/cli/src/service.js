@@ -383,7 +383,7 @@ async function buildRelayService({
     trustedClients,
     storageGuard,
     canIngest: () => storageGuard.canIngest(),
-    canArchive: () => storageGuard.hasMinFreeDisk(),
+    canArchive: () => storageGuard.canIngest(),
     getClassifier() {
       return classifier
     },
@@ -531,18 +531,19 @@ async function buildRelayService({
           minFreeBytes: config.storage.minFreeBytes || 0,
           log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
         })
-        const persistedHeadroom = liveFreeDiskHeadroom({
-          fsModule: runtimeFsModule,
-          path: config.storage.path,
-          minFreeBytes: config.storage.minFreeBytes || 0,
-          log: (...args) => logger.status?.debug?.(args.map(String).join(' '))
-        })
+        // The archive temp volume is bounded by free disk. The persisted copy
+        // is bounded by BOTH free disk and storage.maxBytes; reservations below
+        // subtract concurrent staged/copy bytes from that aggregate room.
+        const persistedHeadroom = () => storageGuard.headroomBytes()
         const archiveHeadroom = archiveWriteHeadroom({
           tmpHeadroom,
           storageHeadroom: persistedHeadroom,
           sharedVolume: maybeSameVolume(runtimeFsModule, config.archive.tmpPath, config.storage.path)
         })
-        const archiveStorageReservations = { bytes: 0 }
+        const archiveStorageReservations = {
+          bytes: 0,
+          invalidate: () => storageGuard.invalidate()
+        }
         archiveConsole = await createArchiveConsole({
           service,
           logger,
@@ -558,8 +559,8 @@ async function buildRelayService({
               outputDir: config.archive.tmpPath,
               fs: runtimeFsModule,
               path: runtimePathModule,
-              // No media-size cap: the live archive temp/persisted-volume
-              // headroom callback is the only byte bound.
+              // No per-file media cap: live temp, aggregate storage budget, and
+              // persisted-volume headroom are the byte bounds.
               storageHeadroom: archiveHeadroom,
               storageReservations: archiveStorageReservations
             }),
@@ -570,6 +571,9 @@ async function buildRelayService({
               ffmpegPath: config.archive.ffmpegPath,
               cookiesPath: config.archive.cookiesPath,
               jsRuntime: config.archive.jsRuntime,
+              storageHeadroom: archiveHeadroom,
+              storageReservations: archiveStorageReservations,
+              onStorageChanged: () => storageGuard.invalidate(),
               ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
               ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
               spawnFn: spawnFn || undefined,
@@ -747,16 +751,18 @@ async function buildRelayService({
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
-      // Deliberate uploads are the relay's purpose; they are only refused when
-      // the disk is genuinely low (ENOSPC risk), NOT when the evictable
-      // discovery cache merely filled the logical storage.maxBytes budget.
-      if (!storageGuard.hasMinFreeDisk()) {
+      // Protected archives are not evicted, but they still share the operator's
+      // hard aggregate budget with cache data. Refuse before scheduling when
+      // either storage.maxBytes or the free-disk floor is exhausted.
+      if (!storageGuard.canIngest()) {
         const snap = storageGuard.snapshot()
-        logger.status?.warn?.('Storage floor reached; refusing archive ingestion', {
+        logger.status?.warn?.('Storage limit reached; refusing archive ingestion', {
+          usedBytes: snap.usedBytes,
+          maxBytes: snap.maxBytes,
           freeBytes: snap.freeBytes,
           minFreeBytes: snap.minFreeBytes
         })
-        throw new Error(`relay storage low on disk (free ${snap.freeBytes ?? 'unknown'} < floor ${snap.minFreeBytes}); free space before archiving`)
+        throw new Error(`relay storage limit reached (used ${snap.usedBytes ?? 'unknown'} of ${snap.maxBytes || 'unbounded'}, free ${snap.freeBytes ?? 'unknown'} with floor ${snap.minFreeBytes}); free space or raise storage.maxBytes before archiving`)
       }
       const runtimeFsModule = fsModule || await import('#fs')
       const runtimePathModule = pathModule || await import('#path')
@@ -765,7 +771,7 @@ async function buildRelayService({
         store,
         logger,
         runQueue: archiveRunQueue,
-        canIngest: () => storageGuard.hasMinFreeDisk(),
+        canIngest: () => storageGuard.canIngest(),
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
@@ -775,6 +781,8 @@ async function buildRelayService({
           jsRuntime: config.archive?.jsRuntime,
           ytDlpExtraArgs: config.archive?.ytDlpExtraArgs,
           ytDlpRetryExtraArgs: config.archive?.ytDlpRetryExtraArgs,
+          storageHeadroom: () => storageGuard.headroomBytes(),
+          onStorageChanged: () => storageGuard.invalidate(),
           spawnFn: spawnFn || undefined,
           fs: runtimeFsModule,
           path: runtimePathModule

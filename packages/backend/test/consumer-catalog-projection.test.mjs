@@ -729,7 +729,7 @@ test('a moderation block on a non-first equivalent subject hides the whole relat
 // a catalog that syncs completely and renders blank is the failure this guards.
 test('claimed cover art reduces to one display locator and reaches the catalog wire', async (t) => {
   const publisher = crypto.keyPair()
-  const work = createEntityReference({ entityKind: 'work', namespace: 'issuer-native', issuerRootKey: publisher.publicKey, issuerLocalId: 'art' })
+  const work = createEntityReference({ entityKind: 'work', namespace: 'tmdb', normalizedIdentifier: 'movie:603' })
   const mediaGraphStore = createMediaGraphStore({ trustedSigners: [publisher.publicKey] })
   const assetManifestStore = createAssetManifestStore({ trustedSigners: [publisher.publicKey] })
   const manifest = createPublicationManifest({
@@ -788,6 +788,11 @@ test('claimed cover art reduces to one display locator and reaches the catalog w
   t.is(page.items[0].posterBlobsCoreKey, 'b'.repeat(64), 'the consumer is told which core holds the cover')
   t.is(page.items[0].posterBlobId, '3:1:0:512', 'the consumer is told which blob to replicate')
   t.is(page.items[0].posterMimeType, 'image/jpeg')
+  t.alike(
+    page.items[0].sources[0].mediaCoordinates,
+    { contentKind: 'movie', mediaProvider: 'tmdb', mediaId: '603' },
+    'the versioned catalog source carries stable provider coordinates',
+  )
   t.absent(page.items[0].posterUrl, 'no origin is handed to a consumer that has a blob')
 })
 

@@ -207,10 +207,10 @@ export function byteCeiling (_maxBytes, _requirePublicSource, headroomBytes) {
   return 0
 }
 
-// Downloads are not capped by media file size. `storageHeadroom` is an optional
-// `() => bytes|null` reading the free-space floor for the archive temp/output
-// volume. It is checked while streaming, so concurrent failed huge fetches stop
-// at the disk floor and clean up their partial temp directories.
+// Downloads are not capped by media file size. `storageHeadroom` reports the
+// live temp-volume room and aggregate persisted-storage room. It is checked
+// while streaming, so concurrent fetches cannot reserve the same bytes and
+// failed huge fetches clean up their partial temp directories.
 export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lookup = null, storageHeadroom = null, storageReservations = null } = {}) {
   if (!outputDir) throw new Error('outputDir is required')
   return {
@@ -239,6 +239,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
         if (reservation.released) return
         reservation.released = true
         releaseBytes(reservation.bytes)
+        storageReservations?.invalidate?.()
       }
       const measuredHeadroom = typeof storageHeadroom === 'function'
         ? () => reserveAdjustedHeadroom(storageHeadroom(), Math.max(0, Math.floor(Number(storageReservations?.bytes) || 0) - reservation.bytes))
@@ -246,7 +247,7 @@ export function createDirectDownloader ({ outputDir, fs, path, timeoutMs = 0, lo
       const headroomState = {}
       if (typeof measuredHeadroom === 'function') {
         const snapshot = measuredHeadroom()
-        if (atStorageFloor(snapshot)) throw new Error('relay is at its minimum free disk floor; refusing direct download')
+        if (atStorageFloor(snapshot)) throw new Error('relay has no archive storage headroom; refusing direct download')
         const error = storageHeadroomError(snapshot, 0, 1, 'direct download', headroomState)
         if (error) throw new Error(error)
       }

@@ -548,6 +548,20 @@ ns.register({
   ]
 })
 
+// Appended as one bounded field so the publication-source optional bitmap
+// remains below JavaScript's 32-bit bitwise ceiling and all existing source
+// flag positions stay unchanged.
+ns.register({
+  name: 'media-source-coordinates',
+  fields: [
+    { name: 'contentKind', type: 'string', required: true },
+    { name: 'mediaProvider', type: 'string', required: true },
+    { name: 'mediaId', type: 'string', required: true },
+    { name: 'seasonNumber', type: 'uint', required: false },
+    { name: 'episodeNumber', type: 'uint', required: false },
+  ]
+})
+
 ns.register({
   name: 'media-publication-source',
   fields: [
@@ -583,6 +597,7 @@ ns.register({
     { name: 'stale', type: 'bool', required: false },
     { name: 'incomplete', type: 'bool', required: false },
     { name: 'availability', type: '@peartube/media-availability', required: false },
+    { name: 'mediaCoordinates', type: '@peartube/media-source-coordinates', required: false },
   ]
 })
 

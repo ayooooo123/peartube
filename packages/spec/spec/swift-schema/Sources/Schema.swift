@@ -295,19 +295,8 @@ public struct ResourceBudgetStateCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: ResourceBudgetState) {
-    // Compute flags for varint sizing
-    var flags: UInt = 0
-    if value.memoryPressure != nil { flags |= 1 }
-    if value.cpuPressure != nil { flags |= 2 }
-    if value.maxFanout != nil { flags |= 4 }
-    if value.maxRequestsPerWindow != nil { flags |= 8 }
-    if value.maxFeedEntries != nil { flags |= 16 }
-    if value.maxConcurrentSync != nil { flags |= 32 }
-    if value.maxConcurrentProofs != nil { flags |= 64 }
-    if value.maxConcurrentFetches != nil { flags |= 128 }
-
     _roleCodec.preencode(&state, value.role)
-    Primitive.UInt().preencode(&state, flags)
+    state.end += 1 // flags
     if let v = value.memoryPressure { _memoryPressureCodec.preencode(&state, v) }
     if let v = value.cpuPressure { _cpuPressureCodec.preencode(&state, v) }
     if let v = value.maxFanout { _maxFanoutCodec.preencode(&state, v) }
@@ -406,18 +395,7 @@ public struct ResourceAllocationStateCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: ResourceAllocationState) {
-    // Compute flags for varint sizing
-    var flags: UInt = 0
-    if value.feedIndexers != nil { flags |= 1 }
-    if value.autobaseLinearizationBuffers != nil { flags |= 2 }
-    if value.activeSwarmConnections != nil { flags |= 4 }
-    if value.maxConcurrentSync != nil { flags |= 8 }
-    if value.maxConcurrentProofs != nil { flags |= 16 }
-    if value.maxConcurrentFetches != nil { flags |= 32 }
-    if value.memoryPressure != nil { flags |= 64 }
-    if value.cpuPressure != nil { flags |= 128 }
-
-    Primitive.UInt().preencode(&state, flags)
+    state.end += 1 // flags
     if let v = value.feedIndexers { _feedIndexersCodec.preencode(&state, v) }
     if let v = value.autobaseLinearizationBuffers { _autobaseLinearizationBuffersCodec.preencode(&state, v) }
     if let v = value.activeSwarmConnections { _activeSwarmConnectionsCodec.preencode(&state, v) }
@@ -1188,13 +1166,23 @@ public struct ProvisionPublisherCatalogResponse {
   public var catalogBootstrapKey: Data
   public var errorCode: String?
   public var error: String?
+  public var localWriterKey: Data
+  public var localSignerKey: Data
+  public var writable: Bool
+  public var namespaceInitialized: Bool
+  public var admitted: Bool
 
-  public init(success: Bool = false, publisherId: String, catalogBootstrapKey: Data, errorCode: String? = nil, error: String? = nil) {
+  public init(success: Bool = false, publisherId: String, catalogBootstrapKey: Data, errorCode: String? = nil, error: String? = nil, localWriterKey: Data, localSignerKey: Data, writable: Bool = false, namespaceInitialized: Bool = false, admitted: Bool = false) {
     self.success = success
     self.publisherId = publisherId
     self.catalogBootstrapKey = catalogBootstrapKey
     self.errorCode = errorCode
     self.error = error
+    self.localWriterKey = localWriterKey
+    self.localSignerKey = localSignerKey
+    self.writable = writable
+    self.namespaceInitialized = namespaceInitialized
+    self.admitted = admitted
   }
 }
 
@@ -1204,6 +1192,8 @@ public struct ProvisionPublisherCatalogResponseCodec: Codec {
   let _catalogBootstrapKeyCodec = Primitive.Buffer()
   let _errorCodeCodec = Primitive.UTF8()
   let _errorCodec = Primitive.UTF8()
+  let _localSignerKeyCodec = Primitive.Buffer()
+  let _localWriterKeyCodec = Primitive.Buffer()
   let _publisherIdCodec = Primitive.UTF8()
 
   public init() {}
@@ -1214,6 +1204,8 @@ public struct ProvisionPublisherCatalogResponseCodec: Codec {
     _catalogBootstrapKeyCodec.preencode(&state, value.catalogBootstrapKey)
     if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
     if let v = value.error { _errorCodec.preencode(&state, v) }
+    _localWriterKeyCodec.preencode(&state, value.localWriterKey)
+    _localSignerKeyCodec.preencode(&state, value.localSignerKey)
   }
 
   public func encode(_ state: inout State, _ value: ProvisionPublisherCatalogResponse) throws {
@@ -1221,12 +1213,17 @@ public struct ProvisionPublisherCatalogResponseCodec: Codec {
     if value.success { flags |= 1 }
     if value.errorCode != nil { flags |= 2 }
     if value.error != nil { flags |= 4 }
+    if value.writable { flags |= 8 }
+    if value.namespaceInitialized { flags |= 16 }
+    if value.admitted { flags |= 32 }
 
     try Primitive.UInt().encode(&state, flags)
     try _publisherIdCodec.encode(&state, value.publisherId)
     try _catalogBootstrapKeyCodec.encode(&state, value.catalogBootstrapKey)
     if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
     if let v = value.error { try _errorCodec.encode(&state, v) }
+    try _localWriterKeyCodec.encode(&state, value.localWriterKey)
+    try _localSignerKeyCodec.encode(&state, value.localSignerKey)
   }
 
   public func decode(_ state: inout State) throws -> ProvisionPublisherCatalogResponse {
@@ -1235,12 +1232,19 @@ public struct ProvisionPublisherCatalogResponseCodec: Codec {
     let _r1 = try _catalogBootstrapKeyCodec.decode(&state)
     let _r2: String? = (flags & 2) != 0 ? try _errorCodeCodec.decode(&state) : nil
     let _r3: String? = (flags & 4) != 0 ? try _errorCodec.decode(&state) : nil
+    let _r4 = try _localWriterKeyCodec.decode(&state)
+    let _r5 = try _localSignerKeyCodec.decode(&state)
     return ProvisionPublisherCatalogResponse(
       success: (flags & 1) != 0,
       publisherId: _r0,
       catalogBootstrapKey: _r1,
       errorCode: _r2,
-      error: _r3
+      error: _r3,
+      localWriterKey: _r4,
+      localSignerKey: _r5,
+      writable: (flags & 8) != 0,
+      namespaceInitialized: (flags & 16) != 0,
+      admitted: (flags & 32) != 0
     )
   }
 }
@@ -2988,18 +2992,18 @@ public let mediaRenditionDescriptor = MediaRenditionDescriptorCodec()
 public struct MediaAvailability {
   public var state: String
   public var renditionId: String?
-  public var observedAt: UInt?
-  public var expiresAt: UInt?
-  public var requiredRangeCount: UInt?
-  public var reachableRangeCount: UInt?
-  public var independentPeerCount: UInt?
-  public var completePeerCount: UInt?
-  public var measuredLatencyMs: UInt?
+  public var observedAt: UInt
+  public var expiresAt: UInt
+  public var requiredRangeCount: UInt
+  public var reachableRangeCount: UInt
+  public var independentPeerCount: UInt
+  public var completePeerCount: UInt
+  public var measuredLatencyMs: UInt
   public var offlinePlayable: Bool
   public var archivePledged: Bool
-  public var reasonCodes: [String]?
+  public var reasonCodes: [String]
 
-  public init(state: String, renditionId: String? = nil, observedAt: UInt? = nil, expiresAt: UInt? = nil, requiredRangeCount: UInt? = nil, reachableRangeCount: UInt? = nil, independentPeerCount: UInt? = nil, completePeerCount: UInt? = nil, measuredLatencyMs: UInt? = nil, offlinePlayable: Bool = false, archivePledged: Bool = false, reasonCodes: [String]? = nil) {
+  public init(state: String, renditionId: String? = nil, observedAt: UInt, expiresAt: UInt, requiredRangeCount: UInt, reachableRangeCount: UInt, independentPeerCount: UInt, completePeerCount: UInt, measuredLatencyMs: UInt, offlinePlayable: Bool = false, archivePledged: Bool = false, reasonCodes: [String]) {
     self.state = state
     self.renditionId = renditionId
     self.observedAt = observedAt
@@ -3032,72 +3036,50 @@ public struct MediaAvailabilityCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: MediaAvailability) {
-    // Compute flags for varint sizing
-    var flags: UInt = 0
-    if value.renditionId != nil { flags |= 1 }
-    if value.observedAt != nil { flags |= 2 }
-    if value.expiresAt != nil { flags |= 4 }
-    if value.requiredRangeCount != nil { flags |= 8 }
-    if value.reachableRangeCount != nil { flags |= 16 }
-    if value.independentPeerCount != nil { flags |= 32 }
-    if value.completePeerCount != nil { flags |= 64 }
-    if value.measuredLatencyMs != nil { flags |= 128 }
-    if value.offlinePlayable { flags |= 256 }
-    if value.archivePledged { flags |= 512 }
-    if value.reasonCodes != nil { flags |= 1024 }
-
     _stateCodec.preencode(&state, value.state)
-    Primitive.UInt().preencode(&state, flags)
+    state.end += 1 // flags
     if let v = value.renditionId { _renditionIdCodec.preencode(&state, v) }
-    if let v = value.observedAt { _observedAtCodec.preencode(&state, v) }
-    if let v = value.expiresAt { _expiresAtCodec.preencode(&state, v) }
-    if let v = value.requiredRangeCount { _requiredRangeCountCodec.preencode(&state, v) }
-    if let v = value.reachableRangeCount { _reachableRangeCountCodec.preencode(&state, v) }
-    if let v = value.independentPeerCount { _independentPeerCountCodec.preencode(&state, v) }
-    if let v = value.completePeerCount { _completePeerCountCodec.preencode(&state, v) }
-    if let v = value.measuredLatencyMs { _measuredLatencyMsCodec.preencode(&state, v) }
-    if let v = value.reasonCodes { _reasonCodesArrayCodec.preencode(&state, v) }
+    _observedAtCodec.preencode(&state, value.observedAt)
+    _expiresAtCodec.preencode(&state, value.expiresAt)
+    _requiredRangeCountCodec.preencode(&state, value.requiredRangeCount)
+    _reachableRangeCountCodec.preencode(&state, value.reachableRangeCount)
+    _independentPeerCountCodec.preencode(&state, value.independentPeerCount)
+    _completePeerCountCodec.preencode(&state, value.completePeerCount)
+    _measuredLatencyMsCodec.preencode(&state, value.measuredLatencyMs)
+    _reasonCodesArrayCodec.preencode(&state, value.reasonCodes)
   }
 
   public func encode(_ state: inout State, _ value: MediaAvailability) throws {
     var flags: UInt = 0
     if value.renditionId != nil { flags |= 1 }
-    if value.observedAt != nil { flags |= 2 }
-    if value.expiresAt != nil { flags |= 4 }
-    if value.requiredRangeCount != nil { flags |= 8 }
-    if value.reachableRangeCount != nil { flags |= 16 }
-    if value.independentPeerCount != nil { flags |= 32 }
-    if value.completePeerCount != nil { flags |= 64 }
-    if value.measuredLatencyMs != nil { flags |= 128 }
-    if value.offlinePlayable { flags |= 256 }
-    if value.archivePledged { flags |= 512 }
-    if value.reasonCodes != nil { flags |= 1024 }
+    if value.offlinePlayable { flags |= 2 }
+    if value.archivePledged { flags |= 4 }
 
     try _stateCodec.encode(&state, value.state)
     try Primitive.UInt().encode(&state, flags)
     if let v = value.renditionId { try _renditionIdCodec.encode(&state, v) }
-    if let v = value.observedAt { try _observedAtCodec.encode(&state, v) }
-    if let v = value.expiresAt { try _expiresAtCodec.encode(&state, v) }
-    if let v = value.requiredRangeCount { try _requiredRangeCountCodec.encode(&state, v) }
-    if let v = value.reachableRangeCount { try _reachableRangeCountCodec.encode(&state, v) }
-    if let v = value.independentPeerCount { try _independentPeerCountCodec.encode(&state, v) }
-    if let v = value.completePeerCount { try _completePeerCountCodec.encode(&state, v) }
-    if let v = value.measuredLatencyMs { try _measuredLatencyMsCodec.encode(&state, v) }
-    if let v = value.reasonCodes { try _reasonCodesArrayCodec.encode(&state, v) }
+    try _observedAtCodec.encode(&state, value.observedAt)
+    try _expiresAtCodec.encode(&state, value.expiresAt)
+    try _requiredRangeCountCodec.encode(&state, value.requiredRangeCount)
+    try _reachableRangeCountCodec.encode(&state, value.reachableRangeCount)
+    try _independentPeerCountCodec.encode(&state, value.independentPeerCount)
+    try _completePeerCountCodec.encode(&state, value.completePeerCount)
+    try _measuredLatencyMsCodec.encode(&state, value.measuredLatencyMs)
+    try _reasonCodesArrayCodec.encode(&state, value.reasonCodes)
   }
 
   public func decode(_ state: inout State) throws -> MediaAvailability {
     let _r0 = try _stateCodec.decode(&state)
     let flags = try Primitive.UInt().decode(&state)
     let _r1: String? = (flags & 1) != 0 ? try _renditionIdCodec.decode(&state) : nil
-    let _r2: UInt? = (flags & 2) != 0 ? try _observedAtCodec.decode(&state) : nil
-    let _r3: UInt? = (flags & 4) != 0 ? try _expiresAtCodec.decode(&state) : nil
-    let _r4: UInt? = (flags & 8) != 0 ? try _requiredRangeCountCodec.decode(&state) : nil
-    let _r5: UInt? = (flags & 16) != 0 ? try _reachableRangeCountCodec.decode(&state) : nil
-    let _r6: UInt? = (flags & 32) != 0 ? try _independentPeerCountCodec.decode(&state) : nil
-    let _r7: UInt? = (flags & 64) != 0 ? try _completePeerCountCodec.decode(&state) : nil
-    let _r8: UInt? = (flags & 128) != 0 ? try _measuredLatencyMsCodec.decode(&state) : nil
-    let _r9: [String]? = (flags & 1024) != 0 ? try _reasonCodesArrayCodec.decode(&state) : nil
+    let _r2 = try _observedAtCodec.decode(&state)
+    let _r3 = try _expiresAtCodec.decode(&state)
+    let _r4 = try _requiredRangeCountCodec.decode(&state)
+    let _r5 = try _reachableRangeCountCodec.decode(&state)
+    let _r6 = try _independentPeerCountCodec.decode(&state)
+    let _r7 = try _completePeerCountCodec.decode(&state)
+    let _r8 = try _measuredLatencyMsCodec.decode(&state)
+    let _r9 = try _reasonCodesArrayCodec.decode(&state)
     return MediaAvailability(
       state: _r0,
       renditionId: _r1,
@@ -3108,14 +3090,83 @@ public struct MediaAvailabilityCodec: Codec {
       independentPeerCount: _r6,
       completePeerCount: _r7,
       measuredLatencyMs: _r8,
-      offlinePlayable: (flags & 256) != 0,
-      archivePledged: (flags & 512) != 0,
+      offlinePlayable: (flags & 2) != 0,
+      archivePledged: (flags & 4) != 0,
       reasonCodes: _r9
     )
   }
 }
 
 public let mediaAvailability = MediaAvailabilityCodec()
+
+// @peartube/media-source-coordinates
+public struct MediaSourceCoordinates {
+  public var contentKind: String
+  public var mediaProvider: String
+  public var mediaId: String
+  public var seasonNumber: UInt?
+  public var episodeNumber: UInt?
+
+  public init(contentKind: String, mediaProvider: String, mediaId: String, seasonNumber: UInt? = nil, episodeNumber: UInt? = nil) {
+    self.contentKind = contentKind
+    self.mediaProvider = mediaProvider
+    self.mediaId = mediaId
+    self.seasonNumber = seasonNumber
+    self.episodeNumber = episodeNumber
+  }
+}
+
+public struct MediaSourceCoordinatesCodec: Codec {
+  public typealias Value = MediaSourceCoordinates
+
+  let _contentKindCodec = Primitive.UTF8()
+  let _episodeNumberCodec = Primitive.UInt()
+  let _mediaIdCodec = Primitive.UTF8()
+  let _mediaProviderCodec = Primitive.UTF8()
+  let _seasonNumberCodec = Primitive.UInt()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: MediaSourceCoordinates) {
+    _contentKindCodec.preencode(&state, value.contentKind)
+    _mediaProviderCodec.preencode(&state, value.mediaProvider)
+    _mediaIdCodec.preencode(&state, value.mediaId)
+    state.end += 1 // flags
+    if let v = value.seasonNumber { _seasonNumberCodec.preencode(&state, v) }
+    if let v = value.episodeNumber { _episodeNumberCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: MediaSourceCoordinates) throws {
+    var flags: UInt = 0
+    if value.seasonNumber != nil { flags |= 1 }
+    if value.episodeNumber != nil { flags |= 2 }
+
+    try _contentKindCodec.encode(&state, value.contentKind)
+    try _mediaProviderCodec.encode(&state, value.mediaProvider)
+    try _mediaIdCodec.encode(&state, value.mediaId)
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.seasonNumber { try _seasonNumberCodec.encode(&state, v) }
+    if let v = value.episodeNumber { try _episodeNumberCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> MediaSourceCoordinates {
+    let _r0 = try _contentKindCodec.decode(&state)
+    let _r1 = try _mediaProviderCodec.decode(&state)
+    let _r2 = try _mediaIdCodec.decode(&state)
+    let flags = try Primitive.UInt().decode(&state)
+    let _r3: UInt? = (flags & 1) != 0 ? try _seasonNumberCodec.decode(&state) : nil
+    let _r4: UInt? = (flags & 2) != 0 ? try _episodeNumberCodec.decode(&state) : nil
+    return MediaSourceCoordinates(
+      contentKind: _r0,
+      mediaProvider: _r1,
+      mediaId: _r2,
+      seasonNumber: _r3,
+      episodeNumber: _r4
+    )
+  }
+}
+
+public let mediaSourceCoordinates = MediaSourceCoordinatesCodec()
 
 // @peartube/media-publication-source
 public struct MediaPublicationSource {
@@ -3149,8 +3200,9 @@ public struct MediaPublicationSource {
   public var stale: Bool
   public var incomplete: Bool
   public var availability: MediaAvailability?
+  public var mediaCoordinates: MediaSourceCoordinates?
 
-  public init(publicationId: String, publisherId: String, manifestId: String? = nil, renditionId: String? = nil, score: UInt? = nil, availabilityScore: UInt? = nil, formatSupport: UInt? = nil, moderationPenalty: UInt? = nil, preferred: Bool = false, selected: Bool = false, eligible: Bool = false, selectionReasonCodes: [String]? = nil, rejectionReasonCodes: [String]? = nil, introductionPublisherIds: [String]? = nil, introductionIndexIds: [String]? = nil, moderationFeedIds: [String]? = nil, claimConflictIds: [String]? = nil, provenanceClaimIds: [String]? = nil, scoreLocalCompleteness: UInt? = nil, scoreStartupReachability: UInt? = nil, scorePeerEvidence: UInt? = nil, scoreFormatSupport: UInt? = nil, scoreStartupLatency: UInt? = nil, scoreUserOverride: UInt? = nil, archiveState: String? = nil, cacheState: String? = nil, availabilityState: String? = nil, stale: Bool = false, incomplete: Bool = false, availability: MediaAvailability? = nil) {
+  public init(publicationId: String, publisherId: String, manifestId: String? = nil, renditionId: String? = nil, score: UInt? = nil, availabilityScore: UInt? = nil, formatSupport: UInt? = nil, moderationPenalty: UInt? = nil, preferred: Bool = false, selected: Bool = false, eligible: Bool = false, selectionReasonCodes: [String]? = nil, rejectionReasonCodes: [String]? = nil, introductionPublisherIds: [String]? = nil, introductionIndexIds: [String]? = nil, moderationFeedIds: [String]? = nil, claimConflictIds: [String]? = nil, provenanceClaimIds: [String]? = nil, scoreLocalCompleteness: UInt? = nil, scoreStartupReachability: UInt? = nil, scorePeerEvidence: UInt? = nil, scoreFormatSupport: UInt? = nil, scoreStartupLatency: UInt? = nil, scoreUserOverride: UInt? = nil, archiveState: String? = nil, cacheState: String? = nil, availabilityState: String? = nil, stale: Bool = false, incomplete: Bool = false, availability: MediaAvailability? = nil, mediaCoordinates: MediaSourceCoordinates? = nil) {
     self.publicationId = publicationId
     self.publisherId = publisherId
     self.manifestId = manifestId
@@ -3181,6 +3233,7 @@ public struct MediaPublicationSource {
     self.stale = stale
     self.incomplete = incomplete
     self.availability = availability
+    self.mediaCoordinates = mediaCoordinates
   }
 }
 
@@ -3197,6 +3250,7 @@ public struct MediaPublicationSourceCodec: Codec {
   let _introductionIndexIdsArrayCodec = Primitive.Array(Primitive.UTF8())
   let _introductionPublisherIdsArrayCodec = Primitive.Array(Primitive.UTF8())
   let _manifestIdCodec = Primitive.UTF8()
+  let _mediaCoordinatesCodec = FrameCodec(MediaSourceCoordinatesCodec())
   let _moderationFeedIdsArrayCodec = Primitive.Array(Primitive.UTF8())
   let _moderationPenaltyCodec = Primitive.UInt()
   let _provenanceClaimIdsArrayCodec = Primitive.Array(Primitive.UTF8())
@@ -3246,6 +3300,7 @@ public struct MediaPublicationSourceCodec: Codec {
     if value.stale { flags |= 33554432 }
     if value.incomplete { flags |= 67108864 }
     if value.availability != nil { flags |= 134217728 }
+    if value.mediaCoordinates != nil { flags |= 268435456 }
 
     _publicationIdCodec.preencode(&state, value.publicationId)
     _publisherIdCodec.preencode(&state, value.publisherId)
@@ -3273,6 +3328,7 @@ public struct MediaPublicationSourceCodec: Codec {
     if let v = value.cacheState { _cacheStateCodec.preencode(&state, v) }
     if let v = value.availabilityState { _availabilityStateCodec.preencode(&state, v) }
     if let v = value.availability { _availabilityCodec.preencode(&state, v) }
+    if let v = value.mediaCoordinates { _mediaCoordinatesCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: MediaPublicationSource) throws {
@@ -3305,6 +3361,7 @@ public struct MediaPublicationSourceCodec: Codec {
     if value.stale { flags |= 33554432 }
     if value.incomplete { flags |= 67108864 }
     if value.availability != nil { flags |= 134217728 }
+    if value.mediaCoordinates != nil { flags |= 268435456 }
 
     try _publicationIdCodec.encode(&state, value.publicationId)
     try _publisherIdCodec.encode(&state, value.publisherId)
@@ -3332,6 +3389,7 @@ public struct MediaPublicationSourceCodec: Codec {
     if let v = value.cacheState { try _cacheStateCodec.encode(&state, v) }
     if let v = value.availabilityState { try _availabilityStateCodec.encode(&state, v) }
     if let v = value.availability { try _availabilityCodec.encode(&state, v) }
+    if let v = value.mediaCoordinates { try _mediaCoordinatesCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> MediaPublicationSource {
@@ -3361,6 +3419,7 @@ public struct MediaPublicationSourceCodec: Codec {
     let _r22: String? = (flags & 8388608) != 0 ? try _cacheStateCodec.decode(&state) : nil
     let _r23: String? = (flags & 16777216) != 0 ? try _availabilityStateCodec.decode(&state) : nil
     let _r24: MediaAvailability? = (flags & 134217728) != 0 ? try _availabilityCodec.decode(&state) : nil
+    let _r25: MediaSourceCoordinates? = (flags & 268435456) != 0 ? try _mediaCoordinatesCodec.decode(&state) : nil
     return MediaPublicationSource(
       publicationId: _r0,
       publisherId: _r1,
@@ -3391,7 +3450,8 @@ public struct MediaPublicationSourceCodec: Codec {
       availabilityState: _r23,
       stale: (flags & 33554432) != 0,
       incomplete: (flags & 67108864) != 0,
-      availability: _r24
+      availability: _r24,
+      mediaCoordinates: _r25
     )
   }
 }
@@ -3700,8 +3760,16 @@ public struct MediaEntitySummary {
   public var availability: MediaAvailability?
   public var sources: [MediaPublicationSource]?
   public var renditions: [MediaRenditionDescriptor]?
+  public var releaseYear: UInt?
+  public var runtimeMinutes: UInt?
+  public var overview: String?
+  public var genres: [String]?
+  public var posterBlobId: String?
+  public var posterBlobsCoreKey: String?
+  public var posterMimeType: String?
+  public var posterUrl: String?
 
-  public init(entityId: String, entityKind: String, localClusterId: String? = nil, title: String? = nil, subtitle: String? = nil, claimCount: UInt? = nil, conflictCount: UInt? = nil, availability: MediaAvailability? = nil, sources: [MediaPublicationSource]? = nil, renditions: [MediaRenditionDescriptor]? = nil) {
+  public init(entityId: String, entityKind: String, localClusterId: String? = nil, title: String? = nil, subtitle: String? = nil, claimCount: UInt? = nil, conflictCount: UInt? = nil, availability: MediaAvailability? = nil, sources: [MediaPublicationSource]? = nil, renditions: [MediaRenditionDescriptor]? = nil, releaseYear: UInt? = nil, runtimeMinutes: UInt? = nil, overview: String? = nil, genres: [String]? = nil, posterBlobId: String? = nil, posterBlobsCoreKey: String? = nil, posterMimeType: String? = nil, posterUrl: String? = nil) {
     self.entityId = entityId
     self.entityKind = entityKind
     self.localClusterId = localClusterId
@@ -3712,6 +3780,14 @@ public struct MediaEntitySummary {
     self.availability = availability
     self.sources = sources
     self.renditions = renditions
+    self.releaseYear = releaseYear
+    self.runtimeMinutes = runtimeMinutes
+    self.overview = overview
+    self.genres = genres
+    self.posterBlobId = posterBlobId
+    self.posterBlobsCoreKey = posterBlobsCoreKey
+    self.posterMimeType = posterMimeType
+    self.posterUrl = posterUrl
   }
 }
 
@@ -3723,8 +3799,16 @@ public struct MediaEntitySummaryCodec: Codec {
   let _conflictCountCodec = Primitive.UInt()
   let _entityIdCodec = Primitive.UTF8()
   let _entityKindCodec = Primitive.UTF8()
+  let _genresArrayCodec = Primitive.Array(Primitive.UTF8())
   let _localClusterIdCodec = Primitive.UTF8()
+  let _overviewCodec = Primitive.UTF8()
+  let _posterBlobIdCodec = Primitive.UTF8()
+  let _posterBlobsCoreKeyCodec = Primitive.UTF8()
+  let _posterMimeTypeCodec = Primitive.UTF8()
+  let _posterUrlCodec = Primitive.UTF8()
+  let _releaseYearCodec = Primitive.UInt()
   let _renditionsArrayCodec = Primitive.Array(FrameCodec(MediaRenditionDescriptorCodec()))
+  let _runtimeMinutesCodec = Primitive.UInt()
   let _sourcesArrayCodec = Primitive.Array(FrameCodec(MediaPublicationSourceCodec()))
   let _subtitleCodec = Primitive.UTF8()
   let _titleCodec = Primitive.UTF8()
@@ -3742,6 +3826,14 @@ public struct MediaEntitySummaryCodec: Codec {
     if value.availability != nil { flags |= 32 }
     if value.sources != nil { flags |= 64 }
     if value.renditions != nil { flags |= 128 }
+    if value.releaseYear != nil { flags |= 256 }
+    if value.runtimeMinutes != nil { flags |= 512 }
+    if value.overview != nil { flags |= 1024 }
+    if value.genres != nil { flags |= 2048 }
+    if value.posterBlobId != nil { flags |= 4096 }
+    if value.posterBlobsCoreKey != nil { flags |= 8192 }
+    if value.posterMimeType != nil { flags |= 16384 }
+    if value.posterUrl != nil { flags |= 32768 }
 
     _entityIdCodec.preencode(&state, value.entityId)
     _entityKindCodec.preencode(&state, value.entityKind)
@@ -3754,6 +3846,14 @@ public struct MediaEntitySummaryCodec: Codec {
     if let v = value.availability { _availabilityCodec.preencode(&state, v) }
     if let v = value.sources { _sourcesArrayCodec.preencode(&state, v) }
     if let v = value.renditions { _renditionsArrayCodec.preencode(&state, v) }
+    if let v = value.releaseYear { _releaseYearCodec.preencode(&state, v) }
+    if let v = value.runtimeMinutes { _runtimeMinutesCodec.preencode(&state, v) }
+    if let v = value.overview { _overviewCodec.preencode(&state, v) }
+    if let v = value.genres { _genresArrayCodec.preencode(&state, v) }
+    if let v = value.posterBlobId { _posterBlobIdCodec.preencode(&state, v) }
+    if let v = value.posterBlobsCoreKey { _posterBlobsCoreKeyCodec.preencode(&state, v) }
+    if let v = value.posterMimeType { _posterMimeTypeCodec.preencode(&state, v) }
+    if let v = value.posterUrl { _posterUrlCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: MediaEntitySummary) throws {
@@ -3766,6 +3866,14 @@ public struct MediaEntitySummaryCodec: Codec {
     if value.availability != nil { flags |= 32 }
     if value.sources != nil { flags |= 64 }
     if value.renditions != nil { flags |= 128 }
+    if value.releaseYear != nil { flags |= 256 }
+    if value.runtimeMinutes != nil { flags |= 512 }
+    if value.overview != nil { flags |= 1024 }
+    if value.genres != nil { flags |= 2048 }
+    if value.posterBlobId != nil { flags |= 4096 }
+    if value.posterBlobsCoreKey != nil { flags |= 8192 }
+    if value.posterMimeType != nil { flags |= 16384 }
+    if value.posterUrl != nil { flags |= 32768 }
 
     try _entityIdCodec.encode(&state, value.entityId)
     try _entityKindCodec.encode(&state, value.entityKind)
@@ -3778,6 +3886,14 @@ public struct MediaEntitySummaryCodec: Codec {
     if let v = value.availability { try _availabilityCodec.encode(&state, v) }
     if let v = value.sources { try _sourcesArrayCodec.encode(&state, v) }
     if let v = value.renditions { try _renditionsArrayCodec.encode(&state, v) }
+    if let v = value.releaseYear { try _releaseYearCodec.encode(&state, v) }
+    if let v = value.runtimeMinutes { try _runtimeMinutesCodec.encode(&state, v) }
+    if let v = value.overview { try _overviewCodec.encode(&state, v) }
+    if let v = value.genres { try _genresArrayCodec.encode(&state, v) }
+    if let v = value.posterBlobId { try _posterBlobIdCodec.encode(&state, v) }
+    if let v = value.posterBlobsCoreKey { try _posterBlobsCoreKeyCodec.encode(&state, v) }
+    if let v = value.posterMimeType { try _posterMimeTypeCodec.encode(&state, v) }
+    if let v = value.posterUrl { try _posterUrlCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> MediaEntitySummary {
@@ -3792,6 +3908,14 @@ public struct MediaEntitySummaryCodec: Codec {
     let _r7: MediaAvailability? = (flags & 32) != 0 ? try _availabilityCodec.decode(&state) : nil
     let _r8: [MediaPublicationSource]? = (flags & 64) != 0 ? try _sourcesArrayCodec.decode(&state) : nil
     let _r9: [MediaRenditionDescriptor]? = (flags & 128) != 0 ? try _renditionsArrayCodec.decode(&state) : nil
+    let _r10: UInt? = (flags & 256) != 0 ? try _releaseYearCodec.decode(&state) : nil
+    let _r11: UInt? = (flags & 512) != 0 ? try _runtimeMinutesCodec.decode(&state) : nil
+    let _r12: String? = (flags & 1024) != 0 ? try _overviewCodec.decode(&state) : nil
+    let _r13: [String]? = (flags & 2048) != 0 ? try _genresArrayCodec.decode(&state) : nil
+    let _r14: String? = (flags & 4096) != 0 ? try _posterBlobIdCodec.decode(&state) : nil
+    let _r15: String? = (flags & 8192) != 0 ? try _posterBlobsCoreKeyCodec.decode(&state) : nil
+    let _r16: String? = (flags & 16384) != 0 ? try _posterMimeTypeCodec.decode(&state) : nil
+    let _r17: String? = (flags & 32768) != 0 ? try _posterUrlCodec.decode(&state) : nil
     return MediaEntitySummary(
       entityId: _r0,
       entityKind: _r1,
@@ -3802,7 +3926,15 @@ public struct MediaEntitySummaryCodec: Codec {
       conflictCount: _r6,
       availability: _r7,
       sources: _r8,
-      renditions: _r9
+      renditions: _r9,
+      releaseYear: _r10,
+      runtimeMinutes: _r11,
+      overview: _r12,
+      genres: _r13,
+      posterBlobId: _r14,
+      posterBlobsCoreKey: _r15,
+      posterMimeType: _r16,
+      posterUrl: _r17
     )
   }
 }
@@ -4626,6 +4758,118 @@ public struct GetPublicationSourcesResponseCodec: Codec {
 
 public let getPublicationSourcesResponse = GetPublicationSourcesResponseCodec()
 
+// @peartube/get-entity-artwork-request
+public struct GetEntityArtworkRequest {
+  public var entityId: String?
+  public var publicationId: String?
+
+  public init(entityId: String? = nil, publicationId: String? = nil) {
+    self.entityId = entityId
+    self.publicationId = publicationId
+  }
+}
+
+public struct GetEntityArtworkRequestCodec: Codec {
+  public typealias Value = GetEntityArtworkRequest
+
+  let _entityIdCodec = Primitive.UTF8()
+  let _publicationIdCodec = Primitive.UTF8()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: GetEntityArtworkRequest) {
+    state.end += 1 // flags
+    if let v = value.entityId { _entityIdCodec.preencode(&state, v) }
+    if let v = value.publicationId { _publicationIdCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: GetEntityArtworkRequest) throws {
+    var flags: UInt = 0
+    if value.entityId != nil { flags |= 1 }
+    if value.publicationId != nil { flags |= 2 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.entityId { try _entityIdCodec.encode(&state, v) }
+    if let v = value.publicationId { try _publicationIdCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> GetEntityArtworkRequest {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: String? = (flags & 1) != 0 ? try _entityIdCodec.decode(&state) : nil
+    let _r1: String? = (flags & 2) != 0 ? try _publicationIdCodec.decode(&state) : nil
+    return GetEntityArtworkRequest(
+      entityId: _r0,
+      publicationId: _r1
+    )
+  }
+}
+
+public let getEntityArtworkRequest = GetEntityArtworkRequestCodec()
+
+// @peartube/get-entity-artwork-response
+public struct GetEntityArtworkResponse {
+  public var success: Bool
+  public var errorCode: String?
+  public var error: String?
+  public var exists: Bool
+  public var url: String?
+
+  public init(success: Bool = false, errorCode: String? = nil, error: String? = nil, exists: Bool = false, url: String? = nil) {
+    self.success = success
+    self.errorCode = errorCode
+    self.error = error
+    self.exists = exists
+    self.url = url
+  }
+}
+
+public struct GetEntityArtworkResponseCodec: Codec {
+  public typealias Value = GetEntityArtworkResponse
+
+  let _errorCodeCodec = Primitive.UTF8()
+  let _errorCodec = Primitive.UTF8()
+  let _urlCodec = Primitive.UTF8()
+
+  public init() {}
+
+  public func preencode(_ state: inout State, _ value: GetEntityArtworkResponse) {
+    state.end += 1 // flags
+    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
+    if let v = value.error { _errorCodec.preencode(&state, v) }
+    if let v = value.url { _urlCodec.preencode(&state, v) }
+  }
+
+  public func encode(_ state: inout State, _ value: GetEntityArtworkResponse) throws {
+    var flags: UInt = 0
+    if value.success { flags |= 1 }
+    if value.errorCode != nil { flags |= 2 }
+    if value.error != nil { flags |= 4 }
+    if value.exists { flags |= 8 }
+    if value.url != nil { flags |= 16 }
+
+    try Primitive.UInt().encode(&state, flags)
+    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
+    if let v = value.error { try _errorCodec.encode(&state, v) }
+    if let v = value.url { try _urlCodec.encode(&state, v) }
+  }
+
+  public func decode(_ state: inout State) throws -> GetEntityArtworkResponse {
+    let flags = try Primitive.UInt().decode(&state)
+    let _r0: String? = (flags & 2) != 0 ? try _errorCodeCodec.decode(&state) : nil
+    let _r1: String? = (flags & 4) != 0 ? try _errorCodec.decode(&state) : nil
+    let _r2: String? = (flags & 16) != 0 ? try _urlCodec.decode(&state) : nil
+    return GetEntityArtworkResponse(
+      success: (flags & 1) != 0,
+      errorCode: _r0,
+      error: _r1,
+      exists: (flags & 8) != 0,
+      url: _r2
+    )
+  }
+}
+
+public let getEntityArtworkResponse = GetEntityArtworkResponseCodec()
+
 // @peartube/media-playback-attempt
 public struct MediaPlaybackAttempt {
   public var publicationId: String
@@ -4729,10 +4973,11 @@ public struct PrepareMediaPlaybackResponse {
   public var publicationId: String?
   public var renditionId: String?
   public var coreKey: String?
+  public var url: String?
   public var attempts: [MediaPlaybackAttempt]?
   public var sources: [MediaPublicationSource]?
 
-  public init(success: Bool = false, errorCode: String? = nil, error: String? = nil, retry: String? = nil, publicationId: String? = nil, renditionId: String? = nil, coreKey: String? = nil, attempts: [MediaPlaybackAttempt]? = nil, sources: [MediaPublicationSource]? = nil) {
+  public init(success: Bool = false, errorCode: String? = nil, error: String? = nil, retry: String? = nil, publicationId: String? = nil, renditionId: String? = nil, coreKey: String? = nil, url: String? = nil, attempts: [MediaPlaybackAttempt]? = nil, sources: [MediaPublicationSource]? = nil) {
     self.success = success
     self.errorCode = errorCode
     self.error = error
@@ -4740,6 +4985,7 @@ public struct PrepareMediaPlaybackResponse {
     self.publicationId = publicationId
     self.renditionId = renditionId
     self.coreKey = coreKey
+    self.url = url
     self.attempts = attempts
     self.sources = sources
   }
@@ -4756,6 +5002,7 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
   let _renditionIdCodec = Primitive.UTF8()
   let _retryCodec = Primitive.UTF8()
   let _sourcesArrayCodec = Primitive.Array(FrameCodec(MediaPublicationSourceCodec()))
+  let _urlCodec = Primitive.UTF8()
 
   public init() {}
 
@@ -4769,8 +5016,9 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
     if value.publicationId != nil { flags |= 16 }
     if value.renditionId != nil { flags |= 32 }
     if value.coreKey != nil { flags |= 64 }
-    if value.attempts != nil { flags |= 128 }
-    if value.sources != nil { flags |= 256 }
+    if value.url != nil { flags |= 128 }
+    if value.attempts != nil { flags |= 256 }
+    if value.sources != nil { flags |= 512 }
 
     Primitive.UInt().preencode(&state, flags)
     if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
@@ -4779,6 +5027,7 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
     if let v = value.publicationId { _publicationIdCodec.preencode(&state, v) }
     if let v = value.renditionId { _renditionIdCodec.preencode(&state, v) }
     if let v = value.coreKey { _coreKeyCodec.preencode(&state, v) }
+    if let v = value.url { _urlCodec.preencode(&state, v) }
     if let v = value.attempts { _attemptsArrayCodec.preencode(&state, v) }
     if let v = value.sources { _sourcesArrayCodec.preencode(&state, v) }
   }
@@ -4792,8 +5041,9 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
     if value.publicationId != nil { flags |= 16 }
     if value.renditionId != nil { flags |= 32 }
     if value.coreKey != nil { flags |= 64 }
-    if value.attempts != nil { flags |= 128 }
-    if value.sources != nil { flags |= 256 }
+    if value.url != nil { flags |= 128 }
+    if value.attempts != nil { flags |= 256 }
+    if value.sources != nil { flags |= 512 }
 
     try Primitive.UInt().encode(&state, flags)
     if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
@@ -4802,6 +5052,7 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
     if let v = value.publicationId { try _publicationIdCodec.encode(&state, v) }
     if let v = value.renditionId { try _renditionIdCodec.encode(&state, v) }
     if let v = value.coreKey { try _coreKeyCodec.encode(&state, v) }
+    if let v = value.url { try _urlCodec.encode(&state, v) }
     if let v = value.attempts { try _attemptsArrayCodec.encode(&state, v) }
     if let v = value.sources { try _sourcesArrayCodec.encode(&state, v) }
   }
@@ -4814,8 +5065,9 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
     let _r3: String? = (flags & 16) != 0 ? try _publicationIdCodec.decode(&state) : nil
     let _r4: String? = (flags & 32) != 0 ? try _renditionIdCodec.decode(&state) : nil
     let _r5: String? = (flags & 64) != 0 ? try _coreKeyCodec.decode(&state) : nil
-    let _r6: [MediaPlaybackAttempt]? = (flags & 128) != 0 ? try _attemptsArrayCodec.decode(&state) : nil
-    let _r7: [MediaPublicationSource]? = (flags & 256) != 0 ? try _sourcesArrayCodec.decode(&state) : nil
+    let _r6: String? = (flags & 128) != 0 ? try _urlCodec.decode(&state) : nil
+    let _r7: [MediaPlaybackAttempt]? = (flags & 256) != 0 ? try _attemptsArrayCodec.decode(&state) : nil
+    let _r8: [MediaPublicationSource]? = (flags & 512) != 0 ? try _sourcesArrayCodec.decode(&state) : nil
     return PrepareMediaPlaybackResponse(
       success: (flags & 1) != 0,
       errorCode: _r0,
@@ -4824,8 +5076,9 @@ public struct PrepareMediaPlaybackResponseCodec: Codec {
       publicationId: _r3,
       renditionId: _r4,
       coreKey: _r5,
-      attempts: _r6,
-      sources: _r7
+      url: _r6,
+      attempts: _r7,
+      sources: _r8
     )
   }
 }
@@ -6143,30 +6396,35 @@ public struct UploadVideoRequestCodec: Codec {
   public typealias Value = UploadVideoRequest
 
   let _categoryCodec = Primitive.UTF8()
-  let _descriptionCodec = Primitive.UTF8()
-  let _filePathCodec = Primitive.UTF8()
   let _contentKindCodec = Primitive.UTF8()
+  let _descriptionCodec = Primitive.UTF8()
+  let _episodeNumberCodec = Primitive.UInt()
+  let _expectedEpisodeCountCodec = Primitive.UInt()
+  let _filePathCodec = Primitive.UTF8()
+  let _mediaIdCodec = Primitive.UTF8()
+  let _mediaProviderCodec = Primitive.UTF8()
+  let _seasonNumberCodec = Primitive.UInt()
   let _seriesIdCodec = Primitive.UTF8()
   let _seriesTitleCodec = Primitive.UTF8()
-  let _mediaProviderCodec = Primitive.UTF8()
-  let _mediaIdCodec = Primitive.UTF8()
   let _titleCodec = Primitive.UTF8()
 
   public init() {}
 
   public func preencode(_ state: inout State, _ value: UploadVideoRequest) {
-    let flags: UInt =
-      (value.description != nil ? 1 : 0) |
-      (value.category != nil ? 2 : 0) |
-      (value.skipThumbnailGeneration ? 4 : 0) |
-      (value.contentKind != nil ? 8 : 0) |
-      (value.seriesId != nil ? 16 : 0) |
-      (value.seriesTitle != nil ? 32 : 0) |
-      (value.mediaProvider != nil ? 64 : 0) |
-      (value.mediaId != nil ? 128 : 0) |
-      (value.seasonNumber != nil ? 256 : 0) |
-      (value.episodeNumber != nil ? 512 : 0) |
-      (value.expectedEpisodeCount != nil ? 1024 : 0)
+    // Compute flags for varint sizing
+    var flags: UInt = 0
+    if value.description != nil { flags |= 1 }
+    if value.category != nil { flags |= 2 }
+    if value.skipThumbnailGeneration { flags |= 4 }
+    if value.contentKind != nil { flags |= 8 }
+    if value.seriesId != nil { flags |= 16 }
+    if value.seriesTitle != nil { flags |= 32 }
+    if value.mediaProvider != nil { flags |= 64 }
+    if value.mediaId != nil { flags |= 128 }
+    if value.seasonNumber != nil { flags |= 256 }
+    if value.episodeNumber != nil { flags |= 512 }
+    if value.expectedEpisodeCount != nil { flags |= 1024 }
+
     _filePathCodec.preencode(&state, value.filePath)
     _titleCodec.preencode(&state, value.title)
     Primitive.UInt().preencode(&state, flags)
@@ -6177,9 +6435,9 @@ public struct UploadVideoRequestCodec: Codec {
     if let v = value.seriesTitle { _seriesTitleCodec.preencode(&state, v) }
     if let v = value.mediaProvider { _mediaProviderCodec.preencode(&state, v) }
     if let v = value.mediaId { _mediaIdCodec.preencode(&state, v) }
-    if let v = value.seasonNumber { Primitive.UInt().preencode(&state, v) }
-    if let v = value.episodeNumber { Primitive.UInt().preencode(&state, v) }
-    if let v = value.expectedEpisodeCount { Primitive.UInt().preencode(&state, v) }
+    if let v = value.seasonNumber { _seasonNumberCodec.preencode(&state, v) }
+    if let v = value.episodeNumber { _episodeNumberCodec.preencode(&state, v) }
+    if let v = value.expectedEpisodeCount { _expectedEpisodeCountCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: UploadVideoRequest) throws {
@@ -6206,9 +6464,9 @@ public struct UploadVideoRequestCodec: Codec {
     if let v = value.seriesTitle { try _seriesTitleCodec.encode(&state, v) }
     if let v = value.mediaProvider { try _mediaProviderCodec.encode(&state, v) }
     if let v = value.mediaId { try _mediaIdCodec.encode(&state, v) }
-    if let v = value.seasonNumber { try Primitive.UInt().encode(&state, v) }
-    if let v = value.episodeNumber { try Primitive.UInt().encode(&state, v) }
-    if let v = value.expectedEpisodeCount { try Primitive.UInt().encode(&state, v) }
+    if let v = value.seasonNumber { try _seasonNumberCodec.encode(&state, v) }
+    if let v = value.episodeNumber { try _episodeNumberCodec.encode(&state, v) }
+    if let v = value.expectedEpisodeCount { try _expectedEpisodeCountCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> UploadVideoRequest {
@@ -6222,9 +6480,9 @@ public struct UploadVideoRequestCodec: Codec {
     let _r6: String? = (flags & 32) != 0 ? try _seriesTitleCodec.decode(&state) : nil
     let _r7: String? = (flags & 64) != 0 ? try _mediaProviderCodec.decode(&state) : nil
     let _r8: String? = (flags & 128) != 0 ? try _mediaIdCodec.decode(&state) : nil
-    let _r9: UInt? = (flags & 256) != 0 ? try Primitive.UInt().decode(&state) : nil
-    let _r10: UInt? = (flags & 512) != 0 ? try Primitive.UInt().decode(&state) : nil
-    let _r11: UInt? = (flags & 1024) != 0 ? try Primitive.UInt().decode(&state) : nil
+    let _r9: UInt? = (flags & 256) != 0 ? try _seasonNumberCodec.decode(&state) : nil
+    let _r10: UInt? = (flags & 512) != 0 ? try _episodeNumberCodec.decode(&state) : nil
+    let _r11: UInt? = (flags & 1024) != 0 ? try _expectedEpisodeCountCodec.decode(&state) : nil
     return UploadVideoRequest(
       filePath: _r0,
       title: _r1,
@@ -8318,18 +8576,7 @@ public struct LogWatchHistoryRequestCodec: Codec {
   public init() {}
 
   public func preencode(_ state: inout State, _ value: LogWatchHistoryRequest) {
-    // Compute flags for varint sizing
-    var flags: UInt = 0
-    if value.channelKey != nil { flags |= 1 }
-    if value.videoId != nil { flags |= 2 }
-    if value.videoKey != nil { flags |= 4 }
-    if value.title != nil { flags |= 8 }
-    if value.duration != nil { flags |= 16 }
-    if value.position != nil { flags |= 32 }
-    if value.completed { flags |= 64 }
-    if value.timestamp != nil { flags |= 128 }
-
-    Primitive.UInt().preencode(&state, flags)
+    state.end += 1 // flags
     if let v = value.channelKey { _channelKeyCodec.preencode(&state, v) }
     if let v = value.videoId { _videoIdCodec.preencode(&state, v) }
     if let v = value.videoKey { _videoKeyCodec.preencode(&state, v) }
@@ -8801,7 +9048,7 @@ public struct ProvisionPersonalEncryptionRequest {
   public var bootstrapKey: String?
   public var deviceLocal: Bool
 
-  public init(secret: String = "", bootstrapKey: String? = nil, deviceLocal: Bool = false) {
+  public init(secret: String, bootstrapKey: String? = nil, deviceLocal: Bool = false) {
     self.secret = secret
     self.bootstrapKey = bootstrapKey
     self.deviceLocal = deviceLocal
@@ -8811,8 +9058,8 @@ public struct ProvisionPersonalEncryptionRequest {
 public struct ProvisionPersonalEncryptionRequestCodec: Codec {
   public typealias Value = ProvisionPersonalEncryptionRequest
 
-  let _secretCodec = Primitive.UTF8()
   let _bootstrapKeyCodec = Primitive.UTF8()
+  let _secretCodec = Primitive.UTF8()
 
   public init() {}
 
@@ -8864,8 +9111,8 @@ public struct ProvisionPersonalEncryptionResponse {
 public struct ProvisionPersonalEncryptionResponseCodec: Codec {
   public typealias Value = ProvisionPersonalEncryptionResponse
 
-  let _errorCodec = Primitive.UTF8()
   let _bootstrapKeyCodec = Primitive.UTF8()
+  let _errorCodec = Primitive.UTF8()
 
   public init() {}
 

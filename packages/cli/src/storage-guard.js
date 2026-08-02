@@ -134,22 +134,19 @@ export function createStorageGuard({
     canIngest() {
       return snapshot().ok
     },
-    // Free-disk floor ONLY, for DELIBERATE content (archive uploads/imports —
-    // the relay's actual purpose). These must not be blocked just because the
-    // evictable discovery cache filled the logical budget; only a genuinely low
-    // disk (ENOSPC risk) refuses them.
-    hasMinFreeDisk() {
-      return !snapshot().lowDisk
-    },
-    // Bytes a single deliberate ingest may still write before it would reach the
-    // free-disk floor, so a per-download ceiling can be clamped to what the disk
-    // actually has. null when free space is not measurable (no statfs, or no
-    // floor configured), which leaves the caller on its configured ceiling.
+    // Bytes one archive may still add before either the aggregate storage
+    // budget or the free-disk floor is reached. A signal that cannot be
+    // measured is omitted; null means neither bound is measurable.
     headroomBytes() {
       const snap = snapshot()
-      if (snap.freeBytes === null) return null
-      const room = snap.freeBytes - snap.minFreeBytes
-      return room > 0 ? room : 0
+      const limits = []
+      if (snap.usedBytes !== null && snap.maxBytes > 0) {
+        limits.push(Math.max(0, snap.maxBytes - snap.usedBytes))
+      }
+      if (snap.freeBytes !== null && snap.minFreeBytes > 0) {
+        limits.push(Math.max(0, snap.freeBytes - snap.minFreeBytes))
+      }
+      return limits.length > 0 ? Math.min(...limits) : null
     },
     snapshot,
     // Force the next snapshot to re-measure (e.g. right after an eviction).

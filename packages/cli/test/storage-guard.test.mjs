@@ -86,6 +86,18 @@ test('storage guard reports the bytes a single ingest may still write', function
   t.is(unmeasurable.headroomBytes(), null, 'null when free space cannot be measured')
 })
 
+test('storage guard bounds deliberate archive writes by the aggregate storage budget', function (t) {
+  const fs = fakeFs({ root: { db: { 'existing.blob': 20 } } })
+  const guard = createStorageGuard({
+    storagePath: 'root',
+    maxBytes: 12_288,
+    statSync: fs.statSync,
+    readdirSync: fs.readdirSync,
+  })
+
+  t.is(guard.headroomBytes(), 2_048, 'an archive may only consume the unallocated part of storage.maxBytes')
+})
+
 test('storage guard degrades to a no-op without fs primitives', function (t) {
   const guard = createStorageGuard({ storagePath: 'root', maxBytes: 1, minFreeBytes: 1 })
   t.ok(guard.canIngest(), 'fails open when it cannot measure')

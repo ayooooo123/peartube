@@ -1,5 +1,6 @@
 import { createServer } from '#http'
-import { rmSync } from '#fs'
+import { existsSync, rmSync, statSync } from '#fs'
+import { dirname, relative, resolve, sep } from '#path'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 import { resolveTmdbOptions } from './settings.js'
@@ -461,6 +462,7 @@ export async function createArchiveConsole({
     reservation.released = true
     copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - reservation.bytes)
     reservation.bytes = 0
+    copyReservations.invalidate?.()
   }
   const releaseUploadReservationByPath = (uploadPath) => {
     const release = uploadReservations.get(uploadPath)
@@ -479,6 +481,28 @@ export async function createArchiveConsole({
     if (size <= 0) return
     reservation.bytes -= size
     copyReservations.bytes = Math.max(0, Math.floor(Number(copyReservations.bytes) || 0) - size)
+  }
+  // Multipart bytes survive a restart with their queued/failed durable jobs.
+  // Restore the eventual persisted-copy reservations before this console can
+  // accept another byte, or the process would spend the same aggregate room
+  // twice.
+  for (const job of await store.listJobs()) {
+    if (job.status !== 'queued' && job.status !== 'failed') continue
+    const privateInput = await store.getPrivateInput(job.id)
+    const uploadPath = privateInput?.uploadPath
+    if (!uploadPath || uploadReservations.has(uploadPath) || !existsSync(uploadPath)) continue
+    let uploadSize = 0
+    try {
+      const staged = statSync(uploadPath)
+      if (typeof staged?.isFile === 'function' && !staged.isFile()) continue
+      uploadSize = Math.max(0, Math.floor(Number(staged?.size) || 0))
+    } catch {
+      continue
+    }
+    if (uploadSize <= 0) continue
+    const reservation = { bytes: 0, released: false }
+    reserveUploadBytes(reservation, uploadSize)
+    uploadReservations.set(uploadPath, () => releaseUploadReservation(reservation))
   }
   const manager = createArchiveManager({ store, downloader, publisher, logger, canIngest: service.canArchive, onCompleted: (job) => service.publishArchiveJob?.(job), runQueue, onUploadReleased: releaseUploadReservationByPath, stagingRoot: uploadDir })
 
@@ -520,6 +544,21 @@ export async function createArchiveConsole({
     return { form: buildArchiveForm((key) => params.get(key) || ''), file: null, fields: formFields(params) }
   }
 
+  function discardUploadPath(uploadPath) {
+    if (!uploadPath || !uploadDir) return
+    const root = resolve(uploadDir)
+    const targetDir = dirname(resolve(uploadPath))
+    const targetRelative = relative(root, targetDir)
+    if (!targetRelative || targetRelative === '..' || targetRelative.startsWith(`..${sep}`)) {
+      throw new Error('refusing to discard an upload outside the archive staging root')
+    }
+    try {
+      rmSync(targetDir, { recursive: true, force: true })
+    } finally {
+      releaseUploadReservationByPath(uploadPath)
+    }
+  }
+
   function discardUploadFile(file) {
     if (!file) return
     try {
@@ -539,6 +578,12 @@ export async function createArchiveConsole({
   // browser Discover form and the machine API: they differ in how they answer,
   // never in what they enqueue.
   async function enqueueCatalogSubmission(form, file) {
+    if (form.reuseJobId) {
+      const previousInput = await store.getPrivateInput(form.reuseJobId)
+      if (previousInput?.uploadPath && previousInput.uploadPath !== file?.path) {
+        discardUploadPath(previousInput.uploadPath)
+      }
+    }
     let job
     try {
       job = await manager.enqueue({

@@ -31,6 +31,19 @@ function describedMediaResponse(item) {
   return out
 }
 
+function mediaCoordinatesResponse(item) {
+  const contentKind = item?.contentKind === 'movie' || item?.contentKind === 'episode' ? item.contentKind : null
+  const mediaProvider = typeof item?.mediaProvider === 'string' && item.mediaProvider ? item.mediaProvider : null
+  const mediaId = typeof item?.mediaId === 'string' && item.mediaId ? item.mediaId : null
+  if (!contentKind || !mediaProvider || !mediaId) return {}
+  const out = { contentKind, mediaProvider, mediaId }
+  if (contentKind === 'episode') {
+    if (Number.isSafeInteger(item.seasonNumber) && item.seasonNumber > 0) out.seasonNumber = item.seasonNumber
+    if (Number.isSafeInteger(item.episodeNumber) && item.episodeNumber > 0) out.episodeNumber = item.episodeNumber
+  }
+  return out
+}
+
 function posterResponse(item) {
   const locator = typeof item?.artwork === 'string' ? item.artwork.trim() : ''
   if (!locator) return {}
@@ -888,6 +901,7 @@ export function createMediaGraphApi(options = {}) {
                 publicationId: publication.publicationId,
                 publisherId: publication.publisherId,
                 availability: scope.assess(publication.publicationId),
+                ...mediaCoordinatesResponse(publication),
               }))
               return {
                 entityId: item.entityRef,
@@ -901,11 +915,15 @@ export function createMediaGraphApi(options = {}) {
                   sources[0]?.availability ||
                   scope.assess('', null)
                 ),
-                sources: sources.map(source => ({
-                  publicationId: source.publicationId,
-                  publisherId: source.publisherId,
-                  availability: availabilityResponse(source.availability),
-                })),
+                sources: sources.map(source => {
+                  const mediaCoordinates = mediaCoordinatesResponse(source)
+                  return {
+                    publicationId: source.publicationId,
+                    publisherId: source.publisherId,
+                    ...(Object.keys(mediaCoordinates).length > 0 ? { mediaCoordinates } : {}),
+                    availability: availabilityResponse(source.availability),
+                  }
+                }),
                 renditions: [],
                 // Cover art is published on the metadata claim; passing it on
                 // is what stops a fully synced catalog rendering blank.

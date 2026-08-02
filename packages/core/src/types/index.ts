@@ -266,11 +266,20 @@ export interface MediaAvailability {
   reasonCodes: string[];
 }
 
+export interface MediaSourceCoordinates {
+  contentKind: 'movie' | 'episode';
+  mediaProvider: string;
+  mediaId: string;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+}
+
 export interface MediaPublicationSource {
   publicationId: string;
   publisherId: string;
   manifestId?: string | null;
   renditionId?: string | null;
+  mediaCoordinates?: MediaSourceCoordinates | null;
   score?: number | null;
   availabilityScore?: number | null;
   formatSupport?: number | null;

@@ -179,7 +179,7 @@ test('guarded downloads do not gain a fallback media-size ceiling', function (t)
   t.is(byteCeiling(64, true, 4096), 4096, 'storage headroom is the only byte limit')
 })
 
-test('the storage gate bounds writes and refuses at the free-disk floor', async function (t) {
+test('the storage gate bounds writes and refuses at the aggregate limit', async function (t) {
   const { server, base } = await startServer()
   const outputDir = mkdtempSync(join(tmpdir(), 'pt-direct-headroom-'))
   let hits = 0
@@ -209,8 +209,8 @@ test('the storage gate bounds writes and refuses at the free-disk floor', async 
     const before = hits
     await t.exception(
       atFloor.download({ id: 'arch_floor', url: `${base}/episode.mp4` }),
-      /free disk floor/,
-      'at the floor it refuses by name'
+      /archive storage headroom/,
+      'at the aggregate limit it refuses by name'
     )
     t.is(hits, before, 'and refuses before fetching a byte')
     t.absent(existsSync(join(outputDir, 'arch_floor')), 'with no temp dir left behind')

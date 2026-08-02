@@ -31,7 +31,16 @@ function catalogPage() {
       entityKind: 'work',
       title: 'Wedding Crashers',
       releaseYear: 2005,
-      sources: [{ publicationId: 'pub-1', publisherId: 'cd'.repeat(32), renditionId: 'rend-1' }],
+      sources: [{
+        publicationId: 'pub-1',
+        publisherId: 'cd'.repeat(32),
+        renditionId: 'rend-1',
+        mediaCoordinates: {
+          contentKind: 'movie',
+          mediaProvider: 'tmdb',
+          mediaId: '9367'
+        }
+      }],
       renditions: [{ renditionId: 'rend-1', coreKey: CORE_KEY, coreLength: 42, byteLength: 1024 }]
     }],
     nextCursor: null
@@ -233,6 +242,114 @@ test('POST /api/v1/archive accepts a movie url seed and enqueues the fetch', asy
   }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader: recordingDownloader(seen) } })
 })
 
+test('POST /api/v1/archive deduplicates concurrent submissions with one idempotency key', async function (t) {
+  let markStarted
+  let releaseDownload
+  const started = new Promise((resolve) => { markStarted = resolve })
+  const blocked = new Promise((resolve) => { releaseDownload = resolve })
+  const seen = []
+  const downloader = {
+    async download(input) {
+      seen.push(input)
+      markStarted()
+      await blocked
+      throw new Error('end idempotency test')
+    }
+  }
+
+  await withRelay(async ({ base }) => {
+    const body = {
+      url: 'https://cdn.example.com/wedding-crashers.mp4',
+      contentKind: 'movie',
+      tmdbId: '9367',
+      tmdbTitle: 'Wedding Crashers'
+    }
+    const submit = () => fetch(`${base}/api/v1/archive`, {
+      ...seed(body),
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'mediastorm-v1:movie-9367-source-a' }
+    })
+
+    const first = await submit()
+    t.is(first.status, 202)
+    const firstJob = await first.json()
+    await started
+
+    const second = await submit()
+    t.is(second.status, 202)
+    const secondJob = await second.json()
+    t.is(secondJob.jobId, firstJob.jobId, 'the retry observes the original job instead of fetching the movie twice')
+    t.is(seen.length, 1, 'only one downloader owns the source')
+
+    const jobs = await (await fetch(`${base}/jobs`)).json()
+    t.is(jobs.jobs.length, 1, 'only one durable archive job exists for the key')
+    releaseDownload()
+    await settledJob(base, firstJob.jobId)
+  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader } })
+})
+
+test('POST /api/v1/archive requeues the same durable job after failure', async function (t) {
+  let attempts = 0
+  const downloader = {
+    async download() {
+      attempts += 1
+      throw new Error(`retryable failure ${attempts}`)
+    }
+  }
+
+  await withRelay(async ({ base }) => {
+    const body = {
+      url: 'https://cdn.example.com/retryable.mp4',
+      contentKind: 'movie',
+      tmdbId: '9367',
+      tmdbTitle: 'Wedding Crashers'
+    }
+    const submit = () => fetch(`${base}/api/v1/archive`, {
+      ...seed(body),
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'mediastorm-v1:movie-9367-retryable' }
+    })
+
+    const first = await (await submit()).json()
+    t.is((await settledJob(base, first.jobId)).status, 'failed')
+
+    const retry = await (await submit()).json()
+    t.is(retry.jobId, first.jobId, 'the retry requeues the original durable identity')
+    t.is((await settledJob(base, retry.jobId)).status, 'failed')
+    t.is(attempts, 2, 'the same job gets one fresh execution')
+
+    const jobs = await (await fetch(`${base}/jobs`)).json()
+    t.is(jobs.jobs.length, 1, 'a retry cannot leave a second publishable job behind')
+  }, { consoleOptions: { sourceLookup: PUBLIC_LOOKUP, downloader } })
+})
+
+test('idempotent upload retry replaces failed staged bytes without leaking them', async function (t) {
+  let canArchive = false
+  const service = fakeService({ service: { canArchive: () => canArchive } })
+  const stagedFileCount = (uploadDir) => readdirSync(uploadDir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile()).length
+
+  await withRelay(async ({ base, uploadDir }) => {
+    const submit = () => {
+      const request = upload({
+        contentKind: 'movie',
+        tmdbId: '9367',
+        tmdbTitle: 'Wedding Crashers'
+      })
+      request.headers = { 'idempotency-key': 'mediastorm-v1:movie-9367-upload-retry' }
+      return fetch(`${base}/api/v1/archive`, request)
+    }
+
+    const first = await (await submit()).json()
+    t.is((await settledJob(base, first.jobId)).status, 'failed')
+    t.ok(stagedFileCount(uploadDir) > 0, 'the retryable failure retains its staged upload')
+
+    canArchive = true
+    const retry = await (await submit()).json()
+    t.is(retry.jobId, first.jobId, 'replacement bytes reuse the original durable job')
+    t.is((await settledJob(base, retry.jobId)).status, 'failed')
+    t.is(stagedFileCount(uploadDir), 0, 'old and replacement staging are both released')
+  }, { service })
+})
+
 test('POST /api/v1/archive derives the show:season:episode hint for a url seed', async function (t) {
   const seen = []
   await withRelay(async ({ base }) => {
@@ -423,6 +540,9 @@ test('GET /api/v1/catalog publishes portable references and never a loopback URL
       publicationId: 'pub-1',
       publisherId: 'cd'.repeat(32),
       renditionId: 'rend-1',
+      contentKind: 'movie',
+      mediaProvider: 'tmdb',
+      mediaId: '9367',
       coreKey: CORE_KEY,
       coreLength: 42,
       byteLength: 1024

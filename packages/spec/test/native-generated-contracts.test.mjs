@@ -13,6 +13,7 @@ function read(relativePath) {
 
 test('quarantined Swift codecs mirror the media catalog cutover without feed compatibility', (t) => {
   const schema = read('packages/desktop-native/Sources/Support/GeneratedSchema.swift')
+  const packageSchema = read('packages/spec/spec/swift-schema/Sources/Schema.swift')
   const hrpc = read('packages/desktop-native/Sources/Support/GeneratedHRPC.swift')
 
   t.absent(forbidden.test(schema), 'Swift message codecs remove legacy feed types and status fields')
@@ -22,6 +23,10 @@ test('quarantined Swift codecs mirror the media catalog cutover without feed com
   t.ok(schema.includes('public struct MediaEntitySummary'), 'Swift schema includes media entity summary')
   t.ok(schema.includes('public struct GetMediaCatalogResponse'), 'Swift schema includes catalog response')
   t.ok(schema.includes('public struct EventMediaGraphUpdate'), 'Swift schema includes graph update event')
+  t.ok(schema.includes('public struct MediaSourceCoordinates'), 'Swift schema includes provider coordinates')
+  t.ok(schema.includes('public var mediaCoordinates: MediaSourceCoordinates?'), 'Swift publication sources carry coordinates')
+  t.ok(schema.includes('flags |= 268435456'), 'Swift source flags remain below the 32-bit overflow boundary')
+  t.is(schema, packageSchema, 'desktop and package Swift schema mirrors stay identical')
   t.ok(hrpc.includes('public func getMediaCatalog('), 'Swift HRPC exposes catalog request')
   t.ok(hrpc.includes('public func eventMediaGraphUpdate('), 'Swift HRPC exposes graph update event')
   t.ok(hrpc.includes('public func onEventMediaGraphUpdate('), 'Swift HRPC receives graph update events')

@@ -27,10 +27,19 @@ function validateProtocol7To8Transition(_context, step = {}) {
   }
 }
 
+// Protocol 9 appends provider coordinates to catalog source transport only.
+// Persisted records and indexes are unchanged.
+function validateProtocol8To9Transition(_context, step = {}) {
+  if (step.fromVersion !== 8 || step.toVersion !== 9 || step.expectedVersion < 9) {
+    throw new Error('invalid stored protocol 8 to 9 transition')
+  }
+}
+
 export const DEFAULT_STORED_PROTOCOL_MIGRATIONS = Object.freeze({
   4: validateProtocol4To5Transition,
   5: validateProtocol5To6Transition,
   7: validateProtocol7To8Transition,
+  8: validateProtocol8To9Transition,
 })
 
 const MAX_MARKER_BYTES = 128

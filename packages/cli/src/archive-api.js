@@ -102,6 +102,8 @@ const TMDB_ID = /^[1-9][0-9]{0,19}$/
 const MAX_TITLE_BYTES = 512
 const MAX_EPISODE_PART = 100000
 const MAX_JOB_ID_LENGTH = 128
+const MAX_IDEMPOTENCY_KEY_BYTES = 128
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
 // A JSON submission carries coordinates, not media, so a body past this is a
 // caller doing something other than describing one title.
 export const MAX_JSON_BODY_BYTES = 64 * 1024
@@ -157,6 +159,15 @@ function episodePart(value) {
 function uint(value) {
   const number = Number(value)
   return Number.isSafeInteger(number) && number >= 0 ? number : null
+}
+
+function requestIdempotencyKey(req) {
+  const value = req?.headers?.['idempotency-key']
+  if (value == null || value === '') return null
+  if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_IDEMPOTENCY_KEY_BYTES || !IDEMPOTENCY_KEY.test(value)) {
+    throw new Error(`Idempotency-Key must be 1-${MAX_IDEMPOTENCY_KEY_BYTES} bytes of letters, digits, '.', '_', ':', or '-'`)
+  }
+  return value
 }
 
 function invalid(code, message, field = null, status = 400) {
@@ -370,6 +381,22 @@ function manifestRendition(assetManifest, source) {
   }
 }
 
+function portableMediaCoordinates(source) {
+  const coordinates = source?.mediaCoordinates || source
+  const contentKind = coordinates?.contentKind === 'movie' || coordinates?.contentKind === 'episode' ? coordinates.contentKind : null
+  const mediaProvider = typeof coordinates?.mediaProvider === 'string' && coordinates.mediaProvider ? coordinates.mediaProvider : null
+  const mediaId = coordinates?.mediaId == null ? null : String(coordinates.mediaId)
+  if (!contentKind || !mediaProvider || !mediaId) return {}
+  const out = { contentKind, mediaProvider, mediaId }
+  if (contentKind === 'episode') {
+    const seasonNumber = uint(coordinates.seasonNumber)
+    const episodeNumber = uint(coordinates.episodeNumber)
+    if (seasonNumber > 0) out.seasonNumber = seasonNumber
+    if (episodeNumber > 0) out.episodeNumber = episodeNumber
+  }
+  return out
+}
+
 // One entity's sources as references a remote node can act on.
 //
 // Deliberately no playback URL: the relay's blob server answers on
@@ -382,6 +409,7 @@ export async function portableEntitySources(item, { publicationSources = null, a
     .map((rendition) => [rendition.renditionId, rendition]))
 
   let sources = item?.sources || []
+  const reportedSources = new Map(sources.map((source) => [source?.publicationId, source]))
   // The consumer projection reports which publications exist but not which
   // rendition each one offers. The source list does, so ask for it rather than
   // handing the caller a publication it cannot resolve to bytes.
@@ -392,7 +420,12 @@ export async function portableEntitySources(item, { publicationSources = null, a
     )
     // A source list that has not arrived leaves the publication as the page
     // reported it, rather than holding the whole page open for one entity.
-    if (page !== DEADLINE_EXPIRED && page?.success === true && page.items?.length > 0) sources = page.items
+    if (page !== DEADLINE_EXPIRED && page?.success === true && page.items?.length > 0) {
+      sources = page.items.map((source) => ({
+        ...(reportedSources.get(source?.publicationId) || {}),
+        ...source
+      }))
+    }
   }
 
   return sources.map((source) => {
@@ -404,6 +437,7 @@ export async function portableEntitySources(item, { publicationSources = null, a
       // consumer drops the source (it cannot address the stream route) while the
       // seeder's own catalog check reads the title as unseeded and re-seeds it.
       renditionId: source?.renditionId || rendition?.renditionId || null,
+      ...portableMediaCoordinates(source),
       coreKey: rendition?.coreKey || null,
       coreLength: uint(rendition?.coreLength),
       byteLength: uint(rendition?.byteLength)
@@ -486,6 +520,23 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
   // listening, and a per-request re-check would only invite a way to skip it.
   const openAccess = createOpenAccessGate({ bindHost, apiOpen })
   const openAccessRefusal = openAccess.refusal
+  const idempotencyTails = new Map()
+
+  async function withIdempotencyLock(key, fn) {
+    if (!key) return fn()
+    let unlock
+    const gate = new Promise((resolve) => { unlock = resolve })
+    const previous = idempotencyTails.get(key) || Promise.resolve()
+    const tail = previous.catch(() => {}).then(() => gate)
+    idempotencyTails.set(key, tail)
+    await previous.catch(() => {})
+    try {
+      return await fn()
+    } finally {
+      unlock()
+      if (idempotencyTails.get(key) === tail) idempotencyTails.delete(key)
+    }
+  }
 
   function send(res, status, body, headers = {}) {
     // No CORS headers: this is a server-to-server API on an unauthenticated
@@ -517,6 +568,13 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
 
   async function postArchive(req, res) {
     let submission = null
+    let idempotencyKey = null
+    try {
+      idempotencyKey = requestIdempotencyKey(req)
+    } catch (err) {
+      sendError(res, invalid('INVALID_IDEMPOTENCY_KEY', err.message, 'Idempotency-Key'))
+      return
+    }
     try {
       submission = await readSubmission(req)
     } catch (err) {
@@ -544,8 +602,31 @@ export function createArchiveApi({ readSubmission, enqueue, store, mediaCatalog,
       }
     }
 
-    const job = await enqueue({ ...submission.form, ...normalized.form }, submission.file)
-    send(res, 202, { jobId: job.id, status: job.status, entityHint: normalized.entityHint })
+    const job = await withIdempotencyLock(idempotencyKey, async () => {
+      if (idempotencyKey) {
+        const existing = (await store.listJobs()).find((candidate) => candidate.idempotencyKey === idempotencyKey)
+        if (existing && ['queued', 'running', 'completed'].includes(existing.status)) {
+          discardStagedUpload(submission.file)
+          return existing
+        }
+        if (existing) {
+          return enqueue({
+            ...submission.form,
+            ...normalized.form,
+            idempotencyKey,
+            entityHint: normalized.entityHint,
+            reuseJobId: existing.id
+          }, submission.file)
+        }
+      }
+      return enqueue({
+        ...submission.form,
+        ...normalized.form,
+        idempotencyKey,
+        entityHint: normalized.entityHint
+      }, submission.file)
+    })
+    send(res, 202, { jobId: job.id, status: job.status, entityHint: job.entityHint || normalized.entityHint })
   }
 
   async function getJob(res, jobId) {

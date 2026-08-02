@@ -275,6 +275,95 @@ test('yt-dlp downloader extracts the actual after_move filepath and verifies it 
   t.ok(calls[0].args.includes('after_move:filepath'), 'keeps yt-dlp after_move filepath print')
 })
 
+test('yt-dlp downloader clamps one file to aggregate archive headroom', async (t) => {
+  const calls = []
+  const reservations = { bytes: 100 }
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    storageHeadroom: () => ({ tmp: 1_000, storage: 1_000, sharedVolume: true }),
+    storageReservations: reservations,
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync() { return true }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_cap/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  const result = await downloader.download({ id: 'arch_cap', url: 'https://www.youtube.com/watch?v=abc' })
+  const maxIndex = calls[0].args.indexOf('--max-filesize')
+  t.ok(maxIndex >= 0, 'yt-dlp receives a hard file-size bound')
+  t.is(calls[0].args[maxIndex + 1], '225', 'shared-volume staging leaves room for video, audio, merge, and persistence')
+  t.is(reservations.bytes, 325, 'yt-dlp reserves its eventual persisted copy beside existing work')
+  result.cleanup()
+  t.is(reservations.bytes, 100, 'cleanup releases only yt-dlp ownership')
+})
+
+test('yt-dlp downloader terminates and cleans up when live headroom is exhausted', async (t) => {
+  let headroomChecks = 0
+  let cached = false
+  let invalidations = 0
+  let killed = false
+  const removed = []
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    storageHeadroom: () => {
+      headroomChecks += 1
+      if (headroomChecks === 1) {
+        cached = true
+        return { tmp: 1_000, storage: 1_000, sharedVolume: true }
+      }
+      return cached
+        ? { tmp: 1_000, storage: 1_000, sharedVolume: true }
+        : { tmp: 0, storage: 1_000, sharedVolume: true }
+    },
+    onStorageChanged() {
+      invalidations += 1
+      cached = false
+    },
+    fs: {
+      mkdirSync() {},
+      rmSync(path) { removed.push(path) },
+      existsSync() { return true }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn() {
+      cached = true
+      const handlers = { close: [], error: [] }
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_live/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { handlers[event]?.push(cb) },
+        kill() {
+          killed = true
+          for (const close of handlers.close) close(1)
+        }
+      }
+    }
+  })
+
+  await t.exception(
+    downloader.download({ id: 'arch_live', url: 'https://www.youtube.com/watch?v=abc' }),
+    /storage headroom/,
+    'live aggregate exhaustion aborts the subprocess'
+  )
+  t.ok(killed, 'the running yt-dlp process is terminated')
+  t.ok(invalidations > 0, 'the monitor invalidates cached headroom without a reservation ledger')
+  t.ok(removed.includes('/archive/tmp/arch_live'), 'the partial target directory is removed')
+})
+
 
 test('yt-dlp downloader reads source title duration channel and thumbnail URL from info json', async (t) => {
   const infoPath = '/archive/tmp/arch_meta/example.info.json'

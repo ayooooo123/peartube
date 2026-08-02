@@ -447,6 +447,48 @@ test('POST /archive reserves staged uploads against later multipart requests', a
   }
 })
 
+test('archive console restores durable upload reservations before listening', async function (t) {
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-upload-restart-'))
+  const service = fakeService()
+  const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
+  const stagedDir = join(uploadDir, 'arch_queued')
+  const stagedPath = join(stagedDir, 'queued.mp4')
+  mkdirSync(stagedDir, { recursive: true })
+  writeFileSync(stagedPath, Buffer.alloc(400, 0x61))
+  await store.addJob({
+    id: 'arch_queued',
+    status: 'queued',
+    title: 'Queued upload',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }, {
+    uploadPath: stagedPath,
+    uploadSize: 999
+  })
+  await store.addJob({
+    id: 'arch_failed_missing',
+    status: 'failed',
+    title: 'Missing failed upload',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  }, {
+    uploadPath: join(uploadDir, 'arch_failed_missing', 'missing.mp4'),
+    uploadSize: 500
+  })
+  const reservations = { bytes: 0 }
+
+  try {
+    await withConsole(service, async () => {
+      t.is(reservations.bytes, 400, 'only extant staged bytes are measured and reserved before listening')
+    }, {
+      uploadDir,
+      storageReservations: reservations
+    })
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+})
+
 test('GET /discover/seasons.json returns TMDB seasons for a show', async function (t) {
   await withConsole(fakeService(), async (base) => {
     const res = await fetch(`${base}/discover/seasons.json?tmdbId=95396`)

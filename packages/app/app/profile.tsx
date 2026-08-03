@@ -29,6 +29,13 @@ import * as haptics from '@/lib/haptics'
 import { useDeveloperMode } from '@/lib/developer-mode'
 import { canShowIdentityTools, developerModeDestination } from '@/lib/developer-mode-routes'
 import {
+  ensurePersonalEncryption,
+  generatePersonalSecretHex,
+  persistPersonalSecret,
+  readPersonalSecretRecord,
+} from '@/lib/personal-encryption'
+import { hasSecureVault } from '@/lib/secure-storage'
+import {
   buildStorageLimitConfirmationCopy,
   runStorageLimitChange,
   type ArchiveOperatorStatus,
@@ -63,6 +70,14 @@ interface TranscodeSettings {
   videoToolboxHwMapSource?: string
 }
 
+/** A device authorized to replicate this viewer's encrypted personal store. */
+interface PersonalDevice {
+  keyHex?: string
+  deviceName?: string
+  addedAt?: number
+  self?: boolean
+}
+
 /** Network-support presets are cache budgets — the knob that actually feeds peers. */
 const SUPPORT_PRESETS: Array<{ label: string; gb: number; blurb: string }> = [
   { label: 'Light', gb: 5, blurb: 'Host a little for the network' },
@@ -71,6 +86,18 @@ const SUPPORT_PRESETS: Array<{ label: string; gb: number; blurb: string }> = [
 ]
 
 const GIB = 1024 ** 3
+
+/** Personal-store invites are single-use; the backend clamps anything longer. */
+const PERSONAL_INVITE_TTL_MS = 5 * 60 * 1000
+
+/**
+ * The one revoke failure where the new encrypted epoch is already recorded and
+ * a restart reopens it, so the key this device just supplied has to stay. Every
+ * other refusal — including `personal-revoke-failed` and
+ * `personal-epoch-unavailable` — is raised with nothing written, and the
+ * pre-rotation key is still the live one.
+ */
+const ROTATION_ALREADY_RECORDED = 'personal-revoke-incomplete'
 
 function notify(title: string, message?: string) {
   if (Platform.OS === 'web') {
@@ -125,15 +152,22 @@ export default function ProfileScreen() {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [developerModeError, setDeveloperModeError] = useState<string | null>(null)
 
-  // Devices
-  const [devices, setDevices] = useState<any[]>([])
+  // Personal-store devices. This is the viewer's own encrypted watch state and
+  // library — deliberately not publisher-channel pairing, which lives in
+  // Studio behind Developer Mode and never appears on this screen.
+  const [devices, setDevices] = useState<PersonalDevice[]>([])
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [inviteCode, setInviteCode] = useState<string | null>(null)
+  const [inviteExpiresAt, setInviteExpiresAt] = useState<number | null>(null)
   const [inviteLoading, setInviteLoading] = useState(false)
   const [pairInviteCode, setPairInviteCode] = useState('')
   const [pairDeviceName, setPairDeviceName] = useState('')
   const [pairing, setPairing] = useState(false)
   const [showPairForm, setShowPairForm] = useState(false)
+  const [revokingKey, setRevokingKey] = useState<string | null>(null)
+  // null while the vault probe is in flight; false means "no vault on this device".
+  const [vaultAvailable, setVaultAvailable] = useState<boolean | null>(null)
+  const personalOwner = identity?.publicKey || null
 
   const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
   const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
@@ -188,20 +222,31 @@ export default function ProfileScreen() {
     if (developerMode.enabled && advancedOpen) loadDiagnostics()
   }, [advancedOpen, developerMode.enabled, loadDiagnostics])
 
-  const loadDevices = useCallback(async () => {
-    if (!rpc || !identity?.driveKey) return
+  // Linking moves a 32-byte store key onto this device. With no OS vault to
+  // hold it, this device stays device-local instead of quietly writing the key
+  // to a plaintext file, so the controls below are disabled and say why.
+  useEffect(() => {
+    let cancelled = false
+    hasSecureVault()
+      .then((available) => { if (!cancelled) setVaultAvailable(available) })
+      .catch(() => { if (!cancelled) setVaultAvailable(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const loadPersonalDevices = useCallback(async () => {
+    if (typeof rpc?.listPersonalDevices !== 'function') return
     setDevicesLoading(true)
     try {
-      const res = await (rpc as any).listDevices(identity.driveKey)
-      setDevices(res?.devices || [])
-    } catch (err) {
-      console.error('[Profile] Failed to load devices:', err)
+      const res = await rpc.listPersonalDevices()
+      setDevices(res?.success === false ? [] : (res?.devices || []))
+    } catch (err: unknown) {
+      console.error('[Profile] Failed to load paired devices:', err instanceof Error ? err.message : err)
     } finally {
       setDevicesLoading(false)
     }
-  }, [rpc, identity?.driveKey])
+  }, [rpc])
 
-  useEffect(() => { loadDevices() }, [loadDevices])
+  useEffect(() => { loadPersonalDevices() }, [loadPersonalDevices])
 
   const loadTranscodeSettings = useCallback(async () => {
     if (!canManageTranscodeSettings) return
@@ -235,49 +280,120 @@ export default function ProfileScreen() {
     }
   }
 
-  const createInvite = async () => {
-    if (!rpc || !identity?.driveKey) return
+  const createPersonalInvite = async () => {
+    if (!rpc || vaultAvailable !== true) return
     setInviteLoading(true)
     try {
-      const res = await (rpc as any).createDeviceInvite(identity.driveKey)
-      if (res?.inviteCode) {
-        setInviteCode(res.inviteCode)
-        haptics.success()
-      }
-    } catch (err: any) {
-      console.error('[Profile] Failed to create invite:', err)
-      notify('Error', err?.message || 'Failed to create invite')
+      const res = await rpc.createPersonalDeviceInvite({ expiresInMs: PERSONAL_INVITE_TTL_MS })
+      if (!res?.success || !res?.inviteCode) throw new Error(res?.error || 'Failed to create invite')
+      setInviteCode(res.inviteCode)
+      setInviteExpiresAt(typeof res.expiresAt === 'number' ? res.expiresAt : null)
+      haptics.success()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to create invite'
+      console.error('[Profile] Failed to create device invite:', message)
+      notify('Error', message)
     } finally {
       setInviteLoading(false)
     }
   }
 
-  const pairDevice = async () => {
-    if (!rpc) return
+  const linkThisDevice = async () => {
+    if (!rpc || vaultAvailable !== true) return
     const code = pairInviteCode.trim()
     if (!code) return
     setPairing(true)
     try {
-      const res = await (rpc as any).pairDevice({
+      const res = await rpc.redeemPersonalDeviceInvite({
         inviteCode: code,
         deviceName: pairDeviceName.trim() || undefined,
       })
-      if (res?.success) {
-        setPairInviteCode('')
-        setPairDeviceName('')
-        setShowPairForm(false)
-        haptics.success()
-        notify('Linked', 'This device is now part of your channel.')
-        await loadDevices()
-      } else {
-        throw new Error('Pair failed')
-      }
-    } catch (err: any) {
-      console.error('[Profile] Pair device failed:', err)
-      notify('Error', err?.message || 'Failed to link device')
+      if (!res?.success || !res?.secret) throw new Error(res?.error || 'Failed to link this device')
+      // The one response in the protocol that carries the store key. Persist it
+      // durably before anything opens the store, then drop the response copy.
+      // JS strings cannot be zeroed, so the discipline is: never render it,
+      // never log it, never hold a reference past this block.
+      await persistPersonalSecret(res.secret, {
+        publicKey: personalOwner,
+        bootstrapKey: res.bootstrapKey,
+      })
+      res.secret = ''
+      await ensurePersonalEncryption(rpc, personalOwner, { force: true, required: true })
+      setPairInviteCode('')
+      setPairDeviceName('')
+      setShowPairForm(false)
+      haptics.success()
+      notify('Device linked', 'Your watch state and library now sync between your linked devices.')
+      await loadPersonalDevices()
+    } catch (err: unknown) {
+      // Only the block above ever holds the store key; error text never does.
+      const message = err instanceof Error ? err.message : 'Failed to link this device'
+      console.error('[Profile] Failed to link device:', message)
+      notify('Error', message)
     } finally {
       setPairing(false)
     }
+  }
+
+  const unlinkDevice = (device: PersonalDevice) => {
+    const keyHex = String(device?.keyHex || '')
+    if (!rpc || !keyHex || vaultAvailable !== true) return
+    confirmDestructive(
+      'Unlink this device?',
+      'Your other devices move to a new key and keep syncing; each of them has to be linked again. The unlinked device stops receiving updates, but everything it already read stays on it — unlinking cannot take that back.',
+      'Unlink',
+      async () => {
+        setRevokingKey(keyHex)
+        try {
+          // Forward-only rotation: this device mints the next epoch key, and the
+          // backend opens a new encrypted store with it. The old key is dead the
+          // moment the backend rotates, so the new one has to be in the vault
+          // before the request goes out — not after the response comes back. The
+          // pre-rotation key rides along as the startup fallback for the one
+          // outcome where the epoch is recorded but never activated.
+          const previous = await readPersonalSecretRecord(personalOwner)
+          const secret = generatePersonalSecretHex()
+          await persistPersonalSecret(secret, { publicKey: personalOwner, previousSecret: previous?.secret })
+
+          const res = await rpc.revokePersonalDevice({
+            keyHex,
+            secret,
+            deviceName: device?.deviceName || undefined,
+          })
+          if (!res?.success) {
+            if (res?.error === ROTATION_ALREADY_RECORDED) {
+              // The new epoch is already recorded and a restart reopens it, so
+              // restoring the old key here would leave this device unable to
+              // unwrap its own store. The new one stays.
+              notify(
+                'Unlink did not finish',
+                'The new key is saved on this device. Restart PearTube and unlink again — your library may take a moment to reopen.',
+              )
+              return
+            }
+            // Every other refusal is raised before anything is written, so the
+            // previous key is still the live one and has to go back.
+            if (previous) await persistPersonalSecret(previous.secret, { publicKey: personalOwner, bootstrapKey: previous.bootstrapKey })
+            throw new Error(res?.error || 'Failed to unlink device')
+          }
+
+          await persistPersonalSecret(secret, { publicKey: personalOwner, bootstrapKey: res.bootstrapKey })
+          await ensurePersonalEncryption(rpc, personalOwner, { force: true, required: true })
+          haptics.success()
+          notify(
+            'Device unlinked',
+            'Future state stays on this device. Every device you keep has to be linked again before it syncs.',
+          )
+          await loadPersonalDevices()
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : 'Failed to unlink device'
+          console.error('[Profile] Failed to unlink device:', message)
+          notify('Error', message)
+        } finally {
+          setRevokingKey(null)
+        }
+      },
+    )
   }
 
   const applyStorageLimit = async (boundedLimit: number) => {
@@ -542,41 +658,13 @@ export default function ProfileScreen() {
             </Pressable>
           </GlassCard>
 
-          <SectionHeader title="Already have a channel?" subtitle="Link this device with an invite code" />
-          <GlassCard style={styles.sectionCard}>
-            <TextInput
-              placeholder="Paste invite code"
-              value={pairInviteCode}
-              onChangeText={setPairInviteCode}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              style={styles.input}
-            />
-            <TextInput
-              placeholder="Device name (optional)"
-              value={pairDeviceName}
-              onChangeText={setPairDeviceName}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              style={styles.input}
-            />
-            <Pressable
-              onPress={async () => { await pairDevice(); await loadIdentity() }}
-              disabled={pairing || !pairInviteCode.trim()}
-              style={[styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }]}
-            >
-              {pairing ? <ActivityIndicator size="small" color={colors.text} /> : (
-                <>
-                  <Feather name="link" size={15} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Link this device</Text>
-                </>
-              )}
-            </Pressable>
-          </GlassCard>
-
           <SectionHeader title="Restore a channel" subtitle="Recover with your 12-word phrase" />
           {renderRestoreCard()}
           </>}
+
+          {renderPersonalDevicesCard()}
+
+          {renderPrivacyCard()}
 
           <SectionHeader title="Network cache" subtitle="Works even without a channel" />
           {renderStorageCard()}
@@ -643,6 +731,199 @@ export default function ProfileScreen() {
           )}
         </Pressable>
       </GlassCard>
+    )
+  }
+
+  function renderPersonalDevicesCard() {
+    const vaultReady = vaultAvailable === true
+    return (
+      <>
+        <SectionHeader title="Your devices" subtitle="Sync your watch state and library to devices you link" />
+        <GlassCard style={styles.sectionCard}>
+          {devices.length ? (
+            <View style={{ gap: 8, marginBottom: 12 }}>
+              {devices.map((device, idx) => {
+                const keyHex = String(device?.keyHex || '')
+                const isSelf = device?.self === true
+                const busy = revokingKey === keyHex
+                return (
+                  <View key={keyHex || idx} style={styles.deviceRow}>
+                    <Feather name="smartphone" size={16} color={colors.textSecondary} />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.deviceName}>
+                        {device?.deviceName || (isSelf ? 'This device' : `Device ${idx + 1}`)}
+                      </Text>
+                      <Text style={styles.deviceKey} numberOfLines={1}>{keyHex}</Text>
+                    </View>
+                    {isSelf || !vaultReady ? null : (
+                      <Pressable
+                        onPress={() => unlinkDevice(device)}
+                        disabled={busy}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Unlink ${device?.deviceName || 'device'}`}
+                        style={[styles.ghostButton, { marginTop: 0 }, busy && { opacity: 0.5 }]}
+                      >
+                        <Feather name="x-circle" size={14} color={colors.textMuted} />
+                        <Text style={styles.ghostLabel}>{busy ? 'Unlinking…' : 'Unlink'}</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                )
+              })}
+            </View>
+          ) : (
+            <Text style={[styles.cardMeta, { marginBottom: 12 }]}>
+              {devicesLoading ? 'Checking linked devices…' : 'Only this device holds your watch state and library.'}
+            </Text>
+          )}
+
+          {vaultAvailable === false ? (
+            <Text style={styles.cardMeta}>
+              This device has no secure keychain that will hold a key for us, so it cannot hold the
+              one that encrypts your personal store. Nothing is written to an encrypted store here
+              and nothing syncs: your watch state, library, and recommendations stay on this device.
+              Linking is turned off instead of keeping the key in plain text beside the data it
+              protects.
+            </Text>
+          ) : (
+            <>
+              {inviteCode ? (
+                <View style={styles.inviteBox}>
+                  <Text style={styles.inviteLabel}>
+                    Single-use code — enter it on your other device within 5 minutes
+                    {inviteExpiresAt ? ` (by ${new Date(inviteExpiresAt).toLocaleTimeString()})` : ''}
+                  </Text>
+                  <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                    <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
+                      <Feather name="copy" size={14} color={colors.text} />
+                      <Text style={styles.secondaryLabel}>Copy</Text>
+                    </Pressable>
+                    <Pressable onPress={() => shareInviteCode(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
+                      <Feather name="share-2" size={14} color={colors.text} />
+                      <Text style={styles.secondaryLabel}>Share</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Pressable
+                  onPress={createPersonalInvite}
+                  disabled={inviteLoading || !vaultReady}
+                  style={[styles.primaryButton, { flex: 1 }, (inviteLoading || !vaultReady) && { opacity: 0.6 }]}
+                  accessibilityRole="button"
+                >
+                  {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
+                    <>
+                      <Feather name="plus" size={15} color={colors.onPrimary} />
+                      <Text style={styles.primaryLabel}>Link a device</Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  onPress={() => setShowPairForm((v) => !v)}
+                  disabled={!vaultReady}
+                  style={[styles.secondaryButton, { flex: 1, marginTop: 0 }, !vaultReady && { opacity: 0.4 }]}
+                  accessibilityRole="button"
+                >
+                  <Feather name="key" size={14} color={colors.text} />
+                  <Text style={styles.secondaryLabel}>Enter code</Text>
+                </Pressable>
+              </View>
+
+              {showPairForm && (
+                <View style={{ marginTop: 12 }}>
+                  <TextInput
+                    placeholder="Paste invite code"
+                    value={pairInviteCode}
+                    onChangeText={setPairInviteCode}
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    style={styles.input}
+                  />
+                  <TextInput
+                    placeholder="Device name (optional)"
+                    value={pairDeviceName}
+                    onChangeText={setPairDeviceName}
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    style={styles.input}
+                  />
+                  <Pressable
+                    onPress={linkThisDevice}
+                    disabled={pairing || !pairInviteCode.trim() || !vaultReady}
+                    style={[styles.secondaryButton, (pairing || !pairInviteCode.trim() || !vaultReady) && { opacity: 0.4 }]}
+                  >
+                    {pairing ? (
+                      <>
+                        <ActivityIndicator size="small" color={colors.text} />
+                        <Text style={styles.secondaryLabel}>Linking…</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.secondaryLabel}>Link with this code</Text>
+                    )}
+                  </Pressable>
+                  {pairing ? (
+                    <Text style={[styles.cardMeta, { marginTop: 8 }]}>
+                      Finding your other device over the peer network. This usually takes a few
+                      seconds and can take up to a minute — keep both devices online.
+                    </Text>
+                  ) : null}
+                </View>
+              )}
+            </>
+          )}
+        </GlassCard>
+      </>
+    )
+  }
+
+  function renderPrivacyCard() {
+    return (
+      <>
+        <SectionHeader title="Privacy" subtitle="What stays here, and what other machines see" />
+        <GlassCard style={styles.sectionCard}>
+          <Text style={styles.cardTitle}>Your viewing stays on your devices</Text>
+          <Text style={styles.cardMeta}>
+            Watch position, completion, your library, and your recommendations are worked out
+            on this device. PearTube collects no viewing analytics and runs no view counter.
+            This state reaches another machine only if you link a device above.
+          </Text>
+          {vaultAvailable === false ? (
+            <Text style={styles.cardMeta}>
+              This device has no secure keychain, so there is no key to encrypt a personal store
+              with and none is opened here. Anything that needs one stays unavailable rather than
+              being stored unprotected.
+            </Text>
+          ) : (
+            <Text style={styles.cardMeta}>
+              It is stored in a personal store encrypted with a key that never leaves this
+              device&apos;s keychain.
+            </Text>
+          )}
+
+          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Peers see your address and requests</Text>
+          <Text style={styles.cardMeta}>
+            Playback is peer-to-peer. The peers you swarm with see your IP address and the
+            topics and byte ranges you ask for. That is how the transfer works and PearTube
+            cannot hide it, so this is not anonymous browsing.
+          </Text>
+
+          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Providers see their own requests</Text>
+          <Text style={styles.cardMeta}>
+            When a title needs provider authentication or a license, that provider&apos;s
+            authentication and license services see those requests and when you made them.
+          </Text>
+
+          <Text style={[styles.cardTitle, { marginTop: 14 }]}>Unlinking works forward only</Text>
+          <Text style={styles.cardMeta}>
+            Unlinking a device rotates your key so that device receives nothing further. It
+            cannot erase what that device already read, and it cannot reach copies already
+            made from it.
+          </Text>
+        </GlassCard>
+      </>
     )
   }
 
@@ -782,97 +1063,6 @@ export default function ProfileScreen() {
 
         </GlassCard>
 
-        {/* Devices */}
-        <SectionHeader title="Your devices" subtitle="One channel, synced across devices" />
-        <GlassCard style={styles.sectionCard}>
-          {devices?.length ? (
-            <View style={{ gap: 8, marginBottom: 12 }}>
-              {devices.map((d, idx) => (
-                <View key={`${d?.keyHex || idx}`} style={styles.deviceRow}>
-                  <Feather name="smartphone" size={16} color={colors.textSecondary} />
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={styles.deviceName}>{d?.deviceName || `Device ${idx + 1}`}</Text>
-                    <Text style={styles.deviceKey} numberOfLines={1}>{d?.keyHex || ''}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <Text style={[styles.cardMeta, { marginBottom: 12 }]}>
-              {devicesLoading ? 'Looking for linked devices…' : 'Just this device so far.'}
-            </Text>
-          )}
-
-          {inviteCode ? (
-            <View style={styles.inviteBox}>
-              <Text style={styles.inviteLabel}>Invite code — enter it on your other device</Text>
-              <Text style={styles.inviteCode} selectable>{inviteCode}</Text>
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <Pressable onPress={() => copyToClipboard(inviteCode, 'Invite code')} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
-                  <Feather name="copy" size={14} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Copy</Text>
-                </Pressable>
-                <Pressable onPress={() => shareInviteCode(inviteCode)} style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}>
-                  <Feather name="share-2" size={14} color={colors.text} />
-                  <Text style={styles.secondaryLabel}>Share</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
-
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Pressable
-              onPress={createInvite}
-              disabled={inviteLoading}
-              style={[styles.primaryButton, { flex: 1 }, inviteLoading && { opacity: 0.8 }]}
-            >
-              {inviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
-                <>
-                  <Feather name="plus" size={15} color={colors.onPrimary} />
-                  <Text style={styles.primaryLabel}>Link a device</Text>
-                </>
-              )}
-            </Pressable>
-            <Pressable
-              onPress={() => setShowPairForm((v) => !v)}
-              style={[styles.secondaryButton, { flex: 1, marginTop: 0 }]}
-            >
-              <Feather name="key" size={14} color={colors.text} />
-              <Text style={styles.secondaryLabel}>Enter code</Text>
-            </Pressable>
-          </View>
-
-          {showPairForm && (
-            <View style={{ marginTop: 12 }}>
-              <TextInput
-                placeholder="Paste invite code"
-                value={pairInviteCode}
-                onChangeText={setPairInviteCode}
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                style={styles.input}
-              />
-              <TextInput
-                placeholder="Device name (optional)"
-                value={pairDeviceName}
-                onChangeText={setPairDeviceName}
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                style={styles.input}
-              />
-              <Pressable
-                onPress={pairDevice}
-                disabled={pairing || !pairInviteCode.trim()}
-                style={[styles.secondaryButton, (pairing || !pairInviteCode.trim()) && { opacity: 0.4 }]}
-              >
-                {pairing ? <ActivityIndicator size="small" color={colors.text} /> : (
-                  <Text style={styles.secondaryLabel}>Link with this code</Text>
-                )}
-              </Pressable>
-            </View>
-          )}
-        </GlassCard>
-
         {/* Backup & recovery */}
         <SectionHeader title="Backup & recovery" subtitle="Restore a channel from its 12-word phrase" />
         {restoreOpen ? renderRestoreCard() : (
@@ -885,6 +1075,10 @@ export default function ProfileScreen() {
           </GlassCard>
         )}
         </>}
+
+        {renderPersonalDevicesCard()}
+
+        {renderPrivacyCard()}
 
         {/* Storage / network support */}
         <SectionHeader title="Network support" subtitle="Cache space you donate to keep videos alive" />

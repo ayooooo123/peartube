@@ -231,3 +231,25 @@ test('preparePlayback response can encode a readiness miss without a URL', async
   t.is(decoded.warmupStarted, true)
   t.is(decoded.selectedBlobWarmup?.error, 'waiting-for-playable-head')
 })
+
+test('no HRPC command or app namespace exposes watch-event telemetry or server-side recommendations', (t) => {
+  // Viewer ranking is device-local (packages/app/lib/local-recommendations.ts).
+  // The wire must therefore offer no way to report what a viewer watched and no
+  // way to ask a remote peer what to watch next. Personal watch history stays:
+  // it is the viewer's own encrypted store, never a publisher-visible log.
+  const telemetry = /watch-event|recommendation/
+  const offending = APP_RPC_METADATA.commands
+    .map((entry) => entry.command)
+    .filter((command) => telemetry.test(command))
+  t.alike(offending, [], 'schema exposes no watch-event or recommendation command')
+
+  t.absent(APP_RPC_METADATA.namespaces.watch, 'the watch telemetry namespace is removed')
+  const offendingMethods = Object.entries(APP_RPC_METADATA.namespaces).flatMap(([namespace, methods]) =>
+    methods
+      .filter((method) => /WatchEvent|Recommendation/.test(method.method))
+      .map((method) => `${namespace}.${method.method}`)
+  )
+  t.alike(offendingMethods, [], 'no app-facing method reports viewing or fetches recommendations')
+
+  t.ok(APP_RPC_COMMANDS.includes('log-watch-history'), 'the viewer\'s own encrypted history is untouched')
+})

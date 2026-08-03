@@ -93,11 +93,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'get-livestream-status',
     'prepare-live-playback'
   ],
-  watch: [
-    'log-watch-event',
-    'get-recommendations',
-    'get-video-recommendations'
-  ],
   personal: [
     'get-playlists',
     'get-playlist-items',
@@ -112,7 +107,11 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'list-resume-positions',
     'set-personal-setting',
     'get-personal-settings',
-    'provision-personal-encryption'
+    'provision-personal-encryption',
+    'create-personal-device-invite',
+    'redeem-personal-device-invite',
+    'list-personal-devices',
+    'revoke-personal-device'
   ],
   transfer: [
     'upload-video',

@@ -661,36 +661,12 @@ B.retrySyncChannel = async (r: any) => {
     return { success: false, error: e?.message || 'Retry failed' }
   }
 }
-B.logWatchEvent = async (r: any) => {
-  try {
-    await api.logWatchEvent?.(r.channelKey, r.videoId, r.watchTime)
-    return { success: true }
-  } catch (e: any) {
-    return { success: false, error: e?.message || 'Failed to log watch event' }
-  }
-}
 B.indexVideoVectors = async (r: any) => {
   try {
     const result = await api.indexVideoVectors?.(r.channelKey)
     return result && typeof result === 'object' ? result : { indexedCount: 0 }
   } catch {
     return { indexedCount: 0 }
-  }
-}
-B.getRecommendations = async (r: any) => {
-  try {
-    const recommendations = await api.getRecommendations?.(r.query, r.channelKey, { topK: r.topK || 10 })
-    return { recommendations: Array.isArray(recommendations) ? recommendations : [] }
-  } catch {
-    return { recommendations: [] }
-  }
-}
-B.getVideoRecommendations = async (r: any) => {
-  try {
-    const recommendations = await api.getVideoRecommendations?.(r.channelKey, r.videoId, { topK: r.topK || 10 })
-    return { recommendations: Array.isArray(recommendations) ? recommendations : [] }
-  } catch {
-    return { recommendations: [] }
   }
 }
 B.createIdentity = async (r: any) => {

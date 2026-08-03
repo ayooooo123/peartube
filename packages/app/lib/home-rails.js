@@ -1,4 +1,5 @@
 import { describeAvailability } from './media-availability.js'
+import { rankLocalRecommendations } from './local-recommendations.ts'
 
 /**
  * Home rail derivation.
@@ -106,6 +107,10 @@ function normalizeItems(items, now) {
   return normalized
 }
 
+function watchedEntityId(entry) {
+  return text(entry?.entityId) || text(entry?.entityRef) || text(entry?.identity?.entityRef) || null
+}
+
 /**
  * Continue Watching is device-local by construction: it is the intersection of
  * this device's watch history with what the catalog can still show. It never
@@ -117,7 +122,7 @@ function continueWatching(items, watchState) {
   return entries
     .filter(isResumable)
     .map(entry => {
-      const entityId = text(entry.entityId) || text(entry.entityRef)
+      const entityId = watchedEntityId(entry)
       const item = entityId ? byEntity.get(entityId) : null
       return item ? { ...item, resume: { fraction: resumeFraction(entry), updatedAt: Number(entry.updatedAt) || 0 } } : null
     })
@@ -126,40 +131,27 @@ function continueWatching(items, watchState) {
 }
 
 /**
- * Recommendations are a local computation, not a service call: titles that
- * share a tag or a creator with something already watched on this device, with
- * anything already in progress removed.
+ * The personal store keeps progress, not metadata: a stored row knows what was
+ * watched and how far, never its tags or its creator. Those come back off the
+ * catalog row this device already holds, so the ranker has something to work
+ * with without anything being asked of the network. Whatever the entry already
+ * carries wins — the catalog only fills gaps.
  */
-function recommended(items, watchState, resumingIds) {
-  const watched = Array.isArray(watchState) ? watchState : []
-  if (watched.length === 0) return []
-  const watchedIds = new Set(watched.map(entry => text(entry.entityId) || text(entry.entityRef)).filter(Boolean))
-  const affinities = new Set()
-  for (const entry of watched) {
-    for (const tag of Array.isArray(entry.tags) ? entry.tags : []) {
-      const value = text(tag)
-      if (value) affinities.add(`tag:${value.toLowerCase()}`)
+function withCatalogAffinities(items, watchState) {
+  const entries = Array.isArray(watchState) ? watchState : []
+  if (entries.length === 0) return entries
+  const byEntity = new Map(items.map(item => [item.entityId, item]))
+  return entries.map(entry => {
+    const item = byEntity.get(watchedEntityId(entry))
+    if (!item) return entry
+    const tags = Array.isArray(entry.tags) && entry.tags.length > 0 ? entry.tags : item.tags
+    return {
+      ...entry,
+      tags,
+      title: text(entry.title) || item.title,
+      creator: text(entry.creator) || text(entry.subtitle) || text(item.subtitle) || text(item.creator) || undefined,
     }
-    const creator = text(entry.creator) || text(entry.subtitle)
-    if (creator) affinities.add(`creator:${creator.toLowerCase()}`)
-  }
-  if (affinities.size === 0) return []
-
-  return items
-    .filter(item => !watchedIds.has(item.entityId) && !resumingIds.has(item.entityId))
-    .map(item => {
-      let overlap = 0
-      for (const tag of Array.isArray(item.tags) ? item.tags : []) {
-        const value = text(tag)
-        if (value && affinities.has(`tag:${value.toLowerCase()}`)) overlap += 1
-      }
-      const creator = text(item.subtitle) || text(item.creator)
-      if (creator && affinities.has(`creator:${creator.toLowerCase()}`)) overlap += 2
-      return { item, overlap }
-    })
-    .filter(entry => entry.overlap > 0)
-    .sort((left, right) => right.overlap - left.overlap || compareByTitleThenId(left.item, right.item))
-    .map(entry => entry.item)
+  })
 }
 
 function railOf(id, items, limit) {
@@ -180,6 +172,17 @@ function railOf(id, items, limit) {
  * `firstSeen` maps entity id to the epoch ms this device first admitted the
  * record. It is a local observation, never a publisher's claimed publish date,
  * so "Recently Added" means new to you rather than new to the world.
+ *
+ * The parameter is spelled out for callers: without it the empty defaults below
+ * infer `never[]`, and every typed caller is rejected for passing real state.
+ *
+ * @param {{
+ *   items?: readonly unknown[],
+ *   watchState?: readonly unknown[],
+ *   firstSeen?: Record<string, number>,
+ *   now?: number,
+ *   limit?: number,
+ * }} [options]
  */
 export function projectHomeRails({ items, watchState = [], firstSeen = {}, now = Date.now(), limit = DEFAULT_RAIL_LIMIT } = {}) {
   const normalized = normalizeItems(items, now)
@@ -191,7 +194,15 @@ export function projectHomeRails({ items, watchState = [], firstSeen = {}, now =
 
   const rails = [
     railOf('continue-watching', resuming, limit),
-    railOf('recommended', recommended(normalized, watchState, resumingIds), limit),
+    // Recommended has exactly one implementation, and it lives in
+    // local-recommendations.ts: a pure function over this device's own state.
+    railOf('recommended', rankLocalRecommendations({
+      items: normalized,
+      watchState: withCatalogAffinities(normalized, watchState),
+      exclude: resumingIds,
+      now,
+      limit,
+    }), limit),
     railOf(
       'trending',
       normalized
@@ -225,6 +236,8 @@ export function projectHomeRails({ items, watchState = [], firstSeen = {}, now =
  * Search returns merged entities, never publisher uploads: one row per work or
  * collection, with the number of sources behind it available as detail rather
  * than as a list of separate results.
+ *
+ * @param {{ items?: readonly unknown[], query?: string | null, now?: number, limit?: number }} [options]
  */
 export function projectSearchResults({ items, query, now = Date.now(), limit = 50 } = {}) {
   const needle = text(query)?.toLowerCase()

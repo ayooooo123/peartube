@@ -9,12 +9,16 @@ import { encodeMediaEntityRouteParam, getMediaEntityRouteId } from '@/components
 import type { MediaEntitySummary } from '@peartube/core'
 import { useMediaCatalog } from '@/hooks/useMediaCatalog'
 import { colors } from '@/lib/colors'
+import { useLocalWatchState } from '@/lib/watch-history'
 import { useApp } from '../_layout'
 
 export default function WebHomeScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
+  // Continue Watching and Recommended are this device's own state. They come
+  // from the encrypted personal store, never from a request.
+  const watchState = useLocalWatchState()
   const catalog = useMediaCatalog({
     ready,
     rpc,
@@ -41,6 +45,7 @@ export default function WebHomeScreen() {
       <ConsumerHomeView
         state={catalog}
         diagnostic={catalog.diagnostic}
+        watchState={watchState}
         onRefresh={() => { void catalog.refresh() }}
         onOpenEntity={openEntity}
         contentBottomInset={Math.max(insets.bottom + 32, 48)}

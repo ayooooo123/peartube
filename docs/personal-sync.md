@@ -81,14 +81,14 @@ Done (at-rest encryption, keychain-backed):
   paired device through the pairing `confirm` payload.
 - Provisioning: encryption is fixed at store-creation time, so the app provisions
   the secret before the store opens. `personalManager.init()` defers opening;
-  the `provision-personal-encryption` RPC lets the app supply an existing
-  keychain secret or request first-device generation. Raw active secrets are not
-  exported over shared app RPC; paired devices must receive/import the secret
-  through the pairing flow. The app side uses
-  `expo-secure-store` (iOS Keychain / Android Keystore) via
-  `packages/app/lib/secure-storage.ts` + `lib/personal-encryption.ts`, wired into
-  identity load/create in `app/_layout.tsx`. A document-directory fallback covers
-  platforms without a hardware keychain (clearly weaker, documented).
+  the `provision-personal-encryption` RPC carries a secret the platform already
+  generated and persisted. The backend never generates one, and no response but
+  the personal-pairing redeem carries a secret. The app side uses
+  `expo-secure-store` (iOS Keychain / Android Keystore) or the desktop keyring
+  bridge via `packages/app/lib/secure-storage.ts` + `lib/personal-encryption.ts`,
+  wired into identity load/create in `app/_layout.tsx`. There is no plaintext
+  fallback: a device whose vault cannot durably hold the secret never provisions
+  encryption, stays device-local, and keeps pairing disabled.
 
 Done (UI):
 - `app/playlists.tsx` (list + create/delete + "Continue watching" from synced

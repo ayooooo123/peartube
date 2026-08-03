@@ -10,7 +10,6 @@ import crypto from 'hypercore-crypto'
 import { fromHex } from './util.js'
 import { CommentsChannel } from './comments-channel.js'
 import { ReactionsManager } from './reactions.js'
-import { WatchEventLogger } from '../recommendations/watch-events.js'
 import { PublicChannelBee } from './public-channel-bee.js'
 import { normalizeBlobRefInput } from '../blob-ref.js'
 import { compareSignedChannelRootDescriptors } from '../channel-descriptor.js'
@@ -271,7 +270,6 @@ export class MultiWriterChannel extends ReadyResource {
     this._publicProjectionClosing = false
     this.comments = null
     this.reactions = null
-    this.watchLogger = null
     this.wakeupSession = null
 
     this._localWriterKey = null
@@ -361,7 +359,6 @@ export class MultiWriterChannel extends ReadyResource {
 
     this.comments = new CommentsChannel(this)
     this.reactions = new ReactionsManager(this)
-    this.watchLogger = new WatchEventLogger(this)
   }
 
   async _ensureBootstrapRecords() {
@@ -779,6 +776,9 @@ export class MultiWriterChannel extends ReadyResource {
       case 'remove-comment': return this.comments.removeComment(op.videoId, op.commentId, op)
       case 'add-reaction': return this.reactions.addReaction(op.videoId, op.reactionType, op)
       case 'remove-reaction': return this.reactions.removeReaction(op.videoId, op)
+      // Legacy, read-only: nothing produces 'log-watch-event' any more — viewer
+      // ranking is device-local. The case stays so channel logs written before
+      // the watch-telemetry removal keep replaying to the same derived state.
       case 'log-watch-event': return this.addWatchEvent(op)
       case 'add-vector-index': return this.addVectorIndex(op)
       default: return null
@@ -1429,6 +1429,9 @@ export class MultiWriterChannel extends ReadyResource {
     return { success: false, videoCount: 0, state: 'failed' }
   }
 
+  // Applies a legacy 'log-watch-event' op during replay. No producer calls this
+  // any more and no API reads the collection back; it exists only so a channel
+  // log written before the watch-telemetry removal derives the same state.
   async addWatchEvent(event) {
     const eventId = event.eventId || b4a.toString(crypto.randomBytes(16), 'hex')
     await this.db.insert('@peartubeChannel/watchEvents', stripUndefined({
@@ -1440,15 +1443,6 @@ export class MultiWriterChannel extends ReadyResource {
     }))
     await this._flush()
     return { success: true, eventId }
-  }
-
-  async listWatchEvents(videoId = null) {
-    await this._update()
-    if (!videoId) return this.db.find('@peartubeChannel/watchEvents', {}).toArray()
-    return this.db.find('@peartubeChannel/watch-events-by-video-timestamp', {
-      gte: { videoId },
-      lte: { videoId, timestamp: MAX_SAFE_RANGE }
-    }).toArray()
   }
 
   async addVectorIndex(record) {

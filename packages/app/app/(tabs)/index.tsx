@@ -9,6 +9,7 @@ import type { MediaEntitySummary } from '@peartube/core'
 import { useMediaCatalog } from '@/hooks/useMediaCatalog'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { colors } from '@/lib/colors'
+import { useLocalWatchState } from '@/lib/watch-history'
 import { useApp } from '../_layout'
 
 export default function HomeScreen() {
@@ -16,6 +17,9 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const tabBar = useTabBarMetrics()
   const { ready, rpc, platformEvents, backendError, startupStatus } = useApp()
+  // Continue Watching and Recommended are this device's own state. They come
+  // from the encrypted personal store, never from a request.
+  const watchState = useLocalWatchState()
   const catalog = useMediaCatalog({
     ready,
     rpc,
@@ -42,6 +46,7 @@ export default function HomeScreen() {
       <ConsumerHomeView
         state={catalog}
         diagnostic={catalog.diagnostic}
+        watchState={watchState}
         onRefresh={() => { void catalog.refresh() }}
         onOpenEntity={openEntity}
         contentBottomInset={Math.max(tabBar.height + 28, insets.bottom + 28)}

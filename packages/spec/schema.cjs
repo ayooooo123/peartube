@@ -1269,7 +1269,33 @@ ns.register({
     { name: 'duration', type: 'uint', required: false },
     { name: 'position', type: 'uint', required: false },
     { name: 'completed', type: 'bool', required: false },
-    { name: 'timestamp', type: 'uint', required: false }
+    { name: 'timestamp', type: 'uint', required: false },
+    { name: 'identity', type: '@peartube/personal-progress-identity', required: false },
+    { name: 'saved', type: 'bool', required: false },
+    { name: 'order', type: '@peartube/personal-progress-order', required: false }
+  ]
+})
+
+// Device-local viewer progress identity and ordering. Media identity is the
+// entity/edition/member triple; `videoKey` remains only so legacy device state
+// can be migrated. Concurrent devices are resolved by
+// (playbackGeneration, lamport, writerKey) and never by wall-clock time.
+ns.register({
+  name: 'personal-progress-identity',
+  fields: [
+    { name: 'entityRef', type: 'string', required: false },
+    { name: 'editionRef', type: 'string', required: false },
+    { name: 'memberRef', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'personal-progress-order',
+  fields: [
+    { name: 'playbackGeneration', type: 'uint', required: true },
+    { name: 'lamport', type: 'uint', required: true },
+    { name: 'writerKey', type: 'string', required: true },
+    { name: 'tombstone', type: 'bool', required: true }
   ]
 })
 
@@ -1282,7 +1308,20 @@ ns.register({
     { name: 'position', type: 'uint', required: false },
     { name: 'duration', type: 'uint', required: false },
     { name: 'completed', type: 'bool', required: false },
-    { name: 'updatedAt', type: 'uint', required: false }
+    { name: 'updatedAt', type: 'uint', required: false },
+    { name: 'identity', type: '@peartube/personal-progress-identity', required: false },
+    { name: 'saved', type: 'bool', required: false },
+    { name: 'order', type: '@peartube/personal-progress-order', required: false }
+  ]
+})
+
+ns.register({
+  name: 'personal-device',
+  fields: [
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false },
+    { name: 'self', type: 'bool', required: false }
   ]
 })
 
@@ -1409,7 +1448,13 @@ ns.register({
     { name: 'duration', type: 'uint', required: false },
     { name: 'position', type: 'uint', required: false },
     { name: 'completed', type: 'bool', required: false },
-    { name: 'timestamp', type: 'uint', required: false }
+    { name: 'timestamp', type: 'uint', required: false },
+    // Media identity and device ordering for the canonical progress record.
+    // `saved` is the library flag; a replay bumps `playbackGeneration`.
+    { name: 'identity', type: '@peartube/personal-progress-identity', required: false },
+    { name: 'saved', type: 'bool', required: false },
+    { name: 'playbackGeneration', type: 'uint', required: false },
+    { name: 'tombstone', type: 'bool', required: false }
   ]
 })
 
@@ -1507,6 +1552,85 @@ ns.register({
     { name: 'success', type: 'bool', required: true },
     { name: 'bootstrapKey', type: 'string', required: false },
     { name: 'encrypted', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// Personal-store device pairing. This is the viewer's own encrypted state and
+// is deliberately separate from publisher-channel pairing: it transfers only
+// the personal-store bootstrap key, one writer authorization, and the 32-byte
+// keychain secret to a device the user explicitly paired.
+ns.register({
+  name: 'create-personal-device-invite-request',
+  fields: [
+    // Bounded by the protocol maximum; a longer request is clamped, never honored.
+    { name: 'expiresInMs', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'create-personal-device-invite-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'inviteCode', type: 'string', required: false },
+    { name: 'expiresAt', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'redeem-personal-device-invite-request',
+  fields: [
+    { name: 'inviteCode', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false }
+  ]
+})
+
+// The only response in the protocol that carries the personal-store secret,
+// and only to the joining device that just completed local pairing. The
+// platform persists it in its keychain and erases the response copy.
+ns.register({
+  name: 'redeem-personal-device-invite-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'secret', type: 'string', required: false },
+    { name: 'bootstrapKey', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-personal-devices-request',
+  fields: []
+})
+
+ns.register({
+  name: 'list-personal-devices-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'devices', type: '@peartube/personal-device', array: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// Revocation is forward-only: the platform supplies a freshly generated
+// secret, the backend rewrites current bounded state into a new epoch, and the
+// revoked device keeps whatever it already read.
+ns.register({
+  name: 'revoke-personal-device-request',
+  fields: [
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'secret', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'revoke-personal-device-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'bootstrapKey', type: 'string', required: false },
+    { name: 'remainingDeviceCount', type: 'uint', required: false },
     { name: 'error', type: 'string', required: false }
   ]
 })
@@ -2923,6 +3047,9 @@ ns.register({
   ]
 })
 
+// Legacy, read-only: no writer produces this op any more (viewer ranking is
+// device-local). The message stays registered so channel logs written before
+// the watch-telemetry removal still decode and replay deterministically.
 ns.register({
   name: 'channel-op-log-watch-event',
   fields: [
@@ -3373,7 +3500,7 @@ ns.register({
 })
 
 // ============================================
-// Search / Watch Events (appended for compat)
+// Search (appended for compat)
 // ============================================
 
 ns.register({
@@ -3394,25 +3521,6 @@ ns.register({
 })
 
 ns.register({
-  name: 'log-watch-event-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'duration', type: 'uint', required: false },
-    { name: 'completed', type: 'bool', required: false },
-    { name: 'share', type: 'bool', required: false }
-  ]
-})
-
-ns.register({
-  name: 'log-watch-event-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
   name: 'index-video-vectors-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -3427,51 +3535,6 @@ ns.register({
     { name: 'error', type: 'string', required: false }
   ]
 })
-
-ns.register({
-  name: 'recommendation',
-  fields: [
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'score', type: 'string', required: false },
-    { name: 'reason', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-recommendations-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'limit', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-recommendations-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-video-recommendations-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'limit', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-video-recommendations-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
 
 // Save schema to disk
 Hyperschema.toDisk(schema)
@@ -3755,6 +3818,30 @@ rpcNs.register({
   name: 'provision-personal-encryption',
   request: { name: '@peartube/provision-personal-encryption-request', stream: false },
   response: { name: '@peartube/provision-personal-encryption-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'create-personal-device-invite',
+  request: { name: '@peartube/create-personal-device-invite-request', stream: false },
+  response: { name: '@peartube/create-personal-device-invite-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'redeem-personal-device-invite',
+  request: { name: '@peartube/redeem-personal-device-invite-request', stream: false },
+  response: { name: '@peartube/redeem-personal-device-invite-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'list-personal-devices',
+  request: { name: '@peartube/list-personal-devices-request', stream: false },
+  response: { name: '@peartube/list-personal-devices-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'revoke-personal-device',
+  request: { name: '@peartube/revoke-personal-device-request', stream: false },
+  response: { name: '@peartube/revoke-personal-device-response', stream: false }
 })
 
 rpcNs.register({
@@ -4176,7 +4263,7 @@ rpcNs.register({
   request: { name: '@peartube/event-cast-time-update', stream: false, send: true }
 })
 
-// Search / Watch events (appended for compat)
+// Search (appended for compat)
 rpcNs.register({
   name: 'search-videos',
   request: { name: '@peartube/search-videos-request', stream: false },
@@ -4184,27 +4271,9 @@ rpcNs.register({
 })
 
 rpcNs.register({
-  name: 'log-watch-event',
-  request: { name: '@peartube/log-watch-event-request', stream: false },
-  response: { name: '@peartube/log-watch-event-response', stream: false }
-})
-
-rpcNs.register({
   name: 'index-video-vectors',
   request: { name: '@peartube/index-video-vectors-request', stream: false },
   response: { name: '@peartube/index-video-vectors-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-recommendations',
-  request: { name: '@peartube/get-recommendations-request', stream: false },
-  response: { name: '@peartube/get-recommendations-response', stream: false }
-})
-
-rpcNs.register({
-  name: 'get-video-recommendations',
-  request: { name: '@peartube/get-video-recommendations-request', stream: false },
-  response: { name: '@peartube/get-video-recommendations-response', stream: false }
 })
 
 rpcNs.register({

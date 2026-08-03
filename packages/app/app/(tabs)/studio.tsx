@@ -2,13 +2,14 @@
  * Studio Tab - Upload and manage videos
  */
 import { useRef, useState, useCallback, useEffect } from 'react'
-import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image, AppState, InteractionManager } from 'react-native'
+import { View, Text, FlatList, Alert, Pressable, Share, TextInput, ActivityIndicator, Platform, Image, AppState, InteractionManager } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import * as VideoThumbnails from 'expo-video-thumbnails'
+import * as Clipboard from 'expo-clipboard'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
@@ -131,6 +132,17 @@ function StudioScreen() {
   const [preparingVideo, setPreparingVideo] = useState(false) // Android: copying picked file into cache
   const tempVideoUriRef = useRef<string | null>(null) // app-cache copy we created; deleted after upload/reset
   const [editingVideo, setEditingVideo] = useState<any>(null)
+  // Publisher-channel pairing. This authorizes another device to publish to
+  // this channel and lives here, behind Developer Mode, precisely because it is
+  // not the viewer's personal-store pairing in Profile: different key, different
+  // blast radius. Neither flow may borrow the other's invite or key material.
+  const [channelDevices, setChannelDevices] = useState<Array<{ keyHex?: string; deviceName?: string }>>([])
+  const [channelDevicesLoading, setChannelDevicesLoading] = useState(false)
+  const [channelInviteCode, setChannelInviteCode] = useState<string | null>(null)
+  const [channelInviteLoading, setChannelInviteLoading] = useState(false)
+  const [channelPairCode, setChannelPairCode] = useState('')
+  const [channelPairName, setChannelPairName] = useState('')
+  const [channelPairing, setChannelPairing] = useState(false)
   // Per-publication source-offload assessments. Eligibility is only a prompt to
   // request explicit confirmation; the backend rechecks and consumes the nonce.
   const [offloadInfo, setOffloadInfo] = useState<Record<string, {
@@ -572,6 +584,72 @@ function StudioScreen() {
     }
   }
 
+  const loadChannelDevices = useCallback(async () => {
+    if (!rpc || !identity?.driveKey) return
+    setChannelDevicesLoading(true)
+    try {
+      const res = await rpc.listDevices(identity.driveKey)
+      setChannelDevices(res?.devices || [])
+    } catch (err: unknown) {
+      console.error('[Studio] Failed to load channel devices:', err instanceof Error ? err.message : err)
+    } finally {
+      setChannelDevicesLoading(false)
+    }
+  }, [rpc, identity?.driveKey])
+
+  useEffect(() => { loadChannelDevices() }, [loadChannelDevices])
+
+  const createChannelInvite = async () => {
+    if (!rpc || !identity?.driveKey) return
+    setChannelInviteLoading(true)
+    try {
+      const res = await rpc.createDeviceInvite(identity.driveKey)
+      if (!res?.inviteCode) throw new Error('Failed to create invite')
+      setChannelInviteCode(res.inviteCode)
+      haptics.success()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to create invite'
+      console.error('[Studio] Failed to create channel invite:', message)
+      Alert.alert('Error', message)
+    } finally {
+      setChannelInviteLoading(false)
+    }
+  }
+
+  const pairChannelDevice = async () => {
+    if (!rpc) return
+    const code = channelPairCode.trim()
+    if (!code) return
+    setChannelPairing(true)
+    try {
+      const res = await rpc.pairDevice({
+        inviteCode: code,
+        deviceName: channelPairName.trim() || undefined,
+      })
+      if (!res?.success) throw new Error('Pair failed')
+      setChannelPairCode('')
+      setChannelPairName('')
+      haptics.success()
+      Alert.alert('Linked', 'This device is now part of your channel.')
+      await loadChannelDevices()
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to link device'
+      console.error('[Studio] Pair device failed:', message)
+      Alert.alert('Error', message)
+    } finally {
+      setChannelPairing(false)
+    }
+  }
+
+  const shareChannelInvite = async (code: string) => {
+    try {
+      await Share.share({ message: code, title: 'PearTube device invite' })
+    } catch {
+      await Clipboard.setStringAsync(code)
+      Alert.alert('Copied', 'Invite code copied to clipboard')
+    }
+  }
+
   const myVideos = videos.filter((v) => v.channelKey === identity?.driveKey)
 
   const listHeaderComponent = (
@@ -822,6 +900,104 @@ function StudioScreen() {
               </Text>
             </Pressable>
           )}
+        </View>
+
+        {/* Channel devices — publisher-channel pairing only. A viewer's watch
+            state and library pair separately in Profile and never travel here. */}
+        <View className="py-5 border-b border-pear-border gap-3">
+          <View>
+            <Text style={{ color: colors.text, fontSize: 18, fontFamily: fonts.heading }}>Channel devices</Text>
+            <Text className="text-caption text-pear-text-muted mt-1">
+              Link another device so it can publish to this channel. This shares publishing
+              authority for the channel — not your viewing state.
+            </Text>
+          </View>
+
+          {channelDevices.length ? (
+            <View className="gap-2">
+              {channelDevices.map((device, idx) => (
+                <View key={device?.keyHex || idx} className="flex-row items-center bg-pear-bg-card rounded-lg p-3">
+                  <Feather name="smartphone" color={colors.textSecondary} size={16} />
+                  <View className="flex-1 ml-3">
+                    <Text className="text-label text-pear-text">{device?.deviceName || `Device ${idx + 1}`}</Text>
+                    <Text className="text-caption text-pear-text-muted" numberOfLines={1}>{device?.keyHex || ''}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text className="text-caption text-pear-text-muted">
+              {channelDevicesLoading ? 'Looking for linked devices…' : 'Just this device so far.'}
+            </Text>
+          )}
+
+          {channelInviteCode ? (
+            <View className="bg-pear-bg-card border border-pear-border rounded-lg p-4 gap-2">
+              <Text className="text-caption text-pear-text-muted">Invite code — enter it on your other device</Text>
+              <Text selectable className="text-label text-pear-text">{channelInviteCode}</Text>
+              <View className="flex-row gap-2">
+                <Pressable
+                  onPress={async () => {
+                    await Clipboard.setStringAsync(channelInviteCode)
+                    Alert.alert('Copied', 'Invite code copied to clipboard')
+                  }}
+                  className="flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-lg py-3 active:opacity-80"
+                >
+                  <Feather name="copy" color={colors.text} size={14} />
+                  <Text className="text-caption text-pear-text">Copy</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => shareChannelInvite(channelInviteCode)}
+                  className="flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-lg py-3 active:opacity-80"
+                >
+                  <Feather name="share-2" color={colors.text} size={14} />
+                  <Text className="text-caption text-pear-text">Share</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          <Pressable
+            onPress={createChannelInvite}
+            disabled={channelInviteLoading || !identity?.driveKey}
+            className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(channelInviteLoading || !identity?.driveKey) ? 'opacity-50' : ''}`}
+          >
+            {channelInviteLoading ? <ActivityIndicator size="small" color={colors.onPrimary} /> : (
+              <>
+                <Feather name="plus" color={colors.onPrimary} size={16} />
+                <Text className="text-label" style={{ color: colors.onPrimary }}>Link a device</Text>
+              </>
+            )}
+          </Pressable>
+
+          <TextInput
+            placeholder="Paste invite code"
+            value={channelPairCode}
+            onChangeText={setChannelPairCode}
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+          />
+          <TextInput
+            placeholder="Device name (optional)"
+            value={channelPairName}
+            onChangeText={setChannelPairName}
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+          />
+          <Pressable
+            onPress={pairChannelDevice}
+            disabled={channelPairing || !channelPairCode.trim()}
+            className={`flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-lg py-3.5 ${(channelPairing || !channelPairCode.trim()) ? 'opacity-50' : ''}`}
+          >
+            {channelPairing ? <ActivityIndicator size="small" color={colors.text} /> : (
+              <>
+                <Feather name="link" color={colors.text} size={15} />
+                <Text className="text-label text-pear-text">Link with this code</Text>
+              </>
+            )}
+          </Pressable>
         </View>
 
         {/* Videos List title */}

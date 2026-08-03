@@ -85,7 +85,6 @@ export const SHARED_HANDLER_NAMES = [
   'GetIdentity',
   'GetPinnedChannels',
   'GetReactions',
-  'GetRecommendations',
   'GetSeedingStatus',
   'GetStatus',
   'GetStorageStats',
@@ -94,7 +93,6 @@ export const SHARED_HANDLER_NAMES = [
   'GetTranscodeSettings',
   'GetVideoData',
   'GetVideoMetadata',
-  'GetVideoRecommendations',
   'GetVideoStats',
   'GetLivestreamStatus',
   'GetVideoThumbnail',
@@ -111,7 +109,6 @@ export const SHARED_HANDLER_NAMES = [
   'ListComments',
   'ListDevices',
   'ListVideos',
-  'LogWatchEvent',
   'ConfirmSourceOffload',
   'PairDevice',
   'PickImageFile',
@@ -172,6 +169,11 @@ export const SHARED_HANDLER_NAMES = [
   'SetPersonalSetting',
   'GetPersonalSettings',
   'ProvisionPersonalEncryption',
+  // Personal-store device pairing (separate from publisher-channel pairing)
+  'CreatePersonalDeviceInvite',
+  'RedeemPersonalDeviceInvite',
+  'ListPersonalDevices',
+  'RevokePersonalDevice',
 ]
 
 function toCamelCase(name) {

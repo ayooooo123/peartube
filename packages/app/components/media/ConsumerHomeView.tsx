@@ -13,6 +13,7 @@ import type { MediaEntitySummary } from '@peartube/core'
 import { MediaPosterCard, MEDIA_POSTER_CARD_WIDTH } from './MediaPosterCard'
 import { HomeHeroCarousel, type HomeHeroItem } from './HomeHeroCarousel'
 import { projectHomeRails } from '@/lib/home-rails.js'
+import type { LocalWatchStateRow } from '@/lib/watch-history'
 import { colors, radius, spacing } from '@/lib/colors'
 import { fonts } from '@/lib/typography'
 
@@ -33,7 +34,8 @@ export type ConsumerHomeDiagnostic = {
 export type ConsumerHomeProps = {
   state: ConsumerHomeState
   diagnostic?: ConsumerHomeDiagnostic
-  watchState?: unknown[]
+  /** This device's own watch state. Never fetched, never reported. */
+  watchState?: LocalWatchStateRow[]
   firstSeen?: Record<string, number>
   onRefresh(): void
   onOpenEntity(entityId: string, item: MediaEntitySummary): void

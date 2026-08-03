@@ -395,7 +395,7 @@ git commit -m "feat(app): deliver the consumer media library"
 
 ```bash
 npm run schema:full
-node --test packages/app/tests/local-recommendations.test.mjs packages/app/tests/no-viewer-analytics-regression.test.mjs packages/app/tests/personal-pairing-separation.test.mjs
+node --test packages/app/tests/local-recommendations.test.mjs packages/app/tests/no-viewer-analytics-regression.test.mjs packages/app/tests/personal-pairing-separation.test.mjs packages/app/tests/watch-history-adapter-regression.test.mjs packages/app/tests/player-watch-session-regression.test.mjs
 npm exec --prefix packages/backend -- brittle packages/backend/test/private-watch-state-pairing.test.mjs packages/backend/test/personal-store.test.mjs packages/backend/test/personal-store-encryption.test.mjs packages/backend/test/personal-hrpc-wiring.test.mjs packages/backend/test/identity-recovery.test.mjs
 npm test --prefix packages/spec
 npm test --prefix packages/host
@@ -406,7 +406,7 @@ npm run typecheck
 8. Commit:
 
 ```bash
-git add packages/app/lib packages/app/app/profile.tsx packages/app/tests/local-recommendations.test.mjs packages/app/tests/no-viewer-analytics-regression.test.mjs packages/app/tests/personal-pairing-separation.test.mjs packages/backend/src/identity.js packages/backend/src/personal packages/backend/src/api/personal.js packages/backend/src/api.js packages/backend/test/private-watch-state-pairing.test.mjs packages/spec packages/host packages/platform packages/core/src/types/index.ts packages/app/backend
+git add packages/app/lib packages/app/app packages/app/tests/local-recommendations.test.mjs packages/app/tests/no-viewer-analytics-regression.test.mjs packages/app/tests/personal-pairing-separation.test.mjs packages/app/tests/watch-history-adapter-regression.test.mjs packages/app/tests/player-watch-session-regression.test.mjs packages/backend/src/identity.js packages/backend/src/personal packages/backend/src/api/personal.js packages/backend/src/api.js packages/backend/test/private-watch-state-pairing.test.mjs packages/backend/test/personal-store.test.mjs packages/spec packages/host packages/platform packages/core/src/types/index.ts packages/app/backend
 git commit -m "feat(privacy): keep viewer state local by default"
 ```
 

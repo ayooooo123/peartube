@@ -360,3 +360,32 @@ export interface ChannelMetadata {
   videoCount?: number;
   driveKey?: string;
 }
+
+/**
+ * Media identity for one piece of device-local viewer progress. A series
+ * episode needs the member reference; a re-cut needs the edition reference.
+ */
+export interface PersonalProgressIdentity {
+  entityRef?: string | null;
+  editionRef?: string | null;
+  memberRef?: string | null;
+}
+
+/**
+ * Deterministic ordering for concurrent progress written on paired devices.
+ * Resolution is (playbackGeneration, lamport, writerKey) — never wall clock.
+ */
+export interface PersonalProgressOrder {
+  playbackGeneration: number;
+  lamport: number;
+  writerKey: string;
+  tombstone: boolean;
+}
+
+/** One device authorized to write the viewer's own encrypted state. */
+export interface PersonalDevice {
+  keyHex: string;
+  deviceName?: string | null;
+  addedAt?: number | null;
+  self?: boolean | null;
+}

@@ -948,7 +948,20 @@ export function createPersonalRpc(ensureRPC: () => any) {
     },
 
     // Watch history / resume
-    async logWatchHistory(req: { channelKey?: string; videoId?: string; videoKey?: string; title?: string; duration?: number; position?: number; completed?: boolean; timestamp?: number }) {
+    async logWatchHistory(req: {
+      channelKey?: string
+      videoId?: string
+      videoKey?: string
+      title?: string
+      duration?: number
+      position?: number
+      completed?: boolean
+      timestamp?: number
+      identity?: { entityRef?: string; editionRef?: string; memberRef?: string }
+      saved?: boolean
+      playbackGeneration?: number
+      tombstone?: boolean
+    }) {
       return ensureRPC().logWatchHistory(req);
     },
     async getWatchHistory(req: { limit?: number } = {}) {
@@ -978,6 +991,21 @@ export function createPersonalRpc(ensureRPC: () => any) {
       deviceLocal?: boolean
     }) {
       return ensureRPC().provisionPersonalEncryption(req);
+    },
+
+    // Personal-store device pairing. Deliberately distinct from publisher
+    // channel pairing: it moves only the viewer's own encrypted state.
+    async createPersonalDeviceInvite(req: { expiresInMs?: number } = {}) {
+      return ensureRPC().createPersonalDeviceInvite(req);
+    },
+    async redeemPersonalDeviceInvite(req: { inviteCode: string; deviceName?: string }) {
+      return ensureRPC().redeemPersonalDeviceInvite(req);
+    },
+    async listPersonalDevices() {
+      return ensureRPC().listPersonalDevices({});
+    },
+    async revokePersonalDevice(req: { keyHex: string; secret: string; deviceName?: string }) {
+      return ensureRPC().revokePersonalDevice(req);
     }
   };
 }

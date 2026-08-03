@@ -1179,19 +1179,6 @@ export const rpc = {
     return ensureRPC().globalSearchVideos(req);
   },
 
-  // Recommendations / watch events
-  async logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }) {
-    return ensureRPC().logWatchEvent(req);
-  },
-
-  async getRecommendations(req: { channelKey: string; limit?: number }) {
-    return ensureRPC().getRecommendations(req);
-  },
-
-  async getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }) {
-    return ensureRPC().getVideoRecommendations(req);
-  },
-
   // Status
   async getStatus() {
     return ensureRPC().getStatus({});

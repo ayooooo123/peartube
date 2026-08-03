@@ -148,9 +148,11 @@ search, comments, recommendations. `prefetchVideo` alone is **~780 lines**
 > moved to `api/feed.js`, `api/seeding.js`, and `api/pairing.js`. Storage/offload
 > remains in `api.js` because it shares active playback range state and upload
 > offload helpers.
-> **Slice 6 done:** Recommendations/watch-event operations moved to
-> `api/recommendations.js`; the module injects the multi-writer guard, channel
-> loader, and semantic-finder initializer explicitly.
+> **Slice 6 done, then deleted:** Recommendations/watch-event operations moved to
+> `api/recommendations.js`, and that group was later removed outright along with
+> `src/recommendations/**` and the channel watch-event producer — viewer ranking
+> is device-local (`packages/app/lib/local-recommendations.ts`), so no watch
+> telemetry or remote recommendation RPC exists to extract any more.
 > **Slice 7 done:** Live, subscriptions, status diagnostics, and network lifecycle
 > operations moved to `api/live.js`, `api/subscriptions.js`, `api/status.js`, and
 > `api/network-lifecycle.js`. Shared playback/cache state stays in `api.js` and is

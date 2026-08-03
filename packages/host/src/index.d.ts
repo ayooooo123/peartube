@@ -793,7 +793,6 @@ export function createProtocolClient(options: {
   channel: ProtocolNamespace
   mediaGraph: MediaGraphProtocolNamespace
   video: VideoProtocolNamespace
-  watch: ProtocolNamespace
   transfer: TransferProtocolNamespace
   search: ProtocolNamespace
   shell: ProtocolNamespace

@@ -627,19 +627,6 @@ export const rpc = {
     return ensureRPC().retrySyncChannel(req);
   },
 
-  // Watch events & recommendations
-  async logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }): Promise<{ success: boolean }> {
-    return ensureRPC().logWatchEvent(req);
-  },
-
-  async getRecommendations(req: { channelKey: string; limit?: number }): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
-    return ensureRPC().getRecommendations(req);
-  },
-
-  async getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
-    return ensureRPC().getVideoRecommendations(req);
-  },
-
   // Comments
   async addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string | null; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<{ success: boolean; commentId?: string | null; queued?: boolean; error?: string | null }> {
     return ensureRPC().addComment(req);

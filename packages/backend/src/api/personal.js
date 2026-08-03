@@ -6,7 +6,77 @@ import { CONSUMER_MODERATION_PROFILE_SETTING_KEY } from '../moderation/profile.j
 // decoded request object and return the response envelope directly, and rely
 // only on the injected `ctx`, never on `this`.
 
+function toUint(value) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0
+}
+
+function toText(value) {
+  return typeof value === 'string' ? value : ''
+}
+
+/**
+ * Project a log-watch-history request onto the canonical progress write. Media
+ * identity, the library flag, and the playback generation come from the client;
+ * the store owns Lamport stamping and deterministic merge.
+ */
+function watchEventFromRequest(req = {}) {
+  const identity = req.identity && typeof req.identity === 'object'
+    ? {
+        entityRef: toText(req.identity.entityRef),
+        editionRef: toText(req.identity.editionRef),
+        memberRef: toText(req.identity.memberRef),
+      }
+    : null
+  const event = {
+    channelKey: toText(req.channelKey),
+    videoId: toText(req.videoId),
+    videoKey: toText(req.videoKey),
+    title: toText(req.title),
+    duration: toUint(req.duration),
+    position: toUint(req.position),
+    completed: req.completed === true,
+    timestamp: toUint(req.timestamp),
+  }
+  if (identity && (identity.entityRef || identity.editionRef || identity.memberRef)) event.identity = identity
+  if (typeof req.saved === 'boolean') event.saved = req.saved
+  const playbackGeneration = toUint(req.playbackGeneration)
+  if (playbackGeneration > 0) event.playbackGeneration = playbackGeneration
+  if (req.tombstone === true) event.tombstone = true
+  return event
+}
+
+/**
+ * A revocation rotates the personal store into a fresh encrypted epoch and
+ * freezes the epoch it is abandoning, so a write issued mid-rotation would be
+ * dropped along with that epoch. Report it as a structured refusal instead: the
+ * client keeps the write pending and replays it against the new epoch.
+ */
+async function personalWrite(run) {
+  try {
+    return await run()
+  } catch (error) {
+    if (error?.code !== 'PERSONAL_STORE_FROZEN') throw error
+    return { success: false, error: 'personal-store-rotating' }
+  }
+}
+
 export function createPersonalApi({ ctx }) {
+  /**
+   * Personal pairing never throws a raw internal out to the client: a missing
+   * manager and an unexpected failure both come back as a structured
+   * `{ success: false, error }`.
+   */
+  async function personalPairingCall(fallbackError, run) {
+    const manager = ctx.personalManager
+    if (!manager) return { success: false, error: 'personal-store-unavailable' }
+    try {
+      return await run(manager)
+    } catch {
+      return { success: false, error: fallbackError }
+    }
+  }
+
   return {
     // ============================================
     // Personal Sync: Playlists / History / Settings
@@ -28,34 +98,46 @@ export function createPersonalApi({ ctx }) {
     },
     async createPlaylist(req = {}) {
       if (!ctx.personal?.writable) throw new Error('No writable personal store (create or activate an identity first)');
-      const id = await ctx.personal.createPlaylist({ name: req.name || '', description: req.description || '' });
-      return { success: true, id };
+      return personalWrite(async () => {
+        const id = await ctx.personal.createPlaylist({ name: req.name || '', description: req.description || '' });
+        return { success: true, id };
+      });
     },
     async updatePlaylist(req = {}) {
       if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.updatePlaylist(req.id, { name: req.name, description: req.description });
-      return { success: true };
+      return personalWrite(async () => {
+        await ctx.personal.updatePlaylist(req.id, { name: req.name, description: req.description });
+        return { success: true };
+      });
     },
     async deletePlaylist(req = {}) {
       if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.deletePlaylist(req.id);
-      return { success: true };
+      return personalWrite(async () => {
+        await ctx.personal.deletePlaylist(req.id);
+        return { success: true };
+      });
     },
     async addToPlaylist(req = {}) {
       if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.addToPlaylist(req.playlistId, { channelKey: req.channelKey, videoId: req.videoId, videoKey: req.videoKey });
-      return { success: true };
+      return personalWrite(async () => {
+        await ctx.personal.addToPlaylist(req.playlistId, { channelKey: req.channelKey, videoId: req.videoId, videoKey: req.videoKey });
+        return { success: true };
+      });
     },
     async removeFromPlaylist(req = {}) {
       if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.removeFromPlaylist(req.playlistId, req.videoKey);
-      return { success: true };
+      return personalWrite(async () => {
+        await ctx.personal.removeFromPlaylist(req.playlistId, req.videoKey);
+        return { success: true };
+      });
     },
 
     async logWatchHistory(req = {}) {
       if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      const eventId = await ctx.personal.logHistory(req);
-      return { success: true, eventId };
+      return personalWrite(async () => {
+        const eventId = await ctx.personal.logHistory(watchEventFromRequest(req));
+        return { success: true, eventId };
+      });
     },
     async getWatchHistory(req = {}) {
       if (!ctx.personal) return { entries: [] };
@@ -78,12 +160,16 @@ export function createPersonalApi({ ctx }) {
         try { value = JSON.parse(value); } catch { /* keep raw string */ }
       }
       if (req.key === CONSUMER_MODERATION_PROFILE_SETTING_KEY && ctx.setConsumerModerationProfile) {
-        await ctx.setConsumerModerationProfile(value)
-        return { success: true };
+        return personalWrite(async () => {
+          await ctx.setConsumerModerationProfile(value);
+          return { success: true };
+        });
       }
       if (!ctx.personal?.writable) throw new Error('No writable personal store');
-      await ctx.personal.setSetting(req.key, value);
-      return { success: true };
+      return personalWrite(async () => {
+        await ctx.personal.setSetting(req.key, value);
+        return { success: true };
+      });
     },
     async getPersonalSettings() {
       const settings = ctx.personal ? await ctx.personal.getSettings() : {};
@@ -115,6 +201,64 @@ export function createPersonalApi({ ctx }) {
         encrypted: !!result.encrypted,
         error: result.error,
       };
+    },
+
+    // ============================================
+    // Personal-store device pairing
+    //
+    // Deliberately separate from publisher-channel pairing
+    // (createDeviceInvite/pairDevice/listDevices): this moves only the viewer's
+    // own encrypted state — the personal-store bootstrap key, one writer
+    // authorization, and the keychain secret — to a device the user explicitly
+    // paired. No channel, drive key, or publisher authority is involved.
+    // ============================================
+
+    async createPersonalDeviceInvite(req = {}) {
+      return personalPairingCall('personal-invite-failed', async (manager) => {
+        const result = await manager.createPersonalDeviceInvite({ expiresInMs: req.expiresInMs });
+        if (!result?.success) return { success: false, error: result?.error || 'personal-invite-failed' };
+        return { success: true, inviteCode: result.inviteCode, expiresAt: result.expiresAt };
+      });
+    },
+
+    /**
+     * The only backend response that carries the personal-store secret, and
+     * only to the joining device that just completed pairing. The platform
+     * persists it in its keychain; the backend never stores or logs it.
+     */
+    async redeemPersonalDeviceInvite(req = {}) {
+      return personalPairingCall('personal-pairing-failed', async (manager) => {
+        const result = await manager.redeemPersonalDeviceInvite({
+          inviteCode: req.inviteCode,
+          deviceName: req.deviceName || '',
+        });
+        if (!result?.success) return { success: false, error: result?.error || 'personal-pairing-failed' };
+        return { success: true, secret: result.secret, bootstrapKey: result.bootstrapKey };
+      });
+    },
+
+    async listPersonalDevices() {
+      return personalPairingCall('personal-device-list-failed', async (manager) => {
+        const result = await manager.listPersonalDevices();
+        if (!result?.success) return { success: false, error: result?.error || 'personal-device-list-failed' };
+        return { success: true, devices: result.devices || [] };
+      });
+    },
+
+    async revokePersonalDevice(req = {}) {
+      return personalPairingCall('personal-revoke-failed', async (manager) => {
+        const result = await manager.revokePersonalDevice({
+          keyHex: req.keyHex,
+          secret: req.secret,
+          deviceName: req.deviceName || '',
+        });
+        if (!result?.success) return { success: false, error: result?.error || 'personal-revoke-failed' };
+        return {
+          success: true,
+          bootstrapKey: result.bootstrapKey,
+          remainingDeviceCount: result.remainingDeviceCount,
+        };
+      });
     },
   }
 }

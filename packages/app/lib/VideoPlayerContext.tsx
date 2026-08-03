@@ -15,44 +15,57 @@ import { resolvePlayerPort } from './video-player'
 import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 import * as watchHistory from './watch-history'
+import type { WatchIdentity } from './watch-history'
 
 const WATCH_HISTORY_WRITE_INTERVAL_MS = 10000
 const STARTUP_AUTOPLAY_GUARD_MS = 3000
 
 /**
- * Persist local watch progress and feed the backend recommender.
- * Strictly best-effort — failures must never affect playback.
+ * Where this video's watch state lives.
+ *
+ * The consumer surfaces play an entity rather than a publisher upload, so
+ * identity is used when the player was handed one and the legacy
+ * channel/video pair when it was not. Null means the video carries neither,
+ * which is nothing watch state can be keyed on.
+ */
+function watchCoordinatesOf(video: VideoData | null): { videoId: string; channelKey: string; identity: WatchIdentity | null } | null {
+  if (!video) return null
+  const loose = video as VideoData & { driveKey?: string; path?: string; entityRef?: string; entityId?: string; editionRef?: string; memberRef?: string }
+  const channelKey = video.channelKey || loose.driveKey || video.channel?.key || ''
+  const videoId = video.id || loose.path || ''
+  const entityRef = loose.entityRef || loose.entityId || (channelKey ? '' : videoId)
+  const identity = entityRef
+    ? { entityRef, editionRef: loose.editionRef ?? null, memberRef: loose.memberRef ?? null }
+    : null
+  if (!identity && !(channelKey && videoId)) return null
+  return { videoId, channelKey, identity }
+}
+
+/**
+ * Persist watch progress into this device's own encrypted personal store.
+ *
+ * Nothing is reported anywhere: there is no watch event, no recommender feed,
+ * and no analytics call. Strictly best-effort — failures must never affect
+ * playback. A write to coordinates the viewer has just deleted is refused by
+ * the store adapter, so a player left mounted over a delete keeps playing
+ * without putting the record back.
  */
 function recordWatchProgressSafe(video: VideoData | null, positionSec: number, durationSec: number): void {
   if (!video || !(durationSec > 0) || !(positionSec > 0)) return
-  const channelKey = video.channelKey || (video as any).driveKey || video.channel?.key || ''
-  const videoId = video.id || (video as any).path || ''
-  if (!channelKey || !videoId) return
+  const coordinates = watchCoordinatesOf(video)
+  if (!coordinates) return
+  const loose = video as VideoData & { thumbnail?: string | null }
   try {
     void watchHistory.recordProgress({
-      videoId,
-      channelKey,
+      ...coordinates,
       publicBeeKey: video.publicBeeKey || null,
       title: video.title || 'Untitled',
       channelName: video.channel?.name,
-      thumbnailUrl: video.thumbnailUrl || (video as any).thumbnail || null,
+      thumbnailUrl: video.thumbnailUrl || loose.thumbnail || null,
       positionSec,
       durationSec,
     })
   } catch {}
-}
-
-function logWatchEventSafe(video: VideoData | null, durationSec: number, completed: boolean): void {
-  if (!video) return
-  const channelKey = video.channelKey || (video as any).driveKey || video.channel?.key || ''
-  const videoId = video.id || (video as any).path || ''
-  if (!channelKey || !videoId) return
-  import('@peartube/platform/rpc')
-    .then((mod: any) => {
-      if (!mod?.isInitialized?.()) return
-      return mod.rpc?.logWatchEvent?.({ channelKey, videoId, duration: Math.round(durationSec), completed })
-    })
-    .catch(() => {})
 }
 
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
@@ -278,7 +291,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Ref for current video - updated synchronously to avoid race conditions with stats events
   const currentVideoRef = useRef<VideoData | null>(null)
   const lastHistoryWriteRef = useRef(0)
-  const watchEventSentForRef = useRef<string | null>(null)
 
   // Ref for video URL - used for error debugging
   const videoUrlRef = useRef<string | null>(null)
@@ -902,6 +914,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       key: playbackKey,
       until: now + STARTUP_AUTOPLAY_GUARD_MS,
     }
+    // Starting playback is a new watch, and it is the only thing that lets
+    // progress reach coordinates the viewer has deleted: a title removed from
+    // history and then deliberately played again is recorded once more, while
+    // the session that was already running when they removed it is not.
+    const watchCoordinates = watchCoordinatesOf(video)
+    if (watchCoordinates) watchHistory.beginWatchSession(watchCoordinates)
     setDesiredPlaying(true)
     try {
       getPlayerPort()?.stop?.()
@@ -1231,17 +1249,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       currentTimeRef.current = timeS
     }
 
-    // Persist watch progress (throttled) so Continue Watching can resume,
-    // and send a single engagement signal per video to the recommender.
+    // Persist watch progress (throttled) so Continue Watching can resume. There
+    // is no second write: the viewer's own store is the only destination.
     if (durationS > 0 && !waitingForSeekCatchup && now - lastHistoryWriteRef.current >= WATCH_HISTORY_WRITE_INTERVAL_MS) {
       lastHistoryWriteRef.current = now
-      const video = currentVideoRef.current
-      recordWatchProgressSafe(video, timeS, durationS)
-      const key = video ? `${video.channelKey || (video as any)?.driveKey || ''}:${video.id || ''}` : null
-      if (key && timeS > 30 && watchEventSentForRef.current !== key) {
-        watchEventSentForRef.current = key
-        logWatchEventSafe(video, timeS, false)
-      }
+      recordWatchProgressSafe(currentVideoRef.current, timeS, durationS)
     }
 
     if (data.currentTime > 0) {
@@ -1393,10 +1405,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setDesiredPlaying(false)
     const video = currentVideoRef.current
     const durationS = durationRef.current
-    if (video && durationS > 0) {
-      recordWatchProgressSafe(video, durationS, durationS)
-      logWatchEventSafe(video, durationS, true)
-    }
+    if (video && durationS > 0) recordWatchProgressSafe(video, durationS, durationS)
   }, [setDesiredPlaying])
 
   const onError = useCallback((error: any) => {

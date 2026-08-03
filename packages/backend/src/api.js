@@ -37,7 +37,6 @@ import { createTranscodeApi } from './api/transcode.js'
 import { createSearchApi } from './api/search.js'
 import { createPairingApi } from './api/pairing.js'
 import { createSeedingApi } from './api/seeding.js'
-import { createRecommendationsApi } from './api/recommendations.js'
 import { createSubscriptionsApi } from './api/subscriptions.js'
 import { createLiveApi } from './api/live.js'
 import { createStatusApi } from './api/status.js'
@@ -3762,17 +3761,6 @@ export function createApi({
       }))
       return snapshots.filter(Boolean)
     },
-
-    // ============================================
-
-
-    // Recommendations Operations
-    ...createRecommendationsApi({
-      ctx,
-      ensureSemanticFinder,
-      isMultiWriterChannelKey,
-      loadChannel,
-    }),
 
     // Network Lifecycle Management
     ...createNetworkLifecycleApi({

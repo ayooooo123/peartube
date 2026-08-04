@@ -538,7 +538,9 @@ export function startCapture(platform, target, outMp4) {
     return { stop() { try { p.kill('SIGINT') } catch {} ; execFileSync('sleep', ['1']) } }
   }
   if (platform === 'desktop') {
-    // macOS full-screen video capture until SIGINT (v1: whole screen; window targeting deferred).
+    // macOS whole-screen video capture until SIGINT. v1 LIMITATION: records the ENTIRE
+    // screen, not just the Electrobun window — macOS has no scriptable single-window video
+    // capture. Documented in README-app-test.md; window targeting is deferred.
     const p = spawn('screencapture', ['-v', outMp4], { stdio: 'ignore' })
     return { stop() { try { p.kill('SIGINT') } catch {} ; execFileSync('sleep', ['1']) } }
   }
@@ -643,16 +645,19 @@ export async function ensureContent() {
 }
 ```
 
-- [ ] **Step 2: Add a macOS mirror override to the compose invocation**
+- [ ] **Step 2: Parameterize the relay mirror volume**
 
-The committed `docker-compose.local-relay.yml` hardcodes the Linux host path. Add `docker-compose.local-relay.override.yml` (gitignored per-machine, or documented) mapping `${PEARTUBE_MIRROR_DIR}:/mirror:ro`, OR document exporting `PEARTUBE_MIRROR_DIR`. Verify the running container sees the fixture:
+Edit `docker-compose.local-relay.yml` line 31 from the hardcoded Linux path to an interpolated variable that keeps the existing default:
+`- ${PEARTUBE_MIRROR_DIR:-/home/user/peartube-local-videos}:/mirror:ro`
+A hardcoded volume ignores the env var, so without this change `content.mjs` passing `PEARTUBE_MIRROR_DIR` in the compose env has no effect. With it, the mount redirects. Verify:
 Run: `PEARTUBE_MIRROR_DIR=$HOME/peartube-local-videos node -e "import('./packages/app/scripts/lib/content.mjs').then(m=>m.ensureContent()).then(x=>console.log(x))"`
-Expected: relay container up, archive UI returns 200, prints `{ mirror, archiveUi }`.
+Then: `docker compose -f docker-compose.local-relay.yml exec relay ls /mirror`
+Expected: relay up, archive UI returns 200, `/mirror` lists `smoke-320x568-3s.mp4`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add packages/app/scripts/lib/content.mjs
+git add packages/app/scripts/lib/content.mjs docker-compose.local-relay.yml
 git commit -m "feat(app-test): local relay content seeding"
 ```
 
@@ -714,7 +719,8 @@ async function run() {
           execFileSync('maestro', ['test', flow, '--format', 'junit', '--output', junitPath],
             { stdio: 'inherit' })
         } catch { /* nonzero exit still writes junit; summarized below */ }
-        gate = summarizeJunit(readFileSync(junitPath, 'utf8'))
+        try { gate = summarizeJunit(readFileSync(junitPath, 'utf8')) }
+        catch { gate = { ok: false, skipped: 0 } } // maestro absent/crashed before writing junit → fail the gate
       }
     } finally {
       cap.stop()
